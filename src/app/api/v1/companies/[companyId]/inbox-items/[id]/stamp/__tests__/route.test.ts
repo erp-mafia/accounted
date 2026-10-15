@@ -70,7 +70,10 @@ describe('POST /api/v1/companies/{companyId}/inbox-items/{id}/stamp', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     withTables({
-      invoice_inbox_items: { data: { id: ITEM_ID, created_journal_entry_id: null } },
+      invoice_inbox_items: [
+        { data: { id: ITEM_ID, created_journal_entry_id: null } }, // read
+        { data: [{ id: ITEM_ID }] }, // compare-and-set stamp: one row
+      ],
       journal_entries: { data: { id: JE_ID } },
     })
   })
@@ -125,6 +128,44 @@ describe('POST /api/v1/companies/{companyId}/inbox-items/{id}/stamp', () => {
     const res = await POST(req({ body: { journal_entry_id: JE_ID } }), params())
     expect(res.status).toBe(200)
     expect((await res.json()).data.created_journal_entry_id).toBe(JE_ID)
+  })
+
+  // accounted#14: two stamps that both read an empty pointer no longer both
+  // answer 200 with the later one re-pointing the item.
+  it('409 when a concurrent stamp with a different entry landed after the read', async () => {
+    authOk(['documents:write'])
+    const tables = {
+      invoice_inbox_items: [
+        { data: { id: ITEM_ID, created_journal_entry_id: null } }, // read: still empty
+        { data: [] }, // compare-and-set: the other stamp landed first
+        { data: { created_journal_entry_id: OTHER_JE_ID } }, // re-read
+      ],
+      journal_entries: { data: { id: JE_ID } },
+      company_members: { data: { role: 'owner' } },
+      idempotency_keys: { data: null },
+    }
+    const mock = createTableMockSupabase(tables)
+    mockServiceClient.mockReturnValue(mock.supabase)
+    const res = await POST(req({ body: { journal_entry_id: JE_ID } }), params())
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.details.current_journal_entry_id).toBe(OTHER_JE_ID)
+    expect(mock.findCalls('invoice_inbox_items', 'is')).toContainEqual(['created_journal_entry_id', null])
+  })
+
+  it('200 when the concurrent stamp that landed first named the same entry', async () => {
+    authOk(['documents:write'])
+    withTables({
+      invoice_inbox_items: [
+        { data: { id: ITEM_ID, created_journal_entry_id: null } },
+        { data: [] },
+        { data: { created_journal_entry_id: JE_ID } },
+      ],
+      journal_entries: { data: { id: JE_ID } },
+    })
+    const res = await POST(req({ body: { journal_entry_id: JE_ID } }), params())
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toEqual({ id: ITEM_ID, created_journal_entry_id: JE_ID })
   })
 
   it('409 when the item is already stamped with a different entry', async () => {

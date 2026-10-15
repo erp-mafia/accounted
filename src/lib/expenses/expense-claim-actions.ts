@@ -33,6 +33,7 @@ import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
 import { hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
 import { findPayslipLineForClaim } from '@/lib/salary/expense-claim-lines'
+import { readInboxItemBookingState } from '@/lib/documents/inbox-item-claim'
 import { roundOre, sumOre } from '@/lib/money'
 import {
   createPayoutBatch,
@@ -174,6 +175,8 @@ const REGISTER_CODES: Record<RegisterExpenseClaimFailure['code'], string> = {
   CLAIM_INSERT_FAILED: 'EXPENSE_CLAIM_SAVE_FAILED',
   COMPANY_NOT_FOUND: 'COMPANY_NOT_FOUND',
   LINK_WRITE_FAILED: 'EXPENSE_CLAIM_LINK_FAILED',
+  INBOX_ITEM_NOT_FOUND: 'EXPENSE_CLAIM_INBOX_ITEM_NOT_FOUND',
+  INBOX_ITEM_BOOKED: 'INBOX_ITEM_ALREADY_BOOKED',
 }
 
 function registerFailure(ctx: OperationContext, failure: RegisterExpenseClaimFailure): Failure {
@@ -224,15 +227,23 @@ async function underlagFailure(ctx: OperationContext, input: RegisterExpenseClai
     if (!data) return { ok: false, code: 'EXPENSE_CLAIM_DOCUMENT_NOT_FOUND', details: { document_id: input.document_id } }
   }
   if (input.inbox_item_id) {
-    const { data, error } = await ctx.supabase
-      .from('invoice_inbox_items')
-      .select('id')
-      .eq('id', input.inbox_item_id)
-      .eq('company_id', ctx.companyId)
-      .maybeSingle()
-    if (error) return failed(error)
-    if (!data) {
+    // Same answer the registration gives before it posts, so a dry run (the
+    // staged preview) refuses an underlag that is already booked (accounted#14).
+    const booking = await readInboxItemBookingState(ctx.supabase, ctx.companyId, input.inbox_item_id)
+    if (booking.state === 'error') return failed(booking.error)
+    if (booking.state === 'missing') {
       return { ok: false, code: 'EXPENSE_CLAIM_INBOX_ITEM_NOT_FOUND', details: { inbox_item_id: input.inbox_item_id } }
+    }
+    if (booking.state === 'booked') {
+      return {
+        ok: false,
+        code: 'INBOX_ITEM_ALREADY_BOOKED',
+        details: {
+          inbox_item_id: input.inbox_item_id,
+          ...(booking.journal_entry_id ? { journal_entry_id: booking.journal_entry_id } : {}),
+          ...(booking.supplier_invoice_id ? { supplier_invoice_id: booking.supplier_invoice_id } : {}),
+        },
+      }
     }
   }
   return null

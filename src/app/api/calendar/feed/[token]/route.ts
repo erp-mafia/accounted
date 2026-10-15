@@ -7,6 +7,7 @@ import type { Deadline, Invoice } from '@/types'
 import { createTokenRateLimiter } from '@/lib/api/token-rate-limit'
 import { UUID_RE } from '@/lib/invariants/uuid'
 import { fileResponse } from '@/lib/api/file-response'
+import { addMonthsIso, todayIsoStockholm } from '@/lib/dates/iso'
 
 const log = createLogger('api/calendar/feed-token')
 
@@ -85,15 +86,10 @@ export async function GET(
     })
     .eq('id', feed.id)
 
-  // Calculate date range: 3 months back, 12 months forward
-  const now = new Date()
-  const startDate = new Date(now)
-  startDate.setMonth(startDate.getMonth() - 3)
-  const endDate = new Date(now)
-  endDate.setMonth(endDate.getMonth() + 12)
-
-  const startStr = startDate.toISOString().split('T')[0]
-  const endStr = endDate.toISOString().split('T')[0]
+  // Date range: 3 months back, 12 months forward from the Swedish calendar day
+  const today = todayIsoStockholm()
+  const startStr = addMonthsIso(today, -3)
+  const endStr = addMonthsIso(today, 12)
 
   try {
     // Fetch relevant data based on feed options. Deadlines are always

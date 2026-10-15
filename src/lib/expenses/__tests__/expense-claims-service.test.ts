@@ -239,10 +239,11 @@ describe('registerExpenseClaim', () => {
 
   it('links an unanchored receipt document to the new verifikat', async () => {
     enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: { created_journal_entry_id: null, created_supplier_invoice_id: null } }) // inbox item read
     enqueue({ data: { id: 'claim-1' } }) // insert
     enqueue({ data: null }) // journal_entry_id update
+    enqueue({ data: [{ id: 'inbox-1' }] }) // inbox item claim (compare-and-set)
     enqueue({ data: { journal_entry_id: null, user_id: 'user-1', storage_path: 'p', file_name: 'kvitto.pdf', file_size_bytes: 1, mime_type: 'application/pdf', sha256_hash: 'x', uploaded_by: 'user-1', upload_source: 'file_upload' } }) // document lookup
-    enqueue({ data: null }) // inbox item update
 
     const result = await registerExpenseClaim(sb, COMPANY, USER, {
       description: 'Kvitto',
@@ -258,6 +259,77 @@ describe('registerExpenseClaim', () => {
 
     expect(result.ok).toBe(true)
     expect(linkToJournalEntryMock).toHaveBeenCalledWith(sb, COMPANY, 'doc-1', 'je-1')
+    expect(findCalls('invoice_inbox_items', 'update')).toEqual([[{ created_journal_entry_id: 'je-1' }]])
+    expect(findCalls('invoice_inbox_items', 'is')).toEqual([
+      ['created_journal_entry_id', null],
+      ['created_supplier_invoice_id', null],
+    ])
+  })
+
+  // accounted#14: the item stamp overwrote any pointer, so the same
+  // underlag registered twice kept two posted verifikat.
+  const INBOX_CLAIM_INPUT = {
+    description: 'Kvitto',
+    expense_date: '2026-09-01',
+    amount: 100,
+    vat_amount: 0,
+    currency: 'SEK' as const,
+    expense_account: '5410',
+    claimant_name: 'Joakim',
+    document_id: 'doc-1',
+    inbox_item_id: 'inbox-1',
+  }
+
+  it('refuses an inbox item another verifikat still books, before writing anything', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: { created_journal_entry_id: 'je-first', created_supplier_invoice_id: null } })
+    enqueue({ data: { status: 'posted' } }) // the pointer's verifikat
+
+    const result = await registerExpenseClaim(sb, COMPANY, USER, INBOX_CLAIM_INPUT)
+
+    expect(result).toEqual({ ok: false, code: 'INBOX_ITEM_BOOKED' })
+    expect(createJournalEntryMock).not.toHaveBeenCalled()
+    expect(findCall('expense_claims', 'insert')).toBeUndefined()
+  })
+
+  it('loses the claim to a concurrent registration: reverses its verifikat, removes its row, attaches nothing', async () => {
+    reverseEntryMock.mockResolvedValue({ id: 'je-storno' })
+    findPayslipLineForClaimMock.mockResolvedValue(null)
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: { created_journal_entry_id: null, created_supplier_invoice_id: null } }) // still unbooked
+    enqueue({ data: { id: 'claim-2' } }) // insert
+    enqueue({ data: null }) // journal_entry_id update
+    enqueue({ data: [] }) // inbox item claim: the other registration stamped first
+    enqueue({ data: { id: 'claim-2', status: 'registered', journal_entry_id: 'je-1' } }) // delete: claim read
+    enqueue({ data: { status: 'posted', reversed_by_id: null } }) // delete: entry status
+    enqueue({ data: null }) // delete: claim row
+
+    const result = await registerExpenseClaim(sb, COMPANY, USER, INBOX_CLAIM_INPUT)
+
+    expect(result).toEqual({ ok: false, code: 'INBOX_ITEM_BOOKED' })
+    expect(reverseEntryMock).toHaveBeenCalledWith(sb, COMPANY, USER, 'je-1')
+    expect(findCall('expense_claims', 'delete')).toBeTruthy()
+    expect(linkToJournalEntryMock).not.toHaveBeenCalled()
+    expect(findCall('document_attachments', 'insert')).toBeUndefined()
+  })
+
+  it('replaces a stale pointer at a reversed verifikat, exactly that value', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: { created_journal_entry_id: 'je-stornoed', created_supplier_invoice_id: null } })
+    enqueue({ data: { status: 'reversed' } })
+    enqueue({ data: { id: 'claim-3' } }) // insert
+    enqueue({ data: null }) // journal_entry_id update
+    enqueue({ data: [{ id: 'inbox-1' }] }) // inbox item claim on the stale value
+    enqueue({ data: { journal_entry_id: 'je-stornoed', user_id: 'user-1', storage_path: 'p', file_name: 'kvitto.pdf', file_size_bytes: 1, mime_type: 'application/pdf', sha256_hash: 'x', uploaded_by: 'user-1', upload_source: 'file_upload' } }) // document lookup
+    enqueue({ data: { id: 'doc-copy' } }) // attachment copy insert
+    enqueue({ data: null }) // claim document_id update
+
+    const result = await registerExpenseClaim(sb, COMPANY, USER, INBOX_CLAIM_INPUT)
+
+    expect(result.ok).toBe(true)
+    expect(findCalls('invoice_inbox_items', 'eq')).toContainEqual(['created_journal_entry_id', 'je-stornoed'])
+    expect(findCalls('invoice_inbox_items', 'is')).toEqual([['created_supplier_invoice_id', null]])
+    expect(reverseEntryMock).not.toHaveBeenCalled()
   })
 
   it('copies an already-anchored receipt instead of re-pointing it (BFL immutability)', async () => {

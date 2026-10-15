@@ -620,6 +620,7 @@ describe('commitPendingOperation: create_voucher', () => {
   // signal that drops the row out of "needs action") and attach the OCR
   // document to the new JE. Status is left untouched: the status CHECK only
   // allows received|error, so the link column alone marks the row processed.
+  const UNBOOKED_ITEM = { created_journal_entry_id: null, created_supplier_invoice_id: null }
 
   it('inbox-direct: posts the entry, links the inbox row, and attaches the document', async () => {
     vi.mocked(createJournalEntry).mockResolvedValueOnce(
@@ -632,7 +633,8 @@ describe('commitPendingOperation: create_voucher', () => {
 
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({ data: [{ id: 'inbox-1' }], error: null }) // inbox update: 1 row claimed
+    enqueue({ data: UNBOOKED_ITEM, error: null }) // inbox item read before posting
+    enqueue({ data: [{ id: 'inbox-1' }], error: null }) // inbox claim: 1 row claimed
     enqueue({ data: null, error: null }) // dispatcher's commit update
 
     const op = makePendingOp({
@@ -672,7 +674,8 @@ describe('commitPendingOperation: create_voucher', () => {
 
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({ data: [{ id: 'inbox-1' }], error: null }) // inbox update: 1 row claimed
+    enqueue({ data: UNBOOKED_ITEM, error: null }) // inbox item read before posting
+    enqueue({ data: [{ id: 'inbox-1' }], error: null }) // inbox claim: 1 row claimed
     enqueue({ data: null, error: null }) // dispatcher's commit update
 
     const op = makePendingOp({
@@ -706,7 +709,8 @@ describe('commitPendingOperation: create_voucher', () => {
 
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null })
-    enqueue({ data: [{ id: 'inbox-1' }], error: null }) // inbox update: 1 row claimed
+    enqueue({ data: UNBOOKED_ITEM, error: null }) // inbox item read before posting
+    enqueue({ data: [{ id: 'inbox-1' }], error: null }) // inbox claim: 1 row claimed
     enqueue({ data: null, error: null }) // dispatcher's commit update
 
     const op = makePendingOp({
@@ -729,18 +733,89 @@ describe('commitPendingOperation: create_voucher', () => {
     expect(result.data).toMatchObject({ journal_entry_id: 'je-link-fails', inbox_linked: true })
   })
 
-  it('inbox-direct: zero-rows-updated (another commit already claimed the inbox): voucher posted, inbox_linked=false, no doc attach', async () => {
-    // Race scenario the .is('created_journal_entry_id', null) predicate is
-    // designed to catch: two pending ops on the same inbox item commit in
-    // parallel, the loser sees 0 rows updated.
+  it('inbox-direct: refuses with 409 before posting when the item is already booked (accounted#14)', async () => {
+    // Staging checked the item, but another booking landed before approval:
+    // approving this op used to post a second verifikat for the same underlag.
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })
+    enqueue({ data: { created_journal_entry_id: 'je-winner', created_supplier_invoice_id: null }, error: null })
+    enqueue({ data: { status: 'posted' }, error: null }) // the pointer's verifikat still books it
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const op = makePendingOp({
+      params: {
+        entry_date: '2026-05-12',
+        description: 'second approval of the same kvitto',
+        fiscal_period_id: 'fp-1',
+        inbox_item_id: 'inbox-1',
+        document_id: 'doc-1',
+        lines: [
+          { account_number: '5410', debit_amount: 250, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 250 },
+        ],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    // Nothing was posted, so the op is an ordinary auto-rejected 409.
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(result.code).toBe('INBOX_ITEM_ALREADY_BOOKED')
+    expect(result.data).toMatchObject({ journal_entry_id: 'je-winner' })
+    expect(createJournalEntry).not.toHaveBeenCalled()
+    expect(reverseEntry).not.toHaveBeenCalled()
+    expect(linkToJournalEntry).not.toHaveBeenCalled()
+    expect(findCalls('invoice_inbox_items', 'update')).toEqual([])
+  })
+
+  it('inbox-direct: replaces a stale pointer at a reversed verifikat, exactly that value', async () => {
+    // The kvitto was booked, the booking was reversed, and it is booked
+    // again: the stornoed verifikat no longer books the underlag.
+    vi.mocked(createJournalEntry).mockResolvedValueOnce(
+      makeJournalEntry({ id: 'je-rebook', voucher_number: 23 })
+    )
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })
+    enqueue({ data: { created_journal_entry_id: 'je-reversed', created_supplier_invoice_id: null }, error: null })
+    enqueue({ data: { status: 'reversed' }, error: null })
+    enqueue({ data: [{ id: 'inbox-1' }], error: null }) // claim on the observed stale value
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const op = makePendingOp({
+      params: {
+        entry_date: '2026-05-12',
+        description: 'rebooked kvitto',
+        fiscal_period_id: 'fp-1',
+        inbox_item_id: 'inbox-1',
+        lines: [
+          { account_number: '5410', debit_amount: 250, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 250 },
+        ],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(findCalls('invoice_inbox_items', 'eq')).toContainEqual(['created_journal_entry_id', 'je-reversed'])
+    expect(findCalls('invoice_inbox_items', 'is')).toEqual([['created_supplier_invoice_id', null]])
+    expect(reverseEntry).not.toHaveBeenCalled()
+  })
+
+  it('inbox-direct: the second claim loses: its verifikat is reversed, no doc attach, op failed_partial (accounted#14)', async () => {
+    // Two pending ops on the same inbox item approved at once: both pass the
+    // read, both post; the compare-and-set lets one keep its verifikat and
+    // the loser reverses its own through the storno service.
     vi.mocked(createJournalEntry).mockResolvedValueOnce(
       makeJournalEntry({ id: 'je-race-loser', voucher_number: 22 })
     )
 
-    const { supabase, enqueue } = createQueuedMockSupabase()
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null })
-    enqueue({ data: [], error: null }) // inbox update returned ZERO rows (race lost)
-    enqueue({ data: null, error: null }) // dispatcher's commit update
+    enqueue({ data: UNBOOKED_ITEM, error: null }) // the read still sees it unbooked
+    enqueue({ data: [], error: null }) // inbox claim returned ZERO rows (race lost)
+    enqueue({ data: null, error: null }) // dispatcher's failed_partial update
 
     const op = makePendingOp({
       params: {
@@ -758,22 +833,31 @@ describe('commitPendingOperation: create_voucher', () => {
 
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
 
-    expect(result.status).toBe('committed')
-    expect(result.data).toMatchObject({ inbox_linked: false })
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(409)
+    expect(result.operation_status).toBe('failed_partial')
+    expect(result.data).toMatchObject({ posted_ids: { journal_entry_id: 'je-race-loser' } })
+    expect(reverseEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'je-race-loser')
+    expect(findCalls('invoice_inbox_items', 'is')).toEqual([
+      ['created_journal_entry_id', null],
+      ['created_supplier_invoice_id', null],
+    ])
     // Critical: document MUST NOT be linked to the racing loser JE: the
     // inbox already points at the winner's JE.
     expect(linkToJournalEntry).not.toHaveBeenCalled()
   })
 
-  it('inbox-direct: inbox update failure does NOT roll back the posted entry (inbox_linked=false)', async () => {
+  it('inbox-direct: a claim write that errors releases its own claim and reverses the verifikat', async () => {
     vi.mocked(createJournalEntry).mockResolvedValueOnce(
       makeJournalEntry({ id: 'je-inbox-fails', voucher_number: 20 })
     )
 
-    const { supabase, enqueue } = createQueuedMockSupabase()
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null })
-    enqueue({ data: null, error: { message: 'unique constraint violated (concurrent commit)' } }) // inbox update fails
-    enqueue({ data: null, error: null }) // dispatcher's commit update
+    enqueue({ data: UNBOOKED_ITEM, error: null })
+    enqueue({ data: null, error: { message: 'connection reset' } }) // inbox claim errors
+    enqueue({ data: null, error: null }) // release keyed on this verifikat's id
+    enqueue({ data: null, error: null }) // dispatcher's failed_partial update
 
     const op = makePendingOp({
       params: {
@@ -792,8 +876,14 @@ describe('commitPendingOperation: create_voucher', () => {
 
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
 
-    expect(result.status).toBe('committed')
-    expect(result.data).toMatchObject({ inbox_linked: false })
+    expect(result.status).toBe('failed')
+    expect(result.operation_status).toBe('failed_partial')
+    expect(findCalls('invoice_inbox_items', 'update')).toEqual([
+      [{ created_journal_entry_id: 'je-inbox-fails' }],
+      [{ created_journal_entry_id: null }],
+    ])
+    expect(findCalls('invoice_inbox_items', 'eq')).toContainEqual(['created_journal_entry_id', 'je-inbox-fails'])
+    expect(reverseEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'je-inbox-fails')
     expect(linkToJournalEntry).not.toHaveBeenCalled()
   })
 

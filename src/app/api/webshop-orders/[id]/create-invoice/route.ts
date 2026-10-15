@@ -9,7 +9,7 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
 import { EU_COUNTRIES } from '@/lib/vat/eu-countries'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
 import type { Currency, Customer, CustomerType, Invoice, WebshopOrder } from '@/types'
-import { todayIsoStockholm } from '@/lib/dates/iso'
+import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 
 const EU_COUNTRY_CODES = new Set(EU_COUNTRIES.map((c) => c.code))
 
@@ -233,11 +233,11 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
             },
           ]
 
+    // The due date counts the terms from the invoice date itself: a UTC
+    // clock lands one day short between midnight and 01:00/02:00 in Sweden.
     const invoiceDate = todayIsoStockholm()
     const paymentTermsDays = customer.default_payment_terms ?? 30
-    const due = new Date()
-    due.setDate(due.getDate() + paymentTermsDays)
-    const dueDate = due.toISOString().split('T')[0]
+    const dueDate = addDaysIso(invoiceDate, paymentTermsDays)
 
     const input: InvoiceWriteInput = {
       customer_id: customer.id,

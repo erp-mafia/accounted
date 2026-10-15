@@ -14,9 +14,10 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { addMonthsIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { coreKey } from './ledger-key'
 import { isScbConfigured } from './scb/config'
-import { getObservedParties, type ObservedParty } from './observed'
+import { getObservedParties, OBSERVED_PARTIES_MAX, type ObservedParty } from './observed'
 import type { SuggestionReason } from './suggest'
 
 export type RegisterView = 'suggested' | 'observed' | 'all'
@@ -210,11 +211,10 @@ export function defaultRoles(stats: LedgerStats | null): PartyRole[] {
   return roles
 }
 
-function periodStart(period: RegisterPeriod, now = new Date()): string | null {
+/** First day of a register period: twelve months before the Swedish calendar day, or null for all time. */
+export function periodStart(period: RegisterPeriod, now = new Date()): string | null {
   if (period === 'all') return null
-  const d = new Date(now)
-  d.setUTCFullYear(d.getUTCFullYear() - 1)
-  return d.toISOString().slice(0, 10)
+  return addMonthsIso(todayIsoStockholm(now), -12)
 }
 
 function normalizeQuery(q: string | undefined): string {
@@ -244,19 +244,20 @@ export async function getRegister(
   const period = options.period ?? '12m'
   const q = normalizeQuery(options.q)
 
+  // Archived (dismissed) parties stay out of the list but keep their keys
+  // claimed, so a dismissed suggestion does not resurface as observed.
+  const partiesRead = fetchAllRows<PartyRecord>(({ from, to }) =>
+    supabase
+      .from('parties')
+      .select('id, display_name, org_number, kind, status, alias_keys, suggested_reason, created_at, archived_at')
+      .eq('company_id', companyId)
+      .is('merged_into', null)
+      .order('display_name', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
   const [parties, customers, suppliers, observed, customerCounts, supplierCounts, countryFacts] = await Promise.all([
-    // Archived (dismissed) parties stay out of the list but keep their keys
-    // claimed, so a dismissed suggestion does not resurface as observed.
-    fetchAllRows<PartyRecord>(({ from, to }) =>
-      supabase
-        .from('parties')
-        .select('id, display_name, org_number, kind, status, alias_keys, suggested_reason, created_at, archived_at')
-        .eq('company_id', companyId)
-        .is('merged_into', null)
-        .order('display_name', { ascending: true })
-        .order('id', { ascending: true })
-        .range(from, to),
-    ),
+    partiesRead,
     // Every paged read below orders on its unique id: paging without a total
     // order duplicates or skips rows on a page boundary, and the counts drift.
     fetchAllRows<{ id: string; party_id: string | null }>(({ from, to }) =>
@@ -265,7 +266,18 @@ export async function getRegister(
     fetchAllRows<{ id: string; party_id: string | null }>(({ from, to }) =>
       supabase.from('suppliers').select('id, party_id').eq('company_id', companyId).not('party_id', 'is', null).order('id').range(from, to),
     ),
-    getObservedParties(supabase, companyId, { fromDate: periodStart(period), limit: 5000 }),
+    // The ranked list feeds the observed queue and stops at
+    // OBSERVED_PARTIES_MAX keys. Every live party's stats come from the same
+    // call by its alias keys, so those keys are named: a party ranked below
+    // the cut used to get no stats, sort last and default to the supplier
+    // role whatever side of the ledger it sits on (accounted#16).
+    partiesRead.then((ps) =>
+      getObservedParties(supabase, companyId, {
+        fromDate: periodStart(period),
+        limit: OBSERVED_PARTIES_MAX,
+        keys: ps.filter((p) => !p.archived_at).flatMap((p) => p.alias_keys),
+      }),
+    ),
     fetchAllRows<{ customer_id: string }>(({ from, to }) =>
       supabase.from('invoices').select('customer_id').eq('company_id', companyId).not('customer_id', 'is', null).order('id').range(from, to),
     ),
@@ -470,7 +482,9 @@ export async function getDossier(supabase: SupabaseClient, companyId: string, pa
       .limit(50),
     supabase.from('customers').select('id').eq('company_id', companyId).eq('party_id', partyId).limit(1).maybeSingle(),
     supabase.from('suppliers').select('id').eq('company_id', companyId).eq('party_id', partyId).limit(1).maybeSingle(),
-    getObservedParties(supabase, companyId, { limit: 5000 }),
+    // This party's keys by name, whatever their rank; the one ranked key the
+    // RPC always returns is filtered out below.
+    getObservedParties(supabase, companyId, { limit: 1, keys: p.alias_keys }),
   ])
   for (const r of [facts, identities, decisions]) if (r.error) throw new Error(`dossier read failed: ${r.error.message}`)
 
@@ -516,6 +530,7 @@ export async function getDossier(supabase: SupabaseClient, companyId: string, pa
       .eq('company_id', companyId)
       .is('merged_into', null)
       .is('archived_at', null)
+      .order('id', { ascending: true })
       .range(from, to),
   )
   const liveById = new Map(live.map((l) => [l.id, l]))

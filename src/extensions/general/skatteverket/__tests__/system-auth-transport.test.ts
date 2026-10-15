@@ -107,4 +107,13 @@ describe('mtlsTransport.fetchToken', () => {
 
     await expect(mtlsTransport.fetchToken([])).rejects.toThrow('ECONNREFUSED')
   })
+
+  it('refuses an http token URL instead of silently upgrading it (accounted#21)', async () => {
+    process.env.SKATTEVERKET_SYSTEM_OAUTH_TOKEN_URL = 'http://oauth2.test.skatteverket.se/token'
+
+    await expect(mtlsTransport.fetchToken([])).rejects.toThrow(
+      /SKATTEVERKET_SYSTEM_OAUTH_TOKEN_URL must be https/,
+    )
+    expect(mockRequest).not.toHaveBeenCalled()
+  })
 })

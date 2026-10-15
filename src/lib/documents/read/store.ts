@@ -5,6 +5,7 @@ import { getAiStatus } from '@/lib/ai'
 import { withAiMeter } from '@/lib/ai/meter'
 import { createLogger } from '@/lib/logger'
 import { recordArkivUsage } from '@/lib/arkiv/usage'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { readDocumentBytes } from './router'
 import { keptPreview } from '@/lib/documents/preview'
 import { historyReaderTier, readLaneFor, readPlanFor, isActingType, isBooked, type ReadPlan } from './lanes'
@@ -222,7 +223,7 @@ export async function readUnreadDocuments(
           .select('units')
           .eq('company_id', companyId)
           .eq('activity', 'pages_vision')
-          .eq('day', now.toISOString().slice(0, 10))
+          .eq('day', todayIsoStockholm(now))
           .maybeSingle()
         spent.set(companyId, Number((rows as { units?: number } | null)?.units ?? 0))
       }

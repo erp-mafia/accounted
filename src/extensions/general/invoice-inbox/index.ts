@@ -53,6 +53,7 @@ import {
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
+import { claimInboxItemOrReverseEntry } from '@/lib/documents/inbox-item-claim'
 import { assertTransactionBookable } from '@/lib/transactions/is-booked'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { roundOre } from '@/lib/money'
@@ -2091,6 +2092,39 @@ export const invoiceInboxExtension: Extension = {
           }
         }
 
+        // Claim the item for this verifikat (accounted#14). The read above is
+        // a fast refusal only: two calls for an item without a bank row (a
+        // double click, a retry, an agent and a person) both passed it and
+        // both posted. The compare-and-set lets exactly one keep its
+        // verifikat; the loser's is reversed (storno), which also releases a
+        // bank row it linked above. It runs before the document link so a
+        // loser never moves the underlag onto its reversed verifikat. The
+        // status column is intentionally left at 'received': terminal state
+        // is encoded via created_journal_entry_id / matched_transaction_id
+        // (see migration 20260504180000_invoice_inbox_remove_ai_columns).
+        // matched_transaction_id keeps the existing match when the caller
+        // sent no transaction_id: overwriting with null let a caller that
+        // merely forgot the field silently unpick a match somebody had
+        // already made, and left the bank line unbooked with nothing on
+        // screen saying so.
+        const claim = await claimInboxItemOrReverseEntry(
+          ctx.supabase,
+          ctx.companyId,
+          ctx.userId,
+          id,
+          journalEntry.id,
+          { also: { matched_transaction_id: bookedTransactionId } },
+        )
+        if (claim.status === 'taken') {
+          return errorResponseFromCode('INBOX_ITEM_ALREADY_BOOKED', ctx.log, {
+            requestId: ctx.requestId,
+            details: { inbox_item_id: id },
+          })
+        }
+        if (claim.status === 'failed') {
+          return errorResponse(claim.error, ctx.log, { requestId: ctx.requestId })
+        }
+
         // Link the source document to the new entry. Best-effort: the
         // entry itself is already posted; surfacing the failure shouldn't
         // roll it back, but log so support can re-link manually.
@@ -2105,26 +2139,6 @@ export const invoiceInboxExtension: Extension = {
           } catch (err) {
             console.error('[invoice-inbox/book-direct] Document link failed:', err)
           }
-        }
-
-        // Mark the inbox item as resolved by writing the FK. The status
-        // column is intentionally left at 'received': terminal state is
-        // encoded via created_journal_entry_id / matched_transaction_id
-        // (see migration 20260504180000_invoice_inbox_remove_ai_columns).
-        const { error: updateError } = await ctx.supabase
-          .from('invoice_inbox_items')
-          .update({
-            created_journal_entry_id: journalEntry.id,
-            // Keep the existing match when the caller sent no transaction_id.
-            // Overwriting with null let a caller that merely forgot the field
-            // silently unpick a match somebody had already made, and left the
-            // bank line unbooked with nothing on screen saying so.
-            matched_transaction_id: bookedTransactionId,
-          })
-          .eq('id', id)
-          .eq('company_id', ctx.companyId)
-        if (updateError) {
-          return NextResponse.json({ error: updateError.message }, { status: 500 })
         }
 
         const postedLines = linesOf(journalEntry)

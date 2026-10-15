@@ -18,6 +18,29 @@ export interface SupplierPaymentDetails {
 
 export type SupplierPaymentColumns = Pick<SupplierPaymentDetails, 'bankgiro' | 'plusgiro' | 'iban' | 'bic'>
 
+/**
+ * What an inbox item's extraction (the scan, or Peppol's PaymentMeans) says
+ * the invoice is paid to. The one reading for every door that registers a
+ * supplier invoice from an inbox item: the dashboard and v1 convert, the
+ * privately paid create and the MCP approval, so no door can keep less of it
+ * than another. Unvalidated: statedPayeeColumns and the backfill validate.
+ */
+export function inboxStatedPaymentDetails(extractedData: unknown): SupplierPaymentDetails | null {
+  const supplier = (extractedData as { supplier?: unknown } | null | undefined)?.supplier
+  if (!supplier || typeof supplier !== 'object') return null
+  const read = (key: keyof SupplierPaymentDetails): string | null => {
+    const value = (supplier as Record<string, unknown>)[key]
+    return typeof value === 'string' && value.trim() ? value : null
+  }
+  const details: SupplierPaymentDetails = {
+    bankgiro: read('bankgiro'),
+    plusgiro: read('plusgiro'),
+    iban: read('iban'),
+    bic: read('bic'),
+  }
+  return Object.values(details).some((value) => value !== null) ? details : null
+}
+
 /** ISO 7064 mod 97-10 over the rearranged IBAN; the cheap check that rejects a misread digit. */
 export function isValidIban(raw: string | null | undefined): boolean {
   const iban = normalizeIban(raw)

@@ -83,6 +83,23 @@ describe('durable SIE HTTP boundaries',()=>{
     expect(sign).toHaveBeenCalledWith(expect.stringMatching(/^company-1\/sie-intake\/[a-f0-9-]+\.se$/),{upsert:false})
     expect((await response.json()).data.token).toBe('upload-token')
   })
+  // accounted#32: the reservation takes every SIE extension from the shared
+  // list (.si included) and refuses a name without one before any token.
+  it.each(['bok.se','BOK.SIE','lon.si'])('reserves an upload for %s',async filename=>{
+    expect((await routes.upload(request({filename,size:1024}))).status).toBe(201)
+  })
+  it.each(['bok','bok.txt','bok.sie.zip'])('refuses %s before issuing a token',async filename=>{
+    expect((await routes.upload(request({filename,size:1024}))).status).toBe(400)
+    expect(sign).not.toHaveBeenCalled()
+  })
+  it.each(['bok','bok.txt'])('execute refuses %s as an unsupported file type',async filename=>{
+    const form=new FormData()
+    form.set('file',new File(['#SIETYP 4\n#RAR 0 20260101 20261231'],filename))
+    const response=await routes.execute(new Request('https://example.test/api/import/sie/execute',{method:'POST',body:form}))
+    expect(response.status).toBe(400)
+    expect((await response.json()).error.code).toBe('SIE_PARSE_INVALID_TYPE')
+    expect(submit).not.toHaveBeenCalled()
+  })
   it('refuses an oversized upload before issuing a token',async()=>{
     expect((await routes.upload(request({filename:'large.se',size:50*1024*1024+1}))).status).toBe(400)
     expect(sign).not.toHaveBeenCalled()

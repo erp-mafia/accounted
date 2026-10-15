@@ -1,6 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { SourceSignals } from './schemas'
 import { loadActiveEmployeeCount } from './employee-facts'
+import { addMonthsIso, todayIsoStockholm } from '@/lib/dates/iso'
 
 // Atom registry index row: the metadata-only shape the composer sees when
 // picking a loadout. We never send full atom bodies to the Opus call;
@@ -311,6 +313,12 @@ interface SieSummary {
   year_count: number
 }
 
+// Ceiling for the transaction rollups below, which page with fetchAllRows.
+// Far above any company's bank lines today; it only bounds the onboarding
+// stream against a pathological feed. Rows are read newest first, so a capped
+// read is the most recent history, and the banking volume says so.
+export const TX_ROLLUP_MAX_ROWS = 20_000
+
 // Build a coarse SIE summary from the most-recent imported SIE for the
 // company. Used by the composer as a verticality signal (e.g. a top-spend
 // account 1465, alcohol inventory, strongly suggests restaurang).
@@ -367,24 +375,31 @@ export async function loadSieSummary(
   //
   // currency/amount_sek/exchange_rate come along because `amount` alone does
   // not say what unit it is in: see the CurrencyMagnitude note above.
-  const { data: tx } = await supabase
-    .from('transactions')
-    .select('description, amount, currency, amount_sek, exchange_rate')
-    .eq('company_id', companyId)
-    .limit(2000)
+  // Paged: a single read stops at PostgREST's 1,000 rows, and the totals
+  // below were sums over whichever 1,000 came back. A failed read leaves the
+  // rollup empty, as before: TIC carries the composer without it.
+  const tx = await fetchAllRows<AmountRow & { description: string | null }>(
+    ({ from, to }) =>
+      supabase
+        .from('transactions')
+        .select('id, description, amount, currency, amount_sek, exchange_rate')
+        .eq('company_id', companyId)
+        .order('date', { ascending: false })
+        .order('id', { ascending: true })
+        .range(from, to),
+    { maxRows: TX_ROLLUP_MAX_ROWS },
+  ).catch(() => [])
 
   const cpAgg = new Map<string, MagnitudeBucket>()
-  if (Array.isArray(tx)) {
-    for (const t of tx as (AmountRow & { description: string | null })[]) {
-      const name = normalizeCounterparty(t.description)
-      if (!name) continue
-      let bucket = cpAgg.get(name)
-      if (!bucket) {
-        bucket = newMagnitudeBucket()
-        cpAgg.set(name, bucket)
-      }
-      addRowToMagnitude(bucket, t)
+  for (const t of tx) {
+    const name = normalizeCounterparty(t.description)
+    if (!name) continue
+    let bucket = cpAgg.get(name)
+    if (!bucket) {
+      bucket = newMagnitudeBucket()
+      cpAgg.set(name, bucket)
     }
+    addRowToMagnitude(bucket, t)
   }
   const allCounterparties: CounterpartyMagnitude[] = Array.from(cpAgg.entries()).map(
     ([name, bucket]) => ({ name, ...finalizeMagnitude(bucket) }),
@@ -448,14 +463,32 @@ export async function loadBankingSummary(
   // currency/amount_sek/exchange_rate are part of the magnitude, not optional
   // decoration: without them `amount` is a bare number with no unit, and the
   // rollup below would sum EUR into a total labelled "kr".
-  const { data, error } = await supabase
-    .from('transactions')
-    .select('description, amount, currency, amount_sek, exchange_rate, date, journal_entry_id')
-    .eq('company_id', companyId)
-    .gte('date', oneYearAgo())
-    .order('date', { ascending: false })
-    .limit(5000)
-  if (error || !Array.isArray(data) || data.length === 0) return null
+  //
+  // Paged with fetchAllRows: one read stops at PostgREST's 1,000 rows, so a
+  // company with more bank lines in the year got its volume, unbooked count
+  // and counterpart totals from the newest 1,000 only, and the volume was
+  // still divided by twelve months.
+  let data: (AmountRow & { description: string | null; date: string; journal_entry_id: string | null })[]
+  try {
+    data = await fetchAllRows(
+      ({ from, to }) =>
+        supabase
+          .from('transactions')
+          .select('id, description, amount, currency, amount_sek, exchange_rate, date, journal_entry_id')
+          .eq('company_id', companyId)
+          .gte('date', oneYearAgo())
+          .order('date', { ascending: false })
+          .order('id', { ascending: true })
+          .range(from, to),
+      { maxRows: TX_ROLLUP_MAX_ROWS },
+    )
+  } catch {
+    return null
+  }
+  if (data.length === 0) return null
+  // At the cap the read holds the newest rows, so it covers less than the
+  // year: average over the months it does cover.
+  const months = data.length >= TX_ROLLUP_MAX_ROWS ? monthsSince(data[data.length - 1]!.date) : 12
 
   interface Bucket {
     magnitude: MagnitudeBucket
@@ -469,10 +502,7 @@ export async function loadBankingSummary(
   let volumeRowsWithSek = 0
   let volumeRowsWithoutSek = 0
   let unbookedCount = 0
-  for (const t of data as (AmountRow & {
-    description: string | null
-    journal_entry_id: string | null
-  })[]) {
+  for (const t of data) {
     if (!t.journal_entry_id) unbookedCount++
 
     const signedAmt = toFiniteNumber(t.amount)
@@ -518,7 +548,7 @@ export async function loadBankingSummary(
   return {
     top_counterparties: top,
     unconvertible_counterparties: unconvertible,
-    monthly_volume: sekVolume > 0 ? Math.round(sekVolume / 12) : null,
+    monthly_volume: sekVolume > 0 ? Math.round(sekVolume / months) : null,
     volume_rows_with_sek: volumeRowsWithSek,
     volume_rows_without_sek: volumeRowsWithoutSek,
     currencies: Array.from(currencies).sort(),
@@ -526,10 +556,15 @@ export async function loadBankingSummary(
   }
 }
 
+/** A year before the Swedish calendar day. */
 function oneYearAgo(): string {
-  const d = new Date()
-  d.setFullYear(d.getFullYear() - 1)
-  return d.toISOString().slice(0, 10)
+  return addMonthsIso(todayIsoStockholm(), -12)
+}
+
+// Months from `date` (YYYY-MM-DD) to today, at least one.
+function monthsSince(date: string): number {
+  const days = (Date.now() - Date.parse(`${date}T00:00:00Z`)) / 86_400_000
+  return Math.max(1, days / (365.25 / 12))
 }
 
 // Cheap counterparty extraction from a bank-statement description. Strips

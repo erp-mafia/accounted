@@ -1,5 +1,6 @@
 import crypto from 'crypto'
 import https from 'node:https'
+import { requireHttpsUrl } from '@/lib/http/require-https'
 import {
   getSystemAuthMechanism,
   getSystemCaPem,
@@ -82,7 +83,9 @@ export const mtlsTransport: SystemAuthTransport = {
     if (clientId) params.set('client_id', clientId)
     const bodyString = params.toString()
 
-    const url = new URL(tokenUrl)
+    // https.request always speaks TLS, so an http:// value would be upgraded
+    // silently; refuse it instead, like every other SKV base URL.
+    const url = new URL(requireHttpsUrl(tokenUrl, 'SKATTEVERKET_SYSTEM_OAUTH_TOKEN_URL'))
     const { status, body } = await new Promise<{ status: number; body: string }>(
       (resolve, reject) => {
         const req = https.request(
@@ -135,6 +138,9 @@ export const privateKeyJwtTransport: SystemAuthTransport = {
         'System auth (private_key_jwt) saknar konfiguration: SKATTEVERKET_SYSTEM_OAUTH_TOKEN_URL, _KEY_PEM_B64 och _CLIENT_ID krävs.'
       )
     }
+    // The signed client_assertion is replayable until it expires: never
+    // send it over plaintext http.
+    requireHttpsUrl(tokenUrl, 'SKATTEVERKET_SYSTEM_OAUTH_TOKEN_URL')
 
     const nowSec = Math.floor(Date.now() / 1000)
     const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url')

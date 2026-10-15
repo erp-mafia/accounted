@@ -14,7 +14,7 @@
 
 import { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
-import { daysBetweenIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { addDaysIso, daysBetweenIso, todayIsoStockholm } from '@/lib/dates/iso'
 
 const log = createLogger('deadline-status')
 
@@ -36,16 +36,13 @@ export function daysUntilDeadline(dueDate: string, now: Date = new Date()): numb
  * Update deadline statuses automatically (called by daily cron)
  */
 export async function updateDeadlineStatuses(
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  now: Date = new Date()
 ): Promise<{ updated: number; newlyOverdue: number; newlyActionNeeded: number }> {
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const todayStr = today.toISOString().split('T')[0]
-
-  // Calculate the action_needed threshold date
-  const thresholdDate = new Date(today)
-  thresholdDate.setDate(thresholdDate.getDate() + ACTION_NEEDED_THRESHOLD_DAYS)
-  const thresholdStr = thresholdDate.toISOString().split('T')[0]
+  // Both bounds are Swedish calendar days: a deadline due today turns
+  // overdue on the Swedish day after, whatever the UTC date says.
+  const todayStr = todayIsoStockholm(now)
+  const thresholdStr = addDaysIso(todayStr, ACTION_NEEDED_THRESHOLD_DAYS)
 
   let updated = 0
   let newlyOverdue = 0

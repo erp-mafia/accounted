@@ -6,6 +6,7 @@ import {
   CONNECTOR_UPSTREAM_CONTENT_TYPE_HEADER,
 } from '@/lib/connect/instance/upstreams'
 import { connectorHeaders } from '@/lib/connect/instance/connector-fetch'
+import { requireHttpsUrl } from '@/lib/http/require-https'
 import { baseUrlToService, parseConnectorCode, skatteverketConnectorMode } from './connector-mode'
 import { refreshAccessToken } from './oauth'
 import { getTokens, storeTokens, deleteTokens } from './token-store'
@@ -695,7 +696,11 @@ async function sendSkvRequest(
     Object.assign(headers, connectorHeaders({ key: connector.key }))
     headers[CONNECTOR_UPSTREAM_AUTH_HEADER] = `Bearer ${accessToken}`
   } else {
-    url = `${effectiveBase}${path}`
+    // Fail closed on a plaintext base URL (accounted#21): the Bearer token,
+    // the gateway Client_Secret and the filing itself ride in this request.
+    // Covers every per-service base (moms, skattekonto, AGI, ombud), since
+    // they all arrive here as effectiveBase.
+    url = `${requireHttpsUrl(effectiveBase, 'Skatteverket API base URL (SKATTEVERKET_*_API_BASE_URL)')}${path}`
     headers['Authorization'] = `Bearer ${accessToken}`
     const gateway = apiGwCredentialsFor(auth)
     headers['Client_Id'] = gateway.clientId

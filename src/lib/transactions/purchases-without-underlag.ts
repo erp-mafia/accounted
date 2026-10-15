@@ -26,6 +26,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { addMonthsIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { isTransactionBooked } from '@/lib/transactions/is-booked'
 
 /**
@@ -75,9 +76,7 @@ export async function fetchPurchasesWithoutUnderlag(
   const lookback = options?.lookbackMonths ?? PURCHASE_LOOKBACK_MONTHS
   const minAmount = options?.minAmountSek ?? MIN_PURCHASE_AMOUNT_SEK
 
-  const since = new Date()
-  since.setMonth(since.getMonth() - lookback)
-  const sinceDate = since.toISOString().slice(0, 10)
+  const sinceDate = addMonthsIso(todayIsoStockholm(), -lookback)
 
   const rows = await fetchAllRows<PurchaseWithoutUnderlag>((range) =>
     supabase

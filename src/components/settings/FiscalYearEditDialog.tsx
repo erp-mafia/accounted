@@ -154,12 +154,10 @@ export function FiscalYearEditDialog({
       })
       const body = await response.json().catch(() => ({}))
       if (!response.ok) {
-        // The route's refusals (BFL 3 kap. shapes, overlap, and every blocker
-        // redate_fiscal_period names) are Swedish domain copy and stay
-        // verbatim in both locales, so the envelope is read without the UI
-        // locale: the registry's English for FISCAL_PERIOD_DATES_BLOCKED is
-        // written for agents and would replace the named blockers.
-        setSubmitError(getUserErrorMessage(body, { fallback: t('fy_edit_failed_default') }))
+        // Read in the UI locale: the fiscal-year codes' English is written for
+        // a person, and a refused re-date keeps its named blockers (Swedish
+        // domain copy) after the English lead.
+        setSubmitError(getUserErrorMessage(body, { locale: errorLocale, fallback: t('fy_edit_failed_default') }))
         return
       }
       toast({ title: t('fy_edit_success') })

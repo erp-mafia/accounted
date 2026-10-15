@@ -9,7 +9,10 @@ import {
   slateAccount,
   whyKeyFor,
   whyTextSv,
+  PROPOSAL_REVERSE_CHARGE_KINDS,
+  reverseChargeKindOf,
   withAccount,
+  withReverseChargeKind,
   type BookingProposal,
 } from '../proposal'
 import { getTemplateById } from '../booking-templates'
@@ -162,13 +165,82 @@ describe('carriedCategory', () => {
     expect(carriedCategory('private', '2893', -100)).toBe('private')
     expect(carriedCategory('private', '2018', 100)).toBe('private')
   })
-  it('keeps the basis box of a reverse charge across an account change, and drops it when the person picks the VAT anew', () => {
+  it('keeps the basis box of a reverse charge across an account change, and off the booking under another treatment', () => {
     const nonEu = accountProposal({ id: 'a', source: 'assistant', account: '5420', label: 'x', category: 'expense_software', vat_treatment: 'reverse_charge', reverse_charge_kind: 'non_eu_services', amount: -200 })
     const moved = withAccount(nonEu, '6540', 'reverse_charge', -200)
     expect(moved.booking).toEqual({ kind: 'account', account: '6540', vat_treatment: 'reverse_charge', category: 'expense_software', reverse_charge_kind: 'non_eu_services' })
     const swedish = withAccount(moved, '6540', 'standard_25', -200)
     expect(swedish.booking).not.toHaveProperty('reverse_charge_kind')
-    expect(withAccount(swedish, '6540', 'reverse_charge', -200).booking).not.toHaveProperty('reverse_charge_kind')
+    expect(categorizeBodyFor(swedish)).not.toHaveProperty('reverse_charge_kind')
+  })
+})
+
+// accounted#35: picking the VAT treatment again gave plain reverse charge,
+// which books an EU service (ruta 21), and nothing in the review could name
+// another box.
+describe('the basis box of a reverse charge in the review', () => {
+  const nonEu = accountProposal({ id: 'assistant:t1', source: 'assistant', account: '5420', label: 'Programvaror', category: 'expense_software', vat_treatment: 'reverse_charge', reverse_charge_kind: 'non_eu_services', amount: -200 })
+
+  it('comes back with the box the review last held when the person leaves reverse charge and picks it again', () => {
+    const swedish = withAccount(nonEu, '5420', 'standard_25', -200, undefined, reverseChargeKindOf(nonEu))
+    const again = withAccount(swedish, '5420', 'reverse_charge', -200, undefined, 'non_eu_services')
+    expect(again.booking).toEqual({ kind: 'account', account: '5420', vat_treatment: 'reverse_charge', category: 'expense_software', reverse_charge_kind: 'non_eu_services' })
+  })
+
+  it('prefers the box the booking has over the one remembered', () => {
+    const p = withAccount(nonEu, '6540', 'reverse_charge', -200, undefined, 'eu_goods')
+    expect(reverseChargeKindOf(p)).toBe('non_eu_services')
+  })
+
+  it('names no box when none was ever said, so the server books its EU-service default', () => {
+    const swedish = accountProposal({ id: 'a', source: 'assistant', account: '6540', label: 'x', category: 'expense_software', vat_treatment: 'standard_25', amount: -200 })
+    const rc = withAccount(swedish, '6540', 'reverse_charge', -200)
+    expect(rc.booking).not.toHaveProperty('reverse_charge_kind')
+    expect(reverseChargeKindOf(rc)).toBeUndefined()
+  })
+
+  it('lets the person pick each box, on the account the booking has, as their own booking', () => {
+    for (const kind of PROPOSAL_REVERSE_CHARGE_KINDS) {
+      const p = withReverseChargeKind(nonEu, kind, -200)
+      expect(p.booking).toEqual({ kind: 'account', account: '5420', vat_treatment: 'reverse_charge', category: 'expense_software', reverse_charge_kind: kind })
+      expect(p).toMatchObject({ source: 'manual', name_sv: 'Programvaror' })
+      expect(categorizeBodyFor(p)).toEqual({
+        is_business: true, category: 'expense_software', account_override: '5420', vat_treatment: 'reverse_charge', reverse_charge_kind: kind,
+      })
+    }
+  })
+
+  it('turns a catalog template into a reverse charge on its business account when a box is picked', () => {
+    const p = withReverseChargeKind(proposalFromTemplate(mobile, 'catalog'), 'eu_services', -100)
+    expect(p.booking).toEqual({ kind: 'account', account: '6211', vat_treatment: 'reverse_charge', category: mobile.fallback_category, reverse_charge_kind: 'eu_services' })
+  })
+
+  it('carries the box a catalog template books when the person sets another account on it', () => {
+    const saasNonEu = proposalFromTemplate(getTemplateById('it_saas_non_eu')!, 'catalog')
+    expect(reverseChargeKindOf(saasNonEu)).toBe('non_eu_services')
+    const moved = withAccount(saasNonEu, '6540', 'reverse_charge', -200)
+    expect(moved.booking).toMatchObject({ account: '6540', vat_treatment: 'reverse_charge', reverse_charge_kind: 'non_eu_services' })
+    expect(reverseChargeKindOf(proposalFromTemplate(mobile, 'catalog'))).toBeUndefined()
+  })
+
+  it('offers the three boxes the categorize body takes, in momsdeklaration order', () => {
+    expect(PROPOSAL_REVERSE_CHARGE_KINDS).toEqual(['eu_goods', 'eu_services', 'non_eu_services'])
+  })
+
+  it.each([
+    ['eu_goods', '4515'],
+    ['eu_services', '4535'],
+    ['non_eu_services', '4531'],
+  ] as const)('books %s with its basis on %s against 4598, fiktiv moms 2645/2614', (kind, basis) => {
+    const body = categorizeBodyFor(withReverseChargeKind(nonEu, kind, -1000))
+    const tx = { id: 't1', amount: -1000, currency: 'SEK', amount_sek: -1000, exchange_rate: 1 } as unknown as Transaction
+    const mapping = buildMappingResultFromCategory(body.category!, tx, true, 'aktiebolag', body.vat_treatment, null, true, body.reverse_charge_kind)
+    expect(mapping.vat_lines).toEqual([
+      expect.objectContaining({ account_number: '2645', debit_amount: 250, credit_amount: 0 }),
+      expect.objectContaining({ account_number: '2614', debit_amount: 0, credit_amount: 250 }),
+      expect.objectContaining({ account_number: basis, debit_amount: 1000, credit_amount: 0 }),
+      expect.objectContaining({ account_number: '4598', debit_amount: 0, credit_amount: 1000 }),
+    ])
   })
 })
 

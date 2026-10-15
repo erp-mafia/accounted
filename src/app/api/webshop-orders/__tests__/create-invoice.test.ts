@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import {
   createMockRequest,
@@ -342,5 +342,43 @@ describe('POST /api/webshop-orders/[id]/create-invoice', () => {
       description: 'Produkt B (3 st)',
       vat_rate: 25,
     })
+  })
+})
+
+/*
+ * accounted#18: the invoice date is the Swedish calendar day and the due
+ * date counts the terms from it. 23:30 UTC is already the next day in
+ * Stockholm, in summer (UTC+2) and in winter (UTC+1).
+ */
+describe('POST /api/webshop-orders/[id]/create-invoice: dates on the Swedish day', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    eventBus.clear()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1', email: 'test@test.se' }, supabase: mockSupabase })
+    requireWriteMock.mockResolvedValue({ ok: true })
+    mockBuildInvoiceWriteData.mockResolvedValue(okBuild)
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it.each([
+    ['summer', '2026-07-01T23:30:00Z', '2026-07-02', '2026-07-12'],
+    ['winter', '2026-01-15T23:30:00Z', '2026-01-16', '2026-01-26'],
+  ])('%s: at %s the invoice is dated %s and due %s', async (_season, instant, invoiceDate, dueDate) => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(instant))
+    enqueue({ data: makeOrderRow() }) // order fetch
+    enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB', customer_type: 'swedish_business', default_payment_terms: 10 } }) // email match
+    enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } }) // invoices insert
+    enqueue({ data: null }) // invoice_items insert
+    enqueue({ data: [{ id: 'order-1' }] }) // order link-back matched
+
+    const { status } = await parseJsonResponse(await postCreate())
+    expect(status).toBe(200)
+    expect(mockBuildInvoiceWriteData).toHaveBeenCalledWith(
+      expect.objectContaining({ input: expect.objectContaining({ invoice_date: invoiceDate, due_date: dueDate }) }),
+    )
   })
 })

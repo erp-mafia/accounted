@@ -9,7 +9,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { statedPayeeColumns, type StatedPayeeColumns, type SupplierPaymentDetails } from '@/lib/supplier-invoices/payment-details-backfill'
 import { CARD_PAYEE_COLUMNS, loadPaidSuppliers } from './payee-alerts'
-import { classifyPayeeChange, payeeAlertFor, type CardPayeeSource, type PayeeAlert } from './payee-change'
+import { classifyPayeeChange, payeeAlertFor, statedPayeeKey, type CardPayeeSource, type PayeeAlert } from './payee-change'
 
 export interface RegisteredPayeeAssessment {
   /** The supplier_invoices.payee_* columns: what the document states, validated. */
@@ -18,6 +18,9 @@ export interface RegisteredPayeeAssessment {
   alert: PayeeAlert | null
   /** Whether the card may take the document's details the card lacks (the backfill). */
   backfill: boolean
+  /** The account the document states and the card's payment account, as payee keys (./payee-change.ts); null when none. */
+  statedKey: string | null
+  cardKey: string | null
 }
 
 /**
@@ -33,8 +36,8 @@ export async function assessRegisteredPayee(
   details: SupplierPaymentDetails | null | undefined,
 ): Promise<RegisteredPayeeAssessment> {
   const stated = statedPayeeColumns(details)
-  const statedAny = Boolean(stated.payee_bankgiro || stated.payee_plusgiro || stated.payee_iban)
-  if (!statedAny) return { stated, alert: null, backfill: true }
+  const statedKey = statedPayeeKey(stated)
+  if (!statedKey) return { stated, alert: null, backfill: true, statedKey: null, cardKey: null }
   const { data: card, error } = await supabase
     .from('suppliers')
     .select(CARD_PAYEE_COLUMNS)
@@ -43,9 +46,10 @@ export async function assessRegisteredPayee(
     .maybeSingle()
   // Never stops a registration: without the card nothing can be compared, and
   // the payment paths compare again before any money moves.
-  if (error || !card) return { stated, alert: null, backfill: true }
+  if (error || !card) return { stated, alert: null, backfill: true, statedKey, cardKey: null }
   const change = classifyPayeeChange({ invoice: stated, card: card as CardPayeeSource })
-  if (change.kind !== 'changed' && change.kind !== 'new_supplier_account') return { stated, alert: null, backfill: true }
+  const keys = { statedKey: change.statedKey, cardKey: change.cardKey }
+  if (change.kind !== 'changed' && change.kind !== 'new_supplier_account') return { stated, alert: null, backfill: true, ...keys }
   let paid = false
   if (change.kind === 'new_supplier_account') {
     try {
@@ -55,7 +59,7 @@ export async function assessRegisteredPayee(
     }
   }
   const alert = payeeAlertFor(change.kind, paid)
-  return { stated, alert, backfill: alert === null }
+  return { stated, alert, backfill: alert === null, ...keys }
 }
 
 /** The warning a registration that alerts carries, for the person booking the invoice. */

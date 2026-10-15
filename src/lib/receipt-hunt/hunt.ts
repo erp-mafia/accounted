@@ -14,6 +14,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { addMonthsIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
 import { getMailSearchService } from '@/lib/mail-search/service'
 import { ingestMailCandidate } from './ingest'
@@ -200,9 +201,7 @@ export async function fetchCandidateTransactions(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<HuntTransaction[]> {
-  const since = new Date()
-  since.setMonth(since.getMonth() - LOOKBACK_MONTHS)
-  const sinceDate = since.toISOString().slice(0, 10)
+  const sinceDate = addMonthsIso(todayIsoStockholm(), -LOOKBACK_MONTHS)
 
   const rows = await fetchAllRows<HuntTransaction>((range) =>
     supabase

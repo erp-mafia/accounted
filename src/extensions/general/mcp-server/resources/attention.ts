@@ -13,6 +13,7 @@ import {
 import { countUnbookedBankTransactions, fetchAnchoredTransactionIds } from '@/lib/transactions/unbooked'
 import { createLogger } from '@/lib/logger'
 import { listVoucherGaps } from '@/lib/core/bookkeeping/voucher-gaps'
+import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 
 type Severity = 'critical' | 'warning' | 'info'
 
@@ -51,9 +52,10 @@ export const attentionResource: McpResource = {
   mimeType: 'application/json',
   read: async ({ supabase, companyId }) => {
     const now = new Date()
-    const today = now.toISOString().slice(0, 10)
-    const horizonDate = new Date(now.getTime() + ACTION_NEEDED_THRESHOLD_DAYS * 86_400_000)
-    const horizon = horizonDate.toISOString().slice(0, 10)
+    // Overdue, the deadline horizon and the open period are judged on the
+    // Swedish calendar day, the day the user and the deadlines live in.
+    const today = todayIsoStockholm(now)
+    const horizon = addDaysIso(today, ACTION_NEEDED_THRESHOLD_DAYS)
 
     const [
       unbooked,

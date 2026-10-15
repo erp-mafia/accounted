@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ExtensionContext } from '@/lib/extensions/types'
 import { eventBus } from '@/lib/events/bus'
 import { createLogger } from '@/lib/logger'
+import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { formatRedovisare } from '@/lib/skatteverket/format'
 import { computeDedupKey, contentSignature } from '@/lib/skatteverket/skattekonto-dedup'
 import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
@@ -41,10 +42,9 @@ const MAX_SKIPPED_ROWS_RETAINED = 50
 /** SKV's default lookback for tidigare transaktioner when no datumFrom is sent. */
 const SKV_DEFAULT_WINDOW_DAYS = 555
 
+/** `days` before the Swedish calendar day, the day SKV counts its own window from. */
 function isoDateDaysAgo(days: number): string {
-  const d = new Date()
-  d.setUTCDate(d.getUTCDate() - days)
-  return d.toISOString().slice(0, 10)
+  return addDaysIso(todayIsoStockholm(), -days)
 }
 
 /**

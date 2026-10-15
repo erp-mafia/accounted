@@ -3,6 +3,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
 import { WebshopOrdersListQuerySchema } from '@/lib/api/schemas'
 import { errorResponse } from '@/lib/errors/get-structured-error'
+import { listWebshopStores, type WebshopStore } from '@/lib/webshop-orders/stores'
 
 const DEFAULT_LIMIT = 50
 
@@ -49,26 +50,14 @@ export const GET = withRouteContext(
       return errorResponse(error, log, { requestId })
     }
 
-    // Store facet for the filter dropdown: cheap distinct over the company's
-    // stores (small cardinality; the select is capped defensively).
-    const { data: facetRows, error: facetError } = await supabase
-      .from('webshop_orders')
-      .select('platform, store_scope, store_label')
-      .eq('company_id', companyId)
-      .eq('row_type', 'order')
-      .order('store_scope')
-      .limit(5000)
-    if (facetError) {
+    // Store facet for the filter dropdown: a distinct over the company's
+    // stores, one read per store whatever the number of orders.
+    let stores: WebshopStore[]
+    try {
+      stores = await listWebshopStores(supabase, companyId)
+    } catch (facetError) {
       log.error('failed to build store facet', facetError)
       return errorResponse(facetError, log, { requestId })
-    }
-    const seen = new Set<string>()
-    const stores: Array<{ platform: string; store_scope: string; store_label: string | null }> = []
-    for (const row of facetRows ?? []) {
-      const key = `${row.platform}:${row.store_scope}`
-      if (seen.has(key)) continue
-      seen.add(key)
-      stores.push(row)
     }
 
     return NextResponse.json({ data: data ?? [], count, stores })

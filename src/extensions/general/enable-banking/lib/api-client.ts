@@ -13,6 +13,7 @@
  */
 
 import { getAuthorizationHeader } from './jwt'
+import { requireHttpsUrl } from '@/lib/http/require-https'
 import { deriveTransactionLabel } from './transaction-label'
 import { FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
 import { bankConnectorMode, CONNECTOR_COMPANY_HEADER } from '@/lib/connect/instance/upstreams'
@@ -472,7 +473,11 @@ async function authenticatedFetch(
   // this instance has its own EB credentials, or on hosted, bankConnectorMode()
   // returns null and the direct path below is byte-identical to before.
   const connector = bankConnectorMode()
-  const url = connector ? `${connector.baseUrl}${endpoint}` : `${ENABLE_BANKING_API_URL}${endpoint}`
+  // The direct path sends Arcim's signed EB JWT: refuse a plaintext base URL
+  // (accounted#21). The connector base is checked in lib/connect/instance/config.ts.
+  const url = connector
+    ? `${connector.baseUrl}${endpoint}`
+    : `${requireHttpsUrl(ENABLE_BANKING_API_URL, 'ENABLE_BANKING_API_URL')}${endpoint}`
   const authorization = connector ? `Bearer ${connector.key}` : getAuthorizationHeader()
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)

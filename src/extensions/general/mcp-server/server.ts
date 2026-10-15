@@ -142,7 +142,8 @@ import {
 } from '@/lib/pending-operations/rejection-categories'
 import { rejectPendingOperations } from '@/lib/pending-operations/reject'
 import { canApproveSupplierInvoice, companyAttestsSupplierInvoices } from '@/lib/supplier-invoices/lifecycle'
-import { planSupplierPaymentBackfill, type SupplierPaymentColumns, type SupplierPaymentDetails } from '@/lib/supplier-invoices/payment-details-backfill'
+import { inboxStatedPaymentDetails, planSupplierPaymentBackfill, type SupplierPaymentColumns } from '@/lib/supplier-invoices/payment-details-backfill'
+import { assessRegisteredPayee, payeeAlertWarning } from '@/lib/payments/payee-registration'
 import { eventBus } from '@/lib/events/bus'
 import {
   explainVatTreatment,
@@ -246,7 +247,7 @@ import {
   type PayeeAlertState,
   type PayeeInvoiceFacts,
 } from '@/lib/payments/payee-alerts'
-import type { CardPayeeSource } from '@/lib/payments/payee-change'
+import { payeeKeyLabel, type CardPayeeSource } from '@/lib/payments/payee-change'
 import {
   normalizeVatRateToDecimal,
   normalizeVatRateToFraction,
@@ -15145,14 +15146,16 @@ export const tools: McpTool[] = [
           ? rawPaymentTerms
           : 30
 
-      // The scan read the supplier's giro or IBAN with everything else: a
-      // supplier that lacks them takes them on approval, so the invoice can
-      // go into a betalfil. Staged and shown here, written by the executor:
-      // staging is a proposal and writes nothing outside pending_operations.
-      const supplierPaymentFill = planSupplierPaymentBackfill(
-        resolvedSupplier as SupplierPaymentColumns,
-        supplierExt as SupplierPaymentDetails | null,
-      )
+      // What the invoice states it is paid to, read as every door reads it,
+      // against the supplier card. Approval keeps it on the invoice and fills
+      // what the card lacks, unless the account differs from the card's: then
+      // the payment waits for a person, and the preview names both accounts.
+      // Read only: staging writes nothing outside pending_operations.
+      const statedPayment = inboxStatedPaymentDetails(extracted)
+      const payeeAssessment = await assessRegisteredPayee(supabase, companyId, supplierId, statedPayment)
+      const supplierPaymentFill = payeeAssessment.backfill
+        ? planSupplierPaymentBackfill(resolvedSupplier as SupplierPaymentColumns, statedPayment)
+        : {}
       const hasSupplierPaymentFill = Object.keys(supplierPaymentFill).length > 0
 
       // Assemble core invoice fields
@@ -15703,7 +15706,6 @@ export const tools: McpTool[] = [
         ...(resolvedDefaultDimensions && Object.keys(resolvedDefaultDimensions).length > 0
           ? { default_dimensions: resolvedDefaultDimensions }
           : {}),
-        ...(hasSupplierPaymentFill ? { supplier_payment_details: supplierPaymentFill } : {}),
       }
 
       const previewData = {
@@ -15775,6 +15777,12 @@ export const tools: McpTool[] = [
         // What confirming also writes to the supplier card: only details it
         // lacks, never overwriting one a person entered.
         ...(hasSupplierPaymentFill ? { supplier_payment_details_fill: supplierPaymentFill } : {}),
+        ...(payeeAssessment.alert && payeeAssessment.statedKey
+          ? {
+              invoice_account: payeeKeyLabel(payeeAssessment.statedKey),
+              current_supplier_account: payeeAssessment.cardKey ? payeeKeyLabel(payeeAssessment.cardKey) : null,
+            }
+          : {}),
         // Echoed for every non-exact dimension resolution (resolve-don't-
         // select) so the agent can verify what a name attached to.
         ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
@@ -15797,6 +15805,7 @@ export const tools: McpTool[] = [
         params,
         preview: previewData,
         actor,
+        ...(payeeAssessment.alert ? { complianceNote: payeeAlertWarning(payeeAssessment.alert).message_sv } : {}),
         next: {
           // Kontantmetoden has no attest step: pointing its agent at the
           // attest tool sent it after a step the app never shows (crm#1156).

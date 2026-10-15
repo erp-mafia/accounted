@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
 // The unbooked count is the shared lib predicate (lib/transactions/unbooked.ts,
@@ -543,5 +543,33 @@ describe('Accounted://attention: reconciliation_due', () => {
     enqueue({ data: [] })
     const out = (await attentionResource.read(ctx(supabase))) as AttentionResponse
     expect(out.categories.find((c) => c.key === 'reconciliation_due')).toBeUndefined()
+  })
+})
+
+/*
+ * accounted#18: 23:30 UTC is already the next day in Stockholm, in summer
+ * (UTC+2) and in winter (UTC+1). Overdue, the deadline horizon and the open
+ * period are read on the Swedish day.
+ */
+describe('Accounted://attention: today is the Swedish calendar day', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it.each([
+    ['summer', '2026-07-01T23:30:00Z', '2026-07-02', '2026-07-16'],
+    ['winter', '2026-01-15T23:30:00Z', '2026-01-16', '2026-01-30'],
+  ])('%s: %s reads as %s', async (_season, instant, today, horizon) => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(instant))
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueueEmpty(enqueue)
+
+    await attentionResource.read(ctx(supabase))
+
+    expect(findCall('invoices', 'lt')).toEqual(['due_date', today])
+    expect(findCall('deadlines', 'lte')).toEqual(['due_date', horizon])
+    expect(findCall('fiscal_periods', 'lte')).toEqual(['period_start', today])
+    expect(findCall('fiscal_periods', 'gte')).toEqual(['period_end', today])
   })
 })

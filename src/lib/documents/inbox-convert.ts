@@ -42,7 +42,7 @@ import type { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
 import type { z } from 'zod'
 import type { CoreEvent } from '@/lib/events/types'
 import { eventBus } from '@/lib/events'
-import { backfillSupplierPaymentDetails, type SupplierPaymentDetails } from '@/lib/supplier-invoices/payment-details-backfill'
+import { backfillSupplierPaymentDetails, inboxStatedPaymentDetails } from '@/lib/supplier-invoices/payment-details-backfill'
 import { assessRegisteredPayee, payeeAlertWarning, type RegisteredPayeeAssessment } from '@/lib/payments/payee-registration'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import {
@@ -134,7 +134,7 @@ export async function convertInboxItemToSupplierInvoice(
   // detour to the supplier card, unless the invoice names an account the
   // card does not have, which waits for a person (lib/payments/payee-alerts.ts).
   // A write: commit only.
-  const scannedSupplier = (item.extracted_data as { supplier?: SupplierPaymentDetails } | null)?.supplier
+  const scannedSupplier = inboxStatedPaymentDetails(item.extracted_data)
   let payeeAssessment: RegisteredPayeeAssessment | null = null
   if (!options.dryRun) {
     payeeAssessment = await assessRegisteredPayee(supabase, companyId, supplier.id as string, scannedSupplier)

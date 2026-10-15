@@ -17,6 +17,21 @@ export function addDaysIso(iso: string, days: number): string {
   return d.toISOString().slice(0, 10)
 }
 
+/**
+ * Add `months` to a `YYYY-MM-DD` string and return `YYYY-MM-DD`. The day of
+ * month clamps to the last day of the target month (2026-03-31 minus one
+ * month is 2026-02-28), so a lookback window never overflows into the month
+ * after.
+ */
+export function addMonthsIso(iso: string, months: number): string {
+  const [y, m, d] = iso.split('-').map(Number)
+  const total = y * 12 + (m - 1) + months
+  const year = Math.floor(total / 12)
+  const monthIndex = total - year * 12
+  const lastDay = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate()
+  return new Date(Date.UTC(year, monthIndex, Math.min(d, lastDay))).toISOString().slice(0, 10)
+}
+
 /** Whole days from `from` to `to` (both `YYYY-MM-DD`); negative when `to` is earlier. */
 export function daysBetweenIso(from: string, to: string): number {
   const ms = new Date(to + 'T00:00:00Z').getTime() - new Date(from + 'T00:00:00Z').getTime()

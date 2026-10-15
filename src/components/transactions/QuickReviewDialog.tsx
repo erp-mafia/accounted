@@ -21,7 +21,10 @@ import { linkDocuments, formatFailedDocumentNames } from '@/lib/documents/link-d
 import { ArrowUpRight, ArrowDownRight, Check, Paperclip, ChevronDown, ChevronUp, Inbox } from 'lucide-react'
 import { resolveTemplateAccountsForEntity } from '@/lib/bookkeeping/proposal-lines'
 import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
-import { accountProposal, businessAccount, carriedCategory, categorizeBodyFor, templateBehind, withAccount, type BookingProposal } from '@/lib/bookkeeping/proposal'
+import { accountProposal, businessAccount, carriedCategory, categorizeBodyFor, reverseChargeKindOf, templateBehind, withAccount, withReverseChargeKind, type BookingProposal } from '@/lib/bookkeeping/proposal'
+import { booksReverseChargePurchase } from '@/lib/bookkeeping/category-mapping'
+import { DEFAULT_REVERSE_CHARGE_KIND, type ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
+import { vatCodeRuleForAccount } from '@/lib/bookkeeping/voucher-line-vat-code'
 import { useProposalPreview } from '@/lib/hooks/use-proposal-preview'
 import { useProposalWhy } from './proposal-why'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
@@ -38,6 +41,7 @@ import { carriedDocumentIds, heldUnderlag, removedUpload, underlagLinkTargets, u
 import { useTransactionUnderlag } from './use-transaction-underlag'
 import UnderlagFileRow from './UnderlagFileRow'
 import VatTreatmentSelect from './VatTreatmentSelect'
+import ReverseChargeBoxSelect from './ReverseChargeBoxSelect'
 import AiCategorizeProposal, { AiStatusLine, pickFromRead, proposalMetaFromRead, type AiProposalMeta, type AssistantPick } from './AiCategorizeProposal'
 import { readIsFresh, type AssistantRead } from '@/lib/agent/categorize/read-shape'
 import { isPersonChoice, type ReviewChoice } from '@/lib/transactions/review-choice'
@@ -134,6 +138,15 @@ export default function QuickReviewDialog({
   // What the review showed before the person took the assistant's pick: the
   // change line names it and Ångra restores it. Null until a pick is taken.
   const [previous, setPrevious] = useState<BookingProposal | null>(null)
+  // The basis box the review last held for a reverse charge (ruta 20, 21 or
+  // 22), kept while the person tries another treatment so picking reverse
+  // charge again brings it back (accounted#35).
+  const lastRcKind = useRef<ReverseChargeKind | undefined>(reverseChargeKindOf(initialProposal))
+  useEffect(() => {
+    if (proposal.booking.kind === 'account' && proposal.booking.vat_treatment === 'reverse_charge') {
+      lastRcKind.current = proposal.booking.reverse_charge_kind
+    }
+  }, [proposal])
   const catalogTemplate = templateBehind(proposal)
   const accountOverride = proposal.booking.kind === 'account' ? proposal.booking.account : ''
   const vatTreatment: VatTreatment | 'none' = proposal.booking.kind === 'account' ? proposal.booking.vat_treatment : 'none'
@@ -354,9 +367,16 @@ export default function QuickReviewDialog({
   // rate picked by hand is what gets booked, and the moms line below offers
   // the document's figure as the way back. Without this the document's moms
   // silently won and changing the rate appeared to do nothing.
+  // A reverse charge picked again after another treatment gets back the box
+  // the review last held, not the EU-service default (accounted#35).
   const setVatTreatment = useCallback((v: VatTreatment | 'none') => {
     setUseDocVat(false)
-    setProposal((p) => withAccount(p, p.booking.kind === 'account' ? p.booking.account : businessAccount(p), v === 'none' ? 'exempt' : v, amountForLegs))
+    const lastKind = lastRcKind.current
+    setProposal((p) => withAccount(p, p.booking.kind === 'account' ? p.booking.account : businessAccount(p), v === 'none' ? 'exempt' : v, amountForLegs, undefined, lastKind))
+  }, [amountForLegs])
+  // The person's pick of the box a reverse-charge purchase reports in.
+  const setReverseChargeKind = useCallback((kind: ReverseChargeKind) => {
+    setProposal((p) => withReverseChargeKind(p, kind, amountForLegs))
   }, [amountForLegs])
 
   // The page is told what this review holds whenever that changes, so a
@@ -526,6 +546,28 @@ export default function QuickReviewDialog({
     .filter((x): x is string => !!x)
     .join(' · ')
   const isLiabilityAccount = accountOverride.startsWith('2')
+  // The box a reverse-charge purchase reports its basis in (accounted#35):
+  // shown, and picked, wherever the booking self-assesses a purchase. On an
+  // account that reports its own ruta 20-24 (4531, or a cost account whose
+  // momskod is a reverse-charge purchase) the account decides the box, as the
+  // booking does (reverseChargeOnAccount), so it is named, not offered.
+  const rcBoxApplies =
+    proposal.booking.kind === 'account' &&
+    proposal.booking.vat_treatment === 'reverse_charge' &&
+    !isLiabilityAccount &&
+    booksReverseChargePurchase(proposal.booking.category, tx.amount)
+  const rcAccountRule = rcBoxApplies
+    ? vatCodeRuleForAccount(accountOverride, (wholeChart ?? accounts).find((a) => a.account_number === accountOverride))
+    : null
+  const rcKind = reverseChargeKindOf(proposal) ?? DEFAULT_REVERSE_CHARGE_KIND
+  const rcBoxText = !rcBoxApplies
+    ? null
+    : rcAccountRule?.mode === 'fixed'
+      ? tJournal('vat_code_account_option', {
+          rate: Math.round(rcAccountRule.code.rate * 100),
+          box: rcAccountRule.box.replace('ruta', ''),
+        })
+      : tJournal(`vat_code_kind_${rcKind}`)
   // For non-SEK transactions, the verifikation and the headline must show
   // the SEK-converted total: the mall/category booking always posts in SEK.
   const sekAmount = resolveSekAmount(
@@ -1031,6 +1073,7 @@ export default function QuickReviewDialog({
                       const opt = VAT_TREATMENT_OPTIONS.find(o => o.value === vatTreatment)
                       return opt ? tCat(opt.labelKey) : t('no_vat_default')
                     })()}
+                    {rcBoxText && ` · ${rcBoxText}`}
                     {' '}
                     <button
                       type="button"
@@ -1043,6 +1086,24 @@ export default function QuickReviewDialog({
                 )}
               </div>
             </div>
+
+            {showVatDropdown && rcBoxApplies && (
+              <div>
+                <label className="text-sm font-medium text-muted-foreground">{t('label_rc_box')}</label>
+                <div className="mt-1">
+                  {rcAccountRule?.mode === 'fixed' ? (
+                    <p className="text-sm">{rcBoxText}</p>
+                  ) : (
+                    <ReverseChargeBoxSelect
+                      value={rcKind}
+                      onValueChange={setReverseChargeKind}
+                      ariaLabel={t('label_rc_box')}
+                      disabled={isProcessing}
+                    />
+                  )}
+                </div>
+              </div>
+            )}
           </>
         )}
 

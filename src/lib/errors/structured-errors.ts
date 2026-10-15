@@ -2760,29 +2760,34 @@ const PERIOD: Record<string, StructuredErrorEntry> = {
   // operations fiscal-periods.create / .update). The shape rules are BFL 3 kap.
   // Codes flagged thrown_message_sv carry a Swedish sentence naming the dates
   // or the neighbouring year; details carry the same facts for agents.
+  // message_en is what the fiscal-year dialog shows an English UI, so it is
+  // written for a person; where details hold the facts, the remediation says
+  // so for agents (accounted#18).
   FISCAL_PERIOD_INVALID_DATES: {
     httpStatus: 400,
     thrown_message_sv: true,
     message_sv: 'Räkenskapsårets datum är ogiltiga: slutdatumet måste ligga efter startdatumet.',
-    message_en: 'The fiscal year dates are invalid: period_end must be after period_start. details.rule names the rule.',
+    message_en: 'The fiscal year dates are invalid: the end date must be after the start date.',
+    remediation: { description: 'details.rule names the rule the dates broke.' },
   },
   FISCAL_PERIOD_START_NOT_FIRST_OF_MONTH: {
     httpStatus: 400,
     message_sv:
       'Räkenskapsåret måste börja den 1:a i en månad. Bara företagets första räkenskapsår får börja mitt i en månad (BFL 3 kap. 1 och 3 §§).',
     message_en:
-      "period_start must be the 1st of a month: only the company's first fiscal year may start mid-month (BFL 3 kap. 1 and 3 §§).",
+      "The fiscal year must start on the 1st of a month: only the company's first fiscal year may start mid-month (BFL 3 kap. 1 and 3 §§).",
   },
   FISCAL_PERIOD_END_NOT_MONTH_END: {
     httpStatus: 400,
     message_sv: 'Räkenskapsåret måste sluta på sista dagen i en månad (BFL 3 kap.).',
-    message_en: 'period_end must be the last day of a month (BFL 3 kap.).',
+    message_en: 'The fiscal year must end on the last day of a month (BFL 3 kap.).',
   },
   FISCAL_PERIOD_TOO_LONG: {
     httpStatus: 400,
     thrown_message_sv: true,
     message_sv: 'Ett räkenskapsår får vara högst 18 månader (BFL 3 kap.).',
-    message_en: 'A fiscal year may be at most 18 months (BFL 3 kap.). details.months holds the length requested.',
+    message_en: 'A fiscal year may be at most 18 months (BFL 3 kap.).',
+    remediation: { description: 'details.months holds the length requested.' },
   },
   FISCAL_PERIOD_ENSKILD_FIRMA_CALENDAR_YEAR: {
     httpStatus: 400,
@@ -2797,17 +2802,20 @@ const PERIOD: Record<string, StructuredErrorEntry> = {
     thrown_message_sv: true,
     message_sv: 'Räkenskapsåren måste följa direkt på varandra, utan glapp.',
     message_en:
-      'Fiscal years must be contiguous: a new year starts the day after the preceding year ends and ends the day before the following year starts. details.expected_start / details.expected_end hold the date that fits.',
+      'Fiscal years must follow each other without a gap: a year starts the day after the previous one ends.',
+    remediation: {
+      description:
+        'A new year starts the day after the preceding year ends and ends the day before the following year starts. details.expected_start / details.expected_end hold the date that fits.',
+    },
   },
   FISCAL_PERIOD_OVERLAP: {
     httpStatus: 409,
     thrown_message_sv: true,
     message_sv: 'Räkenskapsåret överlappar ett befintligt räkenskapsår.',
-    message_en:
-      'The fiscal year overlaps an existing one (details.overlapping_period_id / overlapping_period_name). Fiscal years never overlap.',
+    message_en: 'The fiscal year overlaps an existing fiscal year.',
     remediation: {
       description:
-        'List the existing years with GET /fiscal-periods (gnubok_list_fiscal_periods) and choose dates that do not overlap any of them.',
+        'details.overlapping_period_id / overlapping_period_name name the year it overlaps. List the existing years with GET /fiscal-periods (gnubok_list_fiscal_periods) and choose dates that do not overlap any of them.',
       tool: 'gnubok_list_fiscal_periods',
     },
   },
@@ -2834,7 +2842,11 @@ const PERIOD: Record<string, StructuredErrorEntry> = {
     message_sv:
       'Datumen kan inte ändras: något i räkenskapsåret skulle påverkas. Namnet kan fortfarande ändras.',
     message_en:
-      'The new dates would affect what the fiscal year holds. details.blockers lists each reason (code, message_sv and its facts): entries_outside / drafts_outside (verifikat or drafts dated outside the new dates), other_year_entries, opening_balance (posted opening balances pin the start), period_locked, period_closed, company_lock_date, sie_import_hold, opening_balance_review, year_end_entries, kontantmetod_cutoff, depreciation_posted, tax_depreciation, annual_report, tax_assessment, annual_filing, plus the BFL 3 kap. shape and chain rules. The name can still be changed.',
+      'The dates cannot be changed: something in the fiscal year would be affected. The name can still be changed.',
+    remediation: {
+      description:
+        'details.blockers lists each reason (code, message_sv and its facts): entries_outside / drafts_outside (verifikat or drafts dated outside the new dates), other_year_entries, opening_balance (posted opening balances pin the start), period_locked, period_closed, company_lock_date, sie_import_hold, opening_balance_review, year_end_entries, kontantmetod_cutoff, depreciation_posted, tax_depreciation, annual_report, tax_assessment, annual_filing, plus the BFL 3 kap. shape and chain rules. Send only name to rename.',
+    },
   },
   FISCAL_PERIOD_CREATE_FAILED: {
     httpStatus: 500,
@@ -4543,6 +4555,18 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'Posten är bokförd och kan inte tas bort.',
     message_en: 'The inbox item is booked and cannot be deleted.',
+  },
+  // accounted#14: a second booking of the same underlag. Refused before
+  // posting when the item already reads booked; when two calls race past
+  // that read, the loser's verifikat is reversed (storno) before this answer.
+  INBOX_ITEM_ALREADY_BOOKED: {
+    httpStatus: 409,
+    message_sv: 'Underlaget är redan bokfört. Ladda om för att se verifikationen.',
+    message_en: 'The inbox item is already booked. Reload to see its verifikat.',
+    remediation: {
+      description:
+        'Nothing new stays in the books: either nothing was posted, or the verifikat this call posted was reversed with a storno because another call booked the item first. Read the item (created_journal_entry_id) to find the booking. Do not retry.',
+    },
   },
   // Book-direct on a foreign-currency underlag (crm#1146). The lines arrive as
   // bare numbers that are stored as SEK, so a receipt for 100 EUR used to post

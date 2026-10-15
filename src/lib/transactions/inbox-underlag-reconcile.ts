@@ -44,6 +44,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { appendProcessingHistoryWithClient } from '@/lib/processing-history/append'
 import { createLogger, type Logger } from '@/lib/logger'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import {
   propagateUnderlagForBookedTransaction,
   resolveBookedJournalEntryIds,
@@ -101,6 +102,11 @@ export interface ReconcileStrandedInboxUnderlagSummary {
   historyAppended: number
   /** Companies (or the initial scan) that threw; the run continued past them. */
   failures: number
+  /**
+   * Scanned items in companies archived by a migration reset, left alone:
+   * their rows are immutable by trigger, so every write would be refused.
+   */
+  skippedResetArchives: number
 }
 
 interface StrandedItem {
@@ -125,6 +131,7 @@ function emptySummary(execute: boolean): ReconcileStrandedInboxUnderlagSummary {
     companiesTouched: 0,
     historyAppended: 0,
     failures: 0,
+    skippedResetArchives: 0,
   }
 }
 
@@ -155,6 +162,26 @@ async function fetchStrandedCandidates(supabase: SupabaseClient): Promise<Strand
   return rows
 }
 
+/**
+ * Companies archived by a migration reset. Every row of such a company is
+ * immutable (block_migration_reset_source_mutation, migrations 20260818084050
+ * and 20260818143004): the trigger refuses the document link and the stamp
+ * alike, so the run used to retry the same items there every night and log
+ * "Archived migration reset source records are immutable" (daily since
+ * 2026-10-02). Keyed on the same table the trigger reads, so the skip and the
+ * refusal can never disagree. One row per reset, read once per run.
+ */
+async function fetchResetSourceCompanyIds(supabase: SupabaseClient): Promise<Set<string>> {
+  const rows = await fetchAllRows<{ source_company_id: string }>(({ from, to }) =>
+    supabase
+      .from('company_migration_resets')
+      .select('source_company_id')
+      .order('source_company_id', { ascending: true })
+      .range(from, to),
+  )
+  return new Set(rows.map((r) => r.source_company_id))
+}
+
 export async function reconcileStrandedInboxUnderlag(
   supabase: SupabaseClient,
   opts: ReconcileStrandedInboxUnderlagOptions,
@@ -176,9 +203,26 @@ export async function reconcileStrandedInboxUnderlag(
   }
   summary.scanned = candidates.length
 
+  // A failed read only costs the skip: the trigger still refuses every write
+  // in an archive, as it did before the skip existed.
+  let resetSources = new Set<string>()
+  if (candidates.length > 0) {
+    try {
+      resetSources = await fetchResetSourceCompanyIds(supabase)
+    } catch (err) {
+      log.warn('inbox underlag reconcile: could not read migration reset archives; none skipped this run', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
   // Group per company so the resolvers run one batched lookup per tenant.
   const byCompany = new Map<string, StrandedItem[]>()
   for (const item of candidates) {
+    if (resetSources.has(item.company_id)) {
+      summary.skippedResetArchives++
+      continue
+    }
     const list = byCompany.get(item.company_id) ?? []
     list.push(item)
     byCompany.set(item.company_id, list)

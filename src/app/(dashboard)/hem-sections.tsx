@@ -25,6 +25,7 @@ import { vatDeadlineLine } from '@/lib/onboarding/checklist'
 import { findUnfinishedConnect } from '@/lib/providers/unfinished-connect'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { createServiceClient } from '@/lib/supabase/server'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import type { InitialSetupState, MomsPeriod, OnboardingProgress } from '@/types'
 import { getDashboardAuthContext } from './request-context'
 
@@ -133,7 +134,7 @@ export async function HemChecklistSection({
       .in('tax_deadline_type', ['moms_monthly', 'moms_quarterly', 'moms_yearly'])
       .eq('is_completed', false)
       .is('dismissed_at', null)
-      .gte('due_date', now.toISOString().slice(0, 10))
+      .gte('due_date', todayIsoStockholm(now))
       .order('due_date', { ascending: true })
       .limit(1)
       .maybeSingle(),

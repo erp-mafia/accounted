@@ -147,7 +147,8 @@
  *      static import puts every extension back into that entry's cold start,
  *      or into the browser build. Implementation and rationale in
  *      static-init-import.mjs. No allowlist.
- *   16. limit-above-page: a PostgREST `.limit(N)` with N above 1000. max-rows
+ *   16. limit-above-page: a PostgREST `.limit(N)` with N above 1000, or a
+ *      reader's `{ limit: N }` option above 1000. max-rows
  *      answers it with 1000 rows and no error, so the written cap is a silent
  *      1000 (the Arkiv graph, facts and lint, the counterparty resolver and the
  *      pärm's attachments all summed or matched over a cut list, 2026-10).
@@ -155,9 +156,11 @@
  *      aggregate. Implementation and rationale in limit-above-page.mjs.
  *      Allowlisted file-set, may only shrink.
  *   17. utc-today: "today" computed as the UTC calendar date
- *      (`new Date().toISOString().slice(0, 10)` and its twins), which is
- *      yesterday in Sweden between midnight and 01:00/02:00. Use
- *      todayIsoStockholm() from lib/dates/iso. Implementation and rationale
+ *      (`new Date().toISOString().slice(0, 10)` and its twins, also read off
+ *      a `now` variable or a horizon derived from one), which is yesterday
+ *      in Sweden between midnight and 01:00/02:00. Use todayIsoStockholm()
+ *      from lib/dates/iso, with addDaysIso / addMonthsIso for horizons.
+ *      Implementation and rationale
  *      in utc-today.mjs. Allowlisted file-set, may only shrink.
  *   18. unsigned-provider-names: the name of a provider whose contract is not
  *      signed yet, anywhere in the change against the merge base (added
@@ -173,6 +176,12 @@
  *      stating it. 19 migrations did, and 24 functions ended up in no file.
  *      Grandfathered as a file set that never grows. Implementation and
  *      rationale in functiondef-patch.mjs.
+ *   20. hand-written-sie-extensions: a SIE extension list written out by hand
+ *      (a `\.(se|sie` regex alternation or a `.se,.sie` accept literal)
+ *      instead of imported from lib/import/sie-file-extensions.ts. Every copy
+ *      drifted once: `.si` refused by the dashboard (#2546), then `.si` and
+ *      extensionless files refused by the onboarding SIE step while every
+ *      other surface took `.si` (accounted#32). No baseline: the count is 0.
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -341,6 +350,31 @@ function findDirectInvoicePaymentInserts() {
       if (INVOICE_PAYMENT_INSERT_SANCTIONED.has(r)) return false
       if (r.includes('__tests__/') || r.endsWith('.test.ts')) return false
       return INVOICE_PAYMENT_INSERT_CHAIN_RE.test(fs.readFileSync(f, 'utf8'))
+    })
+    .map(rel)
+    .sort()
+}
+
+// The one list of SIE file extensions (accounted#32). A hand-written copy is a
+// regex alternation of two SIE extensions (`\.(se|sie`, `\.(sie|se|si`) or an
+// accept-style literal (`".se,.sie"`); the shared module derives both.
+const SIE_EXTENSIONS_HOME = 'lib/import/sie-file-extensions.ts'
+const HAND_WRITTEN_SIE_EXTENSIONS_RES = [
+  /\\\.\((?:se|sie|si)\|(?:se|sie|si)\b/i,
+  /['"`]\.(?:se|sie|si),\s*\.(?:se|sie|si)\b/i,
+]
+
+/** Files that spell out the SIE extension list instead of importing it. */
+function findHandWrittenSieExtensions() {
+  const files = ['lib', 'app', 'components', 'extensions'].flatMap((dir) =>
+    walk(path.join(SOURCE_ROOT, dir), ['.ts', '.tsx']),
+  )
+  return files
+    .filter((f) => {
+      const r = rel(f)
+      if (r === SIE_EXTENSIONS_HOME || r.includes('__tests__/') || r.endsWith('.test.ts')) return false
+      const src = fs.readFileSync(f, 'utf8')
+      return HAND_WRITTEN_SIE_EXTENSIONS_RES.some((re) => re.test(src))
     })
     .map(rel)
     .sort()
@@ -1173,6 +1207,7 @@ const current = {
   ledgerScanningReports: findLedgerScanningReports(),
   directJelInsert: findDirectJelInserts(),
   directInvoicePaymentInsert: findDirectInvoicePaymentInserts(),
+  handWrittenSieExtensions: findHandWrittenSieExtensions(),
   leakySupabaseClients: findLeakySupabaseClients(),
   pinnedDepViolations: findPinnedDepViolations(),
   rawUserErrors: findRawUserErrors(),
@@ -1302,6 +1337,21 @@ if (current.directInvoicePaymentInsert.length) {
   console.error(
     '  → record the payment through recordInvoicePaymentRow() (lib/invoices/invoice-payment-row.ts):\n' +
       '    it owns the row semantics (amount = applied to the invoice, never the cash received, #2250).',
+  )
+}
+
+// 1b1b. hand-written-sie-extensions: no baseline, any copy of the SIE extension
+// list outside lib/import/sie-file-extensions.ts is a hard failure.
+if (current.handWrittenSieExtensions.length) {
+  failed = true
+  console.error(
+    `\n✗ hand-written-sie-extensions: ${current.handWrittenSieExtensions.length} file(s) spell out the SIE ` +
+      `extension list instead of importing it:`,
+  )
+  current.handWrittenSieExtensions.forEach((f) => console.error(`    ${f}`))
+  console.error(
+    '  → import SIE_FILE_EXTENSIONS, SIE_FILE_EXTENSION_PATTERN or hasSIEFileExtension() from\n' +
+      '    lib/import/sie-file-extensions.ts: every hand-written copy drifted (#2546, accounted#32).',
   )
 }
 
@@ -1508,9 +1558,10 @@ if (newUtcToday.length) {
   console.error(`\n✗ utc-today: ${newUtcToday.length} site(s) compute "today" as the UTC date:`)
   newUtcToday.forEach((f) => console.error(`    ${f.file}:${f.line}`))
   console.error(
-    '  → use todayIsoStockholm() from @/lib/dates/iso. The UTC date is yesterday in Sweden\n' +
-      '    between midnight and 01:00/02:00, so a default date, a cutoff or an as-of date\n' +
-      '    computed from it books, filters or labels against the wrong day.',
+    '  → use todayIsoStockholm(now) from @/lib/dates/iso, and addDaysIso / addMonthsIso on\n' +
+      '    that ISO date for a horizon. The UTC date is yesterday in Sweden between midnight\n' +
+      '    and 01:00/02:00, so a default date, a cutoff or an as-of date computed from it\n' +
+      '    books, filters or labels against the wrong day.',
   )
 }
 
@@ -1578,10 +1629,10 @@ const pagedSinceBaseline = [...LIMIT_ABOVE_PAGE_ALLOWED].filter((f) => !limitAbo
 if (newLimitsAbovePage.length) {
   failed = true
   console.error(
-    `\n✗ limit-above-page: ${newLimitsAbovePage.length} .limit() call(s) above 1000 rows, which PostgREST ` +
+    `\n✗ limit-above-page: ${newLimitsAbovePage.length} .limit() call(s) or limit option(s) above 1000 rows, which PostgREST ` +
       `silently answers with 1000:`,
   )
-  newLimitsAbovePage.forEach((f) => console.error(`    ${f.file}:${f.line}  .limit(${f.arg}) = ${f.limit}`))
+  newLimitsAbovePage.forEach((f) => console.error(`    ${f.file}:${f.line}  ${f.call} = ${f.limit}`))
   console.error(
     '  → page with fetchAllRows (lib/supabase/fetch-all.ts) after an .order() on a unique column; pass\n' +
       '    { maxRows } to keep a deliberate cap. Read an aggregate for a sum or a count. A sample stays at\n' +
@@ -1899,5 +1950,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, static-init-import: 0, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, client-server-only: ${current.clientServerOnly.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), unsigned-provider-names: ${current.unsignedProviderNames.skipped ? 'skipped' : current.unsignedProviderNames.findings.length}, table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), functiondef-patch: ${functiondefPatchFiles.length}/${functiondefPatchBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s), utc-today: ${current.utcToday.length} in ${UTC_TODAY_ALLOWED.size} allowlisted file(s)).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, hand-written-sie-extensions: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, static-init-import: 0, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, client-server-only: ${current.clientServerOnly.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), unsigned-provider-names: ${current.unsignedProviderNames.skipped ? 'skipped' : current.unsignedProviderNames.findings.length}, table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), functiondef-patch: ${functiondefPatchFiles.length}/${functiondefPatchBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s), utc-today: ${current.utcToday.length} in ${UTC_TODAY_ALLOWED.size} allowlisted file(s)).`,
 )

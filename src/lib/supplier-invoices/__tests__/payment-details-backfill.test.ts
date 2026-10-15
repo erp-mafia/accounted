@@ -3,6 +3,7 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import {
   backfillSupplierPaymentDetails,
   cleanSupplierPaymentDetails,
+  inboxStatedPaymentDetails,
   isValidBic,
   isValidIban,
   planSupplierPaymentBackfill,
@@ -98,5 +99,30 @@ describe('backfillSupplierPaymentDetails', () => {
     enqueue({ data: { bankgiro: '991-2346', plusgiro: null, iban: null, bic: null } })
     expect(await backfillSupplierPaymentDetails(supabase as never, 'company-1', 'sup-1', { bankgiro: '5050-1055' })).toEqual({})
     expect(findCall('suppliers', 'update')).toBeUndefined()
+  })
+})
+
+describe('inboxStatedPaymentDetails', () => {
+  it('reads the giro, IBAN and BIC an extraction states for its supplier, and nothing else', () => {
+    expect(
+      inboxStatedPaymentDetails({
+        supplier: { name: 'Derome Bygg AB', organizationNumber: '5566778899', bankgiro: '9020-0007', iban: 'SE45 5000 0000 0583 9825 7466' },
+        invoice: { invoiceNumber: 'F-1' },
+      }),
+    ).toEqual({ bankgiro: '9020-0007', plusgiro: null, iban: 'SE45 5000 0000 0583 9825 7466', bic: null })
+  })
+
+  it('is null when the extraction states no payment details, has no supplier or is not there', () => {
+    expect(inboxStatedPaymentDetails({ supplier: { name: 'Derome Bygg AB', bankgiro: '  ', plusgiro: 1234566 } })).toBeNull()
+    expect(inboxStatedPaymentDetails({ invoice: { invoiceNumber: 'F-1' } })).toBeNull()
+    expect(inboxStatedPaymentDetails({ supplier: 'Derome Bygg AB' })).toBeNull()
+    expect(inboxStatedPaymentDetails(null)).toBeNull()
+    expect(inboxStatedPaymentDetails(undefined)).toBeNull()
+  })
+
+  it('leaves validation to the columns: a misread bankgiro is read but never stored', () => {
+    const details = inboxStatedPaymentDetails({ supplier: { bankgiro: '5050-1056', plusgiro: '123456-6' } })
+    expect(details).toEqual({ bankgiro: '5050-1056', plusgiro: '123456-6', iban: null, bic: null })
+    expect(statedPayeeColumns(details)).toEqual({ payee_bankgiro: null, payee_plusgiro: '123456-6', payee_iban: null, payee_bic: null })
   })
 })
