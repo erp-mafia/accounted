@@ -106,6 +106,45 @@ describe('fetchCrossCompanyAccountContext', () => {
     expect(context!.deselectedIbans).toEqual(new Set(['SE22', 'SE44']))
   })
 
+  it('releases the accounts of an archived company: they are no claim, so a company made anew can take them', async () => {
+    const { supabase } = makeSupabase({
+      company_members: {
+        data: [{ company_id: 'company-new' }, { company_id: 'company-archived' }, { company_id: 'company-2' }],
+      },
+      bank_connections: { data: [] },
+      cash_accounts: {
+        data: [
+          { company_id: 'company-archived', iban: 'SE55' },
+          { company_id: 'company-2', iban: 'SE66' },
+        ],
+      },
+      companies: {
+        data: [
+          { id: 'company-archived', name: 'Gamla AB', archived_at: '2026-10-15T05:09:09Z' },
+          { id: 'company-2', name: 'Sibling AB', archived_at: null },
+        ],
+      },
+    })
+
+    const context = await fetchCrossCompanyAccountContext(supabase, 'user-1', 'company-new', 'conn-active')
+
+    expect(context!.claims.has('SE55')).toBe(false)
+    expect(context!.claims.get('SE66')).toEqual({ companyId: 'company-2', companyName: 'Sibling AB' })
+  })
+
+  it('keeps the claim when the claimant lookup fails (fails closed)', async () => {
+    const { supabase } = makeSupabase({
+      company_members: { data: [{ company_id: 'company-new' }, { company_id: 'company-archived' }] },
+      bank_connections: { data: [] },
+      cash_accounts: { data: [{ company_id: 'company-archived', iban: 'SE55' }] },
+      companies: { data: null, error: { message: 'boom' } },
+    })
+
+    const context = await fetchCrossCompanyAccountContext(supabase, 'user-1', 'company-new', 'conn-active')
+
+    expect(context!.claims.get('SE55')).toEqual({ companyId: 'company-archived', companyName: null })
+  })
+
   it("lets the active company's own standing state outrank a sibling claim", async () => {
     // The bank-list renewal case: the active company's old row (about to be
     // superseded) and its cash_accounts row still book the IBAN. A sibling

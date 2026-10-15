@@ -265,6 +265,28 @@ async function fetchIbanCarriers(
   return carriers
 }
 
+/** The claimant companies' names and whether each is archived; empty when the lookup fails. */
+async function fetchClaimantCompanies(
+  supabase: SupabaseClient,
+  companyIds: readonly string[],
+): Promise<Map<string, { name: string | null; archived: boolean }>> {
+  if (companyIds.length === 0) return new Map()
+  const { data, error } = await supabase
+    .from('companies')
+    .select('id, name, archived_at')
+    .in('id', [...companyIds])
+  if (error) {
+    log.warn('claimant company lookup failed', { error: error.message })
+    return new Map()
+  }
+  return new Map(
+    ((data ?? []) as Array<{ id: string; name: string | null; archived_at?: string | null }>).map(c => [
+      c.id,
+      { name: c.name || null, archived: Boolean(c.archived_at) },
+    ]),
+  )
+}
+
 async function fetchCompanyNames(
   supabase: SupabaseClient,
   companyIds: readonly string[],
@@ -476,11 +498,21 @@ export async function fetchCrossCompanyAccountContext(
   for (const iban of claims.keys()) deselectedIbans.delete(iban)
 
   if (claims.size > 0) {
-    const names = await fetchCompanyNames(serviceSupabase, [
+    const claimants = await fetchClaimantCompanies(serviceSupabase, [
       ...new Set([...claims.values()].map(c => c.companyId)),
     ])
-    for (const claim of claims.values()) {
-      claim.companyName = names.get(claim.companyId) ?? null
+    for (const [iban, claim] of claims) {
+      const company = claimants.get(claim.companyId)
+      // An archived company reads and books nothing: its accounts are
+      // released territory, like a revoked row's. A company made anew (Gör
+      // om migrering archives the old one) otherwise found every account
+      // locked to its archived copy. An unknown claimant (the lookup
+      // failed) keeps its claim: this guard fails closed.
+      if (company?.archived) {
+        claims.delete(iban)
+        continue
+      }
+      claim.companyName = company?.name ?? null
     }
   }
 
