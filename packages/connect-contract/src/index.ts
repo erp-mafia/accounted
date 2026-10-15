@@ -8,8 +8,10 @@ import { z } from 'zod'
  * provider integrations only Accounted can run: bank feeds through its PSD2
  * credentials, the Skatteverket API client, the Peppol access point, company
  * lookup, the migration sources, bank payments through the payment
- * initiation provider, and the collections and delivery providers a company
- * activates (described at runtime by the catalogue, never named here).
+ * initiation provider, bank reading (consents, accounts, balances, booked
+ * transactions) through the account information provider, and the
+ * collections and delivery providers a company activates (described at
+ * runtime by the catalogue, never named here).
  *
  * Everything here is shape, never behaviour: constants, Zod schemas and the
  * TypeScript types inferred from them, plus the one normalizer that keeps a
@@ -23,6 +25,13 @@ import { z } from 'zod'
  * Every call carries the caller's version in `CONNECTOR_HEADERS.contractVersion`.
  * A response enum only gains a value under a new version, and the service
  * never sends a value the caller's version does not know.
+ *
+ * 2026-10-15 added the AIS enrichment to the bank sync shape: the Bankgirot
+ * split as `parts`, the counterparty's organisationsnummer, the card merchant
+ * category code, the currency exchange, the balance after the row (never for
+ * a personal account), the bank's enriched flag, and per sync the account's
+ * `enrichment` moment. All optional: a ledger on the previous version still
+ * parses the response.
  *
  * This file depends on nothing but `zod`: other repositories consume an exact
  * copy of `src/` pinned to a commit, so it must stay self-contained.
@@ -233,30 +242,32 @@ export const bankSyncRequestSchema = z.object({
 })
 export type BankSyncRequest = z.infer<typeof bankSyncRequestSchema>
 
+/** A Swedish organisationsnummer as the bank reports it: 10 digits, no separator (a 12-digit form has its century prefix dropped). */
+const bankOrgNumberSchema = z.string().regex(/^\d{10}$/, 'organisationsnummer: 10 digits')
+
 /**
- * One alias row of a Bankgirot split (added 2026-10-15): the bank books one
- * aggregate deposit or payout and lists the payments behind it as alias rows
- * (isAliasPayin, isAliasPayout) whose aggregateTransactionId names the
- * aggregate. The alias rows are never rows of their own; they travel here, on
- * the aggregate, in the order the bank listed them.
+ * One payment inside a Bankgirot deposit or payout (2026-10-15). A bankgiro
+ * deposit is one row on the statement and stays one row in `transactions`;
+ * the bank's per-payer split rides along as the row's `parts`, in the order
+ * the bank listed them, so the ledger can settle several invoices from one
+ * deposit. Amounts are signed like the parent row (deposit parts positive,
+ * payout parts negative).
  */
 export const bankTransactionPartSchema = z.object({
-  /** Signed like the parent: a deposit's parts are positive. */
   amount: z.number(),
   currency: z.string(),
-  /** debtorName on a payin, creditorName on a payout. */
+  /** The payer (a deposit) or the payee (a payout). */
   counterparty_name: z.string().nullable(),
-  /** Digits only (10-digit organisationsnummer; a 12-digit form drops the 16 prefix). */
-  counterparty_org_number: z.string().nullable(),
-  /** Bankgiro, plusgiro, BBAN or IBAN, as the row's counterparty account is given. */
+  counterparty_org_number: bankOrgNumberSchema.nullable(),
+  /** Bankgiro, plusgiro, BBAN or IBAN, as the bank gave it. */
   counterparty_account: z.string().nullable(),
   /** The structured reference (OCR first), when the part carries one. */
   reference: z.string().nullable(),
-  /** referredDocumentInformation[].number, deduped; [] when none. */
+  /** The referred documents' numbers (invoice numbers, CINV and others), deduplicated; [] when none. */
   invoice_numbers: z.array(z.string()),
-  /** The unstructured remittance information, joined. */
+  /** The unstructured message, when the part carries one. */
   message: z.string().nullable(),
-  /** The alias row's transactionId or entryReference. */
+  /** The bank's own id for the part (transaction id, else entry reference). */
   provider_part_id: z.string().nullable(),
 })
 export type BankTransactionPart = z.infer<typeof bankTransactionPartSchema>
@@ -271,40 +282,39 @@ export const normalizedBankTransactionSchema = z.object({
   counterparty_account: z.string().nullable(),
   /** The structured payment reference (OCR), when the bank sends one. */
   reference: z.string().nullable(),
+  /** The card merchant category code (4 digits), when the bank sends one; the AIS family fills it since 2026-10-15. */
   merchant_category_code: z.string().nullable(),
   bank_transaction_code: z.string().nullable(),
   proprietary_bank_transaction_code: z.string().nullable(),
   // Optional: a service older than these fields does not send them, and a
-  // required field would refuse its whole sync.
+  // required field would refuse its whole sync. The AIS family (2026-10-12)
+  // adds the end-to-end id and the counterparty IBAN; the Enable Banking path
+  // leaves them out.
   /** The date the money moved, when the bank sends one. */
   value_date: z.iso.date().nullable().optional(),
-  /** The bank's own id for the transaction (entry reference, else transaction id). */
-  provider_transaction_id: z.string().nullable().optional(),
-  /** Index into `raw_pages` of the page this row arrived in. */
-  raw_page_index: z.number().int().min(0).nullable().optional(),
-  // Added 2026-10-12 with the AIS family; a producer that does not know them
-  // (the Enable Banking path) leaves them out.
   /** The end-to-end id a payment order was sent with: how the debit is matched to the order. Never a NOTPROVIDED placeholder. */
   end_to_end_id: z.string().nullable().optional(),
+  /** The bank's own id for the transaction (entry reference, else transaction id). */
+  provider_transaction_id: z.string().nullable().optional(),
   /** The counterparty's IBAN on its own, when the bank gave one. */
   counterparty_iban: z.string().nullable().optional(),
-  // Added 2026-10-15 with Open Payments' daily enrichment (ISO/Bankgirot:
-  // payer names, organisation numbers, OCR references, the split). Every
-  // field is optional and nullable: an older producer leaves them out and
-  // nothing refuses its sync.
-  /** Digits only (10-digit organisationsnummer; a 12-digit form drops the 16 prefix): debtorOrganisationId on a deposit, the creditor's on a payout when the bank sends one. */
-  counterparty_org_number: z.string().nullable().optional(),
-  /** The amount in the currency the payment was made in, when it differs from the account currency (currencyExchange / instructedAmount). Null for a row in the account currency. */
+  /** Index into `raw_pages` of the page this row arrived in. */
+  raw_page_index: z.number().int().min(0).nullable().optional(),
+  // Optional, added 2026-10-15 (the AIS family's enrichment): what the bank
+  // reports beyond the statement line. Null when the bank sends nothing.
+  /** The counterparty's organisationsnummer (10 digits): the payer of a deposit, the payee of a payout when the bank names one. */
+  counterparty_org_number: bankOrgNumberSchema.nullable().optional(),
+  /** The amount in the currency the payment was made in, when that is not the account currency (a card purchase abroad). */
   instructed_amount: z.number().nullable().optional(),
-  /** The currency of instructed_amount. */
-  instructed_currency: z.string().nullable().optional(),
-  /** The bank's rate from instructed_currency into the account currency. Null for a row in the account currency. */
-  exchange_rate: z.number().nullable().optional(),
-  /** balanceAfterTransaction, for accounts whose usage is not PRIV only; a personal account's balances are never passed on. */
+  /** The currency of `instructed_amount`. */
+  instructed_currency: z.string().regex(/^[A-Z]{3}$/).nullable().optional(),
+  /** The bank's rate from `instructed_currency` to the account currency. */
+  exchange_rate: z.number().positive().nullable().optional(),
+  /** The account balance after this row, as the bank reports it; never for a personal account (usage PRIV). */
   balance_after: z.number().nullable().optional(),
-  /** The row's isEnriched flag; null when the bank sends none. */
+  /** The bank's own enrichment flag (data sourced beyond PSD2); null when the bank sends none. */
   is_enriched: z.boolean().nullable().optional(),
-  /** The Bankgirot split behind this row (bankTransactionPartSchema), in the bank's order. Null when the bank sent no split; an empty array is never sent. */
+  /** The Bankgirot per-payer split of this row; null when the bank sent no split, never []. */
   parts: z.array(bankTransactionPartSchema).nullable().optional(),
 })
 export type NormalizedBankTransaction = z.infer<typeof normalizedBankTransactionSchema>
@@ -352,6 +362,15 @@ export function normalizeBankTransactionCode(input: unknown): string | null {
   return null
 }
 
+/** The bank's transaction enrichment for one account, per sync (2026-10-15). */
+export const bankSyncEnrichmentSchema = z.object({
+  /** The account's latest enrichment moment as the bank reports it (ISO 8601); null when it reports none. */
+  last_enriched_at: z.string().nullable(),
+  /** True when `last_enriched_at` falls on or after the window's last day: the rows of that day carry today's enrichment. */
+  window_enriched: z.boolean(),
+})
+export type BankSyncEnrichment = z.infer<typeof bankSyncEnrichmentSchema>
+
 export const bankSyncResponseSchema = z.object({
   transactions: z.array(normalizedBankTransactionSchema),
   /** Raw provider pages, verbatim, for the installation's archive. */
@@ -372,32 +391,30 @@ export const bankSyncResponseSchema = z.object({
   duplicates: z.number().int().min(0).optional(),
   /** Rows kept although their id was already used by a row with another date or amount. */
   conflicts: z.number().int().min(0).optional(),
-  // Added 2026-10-15: what Get Account Details says about the bank's daily
-  // enrichment of this account, so the ledger knows whether a re-read of the
-  // window carries today's enrichment. Null when the bank reports nothing.
-  enrichment: z
-    .object({
-      /** The account's lastTransactionEnrichmentDateTimeUtc (else lastTransactionEnrichmentDateTime). */
-      last_enriched_at: z.string().nullable(),
-      /** True when last_enriched_at falls on or after the window's toDate: today's enrichment has run. */
-      window_enriched: z.boolean(),
-    })
-    .nullable()
-    .optional(),
+  // Added 2026-10-15 with the AIS family's enrichment; the Enable Banking
+  // sync leaves it out.
+  /**
+   * Where the bank's own transaction enrichment stands for this account:
+   * `last_enriched_at` is the account's latest enrichment moment (ISO 8601,
+   * UTC when the bank gives it), `window_enriched` whether it falls on or
+   * after the window's last day (so the rows of that day carry today's
+   * enrichment). Null when the bank reports no enrichment moment.
+   */
+  enrichment: bankSyncEnrichmentSchema.nullable().optional(),
 })
 export type BankSyncResponse = z.infer<typeof bankSyncResponseSchema>
-/** The enrichment facts of one sync (bankSyncResponseSchema.enrichment). */
-export type BankSyncEnrichment = NonNullable<BankSyncResponse['enrichment']>
 
 /**
- * Error codes specific to the bank sync operation. Two BANK 429s (neither is
- * the service's own budget, CONNECTOR_RATE_LIMITED), both answered with HTTP
- * 429 and a Retry-After header:
- *   - CONNECTOR_BANK_RATE_LIMITED: the consent's daily cap is spent;
- *     Retry-After until the next bank day.
- *   - CONNECTOR_BANK_THROTTLED: the bank's short throttle (too many requests
- *     in a moment); Retry-After of about 45 seconds. Try again shortly, the
- *     cap is untouched.
+ * Error codes specific to the bank sync operation. Two of them are the
+ * BANK's 429 (never the service's own budget, CONNECTOR_RATE_LIMITED), both
+ * retryable, both with a Retry-After:
+ * - CONNECTOR_BANK_RATE_LIMITED: the bank's allowance for the day is spent
+ *   (the bank proxy: the bank's 429 with its Retry-After header when it sent
+ *   one; AIS: the consent's reads per day, ACCESS_EXCEEDED at the provider,
+ *   Retry-After until the bank's next day). No more today.
+ * - CONNECTOR_BANK_THROTTLED: the bank or the provider is throttling for the
+ *   moment (BANK_REQUEST_LIMIT_EXCEEDED, any other 429); Retry-After is a
+ *   short wait and the read may be tried again today.
  */
 export const BANK_SYNC_ERROR_CODES = [
   'CONNECTOR_BANK_SESSION_EXPIRED',
@@ -1371,14 +1388,22 @@ export const PAYMENTS_LOOKUP_OPERATIONS = ['lookupCreditor', 'lookupGiroNumbers'
  *   signing" above), then read. Repeating a create or a signing start only
  *   makes another consent or authorisation, which is harmless, so AIS
  *   writes carry no idempotency key.
- * - Banks allow four unattended reads per consent and day. The service
- *   counts `accounts`, `balances` and `syncTransactions` calls without a
- *   person present (psuIpAddress null) and answers the fifth with
+ * - Banks allow four unattended reads per account and day, spread over the
+ *   day. The service counts `balances` and `syncTransactions` calls without
+ *   a person present (psuIpAddress null) per consent and account, and
+ *   `accounts` calls per consent, and answers the fifth with
  *   CONNECTOR_BANK_RATE_LIMITED and a Retry-After until midnight in Sweden.
  *   A read with the person present (psuIpAddress set) is not counted.
  * - `syncTransactions` answers in the bank sync shape (bankSyncResponseSchema)
  *   so an installation ingests this feed and the Enable Banking one the same
- *   way.
+ *   way. Since 2026-10-15 it also carries what the bank reports beyond the
+ *   statement line (the row's `parts`, `counterparty_org_number`,
+ *   `merchant_category_code`, `instructed_amount` / `instructed_currency` /
+ *   `exchange_rate`, `balance_after` for a company account, `is_enriched`)
+ *   and, when the request sets `include_enrichment`, the account's
+ *   `enrichment` moment, read once from the account's details (an extra
+ *   provider call; `include_enrichment` says when the installation asks);
+ *   otherwise `enrichment` is null.
  */
 
 /** Base path of the AIS family. */
@@ -1645,9 +1670,10 @@ export const AIS_COUNTED_READ_OPERATIONS = ['accounts', 'balances', 'syncTransac
 /**
  * Error codes specific to the AIS family, beside CONNECTOR_BANK_SESSION_EXPIRED
  * (410: the consent is over, a new one is needed), CONNECTOR_BANK_RATE_LIMITED
- * (429: the consent's daily read budget, ours or the bank's, with Retry-After)
- * and CONNECTOR_BANK_THROTTLED (429: the bank's short throttle, Retry-After of
- * about 45 s) from BANK_SYNC_ERROR_CODES.
+ * (429: the consent's daily read budget, ours or the bank's, is spent;
+ * Retry-After until the bank's next day) and CONNECTOR_BANK_THROTTLED (429:
+ * the bank or the provider throttles for the moment; a short Retry-After)
+ * from BANK_SYNC_ERROR_CODES.
  */
 export const AIS_ERROR_CODES = [
   'CONNECTOR_AIS_PROVIDER_UNAVAILABLE',
@@ -1965,7 +1991,12 @@ export const collectionsCreditorSchema = z.object({
   kind: z.enum(['company', 'sole_trader']),
   name: z.string().trim().min(1).max(100),
   orgNumber: orgNumberSchema,
-  /** The owner's number: required for a sole trader, null for a company. In transit only. */
+  /**
+   * The owner's personnummer: a sole trader may send it or null, a company
+   * sends null. In transit only. A sole trader (enskild firma) onboards as a
+   * business with its ten-digit `orgNumber`, so an installation need not send
+   * the owner's number at all.
+   */
   personalNumber: personalNumberSchema.nullable(),
   vatRegistered: z.boolean(),
   vatNumber: z.string().max(20).nullable(),
@@ -2006,9 +2037,6 @@ export const collectionsOnboardingRequestSchema = z
     settings: collectionsSettingsSchema,
   })
   .superRefine((req, ctx) => {
-    if (req.creditor.kind === 'sole_trader' && req.creditor.personalNumber === null) {
-      ctx.addIssue({ code: 'custom', message: 'a sole trader needs the owner personalNumber', path: ['creditor', 'personalNumber'] })
-    }
     if (req.creditor.kind === 'company' && req.creditor.personalNumber !== null) {
       ctx.addIssue({ code: 'custom', message: 'a company sends no personalNumber', path: ['creditor', 'personalNumber'] })
     }

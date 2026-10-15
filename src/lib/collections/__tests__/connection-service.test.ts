@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { CollectionsFeatures } from '@accounted/connect-contract'
+import { collectionsOnboardingRequestSchema, type CollectionsFeatures } from '@accounted/connect-contract'
 import type { OnboardingBody } from '../activation-form'
 import {
   createFakeCollectionsAdapter,
@@ -292,13 +292,18 @@ describe('a sole trader', () => {
     seedCompany(db, { entityType: 'enskild_firma', orgNumber: '8112189876' })
   })
 
-  it('prefills the owner from the org number and sends it as twelve digits', async () => {
+  it('prefills the owner from the org number and onboards the firm with its org number alone', async () => {
     const context = await loadActivationContext(db.client, COMPANY_ID, NOW)
     expect(context.company).toMatchObject({ soleTrader: true, orgNumber: '8112189876', ownerPersonalNumber: '198112189876' })
     const onboard = vi.spyOn(adapter, 'onboard')
     await consent()
     await submitOnboarding(deps(), onboardingBody({ company: { ownerPersonalNumber: '19811218-9876' } }))
-    expect(onboard.mock.calls[0]![1].creditor).toMatchObject({ kind: 'sole_trader', orgNumber: '8112189876', personalNumber: '198112189876' })
+    // The provider (2026-10-07) onboards an enskild firma as a business with its
+    // organisationsnummer: the owner's twelve-digit personnummer stays home.
+    const request = onboard.mock.calls[0]![1]
+    expect(request.creditor).toMatchObject({ kind: 'sole_trader', orgNumber: '8112189876', personalNumber: null })
+    expect(JSON.stringify(request)).not.toContain('198112189876')
+    expect(collectionsOnboardingRequestSchema.safeParse(request).success).toBe(true)
   })
 
   it('refuses a missing, invalid or other person\'s number', async () => {

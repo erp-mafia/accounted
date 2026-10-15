@@ -254,10 +254,12 @@ describe('open case', () => {
 })
 
 describe('onboarding', () => {
-  it('needs the owner personal number for a sole trader and refuses one for a company', () => {
-    const soleTrader = { ...onboardingRequest.creditor, kind: 'sole_trader', personalNumber: '191212121212' }
+  it('takes a sole trader with or without the owner personal number and refuses one for a company', () => {
+    const soleTrader = { ...onboardingRequest.creditor, kind: 'sole_trader', orgNumber: '1212121212', personalNumber: '191212121212' }
     expect(collectionsOnboardingRequestSchema.safeParse({ ...onboardingRequest, creditor: soleTrader }).success).toBe(true)
-    expect(collectionsOnboardingRequestSchema.safeParse({ ...onboardingRequest, creditor: { ...soleTrader, personalNumber: null } }).success).toBe(false)
+    // An enskild firma onboards as a business with its ten-digit org number: the owner's number may stay home.
+    expect(collectionsOnboardingRequestSchema.safeParse({ ...onboardingRequest, creditor: { ...soleTrader, personalNumber: null } }).success).toBe(true)
+    expect(collectionsOnboardingRequestSchema.safeParse({ ...onboardingRequest, creditor: { ...soleTrader, personalNumber: '1212121212' } }).success).toBe(false)
     expect(
       collectionsOnboardingRequestSchema.safeParse({ ...onboardingRequest, creditor: { ...onboardingRequest.creditor, personalNumber: '191212121212' } }).success,
     ).toBe(false)

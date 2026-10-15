@@ -395,12 +395,11 @@ export function buildOnboardingRequest(input: {
   }
   if (Object.keys(errors).length > 0) throw new ActivationValidationError(errors)
 
-  let personalNumber: string | null = null
   if (company.soleTrader) {
-    personalNumber = normalizeOwnerPersonalNumber(body.company.ownerPersonalNumber ?? '', now)
+    const ownerNumber = normalizeOwnerPersonalNumber(body.company.ownerPersonalNumber ?? '', now)
     // The firm is registered under the owner's personnummer: the ten
     // significant digits must match, whatever century was typed.
-    if (!personalNumber || personalNumber.slice(2) !== company.orgNumber) fail(COLLECTIONS_OWNER_NUMBER_MISMATCH)
+    if (!ownerNumber || ownerNumber.slice(2) !== company.orgNumber) fail(COLLECTIONS_OWNER_NUMBER_MISMATCH)
   }
 
   const payout = body.company.payout ? findPayoutOption(context.payoutOptions, body.company.payout) : null
@@ -423,7 +422,10 @@ export function buildOnboardingRequest(input: {
       kind: company.soleTrader ? 'sole_trader' : 'company',
       name: body.company.name.trim(),
       orgNumber: company.orgNumber,
-      personalNumber,
+      // An enskild firma onboards as a business with its ten-digit org number
+      // (the collections provider, 2026-10-07): the owner's twelve-digit
+      // personnummer is only checked against it above, never sent.
+      personalNumber: null,
       vatRegistered: body.company.vatRegistered,
       vatNumber: body.company.vatRegistered && body.company.vatNumber ? normalizeVatNumber(body.company.vatNumber) : null,
       email: body.company.email.trim(),
