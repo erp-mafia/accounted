@@ -1356,14 +1356,17 @@
     "end_label": "Period end",
     "account_label": "Balance account",
     "remove_aria": "Remove deferral",
-    "preview": "{months} months × {amount}",
+    "preview": "{months} months × {amount}, {first} to {last}",
+    "preview_one_month": "The whole amount is booked in {month}",
     "preview_invalid_period": "The period end must be after its start",
-    "preview_min_months": "Deferral requires at least 2 calendar months",
+    "invoice_month_only": "The period must cover a month other than the invoice month",
     "k2_hint": "Amounts under SEK 5,000 normally do not need to be deferred (K2).",
     "k1_hint": "Amounts under SEK 5,000 normally do not need to be deferred (K1, simplified annual accounts).",
-    "validation_period": "Enter a period of at least 2 calendar months",
+    "validation_period": "Enter the period start and end",
     "incomplete_toast_title": "Incomplete deferral",
-    "incomplete_toast_description": "Set the period start and end (at least 2 months) or remove the deferral from the line."
+    "incomplete_toast_description": "Set the period start and end or remove the deferral from the line.",
+    "invoice_month_toast_title": "The period is in the invoice month",
+    "invoice_month_toast_description": "Then no amount is moved. Pick a period in another month or remove the deferral from the line."
   },
   "assets": {
     "title": "Fixed assets",

@@ -1,6 +1,6 @@
 'use client'
 
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/select'
 import { formatCurrency } from '@/lib/utils'
 import {
+  accrualCoversOnlyInvoiceMonth,
   computeInstallmentAmounts,
   countCalendarMonths,
 } from '@/lib/bookkeeping/accruals/compute'
@@ -46,7 +47,10 @@ const BALANCE_ACCOUNT_OPTIONS: Record<AccrualDirection, Array<{ value: string; l
 
 /**
  * Per-line periodisering panel for the invoice editors: service period +
- * interim balance account + a live "N månader × X kr" preview. The parent
+ * interim balance account + a live preview naming the months the amount
+ * lands in ("Hela beloppet bokförs i november 2026", or "N månader × X kr,
+ * oktober 2026 till november 2026"), so a period that reaches into the
+ * invoice month by one day is visible before it is booked. The parent
  * owns the toggle; this renders only while periodisering is active on the
  * line. VAT is never affected: only the net amount is deferred.
  */
@@ -60,6 +64,7 @@ export default function AccrualPeriodControl({
   onRemove,
   idPrefix,
   entityType,
+  invoiceDate,
 }: {
   direction: AccrualDirection
   /** Net line amount (ex VAT), in `currency`: drives the preview and the K2 hint. */
@@ -82,8 +87,14 @@ export default function AccrualPeriodControl({
    * wording (the historical default).
    */
   entityType?: EntityType | null
+  /**
+   * The invoice date on the form. A period lying only in its month is
+   * refused by the API (nothing would be deferred), so the panel says so.
+   */
+  invoiceDate?: string | null
 }) {
   const t = useTranslations('accruals')
+  const locale = useLocale()
 
   let preview: string | null = null
   let previewInvalid: string | null = null
@@ -93,13 +104,17 @@ export default function AccrualPeriodControl({
     } else {
       try {
         const months = countCalendarMonths(value.start, value.end)
-        if (months < 2) {
-          previewInvalid = t('preview_min_months')
+        if (invoiceDate && accrualCoversOnlyInvoiceMonth(invoiceDate, value.start, value.end)) {
+          previewInvalid = t('invoice_month_only')
+        } else if (months === 1) {
+          preview = t('preview_one_month', { month: formatPeriodMonth(value.start, locale) })
         } else if (amount > 0) {
           const amounts = computeInstallmentAmounts(amount, months)
           preview = t('preview', {
             months,
             amount: formatCurrency(amounts[0], currency || 'SEK'),
+            first: formatPeriodMonth(value.start, locale),
+            last: formatPeriodMonth(value.end, locale),
           })
         }
       } catch {
@@ -189,4 +204,15 @@ export default function AccrualPeriodControl({
       )}
     </div>
   )
+}
+
+/** '2026-11-30' → 'november 2026' (sv) / 'November 2026' (en). */
+function formatPeriodMonth(date: string, locale: string): string {
+  const year = Number(date.slice(0, 4))
+  const month = Number(date.slice(5, 7))
+  return new Intl.DateTimeFormat(locale === 'en' ? 'en-US' : 'sv-SE', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  }).format(new Date(Date.UTC(year, month - 1, 1)))
 }

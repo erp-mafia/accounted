@@ -28,7 +28,7 @@ import { ISO_DATE_RE, ISO_DATE_MESSAGE_SV } from '@/lib/invariants/iso-date'
 import { orgNumberKey } from '@/lib/invariants/org-number'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
 import { DIMENSION_RULE_POLICY } from '@/lib/bookkeeping/dimension-rule-policy'
-import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
+import { countCalendarMonths, invoiceMonthOnlyAccrualRows } from '@/lib/bookkeeping/accruals/compute'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { CUSTOMER_ADVANCE_ACCOUNT } from '@/lib/bookkeeping/overpayment'
 import { ORE_ROUNDING_ACCOUNT } from '@/lib/money'
@@ -286,8 +286,10 @@ const deferredRevenueAccount = z
 
 /**
  * Shared periodisering period rules for invoice line items: both dates or
- * neither, end after start, and a 2-120 calendar month span. The amount-side
- * rules differ per item shape and stay in each schema's superRefine.
+ * neither, end after start, and a 1-120 calendar month span. The amount-side
+ * rules differ per item shape and stay in each schema's superRefine. A period
+ * that lies only in the invoice month is refused where the invoice date is
+ * known (CreateSupplierInvoiceSchema, buildInvoiceWriteData).
  */
 function validateAccrualPeriod(
   item: { accrual_period_start?: string | null; accrual_period_end?: string | null },
@@ -313,13 +315,6 @@ function validateAccrualPeriod(
     return
   }
   const months = countCalendarMonths(start, end)
-  if (months < 2) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['accrual_period_end'],
-      message: 'Periodisering kräver minst 2 kalendermånader',
-    })
-  }
   if (months > 120) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -1918,6 +1913,17 @@ export const CreateSupplierInvoiceSchema = z.object({
       })
     }
   })
+
+  // Periodisering: a period that lies only in the invoice month books the
+  // cost to 17xx and straight back in the same month, two verifikat that
+  // cancel out. The item schema cannot see invoice_date, so the rule is here.
+  for (const index of invoiceMonthOnlyAccrualRows(invoice.invoice_date, invoice.items)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['items', index, 'accrual_period_end'],
+      message: 'Perioden måste omfatta en annan månad än fakturamånaden',
+    })
+  }
 })
 
 // Pre-submit duplicate lookup for the supplier-invoice editor. Mirrors the

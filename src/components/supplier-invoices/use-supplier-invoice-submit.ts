@@ -4,7 +4,7 @@ import { useState, type RefObject } from 'react'
 import { useTranslations } from 'next-intl'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
+import { invoiceMonthOnlyAccrualRows } from '@/lib/bookkeeping/accruals/compute'
 import { findIllegalVatRateRow } from '@/lib/vat/supplier-invoice-line-checks'
 import { rateToPctString, supplierInvoiceCreateUrl, type SupplierInvoiceFormData } from '@/lib/supplier-invoices/form-payload'
 import { isPersonPayer } from '@/lib/expenses/payer'
@@ -276,18 +276,30 @@ export function useSupplierInvoiceSubmit({
         return
       }
     }
-    // A row with an open periodisering panel must carry a complete period of
-    // at least two calendar months before the invoice can be booked.
-    const invalidAccrual = canUseAccrual && data.items.some((item) => {
-      if (item.accrual_balance_account == null) return false
-      if (!item.accrual_period_start || !item.accrual_period_end) return true
-      if (item.accrual_period_end < item.accrual_period_start) return true
-      return countCalendarMonths(item.accrual_period_start, item.accrual_period_end) < 2
-    })
-    if (invalidAccrual) {
+    // A row with an open periodisering panel must carry a complete period
+    // before the invoice can be booked, and a period lying only in the
+    // invoice month moves nothing (the API refuses it).
+    const openAccrualItems = canUseAccrual
+      ? data.items.filter((item) => item.accrual_balance_account != null)
+      : []
+    const incompleteAccrual = openAccrualItems.some(
+      (item) =>
+        !item.accrual_period_start ||
+        !item.accrual_period_end ||
+        item.accrual_period_end < item.accrual_period_start,
+    )
+    if (incompleteAccrual) {
       toast({
         title: ta('incomplete_toast_title'),
         description: ta('incomplete_toast_description'),
+        variant: 'destructive',
+      })
+      return
+    }
+    if (data.invoice_date && invoiceMonthOnlyAccrualRows(data.invoice_date, openAccrualItems).length > 0) {
+      toast({
+        title: ta('invoice_month_toast_title'),
+        description: ta('invoice_month_toast_description'),
         variant: 'destructive',
       })
       return

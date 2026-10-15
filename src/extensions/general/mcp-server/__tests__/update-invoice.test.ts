@@ -963,6 +963,53 @@ describe('gnubok_update_invoice: accrual and override pass-back (issue #1642)', 
       accrual_balance_account: '2990',
     })
   })
+
+  const novemberLine = {
+    description: 'Support november',
+    quantity: 1,
+    unit: 'st',
+    unit_price: 5000,
+    vat_rate: 25,
+    accrual_period_start: '2026-11-01',
+    accrual_period_end: '2026-11-30',
+    accrual_balance_account: '2970',
+  }
+
+  it('stages a one-month period after the invoice month', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: draftInvoice({ invoice_date: '2026-10-15' }) })
+    enqueue({ data: CUSTOMER })
+    enqueue({ data: CURRENT_ROWS })
+    enqueue({ data: { id: 'op-invoice-3' } })
+
+    const result = (await tool().execute(
+      { invoice_id: INVOICE_ID, items: [novemberLine] },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as StagedResult
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.changes?.items?.[0]).toMatchObject({
+      accrual_period_start: '2026-11-01',
+      accrual_period_end: '2026-11-30',
+    })
+  })
+
+  it('refuses at staging a period lying only in the invoice month, judged on the new invoice_date', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: draftInvoice({ invoice_date: '2026-10-15' }) })
+    enqueue({ data: CUSTOMER })
+
+    await expect(
+      tool().execute(
+        { invoice_id: INVOICE_ID, invoice_date: '2026-11-03', items: [novemberLine] },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toMatchObject({ code: 'INVOICE_CREATE_ACCRUAL_INVOICE_MONTH' })
+  })
 })
 
 describe('gnubok_update_invoice: says why the VAT treatment is what it is (#2749, #2558)', () => {

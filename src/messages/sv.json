@@ -1356,14 +1356,17 @@
     "end_label": "Periodens slut",
     "account_label": "Balanskonto",
     "remove_aria": "Ta bort periodisering",
-    "preview": "{months} månader × {amount}",
+    "preview": "{months} månader × {amount}, {first} till {last}",
+    "preview_one_month": "Hela beloppet bokförs i {month}",
     "preview_invalid_period": "Periodens slut måste vara efter dess start",
-    "preview_min_months": "Periodisering kräver minst 2 kalendermånader",
+    "invoice_month_only": "Perioden måste omfatta en annan månad än fakturamånaden",
     "k2_hint": "Belopp under 5 000 kr behöver normalt inte periodiseras (K2).",
     "k1_hint": "Belopp under 5 000 kr behöver normalt inte periodiseras (K1, förenklat årsbokslut).",
-    "validation_period": "Ange en period på minst 2 kalendermånader",
+    "validation_period": "Ange periodens start och slut",
     "incomplete_toast_title": "Ofullständig periodisering",
-    "incomplete_toast_description": "Ange periodens start och slut (minst 2 månader) eller ta bort periodiseringen från raden."
+    "incomplete_toast_description": "Ange periodens start och slut eller ta bort periodiseringen från raden.",
+    "invoice_month_toast_title": "Perioden ligger i fakturamånaden",
+    "invoice_month_toast_description": "Då flyttas inget belopp. Välj en period i en annan månad eller ta bort periodiseringen från raden."
   },
   "assets": {
     "title": "Anläggningstillgångar",

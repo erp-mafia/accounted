@@ -1115,6 +1115,35 @@ describe('POST /api/supplier-invoices', () => {
     expect(mockRegisterExpenseClaim).not.toHaveBeenCalled()
   })
 
+  it('rejects a periodisering period lying only in the invoice month before writing', async () => {
+    const request = createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: {
+        supplier_id: VALID_UUID,
+        supplier_invoice_number: 'LF-OKT',
+        invoice_date: '2026-10-15',
+        due_date: '2026-10-31',
+        items: [
+          {
+            description: 'Lokalhyra',
+            amount: 5000,
+            account_number: '5010',
+            vat_rate: 0.25,
+            accrual_period_start: '2026-10-01',
+            accrual_period_end: '2026-10-31',
+          },
+        ],
+      },
+    })
+    const response = await POST(request)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toContain('items.0.accrual_period_end: Perioden måste omfatta en annan månad än fakturamånaden')
+    expect(findCall('supplier_invoices', 'insert')).toBeUndefined()
+    expect(mockCreateSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
+  })
+
   it('rejects paid_with_private_funds combined with reverse_charge', async () => {
     // The supplier is now read before this guard (see above).
     setTable('suppliers', { data: makeSupplier({ id: VALID_UUID }) })

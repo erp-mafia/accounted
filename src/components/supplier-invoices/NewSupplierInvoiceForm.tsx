@@ -1014,6 +1014,7 @@ export default function NewSupplierInvoiceForm({
         // and then hides the hint instead of comparing the wrong unit.
         currency={watchedCurrency}
         exchangeRate={parseFloat(watchedExchangeRate)}
+        invoiceDate={watchedInvoiceDate}
         idPrefix={idPrefix}
         value={{
           start: item.accrual_period_start ?? '',

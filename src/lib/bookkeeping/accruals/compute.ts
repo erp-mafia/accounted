@@ -42,6 +42,40 @@ export function countCalendarMonths(periodStart: string, periodEnd: string): num
   return months
 }
 
+/**
+ * True when the period lies wholly in the invoice's own calendar month. The
+ * origin entry books the line to the interim account on the invoice date and
+ * the one installment releases it again in that same month, so the two
+ * verifikat cancel out and nothing is deferred. Compares the YYYY-MM prefix
+ * so an unparsed date never throws here; shape is validated elsewhere.
+ */
+export function accrualCoversOnlyInvoiceMonth(
+  invoiceDate: string,
+  periodStart: string,
+  periodEnd: string,
+): boolean {
+  const invoiceMonth = invoiceDate.slice(0, 7)
+  return periodStart.slice(0, 7) === invoiceMonth && periodEnd.slice(0, 7) === invoiceMonth
+}
+
+/**
+ * Indexes of the rows whose periodisering period lies wholly in the invoice
+ * month (see accrualCoversOnlyInvoiceMonth). Rows without both dates are
+ * skipped: they carry no periodisering.
+ */
+export function invoiceMonthOnlyAccrualRows(
+  invoiceDate: string,
+  items: ReadonlyArray<{ accrual_period_start?: string | null; accrual_period_end?: string | null }>,
+): number[] {
+  const rows: number[] = []
+  items.forEach((item, index) => {
+    const start = item.accrual_period_start
+    const end = item.accrual_period_end
+    if (start && end && accrualCoversOnlyInvoiceMonth(invoiceDate, start, end)) rows.push(index)
+  })
+  return rows
+}
+
 /** First-of-month ISO dates for every calendar month in the period. */
 export function listCalendarMonths(periodStart: string, periodEnd: string): string[] {
   const months = countCalendarMonths(periodStart, periodEnd)
