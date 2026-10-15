@@ -28,6 +28,14 @@
  * fails it. Import the helper from a module of its own.
  *
  * No allowlist.
+ *
+ * A second, counted question rides on the same graph: which server entries
+ * reach lib/initialized.ts (findInitReach().lazyInitEntries). That is the
+ * sanctioned way in at runtime, but the bundler follows its dynamic import,
+ * so every such entry compiles lib/init and every extension. On 2026-10-15
+ * fifty more of them (one shared helper importing period-service, which
+ * imports the event bus) came with the merge after which every Vercel
+ * production build was OOM-killed. no-new-antipatterns.mjs ratchets the count.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -39,8 +47,10 @@ export const FORBIDDEN_STATIC_IMPORTS = [
   'lib/extensions/loader.ts',
   'lib/extensions/_generated/extension-list.ts',
 ]
+/** The dynamic way in to lib/init: the event bus and the registry getters import it. */
+export const LAZY_INIT_MODULE = 'lib/initialized.ts'
 /** What a client module must not reach either: the dynamic way in to lib/init. */
-export const FORBIDDEN_CLIENT_IMPORTS = [...FORBIDDEN_STATIC_IMPORTS, 'lib/initialized.ts']
+export const FORBIDDEN_CLIENT_IMPORTS = [...FORBIDDEN_STATIC_IMPORTS, LAZY_INIT_MODULE]
 
 // The App Router file conventions Next.js runs on the server.
 const APP_ENTRY_RE =
@@ -139,6 +149,15 @@ function staticSpecifiers(fileName, text) {
  * kind ('server' or 'client').
  */
 export function findStaticInitImports(sourceRoot) {
+  return findInitReach(sourceRoot).staticInitImports
+}
+
+/**
+ * Both questions from one graph walk: `staticInitImports` as above, and
+ * `lazyInitEntries`, every server entry whose static graph reaches
+ * LAZY_INIT_MODULE, in the same shape and sorted by entry.
+ */
+export function findInitReach(sourceRoot) {
   const rel = (p) => path.relative(sourceRoot, p).split(path.sep).join('/')
   const edges = new Map()
 
@@ -228,9 +247,11 @@ export function findStaticInitImports(sourceRoot) {
     return found
   }
 
-  const offenders = [
-    ...offendersFor('server', serverEntries, FORBIDDEN_STATIC_IMPORTS),
-    ...offendersFor('client', clientModules, FORBIDDEN_CLIENT_IMPORTS),
-  ]
-  return offenders
+  return {
+    staticInitImports: [
+      ...offendersFor('server', serverEntries, FORBIDDEN_STATIC_IMPORTS),
+      ...offendersFor('client', clientModules, FORBIDDEN_CLIENT_IMPORTS),
+    ],
+    lazyInitEntries: offendersFor('server', serverEntries, [LAZY_INIT_MODULE]),
+  }
 }

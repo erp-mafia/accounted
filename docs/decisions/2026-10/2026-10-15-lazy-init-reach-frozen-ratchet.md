@@ -1,0 +1,1 @@
+[2026-10-15] lazy-init-reach (server entries reaching lib/initialized.ts) is a frozen ratchet that --update cannot raise: each such entry compiles every extension, and a rise of 50 OOM-killed every Vercel production build.

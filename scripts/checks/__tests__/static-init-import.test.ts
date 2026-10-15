@@ -4,14 +4,16 @@
  * through a module it imports, and a client module that reaches the event
  * bus's way in (lib/initialized.ts); and that it lets through the sanctioned
  * way in on the server (a dynamic import, as lib/initialized.ts does) and
- * type-only imports. The fixture tree lives in an OS temp directory created
+ * type-only imports. Also that findInitReach lists the server entries that
+ * reach lib/initialized.ts, the count the lazy-init-reach ratchet holds down
+ * because each of them compiles every extension. The fixture tree lives in an OS temp directory created
  * and deleted here; the last block pins the real tree.
  */
 import { describe, it, expect, afterAll } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { findStaticInitImports } from '../static-init-import.mjs'
+import { findInitReach, findStaticInitImports } from '../static-init-import.mjs'
 
 const tempDirs: string[] = []
 afterAll(() => {
@@ -147,6 +149,23 @@ describe('static-init-import', () => {
     expect(entries).not.toContain('app/api/lock/route.ts')
     expect(entries).not.toContain('app/api/typed/route.ts')
     expect(entries).not.toContain('app/(public)/privacy/page.tsx')
+  })
+})
+
+describe('lazy-init reach', () => {
+  it('lists every server entry whose static graph reaches lib/initialized.ts, with a chain', () => {
+    expect(findInitReach(fixture()).lazyInitEntries).toEqual([
+      {
+        kind: 'server',
+        entry: 'app/api/lock/route.ts',
+        chain: ['app/api/lock/route.ts', 'lib/core/lock.ts', 'lib/events/bus.ts', 'lib/initialized.ts'],
+      },
+    ])
+  })
+
+  it('answers the static question the same way findStaticInitImports does', () => {
+    const root = fixture()
+    expect(findInitReach(root).staticInitImports).toEqual(findStaticInitImports(root))
   })
 })
 
