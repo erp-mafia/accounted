@@ -14,7 +14,7 @@
  *     check the commit will run, so a staged operation that could never
  *     commit is refused now, not at approval), the plan, and the insert.
  */
-import type { PeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
+import type { PeriodStatusForDate } from '@/lib/core/bookkeeping/period-status'
 import { insertStagedOperation, stagedRiskLevel } from '@/lib/pending-operations/stage'
 import type { PendingOperation, PendingOperationActorType, PendingOperationType } from '@/types'
 import type {

@@ -15,7 +15,7 @@
  * argument). The v1 door's Idempotency-Key is the wrapper's (withApiV1).
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { resolvePeriodStatusForDate, type PeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
+import { resolvePeriodStatusForDate, type PeriodStatusForDate } from '@/lib/core/bookkeeping/period-status'
 import type { Logger } from '@/lib/logger'
 import type { PendingOperation, PendingOperationActorType } from '@/types'
 import { getRiskLevel } from './risk-tiers'

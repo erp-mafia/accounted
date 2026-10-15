@@ -1,0 +1,1 @@
+[2026-10-15] The period verdict lives in core/bookkeeping/period-status.ts, re-exported by period-service: the staging code reached the event bus through period-service, so every v1 operation route compiled the whole app and the Vercel build was OOM-killed.
