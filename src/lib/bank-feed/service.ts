@@ -64,6 +64,8 @@ import { runOpenPaymentsSync } from './feed'
 import { accountContextOf, buildBankFeedParty, psuTypeOf, UNATTENDED_SIGNER, type BankFeedSignerInput, type PsuType } from './party'
 import { PSU_AUTHORISER_ID_MISSING } from './psu-authoriser'
 import { BANK_CONNECT_SIGNATORY_TARGET, bankConnectReturnUrl, type BankConnectReturnTarget } from './return-url'
+import { viaCanonicalOrigin } from '@/lib/connect/return-bounce'
+import { getCanonicalAppOrigin } from '@/lib/domains/trusted-app-origin'
 import { normalizeIban, type BankFeedAccount } from './sync'
 
 /** BankID in our screen (same_device, qr) or on the bank's own page (redirect). */
@@ -544,7 +546,11 @@ async function startSigning(
       party,
       consentId: row.session_id!,
       method,
-      ...(method === 'redirect' && ret ? { returnUrl: bankConnectReturnUrl(ret.origin, ret.surface, row.id, { token: ret.token }), returnState: row.id } : {}),
+      // Connect takes returns on the canonical origin only: a brand host's
+      // return goes through the hop there (lib/connect/return-bounce.ts).
+      ...(method === 'redirect' && ret
+        ? { returnUrl: viaCanonicalOrigin(bankConnectReturnUrl(ret.origin, ret.surface, row.id, { token: ret.token }), getCanonicalAppOrigin()), returnState: row.id }
+        : {}),
     })
   } catch (error) {
     return providerFailure(error)

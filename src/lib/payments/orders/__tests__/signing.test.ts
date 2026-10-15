@@ -31,6 +31,8 @@ let ctx: OperationContext
 let log: { info: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn>; error: ReturnType<typeof vi.fn>; debug: ReturnType<typeof vi.fn> }
 
 beforeEach(() => {
+  // The app origin these tests sign from is the canonical one: returns go to it directly (a brand host's would go through the hop).
+  vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.accounted.se')
   resetPaymentInitiationProviders()
   db = createTableMockSupabase({
     company_settings: { data: { org_number: '556677-8899' } },

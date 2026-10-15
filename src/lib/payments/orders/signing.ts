@@ -59,6 +59,8 @@ import {
 import { bankPaymentsAllowanceRefusal } from '@/lib/payments/allowance'
 import { openPaymentsDoor } from './switched-on'
 import { paymentSigningReturnUrl } from './return-url'
+import { viaCanonicalOrigin } from '@/lib/connect/return-bounce'
+import { getCanonicalAppOrigin } from '@/lib/domains/trusted-app-origin'
 import { normalizeSignerPersonalNumber, rememberSignerPersonalNumber } from '@/lib/auth/bankid-signer'
 import { rememberBatchPsu } from '@/lib/auth/resource-psu'
 import { bankDayFor } from './lifecycle'
@@ -524,7 +526,10 @@ async function beginSca(
   // batch named, the batch id as the state the bank echoes.
   if (method === 'redirect' && !ret) return RETURN_ORIGIN_REQUIRED
   const redirect: SigningRedirectReturn | null =
-    method === 'redirect' && ret ? { returnUrl: paymentSigningReturnUrl(ret.origin, batch.id, ret.path ?? undefined), returnState: batch.id } : null
+    method === 'redirect' && ret
+      ? // Connect takes returns on the canonical origin only: a brand host's return goes through the hop there.
+        { returnUrl: viaCanonicalOrigin(paymentSigningReturnUrl(ret.origin, batch.id, ret.path ?? undefined), getCanonicalAppOrigin()), returnState: batch.id }
+      : null
   const writer = createServiceClient()
   // Every order of this signing must still be waiting at the bank in it: a
   // late answer must never start BankID over an order that moved on.
