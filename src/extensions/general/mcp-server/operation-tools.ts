@@ -15,11 +15,26 @@
  * Generated tools are search-only unless the binding says otherwise, so a
  * new operation costs nothing in the tools/list budget and is reachable
  * through gnubok_search_tools, gnubok_call_tool and gnubok_stage_tool.
+ *
+ * Pinned previews (lib/operations/preview-token.ts): a write's dry run
+ * answers `preview_token`; staging with it recomputes the dry run and, when
+ * the fingerprint differs, refuses with PREVIEW_STALE (the fresh preview and
+ * its token in error.details) and stages nothing. The argument is accepted
+ * but not declared in inputSchema (McpTool.undeclaredArgs): declaring it on
+ * the eight generated writes in tools/list costs ~70 tokens against a budget
+ * with ~15 left, and the dry-run answer that hands the token out says how to
+ * send it back.
  */
 import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { fieldValidationError, zodFieldIssues } from '@/lib/errors/refusal'
+import { badArgument, fieldValidationError, zodFieldIssues } from '@/lib/errors/refusal'
 import { throwOutcomeFailure } from '@/lib/operations/errors'
+import {
+  isPreviewToken,
+  MALFORMED_PREVIEW_TOKEN_MESSAGE,
+  operationPreviewToken,
+  previewStaleFailure,
+} from '@/lib/operations/preview-token'
 import { planStagedOperation } from '@/lib/operations/stage'
 import type { AnyOperation } from '@/lib/operations/types'
 import type { ApiKeyScope } from '@/lib/auth/api-keys'
@@ -28,6 +43,21 @@ import type { ActorContext, McpTool, McpToolAnnotations } from './server'
 import type { NextActionHint } from './tool-result'
 
 const log = createLogger('mcp-operation-tools')
+
+/** The staging argument every generated write accepts without declaring it. */
+const PREVIEW_TOKEN_ARG = 'preview_token'
+const UNDECLARED_STAGING_ARGS = [PREVIEW_TOKEN_ARG] as const
+
+/** The pin a staging call sent, or null; a malformed one is refused. */
+function sentPreviewToken(value: unknown): string | null {
+  if (value === undefined || value === null) return null
+  if (typeof value === 'string' && isPreviewToken(value.trim())) return value.trim()
+  throw badArgument(
+    PREVIEW_TOKEN_ARG,
+    `${PREVIEW_TOKEN_ARG}: ${MALFORMED_PREVIEW_TOKEN_MESSAGE}`,
+    'Ogiltig preview_token: skicka tillbaka den som förhandsgranskningen (dry_run) av samma anrop gav.',
+  )
+}
 
 /**
  * MCP-only input preparation for one operation, run on the raw arguments
@@ -206,10 +236,12 @@ export function createOperationTools(operations: readonly AnyOperation[], deps: 
       },
       catalogVisibility: binding.visibility ?? 'search',
       keywords: binding.keywords,
+      undeclaredArgs: UNDECLARED_STAGING_ARGS,
       async execute(args, companyId, userId, supabase, actor) {
         // __keyScopes: the calling key's grant, injected by the dispatcher
         // for the tools whose refusal names a follow-up call.
-        const { dry_run, idempotency_key, __keyScopes, ...rest } = args
+        const { dry_run, idempotency_key, __keyScopes, [PREVIEW_TOKEN_ARG]: rawPreviewToken, ...rest } = args
+        const previewTokenSent = sentPreviewToken(rawPreviewToken)
         const prepare = deps.prepareInput?.[op.id]
         const prepared = prepare ? await prepare(rest, { supabase, companyId }) : { args: rest }
         const input = parseOrThrow(op, inputSchema, prepared.args)
@@ -234,20 +266,24 @@ export function createOperationTools(operations: readonly AnyOperation[], deps: 
         // The same plan the v1 stage mode stages (lib/operations/stage.ts):
         // pinned params (e.g. the payee each payment goes to) make the commit
         // refuse when what the approver saw no longer holds.
-        const plan = planStagedOperation(
-          stage,
-          input as Record<string, unknown>,
-          preview.dryRun ? preview.preview : {},
-        )
+        const previewData = preview.dryRun ? preview.preview : {}
+        const plan = planStagedOperation(stage, input as Record<string, unknown>, previewData)
         const extras = plan.extras
-        return deps.stagePendingOperation(
+        const stagedPreview = { ...plan.preview, ...(prepared.preview ?? {}) }
+        // The same fingerprint every door computes for this input, so a token
+        // from a v1 dry run pins an MCP staging too, and the other way round.
+        const previewToken = operationPreviewToken(op, companyId, input, previewData)
+        if (previewTokenSent && previewTokenSent !== previewToken) {
+          throwOutcomeFailure(previewStaleFailure(stagedPreview, previewToken))
+        }
+        const staged = await deps.stagePendingOperation(
           supabase,
           companyId,
           userId,
           plan.pendingType,
           plan.title,
           plan.params,
-          { ...plan.preview, ...(prepared.preview ?? {}) },
+          stagedPreview,
           actor,
           extras.next,
           {
@@ -257,10 +293,27 @@ export function createOperationTools(operations: readonly AnyOperation[], deps: 
             ...(extras.complianceNote ? { complianceNote: extras.complianceNote } : {}),
           },
         )
+        return dry_run ? withPreviewToken(staged, previewToken) : staged
       },
     })
   }
   return tools
+}
+
+/**
+ * A dry run's staging answer with the token that pins it, and the sentence
+ * that says how to use it: the argument is not in inputSchema, so this
+ * answer is where an agent learns it exists.
+ */
+function withPreviewToken(staged: unknown, previewToken: string): unknown {
+  if (typeof staged !== 'object' || staged === null) return staged
+  const answer = staged as Record<string, unknown>
+  const pin = `To stage exactly this preview once the person confirms it, repeat the call without dry_run and with preview_token="${previewToken}": if anything changed meanwhile, nothing is staged and PREVIEW_STALE returns the fresh preview.`
+  return {
+    ...answer,
+    preview_token: previewToken,
+    message: typeof answer.message === 'string' ? `${answer.message} ${pin}` : pin,
+  }
 }
 
 /**

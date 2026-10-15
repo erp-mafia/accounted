@@ -1,0 +1,1 @@
+[2026-10-15] A 409 PREVIEW_STALE is never cached under the Idempotency-Key: it wrote nothing, and its documented retry is the same request and key with the fresh token, which a cached refusal would answer forever since the token is not in the request hash.

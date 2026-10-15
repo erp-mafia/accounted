@@ -10,7 +10,9 @@
  *
  * company_id is tolerated everywhere: the company-routing layer strips it for
  * company-dependent tools, and a client that always sends it must not break
- * on the few tools that ignore it.
+ * on the few tools that ignore it. A tool's `undeclaredArgs` (McpTool) are
+ * tolerated on that tool only: arguments it takes without declaring them, so
+ * they cost nothing in tools/list.
  */
 export function listArgKeys(inputSchema: Record<string, unknown>): string[] {
   const properties = inputSchema.properties
@@ -27,9 +29,10 @@ export function listRequiredArgKeys(inputSchema: Record<string, unknown>): strin
 export function findUnknownArgKeys(
   inputSchema: Record<string, unknown>,
   args: Record<string, unknown>,
+  undeclaredArgs: readonly string[] = [],
 ): string[] {
   if (inputSchema.additionalProperties !== false) return []
-  const allowed = new Set(listArgKeys(inputSchema))
+  const allowed = new Set([...listArgKeys(inputSchema), ...undeclaredArgs])
   return Object.keys(args).filter((key) => key !== 'company_id' && !allowed.has(key))
 }
 

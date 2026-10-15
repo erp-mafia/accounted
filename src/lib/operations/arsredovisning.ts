@@ -555,6 +555,9 @@ export const arsredovisningRecordSignature = defineOperation({
     path: `${BASE}/signatures/:signatureId`,
     pathParams: { id: 'fiscal_period_id', signatureId: 'signature_id' },
   },
+  // An omitted signed_at defaults to the moment of the call, on the dry run
+  // and again on the commit; one the caller sent is pinned through the input.
+  volatilePreviewKeys: ['signed_at'],
   run: async (ctx, { fiscal_period_id, signature_id, ...body }, { dryRun }) => {
     const transition =
       body.status === 'signed'

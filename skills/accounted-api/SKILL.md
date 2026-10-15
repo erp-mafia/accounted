@@ -100,6 +100,21 @@ Commit by re-issuing without the flag and with the SAME `Idempotency-Key`
 (the dry run is not cached against the key). Preview first on any financial
 write; it is free.
 
+**Pin the preview you showed** (`x-preview-token-supported` in the spec).
+The dry run of these writes also answers `data.preview_token`. The flow for
+an agent: dry run, show the person `data.preview`, and once they confirm,
+commit the same request with the header `Preview-Token: <preview_token>`
+(and the same `Idempotency-Key`). The commit then books exactly what was
+shown, or answers `409 PREVIEW_STALE` and writes nothing when something moved
+in between (a period locked, an account deactivated, a rate changed, another
+write landed): `error.details.preview` is what the write would do now and
+`error.details.preview_token` its token, so show that, ask again and resend
+with the new token. A token binds the operation, the company and the exact
+input, so it never passes anywhere else. It works with `?stage=true` too.
+The header on an endpoint without the flag, or a malformed value, is `400`;
+without the header nothing changes. Over MCP the generated write tools take
+the same token as a `preview_token` argument when staging.
+
 **Stage for approval** (`stage` query parameter in the endpoint entry,
 `x-stage-supported` in the spec). A write that agents stage over MCP can be
 staged over REST too: send it with `?stage=true` and nothing is committed;

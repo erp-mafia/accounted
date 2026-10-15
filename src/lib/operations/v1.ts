@@ -21,6 +21,14 @@
  * the MCP approve tool or the app. withApiV1 refuses stage=true on every
  * endpoint registered without `stageSupported`.
  *
+ * Pinned previews (./preview-token.ts): every write's dry run answers a
+ * `preview_token` beside its preview. A commit (or a staging) that sends it
+ * back in the Preview-Token header first recomputes the dry run for the same
+ * input; when the fingerprint differs it answers 409 PREVIEW_STALE with the
+ * fresh preview and its token and writes nothing, otherwise it commits as
+ * usual. Without the header nothing changes. withApiV1 refuses the header on
+ * every endpoint registered without `previewTokenSupported`.
+ *
  * Scope, idempotency, rate limits, test-mode keys and company membership are
  * withApiV1's job, exactly as for a hand-written route.
  */
@@ -32,6 +40,7 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1, type ApiV1Context } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { toPendingOperationView } from '@/lib/pending-operations/view'
+import { operationPreviewToken, previewStaleFailure } from './preview-token'
 import { stageOperation } from './stage'
 import type { AnyOperation, OperationContext, OperationOutcome } from './types'
 
@@ -82,6 +91,7 @@ export function v1OperationHandler(op: AnyOperation) {
     reversible: op.reversible,
     dryRunSupported: isWrite,
     stageSupported: isWrite && op.mcp?.stage !== undefined,
+    previewTokenSupported: isWrite,
     request:
       http.method === 'GET'
         ? { query: bodySchemaFor(op) }
@@ -133,9 +143,24 @@ export function v1OperationHandler(op: AnyOperation) {
         userId: ctx.userId,
         log: ctx.log,
       }
-      if (ctx.stage) return v1StageResponse(op, opCtx, parsed.data as Record<string, unknown>, ctx)
+      const input = parsed.data as Record<string, unknown>
+      if (ctx.stage) return v1StageResponse(op, opCtx, input, ctx)
 
-      const outcome = await op.run(opCtx, parsed.data, { dryRun: isWrite && ctx.dryRun })
+      // A write's dry run, and the dry run a pinned commit recomputes first:
+      // the preview answers with its token, and a sent token that no longer
+      // matches refuses before anything is written.
+      if (isWrite && (ctx.dryRun || ctx.previewToken)) {
+        const dry = await op.run(opCtx, input, { dryRun: true })
+        if (!dry.ok || !dry.dryRun) return v1OutcomeResponse(dry, ctx)
+        const previewToken = operationPreviewToken(op, opCtx.companyId, input, dry.preview)
+        if (ctx.previewToken && ctx.previewToken !== previewToken) {
+          ctx.log.info('preview token stale', { operation: op.id })
+          return v1OutcomeResponse(previewStaleFailure(dry.preview, previewToken), ctx)
+        }
+        if (ctx.dryRun) return dryRunPreview(dry.preview, { requestId: ctx.requestId, log: ctx.log, previewToken })
+      }
+
+      const outcome = await op.run(opCtx, input, { dryRun: false })
       return v1OutcomeResponse(outcome, ctx)
     },
     {
@@ -184,7 +209,7 @@ async function v1StageResponse(
   op: AnyOperation,
   opCtx: OperationContext,
   input: Record<string, unknown>,
-  ctx: Pick<ApiV1Context, 'requestId' | 'log' | 'dryRun' | 'apiKeyId' | 'apiKeyName'>,
+  ctx: Pick<ApiV1Context, 'requestId' | 'log' | 'dryRun' | 'previewToken' | 'apiKeyId' | 'apiKeyName'>,
 ): Promise<NextResponse> {
   // withApiV1 already refused stage=true here; kept so the handler never
   // commits a request sent to be staged, whatever the registration says.
@@ -196,7 +221,7 @@ async function v1StageResponse(
     opCtx,
     input,
     { type: 'api_key', id: ctx.apiKeyId ?? null, label: ctx.apiKeyName ?? null },
-    { dryRun: ctx.dryRun },
+    { dryRun: ctx.dryRun, previewToken: ctx.previewToken },
   )
   if (!staged.ok) return v1OutcomeResponse(staged.outcome, ctx)
   if (staged.dryRun) {
@@ -208,7 +233,7 @@ async function v1StageResponse(
         risk_level: staged.riskLevel,
         preview: staged.plan.preview,
       },
-      { requestId: ctx.requestId, log: ctx.log },
+      { requestId: ctx.requestId, log: ctx.log, previewToken: staged.previewToken },
     )
   }
   return ok(

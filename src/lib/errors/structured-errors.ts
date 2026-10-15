@@ -8572,6 +8572,19 @@ const PENDING_OPERATIONS: Record<string, StructuredErrorEntry> = {
         'Send the request without stage=true to commit it directly, or stage through an endpoint that lists the stage query parameter.',
     },
   },
+  // A commit sent with a preview token whose dry run, recomputed at commit
+  // time, no longer fingerprints the same (lib/operations/preview-token.ts).
+  // Nothing was written; details carry the fresh preview and its token.
+  PREVIEW_STALE: {
+    httpStatus: 409,
+    message_sv: 'Förhandsgranskningen stämmer inte längre: något har ändrats sedan den togs fram. Inget sparades.',
+    message_en:
+      'The preview no longer holds: something changed after it was computed (a period lock, an account, a rate, another write). Nothing was written.',
+    remediation: {
+      description:
+        'Show the person details.preview, what the write would do now. If they confirm it, send the same request again with details.preview_token in place of the old token.',
+    },
+  },
 }
 
 const REGISTRY: Record<string, StructuredErrorEntry> = {

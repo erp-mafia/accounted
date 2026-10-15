@@ -45,6 +45,12 @@ export interface DryRunPreviewBase<T> {
   dry_run: true
   /** The would-be resource. Same shape as the success response. */
   preview: T
+  /**
+   * Operation writes only (lib/operations/preview-token.ts): the preview's
+   * fingerprint. Send it back in the Preview-Token header on the commit and
+   * the commit books exactly this preview or answers 409 PREVIEW_STALE.
+   */
+  preview_token?: string
 }
 
 interface DryRunResponseOptions {
@@ -52,6 +58,8 @@ interface DryRunResponseOptions {
   log: Logger
   /** Non-blocking warnings the real write would carry in meta.warnings. */
   warnings?: ResponseWarning[]
+  /** The preview's fingerprint, answered as data.preview_token. */
+  previewToken?: string
 }
 
 /**
@@ -62,7 +70,11 @@ interface DryRunResponseOptions {
  * to know what would be written and whether validation passes.
  */
 export function dryRunPreview<T>(preview: T, opts: DryRunResponseOptions): NextResponse {
-  const body: DryRunPreviewBase<T> = { dry_run: true, preview }
+  const body: DryRunPreviewBase<T> = {
+    dry_run: true,
+    preview,
+    ...(opts.previewToken ? { preview_token: opts.previewToken } : {}),
+  }
   opts.log.info('dry-run preview returned', { stage: 'validation-only' })
   return ok(body, { requestId: opts.requestId, dryRun: true, warnings: opts.warnings })
 }

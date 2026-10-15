@@ -22,8 +22,17 @@ export interface NextActionHint {
 }
 
 export interface AgentToolError {
-  error: StructuredError
+  error: StructuredError & { details?: Record<string, unknown> }
 }
+
+/**
+ * The refusals whose details ARE the agent's next step, so they ride in the
+ * envelope as `error.details` (where v1 carries them too). Every other
+ * failure keeps the bare structured error. PREVIEW_STALE carries the fresh
+ * preview and its token, which the agent must show the person before it may
+ * stage again (lib/operations/preview-token.ts).
+ */
+const CODES_WITH_DETAILS = new Set(['PREVIEW_STALE'])
 
 /**
  * Convert a thrown error into the structured tool-error envelope the agent
@@ -37,7 +46,15 @@ export function toToolError(err: unknown, opts: { toolName?: string } = {}): Age
   const scopeMatch = message.match(/Insufficient scope: this API key does not have the "([^"]+)" scope/)
   if (scopeMatch) attemptedScope = scopeMatch[1]
 
-  return {
-    error: getStructuredError(err, { attemptedScope, toolName: opts.toolName }),
-  }
+  const error = getStructuredError(err, { attemptedScope, toolName: opts.toolName })
+  const details = CODES_WITH_DETAILS.has(error.code) ? ownDetails(err) : undefined
+  return { error: details ? { ...error, details } : error }
+}
+
+function ownDetails(err: unknown): Record<string, unknown> | undefined {
+  if (typeof err !== 'object' || err === null) return undefined
+  const details = (err as { details?: unknown }).details
+  return typeof details === 'object' && details !== null && !Array.isArray(details)
+    ? (details as Record<string, unknown>)
+    : undefined
 }

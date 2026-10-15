@@ -1162,6 +1162,12 @@ export interface McpTool {
   // or search_tools output; the tools/list payload budget has zero headroom.
   // Store lowercase.
   keywords?: string[]
+  // Arguments the tool accepts without declaring them in inputSchema, so they
+  // cost nothing in tools/list (payload-size.bench.test.ts): the unknown-
+  // argument guard (arg-guard.ts) lets exactly these through. Today only
+  // preview_token on the generated staging writes (operation-tools.ts), which
+  // the dry-run answer that hands the token out announces. Never serialized.
+  undeclaredArgs?: readonly string[]
   _meta?: { ui: { resourceUri: string } }
   // Result-level UI hint: when set, a call passing render_ui=true gets a
   // _meta.ui.resourceUri on the RESULT, so the host renders the widget only when
@@ -3884,7 +3890,7 @@ function readInnerArguments(inner: McpTool, raw: unknown): Record<string, unknow
   if ('company_id' in innerArgs) {
     throw codedError('VALIDATION_ERROR', 'Do not pass company_id inside arguments: the scope selects the companies.')
   }
-  const unknownArgKeys = findUnknownArgKeys(inner.inputSchema as Record<string, unknown>, innerArgs)
+  const unknownArgKeys = findUnknownArgKeys(inner.inputSchema as Record<string, unknown>, innerArgs, inner.undeclaredArgs)
   if (unknownArgKeys.length > 0) {
     throw codedError(
       'VALIDATION_ERROR',
@@ -26446,7 +26452,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         // parameter used to be dropped silently (see arg-guard.ts). Thrown
         // inside this try so it reaches the caller as the structured
         // VALIDATION_ERROR envelope, never as a half-applied call.
-        const unknownArgKeys = findUnknownArgKeys(tool.inputSchema as Record<string, unknown>, toolArgs)
+        const unknownArgKeys = findUnknownArgKeys(tool.inputSchema as Record<string, unknown>, toolArgs, tool.undeclaredArgs)
         if (unknownArgKeys.length > 0) {
           // Name the shape, not just the mistake: a caller that already sent a
           // wrong key has no way to guess the right one from a key list alone.
