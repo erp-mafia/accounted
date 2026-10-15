@@ -33,6 +33,7 @@ import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/in
 import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
 import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
 import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
+import { effectiveInvoiceStatus, filterInvoicesByReportedStatus } from '@/lib/invoices/overdue'
 import {
   resolveSelfBilledSaleDraft,
   createSelfBilledSaleInvoice,
@@ -152,7 +153,9 @@ const INVOICE_ITEM_COLUMNS =
 // arbitrary 3-8 char strings would pass through to the DB filter without
 // serving any documented purpose.
 const ListFilters = z.object({
-  status: InvoiceStatus.optional().describe('Only invoices in this status.'),
+  status: InvoiceStatus.optional().describe(
+    'Only invoices in this status. overdue = past due_date with remaining_amount > 0, partially_paid included.',
+  ),
   customer_id: z.string().uuid().optional().describe('Only invoices to this customer (id).'),
   document_type: InvoiceDocumentType.optional().describe(
     'Only this document type. Default: every type.',
@@ -288,7 +291,8 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       ? `customer:customers(${CUSTOMER_LIST_CONTEXT_COLUMNS})`
       : `customer:customers(${CUSTOMER_NAME_ONLY_COLUMNS})`
     const itemsSelect = expand.has('items') ? `, items:invoice_items(${INVOICE_ITEM_COLUMNS})` : ''
-    const selectClause = `${INVOICE_SUMMARY_COLUMNS}, ${customerSelect}${itemsSelect}`
+    // credited_invoice_id is read by the overdue rule only, never returned.
+    const selectClause = `${INVOICE_SUMMARY_COLUMNS}, credited_invoice_id, ${customerSelect}${itemsSelect}`
 
     // Sort by (created_at DESC, id ASC). created_at is the stable cursor
     // anchor: it's a real timestamp (passes ISO-8601 validation in
@@ -307,7 +311,11 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       .order('id', { ascending: true })
       .limit(limit + 1)
 
-    if (filters.status) query = query.eq('status', filters.status)
+    // Overdue is derived from the due date and the open remainder
+    // (lib/invoices/overdue.ts), never the stored status: 'sent' and
+    // 'overdue' filter and report as the date says.
+    const today = todayIsoStockholm()
+    if (filters.status) query = filterInvoicesByReportedStatus(query, filters.status, today)
     if (filters.customer_id) query = query.eq('customer_id', filters.customer_id)
     if (filters.document_type) query = query.eq('document_type', filters.document_type)
     if (filters.quote_status) {
@@ -378,7 +386,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
         customer_name: c?.name ?? '',
         invoice_date: r.invoice_date,
         due_date: r.due_date,
-        status: r.status,
+        status: effectiveInvoiceStatus(r, today) as z.infer<typeof InvoiceStatus>,
         document_type: r.document_type,
         valid_until: r.valid_until ?? null,
         quote_status: effectiveQuoteStatus(r),

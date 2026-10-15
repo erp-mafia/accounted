@@ -119,6 +119,7 @@ import { SendToCollectionDialog } from '@/components/collections/SendToCollectio
 import { useCaseWords, useInvoiceCollection } from '@/components/collections/case-client'
 import { remindersAside, showSendToCollection } from '@/lib/collections/invoice-entry'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { invoiceDaysOverdue, isInvoiceOverdue } from '@/lib/invoices/overdue'
 import { newEditorHref } from '@/lib/invoices/editor/new-editor-params'
 import { invoiceStatusDisplay } from '@/lib/invoices/status-display'
 import type { StatusChip } from '@/lib/status-display'
@@ -184,15 +185,6 @@ const accrualMonth = (date: string): string => date.slice(0, 7)
 // actions next to plain values, the hairline underline darkening on hover.
 const ROW_ACTION_CLASS =
   'underline decoration-border underline-offset-4 transition-colors duration-150 hover:decoration-foreground disabled:opacity-50'
-
-// Same arithmetic as the list page's overdue chip, so both say the same days.
-function daysOverdue(dueDateStr: string): number {
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const dueDate = new Date(dueDateStr)
-  dueDate.setHours(0, 0, 0, 0)
-  return Math.round((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
-}
 
 export default function InvoiceDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { canWrite } = useCanWrite()
@@ -1835,11 +1827,15 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         ? quoteStatusDescriptor
       : invoice.status === 'draft' && isUnsentNumberedInvoice
         ? { label: t('status_unsent'), exception: true, variant: 'outline' }
-        : invoice.status === 'overdue' && invoice.due_date
+        : (invoice.status === 'sent' || invoice.status === 'overdue') && isInvoiceOverdue(invoice) && invoice.due_date
           ? {
+              // Overdue follows the due date and the open remainder, the same
+              // rule and day count as the list (lib/invoices/overdue.ts).
               ...baseStatus('overdue'),
-              label: tInvoices('status_overdue_days', { days: Math.max(1, daysOverdue(invoice.due_date)) }),
+              label: tInvoices('status_overdue_days', { days: invoiceDaysOverdue(invoice.due_date) }),
             }
+          : invoice.status === 'overdue'
+            ? baseStatus('sent')
           : invoice.status === 'paid' && invoice.paid_at
             ? { label: tInvoices('status_paid_date', { date: formatDate(invoice.paid_at) }), exception: false }
             : baseStatus(invoice.status)

@@ -1,5 +1,7 @@
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import type { Invoice, InvoiceStatus } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { effectiveInvoiceStatus } from './overdue'
 
 export type InvoiceListSortColumn = 'number' | 'customer' | 'due' | 'amount' | 'status'
 export type InvoiceListSortDirection = 'asc' | 'desc'
@@ -40,11 +42,12 @@ function displayedDueDate(invoice: Invoice): string | null {
   return invoice.due_date || null
 }
 
-function displayedStatusRank(invoice: Invoice): number {
+function displayedStatusRank(invoice: Invoice, today: string): number {
   if (invoice.status === 'cancelled') return statusRank.cancelled
   if (invoice.status === 'paid') return statusRank.paid
   if (invoice.credited_invoice_id) return 5
-  return statusRank[invoice.status]
+  // The status the row shows: a sent invoice past its due date sorts as overdue (lib/invoices/overdue.ts).
+  return statusRank[effectiveInvoiceStatus(invoice, today) as InvoiceStatus]
 }
 
 function compareNullable<T>(
@@ -64,6 +67,7 @@ function comparePrimary(
   right: Invoice,
   sort: InvoiceListSort,
   oreRounding: boolean,
+  today: string,
 ): number {
   switch (sort.column) {
     case 'number':
@@ -94,7 +98,7 @@ function comparePrimary(
       return sort.direction === 'asc' ? result : -result
     }
     case 'status': {
-      const result = displayedStatusRank(left) - displayedStatusRank(right)
+      const result = displayedStatusRank(left, today) - displayedStatusRank(right, today)
       return sort.direction === 'asc' ? result : -result
     }
   }
@@ -104,9 +108,10 @@ export function sortInvoiceList(
   invoices: Invoice[],
   sort: InvoiceListSort,
   oreRounding: boolean,
+  today: string = todayIsoStockholm(),
 ): Invoice[] {
   return [...invoices].sort((left, right) => {
-    const primary = comparePrimary(left, right, sort, oreRounding)
+    const primary = comparePrimary(left, right, sort, oreRounding, today)
     if (primary !== 0) return primary
 
     const dateTieBreak = right.invoice_date.localeCompare(left.invoice_date)

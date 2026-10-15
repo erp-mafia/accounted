@@ -140,31 +140,28 @@ describe('invoice PDF: the one payment QR code', () => {
     expect(treeTextLeaves(tree).join('\n')).toContain('Skanna för att betala med Swish')
   })
 
-  it('draws one bank-app code for a company with only a bank account (no giro, no Swish)', async () => {
+  it('draws no code for a company with only a bank account, and prints the account as text (crm#1191)', async () => {
     const bankOnly = qrCompany({
       bankgiro: null,
       swish: null,
       bank_name: 'Handelsbanken',
       clearing_number: '6000',
       account_number: '658159712',
+      iban: 'SE4560000000000658159712',
     })
     const resolved = resolveInvoicePaymentQr({ invoice: sentInvoice(), company: bankOnly, customer: business, lang: 'sv' })
-    expect(resolved.kind).toBe('bank_app')
-    expect(resolved.kind && JSON.parse(resolved.payload)).toMatchObject({ pt: 'BBAN', acc: '6000658159712', iref: '10234' })
+    expect(resolved).toEqual({ kind: null, mode: 'auto', reason: 'bank_account_only' })
     const paymentQr = await qrFor(sentInvoice(), bankOnly, business)
+    expect(paymentQr).toBeNull()
     const tree = render(sentInvoice(), bankOnly, { paymentQr })
-    expect(codes(tree)).toHaveLength(1)
-    expect(treeElements(tree).filter((el) => el.type === Path)).toHaveLength(1)
+    expect(codes(tree)).toHaveLength(0)
+    expect(treeElements(tree).filter((el) => el.type === Path)).toHaveLength(0)
     const texts = treeTextLeaves(paymentArea(tree))
-    expect(texts.join('\n')).toContain('Skanna med din bankapp')
-    // The page prints the account and the invoice number as the message, the same reference the code carries.
+    expect(texts.join('\n')).not.toContain('Skanna med din bankapp')
+    // The page still tells the payer where to pay: the account, the IBAN and the invoice number as the message.
     expect(texts).toContain('Handelsbanken, 6000-658159712')
+    expect(texts.join('\n')).toContain('SE45 6000 0000 0006 5815 9712')
     expect(texts).toContain('Meddelande')
-  })
-
-  it('draws no code for a company whose only account has a wrong check digit', async () => {
-    const wrong = qrCompany({ bankgiro: null, swish: null, clearing_number: '6000', account_number: '658159713' })
-    expect(await qrFor(sentInvoice(), wrong, business)).toBeNull()
   })
 
   it('prints exactly one code, whatever its kind', async () => {
@@ -336,10 +333,10 @@ describe('invoice PDF: payment QR geometry', () => {
     expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-')
   })
 
-  it('renders a real PDF with the bank-account code for a company without a giro', { timeout: 30_000 }, async () => {
+  it('renders a real PDF without a code for a company that has only a bank account', { timeout: 30_000 }, async () => {
     const bankOnly = qrCompany({ bankgiro: null, swish: null, clearing_number: '8169-5', account_number: '9139876057' })
     const paymentQr = await qrFor(sentInvoice(), bankOnly, makeCustomer())
-    expect(paymentQr?.kind).toBe('bank_app')
+    expect(paymentQr).toBeNull()
     const pages = await layOut(render(sentInvoice(), bankOnly, { paymentQr }))
     expect(pages).toHaveLength(1)
     const area = findArea(pages[0])
@@ -350,7 +347,7 @@ describe('invoice PDF: payment QR geometry', () => {
         Math.abs((node.box?.width ?? 0) - PAYMENT_QR_PT) < 0.5 &&
         Math.abs((node.box?.height ?? 0) - PAYMENT_QR_PT) < 0.5,
     )
-    expect(square.length).toBeGreaterThan(0)
+    expect(square).toHaveLength(0)
     const buffer = await renderToBuffer(render(sentInvoice(), bankOnly, { paymentQr }))
     expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-')
   })

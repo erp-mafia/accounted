@@ -190,9 +190,8 @@ export function describeEditorPaymentSummary(summary: EditorPaymentSummary): Sum
 export interface PaymentReason {
   key: string
   /**
-   * The payee's accounts are kept in Inställningar: add_account adds a giro or
-   * a bank account there, fix_account corrects one. open_panel: the Betalning
-   * panel fixes it.
+   * The payee's accounts are kept in Inställningar: add_account adds a giro
+   * there, fix_account corrects one. open_panel: the Betalning panel fixes it.
    */
   action: 'add_account' | 'fix_account' | 'open_panel' | null
 }
@@ -234,19 +233,20 @@ export function paymentReason(
     case 'currency_not_sek':
       return { key: 'reason_currency', action: null }
     case 'no_printed_giro':
-      // OCR still needs a giro; the code takes a bank account too.
       return {
         key: ctx.lang === 'sv' && ctx.showOcr ? 'reason_no_giro_ocr' : 'reason_no_giro',
+        action: 'add_account',
+      }
+    case 'bank_account_only':
+      // OCR and the bank-app code both need a giro; the account still prints.
+      return {
+        key: ctx.lang === 'sv' && ctx.showOcr ? 'reason_bank_account_only_ocr' : 'reason_bank_account_only',
         action: 'add_account',
       }
     case 'no_org_number':
       return { key: 'reason_no_org_number', action: null }
     case 'invalid_giro':
       return { key: 'reason_invalid_giro', action: 'fix_account' }
-    case 'invalid_bank_account':
-      return { key: 'reason_invalid_bank_account', action: 'fix_account' }
-    case 'unverified_bank_account':
-      return { key: 'reason_unverified_bank_account', action: 'add_account' }
     case 'no_invoice_number':
       return { key: 'reason_no_number', action: null }
     case 'incomplete_details':

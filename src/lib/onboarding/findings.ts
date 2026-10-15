@@ -3,6 +3,7 @@ import { hasSkatteverketOmbudReadAccess } from '@/lib/skatteverket/ombud-access'
 import type { AiClient } from '@/lib/onboarding/ai-clients'
 import { loadAiConnection } from '@/lib/onboarding/ai-clients.server'
 import { roundOre } from '@/lib/money'
+import { filterOverdueInvoices } from '@/lib/invoices/overdue'
 import { SKATTEKONTO_ACCOUNT_DEFAULT } from '@/lib/skatteverket/skattekonto-account'
 
 /**
@@ -100,12 +101,14 @@ export async function loadBooksFindings(
       .select('id, name, period_start, period_end, is_closed, continuity_verified')
       .eq('company_id', companyId)
       .order('period_start', { ascending: true }),
-    supabase
-      .from('invoices')
-      .select('*', { count: 'exact', head: true })
-      .eq('company_id', companyId)
-      .in('status', ['sent', 'partially_paid', 'overdue'])
-      .lt('due_date', today),
+    // The Förfallna view's rows (lib/invoices/overdue.ts): the insight links there.
+    filterOverdueInvoices(
+      supabase
+        .from('invoices')
+        .select('*', { count: 'exact', head: true })
+        .eq('company_id', companyId),
+      today,
+    ),
     supabase
       .from('transactions')
       .select('*', { count: 'exact', head: true })

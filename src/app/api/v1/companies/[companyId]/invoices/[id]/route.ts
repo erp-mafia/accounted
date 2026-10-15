@@ -36,6 +36,7 @@ import { CreateInvoiceItemSchema, InvoiceQrModeSchema, InvoiceVatOverrideShape }
 import { buildInvoiceWriteData, type InvoiceWriteItemInput } from '@/lib/invoices/build-invoice-write'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
+import { effectiveInvoiceStatus, type OverdueInvoiceInput } from '@/lib/invoices/overdue'
 import { deleteDraftInvoice } from '@/lib/invoices/delete-draft-invoice'
 import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
 import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
@@ -217,11 +218,17 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
 
     // Quotes: report the effective decision (expired is derived from
     // valid_until, never stored). Null for every other document type.
+    // Overdue is derived the same way (lib/invoices/overdue.ts): a sent
+    // invoice past its due date with an open remainder reports 'overdue',
+    // as the list endpoint does.
     const row = data as unknown as Record<string, unknown> & {
       quote_status?: string | null
       valid_until?: string | null
-    }
-    return ok({ ...row, quote_status: effectiveQuoteStatus(row) }, { requestId: ctx.requestId })
+    } & OverdueInvoiceInput
+    return ok(
+      { ...row, status: effectiveInvoiceStatus(row), quote_status: effectiveQuoteStatus(row) },
+      { requestId: ctx.requestId },
+    )
   },
 )
 

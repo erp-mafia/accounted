@@ -13,7 +13,13 @@ vi.mock('../categories', () => ({
   countDocumentFieldReviews: vi.fn().mockResolvedValue(0),
   countMissedAgreementPayments: vi.fn().mockResolvedValue(0),
   countArkivFindings: vi.fn().mockResolvedValue(0),
-  countOverdueInvoices: vi.fn().mockResolvedValue(5),
+  getOverdueInvoicesDue: vi.fn().mockResolvedValue({
+    count: 5,
+    remaining_sek: 12500,
+    unconverted_count: 0,
+    oldest_due_date: '2026-09-01',
+    oldest_days_overdue: 42,
+  }),
   countDeadlinesNeedingAction: vi.fn().mockResolvedValue(1),
   countPendingOperations: vi.fn().mockResolvedValue(2),
   countReconciliationDue: vi.fn().mockResolvedValue(1),
@@ -83,7 +89,7 @@ describe('getWorklistCounts', () => {
     vi.mocked(countBankSwitchDue).mockResolvedValueOnce(2)
     const first = await getWorklistCounts(supabase, 'company-1')
     expect(first.counts.bank_switch).toBe(2)
-    expect(first.total).toBe(37)
+    expect(first.total).toBe(33)
     expect(countBankSwitchDue).toHaveBeenCalledWith(supabase, 'company-1')
     vi.mocked(countBankSwitchDue).mockClear()
     const due = [{ connection_id: 'c1' }] as never[]
@@ -99,7 +105,7 @@ describe('getWorklistCounts', () => {
     const { counts, total } = await getWorklistCounts(supabase, 'company-1')
     expect(counts.collection_decision).toBe(2)
     expect(counts.collection_attention).toBe(1)
-    expect(total).toBe(38)
+    expect(total).toBe(34)
     expect(countCollectionDecisions).toHaveBeenCalledWith(supabase, 'company-1')
   })
 
@@ -108,7 +114,7 @@ describe('getWorklistCounts', () => {
     vi.mocked(countCollectionBatchItems).mockResolvedValueOnce(4)
     const { counts, total } = await getWorklistCounts(supabase, 'company-1')
     expect(counts.collection_batch_ready).toBe(4)
-    expect(total).toBe(39)
+    expect(total).toBe(35)
     expect(countCollectionBatchItems).toHaveBeenCalledWith(supabase, 'company-1')
   })
 
@@ -162,7 +168,7 @@ describe('getWorklistCounts', () => {
     // Neither flag: every arkiv row is 0 and no query runs, the pages they lead to are 404 here.
     const off = await getWorklistCounts(supabase, 'company-1')
     expect(off.counts).toMatchObject({ document_relevance: 0, document_unclassified: 0, document_field_review: 0, agreement_payment_missed: 0, arkiv_finding: 0 })
-    expect(off.total).toBe(35)
+    expect(off.total).toBe(31)
     expect(c.countHeldDocuments).not.toHaveBeenCalled()
     expect(c.countArkivFindings).not.toHaveBeenCalled()
 
@@ -170,21 +176,39 @@ describe('getWorklistCounts', () => {
     process.env.ARKIV_COMPANY_IDS = 'company-1'
     const section = await getWorklistCounts(supabase, 'company-1')
     expect(section.counts).toMatchObject({ document_relevance: 2, document_unclassified: 3, document_field_review: 0, agreement_payment_missed: 0, arkiv_finding: 0 })
-    expect(section.total).toBe(40)
+    expect(section.total).toBe(36)
     expect(c.countDocumentFieldReviews).not.toHaveBeenCalled()
 
     // The brain too: everything counts.
     process.env.ARKIV_BRAIN_COMPANY_IDS = 'company-1'
     const brain = await getWorklistCounts(supabase, 'company-1')
     expect(brain.counts).toMatchObject({ document_relevance: 2, document_unclassified: 3, document_field_review: 4, agreement_payment_missed: 5, arkiv_finding: 6 })
-    expect(brain.total).toBe(55)
+    expect(brain.total).toBe(51)
   })
 
   it('excludes suggested_match from the total (subset of book_transaction)', async () => {
     const { total } = await getWorklistCounts(supabase, 'company-1')
-    // 4 + 7 + 6 + 1 + 3 + 5 + 1 + 2 + 1 + 2 (people owed for utlägg) + 1
-    // (skattekonto payment) + 2 (failed Peppol deliveries), without the 2
-    // suggested matches.
-    expect(total).toBe(35)
+    // 4 + 7 + 6 + 1 + 3 + 1 (the overdue group) + 1 + 2 + 1 + 2 (people
+    // owed for utlägg) + 1 (skattekonto payment) + 2 (failed Peppol
+    // deliveries), without the 2 suggested matches.
+    expect(total).toBe(31)
+  })
+
+  it('takes the overdue customer invoices as ONE item: the count says how many, the total adds 1 (crm#1084)', async () => {
+    const { getOverdueInvoicesDue } = await import('../categories')
+    const group = { count: 896, remaining_sek: 1_000_000, unconverted_count: 2, oldest_due_date: '2025-01-31', oldest_days_overdue: 620 }
+    vi.mocked(getOverdueInvoicesDue).mockResolvedValueOnce(group)
+    const many = await getWorklistCounts(supabase, 'company-1')
+    expect(many.counts.overdue_invoice).toBe(896)
+    expect(many.total).toBe(31)
+    // The row's facts travel with the counts, so a refetch updates both.
+    expect(many.overdueInvoices).toEqual(group)
+    expect(getOverdueInvoicesDue).toHaveBeenCalledWith(supabase, 'company-1')
+
+    vi.mocked(getOverdueInvoicesDue).mockResolvedValueOnce(null)
+    const none = await getWorklistCounts(supabase, 'company-1')
+    expect(none.counts.overdue_invoice).toBe(0)
+    expect(none.total).toBe(30)
+    expect(none.overdueInvoices).toBeNull()
   })
 })

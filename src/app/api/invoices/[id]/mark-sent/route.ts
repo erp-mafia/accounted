@@ -177,13 +177,15 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       ...(issued.details ? { details: issued.details } : {}),
     })
   }
-  const { journalEntryId, partialFailures } = issued
+  const { journalEntryId, partialFailures, originalJournalEntryId } = issued
 
   return NextResponse.json(
     {
       success: true,
       status: 'sent',
       journal_entry_id: journalEntryId,
+      // accounted#45: the deferred original was booked first, on its own date.
+      ...(originalJournalEntryId ? { original_journal_entry_id: originalJournalEntryId } : {}),
       ...(partialFailures.length > 0
         ? { partial: true, partial_failures: partialFailures }
         : {}),

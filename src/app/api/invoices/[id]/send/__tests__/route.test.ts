@@ -123,7 +123,8 @@ vi.mock('@/lib/bookkeeping/invoice-entries', () => ({
 }))
 
 const mockIssueCreditNote = vi.fn()
-vi.mock('@/lib/invoices/issue-credit-note', () => ({
+vi.mock('@/lib/invoices/issue-credit-note', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/invoices/issue-credit-note')>()),
   issueCreditNote: (...args: unknown[]) => mockIssueCreditNote(...args),
 }))
 
@@ -706,6 +707,64 @@ describe('POST /api/invoices/[id]/send', () => {
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(500)
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  // accounted#45: the email door passes the defer flag to the shared issue
+  // step and answers its refusal (the original could not be booked first)
+  // with the code that names the fix, before any email is sent.
+  it('refuses a deferred credit with the original-booking code and emails nothing', async () => {
+    const deferredCompany = makeCompanySettings({
+      accounting_method: 'accrual',
+      defer_invoice_booking: true,
+      bankgiro: '123-4567',
+    })
+    const creditNote = makeInvoice({
+      id: 'credit-1',
+      invoice_number: 'KR-F-2024001',
+      status: 'draft',
+      credited_invoice_id: 'inv-1',
+      customer,
+      items: invoice.items,
+    })
+    const unbookedOriginal = {
+      id: 'inv-1',
+      invoice_number: 'F-2024001',
+      status: 'sent',
+      journal_entry_id: null,
+      paid_at: null,
+      paid_amount: 0,
+      total: 12500,
+    }
+    enqueue({ data: creditNote, error: null })
+    enqueue({ data: deferredCompany, error: null })
+    enqueue({ data: unbookedOriginal, error: null })
+    enqueue({ data: [{ id: 'credit-1' }], error: null })
+    mockIssueCreditNote.mockResolvedValue({
+      complete: false,
+      journalEntryId: null,
+      journalEntryRequired: true,
+      repairRequired: false,
+      failures: [{
+        step: 'original_booking',
+        reason: 'not bookable',
+        code: 'INVOICE_CREDIT_ORIGINAL_BOOK_FAILED',
+        details: { original_invoice_id: 'inv-1', original_booking_code: 'INVOICE_BOOK_NO_FISCAL_PERIOD' },
+      }],
+    })
+    enqueue({ data: null, error: null })
+
+    const response = await POST(
+      createMockRequest('/api/invoices/credit-1/send', { method: 'POST' }),
+      createMockRouteParams({ id: 'credit-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_CREDIT_ORIGINAL_BOOK_FAILED')
+    expect(mockIssueCreditNote).toHaveBeenCalledWith(
+      expect.objectContaining({ originalInvoice: unbookedOriginal, deferInvoiceBooking: true }),
+    )
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 

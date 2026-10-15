@@ -175,3 +175,68 @@ describe('gnubok_credit_invoice: refusals at staging', () => {
     expect(result.period_status?.status).toBe('open')
   })
 })
+
+// accounted#45: under deferred booking an original that was never booked is
+// booked first on its own date, then credited. Staging says so, and refuses
+// up front when that date is locked instead of staging an approval that
+// would be refused.
+describe('gnubok_credit_invoice: a deferred original that was never booked', () => {
+  const deferred = { accounting_method: 'accrual', defer_invoice_booking: true }
+  const unbooked = () => original({ invoice_date: '2026-09-03', paid_amount: 0 })
+
+  it('flags books_original_first and says the original is booked first', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: unbooked() })
+    enqueue({ data: deferred })
+    enqueue({ data: { bookkeeping_locked_through: null } }) // the original's date: lock date
+    enqueue({ data: { id: 'fp-sep', is_closed: false, locked_at: null } }) // the original's date: period
+    enqueue({ data: { bookkeeping_locked_through: null } }) // today: lock date
+    enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null } }) // today: period
+    enqueue({ data: { id: 'op-credit-3' } })
+
+    const result = (await tool().execute(
+      { invoice_id: INVOICE_ID },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: Record<string, unknown>; next?: { description?: string } }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.posts_journal_entry).toBe(true)
+    expect(result.preview.books_original_first).toBe(true)
+    expect(String(result.preview.method)).toMatch(/books the unbooked original first/)
+    expect(String(result.next?.description)).toMatch(/original is booked on its invoice date/)
+  })
+
+  it('refuses INVOICE_CREDIT_ORIGINAL_PERIOD_LOCKED at staging when the original is in a closed period', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: unbooked() })
+    enqueue({ data: deferred })
+    enqueue({ data: { bookkeeping_locked_through: null } })
+    enqueue({ data: { id: 'fp-sep', is_closed: true, locked_at: null } })
+
+    await expect(
+      tool().execute({ invoice_id: INVOICE_ID }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toMatchObject({ code: 'INVOICE_CREDIT_ORIGINAL_PERIOD_LOCKED' })
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+
+  it('stages the plain reversal for a deferred original that is already booked', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: original({ journal_entry_id: 'je-orig' }) })
+    enqueue({ data: deferred })
+    enqueue({ data: { bookkeeping_locked_through: null } })
+    enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null } })
+    enqueue({ data: { id: 'op-credit-4' } })
+
+    const result = (await tool().execute(
+      { invoice_id: INVOICE_ID },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.preview.books_original_first).toBe(false)
+    expect(String(result.preview.method)).toMatch(/reverses the original JE/)
+  })
+})

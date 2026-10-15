@@ -75,9 +75,18 @@ export const WORKLIST_CATEGORIES = [
    */
   'verifikat_missing_document',
   /**
-   * Overdue customer invoices ("förfallna kundfakturor").
-   * Pending:  invoices.status = 'overdue', not credited.
-   * Done:     paid/credited (status leaves 'overdue').
+   * Overdue customer invoices ("N kundfakturor har förfallit"), ONE item per
+   * company: the count is the invoices, the total adds 1 (see
+   * OverdueInvoicesDue and getWorklistCounts).
+   * Pending:  a real invoice (not a credit note) still owed (sent, overdue,
+   *           partially_paid) with remaining_amount > 0 and due_date before
+   *           today in Stockholm: lib/invoices/overdue.ts, the same rows as
+   *           the Förfallna view. Derived, never the stored status. An
+   *           invoice the "Hos inkasso" view lists (an open collection case
+   *           past delivery, or a case a person must look at) is left out:
+   *           it has its own rows (collection_decision, collection_attention).
+   * Done:     paid in full, credited or cancelled, handed to collections,
+   *           or the due date moved.
    */
   'overdue_invoice',
   /**
@@ -392,9 +401,39 @@ export interface WorklistCounts {
   counts: Record<WorklistCategory, number>
   /**
    * Distinct actionable items. Excludes suggested_match, which is a fast
-   * path over transactions already counted in book_transaction.
+   * path over transactions already counted in book_transaction, and counts
+   * the overdue customer invoices as one item (one grouped row), not one per
+   * invoice.
    */
   total: number
+  /**
+   * The grouped overdue row's facts (count, amount, oldest due date), so
+   * the row and its count can never disagree after a refetch. Null when
+   * nothing is overdue; absent from older payloads.
+   */
+  overdueInvoices?: OverdueInvoicesDue | null
+}
+
+/**
+ * A company's overdue customer invoices as ONE Att göra row ("N
+ * kundfakturor har förfallit", linking to Förfallna), never one row per
+ * invoice. The same rows the Förfallna view lists (lib/invoices/overdue.ts),
+ * the "Hos inkasso" view's invoices left out.
+ */
+export interface OverdueInvoicesDue {
+  /** Overdue invoices in the group. */
+  count: number
+  /**
+   * What the customers still owe on them, in SEK: remaining_amount for a
+   * SEK invoice, the same share of total_sek for one in another currency.
+   */
+  remaining_sek: number
+  /** Invoices in another currency with no SEK amount stored: counted, not summed. */
+  unconverted_count: number
+  /** YYYY-MM-DD: the earliest due date in the group. */
+  oldest_due_date: string
+  /** Days the oldest is past due (the day after the due date is day 1). */
+  oldest_days_overdue: number
 }
 
 /** A transaction↔invoice match suggestion, ready for one-click confirm. */

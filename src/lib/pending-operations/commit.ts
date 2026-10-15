@@ -4825,7 +4825,14 @@ async function commitCreditInvoice(
   }
   if (result.dryRun) return { error: 'credit_invoice does not commit a dry run', status: 400 }
 
-  return { data: { credit_note_id: result.creditNoteId, journal_entry_id: result.journalEntryId } }
+  return {
+    data: {
+      credit_note_id: result.creditNoteId,
+      journal_entry_id: result.journalEntryId,
+      // accounted#45: the deferred original was booked first, on its own date.
+      ...(result.originalJournalEntryId ? { original_journal_entry_id: result.originalJournalEntryId } : {}),
+    },
+  }
 }
 
 /**

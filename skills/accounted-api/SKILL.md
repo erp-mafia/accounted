@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 327 endpoints.
+  pagination, scopes), and all 328 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -152,7 +152,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 327 operations. Paths are shown without
+API version `2026-05-12`, 328 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (12)
@@ -255,7 +255,7 @@ POST /companies/{companyId}/skatteverket/agi/validate-individuppgift : Pre-valid
 GET /companies/{companyId}/skatteverket/vat-declarations : Read a filed momsdeklaration (submitted and/or decided) from Skatteverket [scope:compliance:read risk:low idempotent]
 ```
 
-### Invoices (AR) (17)
+### Invoices (AR) (18)
 
 Full detail: [references/invoices.md](references/invoices.md)
 
@@ -266,6 +266,7 @@ GET /companies/{companyId}/invoices/{id} : Retrieve a single invoice by id [scop
 PATCH /companies/{companyId}/invoices/{id} : Update a draft invoice (metadata fields, optionally replacing line items) [scope:invoices:write risk:low idempotent dry-run reversible]
 DELETE /companies/{companyId}/invoices/{id} : Delete a draft invoice (hard delete if unnumbered, makulering if numbered) [scope:invoices:write risk:high dry-run]
 POST /companies/{companyId}/invoices/{id}/book : Book a sent customer invoice that was issued without a verifikat (the deferred Bokför step) [scope:invoices:write risk:high idempotent dry-run]
+POST /companies/{companyId}/invoices/{id}/cancel : Cancel (makulera) a quote or a proforma invoice [scope:invoices:write risk:low idempotent dry-run]
 POST /companies/{companyId}/invoices/{id}/credit : Issue a credit note (kreditfaktura) against an invoice [scope:invoices:write risk:high idempotent dry-run]
 POST /companies/{companyId}/invoices/{id}/mark-paid : Record a payment against an invoice [scope:invoices:write risk:medium idempotent dry-run]
 POST /companies/{companyId}/invoices/{id}/mark-sent : Transition a draft invoice to sent (without emailing) [scope:invoices:write risk:medium idempotent dry-run]

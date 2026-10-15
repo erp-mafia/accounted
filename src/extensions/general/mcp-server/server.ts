@@ -123,7 +123,7 @@ import {
   zodFieldIssues,
   type FieldIssue,
 } from '@/lib/errors/refusal'
-import { creditNoteNeedsJournalEntry, invoiceBookingMoment } from '@/lib/bookkeeping/booking-mode'
+import { creditBooksOriginalFirst, creditNoteNeedsJournalEntry, invoiceBookingMoment } from '@/lib/bookkeeping/booking-mode'
 import {
   buildIssuePreview,
   buildMarkPaidPreview,
@@ -274,6 +274,7 @@ import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { isRegisteredFromBooks } from '@/lib/invoices/registered-from-books'
 import { registrationVoucherLabel } from '@/lib/invoices/register-booked-rules'
 import { effectiveQuoteStatus, quoteAwaitsSending } from '@/lib/invoices/quote-status'
+import { effectiveInvoiceStatus, filterInvoicesByReportedStatus, type OverdueInvoiceInput } from '@/lib/invoices/overdue'
 import {
   ensureCompanyDimensions,
   fetchDimensionRegistry,
@@ -455,6 +456,7 @@ import {
 import { resolveSupplierSettlementSide } from '@/lib/invoices/supplier-settlement-side'
 import { findFiscalPeriod, getSwedishLocalDate, validateBalance } from '@/lib/bookkeeping/engine'
 import { countUnbookedInPeriod, findNextPeriod, lockPeriod, resolvePeriodStatusForDate, type PeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
+import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { assertNoUnfinishedSieImport } from '@/lib/core/bookkeeping/sie-import-hold'
 import { validateYearEndReadiness, previewYearEndClosing } from '@/lib/core/bookkeeping/year-end-service'
 import {
@@ -483,7 +485,7 @@ import { CorrectionChainTooDeepError } from '@/lib/bookkeeping/errors'
 import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
 import { getSuggestedCategories, buildMerchantHistory, merchantHistoryFor } from '@/lib/transactions/category-suggestions'
 import { proposeForTransactions } from '@/lib/transactions/propose'
-import { businessAccount, categorizeArgsFor, whyTextSv } from '@/lib/bookkeeping/proposal'
+import { businessAccount, categorizeArgsFor, reverseChargeBoxDispute, reverseChargeBoxNumber, whyTextSv } from '@/lib/bookkeeping/proposal'
 import { booksWithoutReview } from '@/lib/transactions/direct-booking'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
 import {
@@ -8035,7 +8037,7 @@ export const tools: McpTool[] = [
         status: {
           type: 'string',
           enum: ['draft', 'sent', 'paid', 'partially_paid', 'overdue', 'cancelled', 'credited'],
-          description: 'Filter by invoice status',
+          description: 'overdue = past due_date with remaining_amount > 0, partially_paid included',
         },
         document_type: {
           type: 'string',
@@ -8061,11 +8063,15 @@ export const tools: McpTool[] = [
 
       let query = supabase
         .from('invoices')
-        .select('id, invoice_number, status, customer_id, total, paid_amount, remaining_amount, currency, invoice_date, due_date, document_type, valid_until, quote_status, default_dimensions, customers(name)', { count: 'exact' })
+        .select('id, invoice_number, status, customer_id, total, paid_amount, remaining_amount, currency, invoice_date, due_date, document_type, credited_invoice_id, valid_until, quote_status, default_dimensions, customers(name)', { count: 'exact' })
         .eq('company_id', companyId)
 
+      // Overdue is derived from the due date and the open remainder
+      // (lib/invoices/overdue.ts), never the stored status: 'sent' and
+      // 'overdue' filter and report as the date says.
+      const today = todayIsoStockholm()
       if (status) {
-        query = query.eq('status', status)
+        query = filterInvoicesByReportedStatus(query, status, today)
       }
       if (documentType) {
         query = query.eq('document_type', documentType)
@@ -8097,7 +8103,7 @@ export const tools: McpTool[] = [
       const invoices = rows.slice(0, limit).map((inv: Record<string, unknown>) => ({
         id: inv.id,
         invoice_number: inv.invoice_number,
-        status: inv.status,
+        status: effectiveInvoiceStatus(inv as unknown as OverdueInvoiceInput, today),
         customer_name: (inv.customers as Record<string, unknown>)?.name ?? null,
         total: inv.total,
         // Same fields and fallbacks as gnubok_get_invoice, so a partially paid
@@ -8409,7 +8415,8 @@ export const tools: McpTool[] = [
       return {
         invoice_id: invoice.id,
         invoice_number: invoice.invoice_number ?? null,
-        status: invoice.status,
+        // As gnubok_list_invoices reports it: overdue follows the due date.
+        status: effectiveInvoiceStatus(invoice as unknown as OverdueInvoiceInput),
         document_type: invoice.document_type ?? 'invoice',
         valid_until: invoice.valid_until ?? null,
         quote_status: effectiveQuoteStatus(invoice),
@@ -10764,21 +10771,29 @@ export const tools: McpTool[] = [
         // "Best first" holds for an agent too: a match the app takes off the
         // row is never the first proposal it reads.
         proposals[tx.id] = [...offered.filter((p) => !p.contested), ...offered.filter((p) => p.contested)]
-          .map((p) => ({
-            id: p.template_id,
-            source: p.source,
-            label: p.name_sv,
-            why: whyTextSv(p),
-            confidence: p.confidence,
-            books_without_review: booksWithoutReview(p),
-            ...(p.contested ? { contested: true } : {}),
-            account:
-              p.booking.kind === 'template'
-                ? templateSkattekontoAccount(businessAccount(p), skattekontoAccount)
-                : businessAccount(p),
-            vat_treatment: p.booking.kind === 'account' ? p.booking.vat_treatment : (p.vat_treatment ?? null),
-            categorize_args: categorizeArgsFor(p, entityType, skattekontoAccount),
-          }))
+          .map((p) => {
+            // The read reports the purchase in another reverse-charge box
+            // (accounted#37): the agent sees both, as the review does.
+            const box = reverseChargeBoxDispute(p)
+            return {
+              id: p.template_id,
+              source: p.source,
+              label: p.name_sv,
+              why: whyTextSv(p),
+              confidence: p.confidence,
+              books_without_review: booksWithoutReview(p),
+              ...(p.contested ? { contested: true } : {}),
+              ...(box
+                ? { reverse_charge_box: { proposal: `ruta ${reverseChargeBoxNumber(box.proposal)}`, read: `ruta ${reverseChargeBoxNumber(box.read)}` } }
+                : {}),
+              account:
+                p.booking.kind === 'template'
+                  ? templateSkattekontoAccount(businessAccount(p), skattekontoAccount)
+                  : businessAccount(p),
+              vat_treatment: p.booking.kind === 'account' ? p.booking.vat_treatment : (p.vat_treatment ?? null),
+              categorize_args: categorizeArgsFor(p, entityType, skattekontoAccount),
+            }
+          })
       }
 
       return {
@@ -21314,11 +21329,11 @@ export const tools: McpTool[] = [
       const [{ data: inv }, { data: settings }] = await Promise.all([
         supabase
           .from('invoices')
-          .select('id, invoice_number, external_invoice_number, document_type, status, total, currency, credited_invoice_id, deduction_reclaimed_total, journal_entry_id, paid_at, paid_amount, customer:customers(name)')
+          .select('id, invoice_number, external_invoice_number, document_type, status, invoice_date, total, currency, credited_invoice_id, deduction_reclaimed_total, journal_entry_id, paid_at, paid_amount, customer:customers(name)')
           .eq('id', id).eq('company_id', companyId).single(),
         supabase
           .from('company_settings')
-          .select('accounting_method')
+          .select('accounting_method, defer_invoice_booking')
           .eq('company_id', companyId)
           .maybeSingle(),
       ])
@@ -21337,6 +21352,17 @@ export const tools: McpTool[] = [
         (settings as { accounting_method?: string | null } | null)?.accounting_method || 'accrual',
         inv,
       )
+      // accounted#45: a deferred original that was never booked is booked
+      // first, on its own date; a lock there refuses the credit at commit,
+      // so refuse it here already.
+      const booksOriginalFirst = creditBooksOriginalFirst(
+        settings as { accounting_method?: string | null; defer_invoice_booking?: boolean | null } | null,
+        inv,
+      )
+      if (booksOriginalFirst) {
+        const originalLock = await checkPeriodLock(supabase, companyId, inv.invoice_date as string)
+        if (originalLock.locked) throw registryError('INVOICE_CREDIT_ORIGINAL_PERIOD_LOCKED')
+      }
 
       return stage({
         supabase,
@@ -21353,13 +21379,18 @@ export const tools: McpTool[] = [
           currency: inv.currency,
           reason: reason || null,
           posts_journal_entry: postsJournalEntry,
-          method: postsJournalEntry
+          books_original_first: booksOriginalFirst,
+          method: booksOriginalFirst
+            ? 'books the unbooked original first on its invoice date (as Bokför does), then creates KR- mirror invoice + reverses it (debit 30xx + 26xx, credit 1510)'
+            : postsJournalEntry
             ? 'creates KR- mirror invoice + reverses the original JE (debit 30xx + 26xx, credit 1510)'
             : 'creates KR- mirror invoice only: the kontantmetod original is unpaid and was never booked',
         },
         actor,
         next: {
-          description: postsJournalEntry
+          description: booksOriginalFirst
+            ? 'After approval the original is booked on its invoice date, then the credit note posts and the kundfordring is cleared.'
+            : postsJournalEntry
             ? 'After approval the credit note posts and the kundfordring is cleared. If a refund is owed to the customer, book the outbound payment when it leaves the bank.'
             : 'After approval the credit note is created without a verifikat: the unpaid kontantmetod original never reached the ledger, so there is nothing to reverse.',
           tool: 'gnubok_get_ar_ledger',

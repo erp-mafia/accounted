@@ -23,8 +23,10 @@ function row(overrides: Partial<Row> & { status: Row['status'] }): Row {
   }
 }
 
+const TODAY = '2026-10-13'
+
 function tabsFor(invoice: Row): InvoiceListTab[] {
-  return INVOICE_LIST_TABS.filter((tab) => matchesInvoiceListTab(invoice, tab))
+  return INVOICE_LIST_TABS.filter((tab) => matchesInvoiceListTab(invoice, tab, { today: TODAY }))
 }
 
 describe('isUnsentNumberedInvoice', () => {
@@ -56,12 +58,44 @@ describe('matchesInvoiceListTab', () => {
   })
 
   it('keeps sent and overdue invoices in the unpaid view, never in unsent', () => {
-    expect(tabsFor(row({ status: 'sent', invoice_number: 'F-12' }))).toEqual(['all', 'unpaid'])
-    expect(tabsFor(row({ status: 'overdue', invoice_number: 'F-12' }))).toEqual([
+    expect(tabsFor(row({ status: 'sent', invoice_number: 'F-12', due_date: '2026-10-30' }))).toEqual(['all', 'unpaid'])
+    expect(tabsFor(row({ status: 'overdue', invoice_number: 'F-12', due_date: '2026-09-30', remaining_amount: 100 }))).toEqual([
       'all',
       'unpaid',
       'overdue',
     ])
+  })
+
+  describe('Förfallna follows the due date, not the stored status (crm#1084)', () => {
+    const overdue = (invoice: Row) => matchesInvoiceListTab(invoice, 'overdue', { today: TODAY })
+
+    it('lists a sent invoice past its due date that no reminder ever flipped', () => {
+      expect(overdue(row({ status: 'sent', invoice_number: 'F-1', due_date: '2026-10-12', remaining_amount: 500 }))).toBe(true)
+    })
+
+    it('lists a partly paid invoice whose remainder is past due', () => {
+      expect(overdue(row({ status: 'partially_paid', invoice_number: 'F-2', due_date: '2026-09-01', remaining_amount: 200 }))).toBe(true)
+    })
+
+    it('leaves out an invoice due today or later, and a stored overdue whose due date moved', () => {
+      expect(overdue(row({ status: 'sent', invoice_number: 'F-3', due_date: TODAY, remaining_amount: 500 }))).toBe(false)
+      expect(overdue(row({ status: 'overdue', invoice_number: 'F-4', due_date: '2026-11-01', remaining_amount: 500 }))).toBe(false)
+    })
+
+    it('leaves out paid, cancelled, credited, draft and fully settled invoices', () => {
+      const past = { due_date: '2026-09-01', remaining_amount: 500 }
+      for (const status of ['paid', 'cancelled', 'credited', 'draft'] as const) {
+        expect(overdue(row({ status, invoice_number: 'F-5', ...past }))).toBe(false)
+      }
+      expect(overdue(row({ status: 'sent', invoice_number: 'F-6', due_date: '2026-09-01', remaining_amount: 0 }))).toBe(false)
+    })
+
+    it('leaves out credit notes and documents that are not fakturor', () => {
+      const past = { due_date: '2026-09-01', remaining_amount: 500 }
+      expect(overdue(row({ status: 'sent', invoice_number: 'K-1', credited_invoice_id: 'orig', ...past }))).toBe(false)
+      expect(overdue(row({ status: 'sent', document_type: 'proforma', ...past }))).toBe(false)
+      expect(overdue(row({ status: 'sent', document_type: 'quote', ...past }))).toBe(false)
+    })
   })
 
   it('does not put draft credit notes or drafts of other kinds in unsent or draft', () => {
@@ -169,6 +203,19 @@ describe('the collections tab', () => {
     expect(matchesInvoiceListTab(invoice, 'collections', { collectionAttention: new Set(['inv-1']) })).toBe(true)
     expect(parseInvoiceListTab('collections')).toBe('collections')
     expect(INVOICE_LIST_TABS).toContain('collections')
+  })
+
+  it('an overdue invoice "Hos inkasso" lists is that view\'s, never Förfallna\'s too (crm#1084)', () => {
+    const overdue = row({ id: 'inv-1', status: 'sent', invoice_number: 'F-1', due_date: '2026-09-01', remaining_amount: 500 })
+    const views = (context: Parameters<typeof matchesInvoiceListTab>[2]) =>
+      INVOICE_LIST_TABS.filter((tab) => matchesInvoiceListTab(overdue, tab, { today: TODAY, ...context }))
+    expect(views({})).toContain('overdue')
+    // With the provider (an open case past delivery).
+    expect(views({ inCollection: new Set(['inv-1']) })).toEqual(['all', 'unpaid', 'collections'])
+    // A case a person must look at (a refused handover, a failed read).
+    expect(views({ collectionAttention: new Set(['inv-1']) })).toEqual(['all', 'unpaid', 'collections'])
+    // Another invoice's case changes nothing for this one.
+    expect(views({ inCollection: new Set(['inv-2']) })).toEqual(['all', 'unpaid', 'overdue'])
   })
 })
 

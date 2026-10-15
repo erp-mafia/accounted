@@ -86,6 +86,7 @@ import {
   invoicesBulkBook,
   supplierInvoicesBook,
 } from './invoice-booking'
+import { invoicesCancel } from './invoice-cancel'
 import {
   invoicesPeppolDeliveries,
   invoicesPeppolReadiness,
@@ -306,6 +307,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   invoicesBook,
   invoicesBulkBook,
   supplierInvoicesBook,
+  // invoice-cancel (makulera a quote or proforma; the dashboard route calls the same service)
+  invoicesCancel,
   // peppol
   invoicesPeppolReadiness,
   invoicesSendPeppol,

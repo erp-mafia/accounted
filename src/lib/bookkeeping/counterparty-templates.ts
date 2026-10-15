@@ -392,7 +392,10 @@ export async function findCounterpartyTemplatesBatch(
   // counterparty_aliases; without the alias leg here, a template renamed to a
   // human label ("musik") would keep learning through findTemplateByKey but
   // never be proposed again, since the alias tier above only sees raw
-  // descriptors. A real counterparty_name always wins over an alias.
+  // descriptors. A booking on a template of a row whose key it lacked puts
+  // that key here too (upsertCounterpartyTemplate), so an abbreviated bank
+  // text a person tied to the template matches it by name from then on.
+  // A real counterparty_name always wins over an alias.
   const nameMap = new Map<string, CategorizationTemplate>()
   for (const tmpl of templates) {
     nameMap.set(tmpl.counterparty_name, tmpl)
@@ -1352,15 +1355,56 @@ export async function insertOrUpdateTemplate(
 }
 
 /**
+ * The counterpart template a booking was made on, when the booking named one
+ * (the categorize doors' counterparty_template_id, approved by a person).
+ */
+export interface UpsertCounterpartyOptions {
+  bookedOnTemplateId?: string | null
+}
+
+/**
+ * The template a booking named by id, for alias learning: active and of the
+ * company, or null.
+ */
+async function bookedOnTemplate(
+  supabase: SupabaseClient,
+  companyId: string,
+  templateId: string,
+): Promise<CategorizationTemplate | null> {
+  const { data } = await supabase
+    .from('categorization_templates')
+    .select('*')
+    .eq('id', templateId)
+    .eq('company_id', companyId)
+    .eq('is_active', true)
+    .maybeSingle()
+  return (data as CategorizationTemplate | null) ?? null
+}
+
+/**
  * Upsert a counterparty template from a categorization result.
  * Thin wrapper around insertOrUpdateTemplate for single-transaction callers.
+ *
+ * A row booked on a counterpart template whose own key no template holds
+ * teaches that template its text (accounted#36). The bank often abbreviates
+ * a party ("CBA PLESK" for a template learned from "Levfakt Cleverbridge -
+ * Plesk"), so the two share no first name word and the token tier cannot
+ * tie them without the false matches !243 removed. The booking is the
+ * evidence: the row's normalized key joins the template's aliases, and the
+ * next row with that text is the same name (exact_normalized). Without this
+ * the booking started a second template under the row's key, with one
+ * booking behind it, splitting the counterpart's history. Only a booking
+ * that took the template's own accounts teaches it; one that booked
+ * otherwise learns under the row's own key, as before, and leaves the
+ * template alone.
  */
 export async function upsertCounterpartyTemplate(
   supabase: SupabaseClient,
   companyId: string,
   transaction: Transaction,
   mappingResult: MappingResult,
-  source: CategorizationTemplateSource
+  source: CategorizationTemplateSource,
+  options: UpsertCounterpartyOptions = {},
 ): Promise<void> {
   // Mirrored refund/repayment bookings must never be learned: they would
   // flip the template's accounts and poison future matches.
@@ -1397,9 +1441,19 @@ export async function upsertCounterpartyTemplate(
 
   const category = transaction.category !== 'uncategorized' ? transaction.category : null
 
+  let existing = await findTemplateByKey(supabase, companyId, normalized)
+  const aliases = [rawName.toLowerCase()]
+  if (!existing && options.bookedOnTemplateId) {
+    const chosen = await bookedOnTemplate(supabase, companyId, options.bookedOnTemplateId)
+    if (chosen && samePairButBankLedger(chosen, mappingResult.debit_account, mappingResult.credit_account)) {
+      existing = chosen
+      aliases.unshift(normalized)
+    }
+  }
+
   await insertOrUpdateTemplate(supabase, companyId, {
     counterpartyName: normalized,
-    aliases: [rawName.toLowerCase()],
+    aliases,
     debitAccount: mappingResult.debit_account,
     creditAccount: mappingResult.credit_account,
     vatTreatment: mappingResult.vat_lines.length > 0
@@ -1415,7 +1469,7 @@ export async function upsertCounterpartyTemplate(
     // Latest-explicit-wins inside insertOrUpdateTemplate: empty bags never
     // erase a learned one.
     defaultDimensions: mappingResult.dimensions ?? null,
-  })
+  }, existing)
 }
 
 /**

@@ -28,10 +28,17 @@
  * written. Issue is fail closed: the original is flipped to 'credited' only
  * after the verifikat exists, and a draft whose verifikat could not be posted
  * goes back to draft for a retry (issueCreditNote is idempotent).
+ *
+ * A deferred-booking original (#967) that was never booked is booked first,
+ * on its own date, through the Bokför step (accounted#45): the sale and its
+ * credit are both affärshändelser, and a reversal of a sale the books never
+ * recorded would understate revenue and utgående moms. When the original
+ * cannot be booked the credit is refused before anything is written.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
+import { creditBooksOriginalFirst } from '@/lib/bookkeeping/booking-mode'
 import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import type { Logger } from '@/lib/logger'
@@ -43,11 +50,15 @@ import {
 } from './build-credit-note'
 import { buildCreditNoteItem } from './build-credit-note-item'
 import {
+  creditIssueFailureCode,
   creditNoteNeedsJournalEntry,
   issueCreditNote,
+  originalBookingRefusal,
+  type CreditIssueFailureCode,
   type CreditNoteIssueFailure,
   type CreditNoteOriginalInvoice,
 } from './issue-credit-note'
+import { bookInvoice } from './book-service'
 import { archiveIssuedInvoicePdf, type IssuePartialFailure } from './issue-and-book-invoice'
 import { recordManualInvoiceDelivery } from './invoice-deliveries'
 
@@ -300,7 +311,13 @@ export interface IssueCreditNoteDraftInput {
 }
 
 export type IssueCreditNoteDraftResult =
-  | { ok: true; journalEntryId: string | null; partialFailures: IssuePartialFailure[] }
+  | {
+      ok: true
+      journalEntryId: string | null
+      partialFailures: IssuePartialFailure[]
+      /** The original's own verifikat when the issue booked it first (accounted#45). */
+      originalJournalEntryId?: string
+    }
   | {
       ok: false
       code:
@@ -308,13 +325,15 @@ export type IssueCreditNoteDraftResult =
         | 'INVOICE_CREDIT_ALREADY_ISSUED'
         | 'INVOICE_MARK_SENT_STATUS_FAILED'
         | 'INVOICE_MARK_SENT_RACE'
-        | 'INVOICE_CREDIT_REPAIR_REQUIRED'
-        | 'INVOICE_CREDIT_ISSUE_INCOMPLETE'
+        | CreditIssueFailureCode
       details?: Record<string, unknown>
       failures?: CreditNoteIssueFailure[]
       /** INVOICE_CREDIT_REPAIR_REQUIRED: the verifikat that posted. */
       journalEntryId?: string | null
+      /** The original's own verifikat when it was booked before the failure (accounted#45). */
+      originalJournalEntryId?: string
     }
+
 
 /**
  * Issue a credit-note draft: compare-and-set it to 'sent' (skipped when it
@@ -392,12 +411,14 @@ export async function issueCreditNoteDraft(
     originalInvoice,
     entityType,
     accountingMethod,
+    deferInvoiceBooking: !!settings.defer_invoice_booking,
     log,
   })
   // Issued: when the credited invoice is under collection, a database trigger
   // queued the credit note for the provider.
   scheduleCollectionForwardDrain(companyId)
   const journalEntryId = issueResult.journalEntryId
+  const originalJournalEntryId = issueResult.originalJournalEntryId
   partialFailures.push(...issueResult.failures)
 
   if (!issueResult.complete) {
@@ -414,10 +435,10 @@ export async function issueCreditNoteDraft(
     }
     return {
       ok: false,
-      code: issueResult.repairRequired ? 'INVOICE_CREDIT_REPAIR_REQUIRED' : 'INVOICE_CREDIT_ISSUE_INCOMPLETE',
-      details: { failure_steps: issueResult.failures.map((failure) => failure.step) },
+      ...creditIssueFailureCode(issueResult),
       failures: issueResult.failures,
       journalEntryId,
+      ...(originalJournalEntryId ? { originalJournalEntryId } : {}),
     }
   }
 
@@ -456,7 +477,7 @@ export async function issueCreditNoteDraft(
     }
   }
 
-  return { ok: true, journalEntryId, partialFailures }
+  return { ok: true, journalEntryId, partialFailures, ...(originalJournalEntryId ? { originalJournalEntryId } : {}) }
 }
 
 export interface CreditInvoiceContext {
@@ -474,6 +495,8 @@ export type CreditInvoiceResult =
       creditNoteId: string
       journalEntryId: string | null
       partialFailures: IssuePartialFailure[]
+      /** The original's own verifikat when the credit booked it first (accounted#45). */
+      originalJournalEntryId?: string
     }
   | {
       ok: false
@@ -489,7 +512,8 @@ export type CreditInvoiceResult =
 
 /**
  * Credit `invoiceId` in one call: the refusal, the period of today when a
- * verifikat is needed, the draft, its issue. A dry run answers the credit
+ * verifikat is needed, the Bokför step's dry run for a deferred original
+ * that is still unbooked, the draft, its issue. A dry run answers the credit
  * note it would issue and writes nothing.
  */
 export async function creditInvoice(
@@ -529,6 +553,9 @@ export async function creditInvoice(
   // faktureringsmetoden, under kontantmetoden once the original was paid
   // (issue #2552).
   const journalEntryRequired = creditNoteNeedsJournalEntry(accountingMethod, originalRow)
+  // accounted#45: a deferred original that was never booked is booked first,
+  // on its own date, by the Bokför step.
+  const booksOriginalFirst = creditBooksOriginalFirst(companySettings, originalRow)
 
   // Fail closed before anything is written: the credit note is dated today
   // in Stockholm and its verifikat needs an open period for that date. A
@@ -537,6 +564,22 @@ export async function creditInvoice(
   if (journalEntryRequired) {
     const periodRefusal = await creditPeriodRefusal(supabase, companyId, today)
     if (periodRefusal) return { ok: false, ...periodRefusal }
+  }
+
+  // The Bokför step's dry run is every check that booking the original runs
+  // (its date's lock, a fiscal year, the accounts the lines need) and writes
+  // nothing: a refusal there refuses the credit before the draft exists.
+  let originalEntryPreview: unknown = null
+  if (booksOriginalFirst) {
+    const originalBooking = await bookInvoice(ctx, originalRow.id, { dryRun: true })
+    if (!originalBooking.ok) {
+      if (originalBooking.code !== 'INVOICE_BOOK_ALREADY_BOOKED') {
+        const { code, details } = originalBookingRefusal(originalRow.id, originalBooking)
+        return { ok: false, code, details }
+      }
+    } else if (originalBooking.dryRun) {
+      originalEntryPreview = originalBooking.preview.journal_entry ?? null
+    }
   }
 
   const originalRef = creditNoteOriginalReference(originalRow) as string
@@ -559,6 +602,10 @@ export async function creditInvoice(
           return row
         }),
         would_create_journal_entry: journalEntryRequired,
+        // accounted#45: the original's own verifikat posts first, on its date.
+        ...(booksOriginalFirst
+          ? { would_book_original_first: true, original_journal_entry: originalEntryPreview }
+          : {}),
         accounting_method: accountingMethod,
         original_invoice_number: originalRef,
       },
@@ -602,9 +649,22 @@ export async function creditInvoice(
               credit_note_id: creditNote.id,
               original_invoice_id: originalRow.id,
               journal_entry_id: issued.journalEntryId,
+              ...(issued.originalJournalEntryId
+                ? { original_journal_entry_id: issued.originalJournalEntryId }
+                : {}),
             },
           }
-        : {}),
+        : issued.originalJournalEntryId
+          ? {
+              // The original was booked (accounted#45) but the credit was
+              // not: that verifikat stands, and a retry posts only the credit.
+              postedIds: {
+                credit_note_id: creditNote.id,
+                original_invoice_id: originalRow.id,
+                original_journal_entry_id: issued.originalJournalEntryId,
+              },
+            }
+          : {}),
     }
   }
 
@@ -613,6 +673,7 @@ export async function creditInvoice(
     creditNoteId: creditNote.id,
     journalEntryId: issued.journalEntryId,
     partialFailures: issued.partialFailures,
+    ...(issued.originalJournalEntryId ? { originalJournalEntryId: issued.originalJournalEntryId } : {}),
   }
 }
 

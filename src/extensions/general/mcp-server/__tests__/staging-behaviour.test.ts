@@ -590,6 +590,10 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   gnubok_book_invoice: { rows: DEFERRED_BOOKING_ROWS },
   gnubok_bulk_book_invoices: { rows: DEFERRED_BOOKING_ROWS },
   gnubok_book_supplier_invoice: { rows: DEFERRED_BOOKING_ROWS },
+  // Makulera a quote (accounted#20): a sent quote; the preview reads it and writes nothing.
+  gnubok_cancel_quote_or_proforma: {
+    rows: { invoices: { document_type: 'quote', status: 'sent', quote_status: 'open', invoice_number: 'OF-007' } },
+  },
   // Supplier-invoice actions (lib/supplier-invoices/manage.ts, item-account.ts).
   // Delete: an unbooked, unpaid invoice with nothing hanging off it.
   gnubok_delete_supplier_invoice: {

@@ -237,6 +237,9 @@ export default function AttGoraSection({
 
   const [counts, setCounts] = useState(worklist.counts)
   const [total, setTotal] = useState(worklist.total)
+  // The grouped overdue row's facts, refreshed with the counts so its
+  // count, amount and date never disagree.
+  const [overdueInvoices, setOverdueInvoices] = useState(worklist.overdueInvoices ?? null)
   const [matches, setMatches] = useState(suggestedMatches)
   const [leavingIds, setLeavingIds] = useState<Set<string>>(new Set())
   const [confirmingId, setConfirmingId] = useState<string | null>(null)
@@ -253,6 +256,7 @@ export default function AttGoraSection({
     setRenderedWorklist(worklist)
     setCounts(worklist.counts)
     setTotal(worklist.total)
+    setOverdueInvoices(worklist.overdueInvoices ?? null)
     setMatches(suggestedMatches)
     setPayeeChanges(supplierPayeeChanges)
     setPostedSinceLoad(false)
@@ -266,6 +270,7 @@ export default function AttGoraSection({
       if (json.data) {
         setCounts(json.data.counts)
         setTotal(json.data.total)
+        setOverdueInvoices(json.data.overdueInvoices ?? null)
       }
     } catch (err) {
       // Stale counts self-correct on the next page load: never block the
@@ -374,7 +379,7 @@ export default function AttGoraSection({
   const verificationExpired = paymentsVerification?.state === 'expired' ? paymentsVerification : null
   const verificationExpiring = paymentsVerification?.state === 'expiring' ? paymentsVerification : null
   const bevakaRows =
-    counts.overdue_invoice > 0 ||
+    overdueInvoices !== null ||
     counts.deadline_action > 0 ||
     counts.agreement_payment_missed > 0 ||
     counts.reconciliation_due > 0 ||
@@ -804,15 +809,6 @@ export default function AttGoraSection({
                 <div>
                   <BandHeader>{t('band_bevaka')}</BandHeader>
                   <div>
-                    {counts.overdue_invoice > 0 && (
-                      <WorklistRow
-                        href="/invoices?status=unpaid"
-                        action={aiAction('overdue_invoice', counts.overdue_invoice)}
-                        icon={ReceiptText}
-                        label={t('row_overdue_invoices')}
-                        count={counts.overdue_invoice}
-                      />
-                    )}
                     {counts.deadline_action > 0 && (
                       <WorklistRow
                         href="/deadlines"
@@ -820,6 +816,32 @@ export default function AttGoraSection({
                         icon={CalendarClock}
                         label={t('row_deadlines')}
                         count={counts.deadline_action}
+                      />
+                    )}
+                    {/* One row for all of the company's overdue customer
+                        invoices (lib/worklist OverdueInvoicesDue), after the
+                        tax deadlines: a fact and where to act, landing on
+                        Förfallna, the view that lists the same invoices. */}
+                    {overdueInvoices && (
+                      <WorklistRow
+                        href="/invoices?status=overdue"
+                        action={aiAction('overdue_invoice', overdueInvoices.count)}
+                        icon={ReceiptText}
+                        label={t('row_overdue_invoices_group', { count: overdueInvoices.count })}
+                        detail={
+                          overdueInvoices.unconverted_count > 0
+                            ? t('row_overdue_invoices_detail_fx', {
+                                date: formatDate(overdueInvoices.oldest_due_date),
+                                count: overdueInvoices.unconverted_count,
+                              })
+                            : t('row_overdue_invoices_detail', { date: formatDate(overdueInvoices.oldest_due_date) })
+                        }
+                        hint={t('row_overdue_invoices_hint')}
+                        badge={
+                          <span className="text-xs tabular-nums text-muted-foreground">
+                            {formatCurrency(overdueInvoices.remaining_sek)}
+                          </span>
+                        }
                       />
                     )}
                     {counts.agreement_payment_missed > 0 && (

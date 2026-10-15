@@ -414,3 +414,184 @@ describe('creditInvoice', () => {
     expect(calls.filter((c) => c.method === 'insert' || c.method === 'update')).toEqual([])
   })
 })
+
+// accounted#45: faktureringsmetoden with defer_invoice_booking sends invoices
+// without a verifikat. Crediting one that was never booked books the
+// original first (the Bokför step, its own date) and then the credit, both
+// balanced, in that order; a refusal there refuses the credit before
+// anything is written.
+describe('creditInvoice: a deferred original that was never booked', () => {
+  const PLAIN_ITEM = {
+    ...ROT_ITEM,
+    revenue_account: null,
+    deduction_type: null,
+    deduction_amount: 0,
+    labor_hours: null,
+    work_type: null,
+  } as unknown as InvoiceItem
+  const UNBOOKED = {
+    ...ORIGINAL,
+    journal_entry_id: null,
+    deduction_total: 0,
+    items: [PLAIN_ITEM],
+  } as unknown as Invoice & { items: InvoiceItem[] }
+  const DEFERRED_SETTINGS = { ...SETTINGS, defer_invoice_booking: true }
+
+  type Line = { account_number: string; debit_amount: number; credit_amount: number }
+  type EntryInput = { source_type: string; source_id: string; entry_date: string; description: string; lines: Line[] }
+
+  function setupDeferred(original: object = UNBOOKED) {
+    const draft = draftOf(original as Invoice & { items: InvoiceItem[] })
+    return createTableMockSupabase({
+      invoices: [
+        { data: original }, // creditInvoice: the original
+        { data: original }, // the Bokför step's dry run: the original
+        { data: null }, // createCreditNoteDraft: no existing credit note
+        { data: { id: CREDIT_ID } }, // insert
+        { data: null }, // creation_complete
+        { data: draft }, // the completed draft
+        { data: original }, // issueCreditNoteDraft: the original's booked-ness
+        { data: [{ id: CREDIT_ID }] }, // compare-and-set to sent
+        { data: original }, // the Bokför step: the original
+        { data: { ...original, journal_entry_id: 'je-original' } }, // its CAS link
+        { data: [{ id: CREDIT_ID }] }, // credit journal_entry_id link
+        { data: [{ id: ORIGINAL_ID }] }, // original flipped to credited
+      ],
+      invoice_items: { data: null },
+      journal_entries: [
+        { data: null }, // no credit verifikat yet
+        { data: { voucher_series: 'A', voucher_number: 6 } }, // the original's new verifikat
+      ],
+      company_settings: { data: DEFERRED_SETTINGS },
+    })
+  }
+
+  const totals = (lines: Line[]) => ({
+    debit: Math.round(lines.reduce((sum, l) => sum + l.debit_amount, 0) * 100) / 100,
+    credit: Math.round(lines.reduce((sum, l) => sum + l.credit_amount, 0) * 100) / 100,
+  })
+
+  beforeEach(() => {
+    mocks.createJournalEntry
+      .mockResolvedValueOnce({ id: 'je-original', voucher_series: 'A', voucher_number: 6 })
+      .mockResolvedValueOnce({ id: 'je-credit', voucher_series: 'A', voucher_number: 7 })
+  })
+
+  it('books the original on its own date, then the mirrored credit: two balanced verifikat in that order', async () => {
+    const { supabase } = setupDeferred()
+
+    const result = await creditInvoice(ctx(supabase), ORIGINAL_ID, {})
+
+    expect(result).toMatchObject({
+      ok: true,
+      creditNoteId: CREDIT_ID,
+      journalEntryId: 'je-credit',
+      originalJournalEntryId: 'je-original',
+    })
+    expect(mocks.createJournalEntry).toHaveBeenCalledTimes(2)
+    const original = mocks.createJournalEntry.mock.calls[0][3] as EntryInput
+    const credit = mocks.createJournalEntry.mock.calls[1][3] as EntryInput
+
+    expect(original).toMatchObject({ source_type: 'invoice_created', source_id: ORIGINAL_ID, entry_date: '2026-09-01' })
+    expect(credit).toMatchObject({ source_type: 'credit_note', source_id: CREDIT_ID })
+    expect(credit.description).toContain('avser verifikation A-6')
+
+    expect(totals(original.lines)).toEqual({ debit: 12500, credit: 12500 })
+    expect(totals(credit.lines)).toEqual({ debit: 12500, credit: 12500 })
+    const net = (lines: Line[], account: string) =>
+      lines.filter((l) => l.account_number === account).reduce((sum, l) => sum + l.debit_amount - l.credit_amount, 0)
+    // The credit is the exact mirror of the original, account by account.
+    const accounts = [...new Set([...original.lines, ...credit.lines].map((l) => l.account_number))]
+    expect(accounts.length).toBeGreaterThanOrEqual(3)
+    for (const account of accounts) {
+      expect(net(original.lines, account) + net(credit.lines, account)).toBe(0)
+    }
+    expect(net(original.lines, '1510')).toBe(12500)
+    expect(net(original.lines, '2611')).toBe(-2500)
+    expect(original.lines.some((l) => l.account_number.startsWith('30') && l.credit_amount === 10000)).toBe(true)
+  })
+
+  it('refuses before any write when the original\'s date is in a closed period', async () => {
+    mocks.checkPeriodLock.mockImplementation(async (_supabase: unknown, _company: string, date: string) =>
+      date === '2026-09-01'
+        ? { locked: true, reason: 'period_is_closed', fiscal_period_id: 'fp-old' }
+        : { locked: false, fiscal_period_id: 'fp-1' },
+    )
+    const { supabase, calls } = setupDeferred()
+
+    const result = await creditInvoice(ctx(supabase), ORIGINAL_ID, {})
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'INVOICE_CREDIT_ORIGINAL_PERIOD_LOCKED',
+      details: { original_invoice_id: ORIGINAL_ID, reason: 'period_is_closed', invoice_date: '2026-09-01' },
+    })
+    expect(calls.filter((c) => c.method === 'insert' || c.method === 'update')).toEqual([])
+    expect(mocks.createJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('refuses before any write when no fiscal year covers the original\'s date', async () => {
+    mocks.findFiscalPeriod.mockImplementation(async (_supabase: unknown, _company: string, date: string) =>
+      date === '2026-09-01' ? null : 'fp-1',
+    )
+    const { supabase, calls } = setupDeferred()
+
+    const result = await creditInvoice(ctx(supabase), ORIGINAL_ID, {})
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'INVOICE_CREDIT_ORIGINAL_BOOK_FAILED',
+      details: { original_invoice_id: ORIGINAL_ID, original_booking_code: 'INVOICE_BOOK_NO_FISCAL_PERIOD' },
+    })
+    expect(calls.filter((c) => c.method === 'insert' || c.method === 'update')).toEqual([])
+    expect(mocks.createJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('dry run: says the original books first and previews its verifikat, writing nothing', async () => {
+    const { supabase, calls } = setupDeferred()
+
+    const result = await creditInvoice(ctx(supabase), ORIGINAL_ID, {}, { dryRun: true })
+
+    expect(result.ok && result.dryRun).toBe(true)
+    if (!result.ok || !result.dryRun) return
+    expect(result.preview).toMatchObject({
+      would_create_journal_entry: true,
+      would_book_original_first: true,
+      original_journal_entry: expect.objectContaining({ entry_date: '2026-09-01' }),
+    })
+    expect(calls.filter((c) => c.method === 'insert' || c.method === 'update')).toEqual([])
+    expect(mocks.createJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('keeps the original booked and reports it when the credit then fails, the draft back for a retry', async () => {
+    mocks.createJournalEntry.mockReset()
+    mocks.createJournalEntry
+      .mockResolvedValueOnce({ id: 'je-original', voucher_series: 'A', voucher_number: 6 })
+      .mockRejectedValueOnce(new Error('Period locked'))
+    const { supabase, calls } = setupDeferred()
+
+    const result = await creditInvoice(ctx(supabase), ORIGINAL_ID, {})
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'INVOICE_CREDIT_ISSUE_INCOMPLETE',
+      postedIds: { credit_note_id: CREDIT_ID, original_invoice_id: ORIGINAL_ID, original_journal_entry_id: 'je-original' },
+    })
+    const updates = calls.filter((c) => c.table === 'invoices' && c.method === 'update').map((c) => c.args[0])
+    expect(updates).toContainEqual({ status: 'draft' })
+    expect(updates).not.toContainEqual({ status: 'credited' })
+  })
+
+  it('books nothing first where the company books at issue: the unlinked original is reversed as before', async () => {
+    mocks.createJournalEntry.mockReset()
+    mocks.createJournalEntry.mockResolvedValue({ id: 'je-credit', voucher_series: 'A', voucher_number: 7 })
+    const { supabase } = setup(UNBOOKED)
+
+    const result = await creditInvoice(ctx(supabase), ORIGINAL_ID, {})
+
+    expect(result).toMatchObject({ ok: true, journalEntryId: 'je-credit' })
+    expect(result).not.toHaveProperty('originalJournalEntryId')
+    expect(mocks.createJournalEntry).toHaveBeenCalledOnce()
+    expect((mocks.createJournalEntry.mock.calls[0][3] as EntryInput).source_type).toBe('credit_note')
+  })
+})

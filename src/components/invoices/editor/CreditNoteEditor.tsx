@@ -35,7 +35,7 @@ import { resolveEditorStatusLine } from '@/lib/invoices/editor/status-line'
 import { proposeCreditNoteSendLines } from '@/lib/invoices/editor/voucher-preview'
 import { persistAndSend } from '@/lib/invoices/editor/send-sequence'
 import { creditNoteNumber, creditNoteOriginalReference } from '@/lib/invoices/build-credit-note'
-import { creditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
+import { creditBooksOriginalFirst, creditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { isEntityType } from '@/lib/company/entity-type'
 import { EMAIL_PATTERN, parseInvoiceRecipientText } from '@/lib/invoices/email-recipients'
 import { hasLineDiscount } from '@/lib/invoices/line-amounts'
@@ -44,6 +44,7 @@ import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import type { Invoice, InvoiceItem } from '@/types'
 import type { InvoiceWithRelations } from '@/components/invoices/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { isInvoiceOverdue } from '@/lib/invoices/overdue'
 
 // Why email is not possible, as keys of the invoice_editor_shell namespace.
 const EMAIL_BLOCK_KEYS: Record<EmailBlockReason, string> = {
@@ -150,6 +151,9 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
   // A credit note reverses what was booked: under kontantmetoden an unpaid,
   // unbooked original has nothing to reverse.
   const books = invoice ? creditNoteNeedsJournalEntry(accountingMethod, invoice) : false
+  // accounted#45: a deferred original that was never booked is booked first,
+  // on its own date, then credited.
+  const booksOriginalFirst = invoice ? creditBooksOriginalFirst(companySettings, invoice) : false
   const channelContext: ChannelContext = {
     documentType: 'invoice',
     canEmail,
@@ -330,7 +334,7 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
   })
   const credited = (amount: number) => (amount === 0 ? 0 : -Math.abs(amount))
   const statusLabel =
-    invoice.status === 'paid' ? t('status_paid') : invoice.status === 'overdue' ? t('status_overdue') : t('status_unpaid')
+    invoice.status === 'paid' ? t('status_paid') : isInvoiceOverdue(invoice) ? t('status_overdue') : t('status_unpaid')
   const customerLine = customer
     ? [
         customer.customer_type === 'individual' ? '' : customer.org_number ?? '',
@@ -385,6 +389,12 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
   }
   confirmRows.push({ label: tShell('confirm_row_number'), value: creditNumber ?? '' })
   confirmRows.push({ label: t('to_credit'), value: formatCurrency(-Math.abs(invoice.total), currency) })
+  if (confirmChannel && booksOriginalFirst) {
+    confirmRows.push({
+      label: t('confirm_row_original'),
+      value: t('original_booked_first', { date: formatDate(invoice.invoice_date) }),
+    })
+  }
   let confirmVoucher: ConfirmVoucher | null = null
   if (confirmIntent?.kind === 'create') {
     confirmVoucher = { kind: 'note', text: tShell('confirm_create_note') }

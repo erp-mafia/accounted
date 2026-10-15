@@ -1,8 +1,8 @@
 /**
  * The bank-app payment QR payload (UsingQR revision 2, https://qrkod.info/,
- * crm#249): the exact JSON a Swedish bank app scans to fill in a bankgiro,
- * plusgiro or (with no giro on the invoice) bank account payment, and the QR
- * symbol the invoice PDF draws from it.
+ * crm#249): the exact JSON a Swedish bank app scans to fill in a bankgiro
+ * or plusgiro payment, and the QR symbol the invoice PDF draws from it. No
+ * code for a plain bank account (crm#1191).
  */
 import { describe, expect, it } from 'vitest'
 import QRCode from 'qrcode'
@@ -160,12 +160,9 @@ describe('buildBankPaymentQrPayload: account', () => {
     expect(parsed(build({ company: { bankgiro: '5050-1056', plusgiro: '4567-4' } })).pt).toBe('PG')
   })
 
-  it('returns null without a printed bankgiro, plusgiro or bank account', () => {
+  it('returns null without a printed bankgiro or plusgiro', () => {
     expect(build({ company: { bankgiro: null, plusgiro: null } })).toBeNull()
     expect(build({ company: { bankgiro: '5050-1055', invoice_show_bankgiro: false } })).toBeNull()
-    // Half an account does not print (lib/invoices/payment-rows), so it cannot be paid to.
-    expect(build({ company: { bankgiro: null, clearing_number: '6000', account_number: null } })).toBeNull()
-    expect(build({ company: { bankgiro: null, clearing_number: null, account_number: '658159712' } })).toBeNull()
   })
 })
 
@@ -184,20 +181,18 @@ describe('buildBankPaymentQrPayload: the spec\'s own examples (chapter 8.1, dome
     )
   })
 
-  it('Example 2: pt BBAN with the Handelsbanken account and its BIC, byte for byte', () => {
+  it('Example 2 (pt BBAN, a Handelsbanken account) gives no code: bank apps read acc as a giro (crm#1191)', () => {
     expect(
       build({
         company: { ...specCompany, bankgiro: null, clearing_number: '6000', account_number: '658159712' },
         invoice: { invoice_number: '52456', invoice_date: '2013-04-08', due_date: '2013-05-08' },
         amountDue: 5,
       }),
-    ).toBe(
-      '{"uqr":1,"tp":1,"nme":"Test company AB","cid":"555555-5555","iref":"52456","idt":"20130408","ddt":"20130508","due":5,"pt":"BBAN","acc":"6000658159712","bc":"HANDSESS"}',
-    )
+    ).toBeNull()
   })
 })
 
-describe('buildBankPaymentQrPayload: bank account (pt BBAN, chapter 4.1)', () => {
+describe('buildBankPaymentQrPayload: a plain bank account gets no code (crm#1191)', () => {
   /** Only a bank account prints: no bankgiro, no plusgiro. */
   const bankOnly = (overrides: Partial<BankPaymentQrCompany> = {}) => ({
     bankgiro: null,
@@ -207,87 +202,41 @@ describe('buildBankPaymentQrPayload: bank account (pt BBAN, chapter 4.1)', () =>
     ...overrides,
   })
 
-  it('pays to the printed bank account when the invoice prints no giro', () => {
-    const payload = parsed(build({ company: bankOnly() }))
-    expect(payload).toMatchObject({ pt: 'BBAN', acc: '6000658159712', bc: 'HANDSESS' })
-    for (const key of ['uqr', 'tp', 'nme', 'cid', 'iref', 'ddt', 'due', 'pt', 'acc']) {
-      expect(payload, key).toHaveProperty(key)
-    }
-    // Domestic: no country code, no address (the spec asks for them with IBAN or a foreign bank code).
-    expect(payload).not.toHaveProperty('cc')
-    expect(payload).not.toHaveProperty('adr')
-    expect(payload).not.toHaveProperty('cur')
+  it('Handelsbanken (clearing 6xxx, 9-digit account): no code, whichever language', () => {
+    expect(build({ company: bankOnly() })).toBeNull()
+    expect(build({ company: bankOnly(), lang: 'en' })).toBeNull()
+    expect(bankPaymentQrPayee(bankOnly())).toEqual({ ok: false, reason: 'bank_account_only' })
   })
 
-  it('still prefers a printed bankgiro or plusgiro ("Only if the sender didn\'t provide either a PG or BG number should BBAN be used")', () => {
-    expect(parsed(build({ company: bankOnly({ bankgiro: '5050-1055' }) }))).toMatchObject({ pt: 'BG', acc: '5050-1055' })
-    expect(parsed(build({ company: bankOnly({ plusgiro: '4567-4' }) }))).toMatchObject({ pt: 'PG', acc: '4567-4' })
-    expect(parsed(build({ company: bankOnly({ bankgiro: '5050-1055' }) }))).not.toHaveProperty('bc')
+  it('Swedbank with a 5-digit clearing: no code, stored with or without the clearing check digit', () => {
+    expect(build({ company: bankOnly({ clearing_number: '8169-5', account_number: '913 987 605-7' }) })).toBeNull()
+    expect(build({ company: bankOnly({ clearing_number: '8169', account_number: '9139876057' }) })).toBeNull()
+    expect(bankPaymentQrPayee(bankOnly({ clearing_number: '81695', account_number: '9139876057' }))).toEqual({
+      ok: false,
+      reason: 'bank_account_only',
+    })
   })
 
-  it('takes the bank account when the giro is stored but hidden on the invoice', () => {
-    const payload = parsed(build({ company: bankOnly({ bankgiro: '5050-1055', invoice_show_bankgiro: false }) }))
-    expect(payload).toMatchObject({ pt: 'BBAN', acc: '6000658159712' })
+  it('Nordea personkonto (clearing 3300, the personnummer as account): no code', () => {
+    const personkonto = bankOnly({ clearing_number: '3300', account_number: '811218-9876' })
+    expect(build({ company: personkonto })).toBeNull()
+    expect(bankPaymentQrPayee(personkonto)).toEqual({ ok: false, reason: 'bank_account_only' })
+  })
+
+  it('no code when the giro is stored but hidden on the invoice and only the account prints', () => {
+    expect(build({ company: bankOnly({ bankgiro: '5050-1055', invoice_show_bankgiro: false }) })).toBeNull()
+  })
+
+  it('a printed bankgiro or plusgiro beside the account still gives the same code as before', () => {
+    expect(build({ company: bankOnly({ bankgiro: '5050-1055' }) })).toBe(build())
+    expect(build({ company: bankOnly({ plusgiro: '4567-4' }) })).toBe(
+      '{"uqr":1,"tp":1,"nme":"Testbolaget AB","cid":"556677-8899","iref":"102343","idt":"20261001","ddt":"20261031","due":12500,"pt":"PG","acc":"4567-4"}',
+    )
   })
 
   it('never routes around a printed giro with a wrong check digit: the page tells the payer to use it', () => {
     expect(build({ company: bankOnly({ bankgiro: '5050-1056' }) })).toBeNull()
-  })
-
-  it('never encodes an account the bank\'s check-digit rule rejects or cannot check', () => {
-    // Handelsbanken, mod 11 over the account: the last digit off by one.
-    expect(build({ company: bankOnly({ account_number: '658159713' }) })).toBeNull()
-    // A bank without a known rule: "unknown" is not "valid".
-    expect(build({ company: bankOnly({ clearing_number: '9020', account_number: '1234567' }) })).toBeNull()
-    // Not an account shape any payment file accepts.
-    expect(build({ company: bankOnly({ clearing_number: '600', account_number: '658159712' }) })).toBeNull()
-    expect(build({ company: bankOnly({ account_number: '6581-5971x' }) })).toBeNull()
-  })
-
-  it('writes a 5-digit Swedbank clearing as the spec does ("8169-5 9139876057")', () => {
-    expect(parsed(build({ company: bankOnly({ clearing_number: '8169-5', account_number: '913 987 605-7' }) }))).toMatchObject({
-      pt: 'BBAN',
-      acc: '8169-5 9139876057',
-      bc: 'SWEDSESS',
-    })
-  })
-
-  it('adds the clearing check digit when a Swedbank clearing is stored with four digits', () => {
-    expect(parsed(build({ company: bankOnly({ clearing_number: '8169', account_number: '9139876057' }) })).acc).toBe(
-      '8169-5 9139876057',
-    )
-    // A fifth digit that is not the check digit is a wrong clearing.
-    expect(build({ company: bankOnly({ clearing_number: '81694', account_number: '9139876057' }) })).toBeNull()
-  })
-
-  it('reads the account without separators, and without a clearing typed in front of it', () => {
-    expect(parsed(build({ company: bankOnly({ account_number: '658 159 712' }) })).acc).toBe('6000658159712')
-    expect(parsed(build({ company: bankOnly({ clearing_number: '5000', account_number: '50001234560' }) }))).toMatchObject({
-      acc: '50001234560',
-      bc: 'ESSESESS',
-    })
-  })
-
-  it('names the bank by the clearing table\'s BIC, else the payee\'s stored Swedish BIC, else not at all', () => {
-    // Nordea 4000-4999 has a check-digit rule but no BIC in the clearing table.
-    const nordea = bankOnly({ clearing_number: '4000', account_number: '1234567' })
-    expect(parsed(build({ company: nordea }))).toMatchObject({ pt: 'BBAN', acc: '40001234567' })
-    expect(parsed(build({ company: nordea }))).not.toHaveProperty('bc')
-    expect(parsed(build({ company: { ...nordea, bic: 'ndea sess' } })).bc).toBe('NDEASESS')
-    // A foreign BIC cannot name a Swedish account's bank.
-    expect(parsed(build({ company: { ...nordea, bic: 'DABADKKK' } }))).not.toHaveProperty('bc')
-    // The clearing in acc decides the bank, not a stored BIC that disagrees with it.
-    expect(parsed(build({ company: bankOnly({ bic: 'ESSESESS' }) })).bc).toBe('HANDSESS')
-  })
-
-  it('uses the invoice number as the reference: the OCR row prints only beside a giro', () => {
-    expect(parsed(build({ company: bankOnly(), lang: 'sv' })).iref).toBe('10234')
-    expect(parsed(build({ company: bankOnly(), lang: 'en' })).iref).toBe('10234')
-  })
-
-  it('stays a small symbol', async () => {
-    const symbol = await bankPaymentQrSymbol(build({ company: bankOnly({ clearing_number: '81695', account_number: '9139876057' }) }) as string)
-    expect(symbol!.size).toBeLessThanOrEqual(57 + 2 * BANK_PAYMENT_QR_QUIET_ZONE)
+    expect(bankPaymentQrPayee(bankOnly({ bankgiro: '5050-1056' }))).toEqual({ ok: false, reason: 'invalid_giro' })
   })
 })
 
@@ -296,45 +245,28 @@ describe('bankPaymentQrPayee', () => {
     expect(bankPaymentQrPayee({ bankgiro: null })).toEqual({ ok: false, reason: 'no_printed_giro' })
     expect(bankPaymentQrPayee({ bankgiro: '5050-1056' })).toEqual({ ok: false, reason: 'invalid_giro' })
     expect(bankPaymentQrPayee({ plusgiro: '4567-5' })).toEqual({ ok: false, reason: 'invalid_giro' })
-    expect(bankPaymentQrPayee({ clearing_number: '6000', account_number: '658159713' })).toEqual({
+    expect(bankPaymentQrPayee({ clearing_number: '6000', account_number: '658159712' })).toEqual({
       ok: false,
-      reason: 'invalid_bank_account',
+      reason: 'bank_account_only',
     })
-    expect(bankPaymentQrPayee({ clearing_number: '12', account_number: '658159712' })).toEqual({
+    // Half an account does not print (lib/invoices/payment-rows): nothing prints to pay to.
+    expect(bankPaymentQrPayee({ clearing_number: '6000', account_number: null })).toEqual({
       ok: false,
-      reason: 'invalid_bank_account',
+      reason: 'no_printed_giro',
     })
-    expect(bankPaymentQrPayee({ clearing_number: '9020', account_number: '1234567' })).toEqual({
+    expect(bankPaymentQrPayee({ clearing_number: ' ', account_number: '658159712' })).toEqual({
       ok: false,
-      reason: 'unverified_bank_account',
-    })
-  })
-
-  it('calls an account too long for a bank with a known rule wrong, not unverifiable', () => {
-    // SEB accounts have 7 digits, Handelsbanken 9: the validator says 'unknown'
-    // for the length, but the bank is known, so the number is what is wrong.
-    expect(bankPaymentQrPayee({ clearing_number: '5000', account_number: '12345678' })).toEqual({
-      ok: false,
-      reason: 'invalid_bank_account',
-    })
-    expect(bankPaymentQrPayee({ clearing_number: '6000', account_number: '6581597120' })).toEqual({
-      ok: false,
-      reason: 'invalid_bank_account',
+      reason: 'no_printed_giro',
     })
   })
 
-  it('returns the account the payload writes', () => {
+  it('returns the giro the payload writes', () => {
     expect(bankPaymentQrPayee({ bankgiro: '5050-1055', clearing_number: '6000', account_number: '658159712' })).toEqual({
       ok: true,
       pt: 'BG',
       acc: '5050-1055',
     })
-    expect(bankPaymentQrPayee({ clearing_number: '6000', account_number: '658159712' })).toEqual({
-      ok: true,
-      pt: 'BBAN',
-      acc: '6000658159712',
-      bc: 'HANDSESS',
-    })
+    expect(bankPaymentQrPayee({ bankgiro: null, plusgiro: '1760990' })).toEqual({ ok: true, pt: 'PG', acc: '176099-0' })
   })
 })
 

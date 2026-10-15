@@ -292,6 +292,10 @@ describe('categorizeArgsFor', () => {
     expect(categorizeArgsFor(accountProposal({ ...base, reverse_charge_kind: 'eu_services' }))?.vat_treatment).toBe('reverse_charge_eu_services')
     expect(categorizeArgsFor(accountProposal(base))?.vat_treatment).toBe('reverse_charge')
   })
+  it('spells the box a catalog template books, so an agent books a non-EU template in ruta 22 (accounted#37)', () => {
+    expect(categorizeArgsFor(proposalFromTemplate(getTemplateById('it_saas_non_eu')!, 'catalog'))?.vat_treatment).toBe('reverse_charge_non_eu_services')
+    expect(categorizeArgsFor(proposalFromTemplate(getTemplateById('it_saas_eu')!, 'catalog'))?.vat_treatment).toBe('reverse_charge')
+  })
 })
 
 describe('categorizeBodyFor: the body the preview shows and the booking posts', () => {

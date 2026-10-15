@@ -26,7 +26,7 @@ import { buildMappingResultFromCategory } from '../category-mapping'
 import { buildMappingResultFromTemplate, findMatchingTemplates, getTemplateById } from '../booking-templates'
 import { roundOre } from '@/lib/money'
 import type { TemplateUpsertParams } from '../counterparty-templates'
-import type { LinePatternEntry } from '@/types'
+import type { CategorizationTemplate, LinePatternEntry } from '@/types'
 import type { SIETransactionLine } from '@/lib/import/types'
 import { ACCOUNT_RUTA } from '@/lib/reports/vat-declaration'
 
@@ -1097,6 +1097,191 @@ describe('counterparty-templates', () => {
       )
 
       expect(supabase.from).not.toHaveBeenCalled()
+    })
+
+    // accounted#36: the bank abbreviates the party, so its text shares no
+    // first name word with the template's key and the token tier cannot
+    // match it. A booking on the template is what ties the two.
+    describe('a row booked on a counterpart template (accounted#36)', () => {
+      const hosting = makeCategorizationTemplate({
+        id: 'tmpl-hosting',
+        counterparty_name: 'levfakt nordisk hosting',
+        counterparty_aliases: ['levfakt nordisk hosting (1467)'],
+        debit_account: '5410',
+        credit_account: '1930',
+        occurrence_count: 5,
+        confidence: calculateConfidence(5),
+        source: 'sie_import',
+      })
+      const abbreviated = () => makeTransaction({
+        merchant_name: null,
+        description: 'NH HOSTING',
+        original_description: 'NH HOSTING',
+        date: '2026-09-22',
+      })
+
+      /** Answers the learner's reads from `rows`; captures its writes. */
+      function learnerMock(rows: CategorizationTemplate[]) {
+        const updates: { id: unknown; payload: Record<string, unknown> }[] = []
+        const inserts: Record<string, unknown>[] = []
+        const reads: Record<string, unknown>[] = []
+        const from = vi.fn(() => {
+          const filters: Record<string, unknown> = {}
+          const chain = {
+            select: () => chain,
+            eq: (column: string, value: unknown) => {
+              filters[column] = value
+              return chain
+            },
+            contains: (column: string, value: unknown[]) => {
+              filters[`${column}@>`] = value
+              return chain
+            },
+            order: () => chain,
+            limit: () => chain,
+            maybeSingle: async () => {
+              reads.push({ ...filters })
+              const hit = rows.find((t) =>
+                (filters.id === undefined || t.id === filters.id) &&
+                (filters.company_id === undefined || t.company_id === filters.company_id) &&
+                (filters.is_active === undefined || t.is_active === filters.is_active) &&
+                (filters.counterparty_name === undefined || t.counterparty_name === filters.counterparty_name) &&
+                (filters['counterparty_aliases@>'] === undefined ||
+                  (filters['counterparty_aliases@>'] as string[]).every((a) => (t.counterparty_aliases ?? []).includes(a))),
+              )
+              return { data: hit ?? null, error: null }
+            },
+            insert: async (payload: Record<string, unknown>) => {
+              inserts.push(payload)
+              return { error: null }
+            },
+            update: (payload: Record<string, unknown>) => ({
+              eq: async (_column: string, id: unknown) => {
+                updates.push({ id, payload })
+                return { error: null }
+              },
+            }),
+          }
+          return chain
+        })
+        return { supabase: { from }, updates, inserts, reads }
+      }
+
+      it('adds the row\'s key to the template\'s aliases and counts the booking there', async () => {
+        const { supabase, updates, inserts } = learnerMock([hosting])
+
+        await upsertCounterpartyTemplate(
+          supabase as never, hosting.company_id, abbreviated(), mappingResult, 'user_approved',
+          { bookedOnTemplateId: hosting.id },
+        )
+
+        expect(inserts).toEqual([])
+        expect(updates).toHaveLength(1)
+        expect(updates[0].id).toBe(hosting.id)
+        expect(updates[0].payload).toMatchObject({
+          occurrence_count: 6,
+          confidence: calculateConfidence(6),
+          source: 'user_approved',
+          counterparty_aliases: ['levfakt nordisk hosting (1467)', 'nh hosting'],
+        })
+        // A re-approval: the template's accounts are not rewritten.
+        expect(updates[0].payload).not.toHaveProperty('debit_account')
+      })
+
+      it('then proposes the template for the next row with that text, by name', async () => {
+        const before = createQueuedMockSupabase()
+        before.enqueue({ data: [hosting] })
+        expect(await findCounterpartyTemplate(before.supabase as never, hosting.company_id, abbreviated())).toBeNull()
+
+        const { supabase, updates } = learnerMock([hosting])
+        await upsertCounterpartyTemplate(
+          supabase as never, hosting.company_id, abbreviated(), mappingResult, 'user_approved',
+          { bookedOnTemplateId: hosting.id },
+        )
+        const learned = { ...hosting, ...updates[0].payload } as CategorizationTemplate
+
+        const after = createQueuedMockSupabase()
+        after.enqueue({ data: [learned] })
+        const next = makeTransaction({ merchant_name: null, description: 'NH HOSTING 4471', original_description: 'NH HOSTING 4471' })
+        const match = await findCounterpartyTemplate(after.supabase as never, hosting.company_id, next)
+
+        expect(match?.template.id).toBe(hosting.id)
+        expect(match?.matchMethod).toBe('exact_normalized')
+      })
+
+      it('accepts the row\'s own bank ledger as the same pair', async () => {
+        const { supabase, updates, inserts } = learnerMock([hosting])
+
+        await upsertCounterpartyTemplate(
+          supabase as never, hosting.company_id, abbreviated(),
+          { ...mappingResult, credit_account: '1931' }, 'user_approved',
+          { bookedOnTemplateId: hosting.id },
+        )
+
+        expect(inserts).toEqual([])
+        expect(updates.map((u) => u.id)).toEqual([hosting.id])
+      })
+
+      it('booked otherwise, learns under the row\'s own key and leaves the template alone', async () => {
+        const { supabase, updates, inserts } = learnerMock([hosting])
+
+        await upsertCounterpartyTemplate(
+          supabase as never, hosting.company_id, abbreviated(),
+          { ...mappingResult, debit_account: '6540' }, 'user_approved',
+          { bookedOnTemplateId: hosting.id },
+        )
+
+        expect(updates).toEqual([])
+        expect(inserts).toHaveLength(1)
+        expect(inserts[0]).toMatchObject({ counterparty_name: 'nh hosting', counterparty_aliases: ['nh hosting'], debit_account: '6540' })
+      })
+
+      it('a key another template already holds stays with that template', async () => {
+        const owner = makeCategorizationTemplate({
+          id: 'tmpl-owner',
+          counterparty_name: 'nh hosting',
+          counterparty_aliases: ['nh hosting'],
+          debit_account: '5410',
+          credit_account: '1930',
+          occurrence_count: 2,
+        })
+        const { supabase, updates, inserts, reads } = learnerMock([hosting, owner])
+
+        await upsertCounterpartyTemplate(
+          supabase as never, hosting.company_id, abbreviated(), mappingResult, 'user_approved',
+          { bookedOnTemplateId: hosting.id },
+        )
+
+        expect(inserts).toEqual([])
+        expect(updates.map((u) => u.id)).toEqual(['tmpl-owner'])
+        expect(reads.some((r) => r.id === hosting.id)).toBe(false)
+      })
+
+      it('a template that is gone or inactive teaches nothing: the row learns under its own key', async () => {
+        const { supabase, updates, inserts } = learnerMock([{ ...hosting, is_active: false }])
+
+        await upsertCounterpartyTemplate(
+          supabase as never, hosting.company_id, abbreviated(), mappingResult, 'user_approved',
+          { bookedOnTemplateId: hosting.id },
+        )
+
+        expect(updates).toEqual([])
+        expect(inserts).toHaveLength(1)
+        expect(inserts[0].counterparty_name).toBe('nh hosting')
+      })
+
+      it('without a template named by the booking, nothing changes: a new template under the row\'s key', async () => {
+        const { supabase, updates, inserts, reads } = learnerMock([hosting])
+
+        await upsertCounterpartyTemplate(
+          supabase as never, hosting.company_id, abbreviated(), mappingResult, 'user_approved',
+        )
+
+        expect(updates).toEqual([])
+        expect(inserts).toHaveLength(1)
+        expect(inserts[0].counterparty_name).toBe('nh hosting')
+        expect(reads.some((r) => r.id !== undefined)).toBe(false)
+      })
     })
   })
 

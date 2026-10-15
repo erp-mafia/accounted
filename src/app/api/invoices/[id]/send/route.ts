@@ -21,6 +21,7 @@ import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { ensureInvoiceNumber, invoiceNumberingFailure } from '@/lib/invoices/ensure-invoice-number'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import {
+  creditIssueFailureCode,
   issueCreditNote,
   type CreditNoteOriginalInvoice,
 } from '@/lib/invoices/issue-credit-note'
@@ -450,6 +451,7 @@ export const POST = withRouteContext(
         originalInvoice,
         entityType: await resolveCompanyEntityType(supabase, companyId!, (company as CompanySettings).entity_type),
         accountingMethod: ((company as Record<string, unknown>).accounting_method || 'accrual') as AccountingMethod,
+        deferInvoiceBooking: !!(company as CompanySettings).defer_invoice_booking,
         log: opLog,
       })
       // Issued: when the credited invoice is under collection, a database trigger
@@ -467,16 +469,8 @@ export const POST = withRouteContext(
             .eq('status', 'sent')
             .is('journal_entry_id', null)
         }
-        return errorResponseFromCode(
-          issueResult.repairRequired
-            ? 'INVOICE_CREDIT_REPAIR_REQUIRED'
-            : 'INVOICE_CREDIT_ISSUE_INCOMPLETE',
-          opLog,
-          {
-            requestId,
-            details: { failure_steps: issueResult.failures.map((failure) => failure.step) },
-          },
-        )
+        const failure = creditIssueFailureCode(issueResult)
+        return errorResponseFromCode(failure.code, opLog, { requestId, details: failure.details })
       }
     }
 

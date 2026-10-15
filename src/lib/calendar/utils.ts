@@ -1,4 +1,5 @@
 import { Invoice, Deadline, PaymentCalendarDay } from '@/types'
+import { isInvoiceOverdue as isCustomerInvoiceOverdue } from '@/lib/invoices/overdue'
 
 // Swedish day names (Monday first)
 export const SWEDISH_DAYS = ['Mån', 'Tis', 'Ons', 'Tor', 'Fre', 'Lör', 'Sön']
@@ -43,13 +44,10 @@ export function isSameDay(date1: Date, date2: Date): boolean {
 }
 
 // Check if invoice is overdue
+// The one overdue rule (lib/invoices/overdue.ts): an owed invoice past its
+// due date with an open remainder, whatever its stored status.
 export function isInvoiceOverdue(invoice: Invoice): boolean {
-  if (invoice.status === 'paid' || invoice.status === 'cancelled' || invoice.status === 'credited') {
-    return false
-  }
-  const today = startOfDay(new Date())
-  const dueDate = parseDate(invoice.due_date)
-  return isBefore(dueDate, today)
+  return isCustomerInvoiceOverdue(invoice)
 }
 
 // Check if deadline is overdue

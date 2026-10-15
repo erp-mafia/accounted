@@ -8,10 +8,13 @@ import {
   SettingsRowNote,
 } from '@/components/settings/SettingsRows'
 import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
+import { lockedOrgNumber } from '@/lib/company/org-number-rule'
 import type { CompanySettings } from '@/types'
 
 interface CompanyInfoFormProps {
   settings: CompanySettings
+  /** companies.org_number, the second stored copy the lock reads. */
+  companyOrgNumber?: string | null
   /**
    * Opens the delete-company dialog from the locked org number row. Passed
    * only where that way out exists (the section decides: owner, not a
@@ -20,14 +23,17 @@ interface CompanyInfoFormProps {
   onWrongCompany?: () => void
 }
 
-export function CompanyInfoForm({ settings, onWrongCompany }: CompanyInfoFormProps) {
+export function CompanyInfoForm({ settings, companyOrgNumber, onWrongCompany }: CompanyInfoFormProps) {
   const t = useTranslations('settings_company')
-  const orgLocked = settings.onboarding_complete === true
+  // Fixed once the company has a valid number on either stored copy: the
+  // rule the save applies (lib/company/org-number-rule.ts). A saved fill-in
+  // lands in the settings copy, so the field locks as soon as it is saved.
+  const orgLocked = lockedOrgNumber(settings.org_number, companyOrgNumber) !== null
+  const isPersonnummerForm =
+    isEntityType(settings.entity_type) && usesPersonnummerAsOrgNumber(settings.entity_type)
   // Säte belongs to a legal person; a form whose org number is the owner's
   // personnummer (enskild firma) has none.
-  const hasRegisteredOffice = !(
-    isEntityType(settings.entity_type) && usesPersonnummerAsOrgNumber(settings.entity_type)
-  )
+  const hasRegisteredOffice = !isPersonnummerForm
   return (
     <SettingsGroup label={t('company_info_heading')}>
       <SettingsRow
@@ -53,7 +59,18 @@ export function CompanyInfoForm({ settings, onWrongCompany }: CompanyInfoFormPro
           name="org_number"
           defaultValue={settings.org_number || ''}
           disabled={orgLocked}
+          placeholder={orgLocked ? undefined : t(isPersonnummerForm ? 'org_number_placeholder_ef' : 'org_number_placeholder')}
+          inputMode="numeric"
+          autoComplete="off"
+          className="tabular-nums"
         />
+        {/* No valid number yet: the company fills it in itself. Said before
+            the save, not after it, that a saved valid number is final. */}
+        {!orgLocked && (
+          <SettingsRowNote className="basis-full">
+            {t(isPersonnummerForm ? 'org_number_fill_note_ef' : 'org_number_fill_note')}
+          </SettingsRowNote>
+        )}
         {/* A locked field alone is a dead end: an owner who set up the wrong
             company comes here to change the number, and the reason behind the
             "?" says only that it cannot be done. One muted sentence with the

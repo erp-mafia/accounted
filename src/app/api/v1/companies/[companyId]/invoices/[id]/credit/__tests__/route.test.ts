@@ -466,3 +466,80 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/credit', () => {
     expect((await res.json()).error.code).toBe('VALIDATION_ERROR')
   })
 })
+
+// accounted#45: under deferred booking an original that was never booked is
+// booked first (the Bokför step, its own date), then credited. v1 answers
+// both verifikat, or refuses before anything is written.
+describe('POST .../credit: a deferred original that was never booked', () => {
+  const ORIGINAL_JE_ID = '99999999-9999-4999-8999-999999999999'
+  const deferredSettings = {
+    company_name: 'Test AB',
+    accounting_method: 'accrual',
+    defer_invoice_booking: true,
+    entity_type: 'enskild_firma',
+  }
+
+  function deferredSupabase(original: Original) {
+    const draft = draftOf(original)
+    return createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      invoices: [
+        { data: original }, // the original
+        { data: original }, // the Bokför step's dry run
+        { data: null }, // no existing credit note
+        { data: { id: CREDIT_ID } }, // insert
+        { data: null }, // creation_complete
+        { data: draft }, // the completed draft
+        { data: original }, // the original's booked-ness at issue
+        { data: [{ id: CREDIT_ID }] }, // compare-and-set to sent
+        { data: original }, // the Bokför step: the original
+        { data: { ...original, journal_entry_id: ORIGINAL_JE_ID } }, // its CAS link
+        { data: [{ id: CREDIT_ID }] }, // credit journal_entry_id link
+        { data: [{ id: INVOICE_ID }] }, // the original flipped to credited
+        { data: { ...draft, status: 'sent' } }, // the response re-read
+      ],
+      invoice_items: { data: null },
+      journal_entries: [{ data: null }, { data: { voucher_series: 'A', voucher_number: 41 } }],
+      company_settings: { data: deferredSettings },
+    })
+  }
+
+  it('books the original first, then the credit, and answers both verifikat', async () => {
+    mocks.createJournalEntry
+      .mockResolvedValueOnce({ id: ORIGINAL_JE_ID })
+      .mockResolvedValueOnce({ id: JE_ID })
+    mockServiceClient.mockReturnValue(deferredSupabase(ORIGINAL_SENT_INVOICE).supabase)
+
+    const res = await creditInvoice(makeRequest(url()), detailParams(COMPANY_ID, INVOICE_ID))
+
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(body.data.journal_entry_id).toBe(JE_ID)
+    expect(body.data.original_journal_entry_id).toBe(ORIGINAL_JE_ID)
+    expect(mocks.createJournalEntry).toHaveBeenCalledTimes(2)
+    expect(mocks.createJournalEntry.mock.calls[0][3]).toMatchObject({
+      source_type: 'invoice_created',
+      source_id: INVOICE_ID,
+      entry_date: '2026-05-12',
+    })
+    expect(mocks.createJournalEntry.mock.calls[1][3]).toMatchObject({ source_type: 'credit_note', source_id: CREDIT_ID })
+  })
+
+  it('refuses with 400 INVOICE_CREDIT_ORIGINAL_PERIOD_LOCKED before any write when the original\'s period is locked', async () => {
+    mocks.checkPeriodLock.mockImplementation(async (_supabase: unknown, _company: string, date: string) =>
+      date === '2026-05-12'
+        ? { locked: true, reason: 'period_locked_at_set', fiscal_period_id: 'fp-may' }
+        : { locked: false, fiscal_period_id: 'fp-1' },
+    )
+    const { supabase, calls } = deferredSupabase(ORIGINAL_SENT_INVOICE)
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await creditInvoice(makeRequest(url()), detailParams(COMPANY_ID, INVOICE_ID))
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_CREDIT_ORIGINAL_PERIOD_LOCKED')
+    expect(writes(calls)).toEqual([])
+    expect(mocks.createJournalEntry).not.toHaveBeenCalled()
+  })
+})

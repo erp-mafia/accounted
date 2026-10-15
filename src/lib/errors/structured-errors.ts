@@ -1624,6 +1624,32 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
         'The credit note is dated today (Europe/Stockholm) and that date falls in a closed or locked period, on/before the company lock date, or in no fiscal period at all (details.reason: no_fiscal_period; create the fiscal year first). Unlock the period in the dashboard or wait for the next open period; the API cannot backdate or forward-date a credit note.',
     },
   },
+  // accounted#45: a deferred-booking original that was never booked is booked
+  // (the Bokför step) before its credit posts. These two refuse the credit
+  // when that booking cannot happen; nothing was written.
+  INVOICE_CREDIT_ORIGINAL_PERIOD_LOCKED: {
+    httpStatus: 400,
+    message_sv:
+      'Originalfakturan saknar verifikation och måste bokföras innan den krediteras, men dess fakturadatum ligger i en låst eller stängd period. Finns försäljningen redan i bokföringen, koppla fakturan till den verifikationen. Annars: lås upp perioden och försök igen.',
+    message_en:
+      'The original invoice has no voucher and must be booked before it is credited, but its invoice date is in a locked or closed period. If the sale is already in the books, link the invoice to that voucher. Otherwise unlock the period and try again.',
+    remediation: {
+      description:
+        'Under faktureringsmetoden with deferred booking, crediting an invoice that has no verifikat first books it on its own invoice date (the Bokför step, POST /invoices/{id}/book), then posts the credit. details.invoice_date and details.reason say which lock refused it. If the sale is already in the books (a migrated or imported verifikat), link the invoice to it (gnubok_link_invoice_to_voucher) and credit again: the credit then reverses that verifikat. Otherwise unlock that period (gnubok_unlock_period, if it is locked and not closed) and retry. Nothing was written.',
+      tool: 'gnubok_unlock_period',
+    },
+  },
+  INVOICE_CREDIT_ORIGINAL_BOOK_FAILED: {
+    httpStatus: 400,
+    message_sv:
+      'Originalfakturan saknar verifikation och kunde inte bokföras, så den har inte krediterats. Finns försäljningen redan i bokföringen, koppla fakturan till den verifikationen. Annars: öppna fakturan och välj Bokför för att se vad som hindrar.',
+    message_en:
+      'The original invoice has no voucher and could not be booked, so it was not credited. If the sale is already in the books, link the invoice to that voucher. Otherwise open the invoice and choose Book to see what stops it.',
+    remediation: {
+      description:
+        'Under faktureringsmetoden with deferred booking, crediting an invoice that has no verifikat first books it (the Bokför step, POST /invoices/{id}/book), then posts the credit. That booking was refused: details.original_booking_code is the Bokför step\'s own code (e.g. INVOICE_BOOK_NO_FISCAL_PERIOD). If the sale is already in the books (a migrated or imported verifikat), link the invoice to it (gnubok_link_invoice_to_voucher) and credit again. Otherwise book the original first, fix what that refusal names, then credit it. Nothing was written.',
+    },
+  },
   INVOICE_CREDIT_NOT_SENT: {
     httpStatus: 400,
     message_sv: 'Endast skickade, betalda eller förfallna fakturor kan krediteras.',
@@ -2105,6 +2131,16 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'Fakturan ändrades samtidigt och kunde inte makuleras. Ladda om och försök igen.',
     message_en: 'Invoice was modified concurrently and could not be cancelled. Reload and retry.',
+  },
+  // Staging a cancel of a quote or proforma that is already cancelled
+  // (lib/operations/invoice-cancel.ts): nothing is left to stage.
+  INVOICE_ALREADY_CANCELLED: {
+    httpStatus: 409,
+    message_sv: 'Dokumentet är redan makulerat. Det finns inget kvar att göra.',
+    message_en: 'The document is already cancelled. There is nothing left to do.',
+    remediation: {
+      description: 'Nothing to stage or approve: the quote or proforma is already cancelled.',
+    },
   },
   INVOICE_CANCEL_NOT_QUOTE_OR_PROFORMA: {
     httpStatus: 400,
@@ -7513,6 +7549,28 @@ const COMPANY_SETTINGS: Record<string, StructuredErrorEntry> = {
     message_sv: 'Aktiekapital och antal aktier måste anges tillsammans. Fyll i båda fälten eller lämna båda tomma.',
     message_en: 'aktiekapital and antal_aktier are set (or cleared) together.',
   },
+  // The company's own org number (lib/company/org-number-rule.ts): writable
+  // while no valid one is stored, fixed once one is.
+  SETTINGS_ORG_NUMBER_LOCKED: {
+    httpStatus: 409,
+    message_sv: 'Företaget har redan ett giltigt organisationsnummer, och det kan inte ändras.',
+    message_en: 'The company already has a valid org_number; it cannot be changed.',
+  },
+  SETTINGS_ORG_NUMBER_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Organisationsnumret är inte giltigt. Ange det med 10 siffror (NNNNNN-NNNN) och kontrollera att alla siffror stämmer.',
+    message_en: 'org_number is not a valid Swedish organisationsnummer: 10 digits (or 12 with the century) and a correct check digit.',
+  },
+  SETTINGS_ORG_NUMBER_PERSONNUMMER_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'En enskild firmas organisationsnummer är ägarens personnummer. Ange personnumret (ÅÅMMDD-NNNN).',
+    message_en: 'An enskild firma\'s org_number is the owner\'s personnummer (YYMMDD-NNNN).',
+  },
+  SETTINGS_ORG_NUMBER_LEGAL_ENTITY_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Numret är inget organisationsnummer för ett företag eller en förening. Ange organisationsnumret (NNNNNN-NNNN), inte ett personnummer.',
+    message_en: 'org_number must be the legal person\'s organisationsnummer (third digit 2 or higher), not a personnummer.',
+  },
   SETTINGS_VACATION_BASIS_OPEN_BALANCES: {
     httpStatus: 400,
     message_sv: 'Semesterårets basis kan inte ändras medan öppna semestersaldon finns. Stäng semesteråret först.',
@@ -8124,8 +8182,8 @@ const PAYMENT_ORDERS: Record<string, StructuredErrorEntry> = {
   // Same cause and way out as BANK_CONSENT_ORG_NUMBER_MISSING, for a payment.
   PAYMENT_ORG_NUMBER_MISSING: {
     httpStatus: 400,
-    message_sv: 'Företagets organisationsnummer saknas eller är ogiltigt, och banken behöver det för betalningen. Fyll i det under Inställningar, Företag, Allmänt och försök igen. Går fältet inte att ändra, kontakta supporten.',
-    message_en: 'The company\'s organisation number is missing or invalid, and the bank needs it for the payment. Fill it in under Settings, Company, General and try again. If the field cannot be changed, contact support.',
+    message_sv: 'Företagets organisationsnummer saknas eller är ogiltigt, och banken behöver det för betalningen. Fyll i det under Inställningar, Företag, Allmänt och försök igen.',
+    message_en: 'The company\'s organisation number is missing or invalid, and the bank needs it for the payment. Fill it in under Settings, Company, General and try again.',
   },
   PAYMENT_COMPANY_VERIFICATION_REQUIRED: {
     httpStatus: 409,
@@ -8213,12 +8271,12 @@ const OPEN_BANKING: Record<string, StructuredErrorEntry> = {
     message_en: 'Enter the personal identity number of the person logging in with BankID.',
   },
   // No stored organisationsnummer reads as one (lib/company/org-number.ts).
-  // After onboarding the field is locked (settings-service.ts), so the text
-  // also names the way out when it cannot be filled in.
+  // The field is editable exactly then (lib/company/org-number-rule.ts:
+  // writable while no valid number is stored), so the text names it.
   BANK_CONSENT_ORG_NUMBER_MISSING: {
     httpStatus: 400,
-    message_sv: 'Företagets organisationsnummer saknas eller är ogiltigt, och banken behöver det för kopplingen. Fyll i det under Inställningar, Företag, Allmänt och försök igen. Går fältet inte att ändra, kontakta supporten.',
-    message_en: 'The company\'s organisation number is missing or invalid, and the bank needs it for the connection. Fill it in under Settings, Company, General and try again. If the field cannot be changed, contact support.',
+    message_sv: 'Företagets organisationsnummer saknas eller är ogiltigt, och banken behöver det för kopplingen. Fyll i det under Inställningar, Företag, Allmänt och försök igen.',
+    message_en: 'The company\'s organisation number is missing or invalid, and the bank needs it for the connection. Fill it in under Settings, Company, General and try again.',
   },
   BANK_CONSENT_UNKNOWN_BANK: {
     httpStatus: 400,

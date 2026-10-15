@@ -21,7 +21,7 @@ import { linkDocuments, formatFailedDocumentNames } from '@/lib/documents/link-d
 import { ArrowUpRight, ArrowDownRight, Check, Paperclip, ChevronDown, ChevronUp, Inbox } from 'lucide-react'
 import { resolveTemplateAccountsForEntity } from '@/lib/bookkeeping/proposal-lines'
 import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
-import { accountProposal, businessAccount, carriedCategory, categorizeBodyFor, reverseChargeKindOf, templateBehind, withAccount, withReverseChargeKind, type BookingProposal } from '@/lib/bookkeeping/proposal'
+import { accountProposal, businessAccount, carriedCategory, categorizeBodyFor, inReverseChargeBox, PROPOSAL_REVERSE_CHARGE_KINDS, reverseChargeBoxDispute, reverseChargeBoxesOf, reverseChargeBoxNumber, reverseChargeKindOf, templateBehind, withAccount, withReverseChargeKind, type BookingProposal } from '@/lib/bookkeeping/proposal'
 import { booksReverseChargePurchase } from '@/lib/bookkeeping/category-mapping'
 import { DEFAULT_REVERSE_CHARGE_KIND, type ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
 import { vatCodeRuleForAccount } from '@/lib/bookkeeping/voucher-line-vat-code'
@@ -131,17 +131,26 @@ export default function QuickReviewDialog({
   const whyFor = useProposalWhy()
   const { toast } = useToast()
   const router = useRouter()
+  // A proposal the assistant's read puts in another reverse-charge box
+  // (ruta 21 against ruta 22, accounted#37): the review opens on the read's
+  // box, on the proposal's own cost account, with the proposal's box one
+  // click away. A booking with several cost lines opens as it is.
+  const [boxDispute] = useState(() => reverseChargeBoxDispute(initialProposal))
+  const [inReadBox] = useState(() =>
+    boxDispute ? inReverseChargeBox(initialProposal, boxDispute.read, transaction?.amount ?? 0, entityType) : null,
+  )
+  const openedProposal = inReadBox ?? initialProposal
   // The one thing this dialog edits. An account or VAT the person changes
   // turns it into an account booking; everything below (header, preview,
   // confirm) reads this and nothing else.
-  const [proposal, setProposal] = useState<BookingProposal>(initialProposal)
+  const [proposal, setProposal] = useState<BookingProposal>(openedProposal)
   // What the review showed before the person took the assistant's pick: the
   // change line names it and Ångra restores it. Null until a pick is taken.
   const [previous, setPrevious] = useState<BookingProposal | null>(null)
   // The basis box the review last held for a reverse charge (ruta 20, 21 or
   // 22), kept while the person tries another treatment so picking reverse
   // charge again brings it back (accounted#35).
-  const lastRcKind = useRef<ReverseChargeKind | undefined>(reverseChargeKindOf(initialProposal))
+  const lastRcKind = useRef<ReverseChargeKind | undefined>(reverseChargeKindOf(openedProposal))
   useEffect(() => {
     if (proposal.booking.kind === 'account' && proposal.booking.vat_treatment === 'reverse_charge') {
       lastRcKind.current = proposal.booking.reverse_charge_kind
@@ -192,7 +201,7 @@ export default function QuickReviewDialog({
   // booking will carry and can change it.
   const dimensionsEnabled = companySettings?.dimensions_enabled === true
   const [dims, setDims] = useState<Record<string, string>>(
-    () => ({ ...(initialProposal.default_dimensions ?? {}) }),
+    () => ({ ...(openedProposal.default_dimensions ?? {}) }),
   )
   // The dimension fields stay folded until one is set or asked for: two
   // empty pickers on every review was weight without a decision.
@@ -395,7 +404,7 @@ export default function QuickReviewDialog({
   useEffect(() => {
     setEnrichedTx(transaction)
     setRateError(null)
-    setDims({ ...(initialProposal.default_dimensions ?? {}) })
+    setDims({ ...(openedProposal.default_dimensions ?? {}) })
     // A document picked for the previous row must never follow the dialog to
     // the next one: it would attach that underlag to the wrong verifikat.
     // What "Byt" carried over is this row's own and stays.
@@ -568,6 +577,22 @@ export default function QuickReviewDialog({
           box: rcAccountRule.box.replace('ruta', ''),
         })
       : tJournal(`vat_code_kind_${rcKind}`)
+  // The box this review books a reverse charge in, and the read's
+  // disagreement with the proposal over it (accounted#37), said in one line
+  // with the other box one click away: back to the proposal exactly as it
+  // came, over to the read's box, or for a booking the person already
+  // changed, its box set to the other one.
+  const currentBox = reverseChargeBoxesOf(proposal)[0] ?? null
+  const boxSwitch = (() => {
+    if (!boxDispute || !currentBox) return null
+    const target = currentBox === boxDispute.read ? boxDispute.proposal : boxDispute.read
+    if (proposal === inReadBox) return { target, apply: () => setProposal(initialProposal) }
+    if (proposal === initialProposal) return inReadBox ? { target, apply: () => setProposal(inReadBox) } : null
+    if (proposal.booking.kind === 'account' && PROPOSAL_REVERSE_CHARGE_KINDS.includes(target)) {
+      return { target, apply: () => setReverseChargeKind(target) }
+    }
+    return null
+  })()
   // For non-SEK transactions, the verifikation and the headline must show
   // the SEK-converted total: the mall/category booking always posts in SEK.
   const sekAmount = resolveSekAmount(
@@ -944,6 +969,21 @@ export default function QuickReviewDialog({
           </div>
           <p className="text-[12.5px] text-muted-foreground">{whyFor(proposal)}</p>
           {ruleLine && <p className="text-[12.5px] leading-snug text-muted-foreground">{ruleLine}</p>}
+          {boxDispute && currentBox && (
+            <AttnLine
+              action={
+                boxSwitch
+                  ? { label: t('rc_box_switch', { box: reverseChargeBoxNumber(boxSwitch.target) }), onClick: boxSwitch.apply }
+                  : undefined
+              }
+            >
+              {t('rc_box_dispute', {
+                proposal: t(`rc_box_${boxDispute.proposal}`),
+                read: t(`rc_box_${boxDispute.read}`),
+                current: t(`rc_box_${currentBox}`),
+              })}
+            </AttnLine>
+          )}
           {/* The assistant's read, unless this review already is its pick. */}
           {previous && (
             <p className="flex flex-wrap items-center gap-x-2 text-[12.5px] text-foreground">
@@ -974,11 +1014,13 @@ export default function QuickReviewDialog({
               hasUnderlag={!!documentId}
               initial={docRead ?? (assistantRead && readIsFresh(assistantRead, tx) ? assistantRead : null)}
               currentAccount={currentAccount}
+              currentBox={currentBox}
               // The pick fills an account booking nobody chose. One the
               // person set or picked stands, and so does the proposal they
               // went back to after the document's read was taken once: the
-              // line offers the pick instead of taking it over theirs.
-              autoApply={!isTemplateBooking && !isPersonChoice(proposal) && !docRead}
+              // line offers the pick instead of taking it over theirs. A
+              // proposal opened in the read's box is not one nobody chose.
+              autoApply={!isTemplateBooking && !isPersonChoice(proposal) && !docRead && !boxDispute}
               onProposal={setAiProposal}
               onTake={takeAssistantPick}
             />

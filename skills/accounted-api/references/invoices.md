@@ -29,7 +29,7 @@ Cursor-paginated invoice list ordered by created_at DESC, id ASC (newest-registe
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
-| `status` | query | `"draft" \| "sent" \| "paid" \| "partially_paid" \| "overdue" \| "cancelled" \| "credited"` | no | Only invoices in this status. |
+| `status` | query | `"draft" \| "sent" \| "paid" \| "partially_paid" \| "overdue" \| "cancelled" \| "credited"` | no | Only invoices in this status. overdue = past due_date with remaining_amount > 0, partially_paid included. |
 | `customer_id` | query | `string` | no | Only invoices to this customer (id). |
 | `document_type` | query | `"invoice" \| "proforma" \| "delivery_note" \| "quote"` | no | Only this document type. Default: every type. |
 | `quote_status` | query | `"open" \| "accepted" \| "declined" \| "expired"` | no | Quotes only (implies document_type=quote). expired = open with valid_until before today. |
@@ -535,12 +535,78 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/invoices/{id}/cancel`
+
+**Cancel (makulera) a quote or a proforma invoice.**
+`scope:invoices:write · risk:low · idempotent · dry-run`
+
+Sets status cancelled on a quote (document_type=quote) or a proforma (document_type=proforma). The document stays, with its number; neither carries a verifikat, so nothing is booked or reversed. The invoice.cancelled event records who cancelled it. A sales invoice is refused: delete a draft (DELETE /invoices/{id}) and credit an issued one (POST /invoices/{id}/credit). Cancelling an already cancelled document answers it unchanged with already_cancelled=true. Idempotent. Dry-runnable.
+
+**Use when:** A quote will not go ahead (withdrawn, replaced by a new quote) or a proforma will never become an invoice, and the user wants it out of the open documents.
+**Do not use for:** Recording that the customer declined a quote (POST /invoices/{id}/quote-status with declined keeps it as a decided quote), deleting a draft invoice, or crediting an issued invoice.
+
+**Pitfalls:**
+- Only quotes and proformas: any other document answers 400 INVOICE_CANCEL_NOT_QUOTE_OR_PROFORMA with details.documentType.
+- A quote with live invoices converted from it can still be cancelled: those invoices stay as they are (credit them separately if needed), and a part not yet invoiced can no longer be invoiced from the quote (converting a cancelled quote answers INVOICE_CONVERT_SOURCE_CANCELLED).
+- A cancelled quote cannot be decided again (quote-status answers INVOICE_QUOTE_NOT_DECIDABLE): create a new quote instead.
+- A dry run of an already cancelled document answers 409 INVOICE_ALREADY_CANCELLED: there is nothing left to stage.
+- 409 INVOICE_CANCEL_RACE means the document changed between the read and the write (a conversion or another cancel): re-read it before retrying.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: {
+    id: string,
+    invoice_number: string | null,
+    document_type: "quote" | "proforma",
+    status: "cancelled",
+    quote_status: "open" | "accepted" | "declined" | null,
+    already_cancelled: boolean
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "0e9c…",
+    "invoice_number": "OF-007",
+    "document_type": "quote",
+    "status": "cancelled",
+    "quote_status": "open",
+    "already_cancelled": false
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/invoices/{id}/credit`
 
 **Issue a credit note (kreditfaktura) against an invoice.**
 `scope:invoices:write · risk:high · idempotent · dry-run`
 
-Creates and issues a credit note referencing the original invoice. The credit note mirrors the original line for line with reversed-sign amounts (the same VAT, revenue accounts, ROT/RUT and periodisering fields, and payee) and gets invoice_number=KR-<original> (a self-billed original: KR-<its external number>). Posts a reversing journal entry (Debit revenue + Debit output VAT / Credit AR 1510; on ROT/RUT Credit 1513 for Skatteverket's share and 1510 for the customer's; Debit 29xx where revenue is still deferred, and the accrual schedule stops) whenever the original sale reached the ledger: always under faktureringsmetoden, and under kontantmetoden once the original was paid or otherwise booked (status paid, a linked verifikat, a payment date, or a non-zero paid amount). Only a kontantmetod invoice carrying none of those signals is credited without an entry, because nothing has been recognised yet. The original transitions to status=credited once the entry exists. The credit note is dated today (Europe/Stockholm); a locked or closed period, or no fiscal period for today, returns 400 INVOICE_CREDIT_PERIOD_LOCKED before anything is written. Idempotent and dry-runnable. Emits credit_note.created.
+Creates and issues a credit note referencing the original invoice. The credit note mirrors the original line for line with reversed-sign amounts (the same VAT, revenue accounts, ROT/RUT and periodisering fields, and payee) and gets invoice_number=KR-<original> (a self-billed original: KR-<its external number>). Posts a reversing journal entry (Debit revenue + Debit output VAT / Credit AR 1510; on ROT/RUT Credit 1513 for Skatteverket's share and 1510 for the customer's; Debit 29xx where revenue is still deferred, and the accrual schedule stops) whenever the original sale reached the ledger: always under faktureringsmetoden, and under kontantmetoden once the original was paid or otherwise booked (status paid, a linked verifikat, a payment date, or a non-zero paid amount). Only a kontantmetod invoice carrying none of those signals is credited without an entry, because nothing has been recognised yet. Under deferred booking (defer_invoice_booking) an original that was never booked is booked first on its own invoice date, exactly as POST /invoices/{id}/book does (original_journal_entry_id), then credited; when that booking is refused the credit is refused before anything is written (400 INVOICE_CREDIT_ORIGINAL_PERIOD_LOCKED or INVOICE_CREDIT_ORIGINAL_BOOK_FAILED). The original transitions to status=credited once the entry exists. The credit note is dated today (Europe/Stockholm); a locked or closed period, or no fiscal period for today, returns 400 INVOICE_CREDIT_PERIOD_LOCKED before anything is written. Idempotent and dry-runnable. Emits credit_note.created.
 
 **Use when:** You need to legally cancel an issued invoice (ML 17 kap 22-23§). The original invoice cannot be edited once issued: credit it and reissue corrected.
 **Do not use for:** Cancelling a draft (DELETE the draft instead). Refunding a partial payment without invalidating the whole invoice (book the refund manually via the journal-entries API in a future PR).
@@ -580,6 +646,7 @@ Response `200`:
     status: "sent",
     total: number,
     journal_entry_id: string | null,
+    original_journal_entry_id?: string,
     warnings?: { code: string, message: string }[]
   },
   meta: {

@@ -84,6 +84,7 @@ function projectRow(data: unknown, columns: string | null): unknown {
 function makeFlexibleSupabase(
   byTable: Record<string, { data?: unknown; error?: unknown }>,
   inserts: InsertCapture[] = [],
+  filters: Array<{ table: string; method: string; args: unknown[] }> = [],
 ) {
   const buildChain = (table: string, columns: string | null): unknown => {
     const handler: ProxyHandler<object> = {
@@ -104,7 +105,10 @@ function makeFlexibleSupabase(
             return buildChain(table, columns)
           }
         }
-        return (..._args: unknown[]) => buildChain(table, columns)
+        return (...args: unknown[]) => {
+          filters.push({ table, method: String(prop), args })
+          return buildChain(table, columns)
+        }
       },
     }
     return new Proxy({}, handler)
@@ -281,6 +285,88 @@ describe('GET /api/v1/companies/:companyId/invoices', () => {
     expect(body.error.code).toBe('VALIDATION_ERROR')
   })
 
+  it('reports a sent invoice past its due date as overdue and one not yet due as sent (crm#1084)', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: {
+          data: [
+            SAMPLE_INVOICE,
+            { ...SAMPLE_INVOICE, id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', due_date: '2099-12-31' },
+            { ...SAMPLE_INVOICE, id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', status: 'partially_paid', remaining_amount: 100 },
+          ],
+          error: null,
+        },
+      }),
+    )
+
+    const res = await listInvoices(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices?limit=10`),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.map((row: { status: string }) => row.status)).toEqual(['overdue', 'sent', 'partially_paid'])
+    // credited_invoice_id is read by the rule, never returned.
+    expect(body.data[0].credited_invoice_id).toBeUndefined()
+  })
+
+  it('?status=overdue filters on the due date and the open remainder, not the stored status', async () => {
+    const filters: Array<{ table: string; method: string; args: unknown[] }> = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          invoices: { data: [SAMPLE_INVOICE], error: null },
+        },
+        [],
+        filters,
+      ),
+    )
+
+    const res = await listInvoices(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices?status=overdue`),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const invoiceFilters = filters.filter((f) => f.table === 'invoices').map((f) => [f.method, ...f.args])
+    expect(invoiceFilters).toContainEqual(['in', 'status', ['sent', 'overdue', 'partially_paid']])
+    expect(invoiceFilters).toContainEqual(['eq', 'document_type', 'invoice'])
+    expect(invoiceFilters).toContainEqual(['is', 'credited_invoice_id', null])
+    expect(invoiceFilters).toContainEqual(['gt', 'remaining_amount', 0])
+    expect(invoiceFilters.some((f) => f[0] === 'lt' && f[1] === 'due_date')).toBe(true)
+    expect(invoiceFilters).not.toContainEqual(['eq', 'status', 'overdue'])
+    const body = await res.json()
+    expect(body.data[0].status).toBe('overdue')
+  })
+
+  it('?status=sent leaves out invoices that are overdue by date', async () => {
+    const filters: Array<{ table: string; method: string; args: unknown[] }> = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          invoices: { data: [], error: null },
+        },
+        [],
+        filters,
+      ),
+    )
+
+    const res = await listInvoices(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices?status=sent`),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const invoiceFilters = filters.filter((f) => f.table === 'invoices').map((f) => [f.method, ...f.args])
+    expect(invoiceFilters).toContainEqual(['in', 'status', ['sent', 'overdue']])
+    const or = invoiceFilters.find((f) => f[0] === 'or')
+    expect(String(or?.[1])).toMatch(/^document_type\.neq\.invoice,credited_invoice_id\.not\.is\.null,due_date\.gte\.\d{4}-\d{2}-\d{2},remaining_amount\.lte\.0$/)
+  })
+
   it('emits a next_cursor when the page is full', async () => {
     const overFetched = [
       SAMPLE_INVOICE,
@@ -322,6 +408,8 @@ describe('GET /api/v1/companies/:companyId/invoices/:id', () => {
     const body = await res.json()
     expect(body.data.id).toBe(INVOICE_ID)
     expect(body.data.customer.name).toBe('Acme AB')
+    // Sent and past its due date with money left: reported as overdue (crm#1084).
+    expect(body.data.status).toBe('overdue')
   })
 
   it('returns 404 when the invoice does not exist for the company', async () => {

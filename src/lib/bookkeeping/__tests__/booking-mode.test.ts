@@ -5,6 +5,7 @@ import {
   invoiceBookingMoment,
   cashPartialBlockReason,
   creditNoteNeedsJournalEntry,
+  creditBooksOriginalFirst,
   supplierCreditNoteNeedsJournalEntry,
 } from '../booking-mode'
 
@@ -168,6 +169,43 @@ describe('creditNoteNeedsJournalEntry (customer side, #2552)', () => {
     expect(creditNoteNeedsJournalEntry('cash', { ...unpaid, paid_amount: null })).toBe(false)
     expect(creditNoteNeedsJournalEntry('cash', null)).toBe(false)
     expect(creditNoteNeedsJournalEntry('cash', undefined)).toBe(false)
+  })
+})
+
+describe('creditBooksOriginalFirst (accounted#45)', () => {
+  const deferred = { accounting_method: 'accrual', defer_invoice_booking: true }
+  const unbooked = { status: 'sent', journal_entry_id: null, paid_at: null, paid_amount: 0 }
+
+  it('books a sent or overdue deferred original that has no verifikat first', () => {
+    expect(creditBooksOriginalFirst(deferred, unbooked)).toBe(true)
+    expect(creditBooksOriginalFirst(deferred, { ...unbooked, status: 'overdue' })).toBe(true)
+  })
+
+  it('leaves an original that reached the ledger alone: linked, or booked by its payment', () => {
+    expect(creditBooksOriginalFirst(deferred, { ...unbooked, journal_entry_id: 'je-1' })).toBe(false)
+    expect(creditBooksOriginalFirst(deferred, { ...unbooked, status: 'paid' })).toBe(false)
+    expect(creditBooksOriginalFirst(deferred, { ...unbooked, paid_at: '2026-10-01T10:00:00Z' })).toBe(false)
+    expect(creditBooksOriginalFirst(deferred, { ...unbooked, paid_amount: 100 })).toBe(false)
+  })
+
+  it('never books first where the company books at issue: an unlinked original there was migrated or imported booked', () => {
+    expect(creditBooksOriginalFirst({ accounting_method: 'accrual', defer_invoice_booking: false }, unbooked)).toBe(false)
+    expect(creditBooksOriginalFirst({ accounting_method: 'accrual' }, unbooked)).toBe(false)
+    expect(creditBooksOriginalFirst(null, unbooked)).toBe(false)
+  })
+
+  it('never books first under kontantmetoden, defer flag or not', () => {
+    expect(creditBooksOriginalFirst({ accounting_method: 'cash', defer_invoice_booking: true }, unbooked)).toBe(false)
+    expect(creditBooksOriginalFirst({ accounting_method: 'cash' }, unbooked)).toBe(false)
+  })
+
+  it('needs an original to read', () => {
+    expect(creditBooksOriginalFirst(deferred, null)).toBe(false)
+    expect(creditBooksOriginalFirst(deferred, undefined)).toBe(false)
+  })
+
+  it('still has the credit post its own verifikat after the original is booked', () => {
+    expect(creditNoteNeedsJournalEntry('accrual', unbooked)).toBe(true)
   })
 })
 

@@ -1308,3 +1308,121 @@ describe('PUT /api/settings', () => {
     expect(status).toBe(200)
   })
 })
+
+// crm#1206: the company's own org number is writable while no valid one is
+// stored (either copy), never replaced once one is (lib/company/org-number-rule.ts).
+describe('PUT /api/settings: org number', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
+    requireWriteMock.mockResolvedValue({ ok: true })
+    isAdminMock.mockResolvedValue(true)
+  })
+
+  const put = (body: Record<string, unknown>) =>
+    PUT(createMockRequest('/api/settings', { method: 'PUT', body }), { params: Promise.resolve({}) })
+
+  it('fills in an empty org number after onboarding, on both copies, as ten digits', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true, org_number: null } }, // oldSettings
+      { data: { org_number: null, entity_type: 'aktiebolag' } },                            // companies (stored copy)
+      { data: { id: 's1', org_number: '5560125790' } },                                     // update ... returning
+      { data: null },                                                                       // companies mirror
+      { data: null, count: 5 },                                                             // deadlines count
+    ])
+
+    const response = await put({ org_number: '556012-5790' })
+    const { status, body } = await parseJsonResponse<{ data: { org_number: string } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.org_number).toBe('5560125790')
+    expect(findCall('company_settings', 'update')?.[0]).toEqual({ org_number: '5560125790' })
+    expect(findCall('companies', 'update')?.[0]).toEqual({ org_number: '5560125790' })
+  })
+
+  it('fixes a stored number with a wrong check digit', async () => {
+    enqueueMany([
+      { data: { entity_type: 'enskild_firma', onboarding_complete: true, org_number: '121212-1213' } },
+      { data: { org_number: '1212121213', entity_type: 'enskild_firma' } },
+      { data: { id: 's1', org_number: '1212121212' } },
+      { data: null },
+      { data: null, count: 5 },
+    ])
+
+    const response = await put({ org_number: '19121212-1212' })
+
+    expect(response.status).toBe(200)
+    expect(findCall('company_settings', 'update')?.[0]).toEqual({ org_number: '1212121212' })
+  })
+
+  it('refuses to replace a valid number (409) and writes nothing', async () => {
+    enqueueMany([{ data: { entity_type: 'aktiebolag', onboarding_complete: false, org_number: '556012-5790' } }])
+
+    const response = await put({ org_number: '202100-5489', city: 'Malmö' })
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error).toBe('Företaget har redan ett giltigt organisationsnummer, och det kan inte ändras.')
+    expect(findCall('company_settings', 'update')).toBeUndefined()
+    expect(findCall('companies', 'update')).toBeUndefined()
+  })
+
+  it('refuses a number with a wrong check digit (400)', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true, org_number: '' } },
+      { data: { org_number: null, entity_type: 'aktiebolag' } },
+    ])
+
+    const response = await put({ org_number: '556012-5791' })
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toMatch(/^Organisationsnumret är inte giltigt/)
+    expect(findCall('company_settings', 'update')).toBeUndefined()
+  })
+
+  it('refuses a personnummer for an aktiebolag (400)', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true, org_number: null } },
+      { data: { org_number: null, entity_type: 'aktiebolag' } },
+    ])
+
+    const response = await put({ org_number: '121212-1212' })
+
+    expect(response.status).toBe(400)
+    expect(findCall('company_settings', 'update')).toBeUndefined()
+  })
+
+  it('a save that sends the stored value back changes nothing about it, valid or not', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true, org_number: 'saknas' } },
+      { data: { id: 's1', city: 'Malmö' } },
+      { data: null, count: 5 },
+    ])
+
+    const response = await put({ org_number: 'saknas', city: 'Malmö' })
+
+    expect(response.status).toBe(200)
+    expect(findCall('company_settings', 'update')?.[0]).toEqual({ city: 'Malmö' })
+    expect(findCall('companies', 'select')).toBeUndefined()
+  })
+
+  it('returns 404 when the company has no settings row', async () => {
+    enqueueMany([
+      { data: null },                                            // oldSettings: none
+      { data: { org_number: null, entity_type: 'aktiebolag' } }, // companies
+      { data: null, error: { code: 'PGRST116', message: 'no rows' } }, // update ... single
+    ])
+
+    const response = await put({ org_number: '556012-5790' })
+
+    expect(response.status).toBe(404)
+    expect(findCall('companies', 'update')).toBeUndefined()
+  })
+
+  it('returns 400 for an org number that is not a string', async () => {
+    const response = await put({ org_number: 5560125790 })
+    expect(response.status).toBe(400)
+  })
+})

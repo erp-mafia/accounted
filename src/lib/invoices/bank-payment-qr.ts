@@ -12,16 +12,16 @@
  *   - dates as YYYYMMDD, the amount as a JSON number with a dot decimal and
  *     no insignificant digits (500.10 is 500.1, 500.00 is 500);
  *   - the account, chapter 4.1 (Sweden): "Domestic payments in Sweden are
- *     virtually always made using PG (Plusgiro) or BG (Bankgiro). [...] Only
- *     if the sender didn't provide either a PG or BG number should BBAN be
- *     used." So pt BG with the bankgiro in acc, else pt PG with the
- *     plusgiro, and only when the invoice prints neither, pt BBAN with the
- *     Swedish bank account it prints: acc is the clearing and account digits
- *     as in the spec's examples ("6000658159712"; a 5-digit Swedbank clearing
- *     as "8169-5 9139876057"), bc the bank's BIC ("HANDSESS"; pt BBAN on a
- *     domestic invoice: "bank name in BIC form in bc"), left out when it is
- *     not known (bc is optional, chapter 5). No cc and no adr: the spec asks
- *     for them only with IBAN or a foreign bank code;
+ *     virtually always made using PG (Plusgiro) or BG (Bankgiro)." So pt BG
+ *     with the bankgiro in acc, else pt PG with the plusgiro, and no code at
+ *     all when the invoice prints neither. The spec also allows pt BBAN for
+ *     a plain bank account, but a bank app scans the code into its giro
+ *     payment: Handelsbanken's app reads a Handelsbanken account written
+ *     exactly as the spec's example 2 ("6000658159712", bc HANDSESS) as a
+ *     giro number it cannot find (crm#1191), and no bank documents that its
+ *     app pays a BBAN code. A code that cannot pay is worse than none, so an
+ *     invoice with only a bank account prints the account (and IBAN) as text
+ *     and no bank-app code;
  *   - cur left out: only SEK invoices get a QR, and the spec lets a domestic
  *     invoice omit it;
  *   - idt (invoice date) included, as in the official example;
@@ -40,9 +40,8 @@
  * must not pay: credit notes (tp 2 "cannot be used by banking apps"),
  * proformas, quotes, delivery notes, paid, cancelled or credited invoices,
  * foreign-currency invoices, or a missing mandatory field. And never an
- * account a machine would read wrong: a giro or a bank account goes in only
- * when its check digit is valid (a bank account only when the bank's rule is
- * known, lib/bankgiro/account-number.ts).
+ * account a machine would read wrong: a giro goes in only when its check
+ * digit is valid.
  */
 import { formatOrgNumber } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
@@ -50,16 +49,9 @@ import {
   formatBankgiroNumber,
   formatPlusgiroNumber,
   generateOcrReference,
-  luhnCheckDigit,
   validateBankgiroNumber,
   validatePlusgiroNumber,
 } from '@/lib/bankgiro/luhn'
-import { hasSwedishAccountChecksumRule, validateSwedishAccountChecksum } from '@/lib/bankgiro/account-number'
-import {
-  lookupBicByClearing,
-  normalizeBankNumber,
-  resolveDomesticBankAccount,
-} from '@/lib/salary/payment/bank-account'
 import {
   invoicePrintsBankgiro,
   invoicePrintsPlusgiro,
@@ -78,10 +70,9 @@ export interface BankPaymentQrCompany {
   org_number?: string | null
   bankgiro?: string | null
   plusgiro?: string | null
-  /** The printed Swedish bank account (both parts print, or neither: lib/invoices/payment-rows). */
+  /** The printed Swedish bank account: only tells why there is no code (bank_account_only). */
   clearing_number?: string | null
   account_number?: string | null
-  bic?: string | null
   invoice_show_bankgiro?: boolean | null
   invoice_show_plusgiro?: boolean | null
   invoice_show_ocr?: boolean | null
@@ -121,72 +112,20 @@ export type BankPaymentQrPayeeProblem =
   | 'no_printed_giro'
   /** The printed giro has a wrong check digit. */
   | 'invalid_giro'
-  /** The printed bank account is malformed, its length does not fit its bank, or its check digit is wrong. */
-  | 'invalid_bank_account'
-  /** The printed bank account's bank has no check-digit rule we know: it cannot be verified. */
-  | 'unverified_bank_account'
+  /** No bankgiro or plusgiro prints, only a bank account: bank apps pay the code to a giro (module comment). */
+  | 'bank_account_only'
 
 export type BankPaymentQrPayee =
-  | { ok: true; pt: 'BG' | 'PG' | 'BBAN'; acc: string; bc?: string }
+  | { ok: true; pt: 'BG' | 'PG'; acc: string }
   | { ok: false; reason: BankPaymentQrPayeeProblem }
-
-/** An 8- or 11-character BIC of a Swedish bank (country code SE). */
-const SWEDISH_BIC = /^[A-Z]{4}SE[A-Z0-9]{2}([A-Z0-9]{3})?$/
-
-/**
- * The printed Swedish bank account as pt BBAN, or why it cannot be one. Only
- * an account whose check digit the bank's rule confirms: 'invalid' and
- * 'unknown' both stay out, as a machine-read account that is wrong is worse
- * than no QR.
- */
-function bankAccountPayee(company: BankPaymentQrCompany): BankPaymentQrPayee {
-  // The account row prints only with both parts (lib/invoices/payment-rows).
-  if (!company.clearing_number?.trim() || !company.account_number?.trim()) {
-    return { ok: false, reason: 'no_printed_giro' }
-  }
-  // The shape every payout format accepts (lib/salary/payment/bank-account):
-  // a 4-digit clearing or a 5-digit 8xxxx one, 5-10 account digits, or an
-  // account typed with its clearing in front, which it strips.
-  const clearing = normalizeBankNumber(company.clearing_number)
-  const resolved = resolveDomesticBankAccount(clearing, company.account_number)
-  if (!resolved.ok) return { ok: false, reason: 'invalid_bank_account' }
-  // The account without its clearing: on a 5-digit clearing the resolver
-  // carries the clearing's own check digit in front of it.
-  const account = clearing.length === 5 ? resolved.accountDigits.slice(1) : resolved.accountDigits
-  const checksum = validateSwedishAccountChecksum(clearing, account)
-  if (checksum === 'invalid') return { ok: false, reason: 'invalid_bank_account' }
-  // 'unknown' is either a bank without a rule here (cannot be verified) or an
-  // account too long or short for its bank's rule (a wrong number).
-  if (checksum === 'unknown') {
-    return {
-      ok: false,
-      reason: hasSwedishAccountChecksumRule(clearing) ? 'invalid_bank_account' : 'unverified_bank_account',
-    }
-  }
-
-  // acc in the forms the spec shows. Swedbank and the savings banks (8xxxx)
-  // as "8169-5 9139876057": the fifth clearing digit is the mod 10 check
-  // digit of the first four, so a clearing stored without it gets it here
-  // and the bank app cannot read the clearing's last digit as the account's
-  // first. Every other bank as one run of digits, "6000658159712".
-  const clearing4 = resolved.clearing4
-  const acc = clearing4.startsWith('8')
-    ? `${clearing4}-${clearing.length === 5 ? clearing[4] : luhnCheckDigit(clearing4)} ${account}`
-    : `${clearing4}${account}`
-  // bc names the bank of the clearing in acc: the clearing table's BIC, or
-  // the payee's own stored BIC when the table does not know the clearing
-  // (a Swedish one only: a foreign BIC cannot name a Swedish account's bank).
-  const storedBic = company.bic?.replace(/\s/g, '').toUpperCase() ?? ''
-  const bc = lookupBicByClearing(clearing4) ?? (SWEDISH_BIC.test(storedBic) ? storedBic : null)
-  return { ok: true, pt: 'BBAN', acc, ...(bc ? { bc } : {}) }
-}
 
 /**
  * The one account the QR pays to (chapter 4.1). The format carries a single
- * payment method: a printed bankgiro first, then a printed plusgiro, and a
- * printed bank account only when the invoice prints no giro at all. A giro
+ * payment method: a printed bankgiro first, then a printed plusgiro. A giro
  * the invoice prints with a wrong check digit gives no QR rather than a
- * code that quietly pays elsewhere: the page tells the payer to use it.
+ * code that quietly pays elsewhere: the page tells the payer to use it. A
+ * printed bank account alone gives no QR either (see the module comment),
+ * with its own reason so the editor can say the account still prints.
  */
 export function bankPaymentQrPayee(company: BankPaymentQrCompany): BankPaymentQrPayee {
   const printsBankgiro = invoicePrintsBankgiro(company)
@@ -200,7 +139,9 @@ export function bankPaymentQrPayee(company: BankPaymentQrCompany): BankPaymentQr
     return { ok: true, pt: 'PG', acc: formatPlusgiroNumber(plusgiro) }
   }
   if (printsBankgiro || printsPlusgiro) return { ok: false, reason: 'invalid_giro' }
-  return bankAccountPayee(company)
+  // The account row prints only with both parts (lib/invoices/payment-rows).
+  const printsBankAccount = !!company.clearing_number?.trim() && !!company.account_number?.trim()
+  return { ok: false, reason: printsBankAccount ? 'bank_account_only' : 'no_printed_giro' }
 }
 
 /** JSON with every character outside printable ASCII as a \u escape (see the module comment). */
@@ -250,7 +191,6 @@ export function buildBankPaymentQrPayload({ company, invoice, amountDue, lang }:
     due,
     pt: account.pt,
     acc: account.acc,
-    ...(account.bc ? { bc: account.bc } : {}),
   })
 }
 

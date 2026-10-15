@@ -100,29 +100,21 @@ describe('resolveInvoicePaymentQr: auto', () => {
     expect(resolve({ company: { bankgiro: null } }).kind).toBe('swish')
   })
 
-  it('gives a business with only a bank account the bank-app code, paying to that account (pt BBAN)', () => {
+  it('never gives a company with only a bank account the bank-app code: Swish, the link, else none (crm#1191)', () => {
     const onlyBankAccount = { bankgiro: null, swish: null, clearing_number: '6000', account_number: '658159712' }
-    const qr = resolve({ company: onlyBankAccount })
-    expect(qr).toMatchObject({ kind: 'bank_app', mode: 'auto', amount: 12500, caption: 'Skanna med din bankapp' })
-    const payload = qr.kind === 'bank_app' ? (JSON.parse(qr.payload) as Record<string, unknown>) : null
-    expect(payload).toMatchObject({ pt: 'BBAN', acc: '6000658159712', bc: 'HANDSESS', iref: '10234', due: 12500 })
-    // Ahead of Swish for a business, as a giro would be.
-    expect(resolve({ company: { ...onlyBankAccount, swish: '1234567890' } }).kind).toBe('bank_app')
-    // Swish first for a private person; the bank-app code when Swish is hidden.
-    expect(resolve({ company: { ...onlyBankAccount, swish: '1234567890' }, customer: privatePerson }).kind).toBe('swish')
-    expect(resolve({ company: onlyBankAccount, customer: privatePerson }).kind).toBe('bank_app')
-  })
-
-  it('reports the bank account\'s problem when it is the only account and nothing else prints a code', () => {
-    expect(resolve({ company: { bankgiro: null, swish: null, clearing_number: '6000', account_number: '658159713' } })).toEqual({
+    expect(resolve({ company: onlyBankAccount })).toEqual({ kind: null, mode: 'auto', reason: 'bank_account_only' })
+    expect(resolve({ company: onlyBankAccount, customer: privatePerson })).toEqual({
       kind: null,
       mode: 'auto',
-      reason: 'invalid_bank_account',
+      reason: 'bank_account_only',
     })
-    expect(resolve({ company: { bankgiro: null, swish: null, clearing_number: '9020', account_number: '1234567' } })).toEqual({
-      kind: null,
-      mode: 'auto',
-      reason: 'unverified_bank_account',
+    // Swish prints instead, for a business and a private person alike.
+    expect(resolve({ company: { ...onlyBankAccount, swish: '1234567890' } }).kind).toBe('swish')
+    expect(resolve({ company: { ...onlyBankAccount, swish: '1234567890' }, customer: privatePerson }).kind).toBe('swish')
+    // Then the payment link.
+    expect(resolve({ company: onlyBankAccount, invoice: { payment_link_url: LINK } })).toMatchObject({
+      kind: 'payment_link',
+      payload: LINK,
     })
   })
 
@@ -250,14 +242,9 @@ describe('resolveInvoicePaymentQr: an explicit mode never falls back', () => {
     expect(bankApp({ bankgiro: '5050-1056', clearing_number: '6000', account_number: '658159712' })).toMatchObject({
       reason: 'invalid_giro',
     })
-    expect(bankApp({ bankgiro: null, clearing_number: '6000', account_number: '658159713' })).toMatchObject({
-      reason: 'invalid_bank_account',
-    })
-    expect(bankApp({ bankgiro: null, clearing_number: '9020', account_number: '1234567' })).toMatchObject({
-      reason: 'unverified_bank_account',
-    })
-    expect(bankApp({ bankgiro: null, clearing_number: '6000', account_number: '658159712', org_number: null })).toMatchObject({
-      reason: 'no_org_number',
+    expect(bankApp({ bankgiro: null, clearing_number: '6000', account_number: '658159712' })).toMatchObject({
+      kind: null,
+      reason: 'bank_account_only',
     })
     expect(bankApp({ org_number: null })).toMatchObject({ reason: 'no_org_number' })
     expect(bankApp({}, { invoice_number: null, status: 'draft' })).toMatchObject({ reason: 'no_invoice_number' })
@@ -265,15 +252,14 @@ describe('resolveInvoicePaymentQr: an explicit mode never falls back', () => {
     expect(bankApp({ company_name: '' })).toMatchObject({ reason: 'incomplete_details' })
   })
 
-  it('bank_app pays to the printed bank account when no giro prints, and to the giro when one does', () => {
+  it('bank_app pays to the giro when one prints beside a bank account, and prints none for the account alone', () => {
     const account = { clearing_number: '8169-5', account_number: '9139876057' }
-    const pt = (companyOverrides: Partial<CompanySettings>) => {
-      const qr = resolve({ invoice: withMode('bank_app'), company: { ...account, ...companyOverrides } })
-      return qr.kind ? (JSON.parse(qr.payload) as { pt: string; acc: string }) : null
-    }
-    expect(pt({ bankgiro: null })).toMatchObject({ pt: 'BBAN', acc: '8169-5 9139876057' })
-    expect(pt({ invoice_show_bankgiro: false })).toMatchObject({ pt: 'BBAN' })
-    expect(pt({})).toMatchObject({ pt: 'BG', acc: '5050-1055' })
+    const qr = (companyOverrides: Partial<CompanySettings>) =>
+      resolve({ invoice: withMode('bank_app'), company: { ...account, ...companyOverrides } })
+    const withGiro = qr({})
+    expect(withGiro.kind && JSON.parse(withGiro.payload)).toMatchObject({ pt: 'BG', acc: '5050-1055' })
+    expect(qr({ bankgiro: null })).toEqual({ kind: null, mode: 'bank_app', reason: 'bank_account_only' })
+    expect(qr({ invoice_show_bankgiro: false })).toEqual({ kind: null, mode: 'bank_app', reason: 'bank_account_only' })
   })
 
   it('bank_app pays to a printed plusgiro when the bankgiro is hidden', () => {

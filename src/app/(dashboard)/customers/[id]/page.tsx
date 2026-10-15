@@ -30,7 +30,8 @@ import { PartyFactsSection } from '@/components/parties/PartyFactsSection'
 import { CustomerCollectionsExclusion } from '@/components/collections/CustomerCollectionsExclusion'
 import { usePartyDossier } from '@/components/parties/use-party-dossier'
 import { fromRegistry, addressRowsFromRegistry, listSv } from '@/lib/parties/registry-summary'
-import { invoiceStatusDisplay } from '@/lib/invoices/status-display'
+import { invoiceRowStatus } from '@/lib/invoices/status-display'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 
 const CUSTOMER_TYPE_KEY: Record<CustomerType, string> = {
@@ -54,6 +55,13 @@ interface RelatedInvoice {
   status: InvoiceStatus
   total: number
   currency: string
+  remaining_amount: number | null
+  paid_at: string | null
+  document_type: string | null
+  credited_invoice_id: string | null
+  is_self_billed: boolean | null
+  quote_status: string | null
+  valid_until: string | null
 }
 
 interface CustomerWithRelations extends Customer {
@@ -72,6 +80,8 @@ export default function CustomerDetailPage({
   const t = useTranslations('customer_detail')
   const tParties = useTranslations('parties')
   const tInvoices = useTranslations('invoices')
+  // The Swedish calendar day the invoices' overdue line reads (lib/invoices/overdue.ts).
+  const today = todayIsoStockholm()
   const errorLocale = useLocale() as ErrorLocale
   const [customer, setCustomer] = useState<CustomerWithRelations | null>(null)
   const partyId = customer && customer.customer_type !== 'individual' ? ((customer as { party_id?: string | null }).party_id ?? null) : null
@@ -425,9 +435,14 @@ export default function CustomerDetailPage({
         {customer.invoices?.length > 0 ? (
           <div className="divide-y divide-border">
             {customer.invoices.map((invoice) => {
-              // The same status as the invoice list (lib/invoices/status-display.ts).
-              const statusDisplay = invoiceStatusDisplay(invoice.status)
-              const statusLabel = statusDisplay ? tInvoices(statusDisplay.labelKey) : invoice.status
+              // The same status line as the invoice list (lib/invoices/status-display.ts):
+              // overdue follows the due date, a credit note and an unsent number say so.
+              const statusDisplay = invoiceRowStatus(invoice, today)
+              const statusValues =
+                statusDisplay.values && 'date' in statusDisplay.values
+                  ? { date: formatDate(statusDisplay.values.date) }
+                  : statusDisplay.values
+              const statusLabel = statusDisplay.labelKey ? tInvoices(statusDisplay.labelKey, statusValues) : invoice.status
               return (
                 <Link
                   key={invoice.id}
@@ -449,7 +464,7 @@ export default function CustomerDetailPage({
                     {formatCurrency(invoice.total, invoice.currency)}
                   </span>
                   {/* Chips mark exceptions: sent and paid render as muted text. */}
-                  {statusDisplay?.chip ? (
+                  {statusDisplay.chip ? (
                     <Badge variant={statusDisplay.chip}>{statusLabel}</Badge>
                   ) : (
                     <span className="min-w-14 text-right text-xs text-muted-foreground">{statusLabel}</span>
