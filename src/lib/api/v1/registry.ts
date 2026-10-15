@@ -20,6 +20,8 @@ import { z } from 'zod'
 import type { ZodTypeAny } from 'zod'
 import type { V1RequiredScope } from '@/lib/auth/scopes'
 import { PendingOperationView } from '@/lib/pending-operations/view'
+import { MODULES, type ModuleId } from '@/lib/modules/manifest'
+import { getModule, moduleForV1Path } from '@/lib/modules/resolve'
 import { API_V1_VERSION } from './version'
 
 /**
@@ -129,6 +131,14 @@ export interface EndpointDefinition {
   operation: string
   method: HttpMethod
   path: string
+
+  /**
+   * The module (lib/modules/manifest.ts) the endpoint belongs to, published
+   * as its OpenAPI tag and `x-module`. v1OperationHandler sets it from the
+   * operation id; a hand-written route leaves it out and resolves from its
+   * path (see endpointModule).
+   */
+  module?: ModuleId
 
   /** One-sentence summary; first sentence of the OpenAPI description. */
   summary: string
@@ -263,6 +273,16 @@ export function getEndpointForOperation(operation: string, method: string): Endp
 
 export function listEndpoints(): EndpointDefinition[] {
   return Array.from(ENDPOINTS.values())
+}
+
+/**
+ * The module an endpoint belongs to: the one it declares (an operation-backed
+ * endpoint carries its operation's module), else the one that claims its
+ * path. Undefined only for a path no module claims, which the module
+ * coverage test (lib/modules/__tests__) fails on.
+ */
+export function endpointModule(def: Pick<EndpointDefinition, 'module' | 'path'>): ModuleId | undefined {
+  return def.module ?? moduleForV1Path(def.path)
 }
 
 
@@ -457,12 +477,20 @@ function convertZod(schema: ZodTypeAny): JsonSchema {
 // OpenAPI 3.1 spec generation
 // ──────────────────────────────────────────────────────────────────
 
+interface OpenApiTag {
+  name: string
+  description: string
+  'x-display-name': string
+  'x-experimental': true
+}
+
 interface OpenApiSpec {
   openapi: '3.1.0'
   info: { title: string; version: string; description: string }
   servers: Array<{ url: string }>
   components: { schemas: Record<string, unknown>; securitySchemes: Record<string, unknown> }
   security: Array<Record<string, unknown[]>>
+  tags: OpenApiTag[]
   paths: Record<string, Record<string, unknown>>
 }
 
@@ -518,8 +546,16 @@ export function queryParameters(def: EndpointDefinition): QueryParameter[] {
 
 export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
   const paths: OpenApiSpec['paths'] = {}
+  const usedModules = new Set<ModuleId>()
 
   for (const def of ENDPOINTS.values()) {
+    // The building block the endpoint belongs to (lib/modules/manifest.ts):
+    // one tag per operation, so a client or an agent can take the API one
+    // module at a time.
+    const moduleId = endpointModule(def)
+    const mod = moduleId ? getModule(moduleId) : undefined
+    if (mod) usedModules.add(mod.id)
+
     // OpenAPI path syntax: {param} instead of :param.
     const openApiPath = def.path.replace(/:([^/]+)/g, '{$1}')
 
@@ -616,6 +652,7 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
 
     const operationDef: Record<string, unknown> = {
       operationId: def.operation,
+      ...(mod ? { tags: [mod.id] } : {}),
       summary: def.summary,
       description: [
         def.description,
@@ -630,6 +667,7 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
       'x-dry-run-supported': def.dryRunSupported,
       ...(def.stageSupported ? { 'x-stage-supported': true } : {}),
       ...(def.previewTokenSupported ? { 'x-preview-token-supported': true } : {}),
+      ...(mod ? { 'x-module': mod.id } : {}),
       // 'authenticated' is not a scope: such an endpoint carries the global
       // bearer requirement and no x-required-scope.
       ...(def.scope && def.scope !== 'authenticated' ? { 'x-required-scope': def.scope } : {}),
@@ -677,6 +715,15 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
       },
     },
     security: [{ [SCHEME_NAME]: [] }],
+    // One tag per module that has an endpoint, in manifest order (kernels first).
+    // Experimental until the per-company module switch settles the module
+    // boundaries: ids may still be split or renamed until then.
+    tags: MODULES.filter((m) => usedModules.has(m.id)).map((m) => ({
+      name: m.id,
+      description: m.summary,
+      'x-display-name': m.name,
+      'x-experimental': true as const,
+    })),
     paths,
   }
 }

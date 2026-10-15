@@ -39,6 +39,7 @@ import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1, type ApiV1Context } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
+import { moduleForOperationId } from '@/lib/modules/resolve'
 import { toPendingOperationView } from '@/lib/pending-operations/view'
 import { operationPreviewToken, previewStaleFailure } from './preview-token'
 import { stageOperation } from './stage'
@@ -79,6 +80,7 @@ export function v1OperationHandler(op: AnyOperation) {
     operation: op.id,
     method: http.method,
     path: http.path,
+    module: moduleForOperationId(op.id),
     summary: op.docs.summary,
     description: op.docs.description,
     useWhen: op.docs.useWhen,
