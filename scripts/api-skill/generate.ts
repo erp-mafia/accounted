@@ -162,6 +162,16 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
       'proposed and posted per fiscal period through the year-end flow.',
   },
   {
+    file: 'pending-operations.md',
+    title: 'Pending operations (approvals)',
+    members: ['pending-operations'],
+    blurb:
+      'The approval door for staged writes: a write sent with `?stage=true` (or staged by an agent over MCP) ' +
+      'waits here as a pending operation until it is approved (committed, answering the outcome) or rejected. ' +
+      'Each one carries `status` and `task_state` (working, completed, failed, cancelled), so an attest flow ' +
+      'built outside Accounted follows it like any other task. Approving twice never commits twice.',
+  },
+  {
     file: 'webhooks.md',
     title: 'Webhooks',
     members: ['webhooks', 'webhook-deliveries'],

@@ -59,6 +59,7 @@ import { PATCH as setNote } from '../[id]/notes/route'
 import { POST as setNoDoc, DELETE as clearNoDoc } from '../[id]/no-document-required/route'
 import { POST as batchNoDoc } from '../no-document-required/route'
 import { GET as rattelseLog } from '../[id]/rattelse-log/route'
+import { isIdempotencyClaim } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -108,7 +109,7 @@ const BOOKS = new Set([
   'chart_of_accounts',
 ])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || c.table === 'rpc')
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || (c.table === 'rpc' && !isIdempotencyClaim(c)))
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const ENTRY_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'

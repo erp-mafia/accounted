@@ -8,7 +8,7 @@
  * a dry run that previews the real generator's lines and writes nothing.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { makeSupplierInvoice } from '@/tests/helpers'
+import { makeSupplierInvoice, isIdempotencyClaim } from '@/tests/helpers'
 
 beforeAll(() => {
   if (process.env.NODE_ENV !== 'test') throw new Error('NODE_ENV=test required')
@@ -95,7 +95,7 @@ function makeClient(byTable: Record<string, TableResp | TableResp[]>) {
 const WRITES = new Set(['insert', 'update', 'upsert', 'delete'])
 const BOOKS = new Set(['supplier_invoices', 'journal_entries', 'journal_entry_lines', 'document_attachments'])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || c.method === 'rpc')
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || (c.method === 'rpc' && !isIdempotencyClaim(c)))
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const SI_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'

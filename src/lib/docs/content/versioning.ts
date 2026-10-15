@@ -64,14 +64,15 @@ What does NOT count as a breaking change:
 
 ## Idempotency
 
-Every state-changing endpoint (POST, PATCH, DELETE) accepts an \`Idempotency-Key\` header. The key is treated as an opaque string (a UUID is recommended, but any unique value works); the server caches the response keyed by \`(user_id, company_id, idempotency_key)\` for 24 hours. The canonical hash of the request body is stored alongside and compared on replay: same key + same body returns the cached response, same key + different body returns \`409 IDEMPOTENCY_KEY_REUSE\`.
+Every state-changing endpoint (POST, PATCH, DELETE) accepts an \`Idempotency-Key\` header. The key is treated as an opaque string (a UUID is recommended, but any unique value works); the server claims it before the write runs and caches the response keyed by \`(user_id, company_id, idempotency_key)\` for 24 hours. The canonical hash of the request body is stored alongside and compared on replay: same key + same body returns the cached response, same key + different body returns \`409 IDEMPOTENCY_KEY_REUSE\`, and same key + same body while the first request is still running returns \`409 IDEMPOTENCY_KEY_IN_PROGRESS\`.
 
 ### How it works
 
 - **First call with a fresh key** → executes normally; response is cached.
 - **Replay with the same key + same body** → returns the cached response with \`Idempotent-Replayed: true\` header. The original side effects are NOT re-executed.
 - **Replay with the same key + different body** → returns \`409 IDEMPOTENCY_KEY_REUSE\`. This indicates the key was reused incorrectly.
-- **Two concurrent requests with the same key** → the cache lookup takes no lock, so both may execute; the response write is best-effort (the first writer wins, the loser hits the unique-index conflict and skips). Idempotency de-duplicates *sequential* retries reliably; serialise concurrent retries of the same action on your side.
+- **A repeat with the same key + same body while the first request is still running** → returns \`409 IDEMPOTENCY_KEY_IN_PROGRESS\` with a \`Retry-After\` header (seconds) and runs nothing. The key is claimed atomically before the write starts, so two requests with one key never run at the same time. Wait \`Retry-After\` seconds and send the identical request again with the same key; once the first request has finished it returns that request's response with \`Idempotent-Replayed: true\`. Do not switch to a fresh key: that would run the write a second time.
+- **A failed request** (a 5xx or 429 response) caches nothing and gives the key back, so a retry with the same key runs again. A request killed before it could answer (a platform timeout) frees its key after 15 minutes; until then a repeat answers \`409 IDEMPOTENCY_KEY_IN_PROGRESS\`.
 
 ### Required vs supported
 
@@ -121,6 +122,21 @@ Use dry-run to:
 - **Probe period-lock** on a date before scheduling work.
 
 Dry-run **does not** call external providers (VIES VAT validation, BankID, Skatteverket submission). Those run only on commit.
+
+---
+
+## Stage for approval
+
+The writes an agent stages over MCP (\`x-stage-supported: true\` in the OpenAPI spec) accept \`?stage=true\`. The endpoint runs its dry-run checks, stores the write as a **pending operation** and answers **HTTP 202** with it: nothing is committed. It commits when someone approves it, over \`POST /api/v1/companies/{companyId}/pending-operations/{id}/approve\` (scope \`pending_operations:approve\`), the MCP approve tool or the app; \`.../reject\` discards it. An attest flow built outside Accounted polls \`GET .../pending-operations/{id}\` until \`task_state\` is terminal:
+
+| status | task_state |
+|---|---|
+| pending, committing | working |
+| committed | completed |
+| failed_partial, or rejected by the commit | failed |
+| rejected by a person, expired or superseded | cancelled |
+
+\`stage=true\` on an endpoint without \`x-stage-supported\` answers \`400 STAGE_NOT_SUPPORTED\`, and a value other than \`true\` or \`false\` is \`400\`, so a misspelt flag never commits. With \`dry_run=true\` or a test key the staging is previewed and nothing is stored. A staged request and a commit of the same body are different requests to the idempotency layer: reusing one's \`Idempotency-Key\` for the other answers \`409 IDEMPOTENCY_KEY_REUSE\`.
 
 ---
 

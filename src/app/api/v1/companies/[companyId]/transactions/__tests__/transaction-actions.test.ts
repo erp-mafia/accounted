@@ -72,6 +72,7 @@ import { POST as refreshRate } from '../[id]/refresh-exchange-rate/route'
 import { POST as linkJe } from '../[id]/link-journal-entry/route'
 import { POST as matchBatch } from '../[id]/match-batch/route'
 import { POST as bulkBook } from '../bulk-book/route'
+import { isIdempotencyClaim, routeRpcCalls } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -115,7 +116,7 @@ function makeClient(byTable: Record<string, TableResp | TableResp[]>) {
 const WRITES = new Set(['insert', 'update', 'upsert', 'delete'])
 const BOOKS = new Set(['transactions', 'invoices', 'invoice_payments', 'cash_accounts', 'journal_entries'])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || c.method === 'rpc')
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || (c.method === 'rpc' && !isIdempotencyClaim(c)))
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const TX_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -515,7 +516,7 @@ describe('POST /transactions/:id/match-batch', () => {
     const client = makeClient({ company_members: OWNER, invoices: { data: [{ id: INV_ID, document_type: 'proforma' }], error: null } })
     mockServiceClient.mockReturnValue(client)
     expect((await (await post({ allocations })).json()).error.code).toBe('MATCH_INVOICE_NOT_INVOICE_TYPE')
-    expect(client.rpc).not.toHaveBeenCalled()
+    expect(routeRpcCalls(client.rpc)).toEqual([])
   })
 
   it('409 BATCH_TX_POSSIBLE_DUPLICATE when posted vouchers already explain the row', async () => {
@@ -525,7 +526,7 @@ describe('POST /transactions/:id/match-batch', () => {
     const res = await post({ allocations })
     expect(res.status).toBe(409)
     expect((await res.json()).error.code).toBe('BATCH_TX_POSSIBLE_DUPLICATE')
-    expect(client.rpc).not.toHaveBeenCalled()
+    expect(routeRpcCalls(client.rpc)).toEqual([])
   })
 
   it('404 BATCH_TX_NOT_FOUND on a dry run for a row outside the company', async () => {
@@ -548,7 +549,7 @@ describe('POST /transactions/:id/match-batch', () => {
     expect(preview).toMatchObject({ total_allocated: 1250, allocations_count: 2, expected_lines_balanced: true })
     expect(preview.expected_lines.length).toBeGreaterThan(0)
     expect(wrote(client)).toBe(false)
-    expect(client.rpc).not.toHaveBeenCalled()
+    expect(routeRpcCalls(client.rpc)).toEqual([])
     expect(eventBus.emit).not.toHaveBeenCalled()
   })
 
@@ -661,7 +662,7 @@ describe('POST /transactions/bulk-book', () => {
     mockServiceClient.mockReturnValue(client)
     const res = await post({ tx_ids: [TX_ID, TX2_ID], template_id: JE_ID, mode: 'sum_per_account', entry_description: 'x' })
     expect((await res.json()).error.code).toBe('BULK_BOOK_TEMPLATE_NOT_FOUND')
-    expect(client.rpc).not.toHaveBeenCalled()
+    expect(routeRpcCalls(client.rpc)).toEqual([])
   })
 
   it('409 TRANSACTION_BOOK_POSSIBLE_DUPLICATE names the flagged row', async () => {

@@ -155,6 +155,7 @@ describe('POST /api/v1/webhook-deliveries/:id/retry', () => {
     mock.supabase.from = vi.fn((table: string) =>
       table === 'idempotency_keys' ? (idempotency.table() as never) : tableFrom(table),
     ) as typeof tableFrom
+    ;(mock.supabase as unknown as { rpc: typeof idempotency.rpc }).rpc = idempotency.rpc
     mockServiceClient.mockReturnValue(mock.supabase)
 
     const call = () =>
@@ -178,6 +179,41 @@ describe('POST /api/v1/webhook-deliveries/:id/retry', () => {
     expect(mock.payloads('webhook_deliveries', 'insert')).toHaveLength(1)
     expect(idempotency.rows).toHaveLength(1)
     expect(idempotency.rows[0]).toMatchObject({ company_id: COMPANY_ID, key: 'retry-once', scope: 'api_route' })
+  })
+
+  it('stores no refusal under the key: a retry after the delivery became retryable is judged again', async () => {
+    const idempotency = createIdempotencyKeysFake()
+    const mock = createTableMockSupabase({
+      webhook_deliveries: [
+        { data: { ...DEAD_DELIVERY, status: 'pending' }, error: null }, // first call: not retryable yet
+        { data: DEAD_DELIVERY, error: null }, // second call: lookup
+        { data: { id: NEW_DELIVERY_ID }, error: null }, // second call: insert
+      ],
+      company_members: { data: { company_id: COMPANY_ID }, error: null },
+      webhooks: { data: ACTIVE_WEBHOOK, error: null },
+    })
+    const tableFrom = mock.supabase.from
+    mock.supabase.from = vi.fn((table: string) =>
+      table === 'idempotency_keys' ? (idempotency.table() as never) : tableFrom(table),
+    ) as typeof tableFrom
+    ;(mock.supabase as unknown as { rpc: typeof idempotency.rpc }).rpc = idempotency.rpc
+    mockServiceClient.mockReturnValue(mock.supabase)
+
+    const call = () =>
+      retryDelivery(
+        makeRequest(`https://x.test/api/v1/webhook-deliveries/${DELIVERY_ID}/retry`, {
+          method: 'POST',
+          headers: { 'Idempotency-Key': 'retry-later' },
+        }),
+        idParams(DELIVERY_ID),
+      )
+
+    expect((await call()).status).toBe(400)
+    expect(idempotency.rows).toHaveLength(0)
+    const second = await call()
+    expect(second.status).toBe(200)
+    expect(second.headers.get('Idempotent-Replayed')).toBeNull()
+    expect(idempotency.rows[0]).toMatchObject({ key: 'retry-later', state: 'completed' })
   })
 
   it('requires payroll:read for salary_run.* / agi.* retries (elevated-scope gate)', async () => {

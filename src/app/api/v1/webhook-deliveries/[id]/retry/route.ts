@@ -23,8 +23,8 @@
 import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
-import { v1IdempotentReplay, v1RequestHash, withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { checkIdempotencyKey, IdempotencyKeyReuseError, storeIdempotencyResponse } from '@/lib/api/idempotency'
+import { type ApiV1Context, claimV1IdempotencyKey, v1RequestHash, withApiV1 } from '@/lib/api/v1/with-api-v1'
+import type { IdempotencyClaim } from '@/lib/api/idempotency'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { kickWebhookDispatch } from '@/lib/webhooks/dispatch-kick'
 import { minimisePayload } from '@/lib/webhooks/handler'
@@ -73,6 +73,17 @@ registerEndpoint({
   },
 })
 
+type OriginalDelivery = {
+  id: string
+  webhook_id: string
+  company_id: string
+  event_type: string
+  payload: Record<string, unknown>
+  previous_attributes: Record<string, unknown> | null
+  api_version: string
+  status: 'pending' | 'in_flight' | 'delivered' | 'failed' | 'dead'
+}
+
 export const POST = withApiV1<{ params: Promise<{ id: string }> }>(
   'webhook_deliveries.retry',
   async (request, ctx, params) => {
@@ -88,17 +99,7 @@ export const POST = withApiV1<{ params: Promise<{ id: string }> }>(
     if (lookupErr) return v1ErrorResponse(lookupErr, ctx.log, { requestId: ctx.requestId })
     if (!original) return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, { requestId: ctx.requestId })
 
-    type O = {
-      id: string
-      webhook_id: string
-      company_id: string
-      event_type: string
-      payload: Record<string, unknown>
-      previous_attributes: Record<string, unknown> | null
-      api_version: string
-      status: 'pending' | 'in_flight' | 'delivered' | 'failed' | 'dead'
-    }
-    const o = original as O
+    const o = original as OriginalDelivery
 
     // Tenancy check: the wrapper does not have a companyId from the URL
     // here (deliberate; see file header), so run its company gate on the
@@ -107,172 +108,183 @@ export const POST = withApiV1<{ params: Promise<{ id: string }> }>(
     const denied = await ctx.checkCompanyAccess(o.company_id)
     if (denied) return denied
 
-    // Idempotency-Key replay. The wrapper's cache is keyed by the URL
-    // :companyId, which this route does not have, so it replays here, keyed
-    // by the delivery's company once the gate above has passed. Each retry
-    // inserts a NEW delivery row with its own X-Gnubok-Delivery id, so a
-    // repeated call is a second delivery the receiver cannot tell apart; a
-    // repeat with the same key answers the first retry's delivery instead.
+    // Idempotency-Key. The wrapper's claim is keyed by the URL :companyId,
+    // which this route does not have, so it claims here, keyed by the
+    // delivery's company once the gate above has passed. Each retry inserts
+    // a NEW delivery row with its own X-Gnubok-Delivery id, so a repeated
+    // call is a second delivery the receiver cannot tell apart; a repeat
+    // with the same key answers the first retry's delivery instead, and one
+    // sent while the first still runs answers 409 IDEMPOTENCY_KEY_IN_PROGRESS.
     // The route takes no body, so the hash is method + path.
     const idempotencyKey = ctx.idempotencyKey
-    const requestHash = v1RequestHash(request, null, false)
+    let claim: IdempotencyClaim | null = null
     if (idempotencyKey) {
-      try {
-        const hit = await checkIdempotencyKey(ctx.supabase, ctx.userId, o.company_id, idempotencyKey, requestHash)
-        if (hit) {
-          ctx.log.info('idempotent replay', { idempotencyKey })
-          return v1IdempotentReplay(hit, ctx.requestId)
-        }
-      } catch (err) {
-        if (!(err instanceof IdempotencyKeyReuseError)) throw err
-        return v1ErrorResponseFromCode('IDEMPOTENCY_KEY_REUSE', ctx.log, {
-          requestId: ctx.requestId,
-          details: { key: idempotencyKey },
-        })
-      }
-    }
-
-    if (o.status !== 'dead' && o.status !== 'delivered') {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          field: 'status',
-          message: `Only dead or delivered deliveries can be retried (current: ${o.status}).`,
-        },
-      })
-    }
-
-    // Mirror the create-route elevated-scope gate. A key with only
-    // webhooks:manage must NOT be able to re-emit a salary_run.* / agi.*
-    // payload: those carry personnummer, lönesummor, skatteavdrag, and
-    // the original create call required webhooks:manage AND payroll:read.
-    // Retry checks the SAME pair against the CALLING key's scopes (which
-    // may differ from the key that created the webhook in the first place).
-    const PAYROLL_SENSITIVE = /^(salary_run\.|agi\.)/
-    if (PAYROLL_SENSITIVE.test(o.event_type) && !hasScope(ctx.scopes, 'payroll:read')) {
-      return v1ErrorResponseFromCode('INSUFFICIENT_SCOPE', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          required_scope: 'payroll:read',
-          reason: `Retrying ${o.event_type} requires payroll:read in addition to webhooks:manage.`,
-        },
-      })
-    }
-
-    // Re-verify that the parent webhook still exists, still belongs to the
-    // delivery's company, and is still active immediately before INSERT.
-    // Closes the TOCTOU window between the membership check above and the
-    // INSERT: without this a webhook deleted in between would have its
-    // retry land in webhook_deliveries with a now-dangling webhook_id, and
-    // a webhook re-registered to a different company in between would let
-    // the caller redeliver an event to a webhook they never created.
-    const { data: webhook, error: webhookErr } = await ctx.supabase
-      .from('webhooks')
-      .select('id, webhook_url, active, disabled_at, verified_at, verification_grace_ends_at')
-      .eq('id', o.webhook_id)
-      .eq('company_id', o.company_id)
-      .maybeSingle()
-
-    if (webhookErr) return v1ErrorResponse(webhookErr, ctx.log, { requestId: ctx.requestId })
-    if (!webhook) {
-      // The original webhook no longer exists or is no longer in this
-      // company. There's nothing to redeliver to. 404, not VALIDATION_ERROR:
-      // the resource the caller targeted is genuinely gone.
-      return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, { requestId: ctx.requestId })
-    }
-    const w = webhook as {
-      id: string
-      webhook_url: string
-      active: boolean
-      disabled_at: string | null
-      verified_at: string | null
-      verification_grace_ends_at: string | null
-    }
-    if (!w.active || w.disabled_at) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { field: 'webhook.active', message: 'Webhook is disabled: re-enable before retrying.' },
-      })
-    }
-
-    // Ownership gate (ADA CASA 7.1.2): a replay is a delivery, so it needs a
-    // verified endpoint (or one still inside its legacy grace window).
-    if (!verificationAllowsDelivery(w)) {
-      return v1ErrorResponseFromCode('WEBHOOK_NOT_VERIFIED', ctx.log, {
-        requestId: ctx.requestId,
-        details: { verification_status: webhookVerificationStatus(w) },
-      })
-    }
-
-    // Re-run the SSRF guard against the webhook's CURRENT url. The URL
-    // may have changed via PATCH between the original delivery and this
-    // retry call. The dispatch-time guard would catch a malicious URL
-    // eventually, but allowing the INSERT first means a poisoned row
-    // sits in the queue until the next cron tick. Validating here closes
-    // the window: the retry refuses up-front and the audit trail gets
-    // a clean VALIDATION_ERROR rather than a deferred dispatch-time
-    // 'dead' row with reason='url_unsafe'.
-    const urlCheck = await validateWebhookUrl(w.webhook_url)
-    if (!urlCheck.ok) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { field: 'webhook.webhook_url', reason: urlCheck.reason, message: urlCheck.detail },
-      })
-    }
-
-    // Re-run the data-minimisation projection on the original payload
-    // before re-enqueueing. If the original delivery predates a
-    // minimisePayload tightening (e.g. a future projection drops more
-    // fields), the retry must not silently re-deliver the unminimised
-    // shape. Idempotent on already-minimised payloads.
-    const minimised = minimisePayload(o.payload)
-
-    const { data: replay, error: insertErr } = await ctx.supabase
-      .from('webhook_deliveries')
-      .insert({
-        webhook_id: o.webhook_id,
-        company_id: o.company_id,
-        event_type: o.event_type,
-        payload: minimised,
-        previous_attributes: o.previous_attributes,
-        api_version: o.api_version,
-        // Link the retry to the API request that triggered it. The
-        // original delivery's request_id is preserved on its own audit
-        // row; the retry gets a fresh correlation pointing at the
-        // :retry call.
-        request_id: ctx.requestId,
-      })
-      .select('id')
-      .single()
-
-    if (insertErr || !replay) {
-      return v1ErrorResponse(insertErr ?? new Error('insert returned no row'), ctx.log, {
-        requestId: ctx.requestId,
-      })
-    }
-
-    // Deliver now rather than on the next cron tick (#1201). A manual retry
-    // is someone watching a failed delivery and asking for it again; the
-    // cron stays the path for the automatic backoff retries.
-    kickWebhookDispatch()
-
-    const response = ok(
-      { webhook_delivery_id: (replay as { id: string }).id, status: 'pending' as const },
-      { requestId: ctx.requestId },
-    )
-    if (idempotencyKey) {
-      await storeIdempotencyResponse(
+      const claimed = await claimV1IdempotencyKey(
         ctx.supabase,
-        ctx.userId,
-        o.company_id,
-        idempotencyKey,
-        requestHash,
-        'success',
-        (await response.clone().json()) as Record<string, unknown>,
-        'api_route',
+        {
+          userId: ctx.userId,
+          companyId: o.company_id,
+          scope: 'api_route',
+          key: idempotencyKey,
+          requestHash: v1RequestHash(request, null, false),
+        },
+        ctx,
       )
+      if ('response' in claimed) return claimed.response
+      claim = claimed.claim
+    }
+
+    let response: Response
+    try {
+      response = await queueRedelivery(ctx, o)
+    } catch (err) {
+      await claim?.release()
+      throw err
+    }
+    // Only a queued delivery is stored. A refusal (not retryable, missing
+    // scope, webhook gone, disabled or unverified) stores nothing, so a
+    // retry with the same key is judged again, as before.
+    if (claim) {
+      if (response.ok) await claim.complete('success', (await response.clone().json()) as Record<string, unknown>)
+      else await claim.release()
     }
     return response
   },
   { handlerIdempotency: true },
 )
+
+/**
+ * Everything the retry checks and writes once the key (if any) is held: the
+ * delivery's state, the payroll scope, the webhook itself, its URL, then the
+ * new pending row. Returns the response; the caller settles the key.
+ */
+async function queueRedelivery(ctx: ApiV1Context, o: OriginalDelivery): Promise<Response> {
+  if (o.status !== 'dead' && o.status !== 'delivered') {
+    return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+      requestId: ctx.requestId,
+      details: {
+        field: 'status',
+        message: `Only dead or delivered deliveries can be retried (current: ${o.status}).`,
+      },
+    })
+  }
+
+  // Mirror the create-route elevated-scope gate. A key with only
+  // webhooks:manage must NOT be able to re-emit a salary_run.* / agi.*
+  // payload: those carry personnummer, lönesummor, skatteavdrag, and
+  // the original create call required webhooks:manage AND payroll:read.
+  // Retry checks the SAME pair against the CALLING key's scopes (which
+  // may differ from the key that created the webhook in the first place).
+  const PAYROLL_SENSITIVE = /^(salary_run\.|agi\.)/
+  if (PAYROLL_SENSITIVE.test(o.event_type) && !hasScope(ctx.scopes, 'payroll:read')) {
+    return v1ErrorResponseFromCode('INSUFFICIENT_SCOPE', ctx.log, {
+      requestId: ctx.requestId,
+      details: {
+        required_scope: 'payroll:read',
+        reason: `Retrying ${o.event_type} requires payroll:read in addition to webhooks:manage.`,
+      },
+    })
+  }
+
+  // Re-verify that the parent webhook still exists, still belongs to the
+  // delivery's company, and is still active immediately before INSERT.
+  // Closes the TOCTOU window between the membership check above and the
+  // INSERT: without this a webhook deleted in between would have its
+  // retry land in webhook_deliveries with a now-dangling webhook_id, and
+  // a webhook re-registered to a different company in between would let
+  // the caller redeliver an event to a webhook they never created.
+  const { data: webhook, error: webhookErr } = await ctx.supabase
+    .from('webhooks')
+    .select('id, webhook_url, active, disabled_at, verified_at, verification_grace_ends_at')
+    .eq('id', o.webhook_id)
+    .eq('company_id', o.company_id)
+    .maybeSingle()
+
+  if (webhookErr) return v1ErrorResponse(webhookErr, ctx.log, { requestId: ctx.requestId })
+  if (!webhook) {
+    // The original webhook no longer exists or is no longer in this
+    // company. There's nothing to redeliver to. 404, not VALIDATION_ERROR:
+    // the resource the caller targeted is genuinely gone.
+    return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, { requestId: ctx.requestId })
+  }
+  const w = webhook as {
+    id: string
+    webhook_url: string
+    active: boolean
+    disabled_at: string | null
+    verified_at: string | null
+    verification_grace_ends_at: string | null
+  }
+  if (!w.active || w.disabled_at) {
+    return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+      requestId: ctx.requestId,
+      details: { field: 'webhook.active', message: 'Webhook is disabled: re-enable before retrying.' },
+    })
+  }
+
+  // Ownership gate (ADA CASA 7.1.2): a replay is a delivery, so it needs a
+  // verified endpoint (or one still inside its legacy grace window).
+  if (!verificationAllowsDelivery(w)) {
+    return v1ErrorResponseFromCode('WEBHOOK_NOT_VERIFIED', ctx.log, {
+      requestId: ctx.requestId,
+      details: { verification_status: webhookVerificationStatus(w) },
+    })
+  }
+
+  // Re-run the SSRF guard against the webhook's CURRENT url. The URL
+  // may have changed via PATCH between the original delivery and this
+  // retry call. The dispatch-time guard would catch a malicious URL
+  // eventually, but allowing the INSERT first means a poisoned row
+  // sits in the queue until the next cron tick. Validating here closes
+  // the window: the retry refuses up-front and the audit trail gets
+  // a clean VALIDATION_ERROR rather than a deferred dispatch-time
+  // 'dead' row with reason='url_unsafe'.
+  const urlCheck = await validateWebhookUrl(w.webhook_url)
+  if (!urlCheck.ok) {
+    return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+      requestId: ctx.requestId,
+      details: { field: 'webhook.webhook_url', reason: urlCheck.reason, message: urlCheck.detail },
+    })
+  }
+
+  // Re-run the data-minimisation projection on the original payload
+  // before re-enqueueing. If the original delivery predates a
+  // minimisePayload tightening (e.g. a future projection drops more
+  // fields), the retry must not silently re-deliver the unminimised
+  // shape. Idempotent on already-minimised payloads.
+  const minimised = minimisePayload(o.payload)
+
+  const { data: replay, error: insertErr } = await ctx.supabase
+    .from('webhook_deliveries')
+    .insert({
+      webhook_id: o.webhook_id,
+      company_id: o.company_id,
+      event_type: o.event_type,
+      payload: minimised,
+      previous_attributes: o.previous_attributes,
+      api_version: o.api_version,
+      // Link the retry to the API request that triggered it. The
+      // original delivery's request_id is preserved on its own audit
+      // row; the retry gets a fresh correlation pointing at the
+      // :retry call.
+      request_id: ctx.requestId,
+    })
+    .select('id')
+    .single()
+
+  if (insertErr || !replay) {
+    return v1ErrorResponse(insertErr ?? new Error('insert returned no row'), ctx.log, {
+      requestId: ctx.requestId,
+    })
+  }
+
+  // Deliver now rather than on the next cron tick (#1201). A manual retry
+  // is someone watching a failed delivery and asking for it again; the
+  // cron stays the path for the automatic backoff retries.
+  kickWebhookDispatch()
+
+  return ok(
+    { webhook_delivery_id: (replay as { id: string }).id, status: 'pending' as const },
+    { requestId: ctx.requestId },
+  )
+}

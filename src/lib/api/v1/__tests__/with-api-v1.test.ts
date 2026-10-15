@@ -57,6 +57,7 @@ vi.mock('@/lib/api/idempotency', async () => {
   )
   return {
     ...actual,
+    claimIdempotencyKey: vi.fn(),
     checkIdempotencyKey: vi.fn(),
     storeIdempotencyResponse: vi.fn(),
   }
@@ -68,7 +69,8 @@ import {
   RATE_LIMIT_RETRY_AFTER_SECONDS,
 } from '@/lib/auth/api-keys'
 import {
-  checkIdempotencyKey,
+  claimIdempotencyKey,
+  IdempotencyKeyInProgressError,
   storeIdempotencyResponse,
 } from '@/lib/api/idempotency'
 import { companyWriteRefusal, truncateIp, withApiV1 } from '../with-api-v1'
@@ -108,7 +110,7 @@ for (const [operation, method, path, scope] of [
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-const mockCheckIdempotency = checkIdempotencyKey as ReturnType<typeof vi.fn>
+const mockClaimIdempotency = claimIdempotencyKey as ReturnType<typeof vi.fn>
 const mockStoreIdempotency = storeIdempotencyResponse as ReturnType<typeof vi.fn>
 
 function makeSupabaseStub(membership: { company_id: string; role: string } | null) {
@@ -570,9 +572,8 @@ describe('withApiV1: idempotency', () => {
 
     mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'owner' }))
 
-    mockCheckIdempotency.mockResolvedValue({
-      status: 'success',
-      body: { data: { id: 'inv-cached' } },
+    mockClaimIdempotency.mockResolvedValue({
+      replay: { status: 'success', body: { data: { id: 'inv-cached' } } },
     })
 
     const handler = withApiV1(
@@ -636,7 +637,7 @@ describe('withApiV1: idempotency', () => {
       mode: 'live',
     })
     mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'owner' }))
-    mockCheckIdempotency.mockResolvedValue(null)
+    mockClaimIdempotency.mockResolvedValue({ claim: { complete: vi.fn(), release: vi.fn() } })
     let observedBody: unknown
 
     const handler = withApiV1(
@@ -664,13 +665,109 @@ describe('withApiV1: idempotency', () => {
 
     expect(response.status).toBe(200)
     expect(observedBody).toEqual(requestBody)
-    expect(mockCheckIdempotency).toHaveBeenCalledWith(
-      expect.anything(),
-      'user-1',
-      'company-1',
-      'key-body-readable',
-      expect.any(String),
+    expect(mockClaimIdempotency).toHaveBeenCalledWith(expect.anything(), {
+      userId: 'user-1',
+      companyId: 'company-1',
+      scope: 'api_route',
+      key: 'key-body-readable',
+      requestHash: expect.any(String),
+    })
+  })
+})
+
+describe('withApiV1: Idempotency-Key claim', () => {
+  function keyedPost(key = 'key-claim') {
+    return makeRequest('https://x.test/api/v1/companies/company-1/invoices', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer gnubok_sk_x',
+        'Idempotency-Key': key,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ customer_id: 'cust-1' }),
+    })
+  }
+
+  function heldClaim() {
+    const claim = { complete: vi.fn(), release: vi.fn() }
+    mockClaimIdempotency.mockResolvedValue({ claim })
+    return claim
+  }
+
+  beforeEach(() => {
+    mockValidate.mockResolvedValue({ userId: 'user-1', companyId: 'company-1', scopes: ['invoices:write'], mode: 'live' })
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'owner' }))
+  })
+
+  type CompanyRoute = { params: Promise<{ companyId: string }> }
+  const route = (respond: () => Response | Promise<Response>) =>
+    withApiV1<CompanyRoute>('invoices.create', async () => respond(), { requireScope: 'invoices:write' })
+
+  it('answers 409 IDEMPOTENCY_KEY_IN_PROGRESS with Retry-After while the first call runs, and runs nothing', async () => {
+    mockClaimIdempotency.mockRejectedValue(new IdempotencyKeyInProgressError('key-claim'))
+    const handler = vi.fn(async () => NextResponse.json({ data: { id: 'inv-2' } }, { status: 201 }))
+
+    const res = await withApiV1<CompanyRoute>('invoices.create', handler, { requireScope: 'invoices:write' })(
+      keyedPost(),
+      companyParams('company-1'),
     )
+
+    expect(res.status).toBe(409)
+    expect(res.headers.get('Retry-After')).toBe('2')
+    const body = await res.json()
+    expect(body.error.code).toBe('IDEMPOTENCY_KEY_IN_PROGRESS')
+    expect(body.error.details).toEqual({ key: 'key-claim' })
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('stores a success and a returned 4xx under the claim', async () => {
+    const created = heldClaim()
+    await route(() => NextResponse.json({ data: { id: 'inv-1' } }, { status: 201 }))(keyedPost(), companyParams('company-1'))
+    expect(created.complete).toHaveBeenCalledWith('success', { data: { id: 'inv-1' } })
+    expect(created.release).not.toHaveBeenCalled()
+
+    const refused = heldClaim()
+    await route(() => NextResponse.json({ error: { code: 'VALIDATION_ERROR' } }, { status: 400 }))(
+      keyedPost(),
+      companyParams('company-1'),
+    )
+    expect(refused.complete).toHaveBeenCalledWith('error', { error: { code: 'VALIDATION_ERROR' } })
+  })
+
+  it('releases the claim on a 5xx, a 429 and a thrown failure, so a retry runs again', async () => {
+    const serverError = heldClaim()
+    await route(() => NextResponse.json({ error: { code: 'INTERNAL_ERROR' } }, { status: 500 }))(
+      keyedPost(),
+      companyParams('company-1'),
+    )
+    expect(serverError.release).toHaveBeenCalledTimes(1)
+    expect(serverError.complete).not.toHaveBeenCalled()
+
+    const throttled = heldClaim()
+    await route(() => NextResponse.json({ error: { code: 'RATE_LIMITED' } }, { status: 429 }))(
+      keyedPost(),
+      companyParams('company-1'),
+    )
+    expect(throttled.release).toHaveBeenCalledTimes(1)
+
+    const thrown = heldClaim()
+    const res = await route(() => {
+      throw new Error('boom')
+    })(keyedPost(), companyParams('company-1'))
+    expect(res.status).toBe(500)
+    expect(thrown.release).toHaveBeenCalledTimes(1)
+    expect(thrown.complete).not.toHaveBeenCalled()
+  })
+
+  it('answers 500 and runs nothing when claiming the key throws', async () => {
+    mockClaimIdempotency.mockRejectedValue(new Error('unexpected claim failure'))
+    const handler = vi.fn(async () => NextResponse.json({ data: {} }, { status: 201 }))
+    const res = await withApiV1<CompanyRoute>('invoices.create', handler, { requireScope: 'invoices:write' })(
+      keyedPost(),
+      companyParams('company-1'),
+    )
+    expect(res.status).toBe(500)
+    expect(handler).not.toHaveBeenCalled()
   })
 })
 
