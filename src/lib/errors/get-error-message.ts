@@ -88,6 +88,16 @@ const POSTGRES_ERROR_MAP: Record<string, Bilingual> = {
   '22003': { sv: 'Värdet är utanför tillåtet intervall.', en: 'Value is out of allowed range.' },
 }
 
+// Why a month-end cannot take an upplupen kostnad (SI_ACCRUED_COST_PERIOD_LOCKED
+// details.blocked[].reason, checkPeriodLock's vocabulary).
+const ACCRUED_COST_BLOCK_REASON_SV: Record<string, string> = {
+  company_lock_date_covers: 'inom företagets låsdatum',
+  period_locked_at_set: 'perioden är låst',
+  period_is_closed: 'räkenskapsåret är stängt',
+  no_fiscal_period: 'inget räkenskapsår',
+  lookup_failed: 'kunde inte kontrolleras',
+}
+
 // HTTP status codes -> localized messages
 const HTTP_STATUS_MAP: Record<number, Bilingual> = {
   400: { sv: 'Förfrågan innehåller ogiltiga uppgifter.', en: 'The request contains invalid data.' },
@@ -798,6 +808,23 @@ export function getErrorMessage(
         return details?.lockDate
           ? `Räkenskapsperioden för det valda datumet är låst (t.o.m. ${details.lockDate}). Lås upp perioden för att flytta verifikationen dit.`
           : 'Räkenskapsperioden för det valda datumet är låst. Lås upp perioden för att flytta verifikationen dit.'
+      }
+
+      // Name each month-end an upplupen kostnad cannot book on, and why: the
+      // user has to unlock exactly those periods (or create the year).
+      if (structured.code === 'SI_ACCRUED_COST_PERIOD_LOCKED') {
+        const blocked = (structured.details as { blocked?: unknown } | undefined)?.blocked
+        const named = Array.isArray(blocked)
+          ? blocked.flatMap((entry: unknown) => {
+              const { date, reason } = (entry ?? {}) as { date?: unknown; reason?: unknown }
+              if (typeof date !== 'string') return []
+              const why = typeof reason === 'string' ? ACCRUED_COST_BLOCK_REASON_SV[reason] : undefined
+              return [why ? `${date} (${why})` : date]
+            })
+          : []
+        if (named.length > 0) {
+          return `En upplupen kostnad bokförs sista dagen i varje månad, men ${named.join(', ')} kan inte ta emot verifikationer. Kostnaden flyttas inte till en annan månad, så inget har bokförts. Lås upp perioden eller lägg upp räkenskapsåret, eller bokför raden utan periodisering.`
+        }
       }
 
       if (structured.code === 'OB_COMPANY_LOCK_DATE') {

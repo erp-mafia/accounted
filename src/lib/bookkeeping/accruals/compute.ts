@@ -31,6 +31,14 @@ export function firstOfMonth(date: string): string {
   return toMonthIso(year, month)
 }
 
+/** '2026-09-01' → '2026-09-30', '2028-02-10' → '2028-02-29' */
+export function lastOfMonth(date: string): string {
+  const { year, month } = parseIso(date)
+  // Day 0 of the next month is the last day of this one; `month` is
+  // 1-based, so as a 0-based Date.UTC month index it already names the next.
+  return new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10)
+}
+
 /** Number of calendar months touched by [periodStart, periodEnd], inclusive. */
 export function countCalendarMonths(periodStart: string, periodEnd: string): number {
   const start = parseIso(periodStart)
@@ -113,6 +121,14 @@ export function computeInstallmentAmounts(totalAmount: number, months: number): 
     amounts.push((baseOre + (i < remainder ? 1 : 0)) / 100)
   }
   return amounts
+}
+
+/**
+ * The dates an upplupen kostnad (29xx) books on: the last day of every
+ * calendar month in the period, the day the cost belongs to.
+ */
+export function accruedCostReleaseDates(periodStart: string, periodEnd: string): string[] {
+  return listCalendarMonths(periodStart, periodEnd).map(lastOfMonth)
 }
 
 /** Full plan: one installment per calendar month in the period. */

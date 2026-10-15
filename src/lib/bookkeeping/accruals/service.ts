@@ -7,13 +7,16 @@
  * (17xx/29xx); this service creates and posts the monthly dissolution
  * entries:
  *
- *   expense:  Dr target (5xxx/6xxx)  / Cr balance (17xx)
+ *   expense:  Dr target (5xxx/6xxx)  / Cr balance (17xx förutbetald,
+ *                                                  29xx upplupen kostnad)
  *   revenue:  Dr balance (29xx)      / Cr target (3xxx)
  *
  * All entries go through the engine (source_type 'accrual'): never direct
- * inserts. Posting dates are max(period_month, posting_floor_date,
+ * inserts. A deferral posts on max(period_month, posting_floor_date,
  * company lock date + 1) so catch-up months book correctly and the interim
- * account never goes negative.
+ * account never goes negative. An upplupen kostnad (expense on 29xx) covers
+ * months before the invoice and posts on the last day of each month, never
+ * moved by the floor or a lock (accruedCostPosting).
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -41,8 +44,10 @@ import {
   computeInstallments,
   dayAfter,
   firstOfMonth,
+  lastOfMonth,
   maxIsoDate,
 } from '@/lib/bookkeeping/accruals/compute'
+import { isAccruedCostAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { roundOre, sumOre } from '@/lib/money'
 import { createLogger } from '@/lib/logger'
@@ -56,7 +61,7 @@ export interface AccrualScheduleSpec {
   supplierInvoiceItemId?: string | null
   invoiceId?: string
   invoiceItemId?: string | null
-  /** Interim account: 17xx (expense) / 29xx (revenue). */
+  /** Interim account: 17xx or 29xx (expense) / 29xx (revenue). */
   balanceAccount: string
   /** The P&L account the amount dissolves to. */
   targetAccount: string
@@ -124,6 +129,83 @@ async function findNextOpenPeriodStart(
   return row ? { fiscalPeriodId: row.id, periodStart: row.period_start } : null
 }
 
+/**
+ * An expense schedule on 29xx is an upplupen kostnad: its months lie before
+ * the invoice, and the registration that clears 29xx comes after them.
+ */
+function isAccruedCostSchedule(schedule: Pick<ScheduleRow, 'direction' | 'balance_account'>): boolean {
+  return schedule.direction === 'expense' && isAccruedCostAccount(schedule.balance_account)
+}
+
+interface InstallmentPosting {
+  entryDate: string
+  fiscalPeriodId: string
+}
+
+/**
+ * A deferral (förutbetald kostnad 17xx, förutbetald intäkt 29xx) dissolves
+ * on max(period month, posting floor, lock date + 1): never before the
+ * origin entry put the amount on the interim account, so the interim
+ * account cannot go negative, and a closed year clamps to the next open one.
+ */
+async function deferralPosting(
+  supabase: SupabaseClient,
+  companyId: string,
+  periodMonth: string,
+  schedule: Pick<ScheduleRow, 'posting_floor_date'>,
+  lockFloor: string | null,
+): Promise<InstallmentPosting> {
+  const entryDate = maxIsoDate(periodMonth, schedule.posting_floor_date, lockFloor)
+  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, entryDate)
+  if (fiscalPeriodId) return { entryDate, fiscalPeriodId }
+  // The computed date can fall inside a CLOSED fiscal period (bokslut
+  // done while the company lock date lags behind). Clamp forward to the
+  // start of the earliest open period: same spirit as the lockFloor:
+  // instead of retrying the same impossible date forever.
+  const clamped = await findNextOpenPeriodStart(supabase, companyId, entryDate)
+  if (!clamped) {
+    throw new Error(
+      `Ingen öppen räkenskapsperiod för ${entryDate} eller senare: ` +
+        'skapa nästa räkenskapsår för att kunna bokföra periodiseringen',
+    )
+  }
+  return { entryDate: clamped.periodStart, fiscalPeriodId: clamped.fiscalPeriodId }
+}
+
+/**
+ * An upplupen kostnad books on the last day of its own month, before the
+ * invoice that clears 29xx, so neither the posting floor nor a clamp applies:
+ * the cost belongs to that month. A month that cannot take the entry fails
+ * here (the installment stays pending with last_error, retried by the cron
+ * and Bokför förfallna) instead of landing in another month. Registration
+ * refuses such months up front (assertAccruedCostLinesBookable); this only
+ * fires when a period was locked or closed in between.
+ */
+async function accruedCostPosting(
+  supabase: SupabaseClient,
+  companyId: string,
+  periodMonth: string,
+  lockFloor: string | null,
+): Promise<InstallmentPosting> {
+  const entryDate = lastOfMonth(periodMonth)
+  if (lockFloor && entryDate < lockFloor) {
+    throw new Error(
+      `Den upplupna kostnaden för ${periodMonth.slice(0, 7)} ska bokföras ${entryDate}, ` +
+        'men datumet ligger inom företagets låsdatum. Den flyttas inte till en annan månad: ' +
+        'flytta låsdatumet och välj Bokför förfallna, eller kreditera fakturan.',
+    )
+  }
+  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, entryDate)
+  if (!fiscalPeriodId) {
+    throw new Error(
+      `Den upplupna kostnaden för ${periodMonth.slice(0, 7)} ska bokföras ${entryDate}, ` +
+        'men inget öppet räkenskapsår täcker datumet. Den flyttas inte till en annan period: ' +
+        'lägg upp räkenskapsåret om det saknas och välj Bokför förfallna, annars kreditera fakturan.',
+    )
+  }
+  return { entryDate, fiscalPeriodId }
+}
+
 function dissolutionLines(
   schedule: Pick<
     ScheduleRow,
@@ -187,7 +269,10 @@ export async function createAccrualSchedule(
   spec: AccrualScheduleSpec,
   options: {
     originJournalEntryId?: string | null
-    /** Entry date of the origin entry; floors all dissolution dates. */
+    /**
+     * Entry date of the origin entry; floors every deferral's dissolution
+     * dates. An upplupen kostnad (expense on 29xx) books before it.
+     */
     postingFloorDate: string
     /** Skip synchronous catch-up posting (tests / bulk imports). */
     postCatchUp?: boolean
@@ -314,27 +399,9 @@ export async function postDueInstallments(
   for (const installment of due) {
     const schedule = installment.schedule as ScheduleRow
     try {
-      let entryDate = maxIsoDate(
-        installment.period_month,
-        schedule.posting_floor_date,
-        lockFloor,
-      )
-      let fiscalPeriodId = await findFiscalPeriod(supabase, companyId, entryDate)
-      if (!fiscalPeriodId) {
-        // The computed date can fall inside a CLOSED fiscal period (bokslut
-        // done while the company lock date lags behind). Clamp forward to the
-        // start of the earliest open period: same spirit as the lockFloor:
-        // instead of retrying the same impossible date forever.
-        const clamped = await findNextOpenPeriodStart(supabase, companyId, entryDate)
-        if (!clamped) {
-          throw new Error(
-            `Ingen öppen räkenskapsperiod för ${entryDate} eller senare: ` +
-              'skapa nästa räkenskapsår för att kunna bokföra periodiseringen',
-          )
-        }
-        entryDate = clamped.periodStart
-        fiscalPeriodId = clamped.fiscalPeriodId
-      }
+      const { entryDate, fiscalPeriodId } = isAccruedCostSchedule(schedule)
+        ? await accruedCostPosting(supabase, companyId, installment.period_month, lockFloor)
+        : await deferralPosting(supabase, companyId, installment.period_month, schedule, lockFloor)
 
       const monthLabel = installment.period_month.slice(0, 7)
       const description = schedule.description
@@ -465,7 +532,9 @@ async function completeScheduleIfDone(
 /**
  * Dissolve everything that remains on a schedule in one entry, dated today
  * (clamped by lock date / posting floor). Used when the service period ends
- * early or the user simply wants the rest expensed now.
+ * early or the user simply wants the rest expensed now. For an upplupen
+ * kostnad whose month can no longer take its entry this is the explicit way
+ * out: the confirm dialog says the remainder books today.
  */
 export async function dissolveScheduleNow(
   supabase: SupabaseClient,

@@ -18,13 +18,19 @@
  *   - the invoice date is not in a locked or closed period, nor on or before
  *     the company lock date (PERIOD_LOCKED, checked before anything is
  *     generated);
- *   - an open fiscal year covers the invoice date.
+ *   - an open fiscal year covers the invoice date;
+ *   - every month-end an upplupen kostnad (29xx line) books on can take its
+ *     entry (SI_ACCRUED_COST_PERIOD_LOCKED from the registration builder,
+ *     dry run included).
  *
  * A dry run reads, checks and previews the lines the generator would post,
  * and writes nothing.
  */
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
-import { createSchedulesForSupplierInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
+import {
+  ACCRUAL_RELEASE_FAILED_WARNING,
+  createSchedulesForSupplierInvoice,
+} from '@/lib/bookkeeping/accruals/from-invoices'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { toEntryPreview } from '@/lib/bookkeeping/entry-preview'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
@@ -244,6 +250,7 @@ export async function bookSupplierInvoice(
         journalEntry.id,
       )
       if (scheduleResult.failed > 0) warnings.push(ACCRUAL_PARTIAL)
+      if ((scheduleResult.releasesFailed ?? 0) > 0) warnings.push({ ...ACCRUAL_RELEASE_FAILED_WARNING })
     } catch (err) {
       log.error('accrual schedule creation failed on deferred booking', err as Error, {
         invoiceId: supplierInvoiceId,

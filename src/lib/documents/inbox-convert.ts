@@ -56,7 +56,11 @@ import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes
 import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import { foldSellerVatIntoCost, sellerVatAsCostNote, sellerVatIsCost } from '@/lib/bookkeeping/vat-registration'
 import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
-import { createSchedulesForSupplierInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
+import {
+  ACCRUAL_RELEASE_FAILED_WARNING,
+  createSchedulesForSupplierInvoice,
+} from '@/lib/bookkeeping/accruals/from-invoices'
+import { assertAccruedCostLinesBookable } from '@/lib/bookkeeping/accruals/accrued-cost-guard'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { resolveInboxKind } from '@/lib/documents/inbox-kind'
 import { resolveInboxCreditTarget } from '@/lib/supplier-invoices/credit-target'
@@ -163,7 +167,7 @@ export async function convertInboxItemToSupplierInvoice(
 
   // Periodisering requires faktureringsmetoden, and never rides a reverse
   // charge invoice: the expense line carries the VAT base for rutor 20-32,
-  // so deferring the net to a 17xx account would corrupt the momsdeklaration.
+  // so moving the net to a 17xx/29xx account would corrupt the momsdeklaration.
   const hasAccrualItems = body.items.some((line) => line.accrual_period_start && line.accrual_period_end)
   if (hasAccrualItems && reverseCharge) {
     return { ok: false, code: 'SI_CREATE_ACCRUAL_REVERSE_CHARGE' }
@@ -248,6 +252,18 @@ export async function convertInboxItemToSupplierInvoice(
     ? foldSellerVatIntoCost(pricedItems)
     : null
   const items = sellerVatFold ? sellerVatFold.lines : pricedItems
+
+  // An upplupen kostnad (29xx line) books its months right after the
+  // registration: refuse a month that cannot take its entry before an
+  // ankomstnummer is drawn (the registration builder checks again).
+  if (hasAccrualItems && booksInvoicesOnIssue(settings)) {
+    try {
+      await assertAccruedCostLinesBookable(supabase, companyId, body.invoice_date, items)
+    } catch (err) {
+      if (isBookkeepingError(err)) return { ok: false, code: 'SI_CREATE_FAILED', error: err }
+      throw err
+    }
+  }
 
   const subtotal = items.reduce((sum, i) => sum + i.line_total, 0)
   const totalVat = items.reduce((sum, i) => sum + i.vat_amount, 0)
@@ -416,6 +432,8 @@ export async function convertInboxItemToSupplierInvoice(
   }
 
   let registrationJournalEntryId: string | null = null
+  // A periodisering month that could not be posted after the registration.
+  let releaseFailed = false
 
   // #967: deferred companies register WITHOUT booking; ekonomi books later.
   if (booksInvoicesOnIssue(settings)) {
@@ -467,6 +485,7 @@ export async function convertInboxItemToSupplierInvoice(
               failed: scheduleResult.failed,
             })
           }
+          if ((scheduleResult.releasesFailed ?? 0) > 0) releaseFailed = true
         }
       } else {
         // null means no fiscal period covers invoice_date (every other
@@ -554,6 +573,13 @@ export async function convertInboxItemToSupplierInvoice(
       registration_journal_entry_id: registrationJournalEntryId,
       inbox_item_id: inboxItemId,
     },
-    ...(payeeAssessment?.alert ? { warnings: [payeeAlertWarning(payeeAssessment.alert)] } : {}),
+    ...(payeeAssessment?.alert || releaseFailed
+      ? {
+          warnings: [
+            ...(payeeAssessment?.alert ? [payeeAlertWarning(payeeAssessment.alert)] : []),
+            ...(releaseFailed ? [{ ...ACCRUAL_RELEASE_FAILED_WARNING }] : []),
+          ],
+        }
+      : {}),
   }
 }

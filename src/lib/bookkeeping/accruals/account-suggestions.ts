@@ -2,14 +2,18 @@
  * Default interim (balance) account per P&L account for periodisering.
  *
  * Förutbetalda kostnader sit on 17xx interimsfordringar; the specific account
- * follows BAS convention by cost type. Förutbetalda intäkter sit on 2970
- * (29xx interimsskulder). The user can always override in the form: these
- * are suggestions, and the DB CHECK only enforces the 17xx/29xx range.
+ * follows BAS convention by cost type. Upplupna kostnader (a cost for months
+ * before the invoice month) sit on 29xx interimsskulder, by default 2990.
+ * Förutbetalda intäkter sit on 2970 (29xx interimsskulder). The user can
+ * always override in the form: these are suggestions, and the DB CHECK only
+ * enforces the 17xx/29xx range.
  */
 
 import type { AccrualDirection } from '@/types'
+import { isIsoDateShaped } from '@/lib/invariants/iso-date'
 
 export const DEFAULT_PREPAID_EXPENSE_ACCOUNT = '1790' // Övriga förutbetalda kostnader och upplupna intäkter
+export const DEFAULT_ACCRUED_EXPENSE_ACCOUNT = '2990' // Övriga upplupna kostnader
 export const DEFAULT_DEFERRED_REVENUE_ACCOUNT = '2970' // Förutbetalda intäkter
 
 /** Suggest the interim account for a deferred line booked to targetAccount. */
@@ -32,12 +36,76 @@ export function suggestBalanceAccount(
   return DEFAULT_PREPAID_EXPENSE_ACCOUNT
 }
 
-/** DB CHECK mirror: 17xx for expense schedules, 29xx for revenue schedules. */
+/**
+ * An expense periodisering on a 29xx account is an upplupen kostnad: the
+ * cost of months before the invoice month, booked on the last day of each
+ * month and cleared by the registration on the invoice date.
+ */
+export function isAccruedCostAccount(account: string | null | undefined): boolean {
+  return typeof account === 'string' && /^29\d{2}$/.test(account)
+}
+
+/**
+ * True when a service period ends before the calendar month of invoiceDate.
+ * Compares ISO strings only, so a malformed date never throws here.
+ */
+export function periodEndsBeforeInvoiceMonth(periodEnd: string, invoiceDate: string): boolean {
+  return periodEnd < `${invoiceDate.slice(0, 7)}-01`
+}
+
+function isIsoDate(value: string | null | undefined): value is string {
+  return isIsoDateShaped(value)
+}
+
+/**
+ * The interim account a supplier-invoice line's periodisering suggests: a
+ * period wholly before the invoice month is an upplupen kostnad (2960 for
+ * räntekostnader 84xx, else 2990), anything else a förutbetald kostnad on the
+ * 17xx account suggestBalanceAccount picks. Only the forms suggest this way;
+ * an API caller that omits the account keeps the 17xx default.
+ */
+export function suggestExpenseBalanceAccount(
+  targetAccount: string,
+  periodEnd: string | null | undefined,
+  invoiceDate: string | null | undefined,
+): string {
+  if (isIsoDate(periodEnd) && isIsoDate(invoiceDate) && periodEndsBeforeInvoiceMonth(periodEnd, invoiceDate)) {
+    return targetAccount.startsWith('84') ? '2960' : DEFAULT_ACCRUED_EXPENSE_ACCOUNT
+  }
+  return suggestBalanceAccount('expense', targetAccount)
+}
+
+/**
+ * The balance account after the user edits a supplier-invoice line's
+ * periodisering panel. An account the user picks stands. Moving the dates
+ * re-suggests only when the period crosses the line between the two kinds:
+ * a 17xx account moves to the 29xx suggestion once the period lies wholly
+ * before the invoice month, and a 29xx account moves back to the 17xx
+ * suggestion once it reaches that month.
+ */
+export function expenseBalanceAccountAfterEdit(
+  previous: { start: string; end: string; balanceAccount: string },
+  next: { start: string; end: string; balanceAccount: string },
+  targetAccount: string,
+  invoiceDate: string | null | undefined,
+): string {
+  if (next.balanceAccount !== previous.balanceAccount) return next.balanceAccount
+  if (next.start === previous.start && next.end === previous.end) return next.balanceAccount
+  const suggested = suggestExpenseBalanceAccount(targetAccount, next.end, invoiceDate)
+  return isAccruedCostAccount(suggested) === isAccruedCostAccount(next.balanceAccount)
+    ? next.balanceAccount
+    : suggested
+}
+
+/**
+ * DB CHECK mirror: 17xx (förutbetald) or 29xx (upplupen) for expense
+ * schedules, 29xx for revenue schedules.
+ */
 export function isValidBalanceAccount(
   direction: AccrualDirection,
   account: string,
 ): boolean {
-  return direction === 'expense' ? /^17\d{2}$/.test(account) : /^29\d{2}$/.test(account)
+  return direction === 'expense' ? /^(17|29)\d{2}$/.test(account) : /^29\d{2}$/.test(account)
 }
 
 interface AccrualItemFields {

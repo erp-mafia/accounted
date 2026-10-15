@@ -28,7 +28,11 @@ import {
 import { buildSupplierDescription } from '@/lib/bookkeeping/supplier-invoice-description'
 import { registerExpenseClaim } from '@/lib/expenses/expense-claims-service'
 import { ownerFallbackName, resolveExpenseLiabilityAccount } from '@/lib/expenses/payer'
-import { createSchedulesForSupplierInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
+import {
+  ACCRUAL_RELEASE_FAILED_WARNING,
+  createSchedulesForSupplierInvoice,
+} from '@/lib/bookkeeping/accruals/from-invoices'
+import { assertAccruedCostLinesBookable } from '@/lib/bookkeeping/accruals/accrued-cost-guard'
 import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
@@ -458,6 +462,17 @@ export async function createSupplierInvoice(
       }
     }
   }
+  // An upplupen kostnad (29xx line) books its months right after the
+  // registration: its month-ends are checked now, before an ankomstnummer is
+  // drawn (the registration builder checks them again for every door).
+  if (booksOnRegistration && hasAccrualItems) {
+    try {
+      await assertAccruedCostLinesBookable(supabase, companyId, body.invoice_date, items)
+    } catch (err) {
+      if (isBookkeepingError(err)) return { ok: false, code: 'SI_CREATE_FAILED', error: err }
+      throw err
+    }
+  }
 
   // Entity type drives the credit account for privately-paid invoices:
   // AB → 2893 (skuld till aktieägare), EF → 2018 (egen insättning).
@@ -864,6 +879,7 @@ export async function createSupplierInvoice(
             'be created. Check Bookkeeping → Accruals.',
         })
       }
+      if ((scheduleResult.releasesFailed ?? 0) > 0) warnings.push({ ...ACCRUAL_RELEASE_FAILED_WARNING })
     }
   }
 

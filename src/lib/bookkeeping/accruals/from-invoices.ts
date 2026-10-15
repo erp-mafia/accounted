@@ -14,7 +14,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Invoice, InvoiceItem, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
-import { createAccrualSchedule } from '@/lib/bookkeeping/accruals/service'
+import { createAccrualSchedule, postDueInstallments } from '@/lib/bookkeeping/accruals/service'
 import {
   coerceDimensionsBag,
   mergeDimensionBags,
@@ -34,7 +34,28 @@ const log = createLogger('bookkeeping.accruals.from-invoices')
 export interface ScheduleCreationResult {
   created: number
   failed: number
+  /**
+   * Supplier side: months that were due at creation but could not be posted
+   * (they stay pending with last_error, retried by the cron and Bokför
+   * förfallna). For an upplupen kostnad every month is due at once, so a
+   * failure leaves 29xx debited without its cost until the retry succeeds.
+   */
+  releasesFailed?: number
 }
+
+/**
+ * The warning a door returns when a periodisering month could not be posted
+ * right after the registration (ScheduleCreationResult.releasesFailed).
+ */
+export const ACCRUAL_RELEASE_FAILED_WARNING = {
+  code: 'ACCRUAL_RELEASE_FAILED',
+  message_sv:
+    'Fakturan bokfördes, men en eller flera periodiseringsmånader kunde inte bokföras. ' +
+    'De står kvar som väntande med orsaken under Bokföring → Periodiseringar: åtgärda den och välj Bokför förfallna.',
+  message_en:
+    'The invoice was booked, but one or more accrual months (periodiseringar) could not be posted. ' +
+    'They stay pending with the reason under Bokföring > Periodiseringar: fix it and choose Bokför förfallna.',
+} as const
 
 export async function createSchedulesForSupplierInvoice(
   supabase: SupabaseClient,
@@ -45,7 +66,7 @@ export async function createSchedulesForSupplierInvoice(
   originJournalEntryId: string,
 ): Promise<ScheduleCreationResult> {
   const accrualItems = items.filter(itemHasAccrual)
-  const result: ScheduleCreationResult = { created: 0, failed: 0 }
+  const result: ScheduleCreationResult = { created: 0, failed: 0, releasesFailed: 0 }
   if (accrualItems.length === 0) return result
 
   const { data: existing } = await supabase
@@ -66,13 +87,14 @@ export async function createSchedulesForSupplierInvoice(
 
   for (const item of accrualItems) {
     if (item.id && covered.has(item.id)) continue
+    let scheduleId: string
     try {
       const totalSek =
         Math.round(
           resolveSekAmount(item.line_total, null, invoice.currency, invoice.exchange_rate) *
             100,
         ) / 100
-      await createAccrualSchedule(
+      const schedule = await createAccrualSchedule(
         supabase,
         companyId,
         userId,
@@ -92,15 +114,34 @@ export async function createSchedulesForSupplierInvoice(
         },
         {
           originJournalEntryId,
-          // The registration entry is dated invoice_date: dissolutions may
-          // never precede it.
+          // The registration entry is dated invoice_date: a förutbetald
+          // kostnad (17xx) may never dissolve before it. An upplupen kostnad
+          // (29xx) books on its own month-ends, before it.
           postingFloorDate: invoice.invoice_date,
+          // Catch-up runs below, so its failures reach the caller.
+          postCatchUp: false,
         },
       )
+      scheduleId = schedule.id
       result.created++
     } catch (error) {
       result.failed++
       log.error('failed to create accrual schedule for supplier invoice line', error, {
+        companyId,
+        entityId: invoice.id,
+      })
+      continue
+    }
+
+    // Post every month that has already begun (an upplupen kostnad: all of
+    // them). A month that fails stays pending with last_error for the cron
+    // and Bokför förfallna; the count goes back so the door can say so now.
+    try {
+      const catchUp = await postDueInstallments(supabase, companyId, { userId, scheduleId })
+      result.releasesFailed = (result.releasesFailed ?? 0) + catchUp.failed
+    } catch (error) {
+      result.releasesFailed = (result.releasesFailed ?? 0) + 1
+      log.error('accrual catch-up posting failed for supplier invoice line', error, {
         companyId,
         entityId: invoice.id,
       })

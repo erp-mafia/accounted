@@ -6,7 +6,8 @@ import { seedCompany, insertAuthUser, insertDraftJournalEntry } from './fixtures
 // pg-real coverage for 20260623120000_accrual_schedules.sql: CHECK
 // constraints, the posted-installment immutability trigger, the FK RESTRICT
 // on dissolution verifikat, RLS isolation, and the audit-preserving DELETE
-// policies on both tables.
+// policies on both tables. 20261016004700_accrued_costs_on_supplier_invoices
+// widens the expense account range to 17xx or 29xx (upplupna kostnader).
 
 async function insertSupplier(companyId: string, userId: string): Promise<string> {
   const id = randomUUID()
@@ -158,14 +159,34 @@ describe('accrual_schedules constraints', () => {
     ).rejects.toThrow(/period_valid/i)
   })
 
-  it('rejects a non-17xx balance account on an expense schedule', async () => {
+  it('rejects a balance account outside 17xx/29xx on an expense schedule', async () => {
     const ctx = await seedScheduleContext()
-    await expect(
-      insertSchedule({ ...ctx, balanceAccount: '2970' }),
-    ).rejects.toThrow(/balance_account_range/i)
     await expect(
       insertSchedule({ ...ctx, balanceAccount: '5010' }),
     ).rejects.toThrow(/balance_account_range/i)
+    await expect(
+      insertSchedule({ ...ctx, balanceAccount: '1510' }),
+    ).rejects.toThrow(/balance_account_range/i)
+    await expect(
+      insertSchedule({ ...ctx, balanceAccount: '299' }),
+    ).rejects.toThrow(/balance_account_range/i)
+  })
+
+  it('accepts a 17xx förutbetald and a 29xx upplupen kostnad on an expense schedule', async () => {
+    // 20261016004700: an upplupen kostnad (a cost for months before the
+    // invoice month) lives on a 29xx interimsskuld.
+    const ctx = await seedScheduleContext()
+    await expect(insertSchedule({ ...ctx, balanceAccount: '1730' })).resolves.toBeDefined()
+    await expect(
+      insertSchedule({
+        ...ctx,
+        balanceAccount: '2990',
+        targetAccount: '5020',
+        periodStart: '2025-07-01',
+        periodEnd: '2025-12-31',
+      }),
+    ).resolves.toBeDefined()
+    await expect(insertSchedule({ ...ctx, balanceAccount: '2960', targetAccount: '8410' })).resolves.toBeDefined()
   })
 
   it('rejects a non-29xx balance account on a revenue schedule', async () => {
@@ -346,7 +367,7 @@ describe('accrual RLS', () => {
 })
 
 describe('invoice item accrual columns', () => {
-  it('rejects a period start without an end and non-17xx balance accounts', async () => {
+  it('rejects a period start without an end and balance accounts outside 17xx/29xx', async () => {
     const ctx = await seedScheduleContext()
 
     const insertItem = (columns: string, values: string) =>
@@ -374,5 +395,19 @@ describe('invoice item accrual columns', () => {
         `'2026-01-01', '2026-12-31', '1730'`,
       ),
     ).resolves.toBeDefined()
+
+    // Upplupen kostnad (20261016004700): a 29xx interimsskuld is accepted too.
+    await expect(
+      insertItem(
+        'accrual_period_start, accrual_period_end, accrual_balance_account',
+        `'2025-10-01', '2025-12-31', '2990'`,
+      ),
+    ).resolves.toBeDefined()
+    await expect(
+      insertItem(
+        'accrual_period_start, accrual_period_end, accrual_balance_account',
+        `'2025-10-01', '2025-12-31', '1930'`,
+      ),
+    ).rejects.toThrow(/account_range/i)
   })
 })

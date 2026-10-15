@@ -704,3 +704,181 @@ describe('cancelSchedulesForSource', () => {
     ).rejects.toThrow(/source invoice id/i)
   })
 })
+
+// Upplupen kostnad: an expense schedule on 29xx. Its months lie before the
+// invoice month; each posts on its own last day, Dr cost / Cr 29xx, and is
+// never moved by the posting floor (the invoice date) or a lock.
+describe('upplupen kostnad (expense schedule on 29xx)', () => {
+  // Electricity July-September on an invoice dated 2026-10-05.
+  const accrued = (overrides: Record<string, unknown> = {}) =>
+    makeSchedule({
+      balance_account: '2990',
+      target_account: '5020',
+      total_amount: 3000,
+      period_start: '2026-07-01',
+      period_end: '2026-09-30',
+      months: 3,
+      posting_floor_date: '2026-10-05',
+      description: 'El jul-sep',
+      ...overrides,
+    })
+
+  it('posts every month on its last day with Dr cost / Cr 29xx, ignoring the invoice-date floor', async () => {
+    const schedule = accrued()
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      {
+        data: [
+          makeInstallment({ id: 'inst-jul', period_month: '2026-07-01', schedule }),
+          makeInstallment({ id: 'inst-aug', period_month: '2026-08-01', schedule }),
+          makeInstallment({ id: 'inst-sep', period_month: '2026-09-01', schedule }),
+        ],
+      },
+      { data: { bookkeeping_locked_through: null } },
+      { data: [{ id: 'inst-jul' }] },
+      { data: [{ id: 'inst-aug' }] },
+      { data: [{ id: 'inst-sep' }] },
+      { count: 0 },
+      { data: null },
+    ])
+
+    const result = await postDueInstallments(supabase as unknown as SupabaseClient, COMPANY, {
+      userId: USER,
+      today: '2026-10-05',
+    })
+
+    expect(result).toMatchObject({ posted: 3, failed: 0 })
+    const dates = mockCreateJournalEntry.mock.calls.map((call) => call[3].entry_date)
+    expect(dates).toEqual(['2026-07-31', '2026-08-31', '2026-09-30'])
+    // Each month's own fiscal period is looked up for its own date.
+    expect(mockFindFiscalPeriod.mock.calls.map((call) => call[2])).toEqual([
+      '2026-07-31',
+      '2026-08-31',
+      '2026-09-30',
+    ])
+    const sep = mockCreateJournalEntry.mock.calls[2][3]
+    expect(sep.source_type).toBe('accrual')
+    // No moms on the accrual: VAT stays on the invoice date.
+    expect(sep.lines).toEqual([
+      expect.objectContaining({ account_number: '5020', debit_amount: 1000, credit_amount: 0 }),
+      expect.objectContaining({ account_number: '2990', debit_amount: 0, credit_amount: 1000 }),
+    ])
+  })
+
+  it('books a December cost in the previous fiscal year (January invoice)', async () => {
+    mockFindFiscalPeriod.mockResolvedValueOnce('fp-2025')
+    const schedule = accrued({
+      period_start: '2025-12-01',
+      period_end: '2025-12-31',
+      months: 1,
+      posting_floor_date: '2026-01-20',
+    })
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: [makeInstallment({ period_month: '2025-12-01', schedule })] },
+      { data: { bookkeeping_locked_through: null } },
+      { data: [{ id: 'inst-1' }] },
+      { count: 0 },
+      { data: null },
+    ])
+
+    await postDueInstallments(supabase as unknown as SupabaseClient, COMPANY, {
+      userId: USER,
+      today: '2026-01-20',
+    })
+
+    const input = mockCreateJournalEntry.mock.calls[0][3]
+    expect(input.entry_date).toBe('2025-12-31')
+    expect(input.fiscal_period_id).toBe('fp-2025')
+  })
+
+  it('never moves a month behind the company lock date: it fails and stays pending', async () => {
+    const schedule = accrued()
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: [makeInstallment({ period_month: '2026-07-01', schedule })] },
+      { data: { bookkeeping_locked_through: '2026-07-31' } },
+      { data: null }, // last_error update
+    ])
+
+    const result = await postDueInstallments(supabase as unknown as SupabaseClient, COMPANY, {
+      userId: USER,
+      today: '2026-10-05',
+    })
+
+    expect(result).toMatchObject({ posted: 0, failed: 1 })
+    expect(result.errors[0].message).toMatch(/2026-07-31/)
+    expect(result.errors[0].message).toMatch(/flyttas inte/)
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(findCall('accrual_schedule_installments', 'update')?.[0]).toMatchObject({
+      last_error: expect.stringMatching(/låsdatum/),
+    })
+  })
+
+  it('never clamps into the next open year when its own year is closed or missing', async () => {
+    mockFindFiscalPeriod.mockResolvedValueOnce(null)
+    const schedule = accrued()
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: [makeInstallment({ period_month: '2026-09-01', schedule })] },
+      { data: { bookkeeping_locked_through: null } },
+      { data: null }, // last_error update (no next-open-period lookup)
+    ])
+
+    const result = await postDueInstallments(supabase as unknown as SupabaseClient, COMPANY, {
+      userId: USER,
+      today: '2026-10-05',
+    })
+
+    expect(result).toMatchObject({ posted: 0, failed: 1 })
+    expect(result.errors[0].message).toMatch(/inget öppet räkenskapsår täcker datumet/)
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('keeps a 17xx schedule on the invoice-date floor (unchanged)', async () => {
+    const prepaid = makeSchedule({ balance_account: '1790', posting_floor_date: '2026-10-05' })
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: [makeInstallment({ period_month: '2026-10-01', schedule: prepaid })] },
+      { data: { bookkeeping_locked_through: null } },
+      { data: [{ id: 'inst-1' }] },
+      { count: 1 },
+    ])
+
+    await postDueInstallments(supabase as unknown as SupabaseClient, COMPANY, {
+      userId: USER,
+      today: '2026-10-05',
+    })
+
+    expect(mockCreateJournalEntry.mock.calls[0][3].entry_date).toBe('2026-10-05')
+  })
+
+  it('a credit note cancels the schedule and stornoes its posted months on the credit date', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: [accrued()] },
+      { data: null }, // pending -> cancelled
+      {
+        data: ['jul', 'aug', 'sep'].map((month) => ({
+          id: `inst-${month}`,
+          journal_entry_id: `je-${month}`,
+          journal_entry: { fiscal_period: { period_start: '2026-01-01', period_end: '2026-12-31' } },
+        })),
+      },
+      { data: null }, // schedule -> cancelled
+    ])
+
+    const result = await cancelSchedulesForSource(
+      supabase as unknown as SupabaseClient,
+      COMPANY,
+      USER,
+      { supplierInvoiceId: 'si-1' },
+      { reversalDate: '2026-11-02' },
+    )
+
+    expect(result).toEqual({ cancelledSchedules: 1, reversedEntries: 3, failedReversals: 0 })
+    for (const month of ['jul', 'aug', 'sep']) {
+      expect(mockReverseEntry).toHaveBeenCalledWith(expect.anything(), COMPANY, USER, `je-${month}`, '2026-11-02')
+    }
+  })
+})

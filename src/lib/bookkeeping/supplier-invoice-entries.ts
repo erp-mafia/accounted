@@ -8,6 +8,7 @@ import {
   type ChartVatTreatments,
 } from './vat-entries'
 import { fetchChartVatTreatments } from './chart-vat-treatments'
+import { assertAccruedCostLinesBookable } from './accruals/accrued-cost-guard'
 import { generateSlpLines, isSlpPensionAccount } from './slp-lines'
 import { coerceDimensionsBag } from './dimension-resolver'
 import { createLogger } from '@/lib/logger'
@@ -152,10 +153,12 @@ export async function createSupplierInvoiceRegistrationEntry(
 /**
  * The registration verifikat createSupplierInvoiceRegistrationEntry would
  * post, without posting it: the fiscal period lookup (and, for a
- * reverse-charge invoice, the company's momskoder) are the only database
- * reads, and nothing is written. The deferred "Bokför" dry run previews these
- * lines. Returns null when no open fiscal period covers invoice_date. Throws
- * the same generator errors (SupplierInvoiceFxRateMissingError) the
+ * reverse-charge invoice, the company's momskoder; for an upplupen kostnad on
+ * 29xx, the lock state of its month-ends) are the only database reads, and
+ * nothing is written. The deferred "Bokför" dry run previews these lines.
+ * Returns null when no open fiscal period covers invoice_date. Throws the
+ * same generator errors (SupplierInvoiceFxRateMissingError,
+ * AccruedCostPeriodInvalidError, AccruedCostPeriodLockedError) the
  * committing path throws.
  */
 export async function buildSupplierInvoiceRegistrationEntryInput(
@@ -171,6 +174,11 @@ export async function buildSupplierInvoiceRegistrationEntryInput(
     log.warn('No open fiscal period found for invoice date:', invoice.invoice_date)
     return null
   }
+
+  // An upplupen kostnad (29xx line) books its months right after this
+  // registration: refuse here, before the 29xx debit exists, when one of
+  // those months cannot take its entry (every door reaches this point).
+  await assertAccruedCostLinesBookable(supabase, companyId, invoice.invoice_date, items)
 
   const desc = buildSupplierDescription('Leverantörsfaktura', invoice.supplier_invoice_number, supplierName, `(ankomstnr ${invoice.arrival_number})`)
   // The same pure builder the review dialog previews before the invoice

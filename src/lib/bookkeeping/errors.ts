@@ -41,6 +41,8 @@ export const CORRECTION_CHAIN_TOO_DEEP = 'CORRECTION_CHAIN_TOO_DEEP' as const
 export const NO_OPEN_PERIOD_FOR_DATE = 'NO_OPEN_PERIOD_FOR_DATE' as const
 export const TARGET_PERIOD_CLOSED = 'TARGET_PERIOD_CLOSED' as const
 export const TARGET_PERIOD_LOCKED = 'TARGET_PERIOD_LOCKED' as const
+export const SI_ACCRUED_COST_PERIOD_INVALID = 'SI_ACCRUED_COST_PERIOD_INVALID' as const
+export const SI_ACCRUED_COST_PERIOD_LOCKED = 'SI_ACCRUED_COST_PERIOD_LOCKED' as const
 
 // ============================================================================
 // AccountsNotInChartError: kept for back-compat (many existing call sites)
@@ -393,6 +395,57 @@ export class TargetPeriodLockedError extends Error {
   }
 }
 
+/**
+ * Raised before a supplier invoice registration is posted when a line books
+ * an upplupen kostnad (29xx) for a period that does not end before the
+ * invoice month. The cost of the invoice month itself is no accrual: the
+ * line has to be split instead.
+ */
+export class AccruedCostPeriodInvalidError extends Error {
+  readonly code = SI_ACCRUED_COST_PERIOD_INVALID
+  constructor(
+    public readonly periodStart: string,
+    public readonly periodEnd: string,
+    public readonly invoiceDate: string
+  ) {
+    super(
+      `An accrued cost (29xx) must cover months before the invoice month: the period ${periodStart} to ${periodEnd} reaches the month of the invoice dated ${invoiceDate}. Split the line.`
+    )
+    this.name = 'AccruedCostPeriodInvalidError'
+  }
+}
+
+/** Why a month-end date cannot take an upplupen kostnad (checkPeriodLock's reasons). */
+export type AccruedCostBlockReason =
+  | 'company_lock_date_covers'
+  | 'period_locked_at_set'
+  | 'period_is_closed'
+  | 'no_fiscal_period'
+  | 'lookup_failed'
+
+export interface AccruedCostBlockedDate {
+  date: string
+  reason: AccruedCostBlockReason
+}
+
+/**
+ * Raised before a supplier invoice registration is posted when an upplupen
+ * kostnad (29xx) would book on a month-end that cannot take an entry: a
+ * closed or locked period, a date on or before the company lock date, or no
+ * fiscal year at all. The cost belongs
+ * to that month, so it is never moved to another one: the whole registration
+ * is refused and nothing is written.
+ */
+export class AccruedCostPeriodLockedError extends Error {
+  readonly code = SI_ACCRUED_COST_PERIOD_LOCKED
+  constructor(public readonly blocked: AccruedCostBlockedDate[]) {
+    super(
+      `An accrued cost (29xx) would post on ${blocked.map((b) => `${b.date} (${b.reason})`).join(', ')}, which cannot take entries. Nothing was booked.`
+    )
+    this.name = 'AccruedCostPeriodLockedError'
+  }
+}
+
 export class InvalidMappingResultError extends Error {
   readonly code = INVALID_MAPPING_RESULT
   constructor(
@@ -544,6 +597,8 @@ export function isBookkeepingError(err: unknown): boolean {
     err instanceof NoOpenPeriodForDateError ||
     err instanceof TargetPeriodClosedError ||
     err instanceof TargetPeriodLockedError ||
+    err instanceof AccruedCostPeriodInvalidError ||
+    err instanceof AccruedCostPeriodLockedError ||
     err instanceof DimensionValidationError ||
     err instanceof MandatoryDimensionMissingError
   )
@@ -898,6 +953,26 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
         },
       },
       { status: err.code === BOOKKEEPING_DATABASE_ERROR ? 500 : 409 }
+    )
+  }
+
+  if (err instanceof AccruedCostPeriodInvalidError) {
+    return NextResponse.json(
+      {
+        error: {
+          code: err.code,
+          message: err.message,
+          details: { periodStart: err.periodStart, periodEnd: err.periodEnd, invoiceDate: err.invoiceDate },
+        },
+      },
+      { status: 400 }
+    )
+  }
+
+  if (err instanceof AccruedCostPeriodLockedError) {
+    return NextResponse.json(
+      { error: { code: err.code, message: err.message, details: { blocked: err.blocked } } },
+      { status: 400 }
     )
   }
 

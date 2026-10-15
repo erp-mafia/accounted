@@ -28,6 +28,8 @@ import {
 } from './structured-errors'
 import {
   AccountsNotInChartError,
+  AccruedCostPeriodInvalidError,
+  AccruedCostPeriodLockedError,
   BookkeepingDatabaseError,
   CannotCancelNonDraftError,
   CannotEditNonDraftError,
@@ -703,6 +705,15 @@ export function extractBookkeepingDetails(err: unknown): { code: string; details
   }
   if (err instanceof TargetPeriodLockedError) {
     return { code: err.code, details: { date: err.date, lockDate: err.lockDate } }
+  }
+  if (err instanceof AccruedCostPeriodInvalidError) {
+    return {
+      code: err.code,
+      details: { periodStart: err.periodStart, periodEnd: err.periodEnd, invoiceDate: err.invoiceDate },
+    }
+  }
+  if (err instanceof AccruedCostPeriodLockedError) {
+    return { code: err.code, details: { blocked: err.blocked } }
   }
   if (err instanceof BookkeepingDatabaseError) {
     return { code: err.code, details: { operation: err.operation, ...(err.pgCode ? { pgCode: err.pgCode } : {}) } }

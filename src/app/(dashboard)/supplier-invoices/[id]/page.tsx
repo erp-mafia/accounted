@@ -64,7 +64,7 @@ import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 import type { BASAccount, EntityType } from '@/types'
 
 // A line is periodiserad when both period dates are set: the cost was parked
-// on the 17xx interim account and dissolves monthly via accrual_schedules.
+// on the 17xx/29xx interim account and dissolves monthly via accrual_schedules.
 const itemHasAccrual = (item: SupplierInvoiceItem): boolean =>
   !!(item.accrual_period_start && item.accrual_period_end)
 

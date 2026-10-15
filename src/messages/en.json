@@ -1356,6 +1356,8 @@
     "start_label": "Period start",
     "end_label": "Period end",
     "account_label": "Balance account",
+    "accrued_cost_hint": "Accrued cost: booked on the last day of each month in the period.",
+    "accrued_cost_period_invalid": "An accrued cost must cover months before the invoice month. Split the line if the period runs into the invoice's month.",
     "remove_aria": "Remove deferral",
     "preview": "{months} months × {amount}, {first} to {last}",
     "preview_one_month": "The whole amount is booked in {month}",

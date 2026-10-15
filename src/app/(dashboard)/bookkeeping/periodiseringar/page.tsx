@@ -1,8 +1,9 @@
 'use client'
 
-// Periodiseringar: löpande accrual schedules (förutbetalda kostnader 17xx /
-// förutbetalda intäkter 29xx) skapade från fakturarader. Djupt regulatorisk
-// bokföringsyta → svenska i båda locales, i linje med bokslutsguiden.
+// Periodiseringar: löpande accrual schedules (förutbetalda kostnader 17xx,
+// upplupna kostnader 29xx / förutbetalda intäkter 29xx) skapade från
+// fakturarader. Djupt regulatorisk bokföringsyta → svenska i båda locales,
+// i linje med bokslutsguiden.
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'

@@ -5017,6 +5017,27 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
     message_en:
       'Periodisering cannot be combined with reverse charge. The expense line carries the VAT base for the VAT declaration (boxes 20-32), so the net amount cannot be deferred to an interim account.',
   },
+  // Upplupen kostnad (29xx) on a supplier invoice line: typed errors from
+  // lib/bookkeeping/errors.ts, raised before the registration is posted.
+  SI_ACCRUED_COST_PERIOD_INVALID: {
+    httpStatus: 400,
+    message_sv:
+      'En upplupen kostnad (29xx) måste avse månader före fakturamånaden. Perioden fortsätter in i fakturans månad: dela raden i en del för månaderna före fakturamånaden (29xx) och en del för resten (17xx eller kostnadskontot).',
+    message_en:
+      'An accrued cost (29xx) must cover months before the invoice month. The period reaches the month of the invoice: split the line into the months before the invoice month (29xx) and the rest (17xx or the cost account).',
+  },
+  SI_ACCRUED_COST_PERIOD_LOCKED: {
+    httpStatus: 400,
+    message_sv:
+      'En upplupen kostnad (29xx) bokförs sista dagen i varje månad i perioden, och minst en av månaderna kan inte ta emot verifikationer (låst, stängd, inom företagets låsdatum eller utan räkenskapsår). Kostnaden flyttas inte till en annan månad, så inget har bokförts. Lås upp perioden eller lägg upp räkenskapsåret, eller bokför raden utan periodisering.',
+    message_en:
+      'An accrued cost (29xx) books on the last day of each month in the period, and at least one of those months cannot take entries (locked, closed, behind the company lock date or without a fiscal year). The cost is never moved to another month, so nothing was booked. Unlock the period or create the fiscal year, or book the line without periodisering.',
+    remediation: {
+      description:
+        'details.blocked lists each month-end date with its reason (company_lock_date_covers, period_locked_at_set, period_is_closed, no_fiscal_period, lookup_failed). Unlock a locked period (gnubok_unlock_period), create the missing fiscal year, or send the line without the accrual fields. Nothing was written.',
+      tool: 'gnubok_unlock_period',
+    },
+  },
   SI_CREATE_SLP_INVALID_ACCOUNT: {
     httpStatus: 400,
     message_sv:

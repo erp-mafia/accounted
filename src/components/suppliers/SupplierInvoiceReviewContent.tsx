@@ -38,7 +38,7 @@ interface ReviewLineItem {
   // book as two lines.
   dimensions?: Record<string, string>
   // Periodisering: when both dates are set, the registration entry books the
-  // net to the 17xx interim account instead of account_number (mirrored via
+  // net to the 17xx/29xx interim account instead of account_number (mirrored via
   // resolveBookingAccount so this preview matches the saved verifikat).
   accrual_period_start?: string | null
   accrual_period_end?: string | null
