@@ -223,10 +223,16 @@ const ROW_COLUMNS =
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
+/** Connect's refusal when the company already holds its one bank connection (or an attempt in progress). */
+const CONNECTOR_QUOTA_EXCEEDED = 'CONNECTOR_QUOTA_EXCEEDED'
+
 function providerFailure(error: unknown): Failure {
   if (error instanceof ConsentOverError) return { ok: false, code: 'BANK_CONSENT_OVER', details: { provider_code: error.providerCode } }
   if (error instanceof BankFeedError) {
     if (error.code === BANK_FEED_NOT_FOUND) return { ok: false, code: 'BANK_CONSENT_CHANGED', details: { provider_code: error.providerCode } }
+    // One bank connection per company: another connection, or an attempt
+    // still in progress, holds the place. Not the bank's refusal.
+    if (error.code === CONNECTOR_QUOTA_EXCEEDED) return { ok: false, code: 'BANK_CONNECTION_IN_PROGRESS' }
     return {
       ok: false,
       code: error.retryable ? 'BANK_PROVIDER_UNAVAILABLE' : 'BANK_PROVIDER_REFUSED',
@@ -665,16 +671,24 @@ export async function startBankFeedConsent(ctx: OperationContext, input: StartIn
   // for its second signatory and is never swept. Never-finished rows hold no data.
   const { data: pendingRows } = await ctx.supabase
     .from('bank_connections')
-    .select('id, bic, created_at, consent_attempt')
+    .select('id, bic, created_at, session_id, consent_attempt')
     .eq('company_id', ctx.companyId)
     .eq('aggregator', OPEN_PAYMENTS_AGGREGATOR)
     .eq('status', 'pending')
-  const sweep = ((pendingRows ?? []) as Array<{ id: string; bic: string | null; created_at: string; consent_attempt: ConsentAttempt | null }>)
+  const swept = ((pendingRows ?? []) as Array<{ id: string; bic: string | null; created_at: string; session_id: string | null; consent_attempt: ConsentAttempt | null }>)
     .filter((r) => r.consent_attempt?.state !== 'partially_authorised')
     .filter((r) => r.bic === bank.bic || new Date(r.consent_attempt?.started_at ?? r.created_at).getTime() < now - STALE_ATTEMPT_MS)
-    .map((r) => r.id)
-  if (sweep.length > 0) {
-    await ctx.supabase.from('bank_connections').delete().in('id', sweep).eq('company_id', ctx.companyId).eq('aggregator', OPEN_PAYMENTS_AGGREGATOR).eq('status', 'pending')
+  if (swept.length > 0) {
+    // End each abandoned attempt's consent before its row goes: a company
+    // holds one bank connection at Connect, and a consent left behind would
+    // hold that place and refuse this new attempt. Best effort: one already
+    // ended (or never signed) answers so, which changes nothing here.
+    await Promise.all(
+      swept
+        .filter((r) => r.session_id)
+        .map((r) => connect.revokeConsent(ctx.companyId, { party: party.party, consentId: r.session_id! }).catch(() => {})),
+    )
+    await ctx.supabase.from('bank_connections').delete().in('id', swept.map((r) => r.id)).eq('company_id', ctx.companyId).eq('aggregator', OPEN_PAYMENTS_AGGREGATOR).eq('status', 'pending')
   }
 
   const listingOnly = bank.bic === SVEA_BIC

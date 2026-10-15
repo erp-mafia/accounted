@@ -8202,6 +8202,11 @@ const OPEN_BANKING: Record<string, StructuredErrorEntry> = {
     message_sv: 'Att koppla banken med BankID via Open Payments är inte aktiverat för det här företaget.',
     message_en: 'Connecting a bank with BankID through Open Payments is not enabled for this company.',
   },
+  BANK_CONNECTION_IN_PROGRESS: {
+    httpStatus: 409,
+    message_sv: 'Företaget har redan en bankkoppling eller ett påbörjat försök. Ta bort den under Inställningar, Kopplingar för att koppla en annan bank, eller vänta en kvart och försök igen.',
+    message_en: 'The company already has a bank connection or an attempt in progress. Remove it under Settings, Connections to connect another bank, or wait a quarter of an hour and try again.',
+  },
   BANK_CONSENT_PERSONAL_NUMBER_REQUIRED: {
     httpStatus: 400,
     message_sv: 'Ange personnumret för den som loggar in med BankID.',
