@@ -6,7 +6,9 @@ vi.mock('@/lib/auth/bankid-signer', async (importOriginal) => ({
   signerPersonalNumberOnFile: (...a: unknown[]) => mocks.onFile(...a),
 }))
 
+import { paymentsPartySchema } from '@accounted/connect-contract'
 import { createTableMockSupabase } from '@/tests/helpers'
+import { toConnectorParty } from '@/lib/payments/initiation/connect'
 import { buildPartyContext } from '../party'
 import type { DebtorSnapshot } from '../debtor'
 
@@ -42,5 +44,33 @@ describe('the payment party and the Nordea Corporate Netbank logon id', () => {
       ok: false,
       outcome: { ok: false, code: 'VALIDATION_ERROR', details: { field: 'psu_authoriser_id', reason: 'invalid' } },
     })
+  })
+})
+
+describe('the payment party and the company\'s organisationsnummer (crm#1206)', () => {
+  const withOrg = (settings: string | null, company: string | null = null) =>
+    ({
+      supabase: createTableMockSupabase({
+        company_settings: { data: { org_number: settings }, error: null },
+        companies: { data: { org_number: company }, error: null },
+      }).supabase,
+      companyId: 'co-1',
+      userId: 'u-1',
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() },
+    }) as never
+
+  it('sends an enskild firma\'s personnummer stored with its century as the ten digits the contract takes', async () => {
+    const built = await buildPartyContext(withOrg('19121212-1212'), debtor('ESSESESS'), signer())
+    expect(built.ok && built.ctx.companyOrgNumber).toBe('1212121212')
+    if (!built.ok) throw new Error('party not built')
+    expect(paymentsPartySchema.safeParse(toConnectorParty(built.ctx)).success).toBe(true)
+  })
+
+  it('names the missing number instead of the generic validation error', async () => {
+    expect(await buildPartyContext(withOrg(null), debtor('ESSESESS'), signer())).toEqual({
+      ok: false,
+      outcome: { ok: false, code: 'PAYMENT_ORG_NUMBER_MISSING', details: { field: 'org_number', reason: 'missing' } },
+    })
+    expect(await buildPartyContext(withOrg('11223344556'), debtor('ESSESESS'), signer())).toMatchObject({ ok: false, outcome: { code: 'PAYMENT_ORG_NUMBER_MISSING' } })
   })
 })

@@ -131,7 +131,17 @@ describe('getCompanyPaymentVerification', () => {
 
     session.setTable('company_settings', { data: { org_number: null } })
     session.setTable('companies', { data: { org_number: null } })
-    expect(await getCompanyPaymentVerification(ctx(), { now: NOW })).toEqual({ ok: false, code: 'VALIDATION_ERROR', details: { field: 'org_number', reason: 'missing' } })
+    expect(await getCompanyPaymentVerification(ctx(), { now: NOW })).toEqual({ ok: false, code: 'PAYMENT_ORG_NUMBER_MISSING', details: { field: 'org_number', reason: 'missing' } })
+  })
+
+  it('addresses an enskild firma by the ten digits of the personnummer stored with its century (crm#1206)', async () => {
+    const provider = fakeProvider({ getCompanyVerification: vi.fn().mockResolvedValue({ status: 'valid', validUntil: '2027-10-03' }) })
+    registerPaymentInitiationProvider(provider)
+    session.setTable('company_settings', { data: { org_number: '19121212-1212' } })
+    writer.setTable('company_payment_verifications', [{ data: null }, { data: null }, { data: stored({ checked_at: NOW.toISOString() }) }])
+
+    expect(await getCompanyPaymentVerification(ctx(), { now: NOW })).toMatchObject({ ok: true })
+    expect(provider.getCompanyVerification).toHaveBeenCalledWith(expect.objectContaining({ companyOrgNumber: '1212121212' }))
   })
 })
 

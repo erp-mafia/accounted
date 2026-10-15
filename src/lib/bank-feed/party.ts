@@ -3,7 +3,9 @@
  * Connect AIS call carries (forwarded to the provider as PSU headers, never
  * stored by the service).
  *
- *   - orgNumber: the company's organisationsnummer, digits only.
+ *   - orgNumber: the company's organisationsnummer, 10 digits
+ *     (lib/company/org-number.ts): an enskild firma's is the owner's
+ *     personnummer without its century.
  *   - accountContext: 'corporate' for every company but an enskild firma,
  *     whose bank agreement is the owner's private one ('private'). The
  *     context chosen at connect time is kept on bank_connections.psu_type
@@ -33,6 +35,7 @@
 import type { AisParty } from '@accounted/connect-contract'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { normalizeSignerPersonalNumber, signerPersonalNumberOnFile } from '@/lib/auth/bankid-signer'
+import { companyOrgNumber } from '@/lib/company/org-number'
 import { storedConnectionPsu, type ConnectionPsuSource } from '@/lib/auth/resource-psu'
 import type { OperationOutcome } from '@/lib/operations/types'
 import { psuAuthoriserIdFor } from './psu-authoriser'
@@ -65,32 +68,6 @@ export function accountContextOf(psuType: string | null | undefined): AisParty['
 
 export function psuTypeOf(accountContext: AisParty['accountContext']): PsuType {
   return accountContext === 'private' ? 'personal' : 'business'
-}
-
-/**
- * An organisationsnummer as the contract wants it (10 digits), or null. A
- * 12-digit form drops its two leading digits: 16 for a legal entity, 19 or
- * 20 for an enskild firma, whose organisationsnummer is the owner's
- * personnummer and is often stored with its century (19751130XXXX).
- */
-export function tenDigitOrgNumber(raw: string | null | undefined): string | null {
-  if (!raw) return null
-  const digits = raw.replace(/\D/g, '')
-  const ten = digits.length === 12 && /^(16|19|20)/.test(digits) ? digits.slice(2) : digits
-  return /^\d{10}$/.test(ten) ? ten : null
-}
-
-/**
- * The company's organisationsnummer as the contract wants it (10 digits), or
- * null when the company has none: the settings row first, the company row
- * when the settings have none or one that does not read as a number.
- */
-export async function companyOrgNumber(supabase: SupabaseClient, companyId: string): Promise<string | null> {
-  const { data: settings } = await supabase.from('company_settings').select('org_number').eq('company_id', companyId).maybeSingle()
-  const fromSettings = tenDigitOrgNumber((settings as { org_number?: string | null } | null)?.org_number ?? null)
-  if (fromSettings) return fromSettings
-  const { data: company } = await supabase.from('companies').select('org_number').eq('id', companyId).maybeSingle()
-  return tenDigitOrgNumber((company as { org_number?: string | null } | null)?.org_number ?? null)
 }
 
 export interface PartyInput {

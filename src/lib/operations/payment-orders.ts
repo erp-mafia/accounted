@@ -752,6 +752,7 @@ export const paymentOrdersCancel = defineOperation({
     'PAYMENT_CANCEL_TOO_LATE',
     'PAYMENT_CANCEL_NOT_CONFIRMED',
     'PAYMENTS_UNAVAILABLE',
+    'PAYMENT_ORG_NUMBER_MISSING',
     'PAYMENT_PROVIDER_UNAVAILABLE',
     'PAYMENT_PROVIDER_REFUSED',
   ],
@@ -955,7 +956,7 @@ export const paymentsVerification = defineOperation({
   },
   input: z.object({}),
   output: Verification,
-  errorCodes: ['PAYMENTS_UNAVAILABLE', 'PAYMENT_PROVIDER_UNAVAILABLE', 'PAYMENT_PROVIDER_REFUSED'],
+  errorCodes: ['PAYMENTS_UNAVAILABLE', 'PAYMENT_ORG_NUMBER_MISSING', 'PAYMENT_PROVIDER_UNAVAILABLE', 'PAYMENT_PROVIDER_REFUSED'],
   http: { method: 'GET', path: '/api/v1/companies/:companyId/payment-orders/verification' },
   run: async (ctx) => getCompanyPaymentVerification(ctx),
 })
@@ -992,7 +993,7 @@ export const paymentsVerificationStart = defineOperation({
     expires_at: z.string().describe('ISO instant the form link runs out (24 hours).'),
     state: VERIFICATION_STATE,
   }),
-  errorCodes: ['PAYMENTS_UNAVAILABLE', 'PAYMENT_PROVIDER_UNAVAILABLE', 'PAYMENT_PROVIDER_REFUSED'],
+  errorCodes: ['PAYMENTS_UNAVAILABLE', 'PAYMENT_ORG_NUMBER_MISSING', 'PAYMENT_PROVIDER_UNAVAILABLE', 'PAYMENT_PROVIDER_REFUSED'],
   http: { method: 'POST', path: '/api/v1/companies/:companyId/payment-orders/verification/start', requireIdempotencyKey: false },
   run: async (ctx, input, { dryRun }) => {
     if (dryRun) return { ok: true, dryRun: true, preview: { action: 'start_company_verification', handoff: input.handoff === true } }

@@ -96,6 +96,13 @@ describe('gnubok_link_document_to_voucher: refusals at staging', () => {
     expect(error.message_sv).toBe('Dokumentet är redan kopplat till en verifikation.')
     expect(error.message_en).toContain(`verifikat A57 (journal_entry_id ${HOLDER_ID}, status reversed)`)
     expect(error.message_en).toContain('gnubok_correct_entry')
+    // crm#1207: a verifikat that needs the same underlag gets a copy row with
+    // this call's own ids, never "upload it again" (the upload door returns
+    // the existing document for identical bytes).
+    expect(error.message_en).toContain(
+      `gnubok_link_documents_to_vouchers with links: [{ document_id: "${DOC_ID}", journal_entry_id: "${TARGET_ID}", copy: true }]`,
+    )
+    expect(error.message_en).toContain('Do not re-upload or alter the file')
   })
 
   it('refuses a dry run the same way: a dry run that passes must mean the commit can pass', async () => {
@@ -200,11 +207,13 @@ describe('gnubok_link_document_to_voucher: refusals at staging', () => {
       expect(error.code).toBe('DOC_LINK_PROPOSED_ELSEWHERE')
       expect(error.retryable).toBe(false)
       expect(error.message_sv).toContain('ett underlag kan bara kopplas till en verifikation')
-      expect(error.message_sv).toContain('ladda upp filen igen som ett eget underlag')
+      expect(error.message_sv).toContain('kopplas en exakt kopia till den här verifikationen')
       expect(error.message_sv).toContain('avvisa det andra förslaget')
       expect(error.message_sv).not.toContain('flera delar')
       expect(error.message_en).toContain(`pending operation ${OTHER_OP_ID} (journal_entry_id ${OTHER_TARGET_ID})`)
-      expect(error.message_en).toContain('gnubok_upload_document')
+      // crm#1207: the way out is a copy row, not a re-upload that dedups.
+      expect(error.message_en).toContain(`{ document_id: "${DOC_ID}", journal_entry_id: "${TARGET_ID}", copy: true }`)
+      expect(error.message_en).not.toContain('gnubok_upload_document')
       expect(error.message_en).toContain('gnubok_reject_pending_operation')
     })
 
@@ -250,6 +259,55 @@ describe('gnubok_link_document_to_voucher: refusals at staging', () => {
       expect(warning).toContain('egen kopia per verifikation')
       expect(warning).not.toContain('flera delar')
     })
+  })
+})
+
+describe('gnubok_link_document_to_voucher: pointing at the bulk tool (crm#1207)', () => {
+  type Staged = { staged: boolean; next?: { tool?: string; description: string } }
+  const waitingLink = (n: number) => ({
+    id: `00000000-0000-4000-8000-00000000050${n}`,
+    operation_type: 'link_document_to_voucher',
+    params: { document_id: `00000000-0000-4000-8000-00000000060${n}`, journal_entry_id: `00000000-0000-4000-8000-00000000070${n}` },
+  })
+  const stageLink = (supabase: unknown) =>
+    linkDocument.execute({ document_id: DOC_ID, journal_entry_id: TARGET_ID }, COMPANY_ID, USER_ID, supabase as never, ACTOR) as Promise<Staged>
+
+  it('names gnubok_link_documents_to_vouchers when two single links already wait: this is the third', async () => {
+    const result = await stageLink(setup({ pending: [waitingLink(1), waitingLink(2)] }).supabase)
+
+    expect(result.staged).toBe(true)
+    expect(result.next?.tool).toBe('gnubok_link_documents_to_vouchers')
+    expect(result.next?.description).toMatch(/^3 single document links are waiting/)
+    expect(result.next?.description).toContain('gnubok_stage_tool')
+  })
+
+  it('repeats it every tenth link, not on every call', async () => {
+    const waiting = (n: number) => Array.from({ length: n }, (_, i) => ({ ...waitingLink(1), id: `op-waiting-${i}` }))
+    expect((await stageLink(setup({ pending: waiting(3) }).supabase)).next).toBeUndefined()
+    expect((await stageLink(setup({ pending: waiting(12) }).supabase)).next?.description).toMatch(/^13 single document links/)
+  })
+
+  it('says nothing for a lone link, or when the waiting proposals are other kinds', async () => {
+    expect((await stageLink(setup({ pending: [waitingLink(1)] }).supabase)).next).toBeUndefined()
+    const bulk = { ...waitingLink(2), operation_type: 'link_documents_to_vouchers', params: { links: [] } }
+    expect((await stageLink(setup({ pending: [bulk, { ...bulk, id: '00000000-0000-4000-8000-000000000509' }] }).supabase)).next).toBeUndefined()
+  })
+
+  it('a waiting copy row of the document for another verifikat is no conflict: the copy never holds the document', async () => {
+    const { supabase, findCall } = setup({
+      pending: [{ id: '00000000-0000-4000-8000-000000000508', params: { links: [{ document_id: DOC_ID, journal_entry_id: HOLDER_ID, copy: true }] } }],
+    })
+
+    const result = await stageLink(supabase)
+
+    expect(result.staged).toBe(true)
+    expect(findCall('pending_operations', 'insert')).toBeDefined()
+  })
+
+  it('the description names the bulk tool and stays within 280 characters', () => {
+    expect(linkDocument.description).toContain('gnubok_link_documents_to_vouchers')
+    expect(linkDocument.description.length).toBeLessThanOrEqual(280)
+    expect(linkDocuments.description.length).toBeLessThanOrEqual(280)
   })
 })
 

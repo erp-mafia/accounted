@@ -36,6 +36,8 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { canDetachDocument } from './detach-underlag'
 import type { JeUnderlagStatus } from '@/lib/transactions/underlag-status'
 import type { TransactionWithInvoice, HistoryFilter, SourceFilter } from './transaction-types'
+import type { GiroCounterparty } from '@/lib/transactions/giro-counterparty'
+import { useGiroText } from './use-giro-text'
 import type {
   SkattekontoTransactionWithSuggestion,
   StoredSkattekontoTransaction,
@@ -75,6 +77,8 @@ interface TransactionHistoryListProps {
   hasMore?: boolean
   isLoadingMore?: boolean
   onLoadMore?: () => void
+  /** Whose giro number a row that names nobody shows (lib/transactions/giro-counterparty, crm#1204). */
+  giroCounterpartyFor?: (transaction: TransactionWithInvoice) => GiroCounterparty | null
 }
 
 /**
@@ -100,6 +104,7 @@ export default function TransactionHistoryList({
   hasMore,
   isLoadingMore,
   onLoadMore,
+  giroCounterpartyFor,
 }: TransactionHistoryListProps) {
   const t = useTranslations('tx_history')
   const [filter, setFilter] = useState<HistoryFilter>('all')
@@ -199,6 +204,7 @@ export default function TransactionHistoryList({
                     onDetachDocument={onDetachDocument}
                     onOpenMatchVoucher={onOpenMatchVoucher}
                     onDelete={onDelete}
+                    giroCounterparty={giroCounterpartyFor?.(item.data) ?? null}
                   />
                 ) : (
                   <SkattekontoHistoryRow
@@ -240,8 +246,10 @@ function BankHistoryRow({
   onDetachDocument,
   onOpenMatchVoucher,
   onDelete,
+  giroCounterparty = null,
 }: {
   transaction: TransactionWithInvoice
+  giroCounterparty?: GiroCounterparty | null
   isExiting?: boolean
   jeUnderlagStatus?: Record<string, JeUnderlagStatus>
   onOpenMatchDialog: (transaction: TransactionWithInvoice) => void
@@ -253,6 +261,7 @@ function BankHistoryRow({
 }) {
   const t = useTranslations('tx_history')
   const tDetach = useTranslations('tx_detach')
+  const giroText = useGiroText()
   // Viewers must not see write affordances. CorrectionAffordance opens a
   // dialog that stages a storno + correction journal entry; the API path
   // already 403s for viewers but rendering the trigger creates a confusing
@@ -322,6 +331,14 @@ function BankHistoryRow({
       <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden')}>
         <span className="row-collapsible flex min-w-0 items-center gap-2">
           <span className="truncate">{transaction.description}</span>
+          {giroCounterparty && (
+            <span
+              className="hidden max-w-[16rem] shrink-0 truncate text-xs text-muted-foreground md:inline-block"
+              title={giroText.sentence(giroCounterparty)}
+            >
+              {giroText.short(giroCounterparty)}
+            </span>
+          )}
           <TransactionAttachmentIndicator
             documentId={transaction.document_id}
             journalEntryId={primaryEntryId}

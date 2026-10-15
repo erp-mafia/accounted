@@ -2456,6 +2456,7 @@ export default function NewSupplierInvoiceForm({
               oreRounding={oreRounding}
               bookingMoment={bookingMoment}
               chartVatTreatments={chartVatTreatmentsOf(accounts)}
+              defaultDimensions={defaultDims}
             />
           </ConfirmationDialog>
         )

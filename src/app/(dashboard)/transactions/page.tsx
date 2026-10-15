@@ -74,6 +74,8 @@ import type {
   PotentialRotRutPayoutRequest,
 } from '@/components/transactions/transaction-types'
 import type { BatchAllocationPrefill } from '@/lib/transactions/parts-read'
+import { readGiroCounterparty, type GiroCounterparty, type GiroRegister } from '@/lib/transactions/giro-counterparty'
+import { loadGiroRegister } from '@/lib/transactions/giro-register'
 import { loadOpenRotRutPayoutRequests } from '@/lib/invoices/open-rot-rut-payout-requests'
 import { matchTransactionsToRotRutPayoutSets } from '@/lib/invoices/rot-rut-payout-set-matching'
 import {
@@ -812,6 +814,26 @@ export default function TransactionsPage() {
   // Bank transaction being moved to another cash account (null = dialog closed).
   const [moveAccountTarget, setMoveAccountTarget] = useState<TransactionWithInvoice | null>(null)
   const supabase = useRealtimeSupabase()
+  // Whose giro number a row that names nobody shows (crm#1204): the company's
+  // own bankgiro, or the one supplier card carrying it. Read once per company;
+  // nothing is shown until the register is in, so a row never flips from
+  // "likely" to "yours".
+  const [giroLoaded, setGiroLoaded] = useState<{ companyId: string; register: GiroRegister } | null>(null)
+  useEffect(() => {
+    if (!companyId) return
+    let live = true
+    void loadGiroRegister(supabase, companyId).then((register) => {
+      if (live) setGiroLoaded({ companyId, register })
+    })
+    return () => {
+      live = false
+    }
+  }, [companyId, supabase])
+  const giroRegister = giroLoaded && giroLoaded.companyId === companyId ? giroLoaded.register : null
+  const giroCounterpartyFor = useCallback(
+    (tx: TransactionWithInvoice): GiroCounterparty | null => (giroRegister ? readGiroCounterparty(tx, giroRegister) : null),
+    [giroRegister],
+  )
   const highlightId = searchParams.get('highlight')
   // ?open=match beside ?highlight: also open the row's suggested match (Att
   // göra sends a match that needs a decision here, e.g. an overpayment).
@@ -3494,7 +3516,9 @@ export default function TransactionsPage() {
                     ? t('skv_err_ledger_twin')
                     : code === 'LEDGER_COVER_EXISTS'
                       ? t('skv_err_ledger_cover')
-                      : t('skv_err_other')
+                      : code === 'LEDGER_DIRECT_EXISTS'
+                        ? t('skv_err_ledger_direct')
+                        : t('skv_err_other')
       const parts = [t('skv_bulk_partial_ok', { count: succeeded })]
       for (const [code, n] of codeCounts) parts.push(`${n} ${codeLabel(code)}`)
       toast({
@@ -4606,6 +4630,7 @@ export default function TransactionsPage() {
                         accountLogo={accountLogoFor(item.data)}
                         proposal={proposalFor(item.data)}
                         onBookProposal={bookProposal}
+                        giroCounterparty={giroCounterpartyFor(item.data)}
                       />
                     ) : (
                       <SkattekontoInboxCard
@@ -4671,6 +4696,7 @@ export default function TransactionsPage() {
           hasMore={hasMore}
           isLoadingMore={isLoadingMore}
           onLoadMore={loadMoreTransactions}
+          giroCounterpartyFor={giroCounterpartyFor}
         />
       )}
 

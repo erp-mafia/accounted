@@ -823,6 +823,14 @@ export function createQueuedMockSupabase() {
 export type TableMockResult = { data?: unknown; error?: unknown; count?: number | null }
 
 /**
+ * A table answer computed from the chain that asked: every builder call made
+ * on that one chain (`.select()`, `.eq()`, `.in()`, ...), in order. For a
+ * table the code reads in two shapes (one row by id, a list by `.in()`), so a
+ * test answers by WHAT was asked instead of by the order of the reads.
+ */
+export type TableMockResolver = (chainCalls: { method: string; args: unknown[] }[]) => TableMockResult
+
+/**
  * A Supabase mock that answers per table instead of from one global FIFO
  * queue, so a test pins WHAT each table returns rather than the order the
  * code under test happens to query in (createQueuedMockSupabase breaks on
@@ -831,7 +839,9 @@ export type TableMockResult = { data?: unknown; error?: unknown; count?: number 
  * Each key holds either:
  *   - an array: one entry is consumed per awaited chain, and the last entry
  *     sticks once the others are used up;
- *   - a plain object: returned for every await (a constant).
+ *   - a plain object: returned for every await (a constant);
+ *   - a function (TableMockResolver): called on every await with the calls
+ *     made on that chain, its return value is the answer.
  * A key with nothing set resolves `{ data: null, error: null }`.
  *
  * Tables are keyed by name ('suppliers'); RPCs by 'rpc:<name>'
@@ -851,34 +861,38 @@ export type TableMockResult = { data?: unknown; error?: unknown; count?: number 
  *   setTable('rpc:get_next_arrival_number', { data: 5 })
  */
 export function createTableMockSupabase(
-  initial: Record<string, TableMockResult | TableMockResult[]> = {},
+  initial: Record<string, TableMockResult | TableMockResult[] | TableMockResolver> = {},
 ) {
-  const queues = new Map<string, TableMockResult[]>()
+  const queues = new Map<string, Array<TableMockResult | TableMockResolver>>()
 
   /** Every chained builder call, in order: { table, method, args }. */
   const calls: { table: string; method: string; args: unknown[] }[] = []
 
-  const setTable = (key: string, value: TableMockResult | TableMockResult[]) => {
+  const setTable = (key: string, value: TableMockResult | TableMockResult[] | TableMockResolver) => {
     queues.set(key, Array.isArray(value) ? [...value] : [value])
   }
 
-  const next = (key: string) => {
+  const next = (key: string, chainCalls: { method: string; args: unknown[] }[]) => {
     const q = queues.get(key)
-    const entry = q && q.length > 1 ? q.shift()! : q?.[0]
+    const queued = q && q.length > 1 ? q.shift()! : q?.[0]
+    const entry = typeof queued === 'function' ? queued(chainCalls) : queued
     return { data: entry?.data ?? null, error: entry?.error ?? null, count: entry?.count ?? null }
   }
 
-  const buildChain = (key: string): unknown =>
+  // chainCalls: the calls made on this one chain since from()/rpc(), for a
+  // resolver to read.
+  const buildChain = (key: string, chainCalls: { method: string; args: unknown[] }[] = []): unknown =>
     new Proxy(
       {},
       {
         get(_target, prop) {
           if (prop === 'then') {
-            return (resolve: (v: unknown) => void) => resolve(next(key))
+            return (resolve: (v: unknown) => void) => resolve(next(key, chainCalls))
           }
           return (...args: unknown[]) => {
             calls.push({ table: key, method: String(prop), args })
-            return buildChain(key)
+            chainCalls.push({ method: String(prop), args })
+            return buildChain(key, chainCalls)
           }
         },
       },

@@ -11,6 +11,10 @@ import { VTH_CLASS, VTD_CLASS } from '@/components/ui/dry-table'
  * the card: file, verifikat, date and outcome per row, with the counts above.
  * The generic preview rendered the results array as "N rader", which left
  * nothing to check before approving (agent feedback seq 921931).
+ *
+ * A matched_copy row archives a byte-identical copy of a document another
+ * verifikat holds (crm#1207): it is linked like a matched row, and the count
+ * of copies sits with the totals so the approver sees new files are made.
  */
 
 interface LinkResultRow {
@@ -35,6 +39,7 @@ export function LinkDocumentsPreview({ data }: { data: Record<string, unknown> }
   const total = count(data.total) || rows.length
   const matched = count(data.matched_count)
   const locked = count(data.period_locked_count)
+  const copies = count(data.copy_count)
   const unmatched = Math.max(0, count(data.missed_count) - locked)
 
   const statusLabel = (status: string | undefined) =>
@@ -48,6 +53,12 @@ export function LinkDocumentsPreview({ data }: { data: Record<string, unknown> }
       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
         <span className="text-muted-foreground">{t('link_preview_linked')}</span>
         <span className="tabular-nums">{t('link_preview_of_total', { count: matched, total })}</span>
+        {copies > 0 && (
+          <>
+            <span className="text-muted-foreground">{t('link_preview_copies')}</span>
+            <span className="tabular-nums">{copies}</span>
+          </>
+        )}
         {unmatched > 0 && (
           <>
             <span className="text-muted-foreground">{t('link_preview_unmatched')}</span>
@@ -84,7 +95,7 @@ export function LinkDocumentsPreview({ data }: { data: Record<string, unknown> }
                   </td>
                   <td className={cn(VTD_CLASS, 'whitespace-nowrap')}>
                     {/* Chips mark exceptions: a row that will be linked is muted text. */}
-                    {row.status === 'matched' ? (
+                    {row.status === 'matched' || row.status === 'matched_copy' ? (
                       <span className="text-muted-foreground">{statusLabel(row.status)}</span>
                     ) : (
                       <Badge variant="warning">{statusLabel(row.status)}</Badge>

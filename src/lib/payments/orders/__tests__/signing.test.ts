@@ -115,7 +115,7 @@ describe('startPaymentSigning', () => {
     expect(db.findCalls('payment_orders', 'is')).toEqual(expect.arrayContaining([['create_started_at', null], ['outcome_unknown_at', null], ['provider_payment_id', null]]))
     expect(provider.createSigningBasket).toHaveBeenCalledWith(expect.anything(), ['pay-1', 'pay-2'])
     expect(provider.startSigning).toHaveBeenCalledWith(
-      expect.objectContaining({ signerPersonalNumber: '199001011239', debtorBic: 'ESSESESS', companyOrgNumber: '556677-8899', accountContext: 'corporate', affiliatedAspspId: null }),
+      expect.objectContaining({ signerPersonalNumber: '199001011239', debtorBic: 'ESSESESS', companyOrgNumber: '5566778899', accountContext: 'corporate', affiliatedAspspId: null }),
       { kind: 'basket', providerBasketId: 'basket-at-bank' },
       'qr',
       null,

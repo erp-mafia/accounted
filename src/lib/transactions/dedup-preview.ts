@@ -16,11 +16,12 @@
  * What a preview cannot know:
  * - Rows another writer stores between the preview and the commit.
  * - Anything the caller leaves out. The bank-file wizard asks before the user
- *   has picked the settlement account, so its account guard runs with a null
- *   batch account and never rejects: a same-(date, öre, description) row on a
- *   DIFFERENT bank account of the same company is flagged there although
- *   execute inserts it once the account is known. The wizard copy therefore
- *   never promises an exact final number.
+ *   has picked the settlement account, so unless the file's own account
+ *   already is a cash account (crm#1204, the wizard then sends that ledger)
+ *   its account guard runs with a null batch account and never rejects: a
+ *   same-(date, öre, description) row on a DIFFERENT bank account of the same
+ *   company is flagged there although execute inserts it once the account is
+ *   known. The wizard copy therefore never promises an exact final number.
  *
  * Nothing is written: no inserts, no account re-enable, no hand-mirror
  * adoption stamps.
@@ -131,20 +132,23 @@ export interface DuplicatePreviewResult {
 
 /**
  * The bank-file import wizard's duplicate preview: which parsed rows execute
- * will skip. ADVISORY for one reason only, the settlement account is not known
- * yet (see the module note); `ingestTransactions`' own result stays the truth.
+ * will skip. ADVISORY while the settlement account is not known (see the
+ * module note); `ingestTransactions`' own result stays the truth. The wizard
+ * passes the settlement account when the file's own account already is a
+ * cash account (crm#1204), and the preview then guards accounts as execute does.
  */
 export async function previewDuplicates(
   supabase: SupabaseClient,
   companyId: string,
   raws: PreviewTransaction[],
+  options?: Pick<IngestDedupPreviewOptions, 'settlementAccount'>,
 ): Promise<DuplicatePreviewResult> {
   const result: DuplicatePreviewResult = {
     duplicate_row_indexes: [],
     duplicate_count: 0,
     by_reason: { external_id: 0, content_bridge: 0 },
   }
-  const rows = await previewIngestDedup(supabase, companyId, raws)
+  const rows = await previewIngestDedup(supabase, companyId, raws, options)
   rows.forEach((row, index) => {
     if (!row.would_skip) return
     result.duplicate_row_indexes.push(index)

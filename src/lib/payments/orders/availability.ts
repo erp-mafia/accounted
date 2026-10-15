@@ -5,6 +5,7 @@
  */
 
 import { hasSignerOnFile } from '@/lib/auth/bankid-signer'
+import { companyOrgNumber } from '@/lib/company/org-number'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import {
   getPaymentInitiationProvider,
@@ -87,12 +88,7 @@ export async function getPaymentsAvailability(ctx: OperationContext): Promise<Pa
 
 /** The company as the provider's KYC endpoints address it: by its organisationsnummer, in the corporate context. */
 export async function companyParty(ctx: Pick<OperationContext, 'supabase' | 'companyId'>): Promise<PaymentPartyContext | null> {
-  const { data: settings } = await ctx.supabase.from('company_settings').select('org_number').eq('company_id', ctx.companyId).maybeSingle()
-  let orgNumber = (settings as { org_number?: string | null } | null)?.org_number ?? null
-  if (!orgNumber) {
-    const { data: company } = await ctx.supabase.from('companies').select('org_number').eq('id', ctx.companyId).maybeSingle()
-    orgNumber = (company as { org_number?: string | null } | null)?.org_number ?? null
-  }
+  const orgNumber = await companyOrgNumber(ctx.supabase, ctx.companyId)
   if (!orgNumber) return null
   return {
     companyId: ctx.companyId,
@@ -172,7 +168,7 @@ export async function getCompanyPaymentVerification(
   if (!door.ok) return { ok: false, code: 'PAYMENTS_UNAVAILABLE', details: { reason: door.reason } }
   const provider = door.provider
   const party = await companyParty(ctx)
-  if (!party) return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'org_number', reason: 'missing' } }
+  if (!party) return { ok: false, code: 'PAYMENT_ORG_NUMBER_MISSING', details: { field: 'org_number', reason: 'missing' } }
   const now = options.now ?? new Date()
   // The stored record is a cache of the provider's answer: a store that
   // cannot be read or written never stands between the caller and the answer.
@@ -250,7 +246,7 @@ export async function startCompanyPaymentVerification(
   if (!door.ok) return { ok: false, code: 'PAYMENTS_UNAVAILABLE', details: { reason: door.reason } }
   const provider = door.provider
   const party = await companyParty(ctx)
-  if (!party) return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'org_number', reason: 'missing' } }
+  if (!party) return { ok: false, code: 'PAYMENT_ORG_NUMBER_MISSING', details: { field: 'org_number', reason: 'missing' } }
   const now = options.now ?? new Date()
   let url: string
   try {

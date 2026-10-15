@@ -69,6 +69,13 @@ function toLedgerTwin(c: SkattekontoLedgerTwin): SkattekontoLedgerTwin {
  * covers, and "Bokför ändå" repeats the booking with the same per-row
  * override. "Skapa manuellt" gets the same answer from the candidate search
  * (ledger_cover).
+ *
+ * LEDGER_DIRECT_EXISTS is the answer for a row whose event a bank verifikat
+ * without any line on the skattekonto account already books (PH 171): the
+ * previous system, or a bank line here, paid the tax straight to the tax
+ * accounts. There is nothing to link (no skattekonto line), so the primary
+ * action ignores the row, and "Bokför ändå" books it with the same per-row
+ * override.
  */
 export default function SkattekontoBookDialog({
   row,
@@ -93,7 +100,8 @@ export default function SkattekontoBookDialog({
   // Opens the manual match view for a row a summarised verifikat covers; the
   // dialog closes itself first. Omitted: the dialog navigates there itself.
   onLinkCovered?: () => void
-  // Rows were linked (or the link undone) from the cover answer: reload them.
+  // Rows were linked (or the link undone) from the cover answer, or ignored
+  // from the direct answer: reload them.
   onLinked?: () => void
 }) {
   const t = useTranslations('skv_book_dialog')
@@ -116,6 +124,14 @@ export default function SkattekontoBookDialog({
     cover: SkattekontoLedgerCoverInfo | null
     mode: 'book' | 'draft' | 'manual'
   } | null>(null)
+  // The direct-booking refusal (PH 171) for the row it was given for, and
+  // which action "Bokför ändå" repeats.
+  const [directRefusal, setDirectRefusal] = useState<{
+    rowId: string
+    holders: SkattekontoLedgerTwin[]
+    mode: 'book' | 'draft'
+  } | null>(null)
+  const [isIgnoring, setIsIgnoring] = useState(false)
   // The cover answer's "Koppla händelserna" swaps this dialog for the bulk link.
   const [linkAllFor, setLinkAllFor] = useState<string | null>(null)
   // "Bokför ändå" asks why first: the reason is the override, and the
@@ -125,6 +141,7 @@ export default function SkattekontoBookDialog({
   if (!row) return null
   const twinState = twinRefusal?.rowId === row.id ? twinRefusal : null
   const coverState = coverRefusal?.rowId === row.id ? coverRefusal : null
+  const directState = directRefusal?.rowId === row.id ? directRefusal : null
   const reasonState = anywayReason?.rowId === row.id ? anywayReason : null
   const reasonText = reasonState?.text.trim() ?? ''
 
@@ -133,6 +150,7 @@ export default function SkattekontoBookDialog({
     if (!next) {
       setTwinRefusal(null)
       setCoverRefusal(null)
+      setDirectRefusal(null)
       setLinkAllFor(null)
       setAnywayReason(null)
     }
@@ -187,6 +205,10 @@ export default function SkattekontoBookDialog({
       }
       if (result.error_code === 'LEDGER_COVER_EXISTS') {
         setCoverRefusal({ rowId: row.id, cover: result.ledger_cover ?? null, mode: 'book' })
+        return
+      }
+      if (result.error_code === 'LEDGER_DIRECT_EXISTS') {
+        setDirectRefusal({ rowId: row.id, holders: result.ledger_direct ?? [], mode: 'book' })
         return
       }
       if (result.error_code === 'COMMIT_FAILED' && result.journal_entry_id) {
@@ -248,6 +270,14 @@ export default function SkattekontoBookDialog({
         })
         return
       }
+      if (!res.ok && json?.code === 'LEDGER_DIRECT_EXISTS') {
+        setDirectRefusal({
+          rowId: row.id,
+          holders: Array.isArray(json.ledger_direct) ? (json.ledger_direct as SkattekontoLedgerTwin[]) : [],
+          mode: 'draft',
+        })
+        return
+      }
       if (!res.ok) {
         // Map the parsed body plus the status, never `new Error(json.error)`:
         // the mapper would discard the route's own Swedish reason.
@@ -275,6 +305,41 @@ export default function SkattekontoBookDialog({
   function handleMatchInstead() {
     handleOpenChange(false)
     onMatch?.()
+  }
+
+  // The direct answer's primary action: the event is already in the books,
+  // so the row needs no verifikat of its own. Ignoring is reversible (the
+  // ignored rows can be restored on the lists).
+  async function handleIgnoreInstead() {
+    if (!row) return
+    setIsIgnoring(true)
+    try {
+      const res = await fetch(`/api/extensions/ext/skatteverket/skattekonto/transaktioner/${row.id}/ignore`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_ignored: true }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast({
+          title: t('direct_ignore_failed'),
+          description: getErrorMessage(json, { statusCode: res.status }),
+          variant: 'destructive',
+        })
+        return
+      }
+      toast({ title: t('direct_ignored_title'), description: t('direct_ignored_description') })
+      handleOpenChange(false)
+      onLinked?.()
+    } catch (err) {
+      toast({
+        title: t('direct_ignore_failed'),
+        description: err instanceof Error ? getErrorMessage(err) : undefined,
+        variant: 'destructive',
+      })
+    } finally {
+      setIsIgnoring(false)
+    }
   }
 
   // "Bokför ändå" (or "Öppna som utkast ändå"): the first press asks why,
@@ -330,6 +395,68 @@ export default function SkattekontoBookDialog({
         onManual={onLinkCovered}
         skattekontoAccount={skattekontoAccount}
       />
+    )
+  }
+
+  if (directState) {
+    const submitting = isBooking || isOpeningDraft || isIgnoring
+    return (
+      <ConfirmationDialog
+        open={open}
+        onOpenChange={handleOpenChange}
+        title={t('direct_title')}
+        isSubmitting={submitting}
+        confirmLabel={t('direct_ignore_cta')}
+        // The override records the event a second time: say so.
+        warningText={t('direct_warning')}
+        onConfirm={() => void handleIgnoreInstead()}
+        extraActions={
+          <Button
+            variant="ghost"
+            onClick={() => bookAnywayFor(directState.mode)}
+            disabled={submitting || anywayBlocked(directState.mode)}
+            loading={isBooking || isOpeningDraft}
+            className="w-full sm:w-auto text-muted-foreground"
+          >
+            {t('twin_book_anyway')}
+          </Button>
+        }
+      >
+        <div className="space-y-3 py-2 text-sm">
+          <p className="leading-6">
+            {t('direct_body', {
+              text: row.transaktionstext,
+              amount: formatCurrency(Math.abs(amount)),
+              date: formatDate(row.transaktionsdatum),
+              skattekonto: skattekontoAccount,
+            })}
+          </p>
+          {directState.holders.length > 0 && (
+            <ul className="divide-y divide-border rounded-lg border border-border">
+              {directState.holders.slice(0, 5).map((entry) => (
+                <li
+                  key={entry.journal_entry_id}
+                  className="flex items-baseline justify-between gap-4 px-3 py-2"
+                >
+                  <span className="shrink-0 tabular-nums font-medium">
+                    {entry.voucher_number ? formatVoucher(entry) : t('twin_draft')}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-muted-foreground" data-ph-mask>
+                    {entry.description}
+                  </span>
+                  <span className="shrink-0 tabular-nums text-muted-foreground">
+                    {formatDate(entry.entry_date)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="text-xs leading-5 text-muted-foreground">
+            {t('direct_hint', { skattekonto: skattekontoAccount })}
+          </p>
+          {reasonField}
+        </div>
+      </ConfirmationDialog>
     )
   }
 

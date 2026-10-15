@@ -8,6 +8,7 @@
  */
 
 import { normalizeSignerPersonalNumber, signerPersonalNumberOnFile } from '@/lib/auth/bankid-signer'
+import { companyOrgNumber } from '@/lib/company/org-number'
 import { storedBatchPsu } from '@/lib/auth/resource-psu'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { psuAuthoriserIdFor } from '@/lib/bank-feed/psu-authoriser'
@@ -32,19 +33,6 @@ export interface SignerInput {
   psuAuthoriserId?: string | null
 }
 
-/** The company's organisationsnummer as stored: the settings row first, the company row as fallback; null when neither has one. */
-export async function companyOrgNumber(ctx: Pick<OperationContext, 'supabase' | 'companyId'>): Promise<string | null> {
-  const { data: settings } = await ctx.supabase
-    .from('company_settings')
-    .select('org_number')
-    .eq('company_id', ctx.companyId)
-    .maybeSingle()
-  const fromSettings = (settings as { org_number?: string | null } | null)?.org_number ?? null
-  if (fromSettings) return fromSettings
-  const { data: company } = await ctx.supabase.from('companies').select('org_number').eq('id', ctx.companyId).maybeSingle()
-  return (company as { org_number?: string | null } | null)?.org_number ?? null
-}
-
 export async function buildPartyContext(
   ctx: OperationContext,
   order: { debtor_snapshot: DebtorSnapshot },
@@ -55,8 +43,8 @@ export async function buildPartyContext(
     batchId?: string | null
   } = {},
 ): Promise<{ ok: true; ctx: PaymentPartyContext; storedPsu: boolean } | { ok: false; outcome: OperationOutcome<never> }> {
-  const orgNumber = await companyOrgNumber(ctx)
-  if (!orgNumber) return { ok: false, outcome: { ok: false, code: 'VALIDATION_ERROR', details: { field: 'org_number', reason: 'missing' } } }
+  const orgNumber = await companyOrgNumber(ctx.supabase, ctx.companyId)
+  if (!orgNumber) return { ok: false, outcome: { ok: false, code: 'PAYMENT_ORG_NUMBER_MISSING', details: { field: 'org_number', reason: 'missing' } } }
 
   const typed = normalizeSignerPersonalNumber(signer.personalNumber)
   if (signer.personalNumber && !typed) {

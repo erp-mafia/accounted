@@ -5162,6 +5162,22 @@ export const BankFileCheckDuplicatesSchema = z.object({
     .min(1)
     .max(20000),
   format: z.enum(BANK_FILE_FORMAT_IDS),
+  /**
+   * The ledger the rows will settle on, when the wizard already knows it (the
+   * file's own account is a cash account here, crm#1204). With it the preview
+   * applies execute's account guard; without it the guard never rejects.
+   */
+  settlement_account: z.string().regex(/^19\d{2}$/).optional(),
+})
+
+/**
+ * The statement's own bank account as the parse route read it from the file
+ * (BankFileAccountIdentity), sent back with the bank-file execute request.
+ */
+export const BankFileAccountIdentitySchema = z.object({
+  iban: z.string().max(64).nullable(),
+  clearing: z.string().max(32).nullable(),
+  account_number: z.string().max(64).nullable(),
 })
 
 /**

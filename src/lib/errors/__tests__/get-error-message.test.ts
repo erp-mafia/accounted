@@ -800,3 +800,14 @@ describe('getErrorMessage: the caller fallback', () => {
     expect(getErrorMessage(null, { fallback: '  ' })).toBe(getErrorMessage(null))
   })
 })
+
+describe('getErrorMessage: the bank\'s organisationsnummer refusals (crm#1206)', () => {
+  it.each(['BANK_CONSENT_ORG_NUMBER_MISSING', 'PAYMENT_ORG_NUMBER_MISSING'])('%s says what is missing and where it is filled in, never the generic sentence', (code) => {
+    const body = { error: { code, message: 'x', details: { field: 'org_number', reason: 'missing' } } }
+    const sv = getErrorMessage(body)
+    expect(sv).toContain('organisationsnummer saknas')
+    expect(sv).toContain('Inställningar, Företag, Allmänt')
+    expect(sv).not.toBe(getErrorEntry('VALIDATION_ERROR')?.message_sv)
+    expect(getErrorMessage(body, { locale: 'en' })).toContain('Settings, Company, General')
+  })
+})

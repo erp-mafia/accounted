@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { conflictingVoucherClaims, loadDocumentClaims, sharedDocumentWarning } from '../document-claims'
+import { conflictingVoucherClaims, loadDocumentClaims, loadDocumentClaimsAndWaitingLinks, sharedDocumentWarning } from '../document-claims'
 
 const { supabase, enqueue, reset } = createQueuedMockSupabase()
 beforeEach(() => reset())
@@ -24,6 +24,30 @@ describe('loadDocumentClaims', () => {
   it('asks nothing when there are no documents', async () => {
     expect((await loadDocumentClaims(supabase as never, 'company-a', [])).size).toBe(0)
   })
+
+  // crm#1207: a copy row archives a new file at approval; the document
+  // itself stays free, so it is no claim another link could collide with.
+  it('skips the copy rows of a waiting batch', async () => {
+    enqueue({ data: [
+      { id: 'op-c', params: { links: [{ document_id: 'doc-1', journal_entry_id: 'je-27', copy: true }, { document_id: 'doc-1', journal_entry_id: 'je-2' }] } },
+    ] })
+    enqueue({ data: [] })
+    const claims = await loadDocumentClaims(supabase as never, 'company-a', ['doc-1'])
+    expect(claims.get('doc-1')).toEqual([{ document_id: 'doc-1', operation_id: 'op-c', transaction_id: null, journal_entry_id: 'je-2' }])
+  })
+
+  it('counts the single voucher links waiting, from the same read', async () => {
+    enqueue({ data: [
+      { id: 'op-1', operation_type: 'link_document_to_voucher', params: { document_id: 'doc-8', journal_entry_id: 'je-8' } },
+      { id: 'op-2', operation_type: 'link_document_to_voucher', params: { document_id: 'doc-9', journal_entry_id: 'je-9' } },
+      { id: 'op-3', operation_type: 'link_documents_to_vouchers', params: { links: [] } },
+      { id: 'op-4', operation_type: 'attach_document_to_transaction', params: { document_id: 'doc-7', transaction_id: 'tx-7' } },
+    ] })
+    enqueue({ data: [] })
+    const { claims, waitingVoucherLinks } = await loadDocumentClaimsAndWaitingLinks(supabase as never, 'company-a', ['doc-1'])
+    expect(waitingVoucherLinks).toBe(2)
+    expect(claims.size).toBe(0)
+  })
 })
 
 describe('sharedDocumentWarning', () => {
@@ -46,6 +70,8 @@ describe('sharedDocumentWarning', () => {
     ]) {
       expect(note).toContain('Ett underlag kan bara kopplas till en verifikation')
       expect(note).toContain('egen kopia per verifikation')
+      expect(note).toContain('koppla en exakt kopia')
+      expect(note).not.toContain('ladda upp')
       expect(note).not.toContain('flera delar')
       expect(note).not.toMatch(/Godkänn båda/)
     }

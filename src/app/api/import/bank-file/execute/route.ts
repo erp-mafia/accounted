@@ -5,9 +5,13 @@ import { toRawTransaction } from '@/lib/import/bank-file/parser'
 import type { IngestOptions } from '@/types'
 import { getCompanyRole } from '@/lib/auth/require-write'
 import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
+import { loadFileAccountMatch, type FileAccountMatch } from '@/lib/cash-accounts/file-account'
+import { BankFileAccountIdentitySchema } from '@/lib/api/schemas'
+import { accountIdentity } from '@/lib/import/bank-file/account-identity'
+import { dominantCurrency } from '@/lib/import/bank-file/currency-summary'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import type { ParsedBankTransaction, BankFileFormatId } from '@/lib/import/bank-file/types'
+import type { ParsedBankTransaction, BankFileFormatId, BankFileAccountIdentity } from '@/lib/import/bank-file/types'
 import type { Transaction } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import {
@@ -30,24 +34,8 @@ interface ExecuteRequest {
   skip_duplicates: boolean
   auto_categorize: boolean
   settlement_account?: string
-}
-
-/** The currency most rows of the file are denominated in ('SEK' when none say). */
-function dominantCurrency(transactions: ParsedBankTransaction[]): string {
-  const counts = new Map<string, number>()
-  for (const tx of transactions) {
-    const currency = (tx.currency || 'SEK').toUpperCase()
-    counts.set(currency, (counts.get(currency) ?? 0) + 1)
-  }
-  let best = 'SEK'
-  let bestCount = 0
-  for (const [currency, count] of counts) {
-    if (count > bestCount) {
-      best = currency
-      bestCount = count
-    }
-  }
-  return best
+  /** The statement's own account, as the parse route read it from the file. */
+  account?: BankFileAccountIdentity | null
 }
 
 /**
@@ -89,14 +77,58 @@ export const POST = withRouteContext(
 
     const opLog = log.child({ filename, fileHash: file_hash, txCount: transactions.length })
 
+    // The file names its own bank account (crm#1204). When that account is
+    // already a cash account here, the rows belong on it and on no other
+    // ledger: elsewhere the dedup account guard rightly sees another account,
+    // and every row the bank feed already holds comes in a second time. A
+    // file naming no known account imports as before. Checked before any
+    // write, so a refusal leaves nothing behind.
+    const accountPayload = BankFileAccountIdentitySchema.nullable().optional().safeParse(body.account)
+    if (!accountPayload.success) {
+      return errorResponseFromCode('VALIDATION_ERROR', opLog, {
+        requestId,
+        details: { field: 'account', issues: accountPayload.error.issues },
+      })
+    }
+    const fileAccount = accountPayload.data ? accountIdentity(accountPayload.data) : null
+    let settlementAccount = settlement_account
+    if (fileAccount) {
+      let match: FileAccountMatch | null
+      try {
+        match = await loadFileAccountMatch(supabase, companyId, fileAccount, dominantCurrency(transactions))
+      } catch (err) {
+        opLog.error('bank file account match failed', err as Error)
+        return errorResponseFromCode('BANK_FILE_EXECUTE_FAILED', opLog, {
+          requestId,
+          details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
+        })
+      }
+      if (match && settlementAccount === undefined) {
+        settlementAccount = match.ledger_account
+      } else if (match && typeof settlementAccount === 'string' && !match.ledger_accounts.includes(settlementAccount)) {
+        return errorResponseFromCode('BANK_FILE_ACCOUNT_MISMATCH', opLog, {
+          requestId,
+          details: { account: match.ledger_account, selected: settlementAccount },
+          messageSv:
+            `Filen gäller bankkontot som finns på ${match.ledger_account}, inte ${settlementAccount}. ` +
+            `Importera den till ${match.ledger_account}, så känns rader som redan hämtats från banken igen. ` +
+            'Ska bankkontot bokföras på ett annat konto? Byt under Inställningar > Kopplingar > Bank > Välj konton. Inget importerades.',
+          messageEn:
+            `This file is for the bank account set up on ${match.ledger_account}, not ${settlementAccount}. ` +
+            `Import it to ${match.ledger_account} so rows already fetched from the bank are recognized. ` +
+            'To book the bank account on another ledger account, change it under Settings > Connections > Bank > Choose accounts. Nothing was imported.',
+        })
+      }
+    }
+
     // The wizard offers any active 19xx chart account, but a row only binds to
     // a cash_accounts row (ingestTransactions looks the ledger up and tolerates
     // a miss). Without this step a picked ledger with no cash account was
     // silently dropped: every row stayed unbound and the booking dialog fell
     // back to 1930. Find or create the manual row first, before any import
     // record exists, so a refused account leaves nothing behind.
-    if (settlement_account !== undefined) {
-      if (typeof settlement_account !== 'string' || !/^19\d{2}$/.test(settlement_account)) {
+    if (settlementAccount !== undefined) {
+      if (typeof settlementAccount !== 'string' || !/^19\d{2}$/.test(settlementAccount)) {
         return errorResponseFromCode('BANK_FILE_INVALID_SETTLEMENT_ACCOUNT', opLog, { requestId })
       }
       // The ledger must be an active class 19 account in this company's own
@@ -106,12 +138,12 @@ export const POST = withRouteContext(
         .from('chart_of_accounts')
         .select('account_number')
         .eq('company_id', companyId)
-        .eq('account_number', settlement_account)
+        .eq('account_number', settlementAccount)
         .eq('is_active', true)
         .maybeSingle()
       if (chartError) {
         opLog.error('settlement account chart lookup failed', chartError, {
-          settlementAccount: settlement_account,
+          settlementAccount,
         })
         return errorResponseFromCode('BANK_FILE_EXECUTE_FAILED', opLog, {
           requestId,
@@ -121,7 +153,7 @@ export const POST = withRouteContext(
       if (!chartRow) {
         return errorResponseFromCode('BANK_FILE_INVALID_SETTLEMENT_ACCOUNT', opLog, {
           requestId,
-          details: { account: settlement_account },
+          details: { account: settlementAccount },
         })
       }
       // One file is one physical account, so its rows share that account's
@@ -133,17 +165,17 @@ export const POST = withRouteContext(
         // Named after the ledger, not the currency: two manual accounts in
         // the same currency must stay distinguishable in the account pickers.
         await ensureManualCashAccount(
-          supabase, companyId, settlement_account, batchCurrency, `Bankkonto ${settlement_account}`,
+          supabase, companyId, settlementAccount, batchCurrency, `Bankkonto ${settlementAccount}`,
         )
       } catch (err) {
         opLog.error('settlement cash account unavailable', err as Error, {
-          settlementAccount: settlement_account,
+          settlementAccount,
           currency: batchCurrency,
         })
         return errorResponseFromCode('BANK_FILE_SETTLEMENT_ACCOUNT_UNAVAILABLE', opLog, {
           requestId,
           details: {
-            account: settlement_account,
+            account: settlementAccount,
             reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown',
           },
         })
@@ -202,7 +234,7 @@ export const POST = withRouteContext(
         // "undo this import" action can scope its bulk delete exactly.
         bankFileImportId: importRecord.id,
       }
-      if (settlement_account) ingestOptions.settlementAccount = settlement_account
+      if (settlementAccount) ingestOptions.settlementAccount = settlementAccount
       if (role === 'viewer') ingestOptions.rawInsertOnly = true
       if (sieOverlap) ingestOptions.skipAutoCategorization = true
       const ingestResult = await ingestTransactions(supabase, companyId, user.id, rawTransactions, ingestOptions)

@@ -3,6 +3,7 @@ import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 import { eventBus } from '@/lib/events/bus'
 import { MCP_TOOL_CAPABILITY_MAP } from '@/lib/entitlements/keys'
 import { setBankFeedConnectForTests, type BankFeedConnect } from '@/lib/bank-feed/connect'
+import { createTableMockSupabase } from '@/tests/helpers'
 import { tools } from '../server'
 
 // Onboarding connect-link tools (issue #1814 PR 3): status + the browser link
@@ -343,5 +344,122 @@ describe('gnubok_connect_migration', () => {
     await expect(
       migrationTool.execute({ provider: 'monopol' }, COMPANY_ID, 'user-1', {} as never)
     ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+  })
+})
+
+/**
+ * crm#1201: SEB keeps one active Enable Banking consent per BankID login, so
+ * connecting it for a second company stops the first company's feed. The web
+ * page warns before BankID; the agent tool has to say it before it hands out
+ * the link, with the ways that keep the other feed (the Återanvänd offer,
+ * another signer, files).
+ */
+describe('gnubok_connect_bank: one consent per login at the same bank in another company', () => {
+  const SIBLING = '22222222-2222-4222-8222-222222222222'
+  const HIDDEN = '33333333-3333-4333-8333-333333333333'
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.example.test')
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    setBankFeedConnectForTests(undefined)
+  })
+
+  /**
+   * bank_connections answers this company's rows, or (the query that
+   * excludes it) the user's rows in OTHER companies; company_members the
+   * user's memberships for the names.
+   */
+  function world(opts: {
+    own?: Array<Record<string, unknown>>
+    elsewhere: Array<{ company_id: string; bank_name: string }>
+    members?: Array<{ id: string; name: string }>
+  }) {
+    const siblingCalls: Array<Array<{ method: string; args: unknown[] }>> = []
+    const members = opts.members ?? [{ id: COMPANY_ID, name: 'Nya AB' }, { id: SIBLING, name: 'Första AB' }]
+    const { supabase } = createTableMockSupabase({
+      bank_connections: (calls) => {
+        if (calls.some((c) => c.method === 'neq')) {
+          siblingCalls.push(calls)
+          return { data: opts.elsewhere }
+        }
+        return { data: opts.own ?? [] }
+      },
+      company_members: {
+        data: members.map((c, i) => ({ id: `m${i}`, company_id: c.id, role: 'owner', companies: { id: c.id, name: c.name, archived_at: null } })),
+      },
+      company_settings: { data: [] },
+    })
+    return { supabase, siblingCalls }
+  }
+
+  async function run(args: Record<string, unknown>, w: ReturnType<typeof world>, actor?: Record<string, unknown>) {
+    return (await bankTool.execute(args, COMPANY_ID, 'user-1', w.supabase as never, actor as never)) as { instructions: string; connect_url: string }
+  }
+
+  it('warns before the Enable Banking link and names the ways that keep the other feed', async () => {
+    const w = world({ elsewhere: [{ company_id: SIBLING, bank_name: 'SEB' }] })
+    const result = await run({ bank: 'SEB' }, w)
+
+    expect(result.connect_url).toBe('https://app.example.test/import?mode=psd2&bank=SEB')
+    expect(result.instructions).toContain('ONE CONSENT PER LOGIN')
+    expect(result.instructions).toContain(`Första AB (${SIBLING})`)
+    expect(result.instructions).toContain('stops that feed')
+    expect(result.instructions).toContain('Återanvänd')
+    expect(result.instructions).toContain('another person with their own BankID')
+    // Only the caller's own live Enable Banking rows, in other companies.
+    expect(w.siblingCalls[0]).toEqual(
+      expect.arrayContaining([
+        { method: 'eq', args: ['user_id', 'user-1'] },
+        { method: 'eq', args: ['aggregator', 'enable_banking'] },
+        { method: 'eq', args: ['status', 'active'] },
+        { method: 'neq', args: ['company_id', COMPANY_ID] },
+      ])
+    )
+  })
+
+  it('says it also without a named bank, and not for a bank that allows several consents', async () => {
+    const seb = await run({}, world({ elsewhere: [{ company_id: SIBLING, bank_name: 'SEB' }] }))
+    expect(seb.instructions).toContain('ONE CONSENT PER LOGIN: SEB')
+
+    const handelsbanken = await run({}, world({ elsewhere: [{ company_id: SIBLING, bank_name: 'Handelsbanken' }] }))
+    expect(handelsbanken.instructions).not.toContain('ONE CONSENT PER LOGIN')
+  })
+
+  it('stays quiet about another bank than the one the user named', async () => {
+    const result = await run({ bank: 'Swedbank' }, world({ elsewhere: [{ company_id: SIBLING, bank_name: 'SEB' }] }))
+    expect(result.instructions).not.toContain('ONE CONSENT PER LOGIN')
+  })
+
+  it('stays quiet when this company already reads that bank', async () => {
+    const own = [{ id: 'c1', bank_name: 'SEB', status: 'active', created_at: '2026-10-01T00:00:00Z', last_synced_at: null, consent_expires: null, error_message: null }]
+    const result = await run({}, world({ own, elsewhere: [{ company_id: SIBLING, bank_name: 'SEB' }] }))
+    expect(result.instructions).not.toContain('ONE CONSENT PER LOGIN')
+  })
+
+  it('never names a company the connection does not reach', async () => {
+    const w = world({ elsewhere: [{ company_id: HIDDEN, bank_name: 'SEB' }] })
+    const result = await run({}, w, { type: 'api_key', allowedCompanyIds: [COMPANY_ID, SIBLING] })
+    expect(result.instructions).not.toContain(HIDDEN)
+    expect(result.instructions).not.toContain('ONE CONSENT PER LOGIN')
+  })
+
+  it('through Open Payments says the effect on the other feed is not known and to check it after', async () => {
+    openDoor()
+    const result = await run({ bank: 'SEB' }, world({ elsewhere: [{ company_id: SIBLING, bank_name: 'SEB' }] }))
+
+    expect(result.connect_url).toContain('/settings/connections?bank_connect=new')
+    expect(result.instructions).not.toContain('ONE CONSENT PER LOGIN')
+    expect(result.instructions).toContain('This company connects through Open Payments with its own consent')
+    expect(result.instructions).toContain('not known yet')
+    expect(result.instructions).toContain(`Första AB (${SIBLING})`)
+  })
+
+  it('says nothing once the Enable Banking feed has ended', async () => {
+    vi.stubEnv('OPENPAYMENTS_SWITCH_DEADLINE', '2026-01-01')
+    const result = await run({ bank: 'SEB' }, world({ elsewhere: [{ company_id: SIBLING, bank_name: 'SEB' }] }))
+    expect(result.instructions).not.toContain('Första AB')
   })
 })

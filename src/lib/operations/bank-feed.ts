@@ -318,7 +318,7 @@ export const bankFeedStart = defineOperation({
     user_agent: z.string().max(300).nullish(),
   }),
   output: z.object({ connection_id: z.string().uuid(), attempt: Attempt }),
-  errorCodes: ['OPEN_BANKING_NOT_AVAILABLE', 'BANK_CONSENT_UNKNOWN_BANK', 'BANK_CONSENT_PERSONAL_NUMBER_REQUIRED', 'BANK_CONSENT_REDIRECT_UNSUPPORTED', 'VALIDATION_ERROR', 'BANK_PROVIDER_UNAVAILABLE', 'BANK_PROVIDER_REFUSED'],
+  errorCodes: ['OPEN_BANKING_NOT_AVAILABLE', 'BANK_CONSENT_UNKNOWN_BANK', 'BANK_CONSENT_PERSONAL_NUMBER_REQUIRED', 'BANK_CONSENT_ORG_NUMBER_MISSING', 'BANK_CONSENT_REDIRECT_UNSUPPORTED', 'VALIDATION_ERROR', 'BANK_PROVIDER_UNAVAILABLE', 'BANK_PROVIDER_REFUSED'],
   run: async (ctx, input) =>
     startBankFeedConsent(ctx, {
       bic: input.bic,
@@ -389,7 +389,7 @@ export const bankFeedRestart = defineOperation({
     user_agent: z.string().max(300).nullish(),
   }),
   output: z.object({ connection_id: z.string().uuid(), attempt: Attempt }),
-  errorCodes: ['OPEN_BANKING_NOT_AVAILABLE', 'NOT_FOUND', 'BANK_CONSENT_CHANGED', 'VALIDATION_ERROR', 'BANK_PROVIDER_UNAVAILABLE', 'BANK_PROVIDER_REFUSED'],
+  errorCodes: ['OPEN_BANKING_NOT_AVAILABLE', 'NOT_FOUND', 'BANK_CONSENT_CHANGED', 'BANK_CONSENT_ORG_NUMBER_MISSING', 'VALIDATION_ERROR', 'BANK_PROVIDER_UNAVAILABLE', 'BANK_PROVIDER_REFUSED'],
   run: async (ctx, input) =>
     restartBankFeedConsent(ctx, {
       connectionId: input.connection_id,

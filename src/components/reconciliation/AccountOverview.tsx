@@ -292,13 +292,18 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
         const twins = results.filter((r) => r.error_code === 'LEDGER_TWIN_EXISTS').length
         // The same for rows a summarised verifikat already covers.
         const covered = results.filter((r) => r.error_code === 'LEDGER_COVER_EXISTS').length
+        // And for rows a bank verifikat already books without the
+        // skattekonto (PH 171): ignored rather than linked.
+        const direct = results.filter((r) => r.error_code === 'LEDGER_DIRECT_EXISTS').length
         toast({
           title: failed > 0 ? t('toast_book_partial', { ok, failed }) : t('toast_booked', { count: ok }),
           ...(covered > 0
             ? { description: t('toast_book_covered', { count: covered, skattekonto: skattekontoAccount }) }
             : twins > 0
               ? { description: t('toast_book_twins', { count: twins }) }
-              : {}),
+              : direct > 0
+                ? { description: t('toast_book_direct', { count: direct }) }
+                : {}),
           variant: failed > 0 && ok === 0 ? 'destructive' : undefined,
         })
         await refresh()

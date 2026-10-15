@@ -372,6 +372,140 @@ describe('POST /api/import/bank-file/execute (settlement account)', () => {
   })
 })
 
+// crm#1204: a Swedbank statement of the account the bank feed holds on 1931,
+// while 1930 is another account of the same connection. Invented numbers.
+const FEED_IBAN = 'SE1280000832791234567890'
+const OTHER_IBAN = 'SE5580000832799876543210'
+const SWEDBANK_ACCOUNT = { iban: null, clearing: '8327-9', account_number: '123 456 789-0' }
+const CASH_ACCOUNTS = [
+  { ledger_account: '1930', iban: OTHER_IBAN, bban: null, clearing_number: null, account_number: null, currency: 'SEK', enabled: true, is_primary: false, bank_connection_id: 'conn-1' },
+  { ledger_account: '1931', iban: FEED_IBAN, bban: null, clearing_number: null, account_number: null, currency: 'SEK', enabled: true, is_primary: true, bank_connection_id: 'conn-1' },
+]
+
+describe('POST /api/import/bank-file/execute (the file names its own account, crm#1204)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
+    getCompanyRoleMock.mockResolvedValue({ ok: true, role: 'owner', companyId: 'company-1' })
+    ingestMock.mockResolvedValue(emptyIngestResult())
+    ensureCashAccountMock.mockResolvedValue('ca-1931')
+  })
+
+  it('refuses another ledger with 409 and writes nothing', async () => {
+    enqueue({ data: CASH_ACCOUNTS }) // cash_accounts for the match
+
+    const request = createMockRequest('/api/import/bank-file/execute', {
+      method: 'POST',
+      body: makeBody({ format: 'swedbank', settlement_account: '1930', account: SWEDBANK_ACCOUNT }),
+    })
+    const response = await POST(request, emptyParams)
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; details: { account: string; selected: string } }
+    }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('BANK_FILE_ACCOUNT_MISMATCH')
+    expect(body.error.details).toEqual({ account: '1931', selected: '1930' })
+    expect(body.error.message).toContain('1931')
+    expect(ensureCashAccountMock).not.toHaveBeenCalled()
+    expect(supabase.from).not.toHaveBeenCalledWith('bank_file_imports')
+    expect(ingestMock).not.toHaveBeenCalled()
+  })
+
+  it('imports onto the matched ledger, so ingest guards duplicates against the feed rows', async () => {
+    enqueue({ data: CASH_ACCOUNTS }) // cash_accounts for the match
+    enqueue({ data: { account_number: '1931' } }) // chart_of_accounts
+    enqueue({ data: { id: 'import-1' } }) // bank_file_imports upsert
+    enqueue({ data: null }) // sie_imports overlap: none
+    enqueue({ data: null }) // status update
+    enqueue({ data: [{ id: 't-1' }] }) // imported tx for event
+
+    const request = createMockRequest('/api/import/bank-file/execute', {
+      method: 'POST',
+      body: makeBody({ format: 'swedbank', settlement_account: '1931', account: SWEDBANK_ACCOUNT }),
+    })
+    const response = await POST(request, emptyParams)
+
+    expect(response.status).toBe(200)
+    expect(ensureCashAccountMock).toHaveBeenCalledWith(supabase, 'company-1', '1931', 'SEK', 'Bankkonto 1931')
+    const ingestOptions = ingestMock.mock.calls[0][4] as Record<string, unknown>
+    expect(ingestOptions.settlementAccount).toBe('1931')
+  })
+
+  it('settles on the matched ledger when the request names none', async () => {
+    enqueue({ data: CASH_ACCOUNTS })
+    enqueue({ data: { account_number: '1931' } })
+    enqueue({ data: { id: 'import-1' } })
+    enqueue({ data: null })
+    enqueue({ data: null })
+    enqueue({ data: [{ id: 't-1' }] })
+
+    const request = createMockRequest('/api/import/bank-file/execute', {
+      method: 'POST',
+      body: makeBody({ format: 'swedbank', account: SWEDBANK_ACCOUNT }),
+    })
+    const response = await POST(request, emptyParams)
+
+    expect(response.status).toBe(200)
+    const ingestOptions = ingestMock.mock.calls[0][4] as Record<string, unknown>
+    expect(ingestOptions.settlementAccount).toBe('1931')
+  })
+
+  it('imports a file of an account the company does not know onto the chosen ledger', async () => {
+    enqueue({ data: CASH_ACCOUNTS }) // no row is this account
+    enqueue({ data: { account_number: '1940' } })
+    enqueue({ data: { id: 'import-1' } })
+    enqueue({ data: null })
+    enqueue({ data: null })
+    enqueue({ data: [{ id: 't-1' }] })
+
+    const request = createMockRequest('/api/import/bank-file/execute', {
+      method: 'POST',
+      body: makeBody({
+        format: 'swedbank',
+        settlement_account: '1940',
+        account: { iban: null, clearing: '8327-9', account_number: '555 666 777-8' },
+      }),
+    })
+    const response = await POST(request, emptyParams)
+
+    expect(response.status).toBe(200)
+    const ingestOptions = ingestMock.mock.calls[0][4] as Record<string, unknown>
+    expect(ingestOptions.settlementAccount).toBe('1940')
+  })
+
+  it('returns 400 for a malformed account, before any read or write', async () => {
+    const request = createMockRequest('/api/import/bank-file/execute', {
+      method: 'POST',
+      body: makeBody({ settlement_account: '1930', account: { iban: 42 } }),
+    })
+    const response = await POST(request, emptyParams)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(supabase.from).not.toHaveBeenCalled()
+    expect(ingestMock).not.toHaveBeenCalled()
+  })
+
+  it('returns 500 and writes nothing when the cash accounts cannot be read', async () => {
+    enqueue({ error: { message: 'connection reset' } })
+
+    const request = createMockRequest('/api/import/bank-file/execute', {
+      method: 'POST',
+      body: makeBody({ settlement_account: '1930', account: SWEDBANK_ACCOUNT }),
+    })
+    const response = await POST(request, emptyParams)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('BANK_FILE_EXECUTE_FAILED')
+    expect(ensureCashAccountMock).not.toHaveBeenCalled()
+    expect(ingestMock).not.toHaveBeenCalled()
+  })
+})
+
 describe('POST /api/import/bank-file/execute (row fields)', () => {
   beforeEach(() => {
     vi.clearAllMocks()

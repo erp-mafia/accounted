@@ -8,7 +8,7 @@ vi.mock('@/lib/auth/bankid-signer', async (importOriginal) => ({
 vi.mock('@/lib/auth/resource-psu', () => ({ storedConnectionPsu: (...a: unknown[]) => mocks.stored(...a) }))
 
 import { createTableMockSupabase } from '@/tests/helpers'
-import { buildBankFeedParty, companyOrgNumber, tenDigitOrgNumber, UNATTENDED_SIGNER } from '../party'
+import { buildBankFeedParty, UNATTENDED_SIGNER } from '../party'
 
 const base = { companyId: 'co-1', bic: 'SWEDSESS', affiliatedAspspId: null, psuType: 'business' }
 const withOrg = () => createTableMockSupabase({ company_settings: { data: { org_number: '559538-6219' }, error: null } }).supabase as never
@@ -105,32 +105,18 @@ describe('buildBankFeedParty', () => {
     const personal = await buildBankFeedParty(withOrg(), { ...base, psuType: 'personal', affiliatedAspspId: '08999', signer: UNATTENDED_SIGNER })
     expect(personal.ok && personal.party).toMatchObject({ accountContext: 'private', affiliatedAspspId: '08999' })
   })
-})
 
-describe('organisationsnummer (enskild firma stored as a personnummer)', () => {
-  it('reads every stored form as ten digits', () => {
-    expect(tenDigitOrgNumber('559538-6219')).toBe('5595386219')
-    expect(tenDigitOrgNumber('165595386219')).toBe('5595386219')
-    // An enskild firma: the owner's personnummer, with or without its century.
-    expect(tenDigitOrgNumber('19751130-7154')).toBe('7511307154')
-    expect(tenDigitOrgNumber('197511307154')).toBe('7511307154')
-    expect(tenDigitOrgNumber('200101011234')).toBe('0101011234')
-    expect(tenDigitOrgNumber('751130-7154')).toBe('7511307154')
-    expect(tenDigitOrgNumber('')).toBeNull()
-    expect(tenDigitOrgNumber(null)).toBeNull()
-    expect(tenDigitOrgNumber('12345')).toBeNull()
-    expect(tenDigitOrgNumber('991234567890')).toBeNull()
+  it('opens the connection for an enskild firma whose number is the owner\'s personnummer stored with its century (crm#1206)', async () => {
+    const soleTrader = createTableMockSupabase({ company_settings: { data: { org_number: '19121212-1212' }, error: null } }).supabase as never
+    const result = await buildBankFeedParty(soleTrader, { ...base, psuType: 'personal', signer: UNATTENDED_SIGNER, userId: 'owner-1' })
+    expect(result.ok && result.party).toMatchObject({ orgNumber: '1212121212', accountContext: 'private' })
   })
 
-  it('falls back to the company row when the settings hold none or one that does not read as a number', async () => {
-    const settingsTwelve = createTableMockSupabase({ company_settings: { data: { org_number: '19751130-7154' }, error: null } }).supabase as never
-    expect(await companyOrgNumber(settingsTwelve, 'co-1')).toBe('7511307154')
-    const settingsJunk = createTableMockSupabase({
-      company_settings: { data: { org_number: 'saknas' }, error: null },
-      companies: { data: { org_number: '7511307154' }, error: null },
-    }).supabase as never
-    expect(await companyOrgNumber(settingsJunk, 'co-1')).toBe('7511307154')
-    const neither = createTableMockSupabase({ company_settings: { data: null, error: null }, companies: { data: { org_number: null }, error: null } }).supabase as never
-    expect(await companyOrgNumber(neither, 'co-1')).toBeNull()
+  it('names the missing organisationsnummer, never the generic validation error, when the stored one is no number', async () => {
+    const junk = createTableMockSupabase({ company_settings: { data: { org_number: '11223344556' }, error: null }, companies: { data: { org_number: null }, error: null } }).supabase as never
+    const result = await buildBankFeedParty(junk, { ...base, signer: UNATTENDED_SIGNER, requireSigner: true })
+    expect(result).toEqual({ ok: false, outcome: { ok: false, code: 'BANK_CONSENT_ORG_NUMBER_MISSING', details: { field: 'org_number', reason: 'missing' } } })
+    // Refused before the signer is looked up: nothing about the person is read for a company the bank cannot be asked about.
+    expect(mocks.onFile).not.toHaveBeenCalled()
   })
 })

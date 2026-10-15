@@ -28,6 +28,7 @@
 
 import type { Transaction, SupplierInvoice } from '@/types'
 import { isMatchableSupplierInvoiceStatus } from '@/lib/invoices/matchable-statuses'
+import { counterpartyGiroDigits, giroKey } from '@/lib/transactions/giro-counterparty'
 
 export interface SupplierInvoiceMatch {
   supplierInvoice: SupplierInvoice
@@ -159,6 +160,7 @@ export function findSupplierInvoiceMatch(
   // makes a Pass-3 (amount_date) winner ambiguous: the date can't pick between
   // same-amount invoices, so the caller must not auto-link it.
   let amountDateMatchCount = 0
+  const txGiros = counterpartyGiroDigits(transaction)
 
   for (const invoice of unpaidInvoices) {
     // Only match against invoices that can take a payment, with a remainder
@@ -195,8 +197,15 @@ export function findSupplierInvoiceMatch(
       const supplierPg = invoice.supplier?.plusgiro
       const bgMatch = supplierBg && txDesc.includes(normalizeReference(supplierBg))
       const pgMatch = supplierPg && txDesc.includes(normalizeReference(supplierPg))
+      // The row's counterparty giro as the shared reading sees it: the bank's
+      // counterparty account or a formatted or padded BG/PG number, which the
+      // digit substring above misses ("BG 123-4567"), against the card's and
+      // the invoice's stated giro. Never Bankgirot's own-giro settlement.
+      const giroMatch = [supplierBg, supplierPg, invoice.payee_bankgiro, invoice.payee_plusgiro]
+        .map(giroKey)
+        .some((giro) => giro !== '' && txGiros.includes(giro))
 
-      if (bgMatch || pgMatch) {
+      if (bgMatch || pgMatch || giroMatch) {
         return {
           supplierInvoice: invoice,
           confidence: 0.92,

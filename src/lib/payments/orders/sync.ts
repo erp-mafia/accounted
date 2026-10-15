@@ -26,6 +26,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { storedBatchPsu } from '@/lib/auth/resource-psu'
+import { companyOrgNumber } from '@/lib/company/org-number'
 import type { Logger } from '@/lib/logger'
 import {
   getPaymentInitiationProvider,
@@ -93,14 +94,6 @@ export interface PaymentStatusSyncResult {
   errors: number
   /** True when no payments provider is registered: only the stale-claim pass ran. */
   noProvider?: boolean
-}
-
-async function orgNumberFor(writer: SupabaseClient, companyId: string): Promise<string | null> {
-  const { data: settings } = await writer.from('company_settings').select('org_number').eq('company_id', companyId).maybeSingle()
-  const fromSettings = (settings as { org_number?: string | null } | null)?.org_number
-  if (fromSettings) return fromSettings
-  const { data: company } = await writer.from('companies').select('org_number').eq('id', companyId).maybeSingle()
-  return (company as { org_number?: string | null } | null)?.org_number ?? null
 }
 
 /**
@@ -176,7 +169,7 @@ async function settleAbandonedSignings(
     const orders = (orderData ?? []) as PaymentOrderRow[]
 
     const provider = await getPaymentInitiationProvider(batch.company_id)
-    if (provider && !orgNumbers.has(batch.company_id)) orgNumbers.set(batch.company_id, await orgNumberFor(writer, batch.company_id))
+    if (provider && !orgNumbers.has(batch.company_id)) orgNumbers.set(batch.company_id, await companyOrgNumber(writer, batch.company_id))
     const orgNumber = orgNumbers.get(batch.company_id) ?? null
     // Not knowing is not the same as abandoned: without a bank to ask, the
     // signing is left for a run that can ask.
@@ -342,7 +335,7 @@ export async function syncPaymentOrderStatuses(writer: SupabaseClient, log: Logg
   for (const order of orders) {
     const provider = await getPaymentInitiationProvider(order.company_id)
     if (!provider || !order.provider_payment_id) continue
-    if (!orgNumbers.has(order.company_id)) orgNumbers.set(order.company_id, await orgNumberFor(writer, order.company_id))
+    if (!orgNumbers.has(order.company_id)) orgNumbers.set(order.company_id, await companyOrgNumber(writer, order.company_id))
     const orgNumber = orgNumbers.get(order.company_id)
     if (!orgNumber) continue
     result.checked += 1

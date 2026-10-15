@@ -52,6 +52,13 @@ export interface ReportDataStatus {
      * data ends). null when no such connection ever synced.
      */
     last_sync_at: string | null
+    /**
+     * True when bank rows the report's range covers are missing: the range
+     * reaches past last_sync_at and the feed has stopped, or is active but
+     * older than STALE_SYNC_HOURS. The same test as the bank feed caveat, so a
+     * screen reading the flag and an agent reading the caveat agree.
+     */
+    stale: boolean
     /** Earliest sign-off date across the company's bank accounts; null when any is unsigned or there are none. */
     reconciled_through: string | null
   }
@@ -192,14 +199,14 @@ async function build(
     // figures" would be wrong for one of them.
     caveats.push('Cash method (kontantmetoden): invoices are booked when paid; unpaid customer and supplier invoices enter the books only through the year-end (bokslut) entries.')
   }
-  if (feed.lastSyncAt && to >= feed.lastSyncAt.slice(0, 10)) {
+  const bankStale = isFeedStale(feed, to, now)
+  if (bankStale && feed.lastSyncAt) {
     const syncDate = feed.lastSyncAt.slice(0, 10)
-    if (feed.status === 'stopped') {
-      // A stopped feed is stale by definition once the range passes its last sync.
-      caveats.push(`The bank feed has stopped syncing (last synced ${syncDate}): transactions after that date are not imported unless added another way.`)
-    } else if ((now.getTime() - Date.parse(feed.lastSyncAt)) / 3_600_000 > STALE_SYNC_HOURS) {
-      caveats.push(`A bank feed last synced ${syncDate}: its transactions after that date are not imported yet.`)
-    }
+    caveats.push(
+      feed.status === 'stopped'
+        ? `The bank feed has stopped syncing (last synced ${syncDate}): transactions after that date are not imported unless added another way.`
+        : `A bank feed last synced ${syncDate}: its transactions after that date are not imported yet.`,
+    )
   }
   // Only for companies that sign off reconciliations at all (the adoption
   // gate countReconciliationDue uses): about 97% of companies with a bank
@@ -222,7 +229,12 @@ async function build(
     accounting_method: method,
     unbooked_transactions: unbooked.total,
     draft_entries: drafts,
-    bank: { feed_status: feed.status, last_sync_at: feed.lastSyncAt, reconciled_through: recon.reconciledThrough },
+    bank: {
+      feed_status: feed.status,
+      last_sync_at: feed.lastSyncAt,
+      stale: bankStale,
+      reconciled_through: recon.reconciledThrough,
+    },
     preliminary: status === 'open' || unbooked.total > 0 || drafts > 0,
     caveats,
   }
@@ -252,6 +264,22 @@ function bankFeed(rows: Array<{ status: string; last_synced_at: string | null }>
     return { status: 'stopped', lastSyncAt: times[times.length - 1] ?? null }
   }
   return { status: null, lastSyncAt: null }
+}
+
+/**
+ * Whether the feed leaves rows out of a range ending `to`: only when the range
+ * reaches past the last sync. A stopped feed is stale by definition from
+ * there; an active one once its last sync is older than STALE_SYNC_HOURS. A
+ * feed that never synced has no date to measure from and is not called stale.
+ */
+function isFeedStale(
+  feed: { status: 'active' | 'stopped' | null; lastSyncAt: string | null },
+  to: string,
+  now: Date,
+): boolean {
+  if (!feed.lastSyncAt || to < feed.lastSyncAt.slice(0, 10)) return false
+  if (feed.status === 'stopped') return true
+  return (now.getTime() - Date.parse(feed.lastSyncAt)) / 3_600_000 > STALE_SYNC_HOURS
 }
 
 /** YYYY-MM-DD from a date or a timestamp (the UTC date of a timestamptz string). */

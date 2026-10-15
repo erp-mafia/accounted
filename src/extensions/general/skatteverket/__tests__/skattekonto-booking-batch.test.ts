@@ -34,6 +34,15 @@ vi.mock('../lib/skattekonto-match', async (importOriginal) => {
   }
 })
 
+// The direct-booking search (a bank verifikat without any 1630 line already
+// books the event, PH 171) is covered in skattekonto-direct.test.ts: stub it
+// here so these tests keep exercising the booking flow. Default: nothing
+// holds any row.
+vi.mock('../lib/skattekonto-direct', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/skattekonto-direct')>()
+  return { ...actual, findDirectLedgerHolders: vi.fn(), findDirectLedgerHoldersForIds: vi.fn() }
+})
+
 // The 1650 balance behind the VAT-refund routing (feedback seq 975032).
 // Default: nothing on 1650, so every other test keeps the rule's account.
 vi.mock('@/lib/reconciliation/gl-balance', async (importOriginal) => {
@@ -67,11 +76,15 @@ import {
   type SkattekontoMatchCandidate,
 } from '../lib/skattekonto-match'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
+import { findDirectLedgerHolders, findDirectLedgerHoldersForIds } from '../lib/skattekonto-direct'
 import {
   attachBookingSuggestions,
   bokforSkattekontoTransaction,
   bokforSkattekontoTransactionsBatch,
+  buildSkattekontoEntry,
+  counterLineOf,
   ledgerCoverMessage,
+  ledgerDirectMessage,
   ledgerHoldOf,
   ledgerHoldOfRows,
   SkattekontoBookingError,
@@ -157,6 +170,10 @@ beforeEach(() => {
   )
   vi.mocked(sumAccountBalance).mockResolvedValue(0)
   vi.mocked(findOpeningBalanceFloor).mockResolvedValue(null)
+  vi.mocked(findDirectLedgerHolders).mockImplementation(
+    async (_supabase, _companyId, probes) => new Map(probes.map((p) => [p.id, []])),
+  )
+  vi.mocked(findDirectLedgerHoldersForIds).mockResolvedValue(new Map())
   bridgeCover(null)
   bridgePlanned([])
 })
@@ -1707,5 +1724,238 @@ describe('ledgerHoldOf / ledgerHoldOfRows (the one check every door runs)', () =
     expect(ledgerHoldOfRows(holding(['a'], ['b']), ['a', 'b'])).not.toBeNull()
     expect(ledgerHoldOfRows(holding(['a'], ['b']), ['a', 'c'])).toBeNull()
     expect(ledgerHoldOfRows(holding(['a'], []), [])).toBeNull()
+  })
+})
+
+describe('direct-booking guard (a bank verifikat already books the event without 1630, PH 171)', () => {
+  // The previous system's month verifikat: the bank paid the month's tax
+  // straight to the tax accounts, no line on 1630.
+  const HOLDER = {
+    journal_entry_id: 'je-a14',
+    voucher_series: 'A',
+    voucher_number: 14,
+    entry_date: '2026-01-31',
+    description: 'Avstämning skattekonto',
+    status: 'posted' as const,
+  }
+
+  it('refuses a single row with LEDGER_DIRECT_EXISTS, searched on its own counter line, before any period or draft work', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({ transaktionstext: 'Kostnadsränta', belopp_skatteverket: -159 })
+    enqueue({ data: row })
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    vi.mocked(findDirectLedgerHolders).mockResolvedValueOnce(new Map([[row.id, [HOLDER]]]))
+
+    const err = (await bokforSkattekontoTransaction(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      row.id,
+    ).catch((e: unknown) => e)) as SkattekontoBookingError
+
+    expect(err).toBeInstanceOf(SkattekontoBookingError)
+    expect(err.code).toBe('LEDGER_DIRECT_EXISTS')
+    expect(err.ledgerDirect).toEqual([HOLDER])
+    expect(err.ledgerTwins).toBeUndefined()
+    expect(err.ledgerCover).toBeUndefined()
+    expect(err.message).toContain('Händelsen finns redan i bokföringen utan skattekontot: verifikat A14 (2026-01-31)')
+    expect(err.message).toMatch(/159,00\s*kr på konto 8423 direkt mot banken, utan någon rad på konto 1630/)
+    expect(err.message).toContain('ignorera den')
+    // Searched for this row, on the line its verifikat would carry: D 8423.
+    expect(vi.mocked(findDirectLedgerHolders).mock.calls[0][2]).toEqual([
+      { id: row.id, transaktionsdatum: row.transaktionsdatum, counter: { account: '8423', net: 159 } },
+    ])
+    expect(vi.mocked(findDirectLedgerHolders).mock.calls[0][3]).toBe('1630')
+    expect(vi.mocked(findFiscalPeriod)).not.toHaveBeenCalled()
+    expect(vi.mocked(createDraftEntry)).not.toHaveBeenCalled()
+  })
+
+  it('books on the override with a reason, and the verifikat notes the bank verifikat and why', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({ transaktionstext: 'Kostnadsränta', belopp_skatteverket: -159 })
+    enqueue({ data: row })
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: [{ id: row.id }] }) // claim
+    vi.mocked(findDirectLedgerHolders).mockResolvedValueOnce(new Map([[row.id, [HOLDER]]]))
+
+    const entry = await bokforSkattekontoTransaction(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      row.id,
+      undefined,
+      { duplicateReason: REASON },
+    )
+
+    expect(entry.id).toBe('je-draft-1')
+    expect(draftedNotes()).toContain(`Bokförd trots att bokföringen redan innehåller händelsen (A14). Skäl: ${REASON}`)
+  })
+
+  it('does not search when a twin answers first: the override books over the twin and names it', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({ transaktionstext: 'Intäktsränta' })
+    enqueue({ data: row })
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: [{ id: row.id }] })
+    vi.mocked(findLedgerTwinCandidates).mockResolvedValueOnce(new Map([[row.id, [twinCandidate()]]]))
+
+    await bokforSkattekontoTransaction(supabase as unknown as SupabaseClient, 'company-1', 'user-1', row.id, undefined, {
+      duplicateReason: REASON,
+    })
+    expect(vi.mocked(findDirectLedgerHolders)).not.toHaveBeenCalled()
+    expect(draftedNotes()).toContain('(A185)')
+  })
+
+  it('books a row nothing holds exactly as before, with no note', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({ transaktionstext: 'Kostnadsränta', belopp_skatteverket: -159 })
+    enqueue({ data: row })
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: [{ id: row.id }] })
+
+    const entry = await bokforSkattekontoTransaction(supabase as unknown as SupabaseClient, 'company-1', 'user-1', row.id)
+    expect(entry.id).toBe('je-draft-1')
+    expect(vi.mocked(findDirectLedgerHolders)).toHaveBeenCalledTimes(1)
+    expect(draftedNotes()).not.toContain('Bokförd trots')
+  })
+
+  it('batch: one search for the rows no twin answers, skips the held row with its verifikat, books the rest', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const twinRow = makeSkvRow({ transaktionstext: 'Kostnadsränta', belopp_skatteverket: -1 })
+    const directRow = makeSkvRow({ transaktionstext: 'Kostnadsränta', belopp_skatteverket: -159 })
+    const cleanRow = makeSkvRow({ transaktionstext: 'Intäktsränta' })
+    vi.mocked(findLedgerTwinCandidatesForIds).mockResolvedValueOnce(
+      new Map([
+        [twinRow.id, [twinCandidate({ matched_side: 'credit' })]],
+        [directRow.id, []],
+        [cleanRow.id, []],
+      ]),
+    )
+    vi.mocked(findDirectLedgerHoldersForIds).mockResolvedValueOnce(
+      new Map([
+        [directRow.id, { counter: { account: '8423', net: 159 }, holders: [HOLDER] }],
+        [cleanRow.id, { counter: { account: '8314', net: -1 }, holders: [] }],
+      ]),
+    )
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: twinRow })
+    enqueue({ data: directRow })
+    enqueue({ data: cleanRow })
+    enqueue({ data: [{ id: cleanRow.id }] }) // claim clean row
+
+    const result = await bokforSkattekontoTransactionsBatch(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      [twinRow.id, directRow.id, cleanRow.id],
+    )
+
+    expect(vi.mocked(findDirectLedgerHoldersForIds)).toHaveBeenCalledTimes(1)
+    // The twin row is answered by its twin: not searched again.
+    expect(vi.mocked(findDirectLedgerHoldersForIds).mock.calls[0][2]).toEqual([directRow.id, cleanRow.id])
+    // Precomputed and the counter line unchanged: no per-row search.
+    expect(vi.mocked(findDirectLedgerHolders)).not.toHaveBeenCalled()
+    expect(result.results[0]).toMatchObject({ id: twinRow.id, ok: false, error_code: 'LEDGER_TWIN_EXISTS' })
+    expect(result.results[1]).toMatchObject({
+      id: directRow.id,
+      ok: false,
+      error_code: 'LEDGER_DIRECT_EXISTS',
+      ledger_direct: [HOLDER],
+    })
+    expect(result.results[1].error_message).toContain('verifikat A14 (2026-01-31)')
+    expect(result.results[2]).toMatchObject({ id: cleanRow.id, ok: true })
+    expect(vi.mocked(createDraftEntry)).toHaveBeenCalledTimes(1)
+  })
+
+  it('batch: the pre-pass resolves each counter line the way the booking does', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({ transaktionstext: 'Kostnadsränta', belopp_skatteverket: -159 })
+    let lines: unknown[] = []
+    vi.mocked(findDirectLedgerHoldersForIds).mockImplementationOnce(async (_s, _c, _ids, account, counterOf) => {
+      expect(account).toBe('1630')
+      lines = [
+        await counterOf({ ...row, transaktionstext: 'Kostnadsränta', belopp_skatteverket: -159 }),
+        await counterOf({ ...row, transaktionstext: 'Intäktsränta', belopp_skatteverket: 9 }),
+        await counterOf({ ...row, transaktionstext: 'Något okänt', belopp_skatteverket: -5 }),
+      ]
+      return new Map()
+    })
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: row })
+    enqueue({ data: [{ id: row.id }] })
+
+    await bokforSkattekontoTransactionsBatch(supabase as unknown as SupabaseClient, 'company-1', 'user-1', [row.id])
+    expect(lines).toEqual([{ account: '8423', net: 159 }, { account: '8314', net: -9 }, null])
+  })
+
+  it('batch: a row whose counter line changed after the pre-pass searches for itself', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({ transaktionstext: 'Kostnadsränta', belopp_skatteverket: -159 })
+    vi.mocked(findDirectLedgerHoldersForIds).mockResolvedValueOnce(
+      new Map([[row.id, { counter: { account: '8423', net: 1 }, holders: [] }]]),
+    )
+    vi.mocked(findDirectLedgerHolders).mockResolvedValueOnce(new Map([[row.id, [HOLDER]]]))
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: row })
+
+    const result = await bokforSkattekontoTransactionsBatch(supabase as unknown as SupabaseClient, 'company-1', 'user-1', [row.id])
+    expect(vi.mocked(findDirectLedgerHolders)).toHaveBeenCalledTimes(1)
+    expect(result.results[0]).toMatchObject({ ok: false, error_code: 'LEDGER_DIRECT_EXISTS' })
+  })
+
+  it('batch: allowDuplicateIds with a reason books the held row and notes it', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({ transaktionstext: 'Kostnadsränta', belopp_skatteverket: -159 })
+    vi.mocked(findDirectLedgerHoldersForIds).mockResolvedValueOnce(
+      new Map([[row.id, { counter: { account: '8423', net: 159 }, holders: [HOLDER] }]]),
+    )
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: row })
+    enqueue({ data: [{ id: row.id }] })
+
+    const result = await bokforSkattekontoTransactionsBatch(supabase as unknown as SupabaseClient, 'company-1', 'user-1', [row.id], {
+      allowDuplicateIds: [row.id],
+      duplicateReason: REASON,
+    })
+    expect(result.results[0]).toMatchObject({ ok: true })
+    expect(draftedNotes()).toContain(`(A14). Skäl: ${REASON}`)
+  })
+})
+
+describe('counterLineOf / ledgerDirectMessage', () => {
+  const tx = { id: 'r1', transaktionsdatum: '2026-02-13', transaktionstext: 'Inbetalning bokförd 260212' }
+
+  it('reads the counter line of the built verifikat in ledger sign: the bank for a payment, the tax account for a charge', () => {
+    const payment = buildSkattekontoEntry({ ...tx, belopp_skatteverket: 60400 }, { account: '1930', label: 'Inbetalning' }, '1630')
+    expect(counterLineOf(payment, '1630')).toEqual({ account: '1930', net: -60400 })
+    const charge = buildSkattekontoEntry({ ...tx, belopp_skatteverket: -17637 }, { account: '2650', label: 'Moms' }, '2012')
+    expect(counterLineOf(charge, '2012')).toEqual({ account: '2650', net: 17637 })
+  })
+
+  it('leaves the 3740 rounding line out: a refund that clears 1650 within a krona', () => {
+    const refund = buildSkattekontoEntry(
+      { ...tx, belopp_skatteverket: 1001 },
+      { account: '1650', label: 'Momsfordran', oreRounding: 1 },
+      '1630',
+    )
+    expect(counterLineOf(refund, '1630')).toEqual({ account: '1650', net: -1000 })
+  })
+
+  it('says what the verifikat books: the payment on the bank, a tax account against the bank', () => {
+    const holder = { journal_entry_id: 'j', voucher_series: 'A', voucher_number: 172, entry_date: '2026-09-02', description: '', status: 'posted' as const }
+    expect(ledgerDirectMessage([holder], { account: '1930', net: -618 }, '1630')).toMatch(
+      /verifikat A172 \(2026-09-02\) bokför redan betalningen, 618,00\s*kr på konto 1930, utan någon rad på konto 1630/,
+    )
+    expect(ledgerDirectMessage([holder, { ...holder, voucher_number: 0, entry_date: '2026-09-05' }], { account: '2510', net: 618 }, '2012')).toMatch(
+      /verifikat A172 \(2026-09-02\) och ett utkast \(2026-09-05\) bokför redan 618,00\s*kr på konto 2510 direkt mot banken, utan någon rad på konto 2012/,
+    )
   })
 })

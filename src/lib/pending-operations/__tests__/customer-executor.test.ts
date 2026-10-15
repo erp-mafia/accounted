@@ -88,6 +88,59 @@ describe('commitPendingOperation: update_customer', () => {
     expect(supabase.from).toHaveBeenNthCalledWith(3, 'customers')
   })
 
+  // crm#1198: the answer was a hand-kept field list without contact_person.
+  it('answers the record gnubok_get_customer reads, contact person and cc list included', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-customer-1' } }) // CAS claim
+    enqueue({ data: { id: CUSTOMER_ID, customer_type: 'swedish_business', contact_person: null } }) // current read
+    enqueue({
+      data: {
+        id: CUSTOMER_ID,
+        user_id: 'user-1',
+        company_id: 'company-1',
+        name: 'Test Customer AB',
+        customer_type: 'swedish_business',
+        contact_person: 'Anna Andersson',
+        invoice_email_cc_addresses: ['ekonomi@kund.example'],
+        invoice_email_bcc_addresses: null,
+        country: 'SE',
+        vat_number_validated: false,
+        vat_number_validated_at: null,
+        personal_number: null,
+      },
+    }) // update returning
+    enqueue({ data: null }) // dispatcher update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({
+        customer_id: CUSTOMER_ID,
+        changes: { contact_person: 'Anna Andersson', invoice_email_cc_addresses: ['ekonomi@kund.example'] },
+      }),
+    )
+
+    expect(result.status).toBe('committed')
+    expect(findCall('customers', 'update')?.[0]).toEqual({
+      contact_person: 'Anna Andersson',
+      invoice_email_cc_addresses: ['ekonomi@kund.example'],
+    })
+    expect(result.data).toMatchObject({
+      customer_id: CUSTOMER_ID,
+      contact_person: 'Anna Andersson',
+      invoice_email_cc_addresses: ['ekonomi@kund.example'],
+      invoice_email_bcc_addresses: null,
+      personal_number_masked: null,
+    })
+    // The record's fields only: no internal scoping or the raw id key.
+    expect(result.data).not.toHaveProperty('id')
+    expect(result.data).not.toHaveProperty('user_id')
+    expect(result.data).not.toHaveProperty('company_id')
+    expect(result.data).not.toHaveProperty('vat_number_validated_at')
+    expect(result.data).not.toHaveProperty('personal_number')
+  })
+
   it('auto-rejects when the customer no longer exists', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-customer-1' } })

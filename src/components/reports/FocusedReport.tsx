@@ -12,6 +12,7 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ReportDateRange, type DateRangeValue } from '@/components/common/ReportDateRange'
 import { DimensionFilter, type DimensionFilterValue } from '@/components/reports/DimensionFilter'
+import { ReportPrintHeader } from '@/components/reports/ReportPrintHeader'
 import { DATE_RANGE_SLUGS, DIMENSION_FILTER_SLUGS, getReport } from '@/lib/reports/catalog'
 import { huvudbokDrilldownHref, parseDrilldownParams } from '@/lib/reports/report-drilldown'
 import type { FiscalPeriod } from '@/types'
@@ -108,6 +109,15 @@ function FocusedReportInner({
   // link, no shell fiscal-year selector — the view owns its period controls.
   const isStandalone = !!report?.standalone
   const reportName = report ? t(report.labelKey) : slug
+  // What the figures cover: the picked date range inside the fiscal year, else
+  // the whole year. Printed under the title, where the pickers are hidden.
+  const printPeriod =
+    !isPeriodless && selectedPeriodBounds
+      ? {
+          start: dateRange.fromDate ?? selectedPeriodBounds.start,
+          end: dateRange.toDate ?? selectedPeriodBounds.end,
+        }
+      : null
   const accountFilter = searchParams.get('account')
 
   const isEnskildFirma = company?.entity_type === 'enskild_firma'
@@ -160,6 +170,7 @@ function FocusedReportInner({
           }
         />
       )}
+      {!isStandalone && <ReportPrintHeader period={printPeriod} />}
 
       {/* One toolbar row per report: the pickers on the left and the
           report's Exportera on the right (ReportExportMenu portals into the
@@ -170,6 +181,8 @@ function FocusedReportInner({
         <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
           {showRange && selectedPeriodBounds && (
             <ReportDateRange
+              // The print header states the range on paper.
+              className="print:hidden"
               periodStart={selectedPeriodBounds.start}
               periodEnd={selectedPeriodBounds.end}
               value={dateRange}
@@ -178,7 +191,7 @@ function FocusedReportInner({
             />
           )}
           {showDim && <DimensionFilter value={dimensionFilter} onChange={setDimensionFilter} />}
-          {!isStandalone && <div id={REPORT_TOOLBAR_SLOT_ID} className="ml-auto flex items-center gap-2" />}
+          {!isStandalone && <div id={REPORT_TOOLBAR_SLOT_ID} className="ml-auto flex items-center gap-2 print:hidden" />}
         </div>
       )}
 

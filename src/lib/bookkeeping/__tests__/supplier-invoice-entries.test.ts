@@ -2659,6 +2659,97 @@ describe('a supplier invoice that nets below zero books its anchor on the debit 
   })
 })
 
+// crm#1190: the moms of rows below zero. A rate whose rows net to less moms
+// than nothing used to be skipped by every builder (and an invoice of only
+// negative rows got no moms at all), so 2641 kept the moms the rabatter
+// cancel and the 2440 balance line absorbed it: the skuld no longer matched
+// the invoice total. Each rate now books one 2641 line on its own side.
+describe('ingående moms of rows below zero is booked per rate on its own side (crm#1190)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockedFindFiscalPeriod.mockResolvedValue('period-1')
+  })
+
+  // 25 %: 800 - 200 nets +150 moms; 12 %: 300 - 500 nets -24 moms.
+  const mixed = [
+    makeItem({ id: 'i1', line_total: 800, account_number: '6110', vat_rate: 0.25 }),
+    makeItem({ id: 'i2', line_total: -200, account_number: '6110', vat_rate: 0.25 }),
+    makeItem({ id: 'i3', line_total: 300, account_number: '4010', vat_rate: 0.12 }),
+    makeItem({ id: 'i4', line_total: -500, account_number: '4010', vat_rate: 0.12 }),
+  ]
+  const mixedInvoice = () => makeSupplierInvoice({ subtotal: 400, vat_amount: 126, total: 526 })
+  // Only negative rows (a leverantörskreditfaktura keyed in as an invoice).
+  const negativeOnly = [
+    makeItem({ id: 'i1', line_total: -800, account_number: '5410', vat_rate: 0.25 }),
+    makeItem({ id: 'i2', line_total: -100, account_number: '6212', vat_rate: 0.25 }),
+  ]
+  const negativeInvoice = () => makeSupplierInvoice({ subtotal: -900, vat_amount: -225, total: -1125 })
+
+  it('registration: a rate that nets below zero credits 2641, and 2440 is the invoice total', async () => {
+    await createSupplierInvoiceRegistrationEntry(null as never, 'company-1', 'user-1', mixedInvoice(), mixed, 'swedish_business')
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '2641').map((l) => [l.debit_amount, l.credit_amount])).toEqual([[150, 0], [0, 24]])
+    expect(findByAccount(input.lines, '2440')[0]).toMatchObject({ debit_amount: 0, credit_amount: 526 })
+    assertBalanced(input)
+  })
+
+  it('registration: an invoice of only negative rows credits 2641 and debits 2440 by the total', async () => {
+    await createSupplierInvoiceRegistrationEntry(null as never, 'company-1', 'user-1', negativeInvoice(), negativeOnly, 'swedish_business')
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '2641')).toEqual([expect.objectContaining({ debit_amount: 0, credit_amount: 225 })])
+    expect(findByAccount(input.lines, '2440')[0]).toMatchObject({ debit_amount: 1125, credit_amount: 0 })
+    assertBalanced(input)
+  })
+
+  it('registration: a stored moms override on a rabatt row wins, as the invoice total counts it', async () => {
+    // A rabatt on a 50 % deductible cost: -100 at 25 %, of which -12,50 is the deductible moms.
+    const items = [
+      makeItem({ id: 'i1', line_total: 1000, account_number: '5611', vat_rate: 0.25, vat_amount: 125 }),
+      makeItem({ id: 'i2', line_total: -100, account_number: '5611', vat_rate: 0.25, vat_amount: -12.5 }),
+    ]
+    const invoice = makeSupplierInvoice({ subtotal: 900, vat_amount: 112.5, total: 1012.5 })
+    await createSupplierInvoiceRegistrationEntry(null as never, 'company-1', 'user-1', invoice, items, 'swedish_business')
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '2641')[0]).toMatchObject({ debit_amount: 112.5, credit_amount: 0 })
+    expect(findByAccount(input.lines, '2440')[0]).toMatchObject({ credit_amount: 1012.5 })
+    assertBalanced(input)
+  })
+
+  it('cash method: the same 2641 lines, and the bank leg is the invoice total', async () => {
+    await createSupplierInvoiceCashEntry(null as never, 'company-1', 'user-1', mixedInvoice(), mixed, '2026-06-10', 'swedish_business')
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '2641').map((l) => [l.debit_amount, l.credit_amount])).toEqual([[150, 0], [0, 24]])
+    expect(findByAccount(input.lines, '1930')[0]).toMatchObject({ debit_amount: 0, credit_amount: 526 })
+    assertBalanced(input)
+  })
+
+  it('privately paid: the same 2641 lines, and the liability is the invoice total', () => {
+    const lines = buildSupplierInvoicePrivatelyPaidLines(negativeInvoice(), negativeOnly, '2893', 'Utlägg')
+    expect(lines.filter((l) => l.account_number === '2641')).toEqual([expect.objectContaining({ debit_amount: 0, credit_amount: 225 })])
+    expect(lines.filter((l) => l.account_number === '2893')[0]).toMatchObject({ debit_amount: 1125, credit_amount: 0 })
+    const totalDebit = lines.reduce((s, l) => s + l.debit_amount, 0)
+    const totalCredit = lines.reduce((s, l) => s + l.credit_amount, 0)
+    expect(Math.round(totalDebit * 100)).toBe(Math.round(totalCredit * 100))
+  })
+
+  it('a full credit note of such an invoice nets 2641 and 2440 to zero', async () => {
+    const invoice = mixedInvoice()
+    await createSupplierInvoiceRegistrationEntry(null as never, 'company-1', 'user-1', invoice, mixed, 'swedish_business')
+    const creditNote = { ...invoice, id: 'si-cn-1', is_credit_note: true, credited_invoice_id: invoice.id }
+    await createSupplierCreditNoteEntry(null as never, 'company-1', 'user-1', creditNote, mixed, 'swedish_business', undefined, 526)
+    const [registration, credit] = mockedCreateEntry.mock.calls.map((call) => call[3] as CreateJournalEntryInput)
+    const net = (account: string) => Math.round(
+      [...registration.lines, ...credit.lines]
+        .filter((l) => l.account_number === account)
+        .reduce((sum, l) => sum + l.debit_amount - l.credit_amount, 0) * 100,
+    ) / 100
+    expect(findByAccount(credit.lines, '2641').map((l) => [l.debit_amount, l.credit_amount])).toEqual([[0, 150], [24, 0]])
+    expect(net('2641')).toBe(0)
+    expect(net('2440')).toBe(0)
+    assertBalanced(credit)
+  })
+})
+
 describe('largestExpenseAccount', () => {
   it('picks the account of the largest line by magnitude, first line on a tie', () => {
     const items = [

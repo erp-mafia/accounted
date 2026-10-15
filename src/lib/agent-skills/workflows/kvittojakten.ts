@@ -147,10 +147,10 @@ Use the transport in "Your harness" below. After forwarding, Accounted needs up 
 
 For each document you are confident about:
 
-- \`kind: "verifikat"\`: \`gnubok_link_document_to_voucher({ document_id, journal_entry_id })\`
+- \`kind: "verifikat"\`: \`gnubok_link_document_to_voucher({ document_id, journal_entry_id })\`. Several verifikat items: stage them together with \`gnubok_link_documents_to_vouchers({ links: [{ document_id, journal_entry_id }, ...] })\`, one approval for all of them instead of one each (not in tools/list: call it through \`gnubok_stage_tool\` if your client cannot call it directly)
 - \`kind: "transaction"\`: \`gnubok_attach_document_to_transaction({ document_id, transaction_id })\`
 
-Both stage a pending operation and return \`staged: true\`. Nothing is linked until the user approves. The response carries \`period_status\`: when it says \`locked\` or \`closed\`, the link cannot be committed until the user unlocks the period, so say that in the report instead of presenting it as ready to approve. A document you are not sure about stays unlinked in the inbox: say which item you think it belongs to and let the user decide.
+Each stages a pending operation and returns \`staged: true\`. Nothing is linked until the user approves. The response carries \`period_status\`: when it says \`locked\` or \`closed\`, the link cannot be committed until the user unlocks the period, so say that in the report instead of presenting it as ready to approve. A document you are not sure about stays unlinked in the inbox: say which item you think it belongs to and let the user decide.
 
 ### Step 6: Approval and report
 
@@ -172,7 +172,7 @@ Then, **only when something was not found in mail**, close with one question and
 ## Tools used
 
 - \`gnubok_list_companies\`, \`gnubok_receipt_hunt_worklist\` (via \`gnubok_call_tool\`), \`gnubok_list_unmatched_documents\` (read)
-- \`gnubok_link_document_to_voucher\`, \`gnubok_attach_document_to_transaction\` (staged writes)
+- \`gnubok_link_document_to_voucher\`, \`gnubok_link_documents_to_vouchers\`, \`gnubok_attach_document_to_transaction\` (staged writes)
 - \`gnubok_create_document_upload\`, \`gnubok_complete_document_upload\` (direct upload: local agents and portal invoices)
 - \`gnubok_list_pending_operations\`, \`gnubok_approve_pending_operation\` (approval)`
 

@@ -23,11 +23,32 @@ export interface ParsedBankTransaction {
   bank_transaction_code?: string | null // ISO 20022 domain-family-subfamily, e.g. PMNT-RCDT-ESCT
 }
 
+/**
+ * The bank account the statement itself is for, as the file states it:
+ * camt.053 by IBAN in <Stmt><Acct>, Swedbank by its clearing and account
+ * columns, Handelsbanken, ICA Banken and Northmill in a "Kontonummer" line
+ * above the rows. Matched to a cash account by matchFileAccount
+ * (lib/cash-accounts/file-account.ts).
+ */
+export interface BankFileAccountIdentity {
+  /** Normalized IBAN (no spaces, upper case). */
+  iban: string | null
+  /** Clearing number as printed, when the file gives it in its own column. */
+  clearing: string | null
+  /** Account number as printed; may lead with the clearing number. */
+  account_number: string | null
+}
+
 /** Result from parsing a bank file */
 export interface BankFileParseResult {
   format: BankFileFormatId
   format_name: string
   transactions: ParsedBankTransaction[]
+  /**
+   * The statement's own account. Absent or null when the format does not
+   * say, or the file holds rows of more than one account.
+   */
+  account?: BankFileAccountIdentity | null
   date_from: string | null
   date_to: string | null
   issues: BankFileParseIssue[]

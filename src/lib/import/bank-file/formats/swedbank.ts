@@ -16,10 +16,11 @@
  * - Text column contains transaction type (e.g. "Bg-bet. via internet")
  */
 
-import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFileParseIssue } from '../types'
+import type { BankFileAccountIdentity, BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFileParseIssue } from '../types'
 import { prepareContent } from '../../shared/encoding'
 import { normalizeDate } from '../date-utils'
 import { parseCSVLine } from './nordea'
+import { accountIdentity, sharedAccountIdentity } from '../account-identity'
 
 /**
  * Check if a header value matches any of the given patterns (case-insensitive)
@@ -106,6 +107,11 @@ export const swedbankFormat: BankFileFormat = {
     const amountIdx = headers.findIndex((h) => h === 'belopp')
     const balanceIdx = headers.findIndex((h) => h === 'saldo')
     const referenceIdx = headers.findIndex((h) => h === 'referens')
+    // Every row names the account it belongs to: the statement's own identity
+    // (crm#1204), matched to a cash account by lib/cash-accounts/file-account.
+    const clearingIdx = headers.findIndex((h) => h === 'clnr' || h.includes('clearingnummer'))
+    const accountIdx = headers.findIndex((h) => h === 'kontonr' || h === 'kontonummer')
+    const rowAccounts: Array<BankFileAccountIdentity | null> = []
 
     if (dateIdx === -1 || amountIdx === -1) {
       issues.push({
@@ -168,6 +174,13 @@ export const swedbankFormat: BankFileFormat = {
         ? `${reference}: ${textDesc}`
         : reference || textDesc || 'Unknown'
 
+      if (accountIdx >= 0) {
+        rowAccounts.push(accountIdentity({
+          clearing: clearingIdx >= 0 ? fields[clearingIdx] : null,
+          account_number: fields[accountIdx],
+        }))
+      }
+
       transactions.push({
         date: normalizedDate,
         description,
@@ -186,6 +199,7 @@ export const swedbankFormat: BankFileFormat = {
       format: 'swedbank',
       format_name: 'Swedbank',
       transactions,
+      account: rowAccounts.length > 0 ? sharedAccountIdentity(rowAccounts) : null,
       date_from: dates[0] || null,
       date_to: dates[dates.length - 1] || null,
       issues,

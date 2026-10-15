@@ -11,6 +11,7 @@
  * through each.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { z } from 'zod'
 import { createQueuedMockSupabase, createTableMockSupabase } from '@/tests/helpers'
 import type { PendingOperation } from '@/types'
 
@@ -53,6 +54,8 @@ import { PATCH as v1PATCH } from '@/app/api/v1/companies/[companyId]/customers/[
 import { POST as v1BulkPOST } from '@/app/api/v1/companies/[companyId]/customers/bulk-create/route'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
 import { tools } from '@/extensions/general/mcp-server/server'
+import { findUnknownArgKeys } from '@/extensions/general/mcp-server/arg-guard'
+import { CreateCustomerSchema, UpdateCustomerSchema } from '@/lib/api/schemas'
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const CUSTOMER_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
@@ -65,6 +68,7 @@ const input = {
   customer_number: 'K-7',
   contact_person: 'Anna Andersson',
   email: 'faktura@konsult.example',
+  invoice_email_cc_addresses: ['ekonomi@konsult.example'],
   phone: '08-123 45',
   address_line1: 'Gatan 1',
   postal_code: '111 22',
@@ -152,6 +156,7 @@ describe('customer create: every door inserts the same row', () => {
     expect(fromDashboard).toMatchObject({
       customer_number: 'K-7',
       contact_person: 'Anna Andersson',
+      invoice_email_cc_addresses: ['ekonomi@konsult.example'],
       phone: '08-123 45',
       language: 'en',
       notes: 'Ring före leverans.',
@@ -192,7 +197,12 @@ describe('customer create: every door inserts the same row', () => {
     staging.enqueue({ data: { id: 'op-1' } }) // pending_operations insert
     // The tool's wire names: address and payment_terms.
     const { address_line1: address, default_payment_terms: paymentTerms, ...rest } = input
-    await tool.execute({ ...rest, address, payment_terms: paymentTerms }, COMPANY_ID, USER_ID, staging.supabase as never)
+    const args = { ...rest, address, payment_terms: paymentTerms }
+    // execute() runs after the dispatcher's argument guard, which refuses any
+    // key the tool does not list: calling execute alone hid that contact_person
+    // could never get this far (crm#1198).
+    expect(findUnknownArgKeys(tool.inputSchema as Record<string, unknown>, args)).toEqual([])
+    await tool.execute(args, COMPANY_ID, USER_ID, staging.supabase as never)
     const staged = staging.findCall('pending_operations', 'insert')?.[0] as { params: Record<string, unknown> }
 
     const approval = createQueuedMockSupabase()
@@ -308,5 +318,54 @@ describe('customer update: every door writes the same change', () => {
     )
     expect(committed.status, committed.error).toBe('committed')
     expect(written(approval.findCall, 'update')).toEqual(fromDashboard)
+  })
+})
+
+/**
+ * The agent tools list their arguments by hand (a derived schema costs about
+ * 200 tokens more in tools/list), and the dispatcher refuses any key a tool
+ * does not list. So a register field missing from a tool cannot be set over
+ * MCP at all, however the schema, the command and gnubok_get_customer carry
+ * it: contact_person was such a field (crm#1198). Each field the shared
+ * schema takes is an argument of the tool, or is named here with why not.
+ */
+const NOT_ON_THE_AGENT_TOOLS: Record<string, string> = {
+  invoice_email_bcc_addresses: 'a hidden copy of every invoice email; set in the web app (tools/list budget)',
+}
+
+/** gnubok_create_customer names two fields its own way. */
+const CREATE_WIRE_NAMES: Record<string, string> = { address: 'address_line1', payment_terms: 'default_payment_terms' }
+
+/** Arguments that steer the tool rather than name a field. */
+const CONTROL_ARGS = new Set(['customer_id', 'dry_run', 'idempotency_key'])
+
+/** The keys of an object schema, through any transform wrapped around it. */
+function schemaKeys(schema: unknown): string[] {
+  let node = schema
+  while (node && !(node instanceof z.ZodObject)) node = (node as { in?: unknown }).in
+  if (!(node instanceof z.ZodObject)) throw new Error('not an object schema')
+  return Object.keys(node.shape)
+}
+
+function fieldArgs(name: string): string[] {
+  const agentTool = tools.find((candidate) => candidate.name === name)!
+  return Object.keys((agentTool.inputSchema as { properties: Record<string, unknown> }).properties)
+    .filter((key) => !CONTROL_ARGS.has(key))
+    .map((key) => CREATE_WIRE_NAMES[key] ?? key)
+}
+
+describe('the agent tools take the register\'s fields', () => {
+  it.each([
+    ['gnubok_create_customer', CreateCustomerSchema],
+    ['gnubok_update_customer', UpdateCustomerSchema],
+  ] as const)('%s takes every field of its schema, or names why not', (name, schema) => {
+    const args = fieldArgs(name)
+    const missing = schemaKeys(schema).filter((key) => !args.includes(key))
+    expect(missing.sort()).toEqual(Object.keys(NOT_ON_THE_AGENT_TOOLS).sort())
+  })
+
+  it.each(['gnubok_create_customer', 'gnubok_update_customer'])('%s has no argument outside the register', (name) => {
+    const fields = new Set([...schemaKeys(CreateCustomerSchema), ...schemaKeys(UpdateCustomerSchema)])
+    expect(fieldArgs(name).filter((key) => !fields.has(key))).toEqual([])
   })
 })
