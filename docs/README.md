@@ -46,7 +46,7 @@ Start with the [user and API documentation](https://docs.accounted.se) for using
 
 ## Project history and community
 
-- [Decision log](../DECISIONS.md): current decisions and dated archives.
+- [Decision log](../DECISIONS.md): one file per decision under [decisions/](decisions/), plus the dated archives.
 - [Historical review notes](archive/README.md): context from completed work, not current setup instructions.
 - [Community registry](../registry/README.md): contribute a skill, MCP server, workflow, or app.
 - [Code of conduct](../.github/CODE_OF_CONDUCT.md).

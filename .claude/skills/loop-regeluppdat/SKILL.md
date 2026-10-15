@@ -65,7 +65,7 @@ For each surviving finding, before filing anything:
    - Year-end/bokslut: `lib/bokslut/`, `lib/core/bookkeeping/year-end-service.ts` (bolagsskatt)
    - Formats: `lib/reports/` (SIE, INK2, NE-bilaga, SRU), `lib/skatteverket/`
    - E-invoicing/Peppol: the `swedish-e-invoicing` skill documents our current stance
-3. Check `DECISIONS.md` and search issues **state:all** for the same change: it may already be
+3. Search `docs/decisions/` (`grep -ri "<topic>" docs/decisions`) and search issues **state:all** for the same change: it may already be
    tracked, done, or explicitly declined.
 4. Classify: **handled** (code already correct, note it in the run summary), **gap** (file a
    ticket), or **unclear** (file a ticket flagged for founder judgment; do not guess).

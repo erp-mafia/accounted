@@ -1,12 +1,12 @@
 # Decision Log
 
-One line per decision, at most 300 characters: `[YYYY-MM-DD] <decision>: <why>`. Details belong in the PR body. Appended by agents and humans when a non-obvious choice is made. Read before re-litigating a past decision.
+One decision per file, one line per decision, at most 300 characters: `[YYYY-MM-DD] <decision>: <why>`. Details belong in the PR body. Written by agents and humans when a non-obvious choice is made. Search before re-litigating a past decision:
 
-Keep the current calendar month here. Archive completed months verbatim under `docs/decisions/`, preserving their original order and wording.
+```bash
+grep -ri "<topic>" docs/decisions
+```
 
-- [September 2026](docs/decisions/2026-09.md)
-- [August 2026](docs/decisions/2026-08.md)
-- Before August 2026: `git show c36bc125a:DECISIONS.md` (archived on 2026-09-13). Code comments citing a July date refer to that archive.
+## Where decisions live
 
 [2026-10-01] Payslip PDF envelope (crm#202): the dashboard route returns explicit errorResponseFromCode codes instead of throwing dbError as #3345 did, so a remapped SQLSTATE cannot change the 500; the public token route stays plain text on every branch because its reader is an employee's browser opening an emailed link, not an API client.
 [2026-10-01] Grön teknik is left out of "Redo att begäras" and reads "Begärs i e-tjänsten", not "Att begära", in the invoice list: no begäran row exists for it before the Begaran file, so it would look unrequested forever. A manual "Markera som begärd" is a founder question.
@@ -728,3 +728,11 @@ Keep the current calendar month here. Archive completed months verbatim under `d
 [2026-10-15] MCP idempotency_key goes only on the 6 direct writes that can duplicate (withRetryKey); the 16 that cannot (CAS, dedupe, lease, overwrite) are listed with reasons in direct-write-retry.test.ts: a key there adds tools/list tokens (budget had 5 left) and no safety.
 [2026-10-15] A resent MCP approve answers the stored outcome in the approve tool, not in commitPendingOperation: there it would also change the web and bulk doors and write a second PendingOperationApproved audit row per repeat.
 [2026-10-15] MCP catalog ceiling +200 (65.9K to 66.1K, single-company 60.9K to 61.1K) pays for idempotency_key on the six direct-commit writes: direct writes may not be demoted (2026-09-20 policy), and shortening the shared key description saved only about 30 tokens.
+- **New decisions**: a file of their own, `docs/decisions/YYYY-MM/YYYY-MM-DD-<slug>.md` (slug: lowercase words joined by hyphens), for example `docs/decisions/2026-10/2026-10-14-decision-log-one-file-each.md`. Never append to this file: two merge requests that append to one file conflict, and `check:guards` (decision-log) fails a dated line here.
+- **Earlier decisions**, verbatim and in their original order:
+  - [October 2026, before one file per decision](docs/decisions/2026-10.md)
+  - [September 2026](docs/decisions/2026-09.md)
+  - [August 2026](docs/decisions/2026-08.md)
+  - Before August 2026: `git show c36bc125a:DECISIONS.md` (archived on 2026-09-13). Code comments citing a July date refer to that archive.
+
+A code comment that cites `DECISIONS.md <date>` means the entry of that date, wherever it lives now.

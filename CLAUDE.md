@@ -44,7 +44,7 @@ A reported problem usually arrives with a proposed solution: the reporter's work
 2. **What could be removed or simplified instead?** A counter that cannot be wrong because it is gone, a policy dropped instead of a check added, one write path instead of a third copy of a formula, a constraint instead of a trigger. The solution with fewer states and less code wins unless something concrete needs the extra state.
 3. **Is this the best solution, or just the proposed one?** Write down the alternative you considered and why you did not take it. When the better answer removes or changes something users see (a column, a field, a limit), state both options with a recommendation: that choice is the founder's, and the PR should make it easy to take either way.
 
-When the chosen path differs from the one proposed in the issue, record it in `DECISIONS.md` (see Decision Log).
+When the chosen path differs from the one proposed in the issue, record it in the decision log (see Decision Log).
 
 ## Definition of Done
 
@@ -60,6 +60,15 @@ A change is done when all of these hold; iterate until they do:
 8. If the change touches migrations, local and prod are reconciled: every version in prod's `schema_migrations` has a matching file in `supabase/migrations/`, and vice versa. Check before opening the PR (e.g. `list_migrations` / `select version from supabase_migrations.schema_migrations`); a remote-only version means an uncommitted orphan that will abort CI's prod migration push after the merge.
 9. **The last mile is verified in-session, not assumed.** Whatever was built is confirmed switched on before the session ends: merged PR's migration applied to prod, scheduled loop/routine observed firing, script actually executed, feature reachable. An integration with an external provider is live only after one real transaction has been observed end to end in production and a scheduled contract test passes. If switch-on must wait, the session's final output states exactly what is NOT live yet and who flips it. History shows the expensive failure mode is built-but-never-initiated, not built-wrong.
 10. The PR body answers the three questions in [Fix From First Principles](#fix-from-first-principles): why the problem occurred, what removal or simplification was considered, and why the chosen solution is the best one rather than the proposed one.
+
+## Merging
+
+`main` is fast-forward only and squashes every merge request, so a merge request behind `main` cannot land until it is rebased. Whoever lands one, human or agent:
+
+- **Queue it.** `glab api --method PUT projects/87259809/merge_requests/<n>/merge -f auto_merge=true -f squash=true -f should_remove_source_branch=true` sets auto-merge. (`glab mr merge` sets it only while a pipeline is running; with a pending one it tries to merge immediately, and the train refuses that with 405.) With merge trains on, GitLab tests the merge request on top of everything queued ahead of it and lands it; with them off, it lands once its pipeline is green and it is up to date. Never pass `--auto-merge=false` (merge immediately): with trains on it skips the queue and restarts every pipeline on the train. The one exception is an urgent production fix the founders agree to land first.
+- **Leave a queued branch alone.** Any push, a rebase included, takes the merge request off the train and starts its pipeline over. Push only to fix a real problem, then queue it again.
+- **Behind `main` is not a conflict.** With trains on, the train rebases. With them off (the project's `merge_trains_enabled` setting), rebase on GitLab with `glab mr rebase <n>`, not locally, then check that auto-merge is still set. Rebase locally only when GitLab reports a real conflict (`has_conflicts`).
+- **Land merge requests one at a time.** Folding reviewed merge requests into one landing branch to save pipelines is a workaround for trains being off; with trains on, queue each one.
 
 ## Commands
 
@@ -119,4 +128,4 @@ Don't duplicate these here; they auto-load when you touch matching paths:
 
 ## Decision Log
 
-When you make a non-obvious choice (picked approach A over B, declined a dependency, stopped because a rule here forbade something), append one line of at most 300 characters to `DECISIONS.md` (repo root): `[YYYY-MM-DD] <decision>: <why>`; the detail belongs in the PR body. Check that file before re-litigating a past decision (completed months are archived under `docs/decisions/`; entries before 2026-08-01 are in git history, see its header).
+When you make a non-obvious choice (picked approach A over B, declined a dependency, stopped because a rule here forbade something), add one file, `docs/decisions/YYYY-MM/YYYY-MM-DD-<slug>.md`, holding one line of at most 300 characters: `[YYYY-MM-DD] <decision>: <why>`; the detail belongs in the PR body. Never append to `DECISIONS.md`: merge requests that append to one shared file conflict with each other, and `check:guards` fails it. Search `docs/decisions/` before re-litigating a past decision (`grep -ri "<topic>" docs/decisions`); `DECISIONS.md` explains the layout and where older entries live.
