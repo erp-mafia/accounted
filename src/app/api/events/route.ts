@@ -14,6 +14,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { minimisePayload } from '@/lib/webhooks/handler'
+import { PAYROLL_EVENT_PREFIXES, isPayrollEvent } from '@/lib/webhooks/public-events'
 import { isMembershipActive } from '@/lib/entitlements/multi-user'
 import { createLogger } from '@/lib/logger'
 
@@ -84,6 +85,10 @@ export async function GET(request: Request) {
   // events whenever the user's active_company_id happened to point elsewhere.
   let keyCompanyId: string | null = null
   let keyMode: ApiKeyMode = 'live'
+  // Payroll events (salary_run.*, agi.*) need payroll:read on an API key, the
+  // same gate webhook registration applies: the pull feed must never hand out
+  // what the push surface withholds. A session user reads them as in the app.
+  let canReadPayroll = true
 
   const token = extractBearerToken(request)
   if (token?.startsWith('gnubok_sk_')) {
@@ -107,6 +112,7 @@ export async function GET(request: Request) {
 
     userId = authResult.userId
     keyCompanyId = authResult.companyId
+    canReadPayroll = hasScope(authResult.scopes, 'payroll:read')
     // Guard 3: test keys. A test key is simulation-only for WRITES (the v1
     // wrapper forces dry-run and blocks non-simulatable mutations with
     // TEST_KEY_WRITE_BLOCKED). This endpoint has no write path at all, so the
@@ -197,6 +203,18 @@ export async function GET(request: Request) {
   if (!result.success) return result.response
   const { after, types, limit } = result.data
 
+  // Asking for a payroll type by name without the scope is refused rather
+  // than answered with an empty page the caller would poll forever.
+  const deniedPayrollTypes = canReadPayroll ? [] : (types ?? []).filter(isPayrollEvent)
+  if (deniedPayrollTypes.length > 0) {
+    return errorResponseFromCode('INSUFFICIENT_SCOPE', log, {
+      details: {
+        required_scope: 'payroll:read',
+        reason: `Reading ${deniedPayrollTypes.join(', ')} requires payroll:read in addition to ${REQUIRED_SCOPE}.`,
+      },
+    })
+  }
+
   // Build query
   let query = supabase
     .from('event_log')
@@ -211,6 +229,12 @@ export async function GET(request: Request) {
 
   if (types && types.length > 0) {
     query = query.in('event_type', types)
+  }
+
+  if (!canReadPayroll) {
+    for (const prefix of PAYROLL_EVENT_PREFIXES) {
+      query = query.not('event_type', 'like', `${prefix}%`)
+    }
   }
 
   const { data, error } = await query

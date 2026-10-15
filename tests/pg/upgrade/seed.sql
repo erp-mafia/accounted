@@ -126,6 +126,31 @@ VALUES (
   ''
 );
 
+-- A webhook subscription with a single event_type, the only shape before
+-- 20261016001000: a migration that adds a NOT NULL or CHECK over the
+-- subscription's event types must backfill it first.
+INSERT INTO public.webhooks (id, company_id, name, event_type, webhook_url, secret)
+VALUES (
+  '99999999-9999-9999-9999-999999999901',
+  '22222222-2222-2222-2222-222222222222',
+  'Uppgraderingsmottagare',
+  'invoice.paid',
+  'https://example.invalid/hook',
+  'whsec_pg_upgrade_fixture_only'
+);
+
+-- event_log rows as the bus handler wrote them before event_log.dedupe_key
+-- (20261016001100), including the same journal_entry.committed twice: a
+-- unique index over event_log must not trip on history.
+INSERT INTO public.event_log (user_id, company_id, event_type, entity_id, data)
+VALUES
+  ('11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222',
+   'journal_entry.committed', '44444444-4444-4444-4444-444444444401', '{"entry": {}}'::jsonb),
+  ('11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222',
+   'journal_entry.committed', '44444444-4444-4444-4444-444444444401', '{"entry": {}}'::jsonb),
+  ('11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222',
+   'customer.created', '77777777-7777-7777-7777-777777777702', '{"customer": {}}'::jsonb);
+
 -- Guarded: company_migration_resets arrived 2026-08-18 and a merge-base older
 -- than that lacks the table. Then the archived company simply is not seeded.
 DO $$

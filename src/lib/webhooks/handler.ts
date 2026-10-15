@@ -3,7 +3,8 @@
  *
  * Subscribes to every CoreEventType the v1 API surface emits and converts
  * each emission into N rows in `webhook_deliveries`: one per active webhook
- * subscribed to (company_id, event_type). A dispatch cycle is then scheduled
+ * of the company whose event_types lists the emitted type (a subscription
+ * carries one or more types, migration 20261016001000). A dispatch cycle is then scheduled
  * immediately (see dispatch-kick.ts); the per-minute cron stays as the retry
  * and sweep path.
  *
@@ -134,7 +135,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Look up active webhooks for (companyId, eventType) and insert one
+ * Look up the company's active webhooks that list eventType and insert one
  * webhook_deliveries row per match. Pending rows are picked up by the
  * dispatcher cron at next-minute boundary.
  */
@@ -149,7 +150,10 @@ async function fanOutToWebhooks(args: {
     .from('webhooks')
     .select('id, api_version_pinned, verified_at, verification_grace_ends_at')
     .eq('company_id', args.companyId)
-    .eq('event_type', args.eventType)
+    // event_types @> {eventType}: a subscription matches any type it lists.
+    // The sync trigger fills event_types for writers that set only the
+    // legacy event_type, so no OR over the single column is needed.
+    .contains('event_types', [args.eventType])
     .eq('active', true)
     .is('disabled_at', null)
 

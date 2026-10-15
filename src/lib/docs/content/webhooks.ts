@@ -21,11 +21,11 @@ export const WEBHOOKS_MD = `# Webhooks
 
 > Receive HMAC-signed POST notifications when state changes in Accounted: invoices paid, journal entries committed, periods locked, salary runs booked, AGI files generated. At-least-once delivery with exponential backoff over ~87 hours (about 3.6 days).
 
-If you've used [Stripe webhooks](https://docs.stripe.com/webhooks), the model is identical: subscribe a URL to an event type, Accounted POSTs each event with a signed JSON body, your receiver returns 2xx to acknowledge. The signature header format and retry policy are the same. The event types are gnubok-specific.
+If you've used [Stripe webhooks](https://docs.stripe.com/webhooks), the model is identical: subscribe a URL to one or more event types, Accounted POSTs each event with a signed JSON body, your receiver returns 2xx to acknowledge. The signature header format and retry policy are the same. The event types are gnubok-specific.
 
 ## Lifecycle
 
-1. **Register a receiver** with [\`POST /api/v1/companies/{companyId}/webhooks\`](/docs/api/reference/webhooks#post-webhooks-create). The response includes an HMAC signing secret returned **exactly once**: store it on the receiver side immediately. If you lose it, rotate it with [\`POST /api/v1/companies/{companyId}/webhooks/{webhookId}/rotate-secret\`](/docs/api/reference/webhooks#post-webhooks-rotate_secret): a fresh secret is issued in place and the old one is invalidated immediately, with no change to the webhook's id or delivery history.
+1. **Register a receiver** with [\`POST /api/v1/companies/{companyId}/webhooks\`](/docs/api/reference/webhooks#post-webhooks-create), listing the events it should receive in \`event_types\` (one or more; the single \`event_type\` is still accepted). Every delivery carries one event, named by \`type\` and \`X-Gnubok-Event\`. Change the list later with \`PATCH\` (\`event_types\` replaces it). The response includes an HMAC signing secret returned **exactly once**: store it on the receiver side immediately. If you lose it, rotate it with [\`POST /api/v1/companies/{companyId}/webhooks/{webhookId}/rotate-secret\`](/docs/api/reference/webhooks#post-webhooks-rotate_secret): a fresh secret is issued in place and the old one is invalidated immediately, with no change to the webhook's id or delivery history.
 2. **Prove you own the URL.** A new webhook starts with \`verification_status: "pending"\` and receives nothing until its URL passes the [verification handshake](#endpoint-verification): Accounted POSTs a signed \`webhook.verification\` event and your receiver answers with the challenge it contains. Run it with [\`POST /api/v1/companies/{companyId}/webhooks/{webhookId}/verify\`](/docs/api/reference/webhooks#post-webhooks-verify) once your receiver handles it.
 3. **Accounted emits events** internally (e.g. an invoice is marked paid via the dashboard or another API call). The webhook handler enqueues a delivery row.
 4. **The dispatcher runs immediately after the event**, signs the payload with HMAC-SHA256, and POSTs to your URL with a 10-second timeout. A cron sweep every minute picks up anything the immediate pass did not get to, so first-attempt latency is normally a second or two but is never guaranteed to be: treat delivery as prompt, not synchronous.
@@ -77,7 +77,7 @@ The challenge is nested in the request but must come back at the top level: echo
 
 ## Event types
 
-The following event types are deliverable as webhooks. Subscribing to a type that requires elevated scope (\`salary_run.*\` and \`agi.*\` need \`payroll:read\`) returns \`INSUFFICIENT_SCOPE\` at registration time.
+The following event types are deliverable as webhooks. Listing a type that requires elevated scope (\`salary_run.*\` and \`agi.*\` need \`payroll:read\`) returns \`INSUFFICIENT_SCOPE\` at registration time, and when \`PATCH\` sets it.
 
 ${renderEventTypes()}
 
@@ -245,6 +245,12 @@ def verify_signature(body: bytes, header: str, secret: bytes) -> bool:
 - **Treating retries as duplicates of failure.** Retries arrive when *we* didn't get a 2xx. A 200 response that arrives slowly may not reach us in time and we'll retry: your receiver sees the same \`X-Gnubok-Delivery\` twice. Idempotency is on you.
 - **Returning 5xx for application errors.** A 5xx triggers the full retry policy (~87h of attempts). If your handler hit an application bug that won't resolve on retry, return 200 and queue the failure for internal investigation; only return 5xx for genuinely transient problems.
 - **Missing \`redirect: 'error'\`-style refusal at receiver level.** If your receiver follows redirects, an attacker who can MITM the response could redirect re-tries to a malicious URL. Modern HTTP clients refuse redirects by default for POST; verify yours does.
+
+## Catching up: the event feed
+
+Every event type listed under [Event types](#event-types) is also written to the event log, which \`GET /api/events\` serves in \`sequence\` order (scope \`events:read\`; \`salary_run.*\` and \`agi.*\` also need \`payroll:read\`, and a key without it does not see them; naming one in \`types\` answers \`403 INSUFFICIENT_SCOPE\`). Pass \`after\` (the last \`sequence\` you processed), optionally \`types\` (comma-separated) and \`limit\` (up to 100), and keep the returned \`cursor\`. A receiver that was down past the retry window, or whose webhook was paused, reads from its last cursor to catch up; an agent can use the feed instead of a webhook. Rows are kept 30 days. A polled row carries the same minimised payload under \`data\` but no delivery id, so deduplicate on event type and entity, not on \`X-Gnubok-Delivery\`.
+
+\`journal_entry.committed\` is written to the feed in the same database transaction that posts the verifikat: the row exists exactly when the voucher was posted, even if the request that posted it crashed right after. Webhook deliveries are queued after that commit, so a crash in between can still cost a delivery but never the feed row; reconcile against the feed. Other event types are written to the feed right after their change commits.
 
 ## Delivery debugging
 

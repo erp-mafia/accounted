@@ -1,0 +1,1 @@
+[2026-10-15] PATCH may now replace a webhook's event types (they were immutable): api_version_pinned fixes payload shapes, not which events are subscribed, so no re-pin is needed; delete-and-recreate cost the receiver its secret and delivery history.

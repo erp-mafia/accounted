@@ -1,0 +1,1 @@
+[2026-10-15] The in-RPC event payload is the bus handler's own shape, {"entry": row || lines}, built with to_jsonb in SQL: pollers see one shape whichever writer won, at the cost of building the blob inside the commit while the company row lock is held.
