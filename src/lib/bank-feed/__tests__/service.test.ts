@@ -747,7 +747,7 @@ describe('selectBankFeedAccounts', () => {
     expect(await selectBankFeedAccounts({ ...ctx, supabase: picker().supabase }, { connectionId: CONNECTION, accounts: [{ uid: 'ACC003', enabled: false }] })).toMatchObject({ ok: false, code: 'VALIDATION_ERROR', details: { reason: 'none_selected' } })
   })
 
-  it('for Svea creates the second consent naming the chosen IBANs, keeps the selection and the listing consent on the row and answers the attempt', async () => {
+  it('for Svea ends the listing consent, then creates the second consent naming the chosen IBANs, keeps the selection on the row and answers the attempt', async () => {
     const connect = fakeConnect({ createConsent: vi.fn().mockResolvedValue({ consentId: 'consent-2', consentStatus: 'received', validUntil: '2027-04-10' }) })
     mocks.connect.mockReturnValue(connect)
     const listing = row({ status: 'pending_selection', bic: 'SVEASESS', accounts_data: stored, consent_attempt: { selection: { listing_only: true, extended_history_days: 365, replace_connection_id: null } } })
@@ -755,13 +755,30 @@ describe('selectBankFeedAccounts', () => {
     const result = await selectBankFeedAccounts({ ...ctx, supabase }, { connectionId: CONNECTION, accounts: [{ uid: 'ACC003', enabled: true, ledgerAccount: '1930' }, { uid: 'ACC001', enabled: false, ledgerAccount: null }], method: 'qr', signer, now: NOW })
     expect(result).toMatchObject({ ok: true, data: { sync: null, sync_pending: false, attempt: { authorisation_id: 'auth-1', method: 'qr', state: 'pending' }, connection: { status: 'pending' } } })
     expect(connect.createConsent).toHaveBeenCalledWith('co-1', expect.objectContaining({ accounts: [{ iban: 'SE8050000000052131234567' }] }))
-    // The listing consent is not ended yet: the second consent is still to be signed.
-    expect(connect.revokeConsent).not.toHaveBeenCalled()
+    // One consent at a time (one bank connection per company): the listing
+    // consent is ended before the second one is created.
+    expect(connect.revokeConsent).toHaveBeenCalledWith('co-1', expect.objectContaining({ consentId: 'consent-1' }))
+    const revokeCalls = (connect.revokeConsent as ReturnType<typeof vi.fn>).mock.invocationCallOrder
+    const createCalls = (connect.createConsent as ReturnType<typeof vi.fn>).mock.invocationCallOrder
+    expect(revokeCalls[0]).toBeLessThan(createCalls[0])
     expect(payload('bank_connections', 'update')[0]).toMatchObject({
       session_id: 'consent-2', status: 'pending', authorization_id: null,
       consent_attempt: expect.objectContaining({ listing_only: false, listing_consent_id: 'consent-1', selection: expect.objectContaining({ listing_only: false, accounts: [{ uid: 'ACC003', enabled: true, ledger_account: '1930' }, { uid: 'ACC001', enabled: false, ledger_account: null }] }) }),
     })
     expect(mocks.saveSelection).not.toHaveBeenCalled()
+  })
+
+  it('for Svea creates the second consent even when ending the listing consent fails (already ended)', async () => {
+    const connect = fakeConnect({
+      createConsent: vi.fn().mockResolvedValue({ consentId: 'consent-2', consentStatus: 'received', validUntil: '2027-04-10' }),
+      revokeConsent: vi.fn().mockRejectedValue(new Error('consent not found')),
+    })
+    mocks.connect.mockReturnValue(connect)
+    const listing = row({ status: 'pending_selection', bic: 'SVEASESS', accounts_data: stored, consent_attempt: { selection: { listing_only: true, extended_history_days: 365, replace_connection_id: null } } })
+    const { supabase } = stub({ bank_connections: [{ data: listing, error: null }, { data: null, error: null }, { data: null, error: null }], ...orgAnswers() })
+    const result = await selectBankFeedAccounts({ ...ctx, supabase }, { connectionId: CONNECTION, accounts: [{ uid: 'ACC003', enabled: true, ledgerAccount: '1930' }], method: 'qr', signer, now: NOW })
+    expect(result).toMatchObject({ ok: true, data: { connection: { status: 'pending' } } })
+    expect(connect.createConsent).toHaveBeenCalledTimes(1)
   })
 
   it('starts Svea\'s second consent on the bank\'s page with the entry point\'s return when the bank signs only there, and refuses without a return', async () => {
