@@ -110,6 +110,8 @@ function row(overrides: Record<string, unknown> = {}) {
 const orgAnswers = () => ({ company_settings: [{ data: { org_number: '559538-6219' }, error: null }] })
 
 beforeEach(() => {
+  // The app origin these tests sign from is the canonical one: returns go to it directly (a brand host's would go through the hop).
+  vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.accounted.se')
   vi.clearAllMocks()
   mocks.signerOnFile.mockResolvedValue('199001011239')
   mocks.hasSigner.mockResolvedValue(true)
@@ -293,6 +295,22 @@ describe('startBankFeedConsent on the bank\'s own page', () => {
     })
     expect(payload('bank_connections', 'insert')[0]).toMatchObject({ bank_name: 'Sparbanken Nord', affiliated_aspsp_id: '08999', consent_attempt: expect.objectContaining({ method: 'redirect', return_to: 'connections' }) })
     expect(payload('bank_connections', 'update')[0]).toMatchObject({ authorization_id: 'auth-r', consent_attempt: expect.objectContaining({ method: 'redirect', state: 'pending', return_to: 'connections' }) })
+  })
+
+  it('a white-label host signs at the bank with a return through the hop on the canonical origin, the brand page named', async () => {
+    const connect = fakeConnect({ bank: vi.fn().mockResolvedValue({ ...BANK, decoupled: false, redirect: true }), startConsentSigning: vi.fn().mockResolvedValue(REDIRECT_STARTED('https://bank.example/sign')) })
+    mocks.door.mockResolvedValue({ ok: true, connect })
+    const { supabase } = stub({
+      ...orgAnswers(), ...company(),
+      bank_connections: [{ data: [], error: null }, { data: row({ authorization_id: null }), error: null }, { data: null, error: null }],
+    })
+    const brand = 'https://app.brand.example'
+    expect(await startBankFeedConsent({ ...ctx, supabase }, { bic: 'SWEDSESS', method: 'qr', signer, returnTo: 'connections', returnOrigin: brand, now: NOW })).toMatchObject({ ok: true })
+    const sent = (connect.startConsentSigning as ReturnType<typeof vi.fn>).mock.calls[0][1] as { returnUrl: string }
+    const hop = new URL(sent.returnUrl)
+    expect(hop.origin).toBe('https://app.accounted.se')
+    expect(hop.pathname).toBe('/api/bank/return')
+    expect(hop.searchParams.get('to')).toBe(`${brand}/settings/connections?bank_connect=${CONNECTION}`)
   })
 
   it('keeps the person\'s method at a bank that signs both ways, and refuses a redirect without a return page before anything is created', async () => {
