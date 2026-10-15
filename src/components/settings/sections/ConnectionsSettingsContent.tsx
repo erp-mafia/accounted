@@ -368,10 +368,13 @@ export function ConnectionsSettingsContent() {
           // file import instead of the switch (the campaign's own list,
           // lib/bank-feed/bank-coverage.ts), and an active row the campaign
           // no longer waits for already has its new connection: it says it
-          // was replaced and offers neither.
+          // was replaced and offers neither. Before that, a bank the new
+          // provider does not reach offers no switch either: it would end at
+          // the bank's refusal after the BankID.
           const stoppedFeed = Boolean(switchDeadline) && switchPassed
           const pendingSwitch = pendingSwitchIds.has(connection.id)
-          const uncoveredStopped = stoppedFeed && !bankCoveredByOpenPayments(connection.bank_name)
+          const uncovered = !bankCoveredByOpenPayments(connection.bank_name)
+          const uncoveredStopped = stoppedFeed && uncovered
           const replacedStopped = stoppedFeed && !uncoveredStopped && !pendingSwitch && connection.status === 'active'
           const state = uncoveredStopped
             ? t('switch_stopped_uncovered')
@@ -404,7 +407,7 @@ export function ConnectionsSettingsContent() {
                       <Button size="sm" asChild>
                         <Link href="/import?mode=bank">{t('import_statements')}</Link>
                       </Button>
-                    ) : replacedStopped ? null : (
+                    ) : replacedStopped || uncovered ? null : (
                       <Button
                         size="sm"
                         onClick={() => bankFlow.open('switch', { bank: { bic: '', name: connection.bank_name ?? '' }, replaceConnectionId: connection.id, deadline: switchDeadline })}
@@ -413,7 +416,7 @@ export function ConnectionsSettingsContent() {
                       </Button>
                     )}
                     {/* The signatory link is the byrå's path; it sits behind the row's menu so three buttons never clip the primary one. */}
-                    {canInvite && (
+                    {canInvite && !uncovered && (
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <Button variant="outline" size="icon-sm" aria-label={t('more_actions')}>

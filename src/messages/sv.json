@@ -13220,6 +13220,8 @@
     "help_nordea": "Det krävs en företagsanvändare med behörighet att godkänna åtkomst.",
     "help_swedbank": "Välj företaget när BankID frågar, annars kopplas privatkontona.",
     "help_svea": "Svea sker i två steg: först väljer du konton, sedan bekräftar du dem med BankID igen. Visas bolaget två gånger när du väljer avtalspart hos Svea, välj det första.",
+    "not_reached": "{bank} kopplas tills vidare via den tidigare bankkopplingen, under Anslut ny bank i bankinställningarna.",
+    "not_reached_action": "Öppna bankinställningarna",
     "bankid_intro": "Banken frågar efter BankID en gång per bank. Den som skannar behöver ha behörighet för företagets konton hos banken.",
     "personal_number_label": "Personnummer för den som signerar",
     "personal_number_hint": "12 siffror, ÅÅÅÅMMDDNNNN",

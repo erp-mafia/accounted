@@ -1,6 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -11,6 +12,7 @@ import { BankMark } from '@/components/banks/BankMark'
 import { fetchCompanyVerification, fetchPaymentsAvailability, startCompanyVerification } from '@/components/payments/payments-client'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
+import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { notifyBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
 import { FlowHelp, FlowSteps, flowPosition, flowShowsBankMark, flowTitle } from './BankConnectSteps'
@@ -91,6 +93,7 @@ function sessionBackend(): BankConnectBackend {
 function BankConnectDialogInner({ session, onClose, onConnected }: { session: BankConnectSession; onClose: () => void; onConnected?: BankConnectDialogProps['onConnected'] }) {
   const t = useTranslations('bank_connect')
   const { toast } = useToast()
+  const router = useRouter()
   const company = useCompanyOptional()?.company ?? null
   const availability = useOpenPaymentsAvailability()
   const [confirmClose, setConfirmClose] = useState(false)
@@ -158,6 +161,15 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
     onClose()
   }
 
+  // A bank the new connection does not reach yet still reads through Enable
+  // Banking: its panel on the bank settings page.
+  const earlierConnection = ENABLED_EXTENSION_IDS.has('enable-banking')
+    ? () => {
+        onClose()
+        router.push('/settings/banking')
+      }
+    : undefined
+
   const position = flowPosition(state)
   const titleBank = controller.bankName
   const titleMark = flowShowsBankMark(state, titleBank)
@@ -198,6 +210,7 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
             soleTrader={soleTrader}
             closeButton={cancelButton}
             onClose={onClose}
+            onEarlierConnection={earlierConnection}
             onCopyReminder={copyReminder}
             onSendToSignatory={sendToSignatory}
             onCopyForSignatory={copyForSignatory}

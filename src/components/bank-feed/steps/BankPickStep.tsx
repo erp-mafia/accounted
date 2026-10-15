@@ -6,6 +6,7 @@ import { AttnLine } from '@/components/ui/attn-line'
 import { DialogFooter } from '@/components/ui/dialog'
 import { SettingsSeg } from '@/components/settings/SettingsRows'
 import { BankList, OpenPaymentsBankMark } from '../BankList'
+import { bankCoveredByOpenPayments } from '@/lib/bank-feed/bank-coverage'
 import { bankGuideUrl, bankPrerequisiteKey } from '../bank-help'
 import type { FlowAction, FlowState } from '../connect-flow-reducer'
 import type { AccountContext, OpenPaymentsBank } from '../open-payments-client'
@@ -19,6 +20,8 @@ interface BankPickStepProps {
   /** Enskild firma: the private account used in the business is a choice. */
   soleTrader: boolean
   onContinue: () => void
+  /** Close the flow and open the earlier bank connection; absent where there is none to open. */
+  onEarlierConnection?: () => void
   closeButton: React.ReactNode
 }
 
@@ -33,13 +36,17 @@ interface BankPickStepProps {
  * "Vilken sparbank?" follows the list; the choice travels as the party's
  * affiliated_aspsp_id and names the connection.
  */
-export function BankPickStep({ state, dispatch, banks, banksFailed, soleTrader, onContinue, closeButton }: BankPickStepProps) {
+export function BankPickStep({ state, dispatch, banks, banksFailed, soleTrader, onContinue, onEarlierConnection, closeButton }: BankPickStepProps) {
   const t = useTranslations('bank_connect')
   const chosen = state.bank ? (banks?.find((b) => b.bic === state.bank?.bic) ?? null) : null
   const bankName = state.bank?.name ?? chosen?.name ?? ''
   const prerequisite = state.bank ? bankPrerequisiteKey({ name: bankName, bic: state.bank.bic }) : null
   const guideUrl = state.bank ? bankGuideUrl(state.bank) : null
-  const canContinue = state.bank !== null && state.bank.bic !== ''
+  // A bank the provider lists but does not reach yet (lib/bank-feed/bank-coverage.ts)
+  // is said so before a BankID that would end at the bank's refusal, with the
+  // way to the earlier connection that still reads it.
+  const notReached = state.bank !== null && bankName !== '' && !bankCoveredByOpenPayments(bankName)
+  const canContinue = state.bank !== null && state.bank.bic !== '' && !notReached
   const affiliates = state.bankDetails?.affiliates ?? []
 
   return (
@@ -85,7 +92,13 @@ export function BankPickStep({ state, dispatch, banks, banksFailed, soleTrader, 
         </div>
       )}
 
-      {prerequisite && <AttnLine className="px-1">{t(`help_${prerequisite}`)}</AttnLine>}
+      {notReached ? (
+        <AttnLine className="px-1" action={onEarlierConnection ? { label: t('not_reached_action'), onClick: onEarlierConnection } : undefined}>
+          {t('not_reached', { bank: bankName })}
+        </AttnLine>
+      ) : (
+        prerequisite && <AttnLine className="px-1">{t(`help_${prerequisite}`)}</AttnLine>
+      )}
 
       {guideUrl && (
         <p className="px-1 text-[12.5px]">

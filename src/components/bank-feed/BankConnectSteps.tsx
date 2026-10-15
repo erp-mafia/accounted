@@ -89,6 +89,8 @@ interface FlowStepsProps {
   /** The step footers' cancel button; the finished screen shows `onClose` instead. */
   closeButton: React.ReactNode
   onClose: () => void
+  /** Close the flow and open the earlier bank connection (Enable Banking), for a bank the new one does not reach yet; absent where there is none to open (the signatory page). */
+  onEarlierConnection?: () => void
   /** Copy the link a second signatory opens; absent where no such link exists (the signatory page). */
   onCopyReminder?: () => void
   /** Hand the verification form to a signatory by mail; absent where the signatory is the one at the screen. */
@@ -98,7 +100,7 @@ interface FlowStepsProps {
 }
 
 /** The step on screen, from the controller's state. The header (title, "?", step count) is the surface's own. */
-export function FlowSteps({ controller, session, banks, banksFailed, soleTrader, closeButton, onClose, onCopyReminder, onSendToSignatory, onCopyForSignatory }: FlowStepsProps) {
+export function FlowSteps({ controller, session, banks, banksFailed, soleTrader, closeButton, onClose, onEarlierConnection, onCopyReminder, onSendToSignatory, onCopyForSignatory }: FlowStepsProps) {
   const { state, dispatch } = controller
   switch (state.step) {
     case 'intro':
@@ -112,6 +114,7 @@ export function FlowSteps({ controller, session, banks, banksFailed, soleTrader,
           banksFailed={banksFailed}
           soleTrader={soleTrader}
           onContinue={() => dispatch({ type: 'to_bankid' })}
+          onEarlierConnection={onEarlierConnection}
           closeButton={closeButton}
         />
       )
