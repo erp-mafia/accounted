@@ -119,6 +119,7 @@ Adds an account to the company's kontoplan. A BAS 2026 number needs nothing but 
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -229,6 +230,7 @@ Sparse update of one kontoplan account: name, description, VAT defaults (code, b
 | `companyId` | path | `string` | yes |  |
 | `number` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -336,6 +338,7 @@ Removes an account from the kontoplan. Refused for system accounts and for any a
 | `companyId` | path | `string` | yes |  |
 | `number` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Response `200`:
 ```ts
@@ -388,6 +391,7 @@ Makes each listed account bookable: a standard BAS 2026 number missing from the 
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -468,6 +472,7 @@ Deactivates each listed account so it stops being offered for new bookings; hist
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -705,6 +710,7 @@ Adds a dimension to the registry (SIE #DIM). Omit sie_dim_no and the next free n
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -779,6 +785,7 @@ Sparse update of a dimension: name, is_active (false archives it, hiding it from
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -858,6 +865,7 @@ Removes a custom dimension and its values. Refused for the system dimensions and
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Response `200`:
 ```ts
@@ -1363,6 +1371,7 @@ Adds a rule for one account and one dimension. required: posting the account wit
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -1447,6 +1456,7 @@ Sparse update of a rule: rule_type, value_id and is_active (false pauses the rul
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -1522,6 +1532,7 @@ Removes the rule: from then on the account neither requires nor fills in that di
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Response `200`:
 ```ts
@@ -1636,6 +1647,7 @@ Creates a räkenskapsår and links it into the continuity chain (previous_period
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -1715,6 +1727,7 @@ Sparse update of an open, unlocked räkenskapsår: name, period_start, period_en
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -1800,6 +1813,7 @@ Sparse update of the compliance profile the ÅRL, K2 and K3 checks read: publikt
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -2012,6 +2026,7 @@ Saves the narrative overrides for a räkenskapsår's årsredovisning, as the das
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -2216,6 +2231,7 @@ Adds a pending signer slot (role and name) to the roster for the räkenskapsår.
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -2460,6 +2476,7 @@ Builds the årsredovisning from a complete read of the books (refused while an S
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -2609,6 +2626,7 @@ Closes and locks an imported historical räkenskapsår whose bokslut was done in
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Response `200`:
 ```ts
@@ -2877,6 +2895,7 @@ Books the corrected IB verifikat from the lines given (the complete IB, not a di
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -2990,6 +3009,7 @@ Posts the IB verifikat (source_type opening_balance, series A, dated the year's 
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -3234,6 +3254,7 @@ Applies the split GET /fiscal-periods/{id}/opening-balances/split-per-project pr
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -3320,6 +3341,7 @@ Reopens and unlocks a räkenskapsår that close-external closed, and writes the 
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Response `200`:
 ```ts
@@ -3391,6 +3413,7 @@ Clears locked_at so the year accepts postings again, and writes the unlock to th
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Response `200`:
 ```ts

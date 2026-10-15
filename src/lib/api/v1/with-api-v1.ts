@@ -29,7 +29,9 @@
  *      `/webhook-deliveries/:id/retry`) runs the SAME gate through
  *      `ctx.checkCompanyAccess(companyId)` before it reads or writes anything
  *      of that company.
- *   5. Resolves the dry-run flag (`?dry_run=true` query OR `X-Dry-Run` header).
+ *   5. Resolves the dry-run flag (`?dry_run=true` query OR `X-Dry-Run` header)
+ *      and the stage flag (`?stage=true`), refusing stage on an endpoint that
+ *      does not stage (STAGE_NOT_SUPPORTED) and any value but true/false.
  *   6. Resolves `Idempotency-Key` (header) and replays cached responses. The
  *      dry-run flag is part of the cache identity and dry-run responses are
  *      never cached, so a simulation can never be replayed in place of the
@@ -181,6 +183,14 @@ export interface ApiV1Context {
   companyWritable: boolean
   /** Resolved dry-run flag. Routes that mutate state must honor this. */
   dryRun: boolean
+  /**
+   * `?stage=true`: stage the write for approval instead of committing it.
+   * Only ever true on an endpoint registered with `stageSupported` (an
+   * operation write with a staging binding, served by v1OperationHandler):
+   * the wrapper refuses the flag everywhere else, so a hand-written route
+   * can never commit a request its caller sent to be staged.
+   */
+  stage: boolean
   /** Resolved idempotency key, if supplied. */
   idempotencyKey: string | null
 }
@@ -289,6 +299,21 @@ function isDryRun(request: Request, url: URL): boolean {
 }
 
 /**
+ * `?stage=true` (any case): stage instead of commit. Strict, unlike
+ * dry_run's "anything else commits": a misspelt staging flag must never
+ * commit what its caller meant to stage, so only true and false are read and
+ * anything else is refused (null). Absent is false.
+ */
+function parseStageFlag(url: URL): boolean | null {
+  const raw = url.searchParams.get('stage')
+  if (raw === null) return false
+  const value = raw.toLowerCase()
+  if (value === 'true') return true
+  if (value === 'false') return false
+  return null
+}
+
+/**
  * Canonical idempotency hash for a v1 request.
  *
  * `dryRun` is part of the identity of the request. The documented commit flow
@@ -314,12 +339,15 @@ function buildRequestHash(input: {
   path: string
   body: unknown
   dryRun: boolean
+  /** ?stage=true: a staged write and a commit of the same body are different requests. */
+  stage?: boolean
 }): string {
   return hashRequest({
     method: input.method,
     path: input.path,
     body: input.body,
     ...(input.dryRun ? { dry_run: true } : {}),
+    ...(input.stage ? { stage: true } : {}),
   })
 }
 
@@ -621,6 +649,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
           supabase: createAnonClient(),
           companyWritable: false,
           dryRun: false,
+          stage: false,
           idempotencyKey: null,
         }
         if (token) {
@@ -753,6 +782,27 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         }
       }
 
+      // 5c. Stage flag. `?stage=true` turns an operation write into a pending
+      //     operation for approval (v1OperationHandler). Refused on every
+      //     endpoint that does not stage, reads included: a hand-written
+      //     write would otherwise ignore the flag and commit what its caller
+      //     sent to be staged. After the access gates, so a company the key
+      //     cannot see still answers 404, never 400.
+      const stage = parseStageFlag(url)
+      if (stage === null) {
+        return await v1ErrorResponseFromCode('VALIDATION_ERROR', userLog, {
+          requestId,
+          details: { issues: [{ field: 'stage', message: 'stage must be true or false.' }] },
+        })
+      }
+      if (stage && !endpoint?.stageSupported) {
+        userLog.warn('stage requested on an endpoint that does not stage', { path, method: request.method })
+        return await v1ErrorResponseFromCode('STAGE_NOT_SUPPORTED', userLog, {
+          requestId,
+          details: { path, method: request.method },
+        })
+      }
+
       // 6. Idempotency. Mandatory for state-changing methods when the route
       //    opts in (or when an Idempotency-Key header is supplied).
       const idempotencyKey = request.headers.get(IDEMPOTENCY_HEADER)
@@ -803,7 +853,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         const { body, cloned } = await readBodyForHash(request)
         bodyForHash = body
         workingRequest = cloned
-        const reqHash = buildRequestHash({ method: request.method, path, body, dryRun })
+        const reqHash = buildRequestHash({ method: request.method, path, body, dryRun, stage })
         try {
           const hit = await checkIdempotencyKey(supabase, auth.userId, companyId, idempotencyKey, reqHash)
           if (hit) {
@@ -842,6 +892,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         companyId,
         companyWritable,
         dryRun,
+        stage,
         idempotencyKey,
       }
 
@@ -907,6 +958,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
             path,
             body: bodyForHash,
             dryRun,
+            stage,
           })
           const status: 'success' | 'error' = response.status >= 400 ? 'error' : 'success'
           await storeIdempotencyResponse(

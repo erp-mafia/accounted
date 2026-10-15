@@ -329,6 +329,7 @@ Creates a signed link, valid 7 days, that opens the Koppla banken flow for this 
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -522,6 +523,7 @@ Adds a manual bank account (cash_accounts, source manual) in a currency, on the 
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -645,6 +647,7 @@ Sparse update of one cash account. voucher_series (one letter A-Z, null clears) 
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -760,6 +763,7 @@ The primary is where bookings land when nothing else says which bank account the
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Response `200`:
 ```ts
@@ -846,6 +850,7 @@ Sets (or clears with cash_account_id null) the default payee account for one cur
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -978,6 +983,7 @@ Hard-deletes every transaction the import created that is still unbooked (ignore
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Response `200`:
 ```ts
@@ -1160,6 +1166,7 @@ Queues a batch storno of the import: each verifikat the import posted gets a rev
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -1480,6 +1487,7 @@ Connects one venue listed by GET /pos-sales/venues to the company through Accoun
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -1547,6 +1555,7 @@ Ends a POS connection: no more days are fetched and the venue is released at Acc
 | `companyId` | path | `string` | yes |  |
 | `connectionId` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Response `200`:
 ```ts
@@ -1600,6 +1609,7 @@ Updates the account mapping of one POS connection: an account per way of paying 
 | `companyId` | path | `string` | yes |  |
 | `connectionId` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -1961,6 +1971,7 @@ Posts the day as one verifikat (source_type pos_daily_sales, dated the business 
 | `companyId` | path | `string` | yes |  |
 | `dayId` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -3512,6 +3523,7 @@ Pins the document to the transaction. On an unbooked transaction the pin rides a
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -3679,6 +3691,7 @@ Clears the transaction's document pin and releases the inbox item matched to it,
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Response `200`:
 ```ts
@@ -3841,6 +3854,7 @@ Anchors the row to an existing POSTED journal entry: the row counts as booked an
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -3920,6 +3934,7 @@ Allocates the transaction across N invoices of one kind: one samlingsverifikatio
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -4011,6 +4026,7 @@ Books the bank row as the payout of the given registered claims: Debit their lia
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts
@@ -4466,6 +4482,7 @@ Puts up to 200 transactions on ONE verifikat (samlingsverifikation, BFL 5 kap 6 
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts

@@ -12,6 +12,15 @@
  * row, 200 otherwise, the dry-run envelope for `?dry_run=true`, and the
  * structured error envelope for a failure.
  *
+ * Stage mode: a write whose operation stages over MCP (`mcp.stage`) also
+ * accepts `?stage=true`. It then runs the dry run, stages a pending
+ * operation of `mcp.stage.pendingType` exactly as the MCP tool would
+ * (lib/operations/stage.ts) and answers 202 with that pending operation
+ * (pending_operation_id, status pending, task_state working). Nothing is
+ * committed until someone approves it: POST /pending-operations/{id}/approve,
+ * the MCP approve tool or the app. withApiV1 refuses stage=true on every
+ * endpoint registered without `stageSupported`.
+ *
  * Scope, idempotency, rate limits, test-mode keys and company membership are
  * withApiV1's job, exactly as for a hand-written route.
  */
@@ -22,7 +31,9 @@ import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1, type ApiV1Context } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
-import type { AnyOperation, OperationOutcome } from './types'
+import { toPendingOperationView } from '@/lib/pending-operations/view'
+import { stageOperation } from './stage'
+import type { AnyOperation, OperationContext, OperationOutcome } from './types'
 
 type RouteParams = { params: Promise<Record<string, string>> }
 
@@ -70,6 +81,7 @@ export function v1OperationHandler(op: AnyOperation) {
     idempotent: !isWrite || (http.requireIdempotencyKey ?? true),
     reversible: op.reversible,
     dryRunSupported: isWrite,
+    stageSupported: isWrite && op.mcp?.stage !== undefined,
     request:
       http.method === 'GET'
         ? { query: bodySchemaFor(op) }
@@ -115,11 +127,15 @@ export function v1OperationHandler(op: AnyOperation) {
       const parsed = (op.input as unknown as z.ZodTypeAny).safeParse({ ...raw, ...pathInput(op, params) })
       if (!parsed.success) return v1ValidationError(ctx, parsed.error)
 
-      const outcome = await op.run(
-        { supabase: ctx.supabase, companyId: ctx.companyId!, userId: ctx.userId, log: ctx.log },
-        parsed.data,
-        { dryRun: isWrite && ctx.dryRun },
-      )
+      const opCtx: OperationContext = {
+        supabase: ctx.supabase,
+        companyId: ctx.companyId!,
+        userId: ctx.userId,
+        log: ctx.log,
+      }
+      if (ctx.stage) return v1StageResponse(op, opCtx, parsed.data as Record<string, unknown>, ctx)
+
+      const outcome = await op.run(opCtx, parsed.data, { dryRun: isWrite && ctx.dryRun })
       return v1OutcomeResponse(outcome, ctx)
     },
     {
@@ -156,6 +172,52 @@ export async function v1OutcomeResponse(
     requestId: ctx.requestId,
     ...(outcome.warnings && outcome.warnings.length > 0 ? { warnings: outcome.warnings } : {}),
   })
+}
+
+/**
+ * `?stage=true`: stage the write as a pending operation and answer 202 with
+ * it. The dry run refuses exactly what a direct write would refuse, in the
+ * same envelope. With `?dry_run=true` (or a test key) it previews the
+ * staging and writes nothing.
+ */
+async function v1StageResponse(
+  op: AnyOperation,
+  opCtx: OperationContext,
+  input: Record<string, unknown>,
+  ctx: Pick<ApiV1Context, 'requestId' | 'log' | 'dryRun' | 'apiKeyId' | 'apiKeyName'>,
+): Promise<NextResponse> {
+  // withApiV1 already refused stage=true here; kept so the handler never
+  // commits a request sent to be staged, whatever the registration says.
+  if (op.kind !== 'write' || !op.mcp?.stage) {
+    return v1ErrorResponseFromCode('STAGE_NOT_SUPPORTED', ctx.log, { requestId: ctx.requestId })
+  }
+  const staged = await stageOperation(
+    op,
+    opCtx,
+    input,
+    { type: 'api_key', id: ctx.apiKeyId ?? null, label: ctx.apiKeyName ?? null },
+    { dryRun: ctx.dryRun },
+  )
+  if (!staged.ok) return v1OutcomeResponse(staged.outcome, ctx)
+  if (staged.dryRun) {
+    return dryRunPreview(
+      {
+        staged: false,
+        operation_type: staged.plan.pendingType,
+        title: staged.plan.title,
+        risk_level: staged.riskLevel,
+        preview: staged.plan.preview,
+      },
+      { requestId: ctx.requestId, log: ctx.log },
+    )
+  }
+  return ok(
+    {
+      ...toPendingOperationView(staged.row),
+      ...(staged.periodStatus ? { period_status: staged.periodStatus } : {}),
+    },
+    { requestId: ctx.requestId, status: 202 },
+  )
 }
 
 /** True when every input field is supplied by the path (a bare DELETE). */
