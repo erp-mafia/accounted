@@ -46,6 +46,7 @@ import {
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { createServiceClient } from '@/lib/supabase/server'
+import { findSignedBankPayment, signedBankPaymentDetails } from '@/lib/payments/orders/signed-payment'
 import {
   BANK_ENTERED_SUPPLIER_INVOICE_STATUSES,
   canMarkSupplierInvoiceBankEntered,
@@ -472,6 +473,14 @@ export async function setSupplierInvoiceBankEntered(
 
   if (entered && !canMarkSupplierInvoiceBankEntered(invoice)) {
     return { ok: false, code: 'SI_BANK_ENTERED_NOT_PAYABLE', details: { currentStatus: invoice.status } }
+  }
+  // Typing the payment into the internet bank by hand beside a bank payment
+  // signed for the same invoice pays the supplier twice (crm#1243).
+  if (entered) {
+    const signedBankPayment = await findSignedBankPayment(supabase, companyId, supplierInvoiceId)
+    if (signedBankPayment) {
+      return { ok: false, code: 'SI_BANK_PAYMENT_UNDER_WAY', details: signedBankPaymentDetails(signedBankPayment) }
+    }
   }
 
   // Marking an already-marked invoice keeps the first timestamp (that is

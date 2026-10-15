@@ -961,9 +961,14 @@ async function hydrateInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto>(
     return { items, report: { ...EMPTY_HYDRATION_REPORT }, unhydratedIds: new Set() };
   }
 
-  // Unpaid invoices are the ones a later payment match or credit note will
-  // book, so they get the budget first.
-  pending.sort((a, b) => Number(a.dto.paymentStatus.paid) - Number(b.dto.paymentStatus.paid));
+  // Drafts first, then the other unpaid invoices, then the paid ones. A draft
+  // is the next document the user sends, and without its detail form it has
+  // no rows and no VAT to send with (crm#1245: 29 of 63 drafts lost the
+  // budget to sent invoices). Unpaid invoices are the ones a later payment
+  // match or credit note will book. The sort is stable, so list order holds
+  // within each group.
+  const rank = (dto: T): number => (dto.status === 'draft' ? 0 : dto.paymentStatus.paid ? 2 : 1);
+  pending.sort((a, b) => rank(a.dto) - rank(b.dto));
 
   const hydrated = [...items];
   const report: HydrationReport = { ...EMPTY_HYDRATION_REPORT, needed: pending.length };

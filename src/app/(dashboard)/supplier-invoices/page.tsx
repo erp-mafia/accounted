@@ -49,6 +49,11 @@ import type { FiscalPeriod, SupplierInvoice } from '@/types'
 import { useCompanySettings } from '@/components/settings/useSettings'
 import { fetchPaymentsAvailability } from '@/components/payments/payments-client'
 import { supplierInvoiceStatusDisplay } from '@/lib/supplier-invoices/status-display'
+import {
+  openPaymentMarker,
+  OPEN_PAYMENT_MARKER_LABEL_KEYS,
+  type OpenPaymentInstruction,
+} from '@/lib/supplier-invoices/stages'
 
 const NewSupplierInvoiceDialog = dynamic(
   () => import('@/components/supplier-invoices/NewSupplierInvoiceDialog'),
@@ -80,7 +85,13 @@ function isBatchSelectable(inv: SupplierInvoice): boolean {
   )
 }
 
-const TABS = ['all', 'registered', 'approved', 'to_pay', 'paid'] as const
+/** A list row: the invoice, its supplier, and the payment instruction that already covers it (GET /api/supplier-invoices). */
+type ListInvoice = SupplierInvoice & {
+  supplier?: { id: string; name: string }
+  open_payment?: OpenPaymentInstruction | null
+}
+
+const TABS = ['all', 'registered', 'approved', 'to_pay', 'in_payment', 'paid'] as const
 type ListTab = (typeof TABS)[number]
 
 const TAB_LABEL_KEYS: Record<ListTab, string> = {
@@ -88,7 +99,22 @@ const TAB_LABEL_KEYS: Record<ListTab, string> = {
   registered: 'tab_registered',
   approved: 'tab_approved',
   to_pay: 'tab_to_pay',
+  in_payment: 'tab_in_payment',
   paid: 'tab_paid',
+}
+
+/**
+ * Att betala is what still waits for someone to pay it. An invoice with an
+ * open bank payment is not: the bank has it (or a person is approving and
+ * signing it under Betalningar), every payment channel refuses it, and
+ * offering it again invites paying it twice (crm#1243). An invoice in a
+ * payment file stays: a generated file may never have reached the bank.
+ */
+function isToPay(inv: ListInvoice): boolean {
+  return (
+    (inv.status === 'registered' || inv.status === 'approved' || inv.status === 'overdue') &&
+    openPaymentMarker(inv) !== 'bank_payment'
+  )
 }
 
 // Same shape as the invoices list header (app/(dashboard)/invoices/page.tsx).
@@ -123,7 +149,7 @@ export default function SupplierInvoicesPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const company = useCompanyOptional()?.company ?? null
-  const [invoices, setInvoices] = useState<(SupplierInvoice & { supplier?: { id: string; name: string } })[]>([])
+  const [invoices, setInvoices] = useState<ListInvoice[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<ListTab>('all')
   // The flow (UI v2 PR 6) lives on each invoice as a strip; the list keeps
@@ -146,11 +172,10 @@ export default function SupplierInvoicesPage() {
   // "Inlagd i banken" (#2220) in flight for one row: the bock disables while
   // the server confirms, so a double click cannot flip it twice.
   const [bankEnteringId, setBankEnteringId] = useState<string | null>(null)
-  // Payment-file bulk selection + the "already in an active betalfil" chip map.
-  // Radix' onCheckedChange carries no mouse event: the preceding click records
-  // whether shift was held, for range selection.
+  // Payment-file bulk selection. Radix' onCheckedChange carries no mouse
+  // event: the preceding click records whether shift was held, for range
+  // selection.
   const shiftHeld = useRef(false)
-  const [activeBatchInvoiceIds, setActiveBatchInvoiceIds] = useState<Set<string>>(new Set())
   const [showPaymentDialog, setShowPaymentDialog] = useState(false)
   const [showPayViaBankDialog, setShowPayViaBankDialog] = useState(false)
   // Whether this company can pay through the bank: read once per page load;
@@ -192,25 +217,8 @@ export default function SupplierInvoicesPage() {
     }
   }
 
-  // Which invoices already sit in an active (not cancelled) betalfil: feeds
-  // the "I betalfil" chip. Non-blocking; the list renders without it.
-  async function fetchActiveBatchMembership() {
-    try {
-      const res = await fetch('/api/supplier-invoices/payment-batches?status=created')
-      if (!res.ok) return
-      const { data } = await res.json()
-      const ids = new Set<string>()
-      for (const batch of (data ?? []) as Array<{ supplier_invoice_ids?: string[] }>) {
-        for (const id of batch.supplier_invoice_ids ?? []) ids.add(id)
-      }
-      setActiveBatchInvoiceIds(ids)
-    } catch {
-      // Chip data only; the list stays functional without it.
-    }
-  }
-
   // Invoices whose stated bank details hold their payment back: a marker per
-  // row (lib/payments/payee-alerts.ts). Marker data only, like the batch chips.
+  // row (lib/payments/payee-alerts.ts). Marker data only: the list renders without it.
   const [payeeMarkers, setPayeeMarkers] = useState<Map<string, PayeeAlertMarker>>(new Map())
   async function fetchPayeeMarkers() {
     try {
@@ -222,7 +230,6 @@ export default function SupplierInvoicesPage() {
 
   useEffect(() => {
     fetchInvoices()
-    fetchActiveBatchMembership()
     fetchPayeeMarkers()
     // Mount-only fetch (same pattern as /invoices): fetchInvoices reads state
     // only to decide skeleton vs background refresh.
@@ -249,12 +256,14 @@ export default function SupplierInvoicesPage() {
   // "Att betala" is the full payment queue: registered invoices are already
   // booked as debt (2440), so they belong here too. Approval stays the gate
   // for paying, not for visibility; unapproved rows get a hover approve.
+  // "I betalning" is what is already set up for payment (isToPay).
   const filteredInvoices = invoices.filter((inv) => {
     const matchesTab = (() => {
       switch (activeTab) {
         case 'registered': return inv.status === 'registered'
         case 'approved': return inv.status === 'approved'
-        case 'to_pay': return inv.status === 'registered' || inv.status === 'approved' || inv.status === 'overdue'
+        case 'to_pay': return isToPay(inv)
+        case 'in_payment': return openPaymentMarker(inv) !== null
         case 'paid': return inv.status === 'paid'
         default: return true
       }
@@ -372,17 +381,19 @@ export default function SupplierInvoicesPage() {
   }
 
   const registeredCount = invoices.filter((inv) => inv.status === 'registered').length
-  const toPayCount = invoices.filter(
-    (inv) => inv.status === 'registered' || inv.status === 'approved' || inv.status === 'overdue',
-  ).length
+  const toPayCount = invoices.filter(isToPay).length
+  const inPaymentCount = invoices.filter((inv) => openPaymentMarker(inv) !== null).length
 
-  const selectableInvoices = filteredInvoices.filter(isBatchSelectable)
+  // An invoice with an open bank payment takes no new payment: no checkbox
+  // (the server refuses it in both channels anyway).
+  const isRowSelectable = (inv: ListInvoice) => isBatchSelectable(inv) && openPaymentMarker(inv) !== 'bank_payment'
+  const selectableInvoices = filteredInvoices.filter(isRowSelectable)
   // The selection is the payable invoices of the current tab, filter and
   // search: a row they hide leaves it (useBulkSelection). Ranges walk the
   // rows in rendered order: sorted, then sectioned by the active grouping.
   const selection = useBulkSelection(
     selectableInvoices.map((inv) => inv.id),
-    { rangeIds: orderedInvoices.filter(isBatchSelectable).map((inv) => inv.id) },
+    { rangeIds: orderedInvoices.filter(isRowSelectable).map((inv) => inv.id) },
   )
   const { selectedIds, toggle: toggleSelect } = selection
 
@@ -399,7 +410,6 @@ export default function SupplierInvoicesPage() {
   const handleBatchCreated = () => {
     selection.clear()
     fetchInvoices()
-    fetchActiveBatchMembership()
   }
 
   useEffect(() => {
@@ -420,7 +430,6 @@ export default function SupplierInvoicesPage() {
   const handleBankPaymentDone = () => {
     selection.clear()
     fetchInvoices()
-    fetchActiveBatchMembership()
   }
 
   async function handleApprove(id: string) {
@@ -527,7 +536,13 @@ export default function SupplierInvoicesPage() {
           ariaLabel={t('status_picker_aria')}
           triggerLabel={(() => {
             const count =
-              activeTab === 'registered' ? registeredCount : activeTab === 'to_pay' ? toPayCount : 0
+              activeTab === 'registered'
+                ? registeredCount
+                : activeTab === 'to_pay'
+                  ? toPayCount
+                  : activeTab === 'in_payment'
+                    ? inPaymentCount
+                    : 0
             return count > 0
               ? `${t(TAB_LABEL_KEYS[activeTab])} · ${count}`
               : t(TAB_LABEL_KEYS[activeTab])
@@ -540,7 +555,9 @@ export default function SupplierInvoicesPage() {
                 ? String(registeredCount)
                 : tab === 'to_pay' && toPayCount > 0
                   ? String(toPayCount)
-                  : undefined,
+                  : tab === 'in_payment' && inPaymentCount > 0
+                    ? String(inPaymentCount)
+                    : undefined,
           }))}
         />
         <ToolbarSearch
@@ -700,15 +717,18 @@ export default function SupplierInvoicesPage() {
                 // them there), so attest keys off approved_at, not the status.
                 const canApprove =
                   canApproveSupplierInvoice(inv) && !inv.is_credit_note && canWrite
-                const selectable = canWrite && isBatchSelectable(inv)
+                const selectable = canWrite && isRowSelectable(inv)
+                // What already covers the invoice: a bank payment or a file.
+                const openPayment = openPaymentMarker(inv)
                 // "Inlagd i banken" (#2220) shares the trailing slot with
                 // Godkänn, so it appears once attest is done. Viewers see the
-                // bock only when it is set (state, not a control).
+                // bock only when it is set (state, not a control). Paying by
+                // hand is no option while a bank payment is open.
                 const bankEntered = !!inv.bank_entered_at
                 const showBankEntered =
                   !canApprove &&
                   canMarkSupplierInvoiceBankEntered(inv) &&
-                  (canWrite || bankEntered)
+                  (bankEntered || (canWrite && openPayment !== 'bank_payment'))
                 // Same shape as the customer list: the section header is a
                 // sibling row decided from the previous row's key.
                 const groupKey = rowGroupKeys.get(inv.id) ?? null
@@ -813,9 +833,9 @@ export default function SupplierInvoicesPage() {
                         ) : (
                           <span className="text-xs text-muted-foreground">{chipLabel}</span>
                         )}
-                        {activeBatchInvoiceIds.has(inv.id) && inv.status !== 'paid' && (
+                        {openPayment && (
                           <Badge variant="outline" className="font-normal">
-                            {t('in_batch_chip')}
+                            {t(OPEN_PAYMENT_MARKER_LABEL_KEYS[openPayment])}
                           </Badge>
                         )}
                       </span>

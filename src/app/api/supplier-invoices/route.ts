@@ -5,6 +5,8 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { createSupplierInvoice } from '@/lib/supplier-invoices/create'
+import { loadOpenPaymentInstructions } from '@/lib/supplier-invoices/lifecycle-stages'
+import { SETTLED_SUPPLIER_INVOICE_STATUSES } from '@/lib/supplier-invoices/stages'
 
 export const GET = withRouteContext(
   'supplier_invoice.list',
@@ -40,6 +42,14 @@ export const GET = withRouteContext(
 
         return query.order('due_date', { ascending: true }).order('id', { ascending: true }).range(from, to)
       })
+      // Each unsettled invoice carries the payment instruction that already
+      // covers it (an open bank payment or payment file), read the same way
+      // as the lifecycle stage, so a person deciding what to pay sees that a
+      // payment is under way (crm#1243). Null when nothing covers it.
+      const rows = data as Array<{ id: string; status: string }>
+      const unsettledIds = rows.filter((r) => !SETTLED_SUPPLIER_INVOICE_STATUSES.has(r.status)).map((r) => r.id)
+      const open = await loadOpenPaymentInstructions(supabase, companyId, unsettledIds)
+      data = rows.map((r) => ({ ...r, open_payment: open.get(r.id) ?? null }))
     } catch (error) {
       log.error('supplier_invoice list failed', error)
       return errorResponse(error, log, { requestId })

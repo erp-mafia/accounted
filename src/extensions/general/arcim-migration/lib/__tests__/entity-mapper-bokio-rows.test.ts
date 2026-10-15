@@ -62,6 +62,27 @@ describe('Bokio sales invoice rows', () => {
     ])
   })
 
+  // crm#1190: Bokio states no row position, and its line id is not one: a
+  // row moved to the top of an invoice in Bokio keeps a later id than the
+  // rows below it (seen in the source JSON a customer sent, where the PDF
+  // order is the array order). The array as served is the only order there
+  // is, so it is written as it stands and never re-sorted by id.
+  it('keeps the served order when the line ids do not follow it, never sorting by id', () => {
+    const [consultancy, hotel, conference, cables, delivered] = BOKIO_INVOICE.lineItems
+    const { items } = map({
+      ...BOKIO_INVOICE,
+      lineItems: [{ ...consultancy, id: 504 }, hotel, conference, cables, delivered],
+    })
+
+    expect(items.map((item) => [item.sort_order, item.description])).toEqual([
+      [1, 'Consultancy services'],
+      [2, 'Hotel'],
+      [3, 'Conference: two nights'],
+      [4, 'Cables'],
+      [5, 'Delivered on site'],
+    ])
+  })
+
   it('maps units: hour to tim, piece to st, unspecified to no unit', () => {
     const { items } = map(BOKIO_INVOICE)
 

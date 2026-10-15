@@ -104,6 +104,28 @@ describe('fetchSalesInvoicesHydrated (fortnox)', () => {
     expect(details[0]).toContain('/invoices/4');
   });
 
+  it('requests a DRAFT before the open and the paid invoice (crm#1245)', async () => {
+    // A saved, unsent Fortnox invoice: the next document the user sends,
+    // and a row-less one cannot be sent with the right rows and VAT.
+    // Three detail fetches run at once, so the assertions are per wave: the
+    // draft (listed last) is in the first wave, the paid invoice is the last.
+    const DRAFT = { DocumentNumber: 9, InvoiceDate: '2025-11-03', Currency: 'SEK', Total: 750, Balance: 750, Sent: false, Booked: false };
+    const open = (n: number) => ({ ...OPEN, DocumentNumber: n, Sent: true });
+    stubFetch((url) => {
+      const id = url.match(/\/invoices\/(\d+)/)?.[1];
+      return id ? json(detailFor(Number(id), id === '5' ? 500 : 1250)) : json(listResponse([PAID, open(4), open(6), open(7), DRAFT]));
+    });
+
+    const { invoices } = await fetchSalesInvoicesHydrated('fortnox', 'token');
+
+    const ids = requested.map((u) => u.match(/\/invoices\/(\d+)/)?.[1]).filter(Boolean);
+    expect(ids).toHaveLength(5);
+    expect(ids.slice(0, 3)).toContain('9');
+    expect(ids.at(-1)).toBe('5');
+    // Results keep the register's own order.
+    expect(invoices.map((inv) => inv.id)).toEqual(['5', '4', '6', '7', '9']);
+  });
+
   it('reports what the budget could not reach instead of looking complete', async () => {
     stubFetch(() => json(listResponse([OPEN, PAID])));
 

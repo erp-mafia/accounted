@@ -40,7 +40,7 @@ import {
 const V1PatchSupplierInvoiceSchema = UpdateSupplierInvoiceSchema.strict()
 
 const SI_DETAIL_COLUMNS =
-  'id, supplier_id, arrival_number, supplier_invoice_number, invoice_date, due_date, received_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, reverse_charge, payment_reference, paid_at, paid_amount, remaining_amount, is_credit_note, credited_invoice_id, registration_journal_entry_id, payment_journal_entry_id, transaction_id, document_id, notes, default_dimensions, reversed_at, created_at, updated_at'
+  'id, supplier_id, arrival_number, supplier_invoice_number, invoice_date, due_date, received_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, reverse_charge, payment_reference, paid_at, paid_amount, remaining_amount, is_credit_note, credited_invoice_id, registration_journal_entry_id, payment_journal_entry_id, transaction_id, document_id, notes, default_dimensions, reversed_at, approved_at, bank_entered_at, created_at, updated_at'
 
 const SI_ITEM_COLUMNS =
   'id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount, reverse_charge_rate, apply_slp, dimensions'
@@ -76,6 +76,12 @@ const SupplierInvoiceDetail = z.object({
   registration_journal_entry_id: z.string().uuid().nullable(),
   payment_journal_entry_id: z.string().uuid().nullable(),
   notes: z.string().nullable(),
+  // Attest time: an attested invoice past its due date reads 'overdue', like
+  // one nobody attested, so the status alone cannot tell (crm#1229).
+  approved_at: z.string().nullable(),
+  // "Inlagd i banken": paid by hand at the bank, money not landed yet.
+  // Cleared when a payment lands; books nothing.
+  bank_entered_at: z.string().nullable(),
   created_at: z.string(),
   updated_at: z.string(),
 })
@@ -96,6 +102,7 @@ registerEndpoint({
   pitfalls: [
     'Credit notes return is_credit_note=true and a credited_invoice_id pointing at the original.',
     'registration_journal_entry_id and payment_journal_entry_id let you trace the SI to its bokföring rows; they are null when no JE has been posted (e.g. on a kontantmetoden SI before payment).',
+    'status does not say whether an invoice is attested (an attested invoice past its due date is overdue): read approved_at, which kontantmetoden companies leave null (no attest step there). bank_entered_at is set while a payment entered at the bank by hand has not landed; it clears itself when a payment is recorded on the invoice.',
   ],
   example: {
     response: {

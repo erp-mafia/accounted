@@ -65,6 +65,12 @@ const SupplierInvoiceSummary = z.object({
   remaining_amount: z.number(),
   is_credit_note: z.boolean(),
   paid_at: z.string().nullable(),
+  // Attest time. The status cannot tell: an attested invoice past its due
+  // date reads 'overdue', like one nobody attested (crm#1229).
+  approved_at: z.string().nullable(),
+  // "Inlagd i banken": paid by hand at the bank, money not landed yet.
+  // Cleared when a payment lands; books nothing.
+  bank_entered_at: z.string().nullable(),
   created_at: z.string(),
 })
 
@@ -72,7 +78,7 @@ const SupplierInvoicesListResponse = listEnvelope(SupplierInvoiceSummary)
 
 // Explicit projection.
 const SI_SUMMARY_COLUMNS =
-  'id, supplier_id, arrival_number, supplier_invoice_number, invoice_date, due_date, status, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, is_credit_note, paid_at, created_at'
+  'id, supplier_id, arrival_number, supplier_invoice_number, invoice_date, due_date, status, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, is_credit_note, paid_at, approved_at, bank_entered_at, created_at'
 
 const SUPPLIER_NAME_ONLY_COLUMNS = 'id, name'
 
@@ -112,6 +118,7 @@ registerEndpoint({
   pitfalls: [
     'Credit notes (is_credit_note=true) appear in the same list as the originals; filter by status=credited or check the flag to separate.',
     'remaining_amount is the unpaid portion; a partially_paid SI has remaining_amount > 0.',
+    'status does not say whether an invoice is attested (an attested invoice past its due date is overdue): read approved_at, which kontantmetoden companies leave null (no attest step there). bank_entered_at is set while a payment entered at the bank by hand has not landed; it clears itself when a payment is recorded on the invoice.',
     'arrival_number is internal book-keeping, not the seller\'s invoice number: use supplier_invoice_number for matching to received documents.',
     'Ordering is by created_at (registration time), not invoice_date. A late-registered invoice appears where it was registered: filter on ?date_from / ?date_to when you care about the seller\'s invoice date.',
     'Cursor pagination: pass ?cursor=<next_cursor> from the previous response. A stale or tampered cursor is ignored and the first page is returned again.',
@@ -136,6 +143,8 @@ registerEndpoint({
           remaining_amount: 1250,
           is_credit_note: false,
           paid_at: null,
+          approved_at: null,
+          bank_entered_at: null,
           created_at: '2026-05-13T15:00:00Z',
         },
       ],
@@ -221,6 +230,8 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       remaining_amount: number
       is_credit_note: boolean
       paid_at: string | null
+      approved_at: string | null
+      bank_entered_at: string | null
       created_at: string
       supplier: SupplierObj | SupplierObj[] | null
     } & Record<string, unknown>
@@ -253,6 +264,8 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
         remaining_amount: r.remaining_amount,
         is_credit_note: r.is_credit_note,
         paid_at: r.paid_at,
+        approved_at: r.approved_at,
+        bank_entered_at: r.bank_entered_at,
         created_at: r.created_at,
       }
     })

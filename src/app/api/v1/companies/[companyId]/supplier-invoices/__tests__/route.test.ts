@@ -314,6 +314,92 @@ describe('GET /api/v1/companies/:companyId/supplier-invoices/:id', () => {
   })
 })
 
+/*
+ * crm#1229: an agent watching unpaid supplier invoices could not tell
+ * "attested and paid by hand at the bank, money not landed" from "attested,
+ * nothing paid", nor an attested overdue invoice from an unattested one: the
+ * two timestamps that say so were in no read projection.
+ */
+describe('GET supplier invoices: approved_at and bank_entered_at (crm#1229)', () => {
+  const APPROVED_AT = '2026-06-01T08:00:00Z'
+  const BANK_ENTERED_AT = '2026-06-05T09:30:00Z'
+  const attestedAndEntered = {
+    ...SAMPLE_SI,
+    status: 'overdue',
+    approved_at: APPROVED_AT,
+    bank_entered_at: BANK_ENTERED_AT,
+  }
+
+  it('the list projects both columns and returns them on every row', async () => {
+    const mock = supabaseFor({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      supplier_invoices: {
+        data: [
+          { ...attestedAndEntered, supplier: { id: SUPPLIER_ID, name: 'Office Depot AB' } },
+          { ...SAMPLE_SI, id: JE_ID, approved_at: null, bank_entered_at: null, supplier: null },
+        ],
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(mock.supabase)
+    const res = await listSIs(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices`),
+      companyParams(COMPANY_ID),
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data[0]).toMatchObject({ status: 'overdue', approved_at: APPROVED_AT, bank_entered_at: BANK_ENTERED_AT })
+    expect(body.data[1]).toMatchObject({ approved_at: null, bank_entered_at: null })
+    const select = selectedColumns(mock, 'supplier_invoices')
+    expect(select).toMatch(/\bapproved_at\b/)
+    expect(select).toMatch(/\bbank_entered_at\b/)
+  })
+
+  it('the single invoice projects and returns both columns', async () => {
+    const mock = supabaseFor({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      supplier_invoices: { data: attestedAndEntered, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock.supabase)
+    const res = await getSI(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}`),
+      detailParams(COMPANY_ID, SI_ID),
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data).toMatchObject({ approved_at: APPROVED_AT, bank_entered_at: BANK_ENTERED_AT })
+    const select = selectedColumns(mock, 'supplier_invoices')
+    expect(select).toMatch(/\bapproved_at\b/)
+    expect(select).toMatch(/\bbank_entered_at\b/)
+  })
+
+  it('returns 401 UNAUTHORIZED on the list when the API key is rejected', async () => {
+    mockValidate.mockResolvedValue({ error: 'invalid api key', status: 401 })
+    const res = await listSIs(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices`),
+      companyParams(COMPANY_ID),
+    )
+    expect(res.status).toBe(401)
+    const body = await res.json()
+    expect(body.error.code).toBe('UNAUTHORIZED')
+  })
+
+  it('returns 400 VALIDATION_ERROR on the single invoice for a non-uuid id', async () => {
+    mockServiceClient.mockReturnValue(
+      supabaseFor({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }).supabase,
+    )
+    const res = await getSI(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/not-a-uuid`),
+      detailParams(COMPANY_ID, 'not-a-uuid'),
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+  })
+})
+
 describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
   const validBody = {
     supplier_id: SUPPLIER_ID,
@@ -1609,6 +1695,33 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
 
     expect(res.status).toBe(200)
     expect(mockedPayment).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns 409 SI_BANK_PAYMENT_UNDER_WAY while a signed bank payment covers the invoice, dry run included (crm#1243)', async () => {
+    for (const query of ['', '?dry_run=true']) {
+      mockServiceClient.mockReturnValue(
+        supabaseFor({
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          supplier_invoices: { data: approvedSI, error: null },
+          payment_orders: { data: [{ id: 'order-1', status: 'accepted', requested_execution_date: '2026-10-30' }], error: null },
+          company_settings: { data: { accounting_method: 'accrual' }, error: null },
+          fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
+          idempotency_keys: { data: null, error: null },
+        }).supabase,
+      )
+      const res = await markPaidSI(
+        makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}/mark-paid${query}`, {
+          method: 'POST',
+          body: JSON.stringify({ force: true }),
+        }),
+        detailParams(COMPANY_ID, SI_ID),
+      )
+      expect(res.status).toBe(409)
+      const body = await res.json()
+      expect(body.error.code).toBe('SI_BANK_PAYMENT_UNDER_WAY')
+      expect(body.error.details).toMatchObject({ payment_order_id: 'order-1', requested_execution_date: '2026-10-30' })
+    }
+    expect(mockedPayment).not.toHaveBeenCalled()
   })
 
   it('returns 400 SI_PAID_PERIOD_LOCKED when payment_date is in a locked period', async () => {

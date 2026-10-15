@@ -10604,7 +10604,7 @@ export const tools: McpTool[] = [
       let query = supabase
         .from('supplier_invoices')
         .select(
-          'id, supplier_id, supplier_invoice_number, invoice_date, due_date, status, total, total_sek, currency, vat_treatment, remaining_amount, is_credit_note, default_dimensions, ' +
+          'id, supplier_id, supplier_invoice_number, invoice_date, due_date, status, approved_at, bank_entered_at, total, total_sek, currency, vat_treatment, remaining_amount, is_credit_note, default_dimensions, ' +
             `${STATED_PAYEE_COLUMNS}, supplier:suppliers(id, name, ${CARD_PAYEE_COLUMNS})`,
           { count: 'exact' },
         )

@@ -1,0 +1,1 @@
+[2026-10-15] crm#1232: the voucher table wraps the account name instead of a width floor on the review slide-over: the screenshot shows the panel at its full 640px with a nowrap BAS name widening the table, and a floor would slide the panel under the docked assistant (crm#1106) or off screen.

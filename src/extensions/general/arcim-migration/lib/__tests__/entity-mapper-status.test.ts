@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { mapSalesInvoice, mapSupplierInvoice, resolveSupplierSettlement } from '../entity-mapper'
+import { mapFortnoxToSalesInvoice } from '@/lib/providers/fortnox/mapper'
 import type { SalesInvoiceDto, SupplierInvoiceDto, InvoiceStatusCode, PartyDto, PaymentStatusDto } from '@/lib/providers/dto'
 
 /**
@@ -451,5 +452,34 @@ describe('paid_at is the provider payment date or null, never the issue date (#2
     const supplier = map({ status: 'paid', paid: true, balance: 0, total: 1000 })
     expect(sales.paid_at).not.toBe(sales.invoice_date)
     expect(supplier.paid_at).not.toBe(supplier.invoice_date)
+  })
+})
+
+/**
+ * crm#1245: a Fortnox invoice saved but never sent or booked. Its detail form
+ * states Sent false and Booked false; a zero Balance must not make it paid,
+ * and its rows and VAT come over as on any hydrated invoice.
+ */
+describe('mapSalesInvoice: an unissued Fortnox draft', () => {
+  const draft = {
+    DocumentNumber: '4711', InvoiceDate: '2026-10-20', DueDate: '2026-11-19', Currency: 'SEK',
+    CustomerName: 'Kund AB', Sent: false, Booked: false, Cancelled: false,
+    Total: 1250, Net: 1000, TotalVAT: 250, Balance: 0, VATIncluded: false,
+    InvoiceRows: [
+      { RowId: 1, Description: 'Konsulttimmar', DeliveredQuantity: '8', Price: 100, Total: 800, VAT: 25, AccountNumber: 3041 },
+      { RowId: 2, Description: 'Resa', DeliveredQuantity: '1', Price: 200, Total: 200, VAT: 25, AccountNumber: 3041 },
+    ],
+  }
+
+  it('lands as a draft with nothing paid, its rows in order and 25 % VAT', () => {
+    const mapped = mapSalesInvoice(mapFortnoxToSalesInvoice(draft), 'user-1', 'company-1', 'customer-1')
+    expect(mapped.invoice.status).toBe('draft')
+    expect(mapped.invoice.paid_amount).toBe(0)
+    expect(mapped.invoice.remaining_amount).toBe(1250)
+    expect(mapped.invoice.paid_at).toBeNull()
+    expect(mapped.invoice.vat_rate).toBe(25)
+    expect(mapped.invoice.vat_amount).toBe(250)
+    expect(mapped.items.map((item) => [item.sort_order, item.description, item.vat_amount]))
+      .toEqual([[1, 'Konsulttimmar', 200], [2, 'Resa', 50]])
   })
 })

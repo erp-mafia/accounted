@@ -23,6 +23,11 @@ import { usePartyDossier } from '@/components/parties/use-party-dossier'
 import { fromRegistry, addressRowsFromRegistry, listSv } from '@/lib/parties/registry-summary'
 import { formatOrgNumber } from '@/lib/utils'
 import { supplierInvoiceStatusDisplay } from '@/lib/supplier-invoices/status-display'
+import {
+  openPaymentMarker,
+  OPEN_PAYMENT_MARKER_LABEL_KEYS,
+  type OpenPaymentInstruction,
+} from '@/lib/supplier-invoices/stages'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 
 // Supplier invoices carry their own currency; "kr" is only correct for SEK.
@@ -64,7 +69,8 @@ export default function SupplierDetailPage() {
   const registryNote = registryFields.length ? (
     <p className="pt-2 text-xs text-muted-foreground">{tParties('facts_contact_from_registry', { fields: listSv(registryFields, tParties('facts_list_and')) })}</p>
   ) : null
-  const [invoices, setInvoices] = useState<SupplierInvoice[]>([])
+  // Each row carries the payment instruction that already covers it (GET /api/supplier-invoices).
+  const [invoices, setInvoices] = useState<Array<SupplierInvoice & { open_payment?: OpenPaymentInstruction | null }>>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isEditOpen, setIsEditOpen] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
@@ -115,7 +121,7 @@ export default function SupplierDetailPage() {
     )
     const { data } = await res.json()
     if (data) {
-      setInvoices(data as SupplierInvoice[])
+      setInvoices(data as Array<SupplierInvoice & { open_payment?: OpenPaymentInstruction | null }>)
     }
   }
 
@@ -367,6 +373,7 @@ export default function SupplierDetailPage() {
                 const statusDisplay = supplierInvoiceStatusDisplay(inv.status)
                 const exceptionVariant = statusDisplay?.chip ?? undefined
                 const label = statusDisplay ? tInvoices(statusDisplay.labelKey) : inv.status
+                const openPayment = openPaymentMarker(inv)
                 return (
                   <Link
                     key={inv.id}
@@ -401,6 +408,11 @@ export default function SupplierDetailPage() {
                       <span className="min-w-14 shrink-0 text-right text-xs text-muted-foreground">
                         {label}
                       </span>
+                    )}
+                    {openPayment && (
+                      <Badge variant="outline" className="shrink-0 font-normal">
+                        {tInvoices(OPEN_PAYMENT_MARKER_LABEL_KEYS[openPayment])}
+                      </Badge>
                     )}
                   </Link>
                 )

@@ -25,6 +25,7 @@ import { recordSupplierInvoiceDuplicateGuardBypass } from '@/lib/invoices/duplic
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { findSignedBankPayment, signedBankPaymentDetails } from '@/lib/payments/orders/signed-payment'
 
 export const POST = withRouteContext(
   'supplier_invoice.mark_paid',
@@ -55,6 +56,17 @@ export const POST = withRouteContext(
       return errorResponseFromCode('SI_PAID_NOT_PAYABLE', opLog, {
         requestId,
         details: { currentStatus: invoice.status },
+      })
+    }
+
+    // A bank payment signed for this invoice still executes: recording a
+    // payment made another way beside it pays the supplier twice (crm#1243).
+    // No force: the way out is cancelling that payment first.
+    const signedBankPayment = await findSignedBankPayment(supabase, companyId, id)
+    if (signedBankPayment) {
+      return errorResponseFromCode('SI_BANK_PAYMENT_UNDER_WAY', opLog, {
+        requestId,
+        details: signedBankPaymentDetails(signedBankPayment),
       })
     }
 
