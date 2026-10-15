@@ -1,0 +1,1 @@
+[2026-10-15] Idempotency claims expire after 900 s: longer than the 800 s maxDuration of the extension route that serves MCP (v1 routes stop at 300 s), so a claim is taken over only once its request can no longer be running. One TTL for every surface.

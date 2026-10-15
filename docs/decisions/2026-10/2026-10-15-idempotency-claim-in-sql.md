@@ -1,0 +1,1 @@
+[2026-10-15] The idempotency claim and takeover are one SECURITY DEFINER function under an advisory lock on the key, not an app-side insert then select: a company_create claim has no company, so no unique index can serialise it. Complete and release stay plain updates.

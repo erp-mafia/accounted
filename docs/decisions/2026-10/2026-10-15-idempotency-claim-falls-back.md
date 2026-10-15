@@ -1,0 +1,1 @@
+[2026-10-15] When the idempotency claim cannot be made (RPC error, function not yet migrated), the write falls back to step 1's lookup-then-store instead of failing: sequential retries stay safe, only the overlap guard is lost, and it logs an alert.

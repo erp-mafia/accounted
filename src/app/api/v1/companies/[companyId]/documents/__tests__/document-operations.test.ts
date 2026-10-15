@@ -34,6 +34,7 @@ vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { GET as listDocuments } from '../route'
 import { GET as getDocument, DELETE as deleteDocument } from '../[id]/route'
+import { isIdempotencyClaim } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -78,7 +79,7 @@ const WRITES = new Set(['insert', 'update', 'upsert', 'delete', 'remove'])
 /** Business tables only: withApiV1's own bookkeeping (idempotency, usage) is not the operation's. */
 const BOOKS = new Set(['document_attachments', 'storage', 'transactions', 'invoice_inbox_items'])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || c.method === 'rpc')
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || (c.method === 'rpc' && !isIdempotencyClaim(c)))
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const DOC_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'

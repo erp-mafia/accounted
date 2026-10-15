@@ -45,6 +45,7 @@ import { GET as listItems } from '../route'
 import { GET as getItem, PATCH as patchItem, DELETE as deleteItem } from '../[id]/route'
 import { POST as unmatch } from '../[id]/unmatch-transaction/route'
 import { POST as convert } from '../[id]/convert/route'
+import { isIdempotencyClaim } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -89,7 +90,7 @@ const WRITES = new Set(['insert', 'update', 'upsert', 'delete', 'remove'])
 /** Business tables only: withApiV1's own bookkeeping (idempotency, usage) is not the operation's. */
 const BOOKS = new Set(['document_attachments', 'transactions', 'invoice_inbox_items', 'supplier_invoices', 'supplier_invoice_items', 'suppliers', 'processing_history'])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || c.method === 'rpc')
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || (c.method === 'rpc' && !isIdempotencyClaim(c)))
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const ITEM_ID = '22222222-2222-4222-8222-222222222222'

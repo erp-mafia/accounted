@@ -127,6 +127,16 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
         'Use a fresh UUID for a new operation, or send the original request body to replay.',
     },
   },
+  IDEMPOTENCY_KEY_IN_PROGRESS: {
+    httpStatus: 409,
+    message_sv: 'En begäran med samma idempotensnyckel pågår fortfarande. Försök igen om en liten stund.',
+    message_en: 'A request with the same idempotency key and body is still in progress.',
+    retryable: true,
+    remediation: {
+      description:
+        'The first request with this key is still running. Retry the identical request with the same key after Retry-After seconds: once the first one has finished, the retry returns its response without writing again. Do not switch to a fresh key, which would run the write a second time.',
+    },
+  },
   INSUFFICIENT_SCOPE: {
     httpStatus: 403,
     message_sv: 'API-nyckeln saknar behörighet för denna åtgärd.',
