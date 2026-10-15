@@ -6,6 +6,7 @@ import {
   capabilityBlockedResponse,
   getCompanyIdsWithCapability,
   getCompanyEntitlements,
+  readCapabilityAxes,
 } from '../has-capability'
 import { CAPABILITY, CONNECTOR_CAPABILITIES, PAID_CAPABILITIES } from '../keys'
 
@@ -404,6 +405,72 @@ describe('requireCapability', () => {
     const body = await res!.json()
     expect(body.capability_blocked).toBe(true)
     expect(body.capability).toBe(CAPABILITY.ai)
+  })
+})
+
+describe('readCapabilityAxes', () => {
+  const COMPANY = '11111111-1111-4111-8111-111111111111'
+  const KEYS = [CAPABILITY.ai, CAPABILITY.bank_sync, CAPABILITY.skatteverket, CAPABILITY.collections]
+
+  it('keeps entitlement and enablement apart: an expired grant is not entitled, a disabled key is reported even when entitled', async () => {
+    const supabase = makeSupabase({
+      capability_grants: {
+        data: [
+          { capability_key: 'bank_sync', expires_at: iso(60_000), source: 'stripe', team_id: null },
+          { capability_key: 'ai', expires_at: null, source: 'comp', team_id: null },
+          { capability_key: 'skatteverket', expires_at: iso(-60_000), source: 'trial', team_id: null },
+        ],
+      },
+      company_capability_config: { data: [{ capability_key: 'ai' }] },
+    })
+    const axes = await readCapabilityAxes(supabase, COMPANY, KEYS)
+    expect([...axes.entitled].sort()).toEqual(['ai', 'bank_sync'])
+    expect([...axes.disabled]).toEqual(['ai'])
+  })
+
+  it('reads every key in one grant RPC and one config query narrowed to disabled rows of those keys', async () => {
+    const calls: RecordedCall[] = []
+    const supabase = makeRecordingSupabase({ capability_grants: { data: [] }, company_capability_config: { data: [] } }, calls)
+    await readCapabilityAxes(supabase, COMPANY, [...KEYS, CAPABILITY.ai])
+    expect(grantRpcParams(calls)).toEqual([
+      { p_company_id: COMPANY, p_capability_keys: KEYS, p_connector_only: false },
+    ])
+    const config = calls.filter((c) => c.table === 'company_capability_config')
+    expect(config).toContainEqual({ table: 'company_capability_config', method: 'eq', args: ['company_id', COMPANY] })
+    expect(config).toContainEqual({ table: 'company_capability_config', method: 'eq', args: ['enabled', false] })
+    expect(config).toContainEqual({ table: 'company_capability_config', method: 'in', args: ['capability_key', KEYS] })
+  })
+
+  it('on a self-host holds local keys outright and asks only for connector grants of connector keys', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    const calls: RecordedCall[] = []
+    const supabase = makeRecordingSupabase({ capability_grants: { data: [] }, company_capability_config: { data: [] } }, calls)
+    const axes = await readCapabilityAxes(supabase, COMPANY, KEYS)
+    expect([...axes.entitled]).toEqual(['ai'])
+    expect(grantRpcParams(calls)).toEqual([
+      { p_company_id: COMPANY, p_capability_keys: ['bank_sync', 'skatteverket', 'collections'], p_connector_only: true },
+    ])
+  })
+
+  it('throws on a failed grant or config read instead of reporting the key as not entitled', async () => {
+    await expect(
+      readCapabilityAxes(makeSupabase({ capability_grants: { data: null, error: { message: 'boom' } } }), COMPANY, KEYS),
+    ).rejects.toThrow(/capability grants: boom/)
+    await expect(
+      readCapabilityAxes(
+        makeSupabase({ capability_grants: { data: [] }, company_capability_config: { data: null, error: { message: 'down' } } }),
+        COMPANY,
+        KEYS,
+      ),
+    ).rejects.toThrow(/capability config: down/)
+  })
+
+  it('refuses a company id that is not a uuid and answers an empty key list without a query', async () => {
+    await expect(readCapabilityAxes(makeSupabase({}), 'not-a-uuid', KEYS)).rejects.toThrow(/uuid/)
+    const calls: RecordedCall[] = []
+    const axes = await readCapabilityAxes(makeRecordingSupabase({}, calls), COMPANY, [])
+    expect(axes.entitled.size + axes.disabled.size).toBe(0)
+    expect(calls).toEqual([])
   })
 })
 

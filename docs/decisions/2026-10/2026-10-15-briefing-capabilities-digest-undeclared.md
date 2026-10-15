@@ -1,0 +1,1 @@
+[2026-10-15] The briefing's capabilities digest is returned but not declared in outputSchema (like inbox) so tools/list does not grow, and keeps {id, status, reasons} as specified for parity with the REST modules[].id: a module id is a slug, never confused with an entity id.

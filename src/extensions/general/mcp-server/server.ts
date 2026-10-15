@@ -207,6 +207,7 @@ import { generateMonthlyBreakdown } from '@/lib/reports/monthly-breakdown'
 import { uiWidgets, findUiWidget, WIDGET_MIME_TYPE } from './widgets'
 import { dataResources, findResource, parseResourceQuery } from './resources'
 import { buildLedgerContext } from '@/lib/agent-context/ledger-context'
+import { capabilityDigest, loadCompanyCapabilities } from '@/lib/modules/capabilities'
 import { prompts, findPrompt } from './prompts'
 import { findSkill, loadAllSkills, toSummary, SKILL_MIME_TYPE, SKILL_URI_PREFIX, skillUri, skillSlugFromUri } from './skills'
 import { loadSkillProvenance, skillBodyHash, oauthActorLabel } from '@/lib/agent-skills/provenance'
@@ -6543,6 +6544,22 @@ export const tools: McpTool[] = [
         }
       })()
 
+      // The modules this company cannot use right now (lib/modules/
+      // capabilities.ts), so the agent stops calling their tools: only the
+      // ones that are not active, as id, status and reasons, and an empty
+      // list when every module is active. Undeclared in outputSchema on
+      // purpose (tools/list budget, like inbox). Best-effort: a failed read
+      // omits the key, never the briefing. Resolutions and the full list:
+      // GET /api/v1/companies/{companyId}/capabilities.
+      const safeCapabilityDigest = (async () => {
+        try {
+          const capabilities = await loadCompanyCapabilities(supabase, companyId)
+          return capabilities ? capabilityDigest(capabilities) : null
+        } catch {
+          return null
+        }
+      })()
+
       // Skatteverket connection health, so the agent warns the user at
       // session start instead of discovering a dead session mid-task.
       // Best-effort and emitted only when a connection (or verified system
@@ -6760,6 +6777,7 @@ export const tools: McpTool[] = [
       const skvConnection = await safeSkvConnection
       const arkivDigest = await safeArkivDigest
       const inboxAddress = await inboxAddressRead
+      const capabilityDigestRows = await safeCapabilityDigest
 
       return {
         company,
@@ -6777,6 +6795,7 @@ export const tools: McpTool[] = [
         ...(ledgerDigest ? { ledger_context: ledgerDigest } : {}),
         ...(arkivDigest ? { arkiv: arkivDigest } : {}),
         ...(skvConnection ? { skatteverket_connection: skvConnection } : {}),
+        ...(capabilityDigestRows ? { capabilities: capabilityDigestRows } : {}),
         // Always present, so the absence of an address is a stated fact and
         // not something the agent has to infer from a missing key. The note
         // also names the direct upload: an agent holding the file bytes

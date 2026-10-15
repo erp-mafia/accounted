@@ -59,6 +59,7 @@ export const DOCS_NAV: DocsNavSection[] = [
     links: [
       { label: 'Overview', href: '/docs/api/reference', summary: 'All resources, grouped by domain.' },
       { label: 'Companies', href: '/docs/api/reference/companies' },
+      { label: 'Capabilities', href: '/docs/api/reference/capabilities' },
       { label: 'Customers', href: '/docs/api/reference/customers' },
       { label: 'Invoices', href: '/docs/api/reference/invoices' },
       { label: 'Articles', href: '/docs/api/reference/articles' },

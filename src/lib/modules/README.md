@@ -4,7 +4,8 @@ A module is a named building block of Accounted that the API, AI agents and,
 later, a company's own module choice can address as a unit. `manifest.ts`
 declares every module; nothing else does. Today the manifest describes the
 code and changes no behaviour: no route, gate or query reads it to decide
-what a user sees.
+what a user may do. The capabilities report (below) reads it to describe
+each module's state for one company, and gates nothing either.
 
 ## What resolves from the manifest
 
@@ -24,6 +25,21 @@ what a user sees.
 
 `resolve.ts` holds the lookups: `moduleForOperationId`, `moduleForV1Path`,
 `moduleForLibPath`, `getModule`, `modulesInDependencyOrder`.
+
+## Capabilities: which modules one company can use
+
+`capabilities.ts` reports, per company, every module's `status` (`active`,
+`needs_plan`, `off`, `unsupported`), the `reasons` behind it in precedence
+order (`unsupported_country`, `unsupported_legal_form`, `needs_plan`,
+`disabled_by_company`, `dependency_unavailable`) and a `resolution`
+sentence. It reads only gates that already exist: the plan grants and
+`company_capability_config` (through `readCapabilityAxes`), the payroll
+offer rule, and `companies.jurisdiction`. Kernels are always active; only a
+module that is absent for the company (country unsupported, turned off)
+makes its dependents unavailable. It is served by
+`GET /api/v1/companies/{companyId}/capabilities` and, for the modules that
+are not active, by the MCP agent briefing. The per-company module switch
+comes later; when it does, it becomes one more reason here.
 
 ## The rules
 

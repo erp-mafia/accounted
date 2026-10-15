@@ -536,6 +536,102 @@ describe('inbox block (crm#1174)', () => {
   })
 })
 
+// Capabilities digest (lib/modules/capabilities.ts): the modules this
+// company cannot use right now, so an agent stops calling their tools.
+describe('capabilities digest', () => {
+  const tool = () => tools.find((t) => t.name === 'gnubok_get_agent_briefing')!
+  const COMPANY = '11111111-1111-4111-8111-111111111111'
+  const ALL_GRANTS = ['ai', 'bank_sync', 'skatteverket', 'collections'].map((key) => ({
+    capability_key: key,
+    expires_at: null,
+    source: 'stripe',
+    team_id: null,
+  }))
+
+  /** The briefing mock plus the reads the capabilities report makes. */
+  function withCapabilityReads(opts: {
+    entityType: string
+    paysSalaries: boolean | null
+    grants: unknown[] | null
+    grantsError?: { message: string }
+    disabled?: string[]
+  }) {
+    const base = mockSupabase({ profile: null })
+    const single = (data: unknown) => ({
+      select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: vi.fn().mockResolvedValue({ data, error: null }) })) })),
+    })
+    const thenable = (data: unknown) => {
+      const chain: Record<string, unknown> = {}
+      for (const m of ['select', 'eq', 'in']) chain[m] = vi.fn(() => chain)
+      chain.then = (resolve: (v: unknown) => void) => resolve({ data, error: null })
+      return chain
+    }
+    return {
+      from: vi.fn((table: string) => {
+        if (table === 'companies') {
+          return single({ name: 'Firman', org_number: null, entity_type: opts.entityType, jurisdiction: 'SE', ledger_currency: 'SEK' })
+        }
+        if (table === 'company_settings') {
+          return single({
+            accounting_method: null,
+            dimensions_enabled: false,
+            company_name: null,
+            entity_type: opts.entityType,
+            pays_salaries: opts.paysSalaries,
+          })
+        }
+        if (table === 'company_capability_config') {
+          return thenable((opts.disabled ?? []).map((key) => ({ capability_key: key })))
+        }
+        return base.from(table)
+      }),
+      rpc: vi.fn(async (fn: string) =>
+        fn === 'company_capability_grant_rows'
+          ? { data: opts.grants, error: opts.grantsError ?? null }
+          : { data: null, error: { message: `no ${fn} in this mock` } },
+      ),
+    }
+  }
+
+  it('lists only the modules that are not active, as id, status and reasons', async () => {
+    const supabase = withCapabilityReads({
+      entityType: 'enskild_firma',
+      paysSalaries: false,
+      grants: ALL_GRANTS.filter((g) => g.capability_key !== 'collections'),
+    })
+    const result = (await tool().execute({}, COMPANY, 'user-1', supabase as never, { type: 'api_key' })) as {
+      capabilities?: unknown
+    }
+    expect(result.capabilities).toEqual([
+      { id: 'payroll', status: 'unsupported', reasons: ['unsupported_legal_form'] },
+      { id: 'collections', status: 'needs_plan', reasons: ['needs_plan'] },
+    ])
+  })
+
+  it('states an empty list when every module is active', async () => {
+    const supabase = withCapabilityReads({ entityType: 'aktiebolag', paysSalaries: null, grants: ALL_GRANTS })
+    const result = (await tool().execute({}, COMPANY, 'user-1', supabase as never, { type: 'api_key' })) as {
+      capabilities?: unknown
+    }
+    expect(result.capabilities).toEqual([])
+  })
+
+  it('leaves the key out, and still briefs, when the report cannot be read', async () => {
+    const supabase = withCapabilityReads({
+      entityType: 'aktiebolag',
+      paysSalaries: null,
+      grants: null,
+      grantsError: { message: 'statement timeout' },
+    })
+    const result = (await tool().execute({}, COMPANY, 'user-1', supabase as never, { type: 'api_key' })) as {
+      capabilities?: unknown
+      company: { company_id: string }
+    }
+    expect(result).not.toHaveProperty('capabilities')
+    expect(result.company.company_id).toBe(COMPANY)
+  })
+})
+
 describe('skatteverket_connection health block', () => {
   const tool = () => tools.find((t) => t.name === 'gnubok_get_agent_briefing')!
   const originalEnabled = process.env.SKATTEVERKET_ENABLED

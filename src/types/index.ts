@@ -15,6 +15,13 @@ export type EntityType =
 // for a specific framework is resolved through lib/company/entity-type.ts.
 export type AccountingFramework = 'k2' | 'k3'
 
+// The country whose law a company's books follow (ISO 3166-1 alpha-2) and the
+// currency its ledger is kept in (ISO 4217). Pinned by CHECKs on companies
+// (migration 20261016006000) to the one country and currency the product
+// supports; a country pack widens the CHECK and these types together.
+export type CompanyJurisdiction = 'SE'
+export type LedgerCurrency = 'SEK'
+
 // Company role for multi-tenant access
 export type CompanyRole = 'owner' | 'admin' | 'member' | 'viewer'
 
@@ -37,6 +44,8 @@ export interface Company {
   org_number: string | null
   entity_type: EntityType
   accounting_framework: AccountingFramework
+  jurisdiction: CompanyJurisdiction
+  ledger_currency: LedgerCurrency
   created_by: string
   team_id: string | null
   archived_at: string | null

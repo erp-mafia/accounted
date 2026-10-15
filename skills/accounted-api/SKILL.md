@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 335 endpoints.
+  pagination, scopes), and all 336 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -187,10 +187,10 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 335 operations. Paths are shown without
+API version `2026-05-12`, 336 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
-### Core (12)
+### Core (13)
 
 Full detail: [references/core.md](references/core.md)
 
@@ -198,6 +198,7 @@ Full detail: [references/core.md](references/core.md)
 GET /api-key : Show what the calling API key may do: mode, scopes and company access [risk:low idempotent]
 GET /companies : List companies the API key can access [scope:companies:read risk:low idempotent]
 POST /companies : Create a company and set it up for bookkeeping [scope:companies:write risk:medium dry-run]
+GET /companies/{companyId}/capabilities : Which building blocks this company can use, and why not [scope:companies:read risk:low idempotent]
 POST /companies/{companyId}/peppol/access-request : Ask the operators to switch on Peppol for the company (sending, optionally receiving) [scope:companies:write risk:medium idempotent dry-run]
 GET /companies/{companyId}/peppol/registration : Read the company's Peppol receiving status: access grant, eligibility and registration [scope:companies:read risk:low idempotent]
 POST /companies/{companyId}/peppol/registration : Register the company as a Peppol participant so it can receive e-invoices [scope:companies:write risk:high idempotent dry-run]
