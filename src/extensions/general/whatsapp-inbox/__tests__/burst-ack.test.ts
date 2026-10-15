@@ -143,8 +143,8 @@ describe('finalizeBurst', () => {
     const message = sendTextMock.mock.calls[0][1]
     expect(message.template).toBe(TEMPLATE.m5BurstAck)
     expect(message.body).toContain('*2* kvitton')
-    expect(message.body).toContain('1. ICA Maxi, 234 kr')
-    expect(message.body).toContain('2. SJ, 456 kr')
+    expect(message.body).toContain('1. ICA Maxi, 234\u00a0kr')
+    expect(message.body).toContain('2. SJ, 456\u00a0kr')
 
     // acked_at stamped on exactly the covered rows.
     const stamp = findCalls('whatsapp_messages', 'update').at(-1)![0] as Record<string, unknown>
@@ -169,7 +169,7 @@ describe('finalizeBurst', () => {
     const message = sendTextMock.mock.calls[0][1]
     expect(message.template).toBe(TEMPLATE.m4Ack)
     expect(message.body).toContain('ICA Maxi')
-    expect(message.body).toContain('234 kr')
+    expect(message.body).toContain('234\u00a0kr')
     expect(message.body).toContain('2026-07-30')
     expect(message.inboxItemId).toBe('item-1')
   })

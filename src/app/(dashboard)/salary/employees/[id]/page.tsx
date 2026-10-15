@@ -569,7 +569,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
         <DefRow label={t('tax_extra_label')}>
           {employee.extra_tax_amount != null ? (
             <span className="tabular-nums">
-              {t('tax_extra_detail_amount', { amount: employee.extra_tax_amount.toLocaleString('sv-SE') })}
+              {t('tax_extra_detail_amount', { amount: formatCurrency(employee.extra_tax_amount) })}
             </span>
           ) : employee.extra_tax_percentage != null ? (
             <span className="tabular-nums">

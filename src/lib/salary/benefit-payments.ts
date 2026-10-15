@@ -1,4 +1,5 @@
 import { roundOre } from '@/lib/money'
+import { formatCurrency } from '@/lib/utils'
 import type { SalaryLineItemType } from '@/types'
 
 /**
@@ -93,13 +94,6 @@ export type TaxableBenefitsResult =
 const r = roundOre
 const ore = (x: number) => Math.round(Math.abs(x) * 100)
 
-/** Display only (warning text): absolute amount, öre kept when present. Not money math. */
-export function formatKronor(amount: number): string {
-  return new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(
-    Math.abs(amount),
-  )
-}
-
 /**
  * Explicit bruttolöneavdrag rows. Keyed on item type, not on the
  * is_gross_deduction flag: derived sick/VAB/parental rows carry that flag too.
@@ -178,7 +172,7 @@ export function describeDoubleBenefitAdjustments(
 ): string[] {
   return findDoubleBenefitAdjustments(lines, benefits).map(
     (suspect) =>
-      `${employeeName}: bruttolöneavdraget "${suspect.description}" (${formatKronor(suspect.amount)} kr) ` +
+      `${employeeName}: bruttolöneavdraget "${suspect.description}" (${formatCurrency(Math.abs(suspect.amount))}) ` +
       (suspect.fromRecurringLine
         ? 'tas bort under Återkommande lönerader på den anställde'
         : 'tas bort på lönebeskedet'),

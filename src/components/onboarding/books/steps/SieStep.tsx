@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { formatCurrency } from '@/lib/utils'
 import { waitForSIEJob } from '@/lib/import/sie-job-client'
 import { jobProgress, type JobPhase } from '../lib/job-progress'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
@@ -503,7 +504,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
                 <OptRows>
                   <OptRow
                     name={t('opt_ib')}
-                    desc={hasIb ? t('opt_ib_desc', { amount: ibAmount.toLocaleString('sv-SE') }) : t('opt_ib_none')}
+                    desc={hasIb ? t('opt_ib_desc', { amount: formatCurrency(ibAmount) }) : t('opt_ib_none')}
                     off={!ib}
                     locked={!hasIb}
                     control={<Switch on={ib} onToggle={() => setIbOn(!ib)} label={t('opt_ib')} locked={!hasIb} />}
