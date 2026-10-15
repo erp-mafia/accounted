@@ -91,6 +91,12 @@ export interface LegalFormProfile {
     ixbrl: boolean
     /** A revisor is required whatever the size (EFL 8 kap. 1 §); an AB may opt out below ABL 9 kap. 1 §. */
     auditorAlwaysRequired: boolean
+    /**
+     * The förenklat årsbokslut (BFL 6 kap. 3 § andra stycket, 6 §) the product
+     * prepares for the form, named by the BFN allmänt råd whose uppställningsform
+     * it follows; null when none. BFNAR 2006:1 (enskild firma) can join later.
+     */
+    forenklatArsbokslut: 'BFNAR 2010:1' | null
   }
   /**
    * Swedish nouns that differ by law, for labels that name the thing on its

@@ -68,6 +68,8 @@ export interface LegalFormProfile {
     ixbrl: boolean
     /** A revisor is required whatever the size (EFL 8 kap. 1 §). */
     auditorAlwaysRequired: boolean
+    /** The förenklat årsbokslut the product prepares, by its BFN allmänt råd; null when none (ideell förening: BFNAR 2010:1). */
+    forenklatArsbokslut: 'BFNAR 2010:1' | null
   }
   /** Swedish words that differ by law. Everything else in copy stays form-neutral. */
   glossary: { entity: string; owner: string; meeting: string }
@@ -113,7 +115,7 @@ A form is not supported when onboarding accepts its label. It is supported when 
 | VAT: registration default, deadline schedule, non-registered booking | `src/lib/vat`, `src/lib/tax/deadline-config.ts` |
 | SIE import and export: equity accounts, opening-balance difference account, prior-year result | `src/lib/import` |
 | Payroll: allowed, personnel accounts, form-specific rules | `src/lib/salary` |
-| Year-end: closing account, carry, wizard steps, documents | `src/lib/core/bookkeeping`, `src/lib/bokslut`, `src/components/bookkeeping/year-end` |
+| Year-end: closing account, carry, wizard steps, documents (årsredovisning; for ideell förening the förenklat årsbokslut, BFNAR 2010:1, #46) | `src/lib/core/bookkeeping`, `src/lib/bokslut`, `src/lib/bokslut/forenklat-arsbokslut`, `src/components/bookkeeping/year-end` |
 | Filings: the right return is reachable, the wrong ones are hidden and refuse | `src/lib/reports`, `src/lib/bokslut/arsredovisning` |
 | Deadlines: at least the form's statutory set, no empty-list banner | `src/lib/tax/deadline-config.ts` |
 | Reports and navigation | `src/lib/reports/catalog.ts`, `src/components/dashboard` |

@@ -238,6 +238,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   ),
   'PUT /api/bookkeeping/fiscal-periods/:id/bokslutsdispositioner': gap('P3', 'save dispositioner adjustments'),
   'PATCH /api/bookkeeping/fiscal-periods/:id/bokslut-checklist': gap('P3', 'tick a bokslut checklist item'),
+  'PATCH /api/bookkeeping/fiscal-periods/:id/forenklat-arsbokslut': gap('P3', 'förenklat årsbokslut eligibility confirmation, notes and signatories; v1 and MCP read them (reports.forenklat-arsbokslut)'),
   'PATCH /api/bookkeeping/fiscal-periods/:id/arsredovisning/compliance': covered([`PATCH ${V}/fiscal-periods/:id/arsredovisning/compliance`, 'gnubok_update_arsredovisning_compliance']),
   'POST /api/bookkeeping/fiscal-periods/:id/arsredovisning/narrative': covered([`POST ${V}/fiscal-periods/:id/arsredovisning/narrative`, 'gnubok_update_arsredovisning_narrative']),
   'POST /api/bookkeeping/fiscal-periods/:id/arsredovisning/versions': covered([`POST ${V}/fiscal-periods/:id/arsredovisning/versions`, 'gnubok_create_arsredovisning_version']),
@@ -775,4 +776,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 132
+export const GAP_CEILING = 133

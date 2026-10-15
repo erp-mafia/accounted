@@ -6946,6 +6946,21 @@ const BOLAGSVERKET: Record<string, StructuredErrorEntry> = {
       'The annual report content has changed since it was previewed (content hash mismatch). Review a new dry run and retry.',
     retryable: false,
   },
+  // Förenklat årsbokslut (BFNAR 2010:1), lib/bokslut/forenklat-arsbokslut.
+  FORENKLAT_ARSBOKSLUT_WRONG_LEGAL_FORM: {
+    httpStatus: 400,
+    message_sv: 'Förenklat årsbokslut enligt BFNAR 2010:1 upprättas här bara för en ideell förening.',
+    message_en: 'The förenklat årsbokslut (BFNAR 2010:1) is prepared here only for an ideell förening.',
+    retryable: false,
+  },
+  FORENKLAT_ARSBOKSLUT_BLOCKED: {
+    httpStatus: 422,
+    message_sv:
+      'Det förenklade årsbokslutet kan inte skapas förrän bokföringen är rättad och föreningens villkor är bekräftade. Orsaken står bland årsbokslutets kontroller.',
+    message_en:
+      'The förenklat årsbokslut is refused until the books are corrected and the eligibility is confirmed. details.reason and the report blockers name the cause.',
+    retryable: false,
+  },
 }
 
 const ASSETS: Record<string, StructuredErrorEntry> = {

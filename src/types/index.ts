@@ -2791,6 +2791,7 @@ export type TaxDeadlineType =
   | 'arsredovisning_ekonomisk_forening'
   | 'arsstamma'
   | 'foreningsstamma'
+  | 'forenklat_arsbokslut'
   | 'periodisk_sammanstallning'
   | 'kontrolluppgifter'
   | 'rot_rut_begaran'

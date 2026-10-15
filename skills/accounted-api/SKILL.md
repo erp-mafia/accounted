@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 328 endpoints.
+  pagination, scopes), and all 330 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -152,7 +152,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 328 operations. Paths are shown without
+API version `2026-05-12`, 330 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (12)
@@ -502,7 +502,7 @@ POST /companies/{companyId}/salary-runs/{id}/send-payslips : Email every employe
 POST /companies/{companyId}/salary-runs/{id}/unapprove : Recall the approval of a salary run (approved back to review) [scope:payroll:write risk:medium idempotent dry-run reversible]
 ```
 
-### Reports (34)
+### Reports (36)
 
 Full detail: [references/reports.md](references/reports.md)
 
@@ -516,6 +516,8 @@ GET /companies/{companyId}/reports/behandlingshistorik : Behandlingshistorik (BF
 GET /companies/{companyId}/reports/bokslutsbilagor : Bokslutsbilagor: every balance account at the balansdag with its specification, sign-off and underlag [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/continuity-check : IB/UB continuity check: opening balances match prior closing [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/dimension-pnl : Resultat per projekt or kostnadsställe: the income statement with one column per dimension value [scope:reports:read risk:low idempotent]
+GET /companies/{companyId}/reports/forenklat-arsbokslut : Förenklat årsbokslut (ideell förening, BFNAR 2010:1): resultaträkning and balansräkning for a räkenskapsår [scope:reports:read risk:low idempotent]
+GET /companies/{companyId}/reports/forenklat-arsbokslut/pdf : Förenklat årsbokslut (ideell förening, BFNAR 2010:1) as a PDF for the styrelse to sign [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/general-ledger : General ledger (huvudbok) for a fiscal period [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/income-statement : Income statement (resultatrapport) for a fiscal period or a custom date range [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/income-statement/pdf : Income statement (resultaträkning) as a PDF [scope:reports:read risk:low idempotent]

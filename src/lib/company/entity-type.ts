@@ -228,6 +228,16 @@ export function preparesArsredovisning(entityType: EntityType): boolean {
   return legalFormProfile(entityType).filings.arsredovisning
 }
 
+/**
+ * The förenklat årsbokslut the product prepares for the form, by the BFN
+ * allmänt råd it follows (ideell förening: BFNAR 2010:1); null when none.
+ */
+export function preparesForenklatArsbokslut(
+  entityType: EntityType,
+): LegalFormProfile['filings']['forenklatArsbokslut'] {
+  return legalFormProfile(entityType).filings.forenklatArsbokslut
+}
+
 /** The income return the product prepares for the form; null when none is modelled. */
 export function filesIncomeReturn(entityType: EntityType): LegalFormProfile['filings']['incomeReturn'] {
   return legalFormProfile(entityType).filings.incomeReturn

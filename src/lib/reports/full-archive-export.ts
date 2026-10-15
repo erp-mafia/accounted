@@ -1329,6 +1329,10 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   { name: 'annual_report_validation_runs', file: 'annual_report_validation_runs.json', orderBy: 'created_at' },
   { name: 'arsredovisning_signature_requests', file: 'arsredovisning_signature_requests.json', orderBy: 'created_at' },
   { name: 'arsredovisning_submissions', file: 'arsredovisning_submissions.json' },
+  // The förenklat årsbokslut's own inputs per räkenskapsår (BFNAR 2010:1):
+  // the eligibility confirmation with who and when, tilläggsupplysningar and
+  // signatories. Part of the årsbokslut kept with the books (BFL 7 kap. 2 §).
+  { name: 'forenklat_arsbokslut_inputs', file: 'forenklat_arsbokslut_inputs.json', orderBy: 'created_at' },
   // Which four verifikat are the kontantmetod year-end cut-off, and which two
   // of them are the vändningar a momsdeklaration leaves out (20260914150109).
   // Dumped rather than treated as covered by the verifikat themselves: that

@@ -4,7 +4,7 @@
  */
 
 import type { TaxDeadlineType, EntityType, MomsPeriod, TaxFilingMethod } from '@/types'
-import { fiscalYearLockedToCalendar, isEntityType } from '@/lib/company/entity-type'
+import { fiscalYearLockedToCalendar, isEntityType, preparesForenklatArsbokslut } from '@/lib/company/entity-type'
 import { isBankingDay } from './swedish-holidays'
 
 // Condition function type for determining if a deadline applies
@@ -876,6 +876,21 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     titleTemplate: 'Årsstämma räkenskapsår {periodLabel}',
     description: 'Årsstämma för aktiebolag (senast sex månader efter räkenskapsårets utgång)',
     condition: (s) => s.entity_type === 'aktiebolag',
+    priority: 'important',
+    linkedReportType: null,
+    generateDates: annualMeetingDates,
+  },
+
+  // Förenklat årsbokslut (ideell förening, BFNAR 2010:1): upprättat så snart
+  // det kan ske, senast sex månader efter räkenskapsårets utgång (BFL 6 kap.
+  // 7 §). Nothing is filed: the document is kept with the books. The date is
+  // the årsstämma's last day of the month six months on.
+  {
+    type: 'forenklat_arsbokslut',
+    titleTemplate: 'Förenklat årsbokslut räkenskapsår {periodLabel}',
+    description:
+      'Det förenklade årsbokslutet ska vara upprättat och undertecknat av styrelsen senast sex månader efter räkenskapsårets utgång (BFL 6 kap. 7 §)',
+    condition: (s) => isEntityType(s.entity_type) && preparesForenklatArsbokslut(s.entity_type) !== null,
     priority: 'important',
     linkedReportType: null,
     generateDates: annualMeetingDates,

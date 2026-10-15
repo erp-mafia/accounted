@@ -1,4 +1,5 @@
 import type { EntityType } from '@/types'
+import { ENTITY_TYPES, preparesForenklatArsbokslut } from '@/lib/company/entity-type'
 
 /**
  * Single source of truth for the reports surface.
@@ -201,6 +202,20 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     entityType: ['aktiebolag', 'ekonomisk_forening'],
     params: 'fiscal',
     route: '/bookkeeping/year-end/arsredovisning',
+  },
+  {
+    // Förenklat årsbokslut (BFNAR 2010:1): shown to the forms whose profile
+    // prepares one, read from the capability rather than listed by name.
+    // Owns its page in the year-end flow, like the årsredovisning.
+    slug: 'forenklat-arsbokslut',
+    labelKey: 'name_forenklat_arsbokslut',
+    descKey: 'desc_forenklat_arsbokslut',
+    category: 'year_end',
+    entityType: ENTITY_TYPES.filter((form) => preparesForenklatArsbokslut(form) !== null),
+    params: 'fiscal',
+    route: '/bookkeeping/year-end/forenklat-arsbokslut',
+    searchTerms:
+      'förenklat årsbokslut årsbokslut k1 bfnar 2010:1 ideell förening resultaträkning balansräkning styrelse underskrift',
   },
 
   // --- Skatt & moms (tax & VAT) ---

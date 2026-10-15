@@ -14,6 +14,7 @@ import {
   legalFormGlossary,
   legalFormProfile,
   plannedLegalForms,
+  preparesForenklatArsbokslut,
   supportsAccountingFramework,
   supportsCorporateTaxDispositions,
   templateAccountForForm,
@@ -44,6 +45,7 @@ function leaves(profile: LegalFormProfile): Record<string, unknown> {
     'filings.frameworks': JSON.stringify(profile.filings.frameworks),
     'filings.ixbrl': profile.filings.ixbrl,
     'filings.auditorAlwaysRequired': profile.filings.auditorAlwaysRequired,
+    'filings.forenklatArsbokslut': profile.filings.forenklatArsbokslut,
   }
 }
 
@@ -117,6 +119,14 @@ describe('legal forms: capability readers', () => {
     expect(supportsAccountingFramework('aktiebolag', 'K3')).toBe(true)
     expect(supportsAccountingFramework('ideell_forening', 'K2')).toBe(false)
     expect(supportsAccountingFramework('ideell_forening', 'K1')).toBe(true)
+  })
+
+  it('prepare the förenklat årsbokslut only where an allmänt råd for it is modelled', () => {
+    expect(preparesForenklatArsbokslut('ideell_forening')).toBe('BFNAR 2010:1')
+    expect(preparesForenklatArsbokslut('aktiebolag')).toBeNull()
+    expect(preparesForenklatArsbokslut('ekonomisk_forening')).toBeNull()
+    // BFNAR 2006:1 for the enskild firma is not built yet.
+    expect(preparesForenklatArsbokslut('enskild_firma')).toBeNull()
   })
 
   it('know that a förening has members, not owners', () => {

@@ -571,6 +571,145 @@ Example response `200`:
 
 ---
 
+### `GET /api/v1/companies/{companyId}/reports/forenklat-arsbokslut`
+
+**Förenklat årsbokslut (ideell förening, BFNAR 2010:1): resultaträkning and balansräkning for a räkenskapsår.**
+`scope:reports:read · risk:low · idempotent`
+
+The förenklat årsbokslut an ideell förening closes its books with (BFL 6 kap. 3 § andra stycket, 6 §), in the uppställningsform of BFNAR 2010:1 bilaga 2: the resultaträkning from the books before the resultatavslut and the balansräkning after it, each row with the comparison year, empty rows left out, plus the accounts behind each post. blockers say why the document cannot be made yet (the year not closed, an avsättning or another form's equity account booked, a balansräkning that does not balance, årets över-/underskott not equal to 2069, the eligibility not confirmed); warnings flag what needs a look (förutbetalda or invoiced medlemsavgifter, nettoomsättning above three million kronor, the comparison year). The PDF for the styrelse to sign is served by GET /reports/forenklat-arsbokslut/pdf; pdf_file names that path. Read-only.
+
+**Use when:** An ideell förening's year is closed and its förenklat årsbokslut is to be checked, prepared or signed.
+**Do not use for:** An aktiebolag or ekonomisk förening (the årsredovisning), an enskild firma (GET /reports/ne-bilaga), INK3, or confirming the eligibility (a person does that in the app).
+
+**Pitfalls:**
+- Only for a form that prepares one (ideell förening): another form answers 400 FORENKLAT_ARSBOKSLUT_WRONG_LEGAL_FORM.
+- Amounts are kronor with öre. In the resultaträkning an income is positive and a cost negative, as in BFN's example; in the balansräkning every side is positive.
+- A non-empty blockers list means GET .../pdf answers 422 FORENKLAT_ARSBOKSLUT_BLOCKED: correct the books or confirm the eligibility in the app, do not retry.
+- The mapping of BAS accounts to bilaga 2 posts is the product's own (BAS publishes none for K1 föreningar) and awaits an accountant's review.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `period_id` | query | `string` | yes | The fiscal period (räkenskapsår) id, from GET /fiscal-periods. |
+
+Response `200`:
+```ts
+{
+  data: {
+    regelverk: "BFNAR 2010:1",
+    company: { name: string, org_number: string | null },
+    fiscal_period: { fiscal_period_id: string, name: string, period_start: string, period_end: string, is_closed: boolean },
+    previous_period: { fiscal_period_id: string, name: string, period_start: string, period_end: string } | null,
+    resultatrakning: { kind: "rubrik" | "post" | "summa", key: string, label: string, current: number | null, previous: number | null, accounts?: { account_number: string, account_name: string, current: number, previous: number | null }[] }[],
+    balansrakning: { kind: "rubrik" | "post" | "summa", key: string, label: string, current: number | null, previous: number | null, accounts?: { account_number: string, account_name: string, current: number, previous: number | null }[] }[],
+    totals: { aretsOverUnderskott: { current: number, previous: number | null }, summaTillgangar: { current: number, previous: number | null }, summaEgetKapitalOchSkulder: { current: number, previous: number | null }, nettoomsattning: { current: number, previous: number | null } },
+    eligibility: { confirmed: boolean, confirmed_at: string | null },
+    notes: string | null,
+    signatories: { name: string, role: string | null }[],
+    blockers: { code: string, message: string }[],
+    warnings: { code: string, message: string }[],
+    pdf_file: { download: string, content_type: "application/pdf" }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "regelverk": "BFNAR 2010:1",
+    "company": {
+      "name": "Föreningen",
+      "org_number": "8020001234"
+    },
+    "fiscal_period": {
+      "fiscal_period_id": "7c2b…",
+      "name": "2026",
+      "period_start": "2026-01-01",
+      "period_end": "2026-12-31",
+      "is_closed": true
+    },
+    "previous_period": {
+      "fiscal_period_id": "5a1d…",
+      "name": "2025",
+      "period_start": "2025-01-01",
+      "period_end": "2025-12-31"
+    },
+    "resultatrakning": [
+      {
+        "kind": "rubrik",
+        "key": "intakter",
+        "label": "Intäkter",
+        "current": null,
+        "previous": null
+      },
+      {
+        "kind": "post",
+        "key": "medlemsavgifter",
+        "label": "Medlemsavgifter",
+        "current": 210000,
+        "previous": 205000
+      }
+    ],
+    "totals": {
+      "aretsOverUnderskott": {
+        "current": -23000,
+        "previous": 92000
+      }
+    },
+    "eligibility": {
+      "confirmed": true,
+      "confirmed_at": "2027-03-01T10:00:00Z"
+    },
+    "blockers": [],
+    "warnings": [],
+    "pdf_file": {
+      "download": "/api/v1/companies/…/reports/forenklat-arsbokslut/pdf?period_id=7c2b…",
+      "content_type": "application/pdf"
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/reports/forenklat-arsbokslut/pdf`
+
+**Förenklat årsbokslut (ideell förening, BFNAR 2010:1) as a PDF for the styrelse to sign.**
+`scope:reports:read · risk:low · idempotent`
+
+The ideell förening's förenklat årsbokslut in the BFNAR 2010:1 bilaga 2 layout: resultaträkning and balansräkning with comparatives, the tilläggsupplysningar, and a "Beslutat" date line with one signature and date line per styrelseledamot. Byte-identical to the dashboard download. Signing happens on the printed or exported document; nothing is filed anywhere: the document is kept with the books for seven years (BFL 7 kap. 2 §).
+
+**Use when:** The figures are reviewed (GET /reports/forenklat-arsbokslut has no blockers) and the document is to be signed.
+**Do not use for:** Reading the figures (GET /reports/forenklat-arsbokslut), or an aktiebolag or ekonomisk förening (the årsredovisning).
+
+**Pitfalls:**
+- Refused with 422 FORENKLAT_ARSBOKSLUT_BLOCKED while the report has blockers (details.reason names them): correct the books or confirm the eligibility in the app, do not retry.
+- Only for an ideell förening: another legal form answers 400 FORENKLAT_ARSBOKSLUT_WRONG_LEGAL_FORM.
+- Refused while an SIE import is unfinished: complete or undo it first.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `period_id` | query | `string` | yes | The fiscal period (räkenskapsår) id. |
+
+Response `200` (`application/pdf`).
+
+---
+
 ### `GET /api/v1/companies/{companyId}/reports/general-ledger`
 
 **General ledger (huvudbok) for a fiscal period.**
