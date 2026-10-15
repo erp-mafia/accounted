@@ -9,7 +9,7 @@
  * An account whose bank cannot be named confidently is refused, never guessed.
  */
 
-import { normalizeIban } from '@/lib/cash-accounts/service'
+import { normalizeIban } from '@/lib/cash-accounts/ledger-slots'
 import { isValidIban } from '@/lib/supplier-invoices/payment-details-backfill'
 import { lookupBicByBankName, lookupBicByClearing } from '@/lib/salary/payment/bank-account'
 

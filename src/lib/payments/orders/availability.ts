@@ -15,7 +15,8 @@ import {
 } from '@/lib/payments/initiation/provider'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { createServiceClient } from '@/lib/supabase/server'
-import { resolveDebtor, type DebtorResolution } from './debtor'
+import { readPaymentAccounts, type PayableAccount } from './payment-accounts'
+import { paymentsReadiness, type PaymentsReadiness } from './readiness'
 import { openPaymentsDoor, type PaymentsUnavailableReason } from './switched-on'
 import {
   readVerificationRecord,
@@ -26,18 +27,9 @@ import {
 } from './verification-record'
 import { deriveVerificationState, verificationLinkExpiresAt, type DerivedVerification, type VerificationState } from './verification-state'
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+export type { PayableAccount }
 
-export interface PayableAccount {
-  id: string
-  name: string | null
-  ledger_account: string
-  iban: string | null
-  /** The bank behind the account, as its connection reports it; the mark and the signing step name it. */
-  bank_name: string | null
-  payable: boolean
-  reason: Exclude<DebtorResolution, { ok: true }>['reason'] | null
-}
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export interface PaymentsAvailability {
   available: boolean
@@ -49,41 +41,54 @@ export interface PaymentsAvailability {
   signer_known: boolean
 }
 
-export async function getPaymentsAvailability(ctx: OperationContext): Promise<PaymentsAvailability> {
-  const unavailable = (reason: PaymentsUnavailableReason): PaymentsAvailability => ({ available: false, reason, provider: null, accounts: [], signer_known: false })
+/** The availability and the provider behind it, for the readers that go on to the verification. */
+async function openAvailability(ctx: OperationContext): Promise<{ availability: PaymentsAvailability; provider: PaymentInitiationProvider | null }> {
+  const unavailable = (reason: PaymentsUnavailableReason) => ({
+    availability: { available: false, reason, provider: null, accounts: [], signer_known: false },
+    provider: null,
+  })
   if (!(await getPaymentInitiationProvider(ctx.companyId))) return unavailable('no_provider')
   // Sandbox before the plan: a demo visitor is refused, never upsold.
   if (await isSandboxCompany(ctx.supabase, ctx.companyId)) return unavailable('sandbox')
   const door = await openPaymentsDoor(ctx)
   if (!door.ok) return unavailable(door.reason)
-  const provider = door.provider
-  const { data, error } = await ctx.supabase
-    .from('cash_accounts')
-    .select('id, name, ledger_account, iban, currency, enabled, bank_connection:bank_connections(bank_name, affiliated_aspsp_id, psu_type)')
-    .eq('company_id', ctx.companyId)
-    .order('ledger_account', { ascending: true })
-  if (error) throw error
-  const accounts = ((data ?? []) as unknown as Array<{
-    id: string
-    name: string | null
-    ledger_account: string
-    iban: string | null
-    currency: string
-    enabled: boolean
-    bank_connection: { bank_name: string | null; affiliated_aspsp_id: string | null; psu_type: string | null } | null
-  }>).map((a) => {
-    const debtor = resolveDebtor(a, a.bank_connection)
-    return {
-      id: a.id,
-      name: a.name,
-      ledger_account: a.ledger_account,
-      iban: a.iban,
-      bank_name: a.bank_connection?.bank_name ?? null,
-      payable: debtor.ok,
-      reason: debtor.ok ? null : debtor.reason,
+  const accounts = await readPaymentAccounts(ctx.supabase, ctx.companyId)
+  return {
+    availability: { available: true, reason: null, provider: door.provider.id, accounts, signer_known: await hasSignerOnFile(ctx.userId) },
+    provider: door.provider,
+  }
+}
+
+export async function getPaymentsAvailability(ctx: OperationContext): Promise<PaymentsAvailability> {
+  return (await openAvailability(ctx)).availability
+}
+
+export interface PaymentsReadinessView extends PaymentsAvailability {
+  /** Where the company's verification stands; null when payments are not open to it or the verification could not be read. */
+  verification: CompanyVerificationView | null
+  /** What stands between the company and a signed payment (readiness.ts). */
+  readiness: PaymentsReadiness
+}
+
+/**
+ * Availability and the verification in one read, with the readiness derived
+ * from both: what every payment surface in the browser asks first. The
+ * verification is read like GET /api/payments/verification (the stored answer
+ * while fresh, else the provider) and never fails the read: without it the
+ * readiness is verification_unknown and the payment's own refusal speaks.
+ */
+export async function getPaymentsReadiness(ctx: OperationContext): Promise<PaymentsReadinessView> {
+  const { availability, provider } = await openAvailability(ctx)
+  let verification: CompanyVerificationView | null = null
+  if (provider) {
+    try {
+      const outcome = await readCompanyVerification(ctx, provider)
+      if (outcome.ok && !outcome.dryRun) verification = outcome.data
+    } catch (error) {
+      ctx.log.warn('payments verification not read with availability', { error: error instanceof Error ? error.message : String(error) })
     }
-  })
-  return { available: true, reason: null, provider: provider.id, accounts, signer_known: await hasSignerOnFile(ctx.userId) }
+  }
+  return { ...availability, verification, readiness: paymentsReadiness({ available: availability.available, accounts: availability.accounts, verification }) }
 }
 
 /** The company as the provider's KYC endpoints address it: by its organisationsnummer, in the corporate context. */
@@ -166,7 +171,15 @@ export async function getCompanyPaymentVerification(
 ): Promise<OperationOutcome<CompanyVerificationView>> {
   const door = await openPaymentsDoor(ctx)
   if (!door.ok) return { ok: false, code: 'PAYMENTS_UNAVAILABLE', details: { reason: door.reason } }
-  const provider = door.provider
+  return readCompanyVerification(ctx, door.provider, options)
+}
+
+/** The read behind getCompanyPaymentVerification, for a caller that has opened the door already. */
+async function readCompanyVerification(
+  ctx: OperationContext,
+  provider: PaymentInitiationProvider,
+  options: VerificationReadOptions = {},
+): Promise<OperationOutcome<CompanyVerificationView>> {
   const party = await companyParty(ctx)
   if (!party) return { ok: false, code: 'PAYMENT_ORG_NUMBER_MISSING', details: { field: 'org_number', reason: 'missing' } }
   const now = options.now ?? new Date()

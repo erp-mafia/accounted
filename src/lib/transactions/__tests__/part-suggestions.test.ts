@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { makeCustomer, makeInvoice, makeSupplier, makeSupplierInvoice } from '@/tests/helpers'
+import { generateLengthDigitOcrReference } from '@/lib/bankgiro/luhn'
 import type { BankTransactionPartInput } from '@/types'
 import {
   BANKGIRO_SPLIT_CONFIDENCE,
@@ -67,6 +68,36 @@ describe('suggestPartInvoices: a deposit split per payer', () => {
     ]))
     expect(bare).toMatchObject({ suggested_invoice_id: 'inv-1001', suggestion_reason: 'ocr_exact' })
     expect(spaced).toMatchObject({ suggested_invoice_id: 'inv-1002', suggestion_reason: 'ocr_exact' })
+  })
+
+  it("reads Bankgirot's length-digit OCR, as reference or as a further reference, and never one whose digits do not fit", () => {
+    const withLength = generateLengthDigitOcrReference('1001')!
+    expect(withLength).toBe('100164')
+    const [byReference, byFurther, wrongLength, wrongCheck] = suggestPartInvoices(deposit([
+      part({ amount: 500, reference: withLength }),
+      part({ amount: 1000, invoice_numbers: [generateLengthDigitOcrReference('1002')!] }),
+      // 10015 + Luhn: a valid OCR whose length digit (5) is not its length (6).
+      part({ amount: 250, reference: '100156' }),
+      part({ amount: 250, reference: generateLengthDigitOcrReference('1003')!.slice(0, -1) + '0' }),
+    ]))
+    expect(byReference).toMatchObject({ suggested_invoice_id: 'inv-1001', suggestion_reason: 'ocr_exact' })
+    expect(byFurther).toMatchObject({ suggested_invoice_id: 'inv-1002', suggestion_reason: 'invoice_number' })
+    expect(wrongLength.suggested_invoice_id).toBeNull()
+    expect(wrongCheck.suggested_invoice_id).toBeNull()
+  })
+
+  it("reads the length-digit form only when the reference names no invoice the older ways, even one another part took", () => {
+    // 31658 is invoice 31658's own number and invoice 316's length-digit OCR.
+    const i316 = { ...makeInvoice({ id: 'inv-316', invoice_number: '316', status: 'sent', total: 500, remaining_amount: 500, customer_id: kundAb.id }), customer: kundAb }
+    const i31658 = { ...makeInvoice({ id: 'inv-31658', invoice_number: '31658', status: 'sent', total: 500, remaining_amount: 500, customer_id: bolaget.id }), customer: bolaget }
+    const [alone] = suggestPartInvoices(deposit([part({ amount: 500, reference: '31658' })], { customerInvoices: [i316] }))
+    expect(alone).toMatchObject({ suggested_invoice_id: 'inv-316', suggestion_reason: 'ocr_exact' })
+    const [first, second] = suggestPartInvoices(deposit(
+      [part({ amount: 500, reference: '31658' }), part({ amount: 500, reference: '31658' })],
+      { customerInvoices: [i316, i31658] },
+    ))
+    expect(first).toMatchObject({ suggested_invoice_id: 'inv-31658', suggestion_reason: 'ocr_exact' })
+    expect(second.suggested_invoice_id).toBeNull()
   })
 
   it('accepts a partial payment only when the payer named the invoice, never on the amount alone', () => {

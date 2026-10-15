@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { formatBankgiroNumber, formatPlusgiroNumber, validateBankgiroNumber, validatePlusgiroNumber } from '@/lib/bankgiro/luhn'
-import { normalizeIban } from '@/lib/cash-accounts/service'
+import { normalizeIban } from '@/lib/cash-accounts/ledger-slots'
 
 /**
  * The payment details a scanned or Peppol-delivered invoice carries for its

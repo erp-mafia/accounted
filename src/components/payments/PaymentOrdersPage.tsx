@@ -55,6 +55,7 @@ import {
 import { VerificationStateText } from './VerificationStateText'
 import { fetchPayeeAlertMarkers, type PayeeAlertMarker } from './payee-change-client'
 import { FORM_OUT_STATES } from '@/lib/payments/orders/verification-state'
+import { verificationStep } from '@/lib/payments/orders/readiness'
 import { startPollLoop } from '@/components/bank-feed/poll-loop'
 
 /** The provider's form is filled in by hand: a quarter minute between looks while one is open. */
@@ -112,14 +113,9 @@ export function PaymentOrdersPage() {
     setAvailability(availabilityValue)
     setOrders(list.status === 'fulfilled' ? list.value : [])
     setOpenLinks(links.status === 'fulfilled' ? links.value : [])
-    // The verification line is informational: a failed read leaves it out rather than blocking the page.
-    if (availabilityValue.available) {
-      try {
-        setVerification(await fetchCompanyVerification())
-      } catch {
-        setVerification(null)
-      }
-    }
+    // The verification rides on the availability (lib/payments/orders/readiness);
+    // the line is informational: a failed read leaves it out rather than blocking the page.
+    setVerification(availabilityValue.available ? (availabilityValue.verification ?? null) : null)
   }, [])
 
   // A form is out (opened here, or earlier by someone, or with the
@@ -282,21 +278,17 @@ export function PaymentOrdersPage() {
         </p>
       )
     }
-    // A form this page opened is opened again; one with the firmatecknare is
+    // The step by state (lib/payments/orders/readiness verificationStep): a
+    // form this page opened is opened again; one with the firmatecknare is
     // waited for; one opened elsewhere, or none, gets a fresh link.
-    const action = verificationBusy
-      ? undefined
-      : verificationUrl && FORM_OUT_STATES.has(verification.state)
-        ? { label: t('verification_open_form'), onClick: () => window.open(verificationUrl, '_blank', 'noopener,noreferrer') }
-        : verification.state === 'awaiting_signatory'
-          ? undefined
+    const step = verificationStep(verification.state, { formAtHand: verificationUrl !== null })
+    const action =
+      verificationBusy || step === 'wait' || step === 'none'
+        ? undefined
+        : step === 'open_form' && verificationUrl
+          ? { label: t('verification_open_form'), onClick: () => window.open(verificationUrl, '_blank', 'noopener,noreferrer') }
           : {
-              label:
-                verification.state === 'not_started'
-                  ? t('verification_verify')
-                  : verification.state === 'link_expired' || verification.state === 'form_open'
-                    ? t('verification_new_link')
-                    : t('verification_renew'),
+              label: step === 'verify' ? t('verification_verify') : step === 'new_link' ? t('verification_new_link') : t('verification_renew'),
               onClick: () => void startVerification(),
             }
     return (

@@ -119,7 +119,7 @@ describe('payments routes with no provider registered (dark installation)', () =
       await availability(createMockRequest('/api/payments/availability'), { params: Promise.resolve({}) }),
     )
     expect(status).toBe(200)
-    expect(body.data).toEqual({ available: false, reason: 'no_provider', provider: null, accounts: [], signer_known: false })
+    expect(body.data).toEqual({ available: false, reason: 'no_provider', provider: null, accounts: [], signer_known: false, verification: null, readiness: 'unavailable' })
   })
 
   it.each([
@@ -440,6 +440,70 @@ describe('payments routes with a provider registered', () => {
     expect(body.data.accounts.find((a) => a.id === 'acct-usd')?.payable).toBe(false)
   })
 
+  describe('availability with the verification and the readiness', () => {
+    const businessAccount = { id: ACCOUNT, name: 'Företagskonto', ledger_account: '1930', iban: 'SE3550000000054910000003', currency: 'SEK', enabled: true, bank_connection: { bank_name: 'Swedbank', psu_type: 'business' } }
+    type ReadinessBody = { data: { available: boolean; readiness: string; verification: { state: string; status: string } | null; accounts: Array<{ id: string; account_context: string }> } }
+    const readAvailability = async () => parseJsonResponse<ReadinessBody>(await availability(createMockRequest('/api/payments/availability'), { params: Promise.resolve({}) }))
+    function provider(getCompanyVerification: ReturnType<typeof vi.fn>) {
+      registerPaymentInitiationProvider({ id: 'open_payments', isAvailableFor: () => true, getCompanyVerification } as unknown as PaymentInitiationProvider)
+    }
+    /** Sandbox flag, the accounts, no signer on file (BankID login, remembered number), the org number, then the stored verification record. */
+    function companyWith(accounts: unknown[], storedRecord: unknown) {
+      enqueue({ data: { is_sandbox: false } })
+      enqueue({ data: accounts })
+      enqueue({ data: null })
+      enqueue({ data: null })
+      enqueue({ data: { org_number: '5566778899' } })
+      enqueue({ data: storedRecord })
+    }
+
+    it('answers ready from a fresh stored valid record without asking the provider', async () => {
+      const getCompanyVerification = vi.fn()
+      provider(getCompanyVerification)
+      companyWith([businessAccount], {
+        company_id: 'company-1', status: 'valid', valid_until: '2099-01-01', checked_at: new Date().toISOString(),
+        link_created_at: null, link_expires_at: null, handed_off_at: null, started_by: null, updated_at: new Date().toISOString(),
+      })
+
+      const { status, body } = await readAvailability()
+      expect(status).toBe(200)
+      expect(body.data).toMatchObject({ available: true, readiness: 'ready', verification: { state: 'valid', status: 'valid' } })
+      expect(body.data.accounts[0].account_context).toBe('corporate')
+      expect(getCompanyVerification).not.toHaveBeenCalled()
+    })
+
+    it('answers verification_needed when nothing is on file and the provider says not verified, and stores the answer', async () => {
+      const getCompanyVerification = vi.fn().mockResolvedValue({ status: 'invalid', validUntil: null })
+      provider(getCompanyVerification)
+      companyWith([businessAccount], null)
+      enqueue({ data: null })
+
+      const { status, body } = await readAvailability()
+      expect(status).toBe(200)
+      expect(body.data).toMatchObject({ available: true, readiness: 'verification_needed', verification: { state: 'not_started', status: 'invalid' } })
+      expect(findCall('company_payment_verifications', 'upsert')?.[0]).toMatchObject({ company_id: 'company-1', status: 'invalid' })
+    })
+
+    it("answers ready for a company whose only account is the owner's private one: its payments are tried without the verification", async () => {
+      provider(vi.fn().mockResolvedValue({ status: 'invalid', validUntil: null }))
+      companyWith([{ ...businessAccount, bank_connection: { bank_name: 'Swedbank', psu_type: 'personal' } }], null)
+      enqueue({ data: null })
+
+      const { body } = await readAvailability()
+      expect(body.data.accounts[0].account_context).toBe('private')
+      expect(body.data).toMatchObject({ readiness: 'ready', verification: { state: 'not_started' } })
+    })
+
+    it('still answers the availability when the provider cannot be asked and nothing is on file', async () => {
+      provider(vi.fn().mockRejectedValue(new PaymentProviderError('down', 'PROVIDER_DOWN', true)))
+      companyWith([businessAccount], null)
+
+      const { status, body } = await readAvailability()
+      expect(status).toBe(200)
+      expect(body.data).toMatchObject({ available: true, readiness: 'verification_unknown', verification: null })
+    })
+  })
+
   it('availability answers reason subscription for a company without the paid plan, and prepare refuses', async () => {
     registerPaymentInitiationProvider({ id: 'open_payments', isAvailableFor: () => true } as unknown as PaymentInitiationProvider)
     vi.mocked(hasCapability).mockResolvedValueOnce(false)
@@ -449,7 +513,7 @@ describe('payments routes with a provider registered', () => {
       await availability(createMockRequest('/api/payments/availability'), { params: Promise.resolve({}) }),
     )
     expect(status).toBe(200)
-    expect(body.data).toEqual({ available: false, reason: 'subscription', provider: null, accounts: [], signer_known: false })
+    expect(body.data).toEqual({ available: false, reason: 'subscription', provider: null, accounts: [], signer_known: false, verification: null, readiness: 'unavailable' })
 
     vi.mocked(hasCapability).mockResolvedValueOnce(false)
     const prepared = await parseJsonResponse<{ error: { code: string; details?: { reason?: string } } }>(

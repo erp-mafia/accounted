@@ -3774,7 +3774,7 @@
     "match_rot_rut_payout_set_btn": "Match ROT/RUT payout ({count} requests)"
   },
   "tx_parts": {
-    "heading": "Part payments ({count})",
+    "heading": "{count, plural, one {Specified payment} other {Part payments (#)}}",
     "unknown_counterparty": "Unknown payer",
     "ocr": "OCR {reference}",
     "suggested_invoice": "Invoice {number} · {name}",
@@ -8716,6 +8716,8 @@
     "row_payments_verification_expiring": "Renew the verification for payments",
     "row_payments_verification_expired": "The verification for payments has lapsed: renew it",
     "row_payments_verification_detail": "An authorised person at the company signs the renewal with BankID, about five minutes. Without it, bank payments stop.",
+    "row_payments_verification_start": "Verify the company for bank payments",
+    "row_payments_verification_start_detail": "An authorised person at the company signs with BankID, about five minutes. Then supplier invoices can be paid straight from Accounted.",
     "payments_verification_days_left": "{days, plural, =0 {Last day} =1 {1 day left} other {# days left}}",
     "payments_verification_expired_badge": "Expired"
   },
@@ -13450,6 +13452,8 @@
     "try_again": "Sign again",
     "verify_company": "Verify the company",
     "verify_required": "The company needs to be verified with the payment provider before its first payment.",
+    "verification_needed_short": "Bank payments need the company to be verified.",
+    "verification_pending_short": "The company's verification is waiting for a signature.",
     "result_hint": "The payments are booked when the debit shows on the account.",
     "result_second_signer": "The bank waits for another signatory. The payments are executed once they have signed in the bank.",
     "close": "Close",

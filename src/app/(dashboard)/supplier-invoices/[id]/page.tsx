@@ -561,10 +561,12 @@ export default function SupplierInvoiceDetailPage() {
   // After attest the next step is the betalfil to the bank, so that is the
   // header's one primary while the invoice is attested and in no open file.
   // Markera betald stays for the person who paid by hand, as a secondary.
+  // Kontantmetod companies have no attest step (canApprove above): their
+  // registered invoice is ready to pay as it stands, as on the list.
   const canAddToFile =
     !invoice.is_credit_note &&
-    ['approved', 'overdue'].includes(invoice.status) &&
-    !!invoice.approved_at &&
+    ['registered', 'approved', 'overdue'].includes(invoice.status) &&
+    (!!invoice.approved_at || !companyAttestsSupplierInvoices(companySettings?.accounting_method)) &&
     !lifecycle?.batch &&
     !lifecycle?.payment_order
   // With bank payments on, Betala via banken is the primary and the betalfil

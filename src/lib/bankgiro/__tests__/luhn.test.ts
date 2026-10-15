@@ -6,6 +6,7 @@ import {
   validatePlusgiroNumber,
   formatPlusgiroNumber,
   generateOcrReference,
+  generateLengthDigitOcrReference,
   validateOcrReference,
 } from '../luhn'
 
@@ -214,5 +215,35 @@ describe('validateOcrReference', () => {
 
   it('rejects incorrect check digit', () => {
     expect(validateOcrReference('123459')).toBe(false)
+  })
+})
+
+// Bankgirot, "Bankgiro Inbetalningar Användarmanual" (oktober 2023), 5.2.1-5.2.3.
+describe('generateLengthDigitOcrReference', () => {
+  it('puts the whole length before the check digit: invoice 316 is paid as 31658', () => {
+    expect(generateLengthDigitOcrReference('316')).toBe('31658')
+  })
+
+  it("reproduces the manual's worked reference 12345682 (length digit 8, check digit 2)", () => {
+    expect(generateLengthDigitOcrReference('123456')).toBe('12345682')
+    expect(validateOcrReference('12345682')).toBe(true)
+  })
+
+  it('writes only the last digit of a length of ten or more, as the length table does', () => {
+    // 8 digits + length digit + check digit = 10 positions: length digit 0.
+    const ocr = generateLengthDigitOcrReference('2026-0042')!
+    expect(ocr).toHaveLength(10)
+    expect(ocr.slice(0, 9)).toBe('202600420')
+    expect(validateOcrReference(ocr)).toBe(true)
+    // 23 digits reach the 25-position maximum: length digit 5.
+    const longest = generateLengthDigitOcrReference('1'.repeat(23))!
+    expect(longest).toHaveLength(25)
+    expect(longest[23]).toBe('5')
+    expect(validateOcrReference(longest)).toBe(true)
+  })
+
+  it('declines a number without digits or longer than a reference part may be', () => {
+    expect(generateLengthDigitOcrReference('ABC')).toBeNull()
+    expect(generateLengthDigitOcrReference('1'.repeat(24))).toBeNull()
   })
 })

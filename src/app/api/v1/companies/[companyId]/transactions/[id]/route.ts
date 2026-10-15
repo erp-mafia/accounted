@@ -142,8 +142,9 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
         details: { resource: 'transaction' },
       })
     }
-    // The Bankgirot split, when the row carries one (Open Payments). A refused
-    // read fails the detail: a split silently missing would read as "no split".
+    // The Bankgirot split, when the row carries one (Open Payments, or a BG Max
+    // deposit file on a row from any feed). A refused read fails the detail:
+    // a split silently missing would read as "no split".
     let parts
     try {
       parts = await readTransactionParts(ctx.supabase, ctx.companyId!, idParse.data)

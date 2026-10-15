@@ -374,17 +374,18 @@ export default function AttGoraSection({
   // time-driven items.
   const urgentSwitches = bankSwitches.filter((b) => b.urgent)
   const calmSwitches = bankSwitches.filter((b) => !b.urgent)
-  // The verification row follows the same split: expiring waits in Bevaka,
-  // expired (payments refused) leads the list.
+  // The verification row follows the same split: expiring, and the first
+  // verification of a company that pays by file, wait in Bevaka; expired
+  // (payments refused) leads the list.
   const verificationExpired = paymentsVerification?.state === 'expired' ? paymentsVerification : null
-  const verificationExpiring = paymentsVerification?.state === 'expiring' ? paymentsVerification : null
+  const verificationCalm = paymentsVerification && paymentsVerification.state !== 'expired' ? paymentsVerification : null
   const bevakaRows =
     overdueInvoices !== null ||
     counts.deadline_action > 0 ||
     counts.agreement_payment_missed > 0 ||
     counts.reconciliation_due > 0 ||
     calmSwitches.length > 0 ||
-    verificationExpiring !== null ||
+    verificationCalm !== null ||
     expiringBankConnections.length > 0
   const allClear =
     !bokforRows &&
@@ -422,18 +423,25 @@ export default function AttGoraSection({
       ? t(`missing_underlag_next_${topMissingUnderlag.kind}`, { count: topMissingUnderlag.count })
       : undefined
 
-  // The payments verification to renew: the deep link opens Betalningar,
-  // whose header starts the renewal form. A chip counts the days while it is
-  // expiring and says so once it has lapsed (an exception, so a chip; convention 5).
+  // The payments verification to start or renew: the deep link opens
+  // Betalningar, whose header starts the form. A chip counts the days while it
+  // is expiring and says so once it has lapsed (an exception, so a chip;
+  // convention 5); the first verification has no chip.
   const verificationRow = (item: PaymentsVerificationDue) => (
     <WorklistRow
       key="payments-verification"
       href={PAYMENTS_PAGE_PATH}
       icon={ShieldCheck}
-      label={item.state === 'expired' ? t('row_payments_verification_expired') : t('row_payments_verification_expiring')}
-      detail={t('row_payments_verification_detail')}
+      label={
+        item.state === 'not_started'
+          ? t('row_payments_verification_start')
+          : item.state === 'expired'
+            ? t('row_payments_verification_expired')
+            : t('row_payments_verification_expiring')
+      }
+      detail={item.state === 'not_started' ? t('row_payments_verification_start_detail') : t('row_payments_verification_detail')}
       badge={
-        item.state === 'expired' ? (
+        item.state === 'not_started' ? undefined : item.state === 'expired' ? (
           <Badge variant="destructive">{t('payments_verification_expired_badge')}</Badge>
         ) : item.days_left !== null ? (
           <Badge variant="warning">{t('payments_verification_days_left', { days: Math.max(item.days_left, 0) })}</Badge>
@@ -864,7 +872,7 @@ export default function AttGoraSection({
                       />
                     )}
                     {calmSwitches.map(switchRow)}
-                    {verificationExpiring && verificationRow(verificationExpiring)}
+                    {verificationCalm && verificationRow(verificationCalm)}
                     {expiringBankConnections.length > 0 && (
                       <WorklistRow
                         href="/settings/banking"

@@ -69,6 +69,7 @@ import { todayIsoStockholm } from '@/lib/dates/iso'
 import { createServiceClient } from '@/lib/supabase/server'
 import { applyProviderState } from './apply-state'
 import { recordVerificationCheck } from './verification-record'
+import { verificationRequiredFor } from './readiness'
 import { buildPartyContext, type SignerInput } from './party'
 import { cancelAndRelease, cancelForClosedInvoice, releasePaymentOrder, unpayableOrders } from './release'
 import { logPaymentOrderEvents, sanitizedProviderMessage, type PaymentOrderBatchRow, type PaymentOrderRow } from './types'
@@ -819,7 +820,7 @@ export async function startPaymentSigning(
   const ret: SigningReturnOrigin | null = input.returnOrigin ? { origin: input.returnOrigin, path: input.returnPath ?? null } : null
   if (plan.method === 'redirect' && !ret) return RETURN_ORIGIN_REQUIRED
   const party = { ...built, ctx: planParty(built.ctx, plan) }
-  if (party.ctx.accountContext === 'corporate') {
+  if (verificationRequiredFor(party.ctx.accountContext)) {
     try {
       const verification = await provider.getCompanyVerification(party.ctx)
       // Every provider answer is stored (verification-record.ts), so the
