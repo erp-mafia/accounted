@@ -1,6 +1,6 @@
 # Whitelabel fork checklist
 
-Accounted is whitelabel-friendly: every user-visible brand reference reads from a single `BrandingService` (`src/lib/branding/service.ts`). If you don't override anything, the app behaves exactly like upstream Accounted. To run your own brand on top of Accounted, fork the repo and override the values you care about.
+Accounted is whitelabel-friendly: every user-visible brand reference reads from a single `BrandingService` (`src/lib/branding/service.ts`). If you don't override anything, the app behaves exactly like upstream Accounted. To run your own brand on top of Accounted, fork the repo and override the values you care about. A modified version you offer to others must carry its own name and logo, not Accounted's: see [TRADEMARK.md](../TRADEMARK.md).
 
 ## Quick start
 
