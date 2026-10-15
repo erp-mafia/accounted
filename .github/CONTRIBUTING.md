@@ -41,19 +41,13 @@ npm run build
    - `test:` adding or updating tests
    - `docs:` documentation changes
 
-## DCO Sign-Off
+## Contributor License Agreement
 
-All commits must include a `Signed-off-by` line certifying that you have the right to submit the contribution under the project's license. This is the [Developer Certificate of Origin](DCO) (DCO).
+Before we can merge your first pull request, you sign the [Accounted Contributor License Agreement](../CLA.md) once. The CLA Assistant bot posts a link in the pull request, and you accept the agreement there with your GitHub account.
 
-Add the sign-off automatically with `git commit -s`:
+The agreement is a licence, not a transfer: you keep the copyright in your work. It lets Arcim Technology AB offer the project under other licences too, and Arcim promises that every contribution stays available under an open-source licence. If you contribute for a company, write to support@accounted.se first.
 
-```
-feat: add VAT report export
-
-Signed-off-by: Your Name <your.email@example.com>
-```
-
-If you forget, you can amend: `git commit --amend -s`.
+Contributions merged before the agreement was introduced were made under the [Developer Certificate of Origin](DCO), which still applies to them. Signing off commits with `git commit -s` is still welcome.
 
 ## Pull Requests
 
