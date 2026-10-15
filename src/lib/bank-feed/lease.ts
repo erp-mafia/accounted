@@ -26,6 +26,14 @@ export const RATE_LIMIT_COOLDOWN_MS = 12 * 60 * 60 * 1000
 export const THROTTLE_COOLDOWN_MS = 60 * 1000
 /** The cron syncs an Open Payments connection at most this often: two of the consent's four unattended reads a day. */
 export const SYNC_DUE_AFTER_MS = 11 * 60 * 60 * 1000
+/**
+ * How long a failed unattended read keeps the cron away. The bank counts
+ * every attempt against the consent's four reads a day, so retrying in every
+ * cron window spent a whole day's reads inside one night-time maintenance
+ * hour and the connection never synced (Länsförsäkringar, 2026-10-15: four
+ * timeouts between 00:00 and 01:00, the day's budget gone).
+ */
+export const UNATTENDED_FAILURE_HOLD_MS = 2 * 60 * 60 * 1000
 
 /** Atomically claim the lease for an Open Payments connection. True when this caller won it. */
 export async function claimBankFeedLease(
