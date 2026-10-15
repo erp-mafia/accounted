@@ -36,7 +36,7 @@ import { SYNC_COOLDOWN_MS, type TriggerSyncInput, type TriggerSyncResult } from 
 import { eventBus } from '@/lib/events/bus'
 import type { Transaction } from '@/types'
 import { BankFeedError, BankThrottledError, ConsentOverError, ProviderUnavailableError, RateLimitedError, getBankFeedConnect, type BankFeedConnect } from './connect'
-import { claimBankFeedLease, holdBankFeedLease, rateLimitCooldownMs, rateLimitHoldUntil, throttleCooldownMs } from './lease'
+import { claimBankFeedLease, holdBankFeedLease, rateLimitCooldownMs, rateLimitHoldUntil, throttleCooldownMs, UNATTENDED_FAILURE_HOLD_MS } from './lease'
 import { buildBankFeedParty, UNATTENDED_SIGNER, type BankFeedSignerInput } from './party'
 import { syncOpenPaymentsAccount, type BankFeedAccount, type BankFeedIngestFn } from './sync'
 
@@ -479,6 +479,12 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
     }
     if (failure.errorClass === 'unknown') log.error('open payments sync failed', logMeta)
     else log.warn('open payments sync failed', logMeta)
+    // A failed unattended read (a timeout in the bank's night window, a
+    // refusal) is not tried again in the next cron window: every attempt
+    // counts against the consent's four reads a day (UNATTENDED_FAILURE_HOLD_MS).
+    if (trigger === 'cron' && (failure.errorClass === 'bank_unavailable' || failure.errorClass === 'unknown')) {
+      await holdBankFeedLease(supabase, connectionId, now + UNATTENDED_FAILURE_HOLD_MS).catch(() => {})
+    }
     await emitSyncFailed(connection, trigger, failure.errorClass, status, error)
     return { ok: false, code: failure.code, connection_id: connectionId, status }
   }

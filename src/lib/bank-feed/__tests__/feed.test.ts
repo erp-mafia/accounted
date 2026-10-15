@@ -366,6 +366,25 @@ describe('runOpenPaymentsSync', () => {
     expect(mocks.persistFailure).toHaveBeenCalledWith(boom.supabase, expect.objectContaining({ status: 'error', message: SYNC_FAILED_MESSAGE }))
   })
 
+  it('holds a failed unattended read for two hours so a bank\'s night window cannot spend the day\'s four reads, and never holds a person\'s Synka nu', async () => {
+    mocks.syncAccount.mockRejectedValueOnce(new ProviderUnavailableError('timeout', { code: 'CONNECTOR_AIS_PROVIDER_FAILED', status: 502 }))
+    const night = stub({ bank_connections: [{ data: row(), error: null }], company_members: [{ data: { role: 'owner' }, error: null }], sie_imports: [{ data: null, error: null }] })
+    expect(await run(night.supabase, { trigger: 'cron', unattended: true })).toMatchObject({ ok: false, code: 'BANK_SYNC_FAILED' })
+    expect(mocks.holdLease).toHaveBeenCalledWith(night.supabase, 'conn-1', NOW + 2 * 60 * 60 * 1000)
+
+    mocks.holdLease.mockClear()
+    mocks.syncAccount.mockRejectedValueOnce(new Error('refused'))
+    const refused = stub({ bank_connections: [{ data: row(), error: null }], company_members: [{ data: { role: 'owner' }, error: null }], sie_imports: [{ data: null, error: null }] })
+    await run(refused.supabase, { trigger: 'cron', unattended: true })
+    expect(mocks.holdLease).toHaveBeenCalledWith(refused.supabase, 'conn-1', NOW + 2 * 60 * 60 * 1000)
+
+    mocks.holdLease.mockClear()
+    mocks.syncAccount.mockRejectedValueOnce(new ProviderUnavailableError('timeout', { code: 'CONNECTOR_AIS_PROVIDER_FAILED', status: 502 }))
+    const person = stub({ bank_connections: [{ data: row(), error: null }], company_members: [{ data: { role: 'owner' }, error: null }], sie_imports: [{ data: null, error: null }] })
+    await run(person.supabase, { trigger: 'manual' })
+    expect(mocks.holdLease).not.toHaveBeenCalled()
+  })
+
   it('stores the picker advice on an unresolved route and reports an obsolete result as a failure', async () => {
     mocks.resolveRoute.mockRejectedValueOnce(Object.assign(new Error('BANK_INGEST_ROUTE_UNRESOLVED'), { code: 'PT409' }))
     const unresolved = stub({ bank_connections: [{ data: row(), error: null }], company_members: [{ data: { role: 'owner' }, error: null }], sie_imports: [{ data: null, error: null }] })
