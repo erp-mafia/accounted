@@ -752,7 +752,10 @@ const CreateInvoiceBaseSchema = z.object({
   // Quotes only: the date the offer expires ("Giltig till"). Required when
   // document_type is 'quote' (refineQuoteFields); ignored otherwise.
   valid_until: optionalIsoDate,
-  your_reference: z.string().optional(),
+  your_reference: z
+    .string()
+    .optional()
+    .describe('Er referens. Omitted or empty on POST /invoices: the customer\'s invoice_reference.'),
   our_reference: z.string().optional(),
   // Fakturamärkning: buyer-required marking (kostnadsställe/projekt/PO),
   // separate from your_reference. Printed on the PDF and mapped to Peppol
@@ -1428,6 +1431,18 @@ const INDIVIDUAL_ORG_NUMBER_MESSAGE =
   'An individual customer has no org number: org_number must be empty or the person\'s personnummer '
   + '(which is stored as personal_number). Use customer_type "swedish_business" for a business.'
 
+/**
+ * Fakturareferens (crm#1200): '' and null both mean none (on update, a clear).
+ * The customer commands store a blank as NULL.
+ */
+const CustomerInvoiceReferenceSchema = z
+  .string()
+  .trim()
+  .max(200)
+  .nullable()
+  .optional()
+  .describe('Fakturareferens: the Er referens (your_reference) a new invoice to this customer gets when the request states none.')
+
 export const CreateCustomerSchema = z.object({
   name: z.string().min(1, 'Customer name is required'),
   customer_type: CustomerTypeSchema,
@@ -1461,6 +1476,7 @@ export const CreateCustomerSchema = z.object({
   language: z.enum(['sv', 'en']).optional(),
   // Whole days 0-365; 0 = betalning direkt / vid mottagande (issue #2070).
   default_payment_terms: z.number().int().min(0).max(365).optional(),
+  invoice_reference: CustomerInvoiceReferenceSchema,
   notes: z.string().optional(),
 }).superRefine((customer, ctx) => {
   if (customer.personal_number && customer.customer_type !== 'individual') {
@@ -1612,6 +1628,7 @@ export const UpdateCustomerSchema = z.object({
   language: z.enum(['sv', 'en']).optional(),
   // Whole days 0-365; 0 = betalning direkt / vid mottagande (issue #2070).
   default_payment_terms: z.number().int().min(0).max(365).optional(),
+  invoice_reference: CustomerInvoiceReferenceSchema,
   notes: z.string().optional(),
 }).superRefine((customer, ctx) => {
   if (
@@ -4610,6 +4627,16 @@ export const CreateSalaryRunWithDefaultsSchema = z.object({
   deviation_period_start: isoDate.optional(),
   deviation_period_end: isoDate.optional(),
 })
+
+// A new version of a run's pain.001 (crm#1219). The confirmation is the
+// guard against paying the month twice: without it there is no new version.
+export const NewSalaryPaymentFileVersionSchema = z
+  .object({
+    confirm_previous_not_approved: z.literal(true, {
+      message: 'Bekräfta att den tidigare betalfilen inte har godkänts i banken',
+    }),
+  })
+  .strict()
 
 export const AddEmployeeToRunSchema = z.object({
   employee_id: uuid,

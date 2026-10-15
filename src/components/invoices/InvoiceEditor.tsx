@@ -152,7 +152,7 @@ import {
   type SeriesContinuation,
 } from '@/lib/invoices/next-number-preview'
 import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
-import { customerChangedForReference, planYourReferencePrefill } from '@/lib/invoices/editor/customer-reference'
+import { customerCardReference, customerChangedForReference, planYourReferencePrefill } from '@/lib/invoices/editor/customer-reference'
 import {
   invoiceDateLock,
   resolveDetailsChips,
@@ -1651,9 +1651,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         didInitialCustomerSync.current = true
       }
     }
-    // Er referens from the customer card's contact person: into an empty
-    // field, replacing only what the editor itself put there, never what the
-    // user typed. Only when the customer changes: this effect also re-runs
+    // Er referens from the customer card (its Fakturareferens, else its
+    // contact person): into an empty field, replacing only what the editor
+    // itself put there, never what the user typed. Only when the customer
+    // changes: this effect also re-runs
     // on a refreshed customer list, which must not refill a field the user
     // emptied, and a saved draft's own customer never replaces its value.
     // Never for a received självfaktura (no references).
@@ -1666,7 +1667,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     const plan = planYourReferencePrefill({
       current,
       prefilled: prefilledReferenceRef.current,
-      contactPerson: customer?.contact_person ?? null,
+      customerReference: customerCardReference(customer),
     })
     prefilledReferenceRef.current = plan.prefilled
     if (plan.value !== current) setValue('your_reference', plan.value, { shouldDirty: true })

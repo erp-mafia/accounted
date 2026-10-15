@@ -77,6 +77,11 @@ export interface DownloadFileOptions {
   /** Context for reading a refusal envelope (an invoice route's codes read differently from a salary route's). */
   errorContext?: ErrorContext
   timeoutMs?: number
+  /**
+   * POST this value as JSON instead of a GET: for a file the request creates
+   * on an explicit confirmation (a new version of a salary payment file).
+   */
+  postJson?: unknown
   /** Seam for tests; defaults to the DOM anchor implementation below. */
   saveBlob?: (blob: Blob, filename: string) => void
 }
@@ -132,6 +137,7 @@ export async function downloadFile({
   locale = 'sv',
   errorContext,
   timeoutMs = DOWNLOAD_TIMEOUT_MS,
+  postJson,
   saveBlob = saveBlobToDisk,
 }: DownloadFileOptions): Promise<DownloadFileResult> {
   let blob: Blob
@@ -140,7 +146,9 @@ export async function downloadFile({
   try {
     const res = await fetchWithTimeout(
       url,
-      { method: 'GET' },
+      postJson === undefined
+        ? { method: 'GET' }
+        : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(postJson) },
       { timeoutMs, description: `download ${filename}` },
     )
 

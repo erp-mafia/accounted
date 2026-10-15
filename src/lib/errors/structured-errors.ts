@@ -507,6 +507,19 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
     message_en: 'The note could not be saved.',
     thrown_message_sv: true,
   },
+  // The note lives on the verifikat row, and a closed or locked period is
+  // read-only, the note included (enforce_period_lock, migration 017).
+  JOURNAL_ENTRY_NOTE_PERIOD_LOCKED: {
+    httpStatus: 409,
+    message_sv: 'Perioden är stängd eller låst, anteckningen kan inte ändras.',
+    message_en:
+      'The verifikat is in a closed or locked period, which is read-only, its notes included. Nothing was changed.',
+    remediation: {
+      description:
+        'Report it to the user. Never unlock a period just to change a note: a closed year cannot be unlocked, and a locked period is unlocked only when the user explicitly asks (gnubok_unlock_period). Context that must be recorded now belongs on a verifikat in an open period, e.g. the one that corrects or refers to this one.',
+    },
+    thrown_message_sv: true,
+  },
   NO_DOC_REQUIRED_FAILED: {
     httpStatus: 400,
     message_sv: 'Markeringen "Inget underlag krävs" kunde inte sparas.',
@@ -5764,6 +5777,18 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Betalfilen kunde inte skapas: kontrollera bankuppgifterna för företaget och de anställda.',
     message_en: 'The payment file could not be generated: check the bank details of the company and its employees.',
+  },
+  SALARY_RUN_PAYMENT_FILE_NEW_VERSION_UNCONFIRMED: {
+    httpStatus: 422,
+    message_sv:
+      'En ny version av betalfilen kräver en bekräftelse på att den tidigare filen inte har godkänts i banken. Två godkända filer betalar ut lönen två gånger.',
+    message_en:
+      'A new version of the payment file needs a confirmation that the earlier file was not approved at the bank. Two approved files pay the salaries twice.',
+  },
+  SALARY_RUN_PAYMENT_FILE_NEW_VERSION_UNSUPPORTED: {
+    httpStatus: 422,
+    message_sv: 'Bara en ISO 20022-fil (pain.001) kan få en ny version. Bankgirot LB-filen har inga meddelande-id.',
+    message_en: 'Only an ISO 20022 file (pain.001) can get a new version. The Bankgirot LB file has no message ids.',
   },
   BANK_IMPORT_FAILED: {
     httpStatus: 500,

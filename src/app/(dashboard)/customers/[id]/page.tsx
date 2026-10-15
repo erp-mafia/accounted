@@ -405,6 +405,9 @@ export default function CustomerDetailPage({
         <DefRow label={t('def_payment_terms')}>
           {t('payment_terms_value', { days: customer.default_payment_terms ?? 30 })}
         </DefRow>
+        {customer.invoice_reference && (
+          <DefRow label={t('def_invoice_reference')}>{customer.invoice_reference}</DefRow>
+        )}
       </DetailSection>
 
       <CustomerCollectionsExclusion
@@ -517,6 +520,7 @@ export default function CustomerDetailPage({
               // submits every field, so leaving language out resets it on save.
               language: customer.language,
               default_payment_terms: customer.default_payment_terms ?? undefined,
+              invoice_reference: customer.invoice_reference,
               notes: customer.notes || undefined,
             }}
           />

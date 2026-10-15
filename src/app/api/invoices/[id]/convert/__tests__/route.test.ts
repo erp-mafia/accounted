@@ -349,6 +349,43 @@ describe('POST /api/invoices/[id]/convert', () => {
       expect(updates.some((u) => u.status === 'cancelled')).toBe(false)
     })
 
+    // crm#1200: Er referens on the converted invoice.
+    async function convertQuote(quote: Record<string, unknown>) {
+      enqueue({ data: quote, error: null }) // fetch quote
+      enqueue({ data: null, error: null }) // no existing conversion
+      enqueue({ data: null, count: 0, error: null }) // no live sales order
+      enqueue({ data: { id: 'inv-1', invoice_number: null, document_type: 'invoice' }, error: null }) // insert invoice
+      enqueue({ data: null, error: null }) // insert items
+      enqueue({ data: [{ id: 'q-1' }], error: null }) // quote -> accepted
+      enqueue({ data: 'F-042', error: null }) // generate_invoice_number
+      enqueue({ data: { id: 'inv-1', invoice_number: 'F-042', document_type: 'invoice', items: [] }, error: null })
+      const response = await POST(
+        createMockRequest('/api/invoices/q-1/convert', { method: 'POST' }),
+        createMockRouteParams({ id: 'q-1' })
+      )
+      expect(response.status).toBe(200)
+      return findCall('invoices', 'insert')?.[0] as Record<string, unknown>
+    }
+
+    it("takes the customer card's Fakturareferens when the quote has no Er referens", async () => {
+      const inserted = await convertQuote({
+        ...baseQuote,
+        your_reference: null,
+        customer: { default_payment_terms: 20, invoice_reference: 'KST 4410' },
+      })
+      expect(inserted.your_reference).toBe('KST 4410')
+      expect(findCall('invoices', 'select')?.[0]).toContain('invoice_reference')
+    })
+
+    it("keeps the quote's own Er referens over the customer card", async () => {
+      const inserted = await convertQuote({
+        ...baseQuote,
+        your_reference: 'Anna Andersson',
+        customer: { default_payment_terms: 20, invoice_reference: 'KST 4410' },
+      })
+      expect(inserted.your_reference).toBe('Anna Andersson')
+    })
+
     // accounted#18: 23:30 UTC is already the next day in Stockholm, in summer
     // (UTC+2) and in winter (UTC+1). The invoice is dated that day and the
     // terms count from it.

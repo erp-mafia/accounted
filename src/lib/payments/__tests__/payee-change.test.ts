@@ -60,7 +60,44 @@ describe('classifyPayeeChange', () => {
     })
     // The backfill would have made this bankgiro the card's payment account silently.
     expect(classifyPayeeChange({ invoice: { payee_bankgiro: '9020-0001' }, card: { plusgiro: '1234566' } }).kind).toBe('changed')
-    expect(classifyPayeeChange({ invoice: { payee_iban: 'SE4550000000058398257466' }, card: CARD_BG }).kind).toBe('changed')
+    // A different bankgiro alerts whatever IBAN the footer prints beside it.
+    expect(
+      classifyPayeeChange({ invoice: { payee_bankgiro: '9020-0001', payee_iban: 'SE4550000000058398257466' }, card: CARD_BG }).kind,
+    ).toBe('changed')
+  })
+
+  it('compares the account a payment would use: an IBAN only where the card pays no domestic account (crm#1220)', () => {
+    const IBAN = 'SE4550000000058398257466'
+    const OTHER_IBAN = 'SE3550000000054910000003'
+    // The card's bankgiro on the invoice, an IBAN from its footer beside it.
+    expect(classifyPayeeChange({ invoice: { payee_bankgiro: '5050-1055', payee_iban: IBAN }, card: CARD_BG })).toEqual({
+      kind: 'same',
+      statedKey: 'bankgiro:50501055',
+      cardKey: 'bankgiro:50501055',
+    })
+    // Only the IBAN was read (as an invoice registered before accounted#15
+    // through the MCP approval stored it): a payment still uses the card's bankgiro.
+    expect(classifyPayeeChange({ invoice: { payee_iban: IBAN }, card: CARD_BG })).toEqual({
+      kind: 'same',
+      statedKey: `iban:${IBAN}`,
+      cardKey: 'bankgiro:50501055',
+    })
+    expect(classifyPayeeChange({ invoice: { payee_iban: OTHER_IBAN }, card: { ...CARD_BG, iban: IBAN } }).kind).toBe('same')
+    expect(classifyPayeeChange({ invoice: { payee_iban: IBAN }, card: { clearing_number: '3300', account_number: '7001011234' } }).kind).toBe('same')
+    // A card that pays an IBAN only: the IBAN is the account, and another one alerts.
+    expect(classifyPayeeChange({ invoice: { payee_iban: OTHER_IBAN }, card: { iban: IBAN } })).toEqual({
+      kind: 'changed',
+      statedKey: `iban:${OTHER_IBAN}`,
+      cardKey: `iban:${IBAN}`,
+    })
+    expect(classifyPayeeChange({ invoice: { payee_iban: IBAN }, card: { iban: IBAN } }).kind).toBe('same')
+    // A domestic account a card with only an IBAN lacks would become the one paid.
+    expect(classifyPayeeChange({ invoice: { payee_bankgiro: '5050-1055', payee_iban: IBAN }, card: { iban: IBAN } }).kind).toBe('changed')
+    // An empty card: nothing to differ from, whatever is stated.
+    expect(classifyPayeeChange({ invoice: { payee_iban: IBAN }, card: {} }).kind).toBe('new_supplier_account')
+    // first_payment asks about the account a payment uses, the card's.
+    expect(classifyPayeeChange({ invoice: { payee_iban: IBAN }, card: CARD_BG, paidPayeeKeys: ['bankgiro:50501055'] }).kind).toBe('same')
+    expect(classifyPayeeChange({ invoice: { payee_iban: IBAN }, card: CARD_BG, paidPayeeKeys: [] }).kind).toBe('first_payment')
   })
 
   it('is new_supplier_account when the card has no account at all', () => {

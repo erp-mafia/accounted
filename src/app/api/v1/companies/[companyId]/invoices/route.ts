@@ -31,6 +31,7 @@ import { readV1JsonBody } from '@/lib/api/v1/body'
 import { CreateInvoiceSchema } from '@/lib/api/schemas'
 import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
+import { yourReferenceForNewInvoice } from '@/lib/customers/invoice-reference'
 import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
 import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
 import { effectiveInvoiceStatus, filterInvoicesByReportedStatus } from '@/lib/invoices/overdue'
@@ -637,7 +638,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // so dropping a column from this string no longer compiles.
     const { data: customer, error: customerErr } = await ctx.supabase
       .from('customers')
-      .select('id, customer_type, vat_number, vat_number_validated, country')
+      .select('id, customer_type, vat_number, vat_number_validated, country, invoice_reference')
       .eq('company_id', ctx.companyId!)
       .eq('id', input.customer_id)
       .maybeSingle()
@@ -667,7 +668,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       // an omitted key, so the choice is visible and type-checked.
       customer: { ...customer, personal_number: null },
       documentType,
-      input,
+      // Er referens: the request's, else the customer card's Fakturareferens
+      // (crm#1200).
+      input: { ...input, your_reference: yourReferenceForNewInvoice(input.your_reference, customer) ?? undefined },
     })
     if (!build.ok) {
       if ('dbError' in build) {

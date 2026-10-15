@@ -174,6 +174,11 @@ export function CompanyDangerZone({ deleteDoor, onDeleteDoorChange }: CompanyDan
           {deleteDoor === 'wrong_company' && (
             <p className="text-sm text-muted-foreground">{t('danger_dialog_wrong_company_note')}</p>
           )}
+          {/* The same one thing to do first, from the Radera företag row too
+              (a byrå clearing out test companies comes this way, crm#1237). */}
+          {deleteDoor === 'danger_zone' && (
+            <p className="text-sm text-muted-foreground">{t('danger_dialog_bank_note')}</p>
+          )}
           <div className="space-y-2">
             {/* data-ph-mask: the label interpolates the company name */}
             <Label data-ph-mask="" htmlFor="company-delete-confirm">

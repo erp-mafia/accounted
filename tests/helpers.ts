@@ -359,6 +359,7 @@ export function makeCustomer(overrides: Partial<Customer> = {}): Customer {
     invoice_email_bcc_addresses: null,
     language: 'sv',
     default_payment_terms: 30,
+    invoice_reference: null,
     notes: null,
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-01T00:00:00Z',

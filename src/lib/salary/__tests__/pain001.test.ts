@@ -344,3 +344,52 @@ describe('generatePain001 for every other bank', () => {
     expect(plain).toContain('<Nm>Kalle&apos;s Bygg AB</Nm>')
   })
 })
+
+// crm#1218: Danske Bank reads the employee account from CdtrAcct alone (MIG
+// v3.6, 2.80; Appendix C: no ClrSysMmbId for Sweden) and took a 7-digit
+// account without its clearing for a plusgiro number. Nordea wants the
+// clearing in the BBAN too (Appendix Sweden 2026-10-08, s. 2.3.5). Invented
+// accounts throughout.
+describe('generatePain001 for a Danske Bank or Nordea debtor', () => {
+  const employees = [
+    { name: 'Anna Andersson', clearingNumber: '1344', bankAccountNumber: '2045678', netSalary: 28000 },
+    { name: 'Bo Berg', clearingNumber: '83279', bankAccountNumber: '1234567890', netSalary: 30000 },
+    { name: 'Cia Ceder', clearingNumber: '6000', bankAccountNumber: '123456789', netSalary: 31000 },
+    { name: 'Dan Dahl', clearingNumber: '3300', bankAccountNumber: '8001011234', netSalary: 32000 },
+  ]
+  const options = { messageId: 'ACCOUNTED-5561234567-2026-10', paymentDate: '2026-10-23', periodLabel: '2026-10' }
+
+  function routing(xml: string) {
+    return [...xml.matchAll(/<CdtTrfTxInf>[\s\S]*?<\/CdtTrfTxInf>/g)].map(([tx]) => [
+      tx.match(/<MmbId>([^<]+)<\/MmbId>/)![1],
+      tx.match(/<CdtrAcct>\s*<Id>\s*<Othr>\s*<Id>([^<]+)<\/Id>\s*<SchmeNm><Cd>BBAN<\/Cd><\/SchmeNm>/)![1],
+    ])
+  }
+
+  it.each(['DABASESX', 'NDEASESS'])('%s: CdtrAcct carries clearing + account, CdtrAgt keeps the clearing', (bic) => {
+    const company = { name: 'Test AB', orgNumber: '556123-4567', iban: 'SE7212000000012200111878', bic }
+    expect(routing(generatePain001(company, employees, options))).toEqual([
+      ['1344', '13442045678'],
+      ['8327', '832791234567890'],
+      ['6000', '6000123456789'],
+      ['3300', '33008001011234'],
+    ])
+  })
+
+  it('an employee account typed with its clearing in front reaches the same BBAN', () => {
+    const company = { name: 'Test AB', orgNumber: '556123-4567', iban: 'SE7212000000012200111878', bic: 'DABASESX' }
+    const typedInFull = [{ ...employees[0], bankAccountNumber: '13442045678' }]
+    expect(routing(generatePain001(company, typedInFull, options))).toEqual([['1344', '13442045678']])
+  })
+
+  it('every other bank keeps the account without the clearing: the file is unchanged', () => {
+    const company = { name: 'Test AB', orgNumber: '556123-4567', iban: 'SE3550000000054910000003', bic: 'ESSESESS' }
+    expect(routing(generatePain001(company, employees, options))).toEqual([
+      ['1344', '2045678'],
+      ['8327', '91234567890'],
+      ['6000', '123456789'],
+      ['3300', '8001011234'],
+    ])
+    expect(routing(generatePain001({ ...company, bic: 'HANDSESS' }, employees, options))[0]).toEqual(['1344', '2045678'])
+  })
+})

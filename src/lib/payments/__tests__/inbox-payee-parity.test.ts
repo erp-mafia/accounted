@@ -56,11 +56,11 @@ const STATED = {
 let db: ReturnType<typeof createTableMockSupabase>
 
 /** `cardBankgiro`: the supplier card's bankgiro; it pays another one than the invoice states unless they match. */
-function setUp(cardBankgiro: string | null) {
+function setUp(cardBankgiro: string | null, extracted: object = EXTRACTED) {
   db = createTableMockSupabase({
     pending_operations: { data: { id: 'op-1' } },
     invoice_inbox_items: {
-      data: makeInvoiceInboxItem({ id: ITEM_ID, created_supplier_invoice_id: null, extracted_data: EXTRACTED as never }),
+      data: makeInvoiceInboxItem({ id: ITEM_ID, created_supplier_invoice_id: null, extracted_data: extracted as never }),
     },
     suppliers: { data: makeSupplier({ id: SUPPLIER_ID, bankgiro: cardBankgiro, plusgiro: null, iban: null }) },
     // Kontantmetoden: no registration verifikat, so every door stays on the payee.
@@ -183,6 +183,16 @@ describe('inbox supplier invoices: every door stores the account the document st
     expect(db.payloads('supplier_invoices', 'insert')[0]).toMatchObject(STATED)
     expect(db.payloads('suppliers', 'update')).toEqual([
       { bankgiro: '9020-0007', plusgiro: null, iban: 'SE4550000000058398257466', bic: 'ESSESESS' },
+    ])
+  })
+
+  it.each(DOORS)('%s: an IBAN read without the bankgiro the card pays is no new account; the card takes it (crm#1220)', async (_door, run) => {
+    setUp('9020-0007', { supplier: { name: 'Derome Bygg AB', iban: 'SE45 5000 0000 0583 9825 7466' } })
+    await run()
+
+    expect(db.payloads('supplier_invoices', 'insert')[0]).toMatchObject({ payee_bankgiro: null, payee_iban: 'SE4550000000058398257466' })
+    expect(db.payloads('suppliers', 'update')).toEqual([
+      { bankgiro: '9020-0007', plusgiro: null, iban: 'SE4550000000058398257466', bic: null },
     ])
   })
 })

@@ -463,6 +463,41 @@ describe('executeRecurringSchedule auto-send', () => {
     expect(rows[0]).toMatchObject({ line_total: 100, vat_amount: 25 })
   })
 
+  it('takes Er referens from the customer card when the schedule states none (crm#1200)', async () => {
+    // Read at each run, so a card change reaches the next invoice.
+    const withReference = { ...customer, invoice_reference: 'KST 4410' }
+    enqueue({ data: withReference, error: null }) // customers select
+    enqueue({ data: { vat_registered: true }, error: null }) // company_settings VAT gate
+    enqueue({ data: makeInsertedInvoice(), error: null }) // invoices insert
+    enqueue({ data: null, error: null }) // invoice_items insert
+    enqueue({ data: makeCompleteInvoice(), error: null }) // re-fetch with relations
+    enqueue({ data: company, error: null }) // company_settings (auto-send)
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // status flip draft -> sent
+    enqueue({ data: null, error: null }) // journal_entry_id write-back
+
+    await executeRecurringSchedule(client, makeSchedule(), today)
+
+    const header = findCalls('invoices', 'insert')[0][0] as Record<string, unknown>
+    expect(header.your_reference).toBe('KST 4410')
+  })
+
+  it('keeps the schedule\'s own Er referens over the customer card', async () => {
+    enqueue({ data: { ...customer, invoice_reference: 'KST 4410' }, error: null })
+    enqueue({ data: { vat_registered: true }, error: null })
+    enqueue({ data: makeInsertedInvoice(), error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: makeCompleteInvoice(), error: null })
+    enqueue({ data: company, error: null })
+    enqueue({ data: [{ id: 'inv-1' }], error: null })
+    enqueue({ data: null, error: null })
+    const schedule = { ...makeSchedule(), your_reference: 'Anna Andersson' } as Parameters<typeof executeRecurringSchedule>[1]
+
+    await executeRecurringSchedule(client, schedule, today)
+
+    const header = findCalls('invoices', 'insert')[0][0] as Record<string, unknown>
+    expect(header.your_reference).toBe('Anna Andersson')
+  })
+
   it('creates a payment link before rendering and passes its QR to the PDF', async () => {
     enqueueHappyPath()
     mockApplyPaymentLink.mockImplementation(

@@ -55,11 +55,12 @@ export async function getCompanyEntityType(
  * Resolve a company's current display name.
  *
  * `company_settings.company_name` is the read-primary source (what the user
- * edits in Settings and what the invoice PDF renders), with the canonical
- * `companies.name` as the fallback. `companies.name` is written once at
- * onboarding (via create_company_with_owner) and never updated afterwards, so
- * reading it directly shows a stale name after a rename (e.g. a lagerbolag
- * renamed post-signup). Mirrors getCompanyEntityType and the invoice surfaces.
+ * edits in Settings and what the invoice PDF renders), with `companies.name`
+ * as the fallback for a company whose settings name is blank. Every non-blank
+ * settings name is mirrored onto `companies.name` by a trigger (migration
+ * 20261015201209, crm#1209), so the two agree; before it, a rename left
+ * `companies.name` at the onboarding name. Mirrors getCompanyEntityType and
+ * the invoice surfaces.
  *
  * Returns null only if the company can't be resolved from either table.
  */

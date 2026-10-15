@@ -170,6 +170,7 @@ type NavLabelKey =
   | 'income_declaration'
   | 'help'
   | 'settings'
+  | 'account_settings'
   | 'clients'
   | 'automations'
   | 'back_to_clients'
@@ -1020,8 +1021,12 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                 <SubscriptionTouchpoint variant="mobile" onNavigate={closeMobileMenu} />
                 {([
                   // Cockpit: settings open in byrå scope (account-level
-                  // sections only), same as the desktop user menu.
-                  { href: cockpitMode ? '/settings/account?ctx=byra' : '/settings', labelKey: 'settings' as NavLabelKey, icon: Settings },
+                  // sections only) and say so, same as the desktop user menu.
+                  {
+                    href: cockpitMode ? '/settings/account?ctx=byra' : '/settings',
+                    labelKey: (cockpitMode ? 'account_settings' : 'settings') as NavLabelKey,
+                    icon: Settings,
+                  },
                   { href: '/help', labelKey: 'help' as NavLabelKey, icon: HelpCircle },
                 ]).map((item) => {
                   const active = isActive(item.href)

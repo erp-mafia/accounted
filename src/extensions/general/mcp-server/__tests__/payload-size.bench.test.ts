@@ -708,6 +708,12 @@ describe('tools/list payload size guard', () => {
     //     description, a shorter line pin and the bulk tool's "shared
     //     underlag" clause. Measured 65 895 (single-company 60 886). Ceiling
     //     unchanged.
+    //   * Fakturareferens (crm#1200, 2026-10-15): gnubok_create_customer and
+    //     gnubok_update_customer gain invoice_reference as a bare type. Paid
+    //     for by shorter tool descriptions and shorter org_number,
+    //     personal_number, payment_terms, customer_type and country notes on
+    //     the same two tools. Measured 65 895 (single-company 60 886).
+    //     Ceiling unchanged.
     expect(approxTokens).toBeLessThan(65_900)
   })
 
@@ -768,6 +774,8 @@ describe('tools/list payload size guard', () => {
     // case above): measured 60 881. Ceiling unchanged.
     // 2026-10-15, copy on gnubok_link_document_to_voucher (crm#1171 item 9,
     // see the case above): measured 60 886. Ceiling unchanged.
+    // 2026-10-15, invoice_reference on the customer tools (crm#1200, see the
+    // case above): measured 60 886. Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

@@ -458,6 +458,65 @@ describe('debit account for bankgiro payees follows the debtor bank', () => {
   })
 })
 
+/** CdtrAgt member id and CdtrAcct Othr/Id of every credit transfer, in file order. */
+function creditorRouting(xml: string): Array<{ memberId: string; accountId: string; scheme: string }> {
+  return [...xml.matchAll(/<CdtTrfTxInf>[\s\S]*?<\/CdtTrfTxInf>/g)].map(([tx]) => ({
+    memberId: tx.match(/<MmbId>([^<]+)<\/MmbId>/)![1],
+    accountId: tx.match(/<CdtrAcct>\s*<Id>\s*<Othr>\s*<Id>([^<]+)<\/Id>/)![1],
+    scheme: tx.match(/<CdtrAcct>[\s\S]*?<SchmeNm>([\s\S]*?)<\/SchmeNm>/)![1],
+  }))
+}
+
+// crm#1218: Danske Bank reads a domestic payee from CdtrAcct alone (MIG v3.6,
+// 2.80; Appendix C: no ClrSysMmbId for Sweden), Nordea wants the clearing in
+// the BBAN (Appendix Sweden 2026-10-08, s. 2.3.5). Invented accounts.
+describe('bank-account payee follows the debtor bank: clearing inside the BBAN at Danske Bank and Nordea', () => {
+  const accounts = [
+    { type: 'bank_account', clearing: '1344', account: '2045678' },
+    { type: 'bank_account', clearing: '6000', account: '123456789' },
+    { type: 'bank_account', clearing: '3300', account: '8001011234' },
+    { type: 'bank_account', clearing: '83279', account: '123456789' },
+  ] as const
+
+  it.each(['DABASESX', 'NDEASESS', 'ndeasessxxx'])('%s: clearing + account in CdtrAcct, the clearing kept in CdtrAgt', (bic) => {
+    const xml = generateSupplierPain001(
+      { ...danske, bic },
+      accounts.map((payee) => bgPayment({ payee })),
+      options,
+    )
+    expect(creditorRouting(xml)).toEqual([
+      { memberId: '1344', accountId: '13442045678', scheme: '<Cd>BBAN</Cd>' },
+      { memberId: '6000', accountId: '6000123456789', scheme: '<Cd>BBAN</Cd>' },
+      { memberId: '3300', accountId: '33008001011234', scheme: '<Cd>BBAN</Cd>' },
+      { memberId: '8327', accountId: '832790123456789', scheme: '<Cd>BBAN</Cd>' },
+    ])
+  })
+
+  it.each(['DABASESX', 'NDEASESS'])('%s: bankgiro and plusgiro payees are unchanged in the same file', (bic) => {
+    const xml = generateSupplierPain001({ ...danske, bic }, mixedBatch(), options)
+    expect(creditorRouting(xml)).toEqual([
+      { memberId: '9900', accountId: '50501055', scheme: '<Prtry>BGNR</Prtry>' },
+      { memberId: '9960', accountId: '1234567', scheme: '<Cd>BBAN</Cd>' },
+      { memberId: '8327', accountId: '832790123456789', scheme: '<Cd>BBAN</Cd>' },
+      { memberId: '9900', accountId: '50501055', scheme: '<Prtry>BGNR</Prtry>' },
+    ])
+  })
+
+  it.each(['ESSESESS', 'HANDSESS', 'SWEDSESS', 'SVEASESS', 'DABADKKK'])('%s keeps the account without the clearing', (bic) => {
+    const xml = generateSupplierPain001(
+      { ...danske, bic },
+      accounts.map((payee) => bgPayment({ payee })),
+      options,
+    )
+    expect(creditorRouting(xml).map((r) => [r.memberId, r.accountId])).toEqual([
+      ['1344', '2045678'],
+      ['6000', '123456789'],
+      ['3300', '8001011234'],
+      ['8327', '9123456789'],
+    ])
+  })
+})
+
 /**
  * Danske Bank Message Implementation Guide, "Supported payment types and
  * examples", version 5.3 (2026-08-18): the samples "Swedish Bankgiro payment -

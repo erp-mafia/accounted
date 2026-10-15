@@ -558,6 +558,10 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/salary/runs/:id/paid': covered([`POST ${V}/salary-runs/:id/mark-paid`, 'gnubok_mark_salary_run_paid']),
   'POST /api/salary/runs/:id/book': covered([`POST ${V}/salary-runs/:id/book`, 'gnubok_book_salary_run']),
   'POST /api/salary/runs/:id/correct': covered([`POST ${V}/salary-runs/:id/correct`, 'gnubok_correct_salary_run']),
+  'POST /api/salary/runs/:id/payment/pain001': covered(
+    [`POST ${V}/salary-runs/:id/payment-file`],
+    'new version with new_version + confirm_previous_not_approved; no MCP door builds payment files',
+  ),
   'POST /api/salary/runs/:id/payslips/send': covered([`POST ${V}/salary-runs/:id/send-payslips`, 'gnubok_send_payslips']),
   'POST /api/salary/runs/:id/employees': covered([`POST ${V}/salary-runs/:id/employees`, 'gnubok_add_salary_run_employee']),
   'PATCH /api/salary/runs/:id/employees/:employeeId': covered([`PATCH ${V}/salary-runs/:id/employees/:employeeId`, 'gnubok_set_run_salary']),

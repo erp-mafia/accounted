@@ -885,6 +885,32 @@ describe('gnubok_create_supplier_invoice_from_inbox: supplier payment details wa
     expect(inserts[0].preview_data).not.toHaveProperty('compliance_warning')
   })
 
+  it('offers the footer IBAN beside the card\'s own bankgiro as a fill, never as new bank details (crm#1220)', async () => {
+    const inserts: Array<Record<string, unknown>> = []
+    const supabase = makeMock({
+      inbox: {
+        ...inboxWithBankgiro,
+        extracted_data: {
+          ...baseExtracted,
+          supplier: { ...baseExtracted.supplier, bankgiro: '5050-1055', iban: 'SE45 5000 0000 0583 9825 7466', bic: 'ESSESESS' },
+        },
+      },
+      supplierRecord: { id: 'supplier-1', default_expense_account: '6540', bankgiro: '5050-1055', plusgiro: null, iban: null, bic: null },
+      supplierByOrg: { bankgiro: '5050-1055', plusgiro: null, bank_account: null, clearing_number: null, account_number: null, iban: null },
+      inserts,
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const result = (await tool.execute({ inbox_item_id: 'inbox-bg' }, 'company-1', 'user-1', supabase)) as {
+      staged: boolean
+      preview: Record<string, unknown>
+    }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.supplier_payment_details_fill).toEqual({ iban: 'SE4550000000058398257466', bic: 'ESSESESS' })
+    expect(result.preview).not.toHaveProperty('invoice_account')
+    expect(inserts[0].preview_data).not.toHaveProperty('compliance_warning')
+  })
+
   it('names both accounts when the bankgiro differs from the card, fills nothing and writes nothing (accounted#15)', async () => {
     const supplierUpdates: Array<Record<string, unknown>> = []
     const inserts: Array<Record<string, unknown>> = []

@@ -27,6 +27,7 @@ import {
 import { isTextLine } from '@/lib/invoices/recurring-schedule-items'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
 import { roundOre } from '@/lib/money'
+import { yourReferenceForNewInvoice } from '@/lib/customers/invoice-reference'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import {
   archiveIssuedInvoicePdf,
@@ -377,7 +378,9 @@ export async function executeRecurringSchedule(
       vat_rate: isMixedRate ? null : (uniqueRates.values().next().value ?? vatRules.rate),
       moms_ruta: notVatRegistered ? null : vatRules.momsRuta,
       reverse_charge_text: notVatRegistered ? null : (vatRules.reverseChargeText || null),
-      your_reference: schedule.your_reference,
+      // The schedule's Er referens, else the card's Fakturareferens as it is
+      // today (crm#1200), so a change to the card reaches the next invoice.
+      your_reference: yourReferenceForNewInvoice(schedule.your_reference, customer),
       our_reference: schedule.our_reference,
       notes: applyRecurringPlaceholders(schedule.notes, placeholderValues),
       // Carried verbatim so cron-spawned invoices book with the same

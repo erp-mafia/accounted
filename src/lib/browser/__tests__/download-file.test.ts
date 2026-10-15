@@ -56,6 +56,22 @@ describe('downloadFile', () => {
     await expect((blob as Blob).text()).resolves.toBe(EXPORT_BODY)
   })
 
+  it('GETs by default and POSTs JSON when postJson is given', async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(EXPORT_BODY)))
+    globalThis.fetch = fetchMock
+    const saveBlob = vi.fn()
+
+    await downloadFile({ url: '/a', filename: 'a.xml', saveBlob })
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('GET')
+
+    await downloadFile({ url: '/b', filename: 'b.xml', saveBlob, postJson: { confirm_previous_not_approved: true } })
+    const init = fetchMock.mock.calls[1][1] as RequestInit
+    expect(init.method).toBe('POST')
+    expect(new Headers(init.headers).get('Content-Type')).toBe('application/json')
+    expect(init.body).toBe('{"confirm_previous_not_approved":true}')
+    expect(saveBlob).toHaveBeenCalledTimes(2)
+  })
+
   it('writes NO file on a 500 and reports the envelope message', async () => {
     // The regression guard. The old handler called res.blob() with no res.ok
     // check, so this error envelope was saved to disk as bokforingsmallar.json

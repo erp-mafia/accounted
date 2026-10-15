@@ -4,7 +4,8 @@
  * input, rules and service (setJournalEntryNote) as the v1 endpoint. These
  * tests pin what the agent and the approver see: the registration, the
  * validation, the not-found pre-flight, note normalisation ('' → null), the
- * approval preview and title, and the period status of the entry's date.
+ * approval preview and title, the period status of the entry's date, and
+ * the refusal of a note on a verifikat in a closed or locked period (crm#1234).
  * The commit side lives in
  * lib/pending-operations/__tests__/account-and-note-executors.test.ts.
  */
@@ -26,6 +27,7 @@ const ENTRY_ROW = {
   description: 'Hyra mars',
   status: 'posted',
   notes: 'Gammal anteckning',
+  fiscal_period_id: 'fp-1',
 }
 
 const noopSupabase = { from: vi.fn() } as never
@@ -138,20 +140,48 @@ describe('gnubok_set_voucher_note: staging behaviour (dry_run)', () => {
   it('reports the period status of the entry date', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: ENTRY_ROW }) // journal_entries dry-run read
-    enqueue({ data: null }) // company_settings: no company lock date
-    enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: '2026-04-01T00:00:00Z' } }) // covering period
+    enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null } }) // the entry's own period: open
+    enqueue({ data: { bookkeeping_locked_through: '2026-03-31' } }) // company_settings: lock date covers it
+    enqueue({ data: { id: 'fp-1' } }) // covering period
     const result = (await tool.execute(
       { journal_entry_id: JE_ID, notes: 'x', dry_run: true },
       'company-1', 'user-1', supabase as never,
     )) as Staged
 
+    // The company lock date's trigger fires on entry_date only, so a note
+    // behind it still stages; the envelope reports the date's status as is.
     expect(findCalls('fiscal_periods', 'lte')).toContainEqual(['period_start', '2026-03-15'])
-    expect(result.period_status).toMatchObject({ period_id: 'fp-1', status: 'locked' })
+    expect(result.period_status).toMatchObject({ period_id: 'fp-1', status: 'locked', lock_date: '2026-03-31' })
+  })
+
+  it.each([
+    ['closed', { is_closed: true, locked_at: '2025-02-01T00:00:00Z' }, 'Perioden är stängd, anteckningen kan inte ändras.', 'closed'],
+    ['locked', { is_closed: false, locked_at: '2026-04-01T00:00:00Z' }, 'Perioden är låst, anteckningen kan inte ändras.', 'locked'],
+  ])('refuses a note in a %s period at staging, before anything is staged', async (_case, period, messageSv, periodStatus) => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: ENTRY_ROW }) // journal_entries dry-run read
+    enqueue({ data: { id: 'fp-1', ...period } }) // the entry's own period
+
+    const err = await tool
+      .execute({ journal_entry_id: JE_ID, notes: 'Dubbelbokför inte', dry_run: false }, 'company-1', 'user-1', supabase as never)
+      .catch((e: unknown) => e)
+
+    expect(err).toMatchObject({
+      code: 'JOURNAL_ENTRY_NOTE_PERIOD_LOCKED',
+      message: messageSv,
+      details: { period_status: periodStatus, fiscal_period_id: 'fp-1', entry_date: '2026-03-15' },
+    })
+    // The verdict the period lock trigger reaches: the entry's own period by
+    // id, not whatever period covers the date.
+    expect(findCalls('fiscal_periods', 'eq')).toContainEqual(['id', 'fp-1'])
+    expect(findCalls('pending_operations', 'insert')).toEqual([])
+    expect(findCalls('journal_entries', 'update')).toEqual([])
   })
 
   it('stages with the title the approver reads', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: ENTRY_ROW }) // journal_entries dry-run read
+    enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null } }) // the entry's own period: open
     enqueue({ data: null }) // company_settings
     enqueue({ data: null }) // fiscal_periods
     enqueue({ data: { id: 'op-note-1' } }) // pending_operations insert

@@ -1787,3 +1787,58 @@ describe('PATCH /api/v1/companies/:companyId/invoices/:id', () => {
     expect(body.error.code).toBe('VALIDATION_ERROR')
   })
 })
+
+// ──────────────────────────────────────────────────────────────────
+// Er referens from the customer card's Fakturareferens (crm#1200)
+// ──────────────────────────────────────────────────────────────────
+
+describe('POST /api/v1/companies/:companyId/invoices: Er referens from the customer card', () => {
+  // The customers mock honours select(), so the card value only reaches the
+  // route when it actually selects invoice_reference.
+  const CUSTOMER_WITH_REFERENCE = {
+    ...SWEDISH_BUSINESS_CUSTOMER,
+    contact_person: 'Karin Ek',
+    invoice_reference: 'KST 4410',
+  }
+
+  async function create(body: Record<string, unknown>) {
+    withInvoiceWriteScope()
+    const inserts: InsertCapture[] = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          customers: { data: CUSTOMER_WITH_REFERENCE, error: null },
+          invoices: { data: { id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', customer_id: CUSTOMER_ID, status: 'draft' }, error: null },
+          invoice_items: { data: null, error: null },
+        },
+        inserts,
+      ),
+    )
+    const res = await createInvoice(
+      makePostInvoice(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices`, {
+        customer_id: CUSTOMER_ID,
+        invoice_date: '2026-05-12',
+        due_date: '2026-06-11',
+        currency: 'SEK',
+        items: [{ description: 'Konsultation', quantity: 1, unit: 'tim', unit_price: 1000 }],
+        ...body,
+      }),
+      companyParams(COMPANY_ID),
+    )
+    expect(res.status, JSON.stringify(await res.clone().json())).toBe(201)
+    return inserts.find((capture) => capture.table === 'invoices')?.payload as Record<string, unknown>
+  }
+
+  it('writes the Fakturareferens when the request states none', async () => {
+    expect((await create({})).your_reference).toBe('KST 4410')
+  })
+
+  it('reads an empty your_reference as none', async () => {
+    expect((await create({ your_reference: '  ' })).your_reference).toBe('KST 4410')
+  })
+
+  it('keeps the your_reference the request states', async () => {
+    expect((await create({ your_reference: 'Inköp 77' })).your_reference).toBe('Inköp 77')
+  })
+})

@@ -155,6 +155,11 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   // only applies while the period is open, so the promoted button hides
   // (and the ⋯ item stays) whenever the status is anything else or unknown.
   const [periodStatus, setPeriodStatus] = useState<PeriodStatus | null>(null)
+  // The entry's own fiscal period closed or locked: the period lock trigger
+  // refuses every write to the row, the note included (crm#1234). Not the
+  // company lock date: its trigger fires on entry_date only, so a note
+  // behind it is still saved.
+  const [noteLock, setNoteLock] = useState<'closed' | 'locked' | null>(null)
   // Monotonic id of the latest fetchData run. The period-status fetch is not
   // awaited, and fetchData re-runs on every id change and after every dialog
   // success, so an earlier response can resolve last; only the response that
@@ -230,6 +235,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       // failure reads as 'locked'), and a missing answer just keeps the
       // strike button in the ⋯ menu only.
       setPeriodStatus(null)
+      setNoteLock(null)
       const periodRequest = ++periodStatusRequestRef.current
       void fetch(
         `/api/bookkeeping/fiscal-periods/period-status?date=${encodeURIComponent(data.entry.entry_date)}`,
@@ -241,6 +247,13 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           if (periodRequest !== periodStatusRequestRef.current) return
           const status = period?.status
           setPeriodStatus(status === 'open' || status === 'locked' || status === 'closed' ? status : null)
+          setNoteLock(
+            status === 'closed'
+              ? 'closed'
+              : status === 'locked' && period?.period_id && !period?.lock_date
+                ? 'locked'
+                : null,
+          )
         })
         .catch(() => {
           if (periodRequest === periodStatusRequestRef.current) setPeriodStatus(null)
@@ -272,7 +285,13 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         setEntry(prev => prev ? { ...prev, notes: value || null } : prev)
         setEditingNotes(false)
       } else {
-        toast({ title: t('toast_save_note_failed'), variant: 'destructive' })
+        // The refusal says why (a closed or locked period), not just that it failed.
+        const result = await res.json().catch(() => null)
+        toast({
+          title: t('toast_save_note_failed'),
+          ...(result ? { description: getErrorMessage(result, { context: 'journal_entry' }) } : {}),
+          variant: 'destructive',
+        })
       }
     } catch {
       toast({ title: t('toast_save_note_failed'), variant: 'destructive' })
@@ -775,11 +794,13 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           )}
         </DetailSection>
 
-        {/* Notes: always editable (internal metadata, not BFL verifikation content) */}
+        {/* Notes: internal metadata, not BFL verifikation content; editable
+            while the entry's period is open (a closed or locked period is
+            read-only, the note included). */}
         <DetailSection
           kicker={t('field_note')}
           aside={
-            !editingNotes && canWrite ? (
+            !editingNotes && canWrite && !noteLock ? (
               <button
                 type="button"
                 onClick={() => { setNotesValue(entry.notes || ''); setEditingNotes(true) }}
@@ -824,6 +845,11 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
             <p className="py-2 text-sm whitespace-pre-wrap">{entry.notes}</p>
           ) : (
             <p className="py-2 text-sm text-muted-foreground">{t('no_note')}</p>
+          )}
+          {noteLock && !editingNotes && (
+            <p className="text-xs text-muted-foreground">
+              {t(noteLock === 'closed' ? 'note_period_closed' : 'note_period_locked')}
+            </p>
           )}
         </DetailSection>
       </div>

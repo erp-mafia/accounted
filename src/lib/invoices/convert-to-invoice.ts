@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
 import { ensureInvoiceNumber, InvoiceNumberSeriesBehindError } from '@/lib/invoices/ensure-invoice-number'
 import { convertToSEK, fetchExchangeRate } from '@/lib/currency/riksbanken'
+import { yourReferenceForNewInvoice } from '@/lib/customers/invoice-reference'
 import {
   buildQuotePartLines,
   quotePartNote,
@@ -72,7 +73,7 @@ type SourceItem = QuoteSourceLine
 
 type SourceRow = Invoice & {
   items?: SourceItem[] | null
-  customer?: { default_payment_terms?: number | null; language?: string | null } | null
+  customer?: { default_payment_terms?: number | null; language?: string | null; invoice_reference?: string | null } | null
 }
 
 const DEFAULT_PAYMENT_TERMS_DAYS = 30
@@ -89,7 +90,7 @@ export async function convertToInvoice(params: {
 
   const { data: sourceRaw, error: sourceError } = await supabase
     .from('invoices')
-    .select('*, items:invoice_items(*), customer:customers(default_payment_terms, language)')
+    .select('*, items:invoice_items(*), customer:customers(default_payment_terms, language, invoice_reference)')
     .eq('id', sourceId)
     .eq('company_id', companyId)
     .single()
@@ -279,7 +280,9 @@ export async function convertToInvoice(params: {
       // header it produced, so the draft's re-derivations keep it.
       vat_treatment_override: source.vat_treatment_override ?? null,
       delivery_country: source.delivery_country ?? null,
-      your_reference: source.your_reference,
+      // The source's Er referens, else the customer card's Fakturareferens
+      // (crm#1200): a quote made before the card had one still invoices with it.
+      your_reference: yourReferenceForNewInvoice(source.your_reference, source.customer),
       our_reference: source.our_reference,
       // Buyer routing survives conversion (Peppol BT-10 may rely on it alone).
       invoice_marking: source.invoice_marking ?? null,

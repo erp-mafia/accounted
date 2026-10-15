@@ -168,8 +168,9 @@ function isPayableAccountFor(clearing: string, account: string): boolean {
  * digits used by EVERY payout format, or say why it names no payable account.
  * This is the single source of truth: the Bankgirot LB file (fixed 4-digit
  * clearing field, TK40) and the pain.001 files (CdtrAgt ClrSysMmbId SESBA +
- * CdtrAcct BBAN without clearing) must present identical routing for the same
- * payee, or one format pays a different account than the other.
+ * CdtrAcct BBAN, written by lib/payments/creditor-account.ts from these same
+ * parts) must present identical routing for the same payee, or one format
+ * pays a different account than the other.
  *
  * Inputs may contain spaces/hyphens. Anything else that is not a digit makes
  * the pair invalid: a generator must never silently drop a stray character

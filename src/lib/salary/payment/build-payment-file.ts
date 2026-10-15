@@ -30,6 +30,14 @@
  * by a nettolöneavdrag) are left out of the file, so their bank details are
  * not required (see lib/salary/payment/effective-net.ts).
  *
+ * Versions (crm#1219). A pain.001 carries the run's payment file version in
+ * its ids (salaryPaymentMessageId). Every download returns the run's current
+ * version, so a re-download is the same message to the bank and its duplicate
+ * check refuses a second upload of the month. A new version (newVersion) gets
+ * new ids so the bank takes a corrected file; it is refused unless the person
+ * confirms the earlier file was not approved at the bank, and the archive
+ * trigger (20261015230000) raises the run only with that confirmation.
+ *
  * Per BFL 7 kap. 1 § the generated file is räkenskapsinformation (underlag)
  * linked to the salary journal entry and subject to 7-year retention, so on a
  * live call the exact file is archived as a `salary_payment_files` row (WORM)
@@ -80,6 +88,18 @@ export interface BuildSalaryPaymentFileInput {
    * stamp the run.
    */
   dryRun?: boolean
+  /**
+   * Make the next version of the run's pain.001: new MsgId, PmtInfId and
+   * EndToEndIds, so the bank takes the file although an earlier one for the
+   * run reached it. pain.001 only.
+   */
+  newVersion?: boolean
+  /**
+   * The person's confirmation that the earlier file was NOT approved at the
+   * bank. Required with newVersion: two approved files pay the month twice,
+   * and the bank's duplicate check no longer stops a new version.
+   */
+  confirmPreviousNotApproved?: boolean
 }
 
 export type SalaryPaymentFileErrorCode =
@@ -98,6 +118,8 @@ export type SalaryPaymentFileErrorCode =
   | 'GENERATOR_FAILED'
   | 'ARCHIVE_FAILED'
   | 'DB_ERROR'
+  | 'NEW_VERSION_UNCONFIRMED'
+  | 'NEW_VERSION_UNSUPPORTED'
 
 export type SalaryPaymentFileLoadStage = 'run' | 'company' | 'settings' | 'employees'
 
@@ -173,6 +195,8 @@ export interface SalaryPaymentFileOk {
   stamped: boolean
   /** Id of the archived salary_payment_files row; null on a dry run (nothing is archived). */
   paymentFileId: string | null
+  /** The payment file version the file carries (1 for Bankgirot LB). */
+  version: number
 }
 
 export type SalaryPaymentFileResult = SalaryPaymentFileOk | SalaryPaymentFileError
@@ -183,6 +207,8 @@ interface RunRow {
   period_year: number
   period_month: number
   payment_date: string
+  /** The run's pain.001 version (20261015230000); absent before the column existed. */
+  payment_file_version?: number | null
 }
 
 interface SettingsRow {
@@ -286,6 +312,10 @@ export function salaryPaymentFileRefusal(result: SalaryPaymentFileError): Salary
         reason: String(result.details.message ?? ''),
         details: { format: result.format, ...result.details },
       }
+    case 'NEW_VERSION_UNCONFIRMED':
+      return { code: 'SALARY_RUN_PAYMENT_FILE_NEW_VERSION_UNCONFIRMED' }
+    case 'NEW_VERSION_UNSUPPORTED':
+      return { code: 'SALARY_RUN_PAYMENT_FILE_NEW_VERSION_UNSUPPORTED', details: { format: result.format } }
     case 'ARCHIVE_FAILED':
     case 'DB_ERROR':
       return null
@@ -306,6 +336,21 @@ function payeeLine(
   }
 }
 
+/**
+ * The pain.001 MsgId of a run's payment file at a version. Version 1 is the
+ * id every salary file has carried, `<BRAND>-<org>-<period>`, unchanged so a
+ * re-download stays the same message to the bank. A later version is
+ * `LON-<org>-<period>-V<n>`: 25 characters for V2-V9, so PmtInfId and every
+ * InstrId/EndToEndId keep the period and the version after the generator's
+ * -PMT and -TX0001 suffixes (Max35Text). Danske Bank refuses a repeated MsgId
+ * and a repeated EndToEndId for at least three months (MIG v3.6, 1.1 and
+ * 2.30); Swedbank an EndToEndId within 90 days. A new version repeats neither.
+ */
+export function salaryPaymentMessageId(brand: string, org: string, periodLabel: string, version: number): string {
+  if (version <= 1) return `${brand}-${org}-${periodLabel}`
+  return `LON-${org}-${periodLabel}-V${version}`
+}
+
 function resolveFormat(
   requested: SalaryPaymentFileFormat | undefined,
   settings: SettingsRow | null,
@@ -321,6 +366,12 @@ export async function buildSalaryPaymentFile(
 ): Promise<SalaryPaymentFileResult> {
   const { companyId, runId } = input
   const requestedFormat = input.format ?? null
+
+  // A new version without the confirmation is refused before anything is
+  // read: it is the guard against paying the month twice.
+  if (input.newVersion && input.confirmPreviousNotApproved !== true) {
+    return fail('NEW_VERSION_UNCONFIRMED', requestedFormat)
+  }
 
   // 1 + 2. The run and its status gate.
   const { data: run, error: runErr } = await supabase
@@ -360,6 +411,8 @@ export async function buildSalaryPaymentFile(
 
   const settings = (settingsData as SettingsRow | null) ?? null
   const format = resolveFormat(input.format, settings)
+  // Bankgirot LB has no message id the bank deduplicates on: no versions.
+  if (input.newVersion && format !== 'pain001') return fail('NEW_VERSION_UNSUPPORTED', format)
   const companyRow = company as { name: string; org_number: string | null }
   const warnings: string[] = []
 
@@ -512,6 +565,9 @@ export async function buildSalaryPaymentFile(
 
   const totalAmount = Math.round(employees.reduce((sum, e) => sum + e.netSalary, 0) * 100) / 100
   const periodLabel = `${runRow.period_year}-${String(runRow.period_month).padStart(2, '0')}`
+  // The run's current version, or the next one for a confirmed new version.
+  const currentVersion = Math.max(1, runRow.payment_file_version ?? 1)
+  const version = format === 'pain001' ? currentVersion + (input.newVersion ? 1 : 0) : 1
 
   // Generate. Both generators are pure; they run on a dry run too so a preview
   // that passes means the real call passes (invalid clearing, oversize field).
@@ -522,13 +578,18 @@ export async function buildSalaryPaymentFile(
   let payees: SalaryPaymentFilePayee[]
   try {
     if (format === 'pain001') {
-      const messageId = `${getBranding().appName.toUpperCase()}-${companyRow.org_number?.replace('-', '')}-${periodLabel}`
+      const messageId = salaryPaymentMessageId(
+        getBranding().appName.toUpperCase(),
+        `${companyRow.org_number?.replace('-', '')}`,
+        periodLabel,
+        version,
+      )
       content = generatePain001(pain001Company as Pain001CompanyData, employees as Pain001Employee[], {
         messageId,
         paymentDate: runRow.payment_date,
         periodLabel,
       })
-      filename = `pain001_lon_${periodLabel}.xml`
+      filename = version > 1 ? `pain001_lon_${periodLabel}_v${version}.xml` : `pain001_lon_${periodLabel}.xml`
       contentType = 'application/xml'
       charset = 'utf-8'
       payees = employees.map((e, i) => payeeLine(e, pain001TransactionId(messageId, i)))
@@ -572,6 +633,7 @@ export async function buildSalaryPaymentFile(
     byteSize,
     paymentDate: runRow.payment_date,
     periodLabel,
+    version,
     employeeCount: employees.length,
     totalAmount,
     payees,
@@ -611,6 +673,10 @@ export async function buildSalaryPaymentFile(
     employee_count: employees.length,
     total_amount: totalAmount,
     generated_at: generatedAt,
+    // The version and, on a new version, the person's confirmation: the row
+    // is the audit of who made which version when (20261015230000).
+    version,
+    previous_not_approved_confirmed: input.newVersion === true,
   })
   if (archiveErr) return fail('ARCHIVE_FAILED', format, {}, { cause: archiveErr })
 

@@ -20,9 +20,11 @@
  *    SESBA member 9900, CdtrAcct/Id/Othr with the bare BG digits and
  *    SchmeNm/Prtry BGNR. Plusgiro payees route SESBA member 9960 with
  *    SchmeNm/Cd BBAN. Bank-account payees use the clearing number as the
- *    SESBA member and the account (without clearing) as BBAN, through the
- *    same resolveDomesticBankAccount used by the salary generators so the
- *    files can never route an account differently.
+ *    SESBA member and the account as BBAN in the form the debtor's bank
+ *    reads (creditor-account.ts: without the clearing for most banks, with
+ *    it for Danske Bank and Nordea), through the same encoder and
+ *    resolveDomesticBankAccount as the salary file, so the files can never
+ *    route an account differently.
  *  - Swedbank MIG (Validex PFH_pain_001_001_03_219): a BGNR creditor demands
  *    a BGNR debtor. When the company has a bankgiro, bankgiro-payee payments
  *    are grouped into their own PmtInf debited from the company bankgiro
@@ -96,9 +98,9 @@
 
 import { escapeXml } from '@/lib/xml/escape'
 import { formatPainAmount, max35, painControlSum, suffixId } from './pain001-format'
-import { payeeAccountParts } from '@/lib/salary/payment/bank-account'
+import { creditorAccountForm, domesticCreditorAccount, type CreditorAccountForm } from './creditor-account'
 import { sanitizeMigText } from './mig-text'
-import { SWEDBANK_BIC, swedbankCreditorAccount, type SwedbankFileIds } from './swedbank'
+import { SWEDBANK_BIC, type SwedbankFileIds } from './swedbank'
 import type { PaymentReference, SupplierPayee } from './supplier-payee'
 
 export interface SupplierPain001Debtor {
@@ -206,6 +208,8 @@ export function generateSupplierPain001(
     ? ''
     : (debtor.bankgiro ?? '').replace(/\D/g, '')
   const debtorName = text(debtor.name)
+  // How a bank-account payee is written: the debtor bank's form, as it reads the file.
+  const accountForm = creditorAccountForm(debtor.bic, swedbank)
   // Sum the per-transaction amounts exactly as they are rendered (rounded to
   // ore): CtrlSum must equal the sum of the InstdAmt values or banks reject
   // the file, and summing raw floats then rounding once can differ by an ore.
@@ -339,7 +343,7 @@ export function generateSupplierPain001(
       lines.push('        <Amt>')
       lines.push(`          <InstdAmt Ccy="SEK">${formatPainAmount(payment.amount)}</InstdAmt>`)
       lines.push('        </Amt>')
-      pushCreditor(lines, payment, swedbank !== null, text)
+      pushCreditor(lines, payment, accountForm, text)
       pushRemittance(lines, payment, swedbank !== null, text)
       lines.push('      </CdtTrfTxInf>')
     }
@@ -365,10 +369,11 @@ function pushBankAssignedId(lines: string[], id: string): void {
 function pushCreditor(
   lines: string[],
   payment: SupplierPain001Payment,
-  swedbankIso2: boolean,
+  accountForm: CreditorAccountForm,
   text: (value: string) => string,
 ): void {
   const { payee } = payment
+  const swedbankIso2 = accountForm === 'swedbank_iso2'
 
   let memberId: string
   let accountId: string
@@ -389,21 +394,10 @@ function pushCreditor(
         : '<SchmeNm><Cd>BBAN</Cd></SchmeNm>'
       break
     case 'bank_account': {
-      // Swedbank ISO 2.0 states an 8xxxx clearing as MmbId 8CCCC and a
-      // 15-digit BBAN; a 4-digit clearing routes the same at every bank.
-      if (swedbankIso2) {
-        const routing = swedbankCreditorAccount(payment.payeeName, payee.clearing, payee.account)
-        memberId = routing.memberId
-        accountId = routing.accountId
-      } else {
-        const { clearing4, accountDigits } = payeeAccountParts(
-          payment.payeeName,
-          payee.clearing,
-          payee.account,
-        )
-        memberId = clearing4
-        accountId = accountDigits
-      }
+      // The same encoder as the salary file (creditor-account.ts).
+      const routing = domesticCreditorAccount(payment.payeeName, payee.clearing, payee.account, accountForm)
+      memberId = routing.memberId
+      accountId = routing.accountId
       scheme = '<SchmeNm><Cd>BBAN</Cd></SchmeNm>'
       break
     }
