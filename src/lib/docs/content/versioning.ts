@@ -124,6 +124,21 @@ Dry-run **does not** call external providers (VIES VAT validation, BankID, Skatt
 
 ---
 
+## Stage for approval
+
+The writes an agent stages over MCP (\`x-stage-supported: true\` in the OpenAPI spec) accept \`?stage=true\`. The endpoint runs its dry-run checks, stores the write as a **pending operation** and answers **HTTP 202** with it: nothing is committed. It commits when someone approves it, over \`POST /api/v1/companies/{companyId}/pending-operations/{id}/approve\` (scope \`pending_operations:approve\`), the MCP approve tool or the app; \`.../reject\` discards it. An attest flow built outside Accounted polls \`GET .../pending-operations/{id}\` until \`task_state\` is terminal:
+
+| status | task_state |
+|---|---|
+| pending, committing | working |
+| committed | completed |
+| failed_partial, or rejected by the commit | failed |
+| rejected by a person, expired or superseded | cancelled |
+
+\`stage=true\` on an endpoint without \`x-stage-supported\` answers \`400 STAGE_NOT_SUPPORTED\`, and a value other than \`true\` or \`false\` is \`400\`, so a misspelt flag never commits. With \`dry_run=true\` or a test key the staging is previewed and nothing is stored. A staged request and a commit of the same body are different requests to the idempotency layer: reusing one's \`Idempotency-Key\` for the other answers \`409 IDEMPOTENCY_KEY_REUSE\`.
+
+---
+
 ## Strict-mode write semantics
 
 A v1 mutation either commits fully or returns a structured error code with no side effects. The dashboard soft-fails on partial writes (a human is there to retry); the v1 surface aborts. This means you never see "the invoice was sent but the email failed" or "the journal entry posted but the payment row didn't": either both happened or neither did.

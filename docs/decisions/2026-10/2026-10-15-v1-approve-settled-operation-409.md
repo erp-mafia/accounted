@@ -1,0 +1,1 @@
+[2026-10-15] A v1 approve of an operation no longer pending answers 409 PENDING_OPERATION_NOT_PENDING with the operation in details, not a 200 replay: a resent request replays by Idempotency-Key; a new approve of a settled one is a conflict, and the claim keeps it to one commit.

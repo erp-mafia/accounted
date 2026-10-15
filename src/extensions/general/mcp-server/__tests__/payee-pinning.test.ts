@@ -28,7 +28,7 @@ import { eventBus } from '@/lib/events'
 import type { PendingOperation } from '@/types'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
 import { createOperationTools } from '@/extensions/general/mcp-server/operation-tools'
-import { assertNoPlaintextPersonnummer } from '@/extensions/general/mcp-server/staging-pii-guard'
+import { assertNoPlaintextPersonnummer } from '@/lib/pending-operations/staging-pii-guard'
 import { supplierPaymentBatchesCreate } from '@/lib/operations/supplier-payment-batches'
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'

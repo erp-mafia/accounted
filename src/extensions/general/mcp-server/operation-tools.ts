@@ -20,6 +20,7 @@ import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fieldValidationError, zodFieldIssues } from '@/lib/errors/refusal'
 import { throwOutcomeFailure } from '@/lib/operations/errors'
+import { planStagedOperation } from '@/lib/operations/stage'
 import type { AnyOperation } from '@/lib/operations/types'
 import type { ApiKeyScope } from '@/lib/auth/api-keys'
 import { createLogger } from '@/lib/logger'
@@ -230,24 +231,23 @@ export function createOperationTools(operations: readonly AnyOperation[], deps: 
           if (refusal) throw refusal
           throwOutcomeFailure(preview)
         }
-        const previewData = preview.dryRun ? preview.preview : {}
-        // Pinned params (e.g. the payee each payment goes to) make the
-        // commit refuse when what the approver saw no longer holds.
-        const params = stage.pinParams
-          ? stage.pinParams(input as Record<string, unknown>, previewData)
-          : (input as Record<string, unknown>)
-        const extras = stage.extras?.(input as Record<string, unknown>, previewData) ?? {}
+        // The same plan the v1 stage mode stages (lib/operations/stage.ts):
+        // pinned params (e.g. the payee each payment goes to) make the commit
+        // refuse when what the approver saw no longer holds.
+        const plan = planStagedOperation(
+          stage,
+          input as Record<string, unknown>,
+          preview.dryRun ? preview.preview : {},
+        )
+        const extras = plan.extras
         return deps.stagePendingOperation(
           supabase,
           companyId,
           userId,
-          stage.pendingType,
-          stage.title(input as Record<string, unknown>, previewData),
-          params,
-          {
-            ...(stage.preview ? stage.preview(input as Record<string, unknown>, previewData) : previewData),
-            ...(prepared.preview ?? {}),
-          },
+          plan.pendingType,
+          plan.title,
+          plan.params,
+          { ...plan.preview, ...(prepared.preview ?? {}) },
           actor,
           extras.next,
           {

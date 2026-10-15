@@ -1,0 +1,1 @@
+[2026-10-15] task_state maps pending to working, as the plan set, not input_required: the decision may come from a person in the app, not the caller. The v1 approve's door rules sit in lib/pending-operations/api-approval.ts beside the MCP tool's copy: core may not import the extension.
