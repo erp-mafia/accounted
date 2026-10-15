@@ -45,6 +45,7 @@ export const SE_EKONOMISK_FORENING: LegalFormProfile = {
     frameworks: ['K2'],
     ixbrl: false,
     auditorAlwaysRequired: true,
+    forenklatArsbokslut: null,
   },
   glossary: { entity: 'föreningen', owner: 'Medlem', meeting: 'föreningsstämma' },
 }

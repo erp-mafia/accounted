@@ -21,6 +21,7 @@ import { useCompanyOptional } from '@/contexts/CompanyContext'
 import {
   isEntityType,
   preparesArsredovisning,
+  preparesForenklatArsbokslut,
   resultClosingAccounts,
 } from '@/lib/company/entity-type'
 import { StatementReconciliationPanel } from './StatementReconciliationPanel'
@@ -50,6 +51,10 @@ export function ResultStep({ result }: ResultStepProps) {
       ? `(${closing.closing} → ${closing.priorYearCarry})`
       : null
   const offersArsredovisning = form !== null && preparesArsredovisning(form)
+  // A form that closes with a förenklat årsbokslut instead (ideell förening,
+  // BFNAR 2010:1) is offered that document the same way.
+  const offersForenklatArsbokslut = form !== null && preparesForenklatArsbokslut(form) !== null
+  const offersDocument = offersArsredovisning || offersForenklatArsbokslut
   const disabledLink = !acknowledged ? 'pointer-events-none opacity-50' : ''
 
   // If the wizard reached ResultStep, executeYearEndClosing already enforced
@@ -155,8 +160,9 @@ export function ResultStep({ result }: ResultStepProps) {
             </span>
           </label>
 
-          {/* The primary action is the årsredovisning only for a form that
-              prepares one; every other form's next step is the reports. */}
+          {/* The primary action is the year-end document for a form that
+              prepares one (årsredovisning or förenklat årsbokslut); every
+              other form's next step is the reports. */}
           <div className="flex flex-col sm:flex-row gap-3 sm:justify-end">
             <Button variant="outline" asChild disabled={!acknowledged}>
               <Link
@@ -168,7 +174,7 @@ export function ResultStep({ result }: ResultStepProps) {
                 Till bokföringen
               </Link>
             </Button>
-            <Button variant={offersArsredovisning ? 'outline' : 'default'} asChild disabled={!acknowledged}>
+            <Button variant={offersDocument ? 'outline' : 'default'} asChild disabled={!acknowledged}>
               <Link
                 href="/reports"
                 aria-disabled={!acknowledged}
@@ -187,6 +193,18 @@ export function ResultStep({ result }: ResultStepProps) {
                   className={disabledLink}
                 >
                   Skapa årsredovisning
+                </Link>
+              </Button>
+            )}
+            {offersForenklatArsbokslut && (
+              <Button asChild disabled={!acknowledged}>
+                <Link
+                  href={`/bookkeeping/year-end/forenklat-arsbokslut?period=${result.closingEntry.fiscal_period_id}`}
+                  aria-disabled={!acknowledged}
+                  tabIndex={acknowledged ? undefined : -1}
+                  className={disabledLink}
+                >
+                  Skapa förenklat årsbokslut
                 </Link>
               </Button>
             )}

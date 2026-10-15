@@ -212,6 +212,7 @@ import {
   arsredovisningUpdateNarrative,
   arsredovisningValidateIxbrl,
 } from './arsredovisning'
+import { reportsForenklatArsbokslut } from './forenklat-arsbokslut'
 import {
   skattekontoSync,
   skatteverketAgiValidateHuvuduppgift,
@@ -426,6 +427,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   arsredovisningRecordSignature,
   arsredovisningRemoveSignatory,
   arsredovisningValidateIxbrl,
+  // forenklat-arsbokslut (ideell förening, BFNAR 2010:1)
+  reportsForenklatArsbokslut,
   // skatteverket-helpers
   skatteverketAgiValidateHuvuduppgift,
   skatteverketAgiValidateIndividuppgift,

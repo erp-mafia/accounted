@@ -35,6 +35,7 @@ export const SE_ENSKILD_FIRMA: LegalFormProfile = {
     frameworks: ['K1'],
     ixbrl: false,
     auditorAlwaysRequired: false,
+    forenklatArsbokslut: null,
   },
   glossary: { entity: 'firman', owner: 'Ägare', meeting: null },
 }

@@ -31,6 +31,7 @@ export const SE_AKTIEBOLAG: LegalFormProfile = {
     frameworks: ['K2', 'K3'],
     ixbrl: true,
     auditorAlwaysRequired: false,
+    forenklatArsbokslut: null,
   },
   glossary: { entity: 'bolaget', owner: 'Ägare', meeting: 'årsstämma' },
 }

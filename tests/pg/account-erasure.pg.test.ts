@@ -87,6 +87,8 @@ const RETAINED = new Set([
   'company_bank_payment_allowances.granted_by', // The founder who set a company's monthly bank payment allowance; the company keeps the record.
   'bokslut_checklist_items.done_by',
   'bokslut_checklist_items.updated_by',
+  'forenklat_arsbokslut_inputs.eligibility_confirmed_by', // Who confirmed the förening may close with a förenklat årsbokslut; the company keeps the record.
+  'forenklat_arsbokslut_inputs.updated_by',
   'chart_of_accounts.user_id',
   'depreciation_schedules.user_id',
   'document_attachments.uploaded_by',

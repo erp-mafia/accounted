@@ -7,7 +7,8 @@ import type { LegalFormProfile } from './types'
  * Money settled with a member is a plain short-term liability on 2890.
  *
  * INK3 is the statutory return but is not modelled, so `incomeReturn` stays
- * null until it is; the same for årsbokslut and årsredovisning (#2072 step 2).
+ * null until it is; the same for årsredovisning (#2072 step 2). The year-end
+ * document is the förenklat årsbokslut in the BFNAR 2010:1 bilaga 2 layout.
  */
 export const SE_IDEELL_FORENING: LegalFormProfile = {
   jurisdiction: 'SE',
@@ -40,6 +41,7 @@ export const SE_IDEELL_FORENING: LegalFormProfile = {
     frameworks: ['K1'],
     ixbrl: false,
     auditorAlwaysRequired: false,
+    forenklatArsbokslut: 'BFNAR 2010:1',
   },
   glossary: { entity: 'föreningen', owner: 'Medlem', meeting: 'årsmöte' },
 }

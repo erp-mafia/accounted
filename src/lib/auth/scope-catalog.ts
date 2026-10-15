@@ -366,6 +366,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_get_cash_flow_statement: 'reports:read',
   gnubok_get_behandlingshistorik: 'reports:read',
   gnubok_get_bokslutsbilagor: 'reports:read',
+  gnubok_get_forenklat_arsbokslut: 'reports:read',
   gnubok_get_vat_settlement_proposal: 'reports:read',
   gnubok_book_vat_settlement: 'bookkeeping:write',
   gnubok_mark_vat_period_filed: 'bookkeeping:write',

@@ -277,6 +277,8 @@ import '@/app/api/v1/companies/[companyId]/reports/vat-declaration/settlement-pr
 import '@/app/api/v1/companies/[companyId]/reports/kassaflodesanalys/route'
 import '@/app/api/v1/companies/[companyId]/reports/behandlingshistorik/route'
 import '@/app/api/v1/companies/[companyId]/reports/bokslutsbilagor/route'
+import '@/app/api/v1/companies/[companyId]/reports/forenklat-arsbokslut/route'
+import '@/app/api/v1/companies/[companyId]/reports/forenklat-arsbokslut/pdf/route'
 import '@/app/api/v1/companies/[companyId]/reports/kpi/route'
 import '@/app/api/v1/companies/[companyId]/reports/dimension-pnl/route'
 import '@/app/api/v1/companies/[companyId]/audit-trail/route'
