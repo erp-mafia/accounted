@@ -859,4 +859,57 @@ describe('POST /api/invoices/preview-pdf', () => {
     expect(response.status).toBe(500)
     expect(response.headers.get('Cache-Control')).toBe('private, no-store')
   })
+
+  // crm#1084: the preview prints the article number the saved line would
+  // carry, read from the company's own article like the write path.
+  describe('article number column', () => {
+    const ARTICLE_ID = '6f1c2a3e-0000-4000-8000-0000000000a1'
+    const articleLine = { ...validBody.items[0], article_id: ARTICLE_ID }
+
+    it('gives an article line its number when the company prints article numbers', async () => {
+      enqueue({ data: { ...company, invoice_show_article_number: true }, error: null })
+      enqueue({ data: customer, error: null })
+      enqueue({ data: [{ id: ARTICLE_ID, article_number: 'A-100' }], error: null })
+
+      const response = await previewRequest({ ...validBody, items: [articleLine, validBody.items[0]] })
+
+      expect(response.status).toBe(200)
+      const { items } = lastRenderProps()
+      expect(items.map((item) => item.article_number)).toEqual(['A-100', null])
+      expect(findCall('articles', 'eq')).toEqual(['company_id', 'company-1'])
+    })
+
+    it('reads no articles while the setting is off', async () => {
+      enqueue({ data: company, error: null })
+      enqueue({ data: customer, error: null })
+
+      const response = await previewRequest({ ...validBody, items: [articleLine] })
+
+      expect(response.status).toBe(200)
+      expect(mockSupabase.from).not.toHaveBeenCalledWith('articles')
+      expect(lastRenderProps().items[0].article_number).toBeNull()
+    })
+
+    it('previews without the number when the article read fails', async () => {
+      enqueue({ data: { ...company, invoice_show_article_number: true }, error: null })
+      enqueue({ data: customer, error: null })
+      enqueue({ data: null, error: { message: 'connection reset' } })
+
+      const response = await previewRequest({ ...validBody, items: [articleLine] })
+
+      expect(response.status).toBe(200)
+      expect(lastRenderProps().items[0].article_number).toBeNull()
+    })
+
+    it('previews a line whose article link is not a uuid as a line without a number, reading no articles', async () => {
+      enqueue({ data: { ...company, invoice_show_article_number: true }, error: null })
+      enqueue({ data: customer, error: null })
+
+      const response = await previewRequest({ ...validBody, items: [{ ...articleLine, article_id: 'art-1' }] })
+
+      expect(response.status).toBe(200)
+      expect(mockSupabase.from).not.toHaveBeenCalledWith('articles')
+      expect(lastRenderProps().items[0]).toMatchObject({ article_id: null, article_number: null })
+    })
+  })
 })

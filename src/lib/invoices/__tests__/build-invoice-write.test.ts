@@ -774,6 +774,34 @@ describe('buildInvoiceWriteData article company scope (issue #2059)', () => {
     if (result.ok) return
     expect('dbError' in result).toBe(true)
   })
+
+  it("copies each article's number onto its lines and leaves free-text and text rows without one (crm#1084)", async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null }) // company_settings
+    enqueue({
+      data: [
+        { id: ARTICLE_A, article_number: ' A-100 ' },
+        { id: ARTICLE_B, article_number: null },
+      ],
+      error: null,
+    }) // articles
+
+    const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
+      ...baseHeader,
+      items: [
+        { description: 'Rad 1', quantity: 1, unit: 'st', unit_price: 100, vat_rate: 25, article_id: ARTICLE_A },
+        { description: 'Rad 2', quantity: 1, unit: 'st', unit_price: 100, vat_rate: 25, article_id: ARTICLE_B },
+        { description: 'Fri rad', quantity: 1, unit: 'st', unit_price: 100, vat_rate: 25 },
+        { line_type: 'text', description: 'Avser oktober', quantity: 0, unit: '', unit_price: 0 },
+      ],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.items.map((i) => i.article_number)).toEqual(['A-100', null, null, null])
+    // Read from the same company-scoped select as the tenancy check.
+    expect(findCall('articles', 'select')).toEqual(['id, article_number'])
+  })
 })
 
 describe('buildInvoiceWriteData: VAT-treatment warnings (#2749, #2558)', () => {

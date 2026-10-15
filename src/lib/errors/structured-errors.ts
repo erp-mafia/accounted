@@ -6404,13 +6404,13 @@ const BULK_BOOK: Record<string, StructuredErrorEntry> = {
   BULK_BOOK_DATE_MISMATCH: {
     httpStatus: 400,
     message_sv:
-      'Alla transaktioner i en samlingsbokföring måste ha samma datum: BFL 5 kap 6 § tredje stycket tillåter en gemensam verifikation bara för likartade affärshändelser samma dag. Dela upp bokföringen per dag.',
+      'Alla transaktioner i en ny samlingsverifikation måste ha samma datum: BFL 5 kap 6 § tredje stycket tillåter en gemensam verifikation bara för likartade affärshändelser samma dag. Dela upp bokföringen per dag, eller koppla raderna till den verifikation som redan bokför dem (till exempel Stripes månadsfaktura för avgifterna).',
     message_en:
-      'All transactions in a bulk booking must share the same date: BFL 5 kap 6 § tredje stycket allows a gemensam verifikation only for likartade affärshändelser on the same day. Split the batch per day.',
+      'All transactions in a new samlingsverifikat must share the same date: BFL 5 kap 6 § tredje stycket allows a gemensam verifikation only for likartade affärshändelser on the same day. Split the batch per day, or link the rows to the verifikat that already books them (for example Stripe\'s monthly invoice for the fees).',
     retryable: false,
     remediation: {
       description:
-        'This is a legal limit, not a technical one: a monthly samlingsverifikat over several days is not an option under BFL 5 kap 6 §. Group the tx_ids by date and call gnubok_bulk_book_transactions once per date (and per direction).',
+        'This is a legal limit, not a technical one: a monthly samlingsverifikat over several days is not an option under BFL 5 kap 6 §. Group the tx_ids by date and call gnubok_bulk_book_transactions once per date (and per direction). Rows that one document covers, such as a samlingsfaktura (BFNAR 2013:2 p. 6.1: at most one month, e.g. Stripe\'s monthly fee invoice), may be of several dates: book the document as its own verifikat, then link the rows with existing_journal_entry_id.',
       tool: 'gnubok_bulk_book_transactions',
     },
   },
@@ -6423,7 +6423,7 @@ const BULK_BOOK: Record<string, StructuredErrorEntry> = {
     retryable: false,
     remediation: {
       description:
-        'This is a legal limit, not a technical one: an inflow and an outflow are not likartade affärshändelser under BFL 5 kap 6 §. Call gnubok_bulk_book_transactions once for the income rows and once for the expense rows (each batch still on one date).',
+        'This is a legal limit, not a technical one: an inflow and an outflow are not likartade affärshändelser under BFL 5 kap 6 §. Call gnubok_bulk_book_transactions once for the income rows and once for the expense rows (a new samlingsverifikat still on one date).',
       tool: 'gnubok_bulk_book_transactions',
     },
   },

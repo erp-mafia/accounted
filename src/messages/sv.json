@@ -996,6 +996,7 @@
     "preview_link_lines_failed": "Verifikatets rader kunde inte hämtas.",
     "preview_link_open_voucher": "Öppna verifikatet",
     "preview_field": {
+      "date_range": "{from} t.o.m. {to}",
       "current_supplier_account": "Konto på leverantörskortet",
       "invoice_account": "Konto på fakturan",
       "updates_supplier_card": "Uppdaterar leverantörskortet",
@@ -2792,6 +2793,8 @@
     "show_swish_help": "Visa Swish-numret på fakturan. QR-koden kan bara bli en Swish-kod när numret visas.",
     "show_logo_label": "Visa logga",
     "show_logo_help": "Visa uppladdad logga i fakturahuvudet",
+    "show_article_number_label": "Visa artikelnummer",
+    "show_article_number_help": "Visa artikelnumret i en egen kolumn på fakturan och skicka det med e-fakturan. Rader utan artikel lämnas tomma.",
     "qr_mode_label": "QR-kod på fakturan",
     "qr_mode_help": "Varje faktura får högst en QR-kod. Den står i betalningsrutan och gäller beloppet som återstår att betala.",
     "qr_mode_auto": "Automatiskt",

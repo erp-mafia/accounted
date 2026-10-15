@@ -894,6 +894,14 @@ const PreviewInvoiceItemSchema = z.object({
   unit_price: z.number().nullish().transform((v) => v ?? 0),
   discount_percent: z.number().min(0).max(100).nullish(),
   vat_rate: z.number().min(0).max(100).nullish(),
+  // The article link, for the article number column (crm#1084): the
+  // preview reads the number from the company's own article, as the write
+  // path copies it. Anything but a uuid previews as a line without one.
+  article_id: z
+    .string()
+    .max(64)
+    .nullish()
+    .transform((v) => (v && uuid.safeParse(v).success ? v : null)),
   deduction_type: z.enum(DEDUCTION_TYPES).nullish(),
   labor_hours: z.number().nonnegative().nullish(),
   work_type: z.string().max(64).nullish(),
@@ -3256,6 +3264,9 @@ export const UpdateSettingsSchema = z.object({
   // The one payment QR code invoices print (lib/invoices/payment-qr.ts).
   invoice_qr_mode: InvoiceQrModeSchema.optional(),
   invoice_show_logo: z.boolean().optional(),
+  // An article number column on the invoice PDF and the seller's item
+  // identifier in the e-invoice (crm#1084). Default off.
+  invoice_show_article_number: z.boolean().optional(),
   // Superseded by the fixed invoice layout (company name in Från and the
   // footer on every invoice): still accepted and stored so existing callers
   // keep working, but no settings UI writes them any more. The describe

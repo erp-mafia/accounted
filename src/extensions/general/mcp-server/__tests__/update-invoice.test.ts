@@ -477,6 +477,34 @@ describe('gnubok_update_invoice: article_id on items (issue #1642)', () => {
     expect(supabase.from).toHaveBeenNthCalledWith(5, 'pending_operations')
   })
 
+  it("takes the article's English name for an English-language customer, the Swedish one otherwise (crm#1084)", async () => {
+    const bilingual = { ...ARTICLE, name_en: 'Consulting hour' }
+    for (const [customer, expected] of [
+      [{ ...EU_CUSTOMER, language: 'en' }, 'Consulting hour'],
+      [{ ...CUSTOMER, language: 'sv' }, 'Konsulttimme'],
+    ] as const) {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueueItemsEdit(enqueue, customer, [bilingual])
+      const result = (await tool().execute(
+        { invoice_id: INVOICE_ID, items: [{ article_id: ARTICLE_ID, quantity: 1 }] },
+        'company-1',
+        'user-1',
+        supabase as never,
+      )) as StagedResult
+      expect(result.preview.changes?.items?.[0]).toMatchObject({ description: expected })
+    }
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueItemsEdit(enqueue, { ...EU_CUSTOMER, language: 'en' }, [{ ...ARTICLE, name_en: null }])
+    const fallback = (await tool().execute(
+      { invoice_id: INVOICE_ID, items: [{ article_id: ARTICLE_ID, quantity: 1 }] },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as StagedResult
+    expect(fallback.preview.changes?.items?.[0]).toMatchObject({ description: 'Konsulttimme' })
+  })
+
   it('lets explicit line values win over the article', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueueItemsEdit(enqueue, CUSTOMER, [ARTICLE])

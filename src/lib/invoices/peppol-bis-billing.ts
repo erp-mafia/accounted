@@ -621,6 +621,16 @@ function renderParty(
   ].filter(Boolean).join('\n')
 }
 
+function sellersItemIdentification(company: CompanySettings, item: InvoiceItem): string[] {
+  const articleNumber = item.article_number?.trim()
+  if (company.invoice_show_article_number !== true || !articleNumber) return []
+  return [
+    '      <cac:SellersItemIdentification>',
+    `        <cbc:ID>${escapeXml(articleNumber)}</cbc:ID>`,
+    '      </cac:SellersItemIdentification>',
+  ]
+}
+
 function renderInvoiceXml(input: PeppolInvoiceInput, prepared: PreparedInvoice): string {
   const { invoice, company } = input
   const taxTotal = roundMoney(prepared.taxBreakdown.reduce((sum, group) => sum + group.taxAmount, 0))
@@ -662,6 +672,10 @@ function renderInvoiceXml(input: PeppolInvoiceInput, prepared: PreparedInvoice):
     // The UBL item name is a single-line field; descriptions may carry
     // line breaks.
     `      <cbc:Name>${escapeXml(toSingleLine(item.description))}</cbc:Name>`,
+    // BT-155 Item Seller's identifier: the article number frozen on the line,
+    // when the company prints it (crm#1084). UBL orders it after Name and
+    // before ClassifiedTaxCategory.
+    ...sellersItemIdentification(company, item),
     '      <cac:ClassifiedTaxCategory>',
     '        <cbc:ID>S</cbc:ID>',
     `        <cbc:Percent>${formatDecimal(item.vat_rate)}</cbc:Percent>`,

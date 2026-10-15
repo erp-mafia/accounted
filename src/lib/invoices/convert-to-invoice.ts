@@ -64,6 +64,7 @@ interface SourceItem {
   vat_amount?: number | null
   revenue_account?: string | null
   article_id?: string | null
+  article_number?: string | null
   sales_order_item_id?: string | null
   dimensions?: Record<string, string> | null
 }
@@ -281,6 +282,8 @@ export async function convertToInvoice(params: {
     vat_amount: item.vat_amount ?? 0,
     revenue_account: item.revenue_account ?? null,
     article_id: item.article_id ?? null,
+    // The article number the source printed, frozen on its line (crm#1084).
+    article_number: item.article_number ?? null,
     // A kundorder link on a proforma line moves to the invoice, so the order
     // keeps counting the quantity as invoiced once the proforma is cancelled.
     sales_order_item_id: item.sales_order_item_id ?? null,

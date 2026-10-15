@@ -51,7 +51,7 @@ For every row decide which case it is. The case decides the tool:
 | One payment covering several kundfakturor or several leverantörsfakturor, or one outgoing payment of one open leverantörsfaktura | \`gnubok_match_batch_allocate\` |
 | An event already booked on a posted verifikat (the user booked it manually) | \`gnubok_link_transaction_to_journal_entry\` (search-only: reach it with \`gnubok_stage_tool\`) |
 | A normal income or expense with no open invoice behind it | \`gnubok_categorize_transaction\` |
-| Several same-day, same-direction rows that belong in one samlingsverifikat, or one row split over several accounts | \`gnubok_bulk_book_transactions\` |
+| Several same-day, same-direction rows that belong in one samlingsverifikat, one row split over several accounts, or rows of several days that one posted verifikat settles (Stripe's monthly fee invoice) | \`gnubok_bulk_book_transactions\` |
 | Not a business event at all (PSD2 ghost row, bank duplicate, a transfer that never happened) | \`gnubok_ignore_transaction\` |
 
 **match vs categorize.** Before categorizing money in, check \`gnubok_list_invoices\` (status sent, overdue or partially_paid) for the same customer and amount. Before categorizing money out, check \`gnubok_list_supplier_invoices\` for the same supplier and amount. If an open invoice fits, match; never categorize. Categorizing a payment of a booked invoice books the event twice: under faktureringsmetoden the invoice already sits on 1510 (kundfordringar) or 244x (leverantörsskulder), and the payment must clear that account, not hit revenue or cost again. Under kontantmetoden the match books the revenue or cost and moms at payment time; the tools resolve the method themselves, but check the staged preview against it.
@@ -144,12 +144,13 @@ Every verifikat needs an underlag (BFL 5 kap). First look in Accounted (unmatche
 
 \`gnubok_bulk_book_transactions\` puts several bank rows on one samlingsverifikat (BFL 5 kap 6 §), or books one row over several accounts.
 
-- \`tx_ids\`: 1 to 200 unbooked transactions, all on the **same date**, the **same direction** (all in or all out), the **same currency**, and in practice SEK only (a foreign-currency batch is refused). A monthly samlingsverifikat is not legal: group by date and call once per date.
+- \`tx_ids\`: 1 to 200 unbooked transactions, all the **same direction** (all in or all out), the **same currency**, and in practice SEK only (a foreign-currency batch is refused). A new verifikat also needs the **same date**: a monthly samlingsverifikat is not legal, so group by date and call once per date.
 - Exactly one of:
-  - \`existing_journal_entry_id\`: link the rows to a posted verifikat whose 19xx lines net to the rows' sum.
+  - \`existing_journal_entry_id\`: link the rows to a posted verifikat whose lines on the rows' bank account (19xx, or 1686 for the Stripe balance) net to the rows' sum. The rows may be of several dates when one document covers them, such as a supplier's samlingsfaktura (BFNAR 2013:2 p. 6.1, at most one month).
   - \`new_entry\` with \`description\` and \`lines\`: at least 2 lines, each with \`account_number\` (4-digit string), \`debit_amount\`, \`credit_amount\`, \`currency\`, optional \`line_description\` and \`dimensions\`. Lines must balance (debits = credits), no line may be zero on both sides or non-zero on both, and the 19xx bank lines must net exactly to the transactions' sum. Include the bank lines yourself.
 - \`default_dimensions\`: only with \`new_entry\`.
 - Moms is not calculated for you here: put the moms lines in yourself from the underlag, with amounts rounded to whole öre and account numbers as strings. If you are not sure of the moms split, use \`gnubok_categorize_transaction\` per row instead.
+- Stripe balance (1686): one row per card payment, one fee row per payment, and payouts. Book the fees once a month from Stripe's monthly fee invoice: book the invoice as one verifikat with the invoice as underlag (\`gnubok_create_voucher\`; card processing fees are an exempt payment service, no moms and no omvänd skattskyldighet; Stripe Billing, Tax or Radar lines are taxable software services with omvänd skattskyldighet), then link that month's fee rows to it with \`existing_journal_entry_id\`. Sales stay one samlingsverifikat per day.
 
 ## When a tool call fails
 

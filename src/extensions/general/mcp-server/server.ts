@@ -354,6 +354,7 @@ import { OperationError, throwOutcomeFailure } from '@/lib/operations/errors'
 import { requireCompanyAdmin } from '@/lib/operations/access'
 import { createSupplier } from '@/lib/suppliers/create-supplier'
 import { createArticle, updateArticle } from '@/lib/articles/article-commands'
+import { articleLineName, documentLanguageOf, type DocumentLanguage } from '@/lib/articles/line-name'
 import {
   matchSupplierByIdentity,
   matchSupplierId,
@@ -671,6 +672,7 @@ type ResolvedInvoiceLine = StagedInvoiceLineInput & {
 type InvoiceLineArticle = {
   id: string
   name: string
+  name_en: string | null
   unit: string | null
   price_excl_vat: number | null
   vat_rate: number | null
@@ -694,6 +696,7 @@ function resolveInvoiceLineFromArticle(
   currency: string,
   adoptableVatRates: ReadonlySet<number>,
   index: number,
+  language: DocumentLanguage,
 ): ResolvedInvoiceLine {
   const lineNo = index + 1
   // Free-text / spacer rows (web parity, CreateInvoiceItemSchema): no
@@ -731,7 +734,8 @@ function resolveInvoiceLineFromArticle(
   if (article && !article.active) {
     throw new Error(`Item ${lineNo}: article "${article.name}" is deactivated. Reactivate it with gnubok_update_article (active: true) or drop article_id.`)
   }
-  const description = item.description?.trim() || article?.name
+  // The English benämning for an English-language customer (crm#1084).
+  const description = item.description?.trim() || (article ? articleLineName(article, language) : undefined)
   if (!description) throw badArgument(`items.${index}.description`, `Item ${lineNo}: description is required (or set article_id)`)
   const unit = item.unit?.trim() || (article ? article.unit || 'st' : undefined)
   if (!unit) throw badArgument(`items.${index}.unit`, `Item ${lineNo}: unit is required (st, tim, dag)`)
@@ -8212,7 +8216,7 @@ export const tools: McpTool[] = [
       if (articleIds.length > 0) {
         const { data: articleRows, error: articleError } = await supabase
           .from('articles')
-          .select('id, name, unit, price_excl_vat, vat_rate, revenue_account, currency, active')
+          .select('id, name, name_en, unit, price_excl_vat, vat_rate, revenue_account, currency, active')
           .eq('company_id', companyId)
           .in('id', articleIds)
         if (articleError) throw new Error(`Failed to load articles: ${articleError.message}`)
@@ -8226,6 +8230,7 @@ export const tools: McpTool[] = [
           currency,
           adoptableVatRates,
           i,
+          documentLanguageOf(customer),
         ),
       )
 
@@ -8594,7 +8599,7 @@ export const tools: McpTool[] = [
       if (articleIds.length > 0) {
         const { data: articleRows, error: articleError } = await supabase
           .from('articles')
-          .select('id, name, unit, price_excl_vat, vat_rate, revenue_account, currency, active')
+          .select('id, name, name_en, unit, price_excl_vat, vat_rate, revenue_account, currency, active')
           .eq('company_id', companyId)
           .in('id', articleIds)
         if (articleError) throw dbError(articleError)
@@ -8607,6 +8612,7 @@ export const tools: McpTool[] = [
           currency,
           adoptableVatRates,
           i,
+          documentLanguageOf(customer),
         ),
       )
 
@@ -20939,7 +20945,7 @@ export const tools: McpTool[] = [
         // for individuals); never decrypted, staged, or returned here.
         const { data: customer, error: custError } = await supabase
           .from('customers')
-          .select('id, customer_type, vat_number, vat_number_validated, country, personal_number')
+          .select('id, customer_type, vat_number, vat_number_validated, country, personal_number, language')
           .eq('id', invoice.customer_id)
           .eq('company_id', companyId)
           .single()
@@ -20957,7 +20963,7 @@ export const tools: McpTool[] = [
         if (articleIds.length > 0) {
           const { data: articleRows, error: articleError } = await supabase
             .from('articles')
-            .select('id, name, unit, price_excl_vat, vat_rate, revenue_account, currency, active')
+            .select('id, name, name_en, unit, price_excl_vat, vat_rate, revenue_account, currency, active')
             .eq('company_id', companyId)
             .in('id', articleIds)
           if (articleError) throw new Error(`Failed to load articles: ${articleError.message}`)
@@ -20971,6 +20977,7 @@ export const tools: McpTool[] = [
             currency,
             adoptableVatRates,
             i,
+            documentLanguageOf(customer),
           ),
         )
 

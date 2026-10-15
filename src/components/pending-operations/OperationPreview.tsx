@@ -631,12 +631,18 @@ function BulkBookPreview({ data }: { data: Record<string, unknown> }) {
   const txSum = typeof data.tx_sum === 'number' && Number.isFinite(data.tx_sum) ? data.tx_sum : null
   const currency = (data.currency as string) || 'SEK'
   const linkExisting = data.mode === 'link_existing'
+  const t = useTranslations('pending')
+  // A link may carry rows of several dates: earliest and latest.
+  const txDate = String(data.tx_date ?? '')
+  const txDates = data.tx_date_to
+    ? t('preview_field.date_range', { from: txDate, to: String(data.tx_date_to) })
+    : txDate
 
   return (
     <div className="space-y-3 text-sm">
       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
         <span className="text-muted-foreground">Datum</span>
-        <span className="font-mono">{String(data.tx_date ?? '')}</span>
+        <span className="font-mono">{txDates}</span>
         <span className="text-muted-foreground">Transaktioner</span>
         <span className="font-mono tabular-nums">
           {txCount ?? '-'}

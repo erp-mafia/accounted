@@ -996,6 +996,7 @@
     "preview_link_lines_failed": "The voucher's lines could not be loaded.",
     "preview_link_open_voucher": "Open the voucher",
     "preview_field": {
+      "date_range": "{from} through {to}",
       "current_supplier_account": "Account on the supplier card",
       "invoice_account": "Account on the invoice",
       "updates_supplier_card": "Updates the supplier card",
@@ -2792,6 +2793,8 @@
     "show_swish_help": "Show the Swish number on the invoice. The QR code can only be a Swish code while the number is shown.",
     "show_logo_label": "Show logo",
     "show_logo_help": "Show uploaded logo in the invoice header",
+    "show_article_number_label": "Show article number",
+    "show_article_number_help": "Show the article number in its own column on the invoice and send it with the e-invoice. Rows without an article stay blank.",
     "qr_mode_label": "QR code on the invoice",
     "qr_mode_help": "Each invoice gets at most one QR code. It sits in the payment box and asks for the amount still to pay.",
     "qr_mode_auto": "Automatic",

@@ -1,5 +1,5 @@
 /**
- * Bulk-book N bank transactions on the same date into one combined verifikat
+ * Bulk-book N bank transactions into one combined verifikat
  * (samlingsverifikation per BFL 5 kap 6 §), atomically through the
  * bulk_book_transactions RPC behind the engine door commitBulkBooking
  * (lib/bookkeeping/engine.ts), which also emits journal_entry.committed for a
@@ -19,6 +19,10 @@
  * (POST /api/transactions/bulk-book) and the operation transactions.bulk-book
  * (lib/operations/transactions.ts), which serves v1, the MCP tool
  * gnubok_bulk_book_transactions and its approval.
+ *
+ * Rows of several dates may only be linked to an existing verifikat (path
+ * 1): one document, such as Stripe's monthly fee invoice, is settled by bank
+ * rows of many days. A new samlingsverifikat (paths 2 and 3) needs one date.
  *
  * Rules before the RPC: every row belongs to the company; one currency, and
  * that currency SEK (the ledger columns are kronor and nothing here carries
@@ -172,7 +176,7 @@ export async function bulkBookTransactions(
   // a staged booking never waits for an approval that cannot post. The RPC
   // re-checks all of them under its row locks.
   if (options.dryRun) {
-    const rowRefusal = rowShapeRefusal(body.tx_ids, txTyped)
+    const rowRefusal = rowShapeRefusal(body.tx_ids, txTyped, { linkExisting: !!body.existing_journal_entry_id })
     if (rowRefusal) return rowRefusal
   }
 
@@ -349,13 +353,16 @@ export async function bulkBookTransactions(
     }
     const txSum = roundOre(txTyped.reduce((s, t) => s + t.amount, 0))
     const first = txTyped.find((t) => t.id === body.tx_ids[0]) ?? txTyped[0]!
+    // Rows of several dates (a link only): the earliest and the latest.
+    const dates = Array.from(new Set(txTyped.map((t) => t.date))).sort()
     return {
       ok: true,
       dryRun: true,
       preview: {
         mode: body.existing_journal_entry_id ? 'link_existing' : 'create_new',
         tx_count: txTyped.length,
-        tx_date: first.date,
+        tx_date: dates.length > 1 ? dates[0]! : first.date,
+        ...(dates.length > 1 ? { tx_date_to: dates[dates.length - 1]! } : {}),
         direction: first.amount > 0 ? 'income' : 'expense',
         // The first row's counterparty text, for a title the approver recognises.
         lead_description: String(first.merchant_name || first.description || '').trim().slice(0, 40),
@@ -461,9 +468,16 @@ export async function bulkBookTransactions(
  * The first refusal the RPC would give that the selected rows already show:
  * a row with a verifikat, a zero row, two dates or two directions (BFL 5 kap
  * 6 § allows one gemensam verifikation only for likartade affärshändelser of
- * one day). Checked in the caller's order, like the RPC's first offender.
+ * one day). Two dates are refused only for a new samlingsverifikat: a link to
+ * an existing verifikat records which rows settle it, and one document can
+ * be settled by rows of several days. Checked in the caller's order, like the
+ * RPC's first offender.
  */
-function rowShapeRefusal(txIds: string[], txs: SelectedTx[]): Failure | null {
+function rowShapeRefusal(
+  txIds: string[],
+  txs: SelectedTx[],
+  opts: { linkExisting: boolean },
+): Failure | null {
   const byId = new Map(txs.map((t) => [t.id, t]))
   const ordered = txIds.map((id) => byId.get(id)).filter((t): t is SelectedTx => t !== undefined)
   const booked = ordered.find((t) => t.journal_entry_id)
@@ -471,7 +485,7 @@ function rowShapeRefusal(txIds: string[], txs: SelectedTx[]): Failure | null {
   const zero = ordered.find((t) => t.amount === 0)
   if (zero) return { ok: false, code: 'BULK_BOOK_TX_ZERO_AMOUNT', details: { tx_id: zero.id } }
   const firstDate = ordered[0]?.date
-  const otherDate = ordered.find((t) => t.date !== firstDate)
+  const otherDate = opts.linkExisting ? undefined : ordered.find((t) => t.date !== firstDate)
   if (otherDate) {
     return { ok: false, code: 'BULK_BOOK_DATE_MISMATCH', details: { first_date: firstDate, other_date: otherDate.date } }
   }

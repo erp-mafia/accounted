@@ -32,6 +32,7 @@ type PdfToggleField =
   | 'invoice_show_plusgiro'
   | 'invoice_show_swish'
   | 'invoice_show_logo'
+  | 'invoice_show_article_number'
 
 /** Compact switch row for the show/hide grid: small label, "?", Switch. */
 function PdfToggleRow({
@@ -214,6 +215,12 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
     { field: 'invoice_show_plusgiro', label: t('show_plusgiro_label'), help: t('show_plusgiro_help'), defaultOn: true },
     { field: 'invoice_show_swish', label: t('show_swish_label'), help: t('show_swish_help'), defaultOn: false },
     { field: 'invoice_show_logo', label: t('show_logo_label'), help: t('show_logo_help'), defaultOn: true },
+    {
+      field: 'invoice_show_article_number',
+      label: t('show_article_number_label'),
+      help: t('show_article_number_help'),
+      defaultOn: false,
+    },
     // No company-name switch or placement: the fixed layout always prints the
     // legal name in Från and the footer (and in the logo slot without a
     // logo). The columns stay for API compatibility (DECISIONS 2026-10-02).

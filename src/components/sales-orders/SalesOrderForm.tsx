@@ -25,6 +25,7 @@ import CustomerCombobox from '@/components/customers/CustomerCombobox'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { hasDimensionValues } from '@/lib/invoices/editor-payload'
 import { sortArticles } from '@/lib/articles/sort'
+import { articleLineName, documentLanguageOf, planArticleNameSwap } from '@/lib/articles/line-name'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
 import UnitPicker from '@/components/invoices/UnitPicker'
 import { roundOre, parseDecimalInput } from '@/lib/money'
@@ -244,7 +245,9 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
     const rateAllowed = vatOptions.some((o) => o.rate === article.vat_rate)
     updateLine(key, {
       article_id: article.id,
-      description: article.name,
+      // The order lines become the invoice lines: the English benämning for
+      // an English-language customer, like the invoice editor (crm#1084).
+      description: articleLineName(article, documentLanguageOf(selectedCustomer)),
       unit: article.unit,
       unit_price: String(article.price_excl_vat),
       vat_rate: rateAllowed ? article.vat_rate : vatPlan.defaultRate,
@@ -256,6 +259,18 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
     const previousDefault = vatPlan.defaultRate
     setCustomerId(nextId)
     const nextCustomer = customers.find((c) => c.id === nextId) ?? null
+    // Article lines whose text is still the article's name follow the new
+    // customer's language (same rule as the invoice editor).
+    const nameSwaps = planArticleNameSwap({
+      items: lines,
+      articles,
+      from: documentLanguageOf(selectedCustomer),
+      to: documentLanguageOf(nextCustomer),
+    })
+    if (nameSwaps.length > 0) {
+      const byIndex = new Map(nameSwaps.map((swap) => [swap.index, swap.description]))
+      setLines((prev) => prev.map((l, i) => (byIndex.has(i) ? { ...l, description: byIndex.get(i) as string } : l)))
+    }
     const nextDefault = resolveLineVatRates(nextCustomer).defaultRate
     // Only lines still on the previous default follow the customer switch;
     // an explicitly chosen rate is left alone (same rule as the invoice editor).

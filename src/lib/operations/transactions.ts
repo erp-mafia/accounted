@@ -646,14 +646,15 @@ export const transactionsBulkBook = defineOperation({
   risk: 'high',
   reversible: false,
   docs: {
-    summary: 'Book several same-day SEK bank transactions as one samlingsverifikat.',
+    summary: 'Book several SEK bank transactions as one samlingsverifikat, or link them to one posted verifikat.',
     description:
-      'Books up to 200 transactions of the same date into ONE verifikat (samlingsverifikation, BFL 5 kap 6 §), in exactly one of three ways: existing_journal_entry_id links them to an already-posted voucher whose bank net equals their sum (nothing new is posted); template_id + mode + entry_description expands a booking template per row (one_line_per_tx) or on the sum (sum_per_account); manual_lines + entry_description posts caller-built balanced lines. SEK only. The dry run answers the lines and the signed sum (tx_sum). Idempotent. Dry-runnable.',
-    useWhen: 'Many small same-day rows of one kind (Swish sales, card fees, a daily settlement) should be one verifikat.',
+      'Puts up to 200 transactions on ONE verifikat (samlingsverifikation, BFL 5 kap 6 §), in exactly one of three ways: existing_journal_entry_id links them to an already-posted voucher whose bank net equals their sum (nothing new is posted; the rows may be of several dates, e.g. a month of Stripe fee rows settled by the verifikat of Stripe\'s monthly fee invoice); template_id + mode + entry_description expands a booking template per row (one_line_per_tx) or on the sum (sum_per_account); manual_lines + entry_description posts caller-built balanced lines. A new verifikat needs rows of one date. SEK only. The dry run answers the lines and the signed sum (tx_sum). Idempotent. Dry-runnable.',
+    useWhen:
+      'Many small same-day rows of one kind (Swish sales, card fees, a daily settlement) should be one verifikat, or one posted verifikat settles rows of several days (a samlingsfaktura of at most a month, such as Stripe\'s monthly fee invoice).',
     doNotUseFor:
-      'Rows on different dates, foreign-currency rows (book them one by one), or one row against invoices (POST /transactions/{id}/match-batch).',
+      'A new verifikat over rows of several dates (a monthly samlingsverifikat is not legal: one per date), foreign-currency rows (book them one by one), or one row against invoices (POST /transactions/{id}/match-batch).',
     pitfalls: [
-      'All rows must share one date and direction, and currency SEK: BULK_BOOK_MIXED_CURRENCY / BULK_BOOK_FOREIGN_CURRENCY otherwise.',
+      'All rows must share one direction and currency SEK, and one date unless they are linked to an existing verifikat: BULK_BOOK_DATE_MISMATCH / BULK_BOOK_DIRECTION_MISMATCH / BULK_BOOK_MIXED_CURRENCY / BULK_BOOK_FOREIGN_CURRENCY otherwise.',
       'A row that looks already booked returns 409 TRANSACTION_BOOK_POSSIBLE_DUPLICATE naming it; resend with force=true only after reviewing the candidate (each dismissal is logged in behandlingshistorik).',
       'manual_lines accounts must be active in the company\'s chart (BULK_BOOK_INVALID_ACCOUNT) and balance; amounts are kronor, account numbers strings.',
       'A posted samlingsverifikat is permanent: undo with storno (POST /journal-entries/{id}/reverse).',
@@ -714,7 +715,7 @@ export const transactionsBulkBook = defineOperation({
     visibility: 'default',
     keywords: ['bokför', 'kontera', 'massbokföring', 'banktransaktioner'],
     description:
-      'Stage booking N SEK bank txs of one date and direction as 1 samlingsverifikat (BFL 5 kap 6§): link to a posted verifikat, expand a template, or post manual_lines. Dimensions: code or name.',
+      'Stage N SEK bank txs of one direction: 1 samlingsverifikat of one date (BFL 5 kap 6§) via template or manual_lines, or a link (any dates) to a posted verifikat. Dimensions: code or name.',
     stage: {
       pendingType: 'bulk_book_transactions',
       // The queue title is what a reviewer approves from (often on a phone):
@@ -729,8 +730,9 @@ export const transactionsBulkBook = defineOperation({
           `${String(p?.currency ?? 'SEK')}`
         const lead = String(p?.lead_description ?? '')
         const rest = count > 1 ? ` (+${count - 1} till)` : ''
+        const dates = p?.tx_date_to ? `${String(p?.tx_date ?? '')} t.o.m. ${String(p.tx_date_to)}` : String(p?.tx_date ?? '')
         return input.existing_journal_entry_id
-          ? `Länka ${count} transaktioner ${amount} ${String(p?.tx_date ?? '')} till verifikat: ${lead}${rest}`
+          ? `Länka ${count} transaktioner ${amount} ${dates} till verifikat: ${lead}${rest}`
           : `Samlingsverifikation ${amount} ${String(p?.tx_date ?? '')}: ${lead}${rest}`
       },
       // Staged before the operation existed: new_entry {description, lines}
@@ -781,6 +783,7 @@ export const transactionsBulkBook = defineOperation({
       preview: (_input, p) => ({
         tx_count: p.tx_count,
         tx_date: p.tx_date,
+        ...(p.tx_date_to ? { tx_date_to: p.tx_date_to } : {}),
         tx_sum: p.tx_sum,
         currency: p.currency,
         direction: p.direction,
@@ -800,7 +803,8 @@ export const transactionsBulkBook = defineOperation({
         ...(p.dimension_resolutions ? { dimension_resolutions: p.dimension_resolutions } : {}),
       }),
       extras: (_input, p) => {
-        const txDate = String(p.tx_date ?? '')
+        // The latest row date: a link may carry rows of several dates.
+        const txDate = String(p.tx_date_to ?? p.tx_date ?? '')
         const jeDate = String(p.existing_entry_date ?? '')
         return {
           next: {
@@ -822,7 +826,8 @@ export const transactionsBulkBook = defineOperation({
             return codedRefusal(
               failure.code,
               'All transactions must share the same date: BFL 5 kap 6 § tredje stycket allows a gemensam verifikation only for likartade affärshändelser on the same day, ' +
-                'so a monthly samlingsverifikat is not a legal option. Group the tx_ids by date and call gnubok_bulk_book_transactions once per date.',
+                'so a monthly samlingsverifikat is not a legal option. Group the tx_ids by date and call gnubok_bulk_book_transactions once per date. ' +
+                'Rows that one document covers (a samlingsfaktura such as Stripe\'s monthly fee invoice) may be of several dates: book the document as its own verifikat and link them with existing_journal_entry_id.',
             )
           case 'BULK_BOOK_DIRECTION_MISMATCH':
             return codedRefusal(

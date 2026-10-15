@@ -214,6 +214,8 @@ export type InvoiceWriteItemRow = {
   vat_rate: number
   vat_amount: number
   article_id: string | null
+  /** Copied from the article on every write (crm#1084); null without one. */
+  article_number: string | null
   revenue_account: string | null
   sales_order_item_id: string | null
   deduction_type: DeductionType | null
@@ -442,6 +444,9 @@ export async function buildInvoiceWriteData(params: {
   // webshop, sales-order conversion, MCP create and update), so one scoped
   // select covers them all. The MCP update executor keeps its own pre-check
   // as well. Text rows never persist an article (mapped to null below).
+  // The same read gives each line its article number, copied onto the line
+  // (crm#1084) so the invoice prints the number it was written with.
+  const articleNumbers = new Map<string, string | null>()
   const articleIds = Array.from(
     new Set(
       items
@@ -453,12 +458,15 @@ export async function buildInvoiceWriteData(params: {
   if (articleIds.length > 0) {
     const { data: articleRows, error: articlesError } = await supabase
       .from('articles')
-      .select('id')
+      .select('id, article_number')
       .eq('company_id', companyId)
       .in('id', articleIds)
 
     if (articlesError) {
       return { ok: false, dbError: articlesError }
+    }
+    for (const row of (articleRows ?? []) as Array<{ id: string; article_number: string | null }>) {
+      articleNumbers.set(row.id, row.article_number?.trim() || null)
     }
     const foundArticleIds = new Set((articleRows ?? []).map((a) => a.id))
     const invalidArticleIds = articleIds.filter((a) => !foundArticleIds.has(a))
@@ -730,6 +738,7 @@ export async function buildInvoiceWriteData(params: {
         vat_rate: 0,
         vat_amount: 0,
         article_id: null,
+        article_number: null,
         revenue_account: null,
         sales_order_item_id: null,
         deduction_type: null,
@@ -771,6 +780,9 @@ export async function buildInvoiceWriteData(params: {
       // article edit never re-books this line; null falls through to the
       // VAT-treatment-derived account in generatePerRateLines().
       article_id: item.article_id ?? null,
+      // Frozen like revenue_account: renumbering or deleting the article
+      // later never changes what this line prints.
+      article_number: item.article_id ? (articleNumbers.get(item.article_id) ?? null) : null,
       revenue_account: item.revenue_account ?? null,
       // Only a faktura consumes kundorder quantity: a quote or proforma line
       // linked to an order item would mark the order invoiced without any
