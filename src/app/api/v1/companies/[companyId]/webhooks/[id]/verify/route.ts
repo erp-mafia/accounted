@@ -63,7 +63,7 @@ registerEndpoint({
   },
   scope: 'webhooks:manage',
   risk: 'low',
-  idempotent: false,
+  idempotent: true,
   reversible: false,
   dryRunSupported: false,
   response: { success: dataEnvelope(VerifyResponse) },

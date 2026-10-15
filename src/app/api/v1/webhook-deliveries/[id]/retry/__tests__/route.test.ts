@@ -49,6 +49,7 @@ import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-key
 import { validateWebhookUrl } from '@/lib/webhooks/url-guard'
 import { POST as retryDelivery } from '../route'
 import { createTableMockSupabase } from '@/tests/helpers'
+import { createIdempotencyKeysFake } from '@/tests/idempotency-fake'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -135,6 +136,48 @@ describe('POST /api/v1/webhook-deliveries/:id/retry', () => {
     const body = await res.json()
     expect(body.data.webhook_delivery_id).toBe(NEW_DELIVERY_ID)
     expect(body.data.status).toBe('pending')
+  })
+
+  it('honours Idempotency-Key: a repeat answers the first retry and queues no second delivery', async () => {
+    // The wrapper cannot replay here (no :companyId in the URL); the handler
+    // does, keyed by the delivery's company once the company gate passed.
+    const idempotency = createIdempotencyKeysFake()
+    const mock = createTableMockSupabase({
+      webhook_deliveries: [
+        { data: DEAD_DELIVERY, error: null }, // first call: lookup
+        { data: { id: NEW_DELIVERY_ID }, error: null }, // first call: insert
+        { data: DEAD_DELIVERY, error: null }, // second call: lookup
+      ],
+      company_members: { data: { company_id: COMPANY_ID }, error: null },
+      webhooks: { data: ACTIVE_WEBHOOK, error: null },
+    })
+    const tableFrom = mock.supabase.from
+    mock.supabase.from = vi.fn((table: string) =>
+      table === 'idempotency_keys' ? (idempotency.table() as never) : tableFrom(table),
+    ) as typeof tableFrom
+    mockServiceClient.mockReturnValue(mock.supabase)
+
+    const call = () =>
+      retryDelivery(
+        makeRequest(`https://x.test/api/v1/webhook-deliveries/${DELIVERY_ID}/retry`, {
+          method: 'POST',
+          headers: { 'Idempotency-Key': 'retry-once' },
+        }),
+        idParams(DELIVERY_ID),
+      )
+
+    const first = await call()
+    expect(first.status).toBe(200)
+    const firstBody = await first.json()
+
+    const second = await call()
+    expect(second.status).toBe(200)
+    expect(second.headers.get('Idempotent-Replayed')).toBe('true')
+    expect((await second.json()).data.webhook_delivery_id).toBe(firstBody.data.webhook_delivery_id)
+
+    expect(mock.payloads('webhook_deliveries', 'insert')).toHaveLength(1)
+    expect(idempotency.rows).toHaveLength(1)
+    expect(idempotency.rows[0]).toMatchObject({ company_id: COMPANY_ID, key: 'retry-once', scope: 'api_route' })
   })
 
   it('requires payroll:read for salary_run.* / agi.* retries (elevated-scope gate)', async () => {

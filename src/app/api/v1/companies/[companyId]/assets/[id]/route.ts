@@ -141,7 +141,7 @@ registerEndpoint({
   },
   scope: 'bookkeeping:write',
   risk: 'medium',
-  idempotent: false,
+  idempotent: true,
   reversible: false,
   dryRunSupported: true,
   response: { success: NoBodyResponse, errorCodes: ['ASSET_NOT_FOUND', 'ASSET_DELETE_BLOCKED'] },

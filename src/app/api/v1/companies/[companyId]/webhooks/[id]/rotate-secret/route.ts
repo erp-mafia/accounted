@@ -63,7 +63,7 @@ registerEndpoint({
   },
   scope: 'webhooks:manage',
   risk: 'medium',
-  idempotent: false,
+  idempotent: true,
   reversible: false,
   dryRunSupported: false,
   response: { success: dataEnvelope(RotateSecretResponse) },

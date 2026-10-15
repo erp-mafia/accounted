@@ -18,8 +18,13 @@ import {
   PaginationQueryShape,
 } from '@/lib/api/v1/pagination'
 import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/registry'
-import { withApiV1 } from '@/lib/api/v1/with-api-v1'
+import { v1IdempotentReplay, v1RequestHash, withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
+import {
+  checkUserScopedIdempotencyKey,
+  IdempotencyKeyReuseError,
+  storeIdempotencyResponse,
+} from '@/lib/api/idempotency'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { createCompanyCore } from '@/lib/company/create-company'
@@ -108,7 +113,7 @@ registerEndpoint({
     'Bookkeeping duty under BFL starts when the company exists with a fiscal period: do not create companies to try things out. Use a test-mode key (dry run) for that.',
     'Enskild firma always runs on the calendar year; fiscal_year_start_month is ignored for it.',
     'first_fiscal_year is only for a company in its first year (BFL 3 kap.: up to 18 months). Omit it for an established company.',
-    'Not idempotent, and Idempotency-Key is not honoured on this company-less route: a retry after a network failure creates a second company. List GET /api/v1/companies before retrying.',
+    'Send an Idempotency-Key. With one, a retry with the same key and body returns the company the first call created (200, Idempotent-Replayed: true), never a second one; the same key with another body answers 409 IDEMPOTENCY_KEY_REUSE. Keep the key for the whole provisioning attempt (24 h). The header is optional for compatibility: without it, a retry after a network failure creates a second company.',
     'org_number is required for a VAT-registered company (the invoice momsregistreringsnummer derives from it), and f_skatt must be stated explicitly: F-skatt approval is never assumed.',
     'accounting_method may be omitted: it then defaults by form (aktiebolag accrual, enskild firma cash) and the response shows the resolved value. The cash default is only legal when turnover normally stays under 3 MSEK (BFL 4 kap 4 §): send accrual explicitly for a larger enskild firma.',
     'ideell_forening and ekonomisk_forening are rolled out per installation behind the server-side flags NEXT_PUBLIC_IDEELL_FORENING_ENABLED and NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED. Until the flag is on, a request with that entity_type is refused with VALIDATION_ERROR on entity_type; enskild_firma and aktiebolag are always creatable.',
@@ -144,7 +149,7 @@ registerEndpoint({
   reversible: false,
   dryRunSupported: true,
   request: { body: CompanySetupSchema },
-  response: { success: dataEnvelope(CreatedCompany), errorCodes: ['VALIDATION_ERROR', 'FORBIDDEN', 'INTERNAL_ERROR'] },
+  response: { success: dataEnvelope(CreatedCompany), errorCodes: ['VALIDATION_ERROR', 'FORBIDDEN', 'IDEMPOTENCY_KEY_REUSE', 'INTERNAL_ERROR'] },
 })
 
 export const POST = withApiV1('companies.create', async (request, ctx) => {
@@ -208,6 +213,37 @@ export const POST = withApiV1('companies.create', async (request, ctx) => {
     })
   }
 
+  // Idempotency-Key replay. The wrapper's cache is keyed by the URL
+  // :companyId, which this route does not have, so it replays here instead:
+  // per (user, key) under the company_create scope, stored under the company
+  // the first call created. The key is optional for compatibility (the route
+  // documented it as ignored until 2026-10-15): with it a retry can never
+  // create a second company; without it nothing is checked or cached.
+  // A dry run returned above and is never cached.
+  const idempotencyKey = ctx.idempotencyKey ?? null
+  const requestHash = v1RequestHash(request, rawBody, false)
+  if (idempotencyKey) {
+    try {
+      const hit = await checkUserScopedIdempotencyKey(
+        ctx.supabase,
+        ctx.userId,
+        'company_create',
+        idempotencyKey,
+        requestHash,
+      )
+      if (hit) {
+        ctx.log.info('idempotent replay', { idempotencyKey })
+        return v1IdempotentReplay(hit, ctx.requestId)
+      }
+    } catch (err) {
+      if (!(err instanceof IdempotencyKeyReuseError)) throw err
+      return v1ErrorResponseFromCode('IDEMPOTENCY_KEY_REUSE', ctx.log, {
+        requestId: ctx.requestId,
+        details: { key: idempotencyKey },
+      })
+    }
+  }
+
   const result = await createCompanyCore(ctx.supabase, plan.input, () =>
     ctx.supabase.rpc('create_company_for_user', {
       p_user_id: ctx.userId,
@@ -231,8 +267,23 @@ export const POST = withApiV1('companies.create', async (request, ctx) => {
     })
   }
 
-  return created(shape(result.companyId), { requestId: ctx.requestId })
-})
+  const response = created(shape(result.companyId), { requestId: ctx.requestId })
+  // Best-effort like the wrapper's cache: the company exists either way, and
+  // a failed write only weakens a later retry (logged inside).
+  if (idempotencyKey) {
+    await storeIdempotencyResponse(
+      ctx.supabase,
+      ctx.userId,
+      result.companyId,
+      idempotencyKey,
+      requestHash,
+      'success',
+      (await response.clone().json()) as Record<string, unknown>,
+      'company_create',
+    )
+  }
+  return response
+}, { requireIdempotencyKey: false, handlerIdempotency: true })
 
 export const GET = withApiV1('companies.list', async (request, ctx) => {
   const url = new URL(request.url)

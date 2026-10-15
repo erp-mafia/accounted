@@ -106,7 +106,7 @@ registerEndpoint({
   },
   scope: 'reconciliation:write',
   risk: 'medium',
-  idempotent: false,
+  idempotent: true,
   reversible: true,
   dryRunSupported: true,
   request: { body: LinksRequest },

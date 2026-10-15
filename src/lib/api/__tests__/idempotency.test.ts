@@ -4,8 +4,10 @@ import {
   checkIdempotencyKey,
   storeIdempotencyResponse,
   cleanupExpiredIdempotencyKeys,
+  checkUserScopedIdempotencyKey,
   IdempotencyKeyReuseError,
 } from '../idempotency'
+import { createIdempotencyKeysFake } from '@/tests/idempotency-fake'
 
 describe('hashRequest', () => {
   it('produces stable SHA-256 for the same payload', () => {
@@ -108,6 +110,45 @@ describe('checkIdempotencyKey', () => {
     })
     const result = await checkIdempotencyKey(client, 'user-1', 'company-1', 'key-1', 'hash-1')
     expect(result).toBeNull()
+  })
+})
+
+describe('checkUserScopedIdempotencyKey', () => {
+  // A company create has no company until it runs: the key is looked up per
+  // (user, scope) and the row is stored under the company the write created.
+  function seeded() {
+    const fake = createIdempotencyKeysFake()
+    const client = { from: () => fake.table() } as never
+    return { fake, client }
+  }
+
+  it('misses for a key never stored', async () => {
+    const { client } = seeded()
+    expect(await checkUserScopedIdempotencyKey(client, 'user-1', 'company_create', 'k', 'h')).toBeNull()
+  })
+
+  it('replays the row stored under the created company, whatever company it names', async () => {
+    const { client } = seeded()
+    await storeIdempotencyResponse(client, 'user-1', 'company-new', 'k', 'h', 'success', { data: { id: 'company-new' } }, 'company_create')
+    expect(await checkUserScopedIdempotencyKey(client, 'user-1', 'company_create', 'k', 'h')).toEqual({
+      status: 'success',
+      body: { data: { id: 'company-new' } },
+    })
+  })
+
+  it('throws IdempotencyKeyReuseError for the same key with another hash', async () => {
+    const { client } = seeded()
+    await storeIdempotencyResponse(client, 'user-1', 'company-new', 'k', 'h', 'success', {}, 'company_create')
+    await expect(checkUserScopedIdempotencyKey(client, 'user-1', 'company_create', 'k', 'other')).rejects.toBeInstanceOf(
+      IdempotencyKeyReuseError,
+    )
+  })
+
+  it('never matches a key spent on a company-scoped write, nor another user', async () => {
+    const { client } = seeded()
+    await storeIdempotencyResponse(client, 'user-1', 'company-a', 'k', 'h', 'success', {}, 'api_route')
+    await storeIdempotencyResponse(client, 'user-2', 'company-b', 'k', 'h', 'success', {}, 'company_create')
+    expect(await checkUserScopedIdempotencyKey(client, 'user-1', 'company_create', 'k', 'h')).toBeNull()
   })
 })
 

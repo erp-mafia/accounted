@@ -124,7 +124,7 @@ export function v1OperationHandler(op: AnyOperation) {
     },
     {
       requireScope: op.scope,
-      ...(isWrite ? { requireIdempotencyKey: http.requireIdempotencyKey ?? true } : {}),
+      ...(isWrite ? { requireIdempotencyKey: http.requireIdempotencyKey ?? true } : { readOnly: true }),
     },
   )
 }

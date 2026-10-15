@@ -75,7 +75,7 @@ Example response `200`:
 ### `POST /api/v1/companies/{companyId}/bank-connections/{connectionId}/sync`
 
 **Sync one bank connection now instead of waiting for the nightly run.**
-`scope:transactions:write · risk:low`
+`scope:transactions:write · risk:low · idempotent`
 
 Fetches new transactions and balances for one PSD2 bank connection right away. The window is chosen server-side: the last 7 days, widened to cover any gap since last_synced_at, capped at 90 days. Returns how many transactions were imported and the new last_synced_at. A connection synced within the last 15 minutes is refused with 429 BANK_SYNC_COOLDOWN and next_allowed_at: the data is already fresh. Not dry-runnable: the bank call itself is the side effect.
 
@@ -2571,7 +2571,7 @@ Example response `200`:
 ### `POST /api/v1/companies/{companyId}/reconciliation/accounts/{accountKey}/links`
 
 **Link outside rows to existing verifikat (pairs or proposals).**
-`scope:reconciliation:write · risk:medium · dry-run · reversible`
+`scope:reconciliation:write · risk:medium · idempotent · dry-run · reversible`
 
 Body: { pairs: [{ external_ids: [id], journal_entry_ids: [id], allocations? }] } and/or { use_proposals: true, confidence_threshold? }. Each pair is validated as the single-link paths validate (row open and not ignored, entry posted and not reversed, the entry's account lines settle the amount, entry not already linked) and applied independently: the response lists applied[] and skipped[{pair, code, message}] so partial success is explicit. On a bank account a pair may also be ONE transaction against SEVERAL verifikat (1:N): allocations[{journal_entry_id, amount}] gives the signed slice per verifikat (omitted: each slice defaults to the voucher's line on the account); the slices must sum to the transaction amount, and each applied link then carries allocated_amount. On the skattekonto a pair may carry allow_remainder: true to link rows to a summarised verifikat whose 1630 movement they do not settle (one year-end or month-end verifikat that books more events than these, some from before the fetched history): the link is then via "partial", and remainder_amount on each applied link is what the verifikat still holds on 1630 beyond the rows linked to it (ledger sign, either sign); it stays in unmatched_ledger with that amount. remainder_amount is also returned when a row settles one of several 1630 lines of a verifikat. On the skattekonto a pair may also be ONE row against SEVERAL verifikat whose open amounts on 1630 sum exactly to the event (a verifikat and the correction booked after it): each applied link carries via "split" and allocated_amount (that verifikat's whole open amount; allocations, when sent, must equal it), the verifikat leave unmatched_ledger together and are listed under matched with a settlement, and unlinking the row undoes it all. On a SEK bank account a pair may also carry NO external_ids and two or more journal_entry_ids: verifikat that take each other out on the account (a wrong verifikat and the correction booked by hand), each still without a bank row and summing to exactly zero; they leave unmatched_ledger together and are reported in settled[] with a settlement_id. Codes: UNSUPPORTED_PAIR_SHAPE, ALREADY_LINKED, ENTRY_NOT_FOUND, ENTRY_REVERSED, PAIR_NOT_CLOSED, ROW_IGNORED, NOT_FOUND, LINK_RACE, ENTRY_NOT_OPEN (a verifikat of a ledger-only pair already has a bank row, has no line on the account, or is an opening balance or a storno; for a skattekonto 1:N, the verifikat is not in the open 1630 list), ALREADY_SETTLED, BANK_ANCHOR_REFUSED (the database refused the link: a verifikat does not book the row, or its 1:N slice, on the bank ledger in that direction; retrying unchanged will not help). ?dry_run=true returns the pairs that would be attempted without writing (a 1:N dry run resolves the slices).
 
@@ -2730,7 +2730,7 @@ Example response `200`:
 ### `POST /api/v1/companies/{companyId}/reconciliation/accounts/{accountKey}/residual`
 
 **Book the remainder of a bank selection as a fee/interest/rounding verifikat and link the selection.**
-`scope:transactions:write · risk:medium · dry-run`
+`scope:transactions:write · risk:medium · idempotent · dry-run`
 
 Body: { external_ids: [transaction ids], journal_entry_id, kind: "bank_fee" | "interest_expense" | "interest_income" | "rounding", entry_date?, description? }. Computes the difference between the transactions' sum and the verifikat's net on the bank account, books it on 6570 / 8410 / 8310 / 3740 against the bank account (dated on the latest transaction by default), links the transactions to the main verifikat and anchors the residual verifikat through transaction_voucher_links. Bank accounts only (bank:<cash_account_id>). Refused when the difference is 0 (RESIDUAL_ZERO), above 5000 kr (RESIDUAL_TOO_LARGE: that is a missing booking, not a fee), or when the kind points the wrong way (RESIDUAL_DIRECTION). ?dry_run=true returns would_book without writing.
 
@@ -2888,7 +2888,7 @@ Example response `200`:
 ### `POST /api/v1/companies/{companyId}/reconciliation/accounts/{accountKey}/signoff`
 
 **Mark an account reconciled through a date (sign-off).**
-`scope:reconciliation:signoff · risk:medium · dry-run · reversible`
+`scope:reconciliation:signoff · risk:medium · idempotent · dry-run · reversible`
 
 Body: { through_date: "YYYY-MM-DD", note?, force?, external_balance? }. Recomputes the bridge through the date and refuses unless unexplained_difference is zero; with force: true and a note it signs anyway and records the difference. Refuses dates in the future, dates past the skattekonto snapshot (NOT_FETCHED_THROUGH), and dates at or before an existing active sign-off (ALREADY_SIGNED_OFF: reopen that one first). For a manual:NNNN account without a system specification (anything but 1510/2440/2920/2940), external_balance is the balance per the signer's underlag in ledger sign (liabilities negative); the difference against the booked balance is recorded, and a non-zero one still needs force + note. On bank, skattekonto and specification accounts external_balance is refused (EXTERNAL_BALANCE_NOT_ALLOWED). ?dry_run=true returns would_sign without writing. Undo with POST .../signoff/{signoffId}/reopen.
 

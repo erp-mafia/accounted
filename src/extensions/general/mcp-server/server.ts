@@ -292,6 +292,7 @@ import {
   storeIdempotencyResponse,
   hashRequest,
 } from '@/lib/api/idempotency'
+import { IDEMPOTENCY_KEY_PROPERTY, withRetryKey } from './retry-key'
 import { toToolError, type NextActionHint } from './tool-result'
 import {
   addCompanyToNextHint,
@@ -893,10 +894,7 @@ const STAGING_ARGS_PROPERTIES = {
     type: 'boolean',
     description: 'Preview only: nothing is staged or written.',
   },
-  idempotency_key: {
-    type: 'string',
-    description: 'UUID: a retry with the same key and payload replays the first answer (24h).',
-  },
+  idempotency_key: IDEMPOTENCY_KEY_PROPERTY,
 } as const
 
 /** Stages a pending operation or writes once; retries are not idempotent. */
@@ -1172,6 +1170,10 @@ export interface McpTool {
   // execute() after the response instead of blocking on it. Not serialized
   // into tools/list.
   shouldRunAsTask?: (args: Record<string, unknown>) => boolean
+  // Set by withRetryKey (retry-key.ts): a direct write that replays
+  // idempotency_key. Read by __tests__/direct-write-retry.test.ts. Not
+  // serialized into tools/list.
+  retryKey?: true
   execute: (
     args: Record<string, unknown>,
     companyId: string,
@@ -3939,6 +3941,51 @@ async function runInnerTool(params: {
 }
 
 /**
+ * What gnubok_approve_pending_operation answers for an operation that has
+ * already settled, read from its row: the stored result of the approval that
+ * committed it (idempotency_replay: true), its posted ids after a partial
+ * commit, or that it was rejected and nothing was committed. Null while it is
+ * pending or committing, when the approval itself must decide.
+ */
+function settledApprovalOutcome(
+  operation: Pick<PendingOperation, 'id' | 'status' | 'result_data'>,
+): Record<string, unknown> | null {
+  const stored = operation.result_data ?? {}
+  const storedError = typeof stored.error === 'string' ? stored.error : typeof stored.reason === 'string' ? stored.reason : undefined
+  switch (operation.status) {
+    case 'committed':
+      return {
+        status: 'committed',
+        operation_id: operation.id,
+        data: stored,
+        operation_status: 'committed',
+        idempotency_replay: true,
+        message: 'Already committed by an earlier approval of this operation: this is its stored result. Nothing was committed again.',
+      }
+    case 'failed_partial':
+      return {
+        status: 'failed',
+        operation_id: operation.id,
+        ...(storedError ? { error: storedError } : {}),
+        error_code: 'partial_commit',
+        data: { posted_ids: stored.posted_ids ?? {} },
+        operation_status: 'failed_partial',
+        idempotency_replay: true,
+      }
+    case 'rejected':
+      return {
+        status: 'rejected',
+        operation_id: operation.id,
+        error: storedError ?? 'The operation was already rejected; nothing was committed.',
+        ...(stored.auto_rejected === true ? { auto_rejected: true } : {}),
+        operation_status: 'rejected',
+      }
+    default:
+      return null
+  }
+}
+
+/**
  * Commit one staged operation the way gnubok_approve_pending_operation always
  * has: api_key commit provenance, the actor's unattended ceiling, the user's
  * email for attribution, and the PendingOperationApproved audit row. Shared
@@ -5144,7 +5191,7 @@ export const tools: McpTool[] = [
     },
   },
 
-  {
+  withRetryKey({
     name: 'gnubok_create_company',
     keywords: ['företag', 'bolag', 'nytt företag'],
     title: 'Create Company',
@@ -5188,7 +5235,7 @@ export const tools: McpTool[] = [
         message: { type: 'string' },
       },
     },
-    annotations: ANNOTATIONS_STAGED_WRITE,
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, _companyId, userId, supabase, actor) {
       const { confirm, ...setup } = args
       const parsed = CompanySetupSchema.safeParse(setup)
@@ -5296,7 +5343,14 @@ export const tools: McpTool[] = [
         },
       }
     },
-  },
+  }, {
+    // Nothing is created without confirm=true; the company is the cache's company.
+    preview: (args) => args.confirm !== true,
+    userScoped: {
+      scope: 'company_create',
+      companyFromResult: (result) => (typeof result.company_id === 'string' ? result.company_id : undefined),
+    },
+  }),
 
   {
     name: 'gnubok_connect_bank',
@@ -5891,7 +5945,7 @@ export const tools: McpTool[] = [
     },
   },
 
-  {
+  withRetryKey({
     name: 'gnubok_create_skill',
     title: 'Create Own Item',
     description: 'Save a confirmed item as a draft.',
@@ -5918,7 +5972,7 @@ export const tools: McpTool[] = [
       },
       required: ['company_skill_id', 'slug'],
     },
-    annotations: ANNOTATIONS_STAGED_WRITE,
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase) {
       const parsedArgs = CreateSkillArgsSchema.safeParse(args)
       if (!parsedArgs.success) throw fieldValidationError('Invalid skill', zodFieldIssues(parsedArgs.error, args))
@@ -5957,7 +6011,7 @@ export const tools: McpTool[] = [
       if (error) throw error
       return { company_skill_id: data.id, slug: `own/${data.id}` }
     },
-  },
+  }),
 
   {
     name: 'gnubok_remember_fact',
@@ -6717,7 +6771,7 @@ export const tools: McpTool[] = [
     },
   },
 
-  {
+  withRetryKey({
     name: 'gnubok_create_transactions',
     keywords: ['banktransaktion', 'kontohändelse', 'kontoutdrag'],
     title: 'Create Bank Transactions',
@@ -6760,7 +6814,7 @@ export const tools: McpTool[] = [
       },
       required: ['transactions'],
     },
-    annotations: ANNOTATIONS_STAGED_WRITE,
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const items = args.transactions as Array<Record<string, unknown>> | undefined
       if (!Array.isArray(items) || items.length === 0) {
@@ -6873,7 +6927,7 @@ export const tools: McpTool[] = [
         operations,
       }
     },
-  },
+  }),
 
   {
     name: 'gnubok_list_uncategorized_transactions',
@@ -13236,7 +13290,7 @@ export const tools: McpTool[] = [
     },
   },
 
-  {
+  withRetryKey({
     name: 'gnubok_auto_match_period',
     keywords: ['automatchning', 'matcha period', 'stäm av månaden'],
     title: 'Auto-Match Period Income',
@@ -13273,7 +13327,7 @@ export const tools: McpTool[] = [
     annotations: {
       readOnlyHint: false,  // can stage when dry_run=false
       destructiveHint: false,
-      idempotentHint: false,
+      idempotentHint: true, // replays with idempotency_key
       openWorldHint: false,
     },
     async execute(args, companyId, userId, supabase, actor) {
@@ -13438,7 +13492,7 @@ export const tools: McpTool[] = [
         stage_failures: stageFailures,
       }
     },
-  },
+  }, { preview: (args) => args.dry_run !== false }),
 
   // ── Fiscal Periods ───────────────────────────────────────────
 
@@ -14709,7 +14763,7 @@ export const tools: McpTool[] = [
     },
   },
 
-  {
+  withRetryKey({
     name: 'gnubok_upload_document',
     keywords: ['ladda upp', 'kvitto', 'underlag', 'dokument', 'bifoga'],
     title: 'Upload Document to Inbox',
@@ -14735,7 +14789,7 @@ export const tools: McpTool[] = [
       },
       required: ['document_id', 'inbox_item_id', 'status'],
     },
-    annotations: ANNOTATIONS_STAGED_WRITE,
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase) {
       const fileName = args.file_name as string
       const base64Content = args.file_content_base64 as string
@@ -14761,7 +14815,7 @@ export const tools: McpTool[] = [
         buffer,
       )
     },
-  },
+  }),
 
   {
     name: 'gnubok_list_inbox_items',
@@ -19464,7 +19518,7 @@ export const tools: McpTool[] = [
     },
   },
 
-  {
+  withRetryKey({
     name: 'gnubok_generate_rot_rut_file',
     keywords: ['rotavdrag', 'rutavdrag', 'husarbete', 'utbetalningsfil'],
     title: 'Generate Rot/Rut Payout File',
@@ -19517,7 +19571,7 @@ export const tools: McpTool[] = [
     annotations: {
       readOnlyHint: false, // records a rot_rut_payout_requests row when generating
       destructiveHint: false,
-      idempotentHint: false, // second call conflicts (one active begäran per invoice)
+      idempotentHint: true, // replays with idempotency_key; without one a second call conflicts (one active begäran per invoice)
       openWorldHint: false,
     },
     async execute(args, companyId, userId, supabase) {
@@ -19601,7 +19655,7 @@ export const tools: McpTool[] = [
         upload_url: uploadUrl,
       }
     },
-  },
+  }, { preview: (args) => args.list_only === true }),
 
   {
     name: 'gnubok_list_rot_rut_payout_requests',
@@ -24212,6 +24266,13 @@ export const tools: McpTool[] = [
         )
       }
 
+      // A repeat of an approval that already settled (the call that committed
+      // it broke before its answer arrived, and the client sent it again):
+      // answer the stored outcome. Nothing runs, so no second commit and no
+      // second PendingOperationApproved row. The operation_id is the key.
+      const settled = settledApprovalOutcome(operation)
+      if (settled) return settled
+
       // commit_method provenance (agent_first_vision.md §8 P0-1): MCP
       // approvals are relayed through an agent credential: record that in
       // the immutable layer instead of claiming 'user_accept'. The positive
@@ -24241,6 +24302,22 @@ export const tools: McpTool[] = [
         userEmail,
         confirmed: args.confirmed === true,
       })
+
+      // Lost the pending -> committing claim to a concurrent approval of the
+      // same operation (the only failure that carries a 409 and no
+      // operation_status). When that approval has settled meanwhile, answer
+      // its outcome rather than a bare conflict an agent could read as "try
+      // staging it again".
+      if (result.status === 'failed' && result.http_status === 409 && !result.operation_status) {
+        const { data: current } = await supabase
+          .from('pending_operations')
+          .select('*')
+          .eq('id', operationId)
+          .eq('company_id', companyId)
+          .maybeSingle()
+        const settledMeanwhile = current ? settledApprovalOutcome(current as PendingOperation) : null
+        if (settledMeanwhile) return settledMeanwhile
+      }
 
       return {
         status: result.status,

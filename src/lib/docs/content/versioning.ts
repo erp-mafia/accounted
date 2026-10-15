@@ -75,7 +75,7 @@ Every state-changing endpoint (POST, PATCH, DELETE) accepts an \`Idempotency-Key
 
 ### Required vs supported
 
-Most write endpoints **require** an Idempotency-Key: not only the obvious creates (invoices, customers, supplier-invoices, webhooks) but also journal-entry and salary-run creation, invoice \`send\`, period \`lock\`/\`close\`/\`year-end\`, bank reconciliation runs, dimension-value creation, PATCH/DELETE on customers, and more. Each endpoint's reference page states whether the key is required. Calls that omit a required key return \`400 VALIDATION_ERROR\` with field \`Idempotency-Key\`.
+Most write endpoints **require** an Idempotency-Key: not only the obvious creates (companies, invoices, customers, supplier-invoices, webhooks) but also journal-entry and salary-run creation, invoice \`send\`, period \`lock\`/\`close\`/\`year-end\`, bank reconciliation runs, dimension-value creation, PATCH/DELETE on customers, and more. Each endpoint's reference page states whether the key is required. Calls that omit a required key return \`400 VALIDATION_ERROR\` with field \`Idempotency-Key\`.
 
 Other endpoints **support** but don't require it. Sending one is always safe.
 
