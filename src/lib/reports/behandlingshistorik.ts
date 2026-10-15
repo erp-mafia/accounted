@@ -144,6 +144,13 @@ interface RattelseRow {
   struck_lines: unknown
   added_lines: unknown
   actor: string | null
+  /**
+   * WHO relayed the rättelse beside the user (migration 20261016005000): the
+   * committed_actor_type values. NULL or absent on rows written before it,
+   * which read as the user, as they always have.
+   */
+  actor_type?: string | null
+  actor_label?: string | null
   created_at: string
   /** 'sie_import' = correction history carried by the SIE file (#2427); absent/'user' = made here. */
   source?: 'user' | 'sie_import' | null
@@ -709,7 +716,11 @@ export function commitEventFromEntry(entry: EntryRow): RawBehandlingshistorikEve
   const details: string[] = [`Datum: ${entry.entry_date}`]
   if (entry.description) details.push(`Text: ${truncate(entry.description)}`)
   details.push(`Källa: ${sourceTypeLabel(entry.source_type)}`)
-  if (entry.commit_method) {
+  if (entry.commit_method === 'migration' && entry.reverses_id) {
+    // A storno posted by an SIE undo or a reviewed duplicate repair
+    // (20261016005200): imported history taken back out, not imported.
+    details.push('Bokföringssätt: Makulering av importerad verifikation (SIE)')
+  } else if (entry.commit_method) {
     details.push(`Bokföringssätt: ${COMMIT_METHOD_LABELS[entry.commit_method] ?? entry.commit_method}`)
   }
   if (entry.reverses_id) details.push('Vändningsverifikation (storno)')
@@ -801,7 +812,13 @@ export function rattelseEvent(
         ? 'Verifikation rättad i samma verifikat (rader)'
         : 'Verifikation rättad i samma verifikat (text/datum)',
     object: entry ? voucherLabel(entry.voucher_series, entry.voucher_number) : null,
-    actor: { type: 'user', user_id: row.actor, actor_label: null },
+    // The API key, OAuth client, cron job or assistant that relayed it, when
+    // the row records one; otherwise the user, as before.
+    actor: {
+      type: row.actor_type ? normaliseActorType(row.actor_type) : 'user',
+      user_id: row.actor,
+      actor_label: row.actor_label ?? null,
+    },
     details,
     source: 'rattelse_log',
     count: 1,
@@ -841,6 +858,33 @@ function auditEvent(
   }
 }
 
+/**
+ * WHO reversed a verifikat. The trigger's REVERSE row carries the original's
+ * user_id (who booked it, not who reversed it), and a reversal made over
+ * PostgREST (reverseEntry, correctEntry) cannot hand the trigger an actor, so
+ * its actor_type falls back to 'user'. The storno verifikat records who
+ * reversed: its user_id is the reverser, and committed_actor_* names the
+ * credential since the storno is posted through commit_journal_entry
+ * (commitStornoOrCorrectionDraft). Without the storno in this report the row
+ * speaks for itself, as before.
+ */
+function reversalActor(row: AuditLogEntry, ctx: NormaliseContext): RawActor {
+  const stornoId = str(row.new_state?.reversed_by_id)
+  const storno = stornoId ? ctx.entryById.get(stornoId) : undefined
+  if (!storno?.user_id) return baseAuditActor(row)
+  if (storno.committed_actor_type) {
+    return {
+      type: normaliseActorType(storno.committed_actor_type),
+      user_id: storno.user_id,
+      actor_label: storno.committed_actor_label,
+    }
+  }
+  // An actor the row itself records (an SIE undo sets one) wins over an
+  // unattributed storno; otherwise the storno's user is who reversed.
+  if (row.actor_type && row.actor_type !== 'user') return baseAuditActor(row)
+  return { type: 'user', user_id: storno.user_id, actor_label: null }
+}
+
 function journalEntryAuditEvent(
   row: AuditLogEntry,
   ctx: NormaliseContext,
@@ -862,6 +906,7 @@ function journalEntryAuditEvent(
         event: 'Verifikation makulerad (storno)',
         object,
         details: ['Bokförd verifikation vänd med en vändningsverifikation'],
+        actor: reversalActor(row, ctx),
       })
     case 'DELETE':
       if (!isBookedStatus(oldState?.status)) return null

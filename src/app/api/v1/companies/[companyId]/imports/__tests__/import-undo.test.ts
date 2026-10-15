@@ -352,7 +352,14 @@ describe('POST /imports/sie/:id/undo and /resume', () => {
     const res = await undo()
     expect(res.status).toBe(200)
     expect((await res.json()).data).toEqual({ import_id: IMPORT_ID, action: 'undo', state: 'undoing', phase: 'undo', accepted: true })
-    expect(client.rpc).toHaveBeenCalledWith('request_sie_import_undo', { p_company_id: COMPANY_ID, p_import_id: IMPORT_ID, p_actor: 'user-1' })
+    // The stornos will name the API key that asked for the undo (20261016005200).
+    expect(client.rpc).toHaveBeenCalledWith('request_sie_import_undo', {
+      p_company_id: COMPANY_ID,
+      p_import_id: IMPORT_ID,
+      p_actor: 'user-1',
+      p_actor_type: 'api_key',
+      p_actor_label: 'SIE undo: CI key',
+    })
   })
 
   it('maps an RPC refusal (55000) to 409 SIE_IMPORT_ACTION_CONFLICT', async () => {

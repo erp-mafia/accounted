@@ -1,0 +1,1 @@
+[2026-10-15] An app reversal's REVERSE audit row keeps actor 'user': setting it needs an RPC in place of the client-side CAS in reverseEntry and correctEntry, which 50 sequenced unit tests encode; the behandlingshistorik names who reversed from the storno (user_id, committed_actor_*).

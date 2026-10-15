@@ -31,6 +31,7 @@ import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-servic
 import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { resolveUserLabelsFromProfiles } from '@/lib/reports/behandlingshistorik'
+import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
 import {
   AccountsNotInChartError,
   CannotCorrectNonPostedError,
@@ -210,7 +211,9 @@ export async function correctJournalEntryMetadata(
 ): Promise<OperationOutcome<Record<string, unknown>>> {
   if (options.dryRun) return previewMetadataCorrection(ctx, entryId, input)
 
-  const { data, error } = await ctx.supabase.rpc('correct_entry_metadata', {
+  // The log row records WHO beside the user: the commit actor of this
+  // request (a person in the app, an API key, an OAuth client, ...).
+  const { data, error } = await rpcWithActor(ctx.supabase, 'correct_entry_metadata', {
     p_company_id: ctx.companyId,
     p_entry_id: entryId,
     p_description: input.description ?? null,
@@ -303,7 +306,7 @@ export async function strikeJournalEntryLines(
     await backfillStandardBASAccounts(ctx.supabase, ctx.companyId, ctx.userId, accountNumbers)
   }
 
-  const { data, error } = await ctx.supabase.rpc('correct_entry_lines_inline', {
+  const { data, error } = await rpcWithActor(ctx.supabase, 'correct_entry_lines_inline', {
     p_company_id: ctx.companyId,
     p_entry_id: entryId,
     p_strike_line_ids: input.strike_line_ids,

@@ -67,6 +67,7 @@ import { ORE_TOLERANCE, roundOre } from '@/lib/money'
 import { resolvePreviousFiscalPeriod } from '@/lib/core/bookkeeping/period-service'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { isLockDateRefusal } from '@/lib/errors/get-structured-error'
+import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -1040,7 +1041,7 @@ export async function splitOpeningBalancesPerProject(
         })),
       )
 
-      const { data, error } = await supabase.rpc('correct_entry_lines_inline', {
+      const { data, error } = await rpcWithActor(supabase, 'correct_entry_lines_inline', {
         p_company_id: companyId,
         p_entry_id: entryId,
         p_strike_line_ids: strike,

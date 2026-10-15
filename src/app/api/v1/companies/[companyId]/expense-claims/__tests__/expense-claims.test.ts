@@ -646,6 +646,9 @@ describe('POST /api/v1/companies/:companyId/expense-claims/payouts', () => {
       p_notes: null,
       p_user_id: 'user-1',
       p_transaction_id: null,
+      // The payout verifikat records the API key that booked it (20261016005100).
+      p_actor_type: 'api_key',
+      p_actor_label: 'CI key',
     })
   })
 

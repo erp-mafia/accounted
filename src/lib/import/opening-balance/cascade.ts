@@ -3,6 +3,7 @@ import type { Logger } from '@/lib/logger'
 import type { CreateJournalEntryLineInput } from '@/types'
 import { roundOre } from '@/lib/money'
 import { replaceOpeningBalanceEntry } from '@/lib/bookkeeping/engine'
+import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import {
   validateOpeningBalanceLines,
@@ -308,7 +309,7 @@ export async function cascadeOpeningBalanceCorrection(
       // storno, no new verifikat. The RPC transaction enforces the whole
       // envelope (posted, current linked IB, no bokslut, class 1-2, balance
       // to the öre, rättelse log) and rolls the period back on any failure.
-      const { error: inlineError } = await supabase.rpc('correct_entry_lines_inline', {
+      const { error: inlineError } = await rpcWithActor(supabase, 'correct_entry_lines_inline', {
         p_company_id: companyId,
         p_entry_id: oldEntryId,
         p_strike_line_ids: [],
