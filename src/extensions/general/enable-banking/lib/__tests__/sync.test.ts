@@ -795,7 +795,7 @@ describe('syncAccountTransactions', () => {
       '2026-01-01', '2026-06-01', mockIngest
     )
 
-    expect(mockGetAccountBalance).toHaveBeenCalledWith('acc-uid-1')
+    expect(mockGetAccountBalance).toHaveBeenCalledWith('acc-uid-1', undefined)
     expect(account.balance).toBe(1234.56)
     expect(account.available_balance).toBe(1100.5)
     expect(account.balance_updated_at).not.toBe(staleAt)
@@ -853,7 +853,7 @@ describe('syncAccountTransactions', () => {
       '2026-01-01', '2026-06-01', mockIngest
     )
 
-    expect(mockGetAccountBalance).toHaveBeenCalledWith('acc-uid-1')
+    expect(mockGetAccountBalance).toHaveBeenCalledWith('acc-uid-1', undefined)
     expect(account.balance).toBe(1234.56)
     expect(account.balance_updated_at).not.toBe(futureAt)
   })
@@ -903,5 +903,50 @@ describe('syncAccountTransactions', () => {
 
     const ingestOptions = mockIngest.mock.calls[0][4]
     expect(ingestOptions.settlementAccount).toBe('1930')
+  })
+})
+
+describe('syncAccountTransactions: the person asking', () => {
+  const SIGNER = { personalNumber: null, ipAddress: '203.0.113.7', userAgent: 'Mozilla/5.0 test' }
+  const PSU = { 'Psu-Ip-Address': '203.0.113.7', 'Psu-User-Agent': 'Mozilla/5.0 test' }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockResolveBankIngestRoute.mockImplementation(async (_db, _company, connectionId, accountUid, currency) => ({
+      connectionId, accountUid, currency, sessionId: 'session', cashAccountId: 'cash', ledgerAccount: '1930', token: 'route-token',
+    }))
+    mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: [], rawPages: [] })
+    mockGetAccountBalance.mockResolvedValue(null)
+  })
+
+  it('reads transactions and the balance with the PSU headers when a person asked', async () => {
+    await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+      '2026-07-01', '2026-10-01', mockIngest, { signer: SIGNER }
+    )
+
+    expect(mockGetAllTransactionsWithRaw).toHaveBeenCalledWith(
+      'acc-uid-1', '2026-07-01', '2026-10-01', undefined, { acceptedHistoryDays: undefined, psu: PSU }
+    )
+    expect(mockGetAccountBalance).toHaveBeenCalledWith('acc-uid-1', PSU)
+  })
+
+  it('reads in the background without a person (the cron, the agent)', async () => {
+    await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+      '2026-07-01', '2026-10-01', mockIngest
+    )
+
+    expect(mockGetAllTransactionsWithRaw.mock.calls[0][4]).not.toHaveProperty('psu')
+    expect(mockGetAccountBalance.mock.calls[0][1]).toBeUndefined()
+  })
+
+  it('reads in the background when the person cannot be named in full', async () => {
+    await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+      '2026-07-01', '2026-10-01', mockIngest, { signer: { ...SIGNER, userAgent: null } }
+    )
+
+    expect(mockGetAllTransactionsWithRaw.mock.calls[0][4]).not.toHaveProperty('psu')
   })
 })

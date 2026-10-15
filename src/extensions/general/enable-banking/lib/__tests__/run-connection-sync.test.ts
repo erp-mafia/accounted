@@ -104,6 +104,20 @@ describe('runConnectionSync', () => {
     expect(mockSync.mock.calls[0][8]).toEqual({})
   })
 
+  it('hands the person who asked to every account read, and nobody when none did', async () => {
+    const { supabase } = createTableMockSupabase({ sie_imports: { data: null } })
+    mockSync.mockResolvedValue(result() as never)
+    const signer = { personalNumber: null, ipAddress: '203.0.113.7', userAgent: 'Mozilla/5.0 test' }
+
+    await runConnectionSync(input(supabase, { lookbackDays: 7, signer }))
+    expect(mockSync.mock.calls[0][8]).toEqual({ signer })
+    expect(mockSync.mock.calls[1][8]).toEqual({ signer })
+
+    mockSync.mockClear()
+    await runConnectionSync(input(supabase, { lookbackDays: 7 }))
+    expect(mockSync.mock.calls[0][8]).toEqual({})
+  })
+
   it('records the window and what the bank returned on a first sync', async () => {
     const { supabase } = createTableMockSupabase({ sie_imports: { data: null } })
     mockSync.mockResolvedValue(result({ returnedMinBookingDate: '2026-07-05', returnedMaxBookingDate: '2026-09-30' }) as never)

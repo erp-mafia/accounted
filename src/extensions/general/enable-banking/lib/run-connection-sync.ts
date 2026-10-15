@@ -61,6 +61,12 @@ export interface ConnectionSyncInput {
    * persisted from them.
    */
   fetchTimeoutMs?: number
+  /**
+   * The person who asked ("Synka nu", the first import after the account
+   * picker): their reads do not count against the consent's background
+   * budget. Never set by the cron or the agent sync.
+   */
+  signer?: SyncOptions['signer']
   log: ConnectionSyncLog
 }
 
@@ -108,6 +114,7 @@ export async function runConnectionSync(input: ConnectionSyncInput): Promise<Con
     ...(sieOverlap ? { skipAutoCategorization: true } : {}),
     ...(rawInsertOnly ? { rawInsertOnly: true } : {}),
     ...(input.firstSync || input.lookbackDays >= LONGEST_STRATEGY_MIN_DAYS ? { strategy: 'longest' as const } : {}),
+    ...(input.signer ? { signer: input.signer } : {}),
   }
 
   const fetches = Promise.all(
