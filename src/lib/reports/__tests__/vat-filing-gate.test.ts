@@ -286,8 +286,19 @@ describe('rcBasisGapAdvisoryFinding', () => {
   it('uses singular and plural Swedish wording and keeps the worklist pointer', () => {
     expect(rcBasisGapAdvisoryFinding(1).message).toContain('1 verifikation i perioden')
     expect(rcBasisGapAdvisoryFinding(3).message).toContain('3 verifikationer i perioden')
-    expect(rcBasisGapAdvisoryFinding(1).message).toContain('listan nedan')
+    expect(rcBasisGapAdvisoryFinding(1).message).toContain('verifikationerna i listan')
     expect(rcBasisGapAdvisoryFinding(1).message).toContain('per momssats')
+  })
+
+  it('says where the basis is, how to accept it and why Korrigera is wrong here (crm#1171)', () => {
+    const { message } = rcBasisGapAdvisoryFinding(13)
+    // The flagged verifikat may be the originals (their basis added by a
+    // collective rättelse) or moms-only corrections: the message names neither.
+    expect(message).toContain('basbeloppet finns i ett annat verifikat i perioden')
+    expect(message).toContain('markera varningen som granskad')
+    expect(message).toContain('Korrigera inte verifikationerna i listan')
+    expect(message).toContain('räknas basbeloppet två gånger')
+    expect(message).not.toMatch(/[\u2013\u2014]/)
     expect(rcBasisGapAdvisoryFinding(1).status).toBe('WARNING')
     expect(rcBasisGapAdvisoryFinding(1).code).toBe('RC_BASIS_MISSING')
   })

@@ -36,6 +36,16 @@ describe('loadDocumentClaims', () => {
     expect(claims.get('doc-1')).toEqual([{ document_id: 'doc-1', operation_id: 'op-c', transaction_id: null, journal_entry_id: 'je-2' }])
   })
 
+  // crm#1171 item 9: a single link staged as a copy leaves the document free too.
+  it('skips a waiting single link staged as a copy', async () => {
+    enqueue({ data: [
+      { id: 'op-s', operation_type: 'link_document_to_voucher', params: { document_id: 'doc-1', journal_entry_id: 'je-23', copy: true } },
+    ] })
+    enqueue({ data: [] })
+    const claims = await loadDocumentClaims(supabase as never, 'company-a', ['doc-1'])
+    expect(claims.has('doc-1')).toBe(false)
+  })
+
   it('counts the single voucher links waiting, from the same read', async () => {
     enqueue({ data: [
       { id: 'op-1', operation_type: 'link_document_to_voucher', params: { document_id: 'doc-8', journal_entry_id: 'je-8' } },

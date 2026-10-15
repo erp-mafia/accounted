@@ -20,9 +20,11 @@ import { nextDay } from '@/lib/core/bookkeeping/kontantmetod-cutoff'
 import { codedRefusal } from '@/lib/errors/refusal'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope'
-import { findRcBasisGaps } from '@/lib/reports/rc-basis-gaps'
+import { findRcBasisGaps, type RcBasisGap } from '@/lib/reports/rc-basis-gaps'
 import { computeVatDeclaration, type MomsredovisningDetection, rcInputTotalsFromDeclaration, VAT_SETTLEMENT_NET_ACCOUNTS, type VatPeriodSource, type VatSettlementShapedEntry } from '@/lib/reports/vat-declaration'
-import { revenueAccountWithoutRutaFinding, runVatDeclarationChecks, type VatDeclarationCheck, type VatDeclarationCheckStatus } from '@/lib/reports/vat-declaration-checks'
+import { revenueAccountWithoutRutaFinding, runVatDeclarationChecks, selfAssessedVatWithoutAnyInputVat, type VatCheckReviewMark, type VatDeclarationCheck, type VatDeclarationCheckStatus } from '@/lib/reports/vat-declaration-checks'
+import { listVatCheckReviews } from '@/lib/vat/check-review-store'
+import { applyVatCheckReviews, isReviewableVatCheck, type VatCheckReview, type VatCheckReviewInputs } from '@/lib/vat/check-reviews'
 import { isFilingBlocked, type RcBasisGapScan, withRcBasisGapFindings } from '@/lib/reports/vat-filing-gate'
 import { buildFiledAmounts } from '@/lib/reports/vat-manual-filing'
 import { euTradeInRutor, formatEuTradeBoxes } from '@/lib/vat/eu-trade'
@@ -357,6 +359,11 @@ export interface VatFilingVerdict {
   checks: VatDeclarationCheck[]
   /** isFilingBlocked(checks): an ERROR finding, the state the UI disables Skicka on. */
   blocked: boolean
+  /**
+   * The per-verifikat scan the checks were folded with, null when it could
+   * not run. A review fingerprint (src/lib/vat/check-reviews.ts) reads it.
+   */
+  gaps: RcBasisGap[] | null
 }
 
 export async function vatFilingVerdict(
@@ -367,8 +374,9 @@ export async function vatFilingVerdict(
 ): Promise<VatFilingVerdict> {
   const { type: periodType, year, period } = declaration.period
   let scan: RcBasisGapScan
+  let gaps: RcBasisGap[] | null = null
   try {
-    const gaps = await findRcBasisGaps(supabase, companyId, periodType, year, period, {
+    gaps = await findRcBasisGaps(supabase, companyId, periodType, year, period, {
       fiscalPeriodId: options.fiscalPeriodId,
     })
     scan = { status: 'scanned', gapCount: gaps.length }
@@ -384,7 +392,36 @@ export async function vatFilingVerdict(
       ? { rutor: declaration.rutor, rcBasisByRate: declaration.rcBasisByRate }
       : undefined,
   )
-  return { checks, blocked: isFilingBlocked(checks) }
+  return { checks, blocked: isFilingBlocked(checks), gaps }
+}
+
+/**
+ * vatFilingVerdict with the period's stored reviews applied (crm#1171): a
+ * WARNING a person accepted for the period, with its figures unchanged,
+ * carries `review`. For the readers that report findings to someone
+ * (gnubok_vat_close_check, gnubok_vat_declaration_validate); the filing paths
+ * keep calling vatFilingVerdict, and `blocked` is the same either way because
+ * a review never attaches to an ERROR. A failed review read leaves the
+ * warnings unreviewed: they nag once more, nothing is hidden.
+ */
+export async function vatFilingVerdictWithReviews(
+  supabase: SupabaseClient,
+  companyId: string,
+  declaration: VatDeclaration,
+  options: { fiscalPeriodId?: string } = {},
+): Promise<VatFilingVerdict & { inputs: VatCheckReviewInputs }> {
+  const verdict = await vatFilingVerdict(supabase, companyId, declaration, options)
+  const inputs: VatCheckReviewInputs = { declaration, gaps: verdict.gaps }
+  if (!verdict.checks.some((check) => isReviewableVatCheck(check, inputs))) return { ...verdict, inputs }
+  let reviews: VatCheckReview[] = []
+  try {
+    reviews = await listVatCheckReviews(supabase, companyId, declaration.period, { labelClient: supabase })
+  } catch (err) {
+    log.warn('vat check reviews unavailable, reporting warnings unreviewed', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+  return { ...verdict, checks: applyVatCheckReviews(verdict.checks, reviews, inputs), inputs }
 }
 
 /** Wire shape for a completeness finding on the MCP surface. */
@@ -393,19 +430,29 @@ export interface VatCompletenessFinding {
   status: VatDeclarationCheckStatus
   message: string
   rutor: string[]
+  /** Present when the caller passed the review inputs: whether gnubok_mark_vat_check_reviewed accepts this finding. */
+  reviewable?: boolean
+  /** Present with `reviewable`: who accepted the warning for this period, or null. */
+  review?: VatCheckReviewMark | null
 }
 
 /**
  * Serialize findings for an agent. Unlike the web UI (which deliberately hides
  * the rule ids as visual noise, DECISIONS.md archive 2026-07-24), the machine surface
- * carries `code`: an agent needs a stable key to branch on, not prose.
+ * carries `code`: an agent needs a stable key to branch on, not prose. With
+ * `inputs` (the readers that apply reviews) each finding also says whether it
+ * can be marked reviewed and who did.
  */
-export function toCompletenessFindings(checks: VatDeclarationCheck[]): VatCompletenessFinding[] {
+export function toCompletenessFindings(
+  checks: VatDeclarationCheck[],
+  inputs?: VatCheckReviewInputs,
+): VatCompletenessFinding[] {
   return checks.map((c) => ({
     code: c.code,
     status: c.status,
     message: c.message,
     rutor: (c.rutor ?? []) as string[],
+    ...(inputs ? { reviewable: isReviewableVatCheck(c, inputs), review: c.review ?? null } : {}),
   }))
 }
 
@@ -475,6 +522,28 @@ export const RC_BASIS_MISSING_HINT =
   'EU-tjänster ruta 21, 4531-4533 tjänster utanför EU ruta 22, 4515-4517 EU-varor ruta 20. Eller Korrigera i ' +
   'momsvyn. Har ett konto en momskod för omvänd skattskyldighet utan Standard moms 25, 12 eller 6 %, rätta ' +
   'kontot i kontoplanen först.'
+
+/**
+ * Hint for the advisory (WARNING) RC_BASIS_MISSING: the period's basis matches
+ * its fiktiv moms per momssats, so the flagged verifikat's basis is booked in
+ * another verifikat. Adding basis would count it twice; what is left is the
+ * user's check that the other verifikat covers these purchases, recorded as a
+ * review (crm#1171). Exported so the test can pin the contract.
+ */
+export const RC_BASIS_ADVISORY_HINT =
+  'Lägg inte till basbelopp: summan per momssats stämmer, så basbeloppet för dessa verifikat finns i ett annat ' +
+  'verifikat i perioden (ofta ett rättelseverifikat). Visa användaren verifikaten (gnubok_get_general_ledger för ' +
+  '2614/2624/2634 och 44xx/45xx). Bekräftar användaren att basbeloppet avser just de här inköpen: ' +
+  'gnubok_mark_vat_check_reviewed med check_code RC_BASIS_MISSING och en notering om var basbeloppet finns.'
+
+/**
+ * Appended to the hint of every other reviewable WARNING: once the user has
+ * checked it and it is right as booked, the review stops it from coming back
+ * until the figures change.
+ */
+export const VAT_CHECK_REVIEW_HINT =
+  'Är det rätt som bokfört enligt användaren: gnubok_mark_vat_check_reviewed med check_code, så återkommer varningen ' +
+  'bara om underlaget ändras.'
 
 /**
  * Hint for the bank_unreconciled blocker when every bank row in the period is
@@ -1077,11 +1146,14 @@ export async function computeVatCloseCheck(
   //     Now the shared core checks run instead, over the full SKV 4700
   //     projection, so the MCP verdict is the SAME verdict the web UI's
   //     "Kontroll av underlaget" gate gives. Never re-derive these locally.
-  const { checks: declarationChecks, blocked: declarationBlocked } = await vatFilingVerdict(
-    supabase,
-    companyId,
-    declaration,
-  )
+  //     A WARNING a person reviewed for the period (crm#1171) stays in
+  //     declaration_checks with its review and leaves the blockers: it has
+  //     been looked at. An ERROR is never reviewed.
+  const {
+    checks: declarationChecks,
+    blocked: declarationBlocked,
+    inputs: reviewInputs,
+  } = await vatFilingVerdictWithReviews(supabase, companyId, declaration)
 
   // Zero deductible input VAT against self-assessed utgående moms is
   // unambiguous: rutor 30-32 (omvänd skattskyldighet, 2614/2624/2634) and
@@ -1101,14 +1173,26 @@ export async function computeVatCloseCheck(
   //     the tullvärdesunderlag in ruta 50, never against the input side.
   const eps = 0.5
   const rcOutput = declarationRutor.ruta30 + declarationRutor.ruta31 + declarationRutor.ruta32
-  const selfAssessedOutput =
-    rcOutput + declarationRutor.ruta60 + declarationRutor.ruta61 + declarationRutor.ruta62
-  const noInputVatAtAll = selfAssessedOutput > eps && declarationRutor.ruta48 <= eps
+  const noInputVatAtAll = selfAssessedVatWithoutAnyInputVat(declarationRutor)
 
   for (const check of declarationChecks) {
+    if (check.review) continue
     const escalated =
       check.status === 'ERROR' ||
       (check.code === 'RC_INPUT_VAT_MISMATCH' && noInputVatAtAll)
+    const baseHint =
+      // Only the blocking variant: the advisory RC_BASIS_MISSING (period
+      // consistent per rate) and the scan-unavailable one must not be told to
+      // add basis pairs, that would double-count rutor 20-24.
+      check.code === 'RC_BASIS_MISSING' && check.status === 'ERROR'
+        ? RC_BASIS_MISSING_HINT
+        : check.code === 'RC_BASIS_MISSING' && isReviewableVatCheck(check, reviewInputs)
+          ? RC_BASIS_ADVISORY_HINT
+          : check.code === 'REVENUE_ACCOUNT_WITHOUT_RUTA'
+            ? REVENUE_ACCOUNT_WITHOUT_RUTA_HINT
+            : check.rutor?.length
+              ? `Granska ${check.rutor.join(', ')} i huvudboken innan inlämning (gnubok_get_general_ledger).`
+              : 'Granska underlaget i huvudboken innan inlämning (gnubok_get_general_ledger).'
     blockers.push({
       kind: RC_COMPLETENESS_CODES.has(check.code)
         ? 'reverse_charge_input_missing'
@@ -1116,16 +1200,15 @@ export async function computeVatCloseCheck(
       severity: escalated ? 'high' : 'medium',
       count: 1,
       message: check.message,
-      // Only the blocking variant: the advisory RC_BASIS_MISSING (period
-      // consistent per rate) and the scan-unavailable one must not be told to
-      // add basis pairs, that would double-count rutor 20-24.
-      hint: check.code === 'RC_BASIS_MISSING' && check.status === 'ERROR'
-        ? RC_BASIS_MISSING_HINT
-        : check.code === 'REVENUE_ACCOUNT_WITHOUT_RUTA'
-          ? REVENUE_ACCOUNT_WITHOUT_RUTA_HINT
-          : check.rutor?.length
-          ? `Granska ${check.rutor.join(', ')} i huvudboken innan inlämning (gnubok_get_general_ledger).`
-          : 'Granska underlaget i huvudboken innan inlämning (gnubok_get_general_ledger).',
+      // The review pointer, except where the finding has its own way out:
+      // RC_BASIS_MISSING's advisory hint names the review itself, and an
+      // account without a ruta is fixed on the account, not accepted.
+      hint: !escalated &&
+        isReviewableVatCheck(check, reviewInputs) &&
+        check.code !== 'RC_BASIS_MISSING' &&
+        check.code !== 'REVENUE_ACCOUNT_WITHOUT_RUTA'
+        ? `${baseHint} ${VAT_CHECK_REVIEW_HINT}`
+        : baseHint,
       check_code: check.code,
     })
   }
@@ -1243,7 +1326,7 @@ export async function computeVatCloseCheck(
       moms_period: momsPeriod,
     },
     blockers,
-    declaration_checks: toCompletenessFindings(declarationChecks),
+    declaration_checks: toCompletenessFindings(declarationChecks, reviewInputs),
     sanity: { anomalies, ratios },
     ready_to_close: readyToClose,
     summary,

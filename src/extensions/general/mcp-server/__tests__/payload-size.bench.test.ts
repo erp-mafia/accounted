@@ -702,6 +702,12 @@ describe('tools/list payload size guard', () => {
     //     type, email, VAT number, address) and shortening both tool
     //     descriptions. Measured 65 890 (single-company 60 881). Ceiling
     //     unchanged.
+    //   * Shared underlag (crm#1171 item 9, 2026-10-15):
+    //     gnubok_link_document_to_voucher gains copy (a byte-identical copy
+    //     for a second verifikat). Paid for by dropping document_id's
+    //     description, a shorter line pin and the bulk tool's "shared
+    //     underlag" clause. Measured 65 895 (single-company 60 886). Ceiling
+    //     unchanged.
     expect(approxTokens).toBeLessThan(65_900)
   })
 
@@ -760,6 +766,8 @@ describe('tools/list payload size guard', () => {
     // above): measured 60 890. Ceiling unchanged.
     // 2026-10-15, the customer card on the agent tools (crm#1198, see the
     // case above): measured 60 881. Ceiling unchanged.
+    // 2026-10-15, copy on gnubok_link_document_to_voucher (crm#1171 item 9,
+    // see the case above): measured 60 886. Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

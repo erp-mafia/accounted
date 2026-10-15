@@ -100,3 +100,55 @@ describe('commitPendingOperation: link_documents_to_vouchers with a copy row', (
     expect(linkDocumentToVoucher).not.toHaveBeenCalled()
   })
 })
+
+describe('commitPendingOperation: link_document_to_voucher staged as a copy (crm#1171 item 9)', () => {
+  function single(params: Record<string, unknown>): PendingOperation {
+    return { ...op([]), operation_type: 'link_document_to_voucher', params } as PendingOperation
+  }
+
+  it('archives a copy for the verifikat and names the document it was made from', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null })           // dispatcher commit update
+
+    const result = await commitPendingOperation(supabase as never, 'user-approver', 'company-1', single({
+      document_id: 'invoice', journal_entry_id: 'je-a27', journal_entry_line_id: null, copy: true,
+    }))
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ document_id: 'copy-1', journal_entry_id: 'je-a27', copy_of_document_id: 'invoice' })
+    expect(linkDocumentCopyToVoucher).toHaveBeenCalledWith(supabase, 'company-1', 'user-approver', {
+      document_id: 'invoice', journal_entry_id: 'je-a27', journal_entry_line_id: null,
+    })
+    expect(linkDocumentToVoucher).not.toHaveBeenCalled()
+  })
+
+  it('rejects in Swedish when the copy rules refuse it', async () => {
+    linkDocumentCopyToVoucher.mockResolvedValueOnce({ ok: false, code: 'PERIOD_LOCKED', details: { period: {} } })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })
+    enqueue({ data: null, error: null })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', single({
+      document_id: 'invoice', journal_entry_id: 'je-a27', copy: true,
+    }))
+
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(result.error).toBe('Verifikationens period är låst: bilagan kan inte länkas.')
+  })
+
+  it('links the document itself when the operation was not staged as a copy', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })
+    enqueue({ data: null, error: null })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', single({
+      document_id: 'invoice', journal_entry_id: 'je-a2',
+    }))
+
+    expect(result.status).toBe('committed')
+    expect(linkDocumentCopyToVoucher).not.toHaveBeenCalled()
+    expect(linkDocumentToVoucher).toHaveBeenCalledTimes(1)
+  })
+})

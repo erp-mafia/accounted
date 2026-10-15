@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useRouter, useSearchParams } from 'next/navigation'
@@ -10,8 +10,7 @@ import { AttnLine } from '@/components/ui/attn-line'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { Skeleton } from '@/components/ui/skeleton'
-import { CalendarPlus, Check, Lock } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { CalendarPlus, Lock } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { FiscalPeriod, YearEndPreview, YearEndResult } from '@/types'
@@ -22,6 +21,7 @@ import { AccrualsStep } from '@/components/bookkeeping/year-end/AccrualsStep'
 import { PreviewStep } from '@/components/bookkeeping/year-end/PreviewStep'
 import { ExecuteStep } from '@/components/bookkeeping/year-end/ExecuteStep'
 import { ResultStep } from '@/components/bookkeeping/year-end/ResultStep'
+import { StepRail } from '@/components/bokslut/StepRail'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
 type Step = 'preflight' | 'accruals' | 'dispositions' | 'preview' | 'execute' | 'result'
@@ -347,59 +347,21 @@ export default function YearEndPage() {
         )
       )}
 
-      {/* Stegen (concept scene 34): dots walk check -> filled -> number.
-          Steps behind the current one are clickable for going back; forward
-          navigation stays with each step's own continue action. */}
+      {/* Stegen (concept scene 34): steps behind the current one are
+          clickable for going back; forward navigation stays with each
+          step's own continue action. */}
       {showWizard && step !== 'result' && (
-        <div
-          className="mx-auto flex w-full max-w-4xl items-center gap-3 overflow-x-auto px-1"
-          role="tablist"
-          aria-label="Bokslutets steg"
-        >
-          {STEP_ORDER.map((s, i) => (
-            <React.Fragment key={s}>
-              {i > 0 && <span className="h-px min-w-4 flex-1 bg-border" aria-hidden="true" />}
-              <button
-                type="button"
-                role="tab"
-                aria-selected={s === step}
-                disabled={navigationBlocked || i >= currentStepIndex}
-                onClick={() => {
-                  if (!navigationBlocked && i < currentStepIndex) setStep(s)
-                }}
-                className={cn(
-                  'group flex shrink-0 items-center gap-2 text-left',
-                  (navigationBlocked || i >= currentStepIndex) && 'cursor-default',
-                )}
-              >
-                <span
-                  className={cn(
-                    'flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs tabular-nums transition-colors duration-150',
-                    i < currentStepIndex
-                      ? 'border-success/40 text-success'
-                      : s === step
-                        ? 'border-foreground bg-foreground text-background'
-                        : 'border-border text-muted-foreground',
-                  )}
-                >
-                  {i < currentStepIndex ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : i + 1}
-                </span>
-                <span
-                  className={cn(
-                    'text-[12.5px] transition-colors duration-150',
-                    s === step
-                      ? 'font-medium'
-                      : i < currentStepIndex
-                        ? 'text-muted-foreground group-hover:text-foreground'
-                        : 'text-muted-foreground',
-                  )}
-                >
-                  {STEP_LABELS[s]}
-                </span>
-              </button>
-            </React.Fragment>
-          ))}
-        </div>
+        <StepRail
+          className="mx-auto max-w-4xl"
+          ariaLabel="Bokslutets steg"
+          steps={STEP_ORDER.map((s, i) => ({
+            key: s,
+            label: STEP_LABELS[s],
+            state: i < currentStepIndex ? 'done' : s === step ? 'current' : 'upcoming',
+          }))}
+          canSelect={(_s, i) => !navigationBlocked && i < currentStepIndex}
+          onSelect={(key) => setStep(key as Step)}
+        />
       )}
 
       {showWizard && step === 'preflight' && (

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { HelpPopover } from '@/components/ui/help-popover'
+import { Textarea } from '@/components/ui/textarea'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import {
   DataList,
@@ -26,6 +27,12 @@ import {
 } from 'lucide-react'
 import type { VatDeclarationCheck } from '@/lib/reports/vat-declaration-checks'
 import type { RcBasisGap } from '@/lib/reports/rc-basis-gaps'
+import {
+  isReviewableVatCheck,
+  unreviewedVatChecks,
+  vatCheckFingerprint,
+  type VatCheckReviewInputs,
+} from '@/lib/vat/check-reviews'
 import type { VatPeriodType } from '@/types'
 import { formatAmount, formatDate } from '@/lib/utils'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -88,6 +95,13 @@ const rowKey = (gap: RcBasisGap) => `${gap.entryId}:${gap.rcOutputAccount}`
  * bulk Korrigera. Hoisted out of SkatteverketPanel so EVERY user sees it,
  * paying or not, connected or not: manual filers are exactly the users who
  * must not file a declaration these checks would have blocked.
+ *
+ * A WARNING can be marked reviewed for the period (crm#1171,
+ * lib/vat/check-reviews.ts): it then renders muted with who and when, and
+ * stops counting. It comes back when its figures change. An ERROR has no such
+ * action. When the RC basis gaps are advisory (`rcBasisAdvisory`: the period
+ * matches per momssats) the worklist offers no Korrigera: the basis is
+ * already booked in another verifikat and would be counted twice.
  */
 export function VatChecksCard({
   checks,
@@ -96,6 +110,9 @@ export function VatChecksCard({
   period,
   fiscalPeriodId,
   onCorrected,
+  reviewInputs = null,
+  rcBasisAdvisory = false,
+  onReviewsChanged,
 }: {
   checks: VatDeclarationCheck[]
   periodType: VatPeriodType
@@ -103,6 +120,10 @@ export function VatChecksCard({
   period: number
   fiscalPeriodId?: string
   onCorrected: () => void
+  /** What the period's findings were computed from; null while the gap scan is pending. */
+  reviewInputs?: VatCheckReviewInputs | null
+  rcBasisAdvisory?: boolean
+  onReviewsChanged?: () => void
 }) {
   const router = useRouter()
   const t = useTranslations('reports')
@@ -138,6 +159,11 @@ export function VatChecksCard({
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
   const [fixingId, setFixingId] = useState<string | null>(null)
   const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null)
+  // The finding whose review note is open, its draft note, and the code a
+  // mark or undo is in flight for.
+  const [reviewingCode, setReviewingCode] = useState<string | null>(null)
+  const [reviewNote, setReviewNote] = useState('')
+  const [reviewBusy, setReviewBusy] = useState<string | null>(null)
 
   // Render-phase adjustment: a new period resets the per-row working state.
   const [appliedGapsKey, setAppliedGapsKey] = useState<string | null>(null)
@@ -148,6 +174,8 @@ export function VatChecksCard({
     setRowErrors({})
     setExpandedId(null)
     setShowAll(false)
+    setReviewingCode(null)
+    setReviewNote('')
   }
 
   const gapsFetched = gapsResult !== null && gapsResult.key === gapsKey
@@ -337,6 +365,74 @@ export function VatChecksCard({
     onCorrected()
   }
 
+  const periodQuery = (): Record<string, string> => ({
+    period_type: periodType,
+    year: String(year),
+    period: String(period),
+    ...(fiscalPeriodId ? { fiscal_period_id: fiscalPeriodId } : {}),
+  })
+
+  // The server recomputes the finding; the fingerprint sent is the one on
+  // screen, so figures that moved since are refused instead of reviewed.
+  const handleMarkReviewed = async (check: VatDeclarationCheck) => {
+    if (!reviewInputs) return
+    setReviewBusy(check.code)
+    try {
+      const note = reviewNote.trim()
+      const res = await fetch('/api/reports/vat-declaration/check-reviews', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...periodQuery(),
+          year,
+          period,
+          check_code: check.code,
+          ...(note ? { note } : {}),
+          expected_fingerprint: vatCheckFingerprint(check, reviewInputs),
+        }),
+      })
+      const json = await res.json().catch(() => null)
+      if (!res.ok || json?.error) {
+        toast({
+          title: t('vat_check_review_failed'),
+          description: getErrorMessage(json, { locale: errorLocale, fallback: t('vat_check_review_failed') }),
+        })
+        return
+      }
+      setReviewingCode(null)
+      setReviewNote('')
+      toast({ title: t('vat_check_review_saved') })
+      onReviewsChanged?.()
+    } catch {
+      toast({ title: t('vat_check_review_failed') })
+    } finally {
+      setReviewBusy(null)
+    }
+  }
+
+  const handleUndoReview = async (check: VatDeclarationCheck) => {
+    setReviewBusy(check.code)
+    try {
+      const params = new URLSearchParams({ ...periodQuery(), check_code: check.code })
+      const res = await fetch(`/api/reports/vat-declaration/check-reviews?${params.toString()}`, { method: 'DELETE' })
+      const json = await res.json().catch(() => null)
+      if (!res.ok || json?.error) {
+        toast({
+          title: t('vat_check_review_undo_failed'),
+          description: getErrorMessage(json, { locale: errorLocale, fallback: t('vat_check_review_undo_failed') }),
+        })
+        return
+      }
+      onReviewsChanged?.()
+    } catch {
+      toast({ title: t('vat_check_review_undo_failed') })
+    } finally {
+      setReviewBusy(null)
+    }
+  }
+
+  const unreviewed = unreviewedVatChecks(checks)
+
   // The fold counts verifikat, like the header and its own label: every row
   // of a verifikat with two momssatser stays on the same side of it.
   const previewIds = new Set([...new Set(gaps.map((g) => g.entryId))].slice(0, GAP_PREVIEW_COUNT))
@@ -350,25 +446,109 @@ export function VatChecksCard({
             Inga fel hittades i underlaget för perioden.
           </div>
         )}
+        {checks.length > 0 && unreviewed.length === 0 && (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <CheckCircle2 className="h-4 w-4 text-success" />
+            {t('vat_check_all_reviewed')}
+          </div>
+        )}
 
         {checks.length > 0 && (
           <div>
-            {checks.map((c, i) => (
-              <div
-                key={`${c.code}-${i}`}
-                className="flex items-start gap-2 border-b border-border py-3 text-[13px] leading-5 last:border-b-0"
-              >
-                {c.status === 'ERROR' ? (
-                  <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />
-                ) : (
-                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-attn" aria-hidden="true" />
-                )}
-                <div className="flex min-w-0 items-start gap-1.5">
-                  <span>{c.message}</span>
-                  {c.detail ? <HelpPopover className="mt-0.5">{c.detail}</HelpPopover> : null}
+            {checks.map((c, i) => {
+              const reviewable = reviewInputs !== null && isReviewableVatCheck(c, reviewInputs)
+              const editing = reviewingCode === c.code
+              return (
+                <div
+                  key={`${c.code}-${i}`}
+                  className="flex items-start gap-2 border-b border-border py-3 text-[13px] leading-5 last:border-b-0"
+                >
+                  {c.review ? (
+                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  ) : c.status === 'ERROR' ? (
+                    <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />
+                  ) : (
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-attn" aria-hidden="true" />
+                  )}
+                  <div className="min-w-0 flex-1 space-y-1.5">
+                    <div className="flex min-w-0 items-start gap-1.5">
+                      <span className={cn(c.review && 'text-muted-foreground')}>{c.message}</span>
+                      {c.detail ? <HelpPopover className="mt-0.5">{c.detail}</HelpPopover> : null}
+                    </div>
+                    {c.review ? (
+                      <p className="text-xs text-muted-foreground">
+                        {c.review.reviewed_by_label
+                          ? t('vat_check_reviewed_by', {
+                              date: formatDate(c.review.reviewed_at),
+                              name: c.review.reviewed_by_label,
+                            })
+                          : t('vat_check_reviewed', { date: formatDate(c.review.reviewed_at) })}
+                        {c.review.source === 'agent' ? ` ${t('vat_check_reviewed_via_agent')}` : ''}
+                        {c.review.note ? `: ${c.review.note}` : ''}
+                        {canWrite && (
+                          <>
+                            {' '}
+                            <button
+                              type="button"
+                              onClick={() => handleUndoReview(c)}
+                              disabled={reviewBusy !== null}
+                              className={cn(QUIET_LINK_CLASS, 'disabled:cursor-not-allowed disabled:opacity-50')}
+                            >
+                              {t('vat_check_review_undo')}
+                            </button>
+                          </>
+                        )}
+                      </p>
+                    ) : reviewable && canWrite && !editing ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReviewingCode(c.code)
+                          setReviewNote('')
+                        }}
+                        disabled={reviewBusy !== null}
+                        className={cn(QUIET_LINK_CLASS, 'text-xs disabled:cursor-not-allowed disabled:opacity-50')}
+                      >
+                        {t('vat_check_review_action')}
+                      </button>
+                    ) : null}
+                    {editing && !c.review && (
+                      <div className="space-y-2 pt-1">
+                        <label className="block text-xs text-muted-foreground" htmlFor={`vat-review-note-${c.code}`}>
+                          {t('vat_check_review_note_label')}
+                        </label>
+                        <Textarea
+                          id={`vat-review-note-${c.code}`}
+                          value={reviewNote}
+                          onChange={(e) => setReviewNote(e.target.value)}
+                          maxLength={1000}
+                          placeholder={t('vat_check_review_note_placeholder')}
+                          className="min-h-[64px]"
+                        />
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            size="sm"
+                            onClick={() => handleMarkReviewed(c)}
+                            loading={reviewBusy === c.code}
+                            disabled={reviewBusy !== null}
+                          >
+                            {t('vat_check_review_save')}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setReviewingCode(null)}
+                            disabled={reviewBusy !== null}
+                          >
+                            {t('vat_check_review_cancel')}
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
 
@@ -379,7 +559,9 @@ export function VatChecksCard({
                 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground"
                 aria-live="polite"
               >
-                Verifikationer som saknar basbelopp ({verifikatCount})
+                {rcBasisAdvisory
+                  ? t('vat_basis_advisory_heading', { count: verifikatCount })
+                  : `Verifikationer som saknar basbelopp (${verifikatCount})`}
               </h3>
               <div className="h-px flex-1 bg-border/60" />
             </div>
@@ -405,9 +587,14 @@ export function VatChecksCard({
               </p>
             ) : (
               <>
+                {rcBasisAdvisory && (
+                  <p className="text-xs text-muted-foreground">{t('vat_basis_advisory_hint')}</p>
+                )}
                 {/* Classification chips (house context-picker style), then the
                     bulk action: the chip values ("EU-leverantör", "Tjänst")
-                    are self-describing, so no field labels. */}
+                    are self-describing, so no field labels. Not in the
+                    advisory tier: there is nothing to add. */}
+                {!rcBasisAdvisory && (
                 <div className="flex flex-wrap items-center gap-2">
                   <ContextPicker
                     items={SUPPLIER_ITEMS}
@@ -442,6 +629,7 @@ export function VatChecksCard({
                     Korrigera alla ({verifikatCount})
                   </Button>
                 </div>
+                )}
 
                 {bulkProgress && (
                   <p role="status" className="text-sm text-muted-foreground">
@@ -469,6 +657,7 @@ export function VatChecksCard({
                             <span className="text-sm tabular-nums text-muted-foreground">
                               {formatAmount(gap.missingBasisAmount)} kr
                             </span>
+                            {!rcBasisAdvisory && (
                             <button
                               type="button"
                               onClick={(e) => {
@@ -483,6 +672,7 @@ export function VatChecksCard({
                               )}
                               Korrigera
                             </button>
+                            )}
                             <Button
                               variant="ghost"
                               size="icon"
@@ -513,7 +703,9 @@ export function VatChecksCard({
                               {formatAmount(gap.missingBasisAmount)} kr
                             </p>
                             {/* Same chips as the toolbar, scoped to this row:
-                                a changed value becomes a per-row override. */}
+                                a changed value becomes a per-row override.
+                                Not in the advisory tier (no Korrigera). */}
+                            {!rcBasisAdvisory && (
                             <div className="flex flex-wrap items-center gap-2">
                               <ContextPicker
                                 items={SUPPLIER_ITEMS}
@@ -552,6 +744,7 @@ export function VatChecksCard({
                                 disabled={busy}
                               />
                             </div>
+                            )}
                           </div>
                         }
                       >

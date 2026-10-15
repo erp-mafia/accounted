@@ -3247,6 +3247,29 @@ const VAT_FILING: Record<string, StructuredErrorEntry> = {
       tool: 'gnubok_vat_declaration_validate',
     },
   },
+  // Reviewed VAT warnings (lib/vat/check-review-service.ts, crm#1171).
+  VAT_CHECK_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Perioden visar inte den varningen längre. Ladda om sidan så uppdateras kontrollen.',
+    message_en: 'The period no longer shows that warning. Reload the page to refresh the checks.',
+  },
+  VAT_CHECK_NOT_REVIEWABLE: {
+    httpStatus: 409,
+    message_sv:
+      'Bara en varning kan markeras som granskad. Ett fel måste rättas i bokföringen, och en kontroll som inte kunde köras finns det inget att granska i.',
+    message_en:
+      'Only a warning can be marked as reviewed. An error must be fixed in the books, and a check that could not run has nothing to review.',
+  },
+  VAT_CHECK_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Underlaget för varningen har ändrats sedan du såg den. Ladda om sidan och granska den igen.',
+    message_en: 'The figures behind the warning have changed since you saw it. Reload the page and review it again.',
+  },
+  VAT_CHECK_REVIEW_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Varningen är inte markerad som granskad för perioden.',
+    message_en: 'The warning is not marked as reviewed for the period.',
+  },
 }
 
 const PS_REPORT: Record<string, StructuredErrorEntry> = {
@@ -4431,7 +4454,7 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
       'The document is already proposed for another verifikat, and a document can be linked to only one verifikat.',
     remediation: {
       description:
-        'If both verifikat need this underlag (a bank statement covering several fees, a correction resting on the original\'s invoice), stage gnubok_link_documents_to_vouchers with the row { document_id, journal_entry_id, copy: true }: approval archives a byte-identical copy on this verifikat. Do not re-upload or alter the file. If the other proposal is the wrong one, reject it first, then stage this link again.',
+        'If both verifikat need this underlag (a bank statement covering several fees, a correction resting on the original\'s invoice), stage this link again with copy: true (or a copy: true row in gnubok_link_documents_to_vouchers): approval archives a byte-identical copy on this verifikat. Do not re-upload or alter the file. If the other proposal is the wrong one, reject it first, then stage this link again.',
     },
   },
   DOC_LINK_FAILED: {

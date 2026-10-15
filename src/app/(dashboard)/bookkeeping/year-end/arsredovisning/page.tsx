@@ -25,7 +25,19 @@ import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
 import { FyPicker } from '@/components/common/FyPicker'
 import { DigitalInlamning, INLAMNING_COMING_SOON } from '@/components/bokslut/DigitalInlamning'
-import { AnnualReportStudio } from '@/components/bokslut/AnnualReportStudio'
+import {
+  AnnualReportStudio,
+  type AnnualReportComplianceSummary,
+} from '@/components/bokslut/AnnualReportStudio'
+import { StepRail } from '@/components/bokslut/StepRail'
+import { StepSectionHeader, annualReportStepAnchor } from '@/components/bokslut/StepSectionHeader'
+import {
+  deriveAnnualReportWorkflow,
+  isAgmRecorded,
+  type AnnualReportStep,
+  type AnnualReportStepKey,
+} from '@/lib/bokslut/arsredovisning/workflow-steps'
+import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import type { ArsredovisningData } from '@/lib/bokslut/arsredovisning/types'
 import type { SignatureRequest } from '@/lib/bokslut/arsredovisning/signature-service'
 import type { AnnualReportVersionSummary } from '@/lib/bokslut/arsredovisning/compliance-types'
@@ -35,6 +47,9 @@ import { parseAmountInput } from '@/lib/money'
 
 const SIGNATURE_EVIDENCE_REFERENCE_PATTERN =
   /^(archive|document|receipt):[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/
+
+const TEXT_LINK_CLASS =
+  'text-foreground underline underline-offset-4 decoration-muted-foreground/40 hover:decoration-foreground'
 
 /** Note overrides as the server rendered them: overridden notes carry the
  *  generated text in generated_body and the user's text in body. */
@@ -58,6 +73,8 @@ export default function ArsredovisningPage() {
   const { toast } = useToast()
   const tStudio = useTranslations('annualReportStudio')
   const tNotes = useTranslations('annualReportNotes')
+  const tSteps = useTranslations('annualReportSteps')
+  const { periods: fiscalPeriods, isLoading: periodsLoading } = useFiscalPeriods()
 
   const [data, setData] = useState<ArsredovisningData | null>(null)
   const [signatures, setSignatures] = useState<SignatureRequest[]>([])
@@ -134,13 +151,19 @@ export default function ArsredovisningPage() {
   const [signerName, setSignerName] = useState('')
   const [signerRole, setSignerRole] = useState('Styrelseledamot')
   const [versions, setVersions] = useState<AnnualReportVersionSummary[]>([])
-  const [blockingCount, setBlockingCount] = useState<number | null>(null)
   const [selectedSignatureVersionId, setSelectedSignatureVersionId] = useState('')
   const [signingMethod, setSigningMethod] = useState<
     'paper_original' | 'advanced_e_signature' | 'bankid'
   >('paper_original')
   const [signatureEvidence, setSignatureEvidence] = useState('')
   const [signatureDate, setSignatureDate] = useState(() => todayIsoStockholm())
+
+  // The compliance check as the studio last loaded it (null while loading)
+  // and a counter that makes the studio reload it after a signer change:
+  // the roster trigger clears the roster confirmation server-side.
+  const [complianceSummary, setComplianceSummary] = useState<AnnualReportComplianceSummary | null>(null)
+  const [complianceRefresh, setComplianceRefresh] = useState(0)
+  const refreshCompliance = useCallback(() => setComplianceRefresh((n) => n + 1), [])
 
   const handleVersionsChanged = useCallback((nextVersions: AnnualReportVersionSummary[]) => {
     setVersions(nextVersions)
@@ -253,14 +276,17 @@ export default function ArsredovisningPage() {
     }
   }, [periodId])
 
-  const hasUnsavedNarrative =
+  // The AGM fields are step 7, everything else is step 3; both are saved by
+  // the same narrative POST.
+  const hasUnsavedAgm =
+    agmDate !== savedAgmDate ||
+    agmDispositionOutcome !== savedAgmDispositionOutcome ||
+    agmDispositionDecision !== savedAgmDispositionDecision
+  const hasUnsavedContent =
     description !== savedDescription ||
     importantEvents !== savedImportantEvents ||
     resultatdisposition !== savedResultatdisposition ||
     proposedDividend !== savedProposedDividend ||
-    agmDate !== savedAgmDate ||
-    agmDispositionOutcome !== savedAgmDispositionOutcome ||
-    agmDispositionDecision !== savedAgmDispositionDecision ||
     longTermDebt !== savedLongTermDebt ||
     securitiesPledged !== savedSecuritiesPledged ||
     contingentLiabilities !== savedContingentLiabilities ||
@@ -279,6 +305,7 @@ export default function ArsredovisningPage() {
     !sameNoteOverrides(noteOverrides, savedNoteOverrides) ||
     omitCashFlow !== savedOmitCashFlow ||
     cashFlowOmissionConfirmed !== savedCashFlowOmissionConfirmed
+  const hasUnsavedNarrative = hasUnsavedContent || hasUnsavedAgm
 
   const handleSaveNarrative = useCallback(async () => {
     if (!periodId) return
@@ -519,13 +546,9 @@ export default function ArsredovisningPage() {
         setSignatures((prev) =>
           prev.map((s) => (s.id === signatureId ? (body.data as SignatureRequest) : s)),
         )
-        const versionsResponse = await fetch(
-          `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/versions`,
-        )
-        if (versionsResponse.ok) {
-          const versionsBody = await versionsResponse.json()
-          handleVersionsChanged((versionsBody.data ?? []) as AnnualReportVersionSummary[])
-        }
+        // The last signature moves the version to signed: the studio
+        // reloads the versions and hands them back via onVersionsChanged.
+        refreshCompliance()
         toast({ title: 'Underskrift registrerad' })
       } catch (err) {
         toast({
@@ -536,8 +559,8 @@ export default function ArsredovisningPage() {
       }
     },
     [
-      handleVersionsChanged,
       periodId,
+      refreshCompliance,
       selectedSignatureVersionId,
       signatureDate,
       signatureEvidence,
@@ -568,6 +591,7 @@ export default function ArsredovisningPage() {
       }
       setSignatures((prev) => [...prev, body.data as SignatureRequest])
       setSignerName('')
+      refreshCompliance()
       toast({ title: 'Undertecknare tillagd', description: `${signerRole}: ${signerName}` })
     } catch (err) {
       toast({
@@ -576,7 +600,7 @@ export default function ArsredovisningPage() {
         variant: 'destructive',
       })
     }
-  }, [periodId, signerName, signerRole, toast])
+  }, [periodId, refreshCompliance, signerName, signerRole, toast])
 
   const handleRemoveSigner = useCallback(
     async (signatureId: string) => {
@@ -591,6 +615,7 @@ export default function ArsredovisningPage() {
           throw new Error(getUserErrorMessage(body?.error))
         }
         setSignatures((current) => current.filter((signature) => signature.id !== signatureId))
+        refreshCompliance()
         toast({ title: tStudio('signer_removed') })
       } catch (err) {
         toast({
@@ -600,7 +625,22 @@ export default function ArsredovisningPage() {
         })
       }
     },
-    [periodId, tStudio, toast],
+    [periodId, refreshCompliance, tStudio, toast],
+  )
+
+  // A rail step scrolls to its section; the bokslut lives on its own page.
+  const goToStep = useCallback(
+    (key: string) => {
+      if (key === 'bokslut') {
+        if (periodId) router.push(`/bookkeeping/year-end?period=${periodId}`)
+        return
+      }
+      const section = document.getElementById(annualReportStepAnchor(key as AnnualReportStepKey))
+      if (!section) return
+      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      section.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' })
+    },
+    [periodId, router],
   )
 
   if (!periodId) {
@@ -666,18 +706,21 @@ export default function ArsredovisningPage() {
   // user (2026-08-20): say what is missing and where the button lives.
   const lockedVersions = versions.filter((version) => version.status === 'ready_for_signature')
   const draftVersionCount = versions.filter((version) => version.status === 'draft').length
+  const blockingCount = complianceSummary
+    ? complianceSummary.issues.filter((issue) => issue.severity === 'error').length
+    : null
   const noLockedVersionHint = (() => {
     if (lockedVersions.length > 0) return null
     const draftNote = draftVersionCount > 0 ? 'Versionsutkast kan inte signeras. ' : ''
     if (blockingCount === null) {
-      return `${draftNote}Lås en version under Fullständighetskontroll så dyker den upp här.`
+      return `${draftNote}Lås en version under Granska och lås så dyker den upp här.`
     }
     if (blockingCount > 0) {
       const what = blockingCount === 1 ? 'det blockerande felet' : `de ${blockingCount} blockerande felen`
       const done = blockingCount === 1 ? 'åtgärdat' : 'åtgärdade'
-      return `${draftNote}Knappen Lås version för underskrift är grå tills ${what} under Fullständighetskontroll är ${done}.`
+      return `${draftNote}Knappen Lås version för underskrift är grå tills ${what} är ${done}.`
     }
-    return `${draftNote}Klicka på Lås version för underskrift under Fullständighetskontroll så dyker versionen upp här.`
+    return `${draftNote}Klicka på Lås version för underskrift under Granska och lås så dyker versionen upp här.`
   })()
   const pendingSignatureCount = signatures.filter(
     (sig) => sig.status !== 'signed' && sig.status !== 'declined',
@@ -689,6 +732,50 @@ export default function ArsredovisningPage() {
       : !signatureDate
         ? 'Ange underskriftsdatum så aktiveras Markera som signerad.'
         : null
+
+  // The steps, derived from what is stored (workflow-steps.ts). They wait
+  // for the compliance check and the fiscal-year list so the rail never
+  // shows a guess.
+  const period = fiscalPeriods.find((candidate) => candidate.id === periodId)
+  const workflow =
+    complianceSummary && !periodsLoading
+      ? deriveAnnualReportWorkflow({
+          yearClosed: Boolean(period && (period.is_closed || period.closing_entry_id)),
+          issues: complianceSummary.issues,
+          signerRosterConfirmed: complianceSummary.signerRosterConfirmed,
+          unsavedContent: hasUnsavedContent,
+          unsavedAgm: hasUnsavedAgm,
+          signers: signatures,
+          versions,
+          agmRecorded: isAgmRecorded({
+            agm_date: savedAgmDate,
+            agm_disposition_outcome: savedAgmDispositionOutcome,
+            agm_disposition_decision: savedAgmDispositionDecision,
+          }),
+        })
+      : null
+  const primaryAction = workflow?.next?.action ?? null
+  const stepSub = (step: AnnualReportStep): { sub: string | null; warn: boolean } => {
+    const detail = step.detail
+    switch (detail.kind) {
+      case 'done':
+        return { sub: tSteps('sub_done'), warn: false }
+      case 'errors':
+        return { sub: tSteps('sub_errors', { count: detail.count }), warn: true }
+      case 'unsaved':
+        return { sub: tSteps('sub_unsaved'), warn: true }
+      case 'draft':
+        return { sub: tSteps('sub_draft'), warn: false }
+      case 'version':
+        return { sub: tSteps('sub_version', { number: detail.number }), warn: false }
+      case 'progress':
+        return { sub: tSteps('sub_progress', { done: detail.done, total: detail.total }), warn: false }
+      case 'k3_draft_only':
+        return { sub: tSteps('sub_k3'), warn: true }
+      default:
+        return { sub: step.state === 'current' ? tSteps('sub_next') : null, warn: false }
+    }
+  }
 
   return (
     <div className="space-y-8">
@@ -727,6 +814,52 @@ export default function ArsredovisningPage() {
         }
       />
 
+      {/* One numbered sequence for the whole page: what is done, what is
+          next and what blocks (crm#1172). Each step scrolls to its section. */}
+      {workflow ? (
+        <div className="space-y-3">
+          <StepRail
+            compact
+            ariaLabel={tSteps('rail_label')}
+            steps={workflow.steps.map((step) => ({
+              key: step.key,
+              label: tSteps(`step_${step.key}`),
+              state: step.state,
+              ...stepSub(step),
+            }))}
+            onSelect={goToStep}
+          />
+          <p className="px-1 text-[13px] leading-5">
+            {workflow.next ? (
+              <>
+                <span className="text-muted-foreground">{tSteps('next_label')}</span>{' '}
+                {tSteps(`next_${workflow.next.action}`)}{' '}
+                {workflow.next.action === 'close_year' ? (
+                  <Link href={`/bookkeeping/year-end?period=${periodId}`} className={TEXT_LINK_CLASS}>
+                    {tSteps('open_bokslut')}
+                  </Link>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => goToStep(workflow.next?.step ?? 'scope')}
+                    className={TEXT_LINK_CLASS}
+                  >
+                    {tSteps('go_to_step')}
+                  </button>
+                )}
+              </>
+            ) : (
+              <span className="text-muted-foreground">{tSteps('all_done')}</span>
+            )}
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-3 px-1" aria-hidden="true">
+          <Skeleton className="h-7 w-full" />
+          <Skeleton className="h-4 w-2/3" />
+        </div>
+      )}
+
       {data.accounting_framework === 'k3' && (
         <div className="px-1 text-sm">
           <p className="font-medium">Årsredovisning enligt K3 (BFNAR 2012:1)</p>
@@ -750,6 +883,9 @@ export default function ArsredovisningPage() {
         </div>
       )}
 
+      {/* Steps 2 to 5 render inside the studio, which owns the compliance
+          check; steps 3 and 4 are this page's inputs, passed in so each
+          step's fields, open points and confirm button sit together. */}
       <AnnualReportStudio
         periodId={periodId}
         periodStart={data.fiscal_period.period_start}
@@ -757,500 +893,514 @@ export default function ArsredovisningPage() {
         framework={data.accounting_framework}
         hasUnsavedNarrative={hasUnsavedNarrative}
         narrativeRevision={narrativeRevision}
+        refreshKey={complianceRefresh}
+        primaryAction={primaryAction}
         onVersionsChanged={handleVersionsChanged}
-        onBlockingCountChanged={setBlockingCount}
-      />
-
-      <section>
-        <div className="mb-1 flex items-center gap-2 px-1">
-          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Förvaltningsberättelse: narrativ</h3>
-          <div className="h-px flex-1 bg-border/60" />
-        </div>
-          <p className="px-1 text-xs leading-5 text-muted-foreground">
-            Texten nedan visas i PDF:en. Klicka på <strong>Spara texten</strong> nedan
-            för att behålla ändringarna mellan sessioner.
-          </p>
-        <div className="space-y-4 px-1 pt-4">
-          <div className="space-y-2">
-            <Label htmlFor="ar-description">Verksamhetsbeskrivning</Label>
-            <Textarea
-              id="ar-description"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={3}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="ar-events">Väsentliga händelser</Label>
-            <Textarea
-              id="ar-events"
-              value={importantEvents}
-              onChange={(e) => setImportantEvents(e.target.value)}
-              rows={4}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="ar-rd">Resultatdisposition</Label>
-            <Textarea
-              id="ar-rd"
-              value={resultatdisposition}
-              onChange={(e) => setResultatdisposition(e.target.value)}
-              rows={3}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="ar-dividend">Föreslagen utdelning (kr)</Label>
-            <Input
-              id="ar-dividend"
-              inputMode="decimal"
-              value={proposedDividend}
-              onChange={(event) => setProposedDividend(event.target.value)}
-              placeholder="0"
-              className="max-w-[220px] tabular-nums"
-            />
-            <p className="text-xs text-muted-foreground">
-              Beloppet används i resultatdispositionen i samma version av PDF och iXBRL.
+        onComplianceChanged={setComplianceSummary}
+        contentSection={
+          <>
+            <p className="px-1 text-xs leading-5 text-muted-foreground">
+              Texten nedan visas i PDF:en. Klicka på <strong>Spara texten</strong> nedan
+              för att behålla ändringarna mellan sessioner.
             </p>
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="ar-agm-date">Datum för årsstämma</Label>
-            <Input
-              id="ar-agm-date"
-              type="date"
-              value={agmDate}
-              onChange={(e) => setAgmDate(e.target.value)}
-              className="max-w-[220px]"
-            />
-            <p className="text-xs text-muted-foreground">
-              Datum då årsstämman fastställde årsredovisningen: fyller i datumraden på
-              fastställelseintyget i PDF:en (krävs för inlämning till Bolagsverket).
-            </p>
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="ar-agm-outcome">Årsstämmans beslut om resultatdisposition</Label>
-            <Select
-              value={agmDispositionOutcome}
-              onValueChange={(next) =>
-                setAgmDispositionOutcome(
-                  next as 'proposal_approved' | 'alternative_decision',
-                )
-              }
-            >
-              <SelectTrigger id="ar-agm-outcome" className="max-w-xl">
-                <SelectValue placeholder="Välj efter genomförd årsstämma" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="proposal_approved">Styrelsens förslag godkändes</SelectItem>
-                <SelectItem value="alternative_decision">Årsstämman fattade ett annat beslut</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          {agmDispositionOutcome === 'alternative_decision' && (
-            <div className="space-y-2">
-              <Label htmlFor="ar-agm-decision">Årsstämmans beslut</Label>
-              <Textarea
-                id="ar-agm-decision"
-                value={agmDispositionDecision}
-                onChange={(event) => setAgmDispositionDecision(event.target.value)}
-                rows={3}
-              />
-            </div>
-          )}
-
-          <div className="pt-4 border-t border-border space-y-4">
-            <div>
-              <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Lagstadgade upplysningar
-              </h3>
-              <p className="text-xs text-muted-foreground mt-1">
-                Noter som krävs enligt ÅRL men inte kan härledas automatiskt. Tomma
-                fält visas som &quot;Inga.&quot; i PDF:en.
-              </p>
-            </div>
-            {data?.company.entity_type === 'ekonomisk_forening' && (
-              <div className="space-y-4 pb-4 border-b border-border">
+            <div className="space-y-4 px-1 pt-4">
+              <div className="space-y-2">
+                <Label htmlFor="ar-description">Verksamhetsbeskrivning</Label>
+                <Textarea
+                  id="ar-description"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  rows={3}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="ar-events">Väsentliga händelser</Label>
+                <Textarea
+                  id="ar-events"
+                  value={importantEvents}
+                  onChange={(e) => setImportantEvents(e.target.value)}
+                  rows={4}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="ar-rd">Resultatdisposition</Label>
+                <Textarea
+                  id="ar-rd"
+                  value={resultatdisposition}
+                  onChange={(e) => setResultatdisposition(e.target.value)}
+                  rows={3}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="ar-dividend">Föreslagen utdelning (kr)</Label>
+                <Input
+                  id="ar-dividend"
+                  inputMode="decimal"
+                  value={proposedDividend}
+                  onChange={(event) => setProposedDividend(event.target.value)}
+                  placeholder="0"
+                  className="max-w-[220px] tabular-nums"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Beloppet används i resultatdispositionen i samma version av PDF och iXBRL.
+                </p>
+              </div>
+              <div className="pt-4 border-t border-border space-y-4">
                 <div>
-                  <h4 className="text-sm font-medium">Medlemmar och insatser (ÅRL 6 kap. 3 §)</h4>
+                  <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                    Lagstadgade upplysningar
+                  </h3>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Förvaltningsberättelsen i en ekonomisk förening ska ange väsentliga
-                    förändringar i medlemsantalet, insatser som ska återbetalas och
-                    förlagsinsatsernas villkor. Tomma belopp visas som &quot;inga&quot;.
+                    Noter som krävs enligt ÅRL men inte kan härledas automatiskt. Tomma
+                    fält visas som &quot;Inga.&quot; i PDF:en.
+                  </p>
+                </div>
+                {data?.company.entity_type === 'ekonomisk_forening' && (
+                  <div className="space-y-4 pb-4 border-b border-border">
+                    <div>
+                      <h4 className="text-sm font-medium">Medlemmar och insatser (ÅRL 6 kap. 3 §)</h4>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Förvaltningsberättelsen i en ekonomisk förening ska ange väsentliga
+                        förändringar i medlemsantalet, insatser som ska återbetalas och
+                        förlagsinsatsernas villkor. Tomma belopp visas som &quot;inga&quot;.
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="ar-member-count">Väsentliga förändringar i medlemsantalet</Label>
+                      <Textarea
+                        id="ar-member-count"
+                        value={memberCountChange}
+                        onChange={(e) => setMemberCountChange(e.target.value)}
+                        placeholder="T.ex. Antalet medlemmar ökade från 42 till 55 under året."
+                        rows={2}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="ar-insatser-repayable">
+                        Insatser som ska återbetalas under nästa räkenskapsår (kr)
+                      </Label>
+                      <Input
+                        id="ar-insatser-repayable"
+                        type="text"
+                        inputMode="decimal"
+                        value={insatserRepayable}
+                        onChange={(e) => setInsatserRepayable(e.target.value)}
+                        placeholder="0"
+                        className="max-w-[220px] tabular-nums"
+                      />
+                      <p className="text-xs text-muted-foreground">EFL 10 kap. 11 och 16 §§.</p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="ar-forlags-right">Rätt till utdelning som förlagsinsatser medför</Label>
+                      <Textarea
+                        id="ar-forlags-right"
+                        value={forlagsDividendRight}
+                        onChange={(e) => setForlagsDividendRight(e.target.value)}
+                        placeholder="Lämna tomt om föreningen saknar förlagsinsatser."
+                        rows={2}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="ar-forlags-redeemable">
+                        Uppsagda förlagsinsatser som ska lösas in inom två räkenskapsår (kr)
+                      </Label>
+                      <Input
+                        id="ar-forlags-redeemable"
+                        type="text"
+                        inputMode="decimal"
+                        value={forlagsRedeemable}
+                        onChange={(e) => setForlagsRedeemable(e.target.value)}
+                        placeholder="0"
+                        className="max-w-[220px] tabular-nums"
+                      />
+                      <p className="text-xs text-muted-foreground">EFL 11 kap. 7 §.</p>
+                    </div>
+                  </div>
+                )}
+                <div className="space-y-2">
+                  <Label htmlFor="ar-medelantal">Medelantal anställda</Label>
+                  <Input
+                    id="ar-medelantal"
+                    type="text"
+                    inputMode="numeric"
+                    value={medelantalOverride}
+                    onChange={(e) => setMedelantalOverride(e.target.value)}
+                    placeholder="Beräknas från Löner"
+                    className="max-w-[220px] tabular-nums"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    ÅRL 5:20 §. Lämna tomt för att använda antalet anställda från Löner.
+                    Ägare som tar ut lön räknas som anställd; fyll i om lönen bokförts utan
+                    anställd i Löner.
                   </p>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="ar-member-count">Väsentliga förändringar i medlemsantalet</Label>
-                  <Textarea
-                    id="ar-member-count"
-                    value={memberCountChange}
-                    onChange={(e) => setMemberCountChange(e.target.value)}
-                    placeholder="T.ex. Antalet medlemmar ökade från 42 till 55 under året."
-                    rows={2}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="ar-insatser-repayable">
-                    Insatser som ska återbetalas under nästa räkenskapsår (kr)
+                  <Label htmlFor="ar-ltd">
+                    Långfristiga skulder förfallande efter mer än fem år (kr)
                   </Label>
                   <Input
-                    id="ar-insatser-repayable"
+                    id="ar-ltd"
                     type="text"
                     inputMode="decimal"
-                    value={insatserRepayable}
-                    onChange={(e) => setInsatserRepayable(e.target.value)}
+                    value={longTermDebt}
+                    onChange={(e) => setLongTermDebt(e.target.value)}
                     placeholder="0"
                     className="max-w-[220px] tabular-nums"
                   />
-                  <p className="text-xs text-muted-foreground">EFL 10 kap. 11 och 16 §§.</p>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="ar-forlags-right">Rätt till utdelning som förlagsinsatser medför</Label>
-                  <Textarea
-                    id="ar-forlags-right"
-                    value={forlagsDividendRight}
-                    onChange={(e) => setForlagsDividendRight(e.target.value)}
-                    placeholder="Lämna tomt om föreningen saknar förlagsinsatser."
-                    rows={2}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="ar-forlags-redeemable">
-                    Uppsagda förlagsinsatser som ska lösas in inom två räkenskapsår (kr)
-                  </Label>
-                  <Input
-                    id="ar-forlags-redeemable"
-                    type="text"
-                    inputMode="decimal"
-                    value={forlagsRedeemable}
-                    onChange={(e) => setForlagsRedeemable(e.target.value)}
-                    placeholder="0"
-                    className="max-w-[220px] tabular-nums"
-                  />
-                  <p className="text-xs text-muted-foreground">EFL 11 kap. 7 §.</p>
-                </div>
-              </div>
-            )}
-            <div className="space-y-2">
-              <Label htmlFor="ar-medelantal">Medelantal anställda</Label>
-              <Input
-                id="ar-medelantal"
-                type="text"
-                inputMode="numeric"
-                value={medelantalOverride}
-                onChange={(e) => setMedelantalOverride(e.target.value)}
-                placeholder="Beräknas från Löner"
-                className="max-w-[220px] tabular-nums"
-              />
-              <p className="text-xs text-muted-foreground">
-                ÅRL 5:20 §. Lämna tomt för att använda antalet anställda från Löner.
-                Ägare som tar ut lön räknas som anställd; fyll i om lönen bokförts utan
-                anställd i Löner.
-              </p>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="ar-ltd">
-                Långfristiga skulder förfallande efter mer än fem år (kr)
-              </Label>
-              <Input
-                id="ar-ltd"
-                type="text"
-                inputMode="decimal"
-                value={longTermDebt}
-                onChange={(e) => setLongTermDebt(e.target.value)}
-                placeholder="0"
-                className="max-w-[220px] tabular-nums"
-              />
-              <p className="text-xs text-muted-foreground">
-                ÅRL 5:13 §. Lämna tomt om inga skulder förfaller senare än fem år.
-              </p>
-              <label className="flex cursor-pointer items-center gap-3 text-sm">
-                <Checkbox
-                  id="ar-ltd-confirmed"
-                  checked={longTermDebtConfirmed}
-                  onCheckedChange={(checked) => setLongTermDebtConfirmed(Boolean(checked))}
-                />
-                Jag har kontrollerat uppgiften, även om beloppet är noll.
-              </label>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="ar-securities">Ställda säkerheter</Label>
-              <Textarea
-                id="ar-securities"
-                value={securitiesPledged}
-                onChange={(e) => setSecuritiesPledged(e.target.value)}
-                rows={2}
-                placeholder="t.ex. Företagsinteckning 500 000 kr som säkerhet för bankkredit."
-              />
-              <p className="text-xs text-muted-foreground">ÅRL 5:14 §.</p>
-              <label className="flex cursor-pointer items-center gap-3 text-sm">
-                <Checkbox
-                  id="ar-securities-confirmed"
-                  checked={securitiesPledgedConfirmed}
-                  onCheckedChange={(checked) => setSecuritiesPledgedConfirmed(Boolean(checked))}
-                />
-                Jag har kontrollerat ställda säkerheter, även om svaret är inga.
-              </label>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="ar-contingent">Eventualförpliktelser</Label>
-              <Textarea
-                id="ar-contingent"
-                value={contingentLiabilities}
-                onChange={(e) => setContingentLiabilities(e.target.value)}
-                rows={2}
-                placeholder="t.ex. Borgensåtagande för dotterbolags krediter 200 000 kr."
-              />
-              <p className="text-xs text-muted-foreground">ÅRL 5:15 §.</p>
-              <label className="flex cursor-pointer items-center gap-3 text-sm">
-                <Checkbox
-                  id="ar-contingent-confirmed"
-                  checked={contingentLiabilitiesConfirmed}
-                  onCheckedChange={(checked) => setContingentLiabilitiesConfirmed(Boolean(checked))}
-                />
-                Jag har kontrollerat eventualförpliktelser, även om svaret är inga.
-              </label>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="ar-parent-name">
-                Moderföretag: namn (om koncerntillhörighet)
-              </Label>
-              <Input
-                id="ar-parent-name"
-                value={parentName}
-                onChange={(e) => setParentName(e.target.value)}
-                placeholder="t.ex. AB Koncernholding"
-              />
-              <p className="text-xs text-muted-foreground">
-                BFNAR 2016:10 kap. 19 / BFNAR 2012:1 kap. 8. Lämna tomt om bolaget
-                inte ingår i en koncern: noten utelämnas då.
-              </p>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-2">
-                <Label htmlFor="ar-parent-orgnr">Moderföretagets org.nr</Label>
-                <Input
-                  id="ar-parent-orgnr"
-                  value={parentOrgNr}
-                  onChange={(e) => setParentOrgNr(e.target.value)}
-                  placeholder="556677-8899 eller CHE-123.456.789"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Svenskt org.nr NNNNNN-NNNN. Utländskt moderföretag: registreringsnumret som
-                  det står i hemlandets register.
-                </p>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="ar-parent-city">Moderföretagets säte</Label>
-                <Input
-                  id="ar-parent-city"
-                  value={parentCity}
-                  onChange={(e) => setParentCity(e.target.value)}
-                  placeholder="Stockholm eller Zug, Schweiz"
-                />
-              </div>
-            </div>
-            <label className="flex cursor-pointer items-center gap-3 text-sm">
-              <Checkbox
-                id="ar-parent-confirmed"
-                checked={parentCompanyConfirmed}
-                onCheckedChange={(checked) => setParentCompanyConfirmed(Boolean(checked))}
-              />
-              Jag har kontrollerat koncernförhållandet, även om bolaget saknar moderföretag.
-            </label>
-          </div>
-
-          {data.accounting_framework === 'k3' && (
-            <div className="pt-4 border-t border-border space-y-4">
-              <div>
-                <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                  {tNotes('notes_title')}
-                </h3>
-                <p className="text-xs text-muted-foreground mt-1">{tNotes('notes_description')}</p>
-              </div>
-              {data.noter
-                .filter((note) => note.key)
-                .map((note) => {
-                  const key = note.key as string
-                  const generated = note.generated_body ?? note.body
-                  const edited = key in noteOverrides
-                  return (
-                    <div key={key} className="space-y-2">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <Label htmlFor={`ar-note-${key}`}>
-                          {tNotes('note_label', { number: note.number, title: note.title })}
-                        </Label>
-                        {edited && (
-                          <div className="flex items-center gap-2">
-                            <Badge variant="secondary">{tNotes('note_edited')}</Badge>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() =>
-                                setNoteOverrides((prev) => {
-                                  const next = { ...prev }
-                                  delete next[key]
-                                  return next
-                                })
-                              }
-                            >
-                              {tNotes('reset_note')}
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-                      <Textarea
-                        id={`ar-note-${key}`}
-                        value={noteOverrides[key] ?? generated}
-                        onChange={(event) => {
-                          const value = event.target.value
-                          setNoteOverrides((prev) => {
-                            const next = { ...prev }
-                            if (value === generated || value.trim() === '') delete next[key]
-                            else next[key] = value
-                            return next
-                          })
-                        }}
-                        rows={key === 'redovisningsprinciper' ? 10 : 3}
-                        maxLength={8000}
-                      />
-                    </div>
-                  )
-                })}
-            </div>
-          )}
-
-          {data.accounting_framework === 'k3' && data.kassaflodesanalys_omission && (
-            <div className="pt-4 border-t border-border space-y-3">
-              <div>
-                <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                  {tNotes('cashflow_title')}
-                </h3>
-                <p className="text-xs text-muted-foreground mt-1">{tNotes('cashflow_rule')}</p>
-              </div>
-              {data.kassaflodesanalys_omission.rule === 'forbidden' ? (
-                <>
-                  <p className="text-sm">{tNotes('cashflow_forbidden')}</p>
-                  {/* A choice saved before the company became a större
-                      företag is not honoured; let the user clear it. */}
-                  {savedOmitCashFlow && (
-                    <label className="flex cursor-pointer items-center gap-3 text-sm">
-                      <Checkbox
-                        id="ar-omit-cashflow"
-                        checked={omitCashFlow}
-                        onCheckedChange={(checked) => setOmitCashFlow(Boolean(checked))}
-                      />
-                      {tNotes('cashflow_omit')}
-                    </label>
-                  )}
-                </>
-              ) : (
-                <>
                   <p className="text-xs text-muted-foreground">
-                    {data.kassaflodesanalys_omission.rule === 'allowed'
-                      ? tNotes('cashflow_allowed')
-                      : tNotes('cashflow_needs_confirmation')}
+                    ÅRL 5:13 §. Lämna tomt om inga skulder förfaller senare än fem år.
                   </p>
                   <label className="flex cursor-pointer items-center gap-3 text-sm">
                     <Checkbox
-                      id="ar-omit-cashflow"
-                      checked={omitCashFlow}
-                      onCheckedChange={(checked) => setOmitCashFlow(Boolean(checked))}
+                      id="ar-ltd-confirmed"
+                      checked={longTermDebtConfirmed}
+                      onCheckedChange={(checked) => setLongTermDebtConfirmed(Boolean(checked))}
                     />
-                    {tNotes('cashflow_omit')}
+                    Jag har kontrollerat uppgiften, även om beloppet är noll.
                   </label>
-                  {data.kassaflodesanalys_omission.rule === 'requires_confirmation' && omitCashFlow && (
-                    <label className="flex cursor-pointer items-center gap-3 text-sm">
-                      <Checkbox
-                        id="ar-omit-cashflow-confirmed"
-                        checked={cashFlowOmissionConfirmed}
-                        onCheckedChange={(checked) =>
-                          setCashFlowOmissionConfirmed(Boolean(checked))
-                        }
-                      />
-                      {tNotes('cashflow_confirm')}
-                    </label>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ar-securities">Ställda säkerheter</Label>
+                  <Textarea
+                    id="ar-securities"
+                    value={securitiesPledged}
+                    onChange={(e) => setSecuritiesPledged(e.target.value)}
+                    rows={2}
+                    placeholder="t.ex. Företagsinteckning 500 000 kr som säkerhet för bankkredit."
+                  />
+                  <p className="text-xs text-muted-foreground">ÅRL 5:14 §.</p>
+                  <label className="flex cursor-pointer items-center gap-3 text-sm">
+                    <Checkbox
+                      id="ar-securities-confirmed"
+                      checked={securitiesPledgedConfirmed}
+                      onCheckedChange={(checked) => setSecuritiesPledgedConfirmed(Boolean(checked))}
+                    />
+                    Jag har kontrollerat ställda säkerheter, även om svaret är inga.
+                  </label>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ar-contingent">Eventualförpliktelser</Label>
+                  <Textarea
+                    id="ar-contingent"
+                    value={contingentLiabilities}
+                    onChange={(e) => setContingentLiabilities(e.target.value)}
+                    rows={2}
+                    placeholder="t.ex. Borgensåtagande för dotterbolags krediter 200 000 kr."
+                  />
+                  <p className="text-xs text-muted-foreground">ÅRL 5:15 §.</p>
+                  <label className="flex cursor-pointer items-center gap-3 text-sm">
+                    <Checkbox
+                      id="ar-contingent-confirmed"
+                      checked={contingentLiabilitiesConfirmed}
+                      onCheckedChange={(checked) => setContingentLiabilitiesConfirmed(Boolean(checked))}
+                    />
+                    Jag har kontrollerat eventualförpliktelser, även om svaret är inga.
+                  </label>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ar-parent-name">
+                    Moderföretag: namn (om koncerntillhörighet)
+                  </Label>
+                  <Input
+                    id="ar-parent-name"
+                    value={parentName}
+                    onChange={(e) => setParentName(e.target.value)}
+                    placeholder="t.ex. AB Koncernholding"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    BFNAR 2016:10 kap. 19 / BFNAR 2012:1 kap. 8. Lämna tomt om bolaget
+                    inte ingår i en koncern: noten utelämnas då.
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <Label htmlFor="ar-parent-orgnr">Moderföretagets org.nr</Label>
+                    <Input
+                      id="ar-parent-orgnr"
+                      value={parentOrgNr}
+                      onChange={(e) => setParentOrgNr(e.target.value)}
+                      placeholder="556677-8899 eller CHE-123.456.789"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Svenskt org.nr NNNNNN-NNNN. Utländskt moderföretag: registreringsnumret som
+                      det står i hemlandets register.
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="ar-parent-city">Moderföretagets säte</Label>
+                    <Input
+                      id="ar-parent-city"
+                      value={parentCity}
+                      onChange={(e) => setParentCity(e.target.value)}
+                      placeholder="Stockholm eller Zug, Schweiz"
+                    />
+                  </div>
+                </div>
+                <label className="flex cursor-pointer items-center gap-3 text-sm">
+                  <Checkbox
+                    id="ar-parent-confirmed"
+                    checked={parentCompanyConfirmed}
+                    onCheckedChange={(checked) => setParentCompanyConfirmed(Boolean(checked))}
+                  />
+                  Jag har kontrollerat koncernförhållandet, även om bolaget saknar moderföretag.
+                </label>
+              </div>
+
+              {data.accounting_framework === 'k3' && (
+                <div className="pt-4 border-t border-border space-y-4">
+                  <div>
+                    <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                      {tNotes('notes_title')}
+                    </h3>
+                    <p className="text-xs text-muted-foreground mt-1">{tNotes('notes_description')}</p>
+                  </div>
+                  {data.noter
+                    .filter((note) => note.key)
+                    .map((note) => {
+                      const key = note.key as string
+                      const generated = note.generated_body ?? note.body
+                      const edited = key in noteOverrides
+                      return (
+                        <div key={key} className="space-y-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <Label htmlFor={`ar-note-${key}`}>
+                              {tNotes('note_label', { number: note.number, title: note.title })}
+                            </Label>
+                            {edited && (
+                              <div className="flex items-center gap-2">
+                                <Badge variant="secondary">{tNotes('note_edited')}</Badge>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() =>
+                                    setNoteOverrides((prev) => {
+                                      const next = { ...prev }
+                                      delete next[key]
+                                      return next
+                                    })
+                                  }
+                                >
+                                  {tNotes('reset_note')}
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                          <Textarea
+                            id={`ar-note-${key}`}
+                            value={noteOverrides[key] ?? generated}
+                            onChange={(event) => {
+                              const value = event.target.value
+                              setNoteOverrides((prev) => {
+                                const next = { ...prev }
+                                if (value === generated || value.trim() === '') delete next[key]
+                                else next[key] = value
+                                return next
+                              })
+                            }}
+                            rows={key === 'redovisningsprinciper' ? 10 : 3}
+                            maxLength={8000}
+                          />
+                        </div>
+                      )
+                    })}
+                </div>
+              )}
+
+              {data.accounting_framework === 'k3' && data.kassaflodesanalys_omission && (
+                <div className="pt-4 border-t border-border space-y-3">
+                  <div>
+                    <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                      {tNotes('cashflow_title')}
+                    </h3>
+                    <p className="text-xs text-muted-foreground mt-1">{tNotes('cashflow_rule')}</p>
+                  </div>
+                  {data.kassaflodesanalys_omission.rule === 'forbidden' ? (
+                    <>
+                      <p className="text-sm">{tNotes('cashflow_forbidden')}</p>
+                      {/* A choice saved before the company became a större
+                          företag is not honoured; let the user clear it. */}
+                      {savedOmitCashFlow && (
+                        <label className="flex cursor-pointer items-center gap-3 text-sm">
+                          <Checkbox
+                            id="ar-omit-cashflow"
+                            checked={omitCashFlow}
+                            onCheckedChange={(checked) => setOmitCashFlow(Boolean(checked))}
+                          />
+                          {tNotes('cashflow_omit')}
+                        </label>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-xs text-muted-foreground">
+                        {data.kassaflodesanalys_omission.rule === 'allowed'
+                          ? tNotes('cashflow_allowed')
+                          : tNotes('cashflow_needs_confirmation')}
+                      </p>
+                      <label className="flex cursor-pointer items-center gap-3 text-sm">
+                        <Checkbox
+                          id="ar-omit-cashflow"
+                          checked={omitCashFlow}
+                          onCheckedChange={(checked) => setOmitCashFlow(Boolean(checked))}
+                        />
+                        {tNotes('cashflow_omit')}
+                      </label>
+                      {data.kassaflodesanalys_omission.rule === 'requires_confirmation' && omitCashFlow && (
+                        <label className="flex cursor-pointer items-center gap-3 text-sm">
+                          <Checkbox
+                            id="ar-omit-cashflow-confirmed"
+                            checked={cashFlowOmissionConfirmed}
+                            onCheckedChange={(checked) =>
+                              setCashFlowOmissionConfirmed(Boolean(checked))
+                            }
+                          />
+                          {tNotes('cashflow_confirm')}
+                        </label>
+                      )}
+                    </>
                   )}
-                </>
+                </div>
               )}
-            </div>
-          )}
 
-          <div className="flex items-center justify-between pt-2">
-            <div className="text-xs text-muted-foreground">
-              {hasUnsavedNarrative ? (
-                <span>Ändringar sparas inte automatiskt.</span>
-              ) : narrativeRevision ? (
-                <span className="inline-flex items-center gap-1 text-success">
-                  <CheckCircle2 className="h-3.5 w-3.5" /> Sparat
-                </span>
-              ) : (
-                <span>Alla ändringar är sparade.</span>
-              )}
+              <div className="space-y-2 border-t border-border pt-4">
+                <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  Flerårsöversikt
+                </h3>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>År</TableHead>
+                      <TableHead className="text-right">Nettoomsättning</TableHead>
+                      <TableHead className="text-right">Resultat efter fin.</TableHead>
+                      <TableHead className="text-right">Soliditet</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {data.forvaltningsberattelse.flerarsoversikt.map((row) => (
+                      <TableRow key={row.year}>
+                        <TableCell>{row.year}</TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatCurrency(row.net_revenue)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatCurrency(row.result_after_financial)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {row.soliditet_pct === null
+                            ? '-'
+                            : `${row.soliditet_pct.toFixed(1)} %`}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+
+              <div className="flex items-center justify-between pt-2">
+                <div className="text-xs text-muted-foreground">
+                  {hasUnsavedNarrative ? (
+                    <span>Ändringar sparas inte automatiskt.</span>
+                  ) : narrativeRevision ? (
+                    <span className="inline-flex items-center gap-1 text-success">
+                      <CheckCircle2 className="h-3.5 w-3.5" /> Sparat
+                    </span>
+                  ) : (
+                    <span>Alla ändringar är sparade.</span>
+                  )}
+                </div>
+                <Button
+                  variant={primaryAction === 'save_text' ? 'default' : 'outline'}
+                  onClick={handleSaveNarrative}
+                  disabled={!hasUnsavedNarrative}
+                  loading={savingNarrative}
+                >
+                  {savingNarrative ? (
+                    'Sparar…'
+                  ) : (
+                    <>
+                      <Save className="mr-2 h-4 w-4" /> Spara texten
+                    </>
+                  )}
+                </Button>
+              </div>
             </div>
-            <Button
-              onClick={handleSaveNarrative}
-              disabled={!hasUnsavedNarrative}
-              loading={savingNarrative}
-            >
-              {savingNarrative ? (
-                'Sparar…'
-              ) : (
-                <>
-                  <Save className="mr-2 h-4 w-4" /> Spara texten
-                </>
-              )}
-            </Button>
+          </>
+        }
+        boardSection={
+          <div className="space-y-4 px-1 pt-2">
+            <p className="text-xs leading-5 text-muted-foreground">{tSteps('board_intro')}</p>
+            {signatures.length === 0 ? (
+              <p className="text-sm text-muted-foreground italic">{tSteps('board_empty')}</p>
+            ) : (
+              signatures.map((sig) => (
+                <div
+                  key={sig.id}
+                  className="flex items-center justify-between gap-3 border-b border-border pb-3 last:border-b-0 last:pb-0"
+                >
+                  <div>
+                    <p className="text-sm font-medium">{sig.signer_name}</p>
+                    <p className="text-xs text-muted-foreground">{sig.role}</p>
+                  </div>
+                  {sig.status === 'pending' && sig.annual_report_version_id === null && (
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="min-w-11"
+                      aria-label={tStudio('remove_signer')}
+                      onClick={() => void handleRemoveSigner(sig.id)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
+              ))
+            )}
+            <div className="flex flex-col gap-3 pt-2 sm:flex-row sm:flex-wrap sm:items-end">
+              <div className="space-y-1">
+                <Label htmlFor="signer-role" className="text-xs">
+                  Roll
+                </Label>
+                <Select value={signerRole} onValueChange={setSignerRole}>
+                  <SelectTrigger id="signer-role" className="sm:w-56">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Styrelseledamot">Styrelseledamot</SelectItem>
+                    <SelectItem value="Styrelseordförande">Styrelseordförande</SelectItem>
+                    <SelectItem value="VD">VD</SelectItem>
+                    <SelectItem value="Verkställande direktör">Verkställande direktör</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1 flex-1 min-w-[200px]">
+                <Label htmlFor="signer-name" className="text-xs">
+                  Namn
+                </Label>
+                <Input
+                  id="signer-name"
+                  value={signerName}
+                  onChange={(e) => setSignerName(e.target.value)}
+                  placeholder="t.ex. Anna Andersson"
+               
+                />
+              </div>
+              <Button
+                variant={primaryAction === 'add_signer' ? 'default' : 'outline'}
+                className="w-full sm:w-auto"
+                onClick={handleAddSigner}
+                disabled={!signerName.trim()}
+              >
+                <Plus className="mr-1 h-4 w-4" /> Lägg till
+              </Button>
+            </div>
           </div>
-        </div>
-      </section>
+        }
+      />
 
-      <section>
-        <div className="mb-1 flex items-center gap-2 px-1">
-          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Flerårsöversikt</h3>
-          <div className="h-px flex-1 bg-border/60" />
-        </div>
-        <div className="px-1 pt-2">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>År</TableHead>
-                <TableHead className="text-right">Nettoomsättning</TableHead>
-                <TableHead className="text-right">Resultat efter fin.</TableHead>
-                <TableHead className="text-right">Soliditet</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.forvaltningsberattelse.flerarsoversikt.map((row) => (
-                <TableRow key={row.year}>
-                  <TableCell>{row.year}</TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {formatCurrency(row.net_revenue)}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {formatCurrency(row.result_after_financial)}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {row.soliditet_pct === null
-                      ? '-'
-                      : `${row.soliditet_pct.toFixed(1)} %`}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      </section>
-
-      <section>
-        <div className="mb-1 flex items-center gap-2 px-1">
-          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Underskrifter</h3>
-          <div className="h-px flex-1 bg-border/60" />
-        </div>
-          <p className="px-1 text-xs leading-5 text-muted-foreground">
-            Lägg till varje styrelseledamot och eventuell VD. Lås först en version i
-            arbetsflödet ovan. När originalet eller en extern e-signatur är klar registrerar
-            du datum och bevisreferens mot exakt den version som skrevs under.
-          </p>
+      <section id={annualReportStepAnchor('signatures')} className="scroll-mt-24">
+        <StepSectionHeader step="signatures" title={tSteps('section_signatures')} />
+        <p className="px-1 text-xs leading-5 text-muted-foreground">{tSteps('signatures_intro')}</p>
         <div className="space-y-4 px-1 pt-4">
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
@@ -1276,11 +1426,8 @@ export default function ArsredovisningPage() {
               {noLockedVersionHint && (
                 <p className="text-xs leading-5 text-muted-foreground">
                   {noLockedVersionHint}{' '}
-                  <a
-                    href="#ar-fullstandighetskontroll"
-                    className="text-foreground underline underline-offset-4 decoration-muted-foreground/40 hover:decoration-foreground"
-                  >
-                    Gå till Fullständighetskontroll
+                  <a href={`#${annualReportStepAnchor('lock')}`} className={TEXT_LINK_CLASS}>
+                    Gå till Granska och lås
                   </a>
                 </p>
               )}
@@ -1332,11 +1479,6 @@ export default function ArsredovisningPage() {
               originalet eller signeringskvittot enligt bolagets dokumenthantering.
             </p>
           </div>
-          {signatures.length === 0 && (
-            <p className="text-sm text-muted-foreground italic">
-              Inga undertecknare tillagda än.
-            </p>
-          )}
           {pendingSignatureCount > 0 && signReadinessHint && (
             <p className="text-xs leading-5 text-muted-foreground">{signReadinessHint}</p>
           )}
@@ -1356,18 +1498,7 @@ export default function ArsredovisningPage() {
                   <Badge variant="destructive">Avböjd</Badge>
                 ) : (
                   <>
-                    <Badge variant="outline">Väntar på underskrift</Badge>
-                    {sig.annual_report_version_id === null && (
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="min-w-11"
-                        aria-label={tStudio('remove_signer')}
-                        onClick={() => void handleRemoveSigner(sig.id)}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    )}
+                    <span className="text-xs text-muted-foreground">Väntar på underskrift</span>
                     <Button
                       size="sm"
                       variant="outline"
@@ -1386,47 +1517,74 @@ export default function ArsredovisningPage() {
               </div>
             </div>
           ))}
-          <div className="flex flex-col gap-3 pt-2 sm:flex-row sm:flex-wrap sm:items-end">
-            <div className="space-y-1">
-              <Label htmlFor="signer-role" className="text-xs">
-                Roll
-              </Label>
-              <Select value={signerRole} onValueChange={setSignerRole}>
-                <SelectTrigger id="signer-role" className="sm:w-56">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Styrelseledamot">Styrelseledamot</SelectItem>
-                  <SelectItem value="Styrelseordförande">Styrelseordförande</SelectItem>
-                  <SelectItem value="VD">VD</SelectItem>
-                  <SelectItem value="Verkställande direktör">Verkställande direktör</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1 flex-1 min-w-[200px]">
-              <Label htmlFor="signer-name" className="text-xs">
-                Namn
-              </Label>
-              <Input
-                id="signer-name"
-                value={signerName}
-                onChange={(e) => setSignerName(e.target.value)}
-                placeholder="t.ex. Anna Andersson"
-               
+        </div>
+      </section>
+
+      <section id={annualReportStepAnchor('agm')} className="scroll-mt-24">
+        <StepSectionHeader step="agm" title={tSteps('section_agm')} />
+        <p className="px-1 text-xs leading-5 text-muted-foreground">{tSteps('agm_intro')}</p>
+        <div className="space-y-4 px-1 pt-4">
+          <div className="space-y-2">
+            <Label htmlFor="ar-agm-date">Datum för årsstämma</Label>
+            <Input
+              id="ar-agm-date"
+              type="date"
+              value={agmDate}
+              onChange={(e) => setAgmDate(e.target.value)}
+              className="max-w-[220px]"
+            />
+            <p className="text-xs text-muted-foreground">
+              Datum då årsstämman fastställde årsredovisningen: fyller i datumraden på
+              fastställelseintyget i PDF:en (krävs för inlämning till Bolagsverket).
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="ar-agm-outcome">Årsstämmans beslut om resultatdisposition</Label>
+            <Select
+              value={agmDispositionOutcome}
+              onValueChange={(next) =>
+                setAgmDispositionOutcome(
+                  next as 'proposal_approved' | 'alternative_decision',
+                )
+              }
+            >
+              <SelectTrigger id="ar-agm-outcome" className="max-w-xl">
+                <SelectValue placeholder="Välj efter genomförd årsstämma" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="proposal_approved">Styrelsens förslag godkändes</SelectItem>
+                <SelectItem value="alternative_decision">Årsstämman fattade ett annat beslut</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {agmDispositionOutcome === 'alternative_decision' && (
+            <div className="space-y-2">
+              <Label htmlFor="ar-agm-decision">Årsstämmans beslut</Label>
+              <Textarea
+                id="ar-agm-decision"
+                value={agmDispositionDecision}
+                onChange={(event) => setAgmDispositionDecision(event.target.value)}
+                rows={3}
               />
             </div>
-            <Button className="w-full sm:w-auto" onClick={handleAddSigner} disabled={!signerName.trim()}>
-              <Plus className="mr-1 h-4 w-4" /> Lägg till
+          )}
+
+          <div className="flex justify-end pt-2">
+            <Button
+              variant={primaryAction === 'save_agm' ? 'default' : 'outline'}
+              onClick={handleSaveNarrative}
+              disabled={!hasUnsavedNarrative}
+              loading={savingNarrative}
+            >
+              {!savingNarrative && <Save className="mr-2 h-4 w-4" />}
+              {tSteps('save_agm')}
             </Button>
           </div>
         </div>
       </section>
 
-      <section>
-        <div className="mb-1 flex items-center gap-2 px-1">
-          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">PDF för pappersinlämning</h3>
-          <div className="h-px flex-1 bg-border/60" />
-        </div>
+      <section id={annualReportStepAnchor('filing')} className="scroll-mt-24">
+        <StepSectionHeader step="filing" title={tSteps('section_filing')} />
         <div className="space-y-4 px-1 pt-2 text-sm">
           <p className="text-muted-foreground">
             Ladda ner PDF-utkastet och granska det. För pappersinlämning ska
@@ -1435,7 +1593,7 @@ export default function ArsredovisningPage() {
             till Bolagsverket. PDF-filen kan inte laddas upp som digital årsredovisning.
           </p>
           <div className="flex flex-wrap gap-3">
-            <Button asChild>
+            <Button variant="outline" asChild>
               <Link href={pdfUrl} target="_blank" rel="noopener noreferrer">
                 <FileDown className="mr-2 h-4 w-4" /> Ladda ner PDF (utkast)
               </Link>

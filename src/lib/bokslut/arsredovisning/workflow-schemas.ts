@@ -226,6 +226,15 @@ export type ComplianceUpdateInput = z.infer<typeof ComplianceUpdateSchema>
 /** The underskrifter roles ÅRL 2 kap. 7 § allows (the UI dropdown's set). */
 export const SIGNER_ROLES = ['Styrelseledamot', 'Styrelseordförande', 'VD', 'Verkställande direktör'] as const
 
+/**
+ * Who may sign the fastställelseintyg: a board member or the verkställande
+ * direktör (founder decision 2026-10-15, following
+ * .claude/skills/swedish-financial-reporting references/bolagsverket-filing.md
+ * § 5: "Styrelseledamot or VD" signs it; the intyg is filed with the
+ * årsredovisning under ÅRL 8 kap. 3 §). Every roster role qualifies.
+ */
+export const CERTIFICATE_SIGNER_ROLES = SIGNER_ROLES
+
 export const versionShape = {
   action: z
     .enum(['snapshot', 'finalize'])
@@ -234,7 +243,7 @@ export const versionShape = {
     .object({
       first_name: z.string().min(1).max(100),
       last_name: z.string().min(1).max(100),
-      role: z.enum(SIGNER_ROLES),
+      role: z.enum(CERTIFICATE_SIGNER_ROLES),
     })
     .strict()
     .optional()

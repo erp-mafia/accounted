@@ -372,7 +372,7 @@ Example response `200`:
 **Link a document to a journal entry.**
 `scope:documents:write · risk:medium · idempotent · dry-run`
 
-Sets journal_entry_id (and optionally journal_entry_line_id) on an existing document, and marks the invoice-inbox item that carries the document as handled. Use this after /documents upload when the link target was unknown at upload time. A link is permanent once set (BFL 5 kap 6 §): a document already linked to another verifikat cannot be moved.
+Sets journal_entry_id (and optionally journal_entry_line_id) on an existing document, and marks the invoice-inbox item that carries the document as handled. Use this after /documents upload when the link target was unknown at upload time. A link is permanent once set (BFL 5 kap 6 §): a document already linked to another verifikat cannot be moved. When another verifikat needs the same underlag too (one bank statement covering several fees, a correction resting on the original's invoice), send copy: true: a byte-identical copy is archived on this verifikat and the response names its source in copy_of_document_id.
 
 **Use when:** A document was uploaded without a journal_entry_id (e.g. bulk import) and you now want to attach it to a verifikation. A document that came from the invoice inbox marks its item handled in the same call.
 **Do not use for:** Unlinking: no v1 unlink endpoint. The dashboard exposes a manual override; v1 keeps the WORM contract by refusing to revert posted-JE links.
@@ -380,7 +380,8 @@ Sets journal_entry_id (and optionally journal_entry_line_id) on an existing docu
 **Pitfalls:**
 - Idempotency-Key is mandatory.
 - Both the document and the journal_entry_id must belong to the caller's company. NOT_FOUND on mismatch (enumeration hardening).
-- A document already linked to another verifikat (posted, draft or reversed) answers 409 DOC_LINK_ALREADY_LINKED with details.current_journal_entry_id, on the dry run too; so does a change of a line already set. Re-linking to the same verifikat is allowed. If the holding verifikat is wrong, correct it with POST /journal-entries/{id}/correct: the underlag moves to the correction.
+- A document already linked to another verifikat (posted, draft or reversed) answers 409 DOC_LINK_ALREADY_LINKED with details.current_journal_entry_id, on the dry run too, unless copy: true is sent; a change of a line already set answers it either way. Re-linking to the same verifikat is allowed. If the holding verifikat is wrong, correct it with POST /journal-entries/{id}/correct: the underlag moves to the correction.
+- copy: true never re-points the document: the response id is the new copy (copy_of_document_id the original), and a document nothing else holds is linked itself (copy_of_document_id null). Retrying converges on one copy per verifikat. Send it only when the same underlag really backs both verifikat: a receipt on two verifikat is usually one purchase booked twice.
 - journal_entry_line_id must be a line of journal_entry_id: NOT_FOUND otherwise.
 - A verifikat in a closed or locked period answers PERIOD_LOCKED, on the dry run too.
 - The inbox item that carries the document (and is not yet handled) is stamped whether or not inbox_item_id is sent; an inbox_item_id that does not carry the document is not stamped. The stamp is best-effort: if it fails the document link still succeeds.
@@ -393,7 +394,7 @@ Sets journal_entry_id (and optionally journal_entry_line_id) on an existing docu
 
 Request body:
 ```ts
-{ journal_entry_id: string, journal_entry_line_id?: string, inbox_item_id?: string }
+{ journal_entry_id: string, journal_entry_line_id?: string, inbox_item_id?: string, copy?: boolean }
 ```
 
 Example request:
@@ -406,7 +407,13 @@ Example request:
 Response `200`:
 ```ts
 {
-  data: { id: string, journal_entry_id: string, journal_entry_line_id: string | null, file_name: string },
+  data: {
+    id: string,
+    journal_entry_id: string,
+    journal_entry_line_id: string | null,
+    file_name: string,
+    copy_of_document_id: string | null
+  },
   meta: {
     request_id: string,
     api_version: string,
@@ -426,7 +433,8 @@ Example response `200`:
     "id": "0e9c…",
     "journal_entry_id": "a8f1…",
     "journal_entry_line_id": null,
-    "file_name": "kvitto-2026-05-12.pdf"
+    "file_name": "kvitto-2026-05-12.pdf",
+    "copy_of_document_id": null
   },
   "meta": {
     "request_id": "req_…",

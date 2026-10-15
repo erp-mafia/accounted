@@ -174,10 +174,26 @@ export interface RcGapDowngradeEvidence {
  *
  * So when the basis booked at each momssats matches the fiktiv moms declared
  * at that sats, the per-voucher list stays visible as a worklist (same
- * RC_BASIS_MISSING code) but stops gating "Skicka": at that point the flagged
- * vouchers are corrections whose basis is elsewhere in the period at the same
- * sats, and the declaration is not under-reporting. With any per-rate
- * mismatch the ERROR tier still applies.
+ * RC_BASIS_MISSING code) but stops gating "Skicka": the flagged vouchers' basis
+ * is elsewhere in the period at the same sats, and the rutor are not
+ * under-reporting. With any per-rate mismatch the ERROR tier still applies.
+ *
+ * Which voucher is the rättelse differs by case, so the message names
+ * neither: in the 2026-08 case the flagged vouchers were moms-only
+ * corrections, in crm#1171 they are the original purchases (most of them
+ * got their fiktiv moms through a Fortnox rättelse imported by SIE) and the
+ * basis was added by one collective rättelseverifikat with no link to them. Neither carries a
+ * link the scan could follow (no correction_of_id, no rättelse log row on the
+ * correcting side), so the downgrade stays on the per-rate identity, the only
+ * evidence that speaks to the rutor (DECISIONS.md 2026-10-15).
+ *
+ * It stays a WARNING rather than going silent because the identity cannot
+ * tell a basis that belongs to these purchases from two offsetting mistakes
+ * (one purchase without basis, another without fiktiv moms): both balance the
+ * period. A person checks it once and marks it reviewed
+ * (src/lib/vat/check-reviews.ts); the review lapses when the figures change.
+ * Korrigera on these rows would add the basis a second time, so the message
+ * says so.
  */
 export function rcBasisGapAdvisoryFinding(gapCount: number): VatDeclarationCheck {
   const subject = gapCount === 1 ? '1 verifikation' : `${gapCount} verifikationer`
@@ -186,11 +202,11 @@ export function rcBasisGapAdvisoryFinding(gapCount: number): VatDeclarationCheck
     status: 'WARNING',
     message:
       `${subject} i perioden har fiktiv moms (2614/2624/2634) utan eget basbelopp ` +
-      'på 44xx/45xx. Periodens underlag stämmer dock per momssats: basbeloppen ' +
-      'på 44xx/45xx motsvarar den fiktiva momsen i ruta 30-32, så detta är ' +
-      'normalt rättelseverifikat vars basbelopp redan finns i ett annat ' +
-      'verifikat. Kontrollera listan nedan; är raderna rättelser behöver du ' +
-      'inte göra något och kan lämna in som vanligt.',
+      'på 44xx/45xx. Periodens underlag stämmer per momssats, så basbeloppet finns ' +
+      'i ett annat verifikat i perioden, till exempel ett rättelseverifikat som lade ' +
+      'till det i efterhand. Kontrollera att det basbeloppet avser just de här ' +
+      'inköpen. Stämmer det kan du markera varningen som granskad och lämna in som ' +
+      'vanligt. Korrigera inte verifikationerna i listan: då räknas basbeloppet två gånger.',
     rutor: ['ruta20', 'ruta21', 'ruta22', 'ruta23', 'ruta24', 'ruta30', 'ruta31', 'ruta32'],
   }
 }

@@ -15,6 +15,7 @@ import {
 } from '@/lib/vat/supplier-invoice-line-checks'
 import { ACCOUNT_VAT_TREATMENTS } from '@/lib/vat/account-vat-treatment'
 import { ACCOUNT_VAT_BOXES } from '@/lib/vat/account-vat-box'
+import { VAT_DECLARATION_CHECK_CODES } from '@/lib/reports/vat-declaration-checks'
 import { PERSON_REJECTION_CATEGORIES } from '@/lib/pending-operations/rejection-categories'
 import {
   accountNumberSchema,
@@ -3517,6 +3518,43 @@ export const MarkVatFilingSchema = z
   })
   .superRefine(refineVatFilingPeriod)
 
+/**
+ * One momsdeklaration finding of one VAT period, the key of a review
+ * (lib/vat/check-reviews.ts, crm#1171). Shared by the dashboard route
+ * /api/reports/vat-declaration/check-reviews and the MCP-only operation
+ * vat-check-reviews.mark (gnubok_mark_vat_check_reviewed).
+ */
+const vatCheckReviewTargetShape = {
+  ...vatFilingPeriodShape,
+  fiscal_period_id: z
+    .string()
+    .uuid()
+    .optional()
+    .describe('Yearly only, optional: the räkenskapsår the period is, instead of the year it ends in.'),
+  check_code: z
+    .enum(VAT_DECLARATION_CHECK_CODES)
+    .describe("The finding's code, as declaration_checks (gnubok_vat_close_check) reports it."),
+}
+
+export const VatCheckReviewTargetSchema = z.object(vatCheckReviewTargetShape).superRefine(refineVatFilingPeriod)
+
+export const MarkVatCheckReviewedSchema = z
+  .object({
+    ...vatCheckReviewTargetShape,
+    note: z
+      .string()
+      .trim()
+      .max(1000)
+      .optional()
+      .describe('What was checked, e.g. "Basbeloppet är bokat i A61" (max 1000 characters).'),
+    expected_fingerprint: z
+      .string()
+      .regex(/^v[0-9]+:[0-9a-f]{16}$/)
+      .optional()
+      .describe('The finding as seen (a dry run answers it); refused as VAT_CHECK_CHANGED when the figures moved since.'),
+  })
+  .superRefine(refineVatFilingPeriod)
+
 // ============================================================
 // Account schemas
 // ============================================================
@@ -4842,6 +4880,8 @@ export const LinkDocumentSchema = z.object({
   journal_entry_line_id: uuid.optional(),
   inbox_item_id: uuid.optional(),
   transaction_id: uuid.optional(),
+  /** A document another verifikat holds gets a byte-identical copy here (crm#1171). */
+  copy: z.boolean().optional(),
 })
 
 /**

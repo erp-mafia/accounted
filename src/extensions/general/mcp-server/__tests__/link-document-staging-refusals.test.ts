@@ -96,12 +96,10 @@ describe('gnubok_link_document_to_voucher: refusals at staging', () => {
     expect(error.message_sv).toBe('Dokumentet är redan kopplat till en verifikation.')
     expect(error.message_en).toContain(`verifikat A57 (journal_entry_id ${HOLDER_ID}, status reversed)`)
     expect(error.message_en).toContain('gnubok_correct_entry')
-    // crm#1207: a verifikat that needs the same underlag gets a copy row with
-    // this call's own ids, never "upload it again" (the upload door returns
-    // the existing document for identical bytes).
-    expect(error.message_en).toContain(
-      `gnubok_link_documents_to_vouchers with links: [{ document_id: "${DOC_ID}", journal_entry_id: "${TARGET_ID}", copy: true }]`,
-    )
+    // crm#1207, crm#1171 item 9: a verifikat that needs the same underlag
+    // gets a copy from this same tool, never "upload it again" (the upload
+    // door returns the existing document for identical bytes).
+    expect(error.message_en).toContain('stage this link again with copy: true')
     expect(error.message_en).toContain('Do not re-upload or alter the file')
   })
 
@@ -211,8 +209,8 @@ describe('gnubok_link_document_to_voucher: refusals at staging', () => {
       expect(error.message_sv).toContain('avvisa det andra förslaget')
       expect(error.message_sv).not.toContain('flera delar')
       expect(error.message_en).toContain(`pending operation ${OTHER_OP_ID} (journal_entry_id ${OTHER_TARGET_ID})`)
-      // crm#1207: the way out is a copy row, not a re-upload that dedups.
-      expect(error.message_en).toContain(`{ document_id: "${DOC_ID}", journal_entry_id: "${TARGET_ID}", copy: true }`)
+      // crm#1207: the way out is a copy, not a re-upload that dedups.
+      expect(error.message_en).toContain('stage this link again with copy: true')
       expect(error.message_en).not.toContain('gnubok_upload_document')
       expect(error.message_en).toContain('gnubok_reject_pending_operation')
     })
@@ -259,6 +257,113 @@ describe('gnubok_link_document_to_voucher: refusals at staging', () => {
       expect(warning).toContain('egen kopia per verifikation')
       expect(warning).not.toContain('flera delar')
     })
+  })
+})
+
+describe('gnubok_link_document_to_voucher: copy: true, one underlag on several verifikat (crm#1171 item 9)', () => {
+  // Feedback seq 1353328: one bank statement lists two 1,49 kr fees booked as
+  // two verifikat; only one could carry the statement as underlag.
+  type Staged = { staged?: boolean; dry_run?: boolean; preview: Record<string, unknown> }
+  type Inserted = { title: string; params: Record<string, unknown> }
+  const HOLDER = { status: 'posted', voucher_series: 'A', voucher_number: 22 }
+
+  function copySetup(opts: {
+    docJournalEntryId?: string | null
+    docType?: string | null
+    period?: Record<string, unknown>
+    pending?: Array<{ id: string; params: Record<string, unknown> }>
+  }) {
+    const held = opts.docJournalEntryId != null
+    return createTableMockSupabase({
+      document_attachments: {
+        data: {
+          id: DOC_ID, file_name: 'kontoutdrag.pdf', mime_type: 'application/pdf', doc_type: opts.docType ?? null,
+          journal_entry_id: opts.docJournalEntryId ?? null, journal_entry_line_id: null,
+        },
+      },
+      // The plain check reads the target and then the holder; the copy check
+      // reads the target again.
+      journal_entries: held ? [{ data: TARGET }, { data: HOLDER }, { data: TARGET }] : [{ data: TARGET }],
+      fiscal_periods: { data: opts.period ?? OPEN_2026 },
+      pending_operations: [{ data: opts.pending ?? [] }, { data: { id: 'op-new' } }],
+      transactions: { data: [] },
+    })
+  }
+  const stage = (args: Record<string, unknown>, supabase: unknown) =>
+    linkDocument.execute(args, COMPANY_ID, USER_ID, supabase as never, ACTOR) as Promise<Staged>
+
+  it('stages a copy for a document another verifikat holds, titled as a copy, the document itself untouched', async () => {
+    const { supabase, findCall } = copySetup({ docJournalEntryId: HOLDER_ID, docType: 'bank_statement' })
+
+    const result = await stage({ document_id: DOC_ID, journal_entry_id: TARGET_ID, copy: true }, supabase)
+
+    expect(result.staged).toBe(true)
+    const inserted = findCall('pending_operations', 'insert')![0] as Inserted
+    expect(inserted.title).toBe('Koppla kopia av bilaga: kontoutdrag.pdf → verifikat D8')
+    expect(inserted.params).toEqual({ document_id: DOC_ID, journal_entry_id: TARGET_ID, journal_entry_line_id: null, copy: true })
+    expect(result.preview).toMatchObject({ copy: true, document_current_journal_entry_id: HOLDER_ID, voucher_label: 'D8' })
+    // A bank statement backing two fees is the ordinary case: no warning.
+    expect(result.preview.compliance_warning).toBeUndefined()
+    expect(findCall('document_attachments', 'update')).toBeUndefined()
+  })
+
+  it('warns the approver that a copied receipt can mean the same purchase booked twice', async () => {
+    const { supabase } = copySetup({ docJournalEntryId: HOLDER_ID, docType: 'receipt' })
+
+    const result = await stage({ document_id: DOC_ID, journal_entry_id: TARGET_ID, copy: true, dry_run: true }, supabase)
+
+    expect(result.dry_run).toBe(true)
+    expect(result.preview.compliance_warning).toContain('bokfört två gånger')
+  })
+
+  it('stages a copy instead of refusing when another waiting proposal links the document elsewhere', async () => {
+    const { supabase, findCall } = copySetup({
+      pending: [{ id: '00000000-0000-4000-8000-000000000401', params: { document_id: DOC_ID, journal_entry_id: HOLDER_ID } }],
+    })
+
+    const result = await stage({ document_id: DOC_ID, journal_entry_id: TARGET_ID, copy: true }, supabase)
+
+    expect(result.staged).toBe(true)
+    expect((findCall('pending_operations', 'insert')![0] as Inserted).params).toMatchObject({ copy: true })
+    // The shared-document warning says only one verifikat can get it: not so for a copy.
+    expect(result.preview.compliance_warning).toBeUndefined()
+  })
+
+  it('links a document nothing else holds itself: copy is only used when it is needed', async () => {
+    const { supabase, findCall } = copySetup({})
+
+    await stage({ document_id: DOC_ID, journal_entry_id: TARGET_ID, copy: true }, supabase)
+
+    const inserted = findCall('pending_operations', 'insert')![0] as Inserted
+    expect(inserted.params).not.toHaveProperty('copy')
+    expect(inserted.title).toBe('Koppla bilaga: kontoutdrag.pdf → verifikat D8')
+  })
+
+  it('still refuses a copy into a locked year, and a line change on the same verifikat', async () => {
+    const locked = copySetup({ docJournalEntryId: HOLDER_ID, period: { ...OPEN_2026, locked_at: '2026-09-20T10:00:00Z' } })
+    const lockedError = toToolError(await refusal({ document_id: DOC_ID, journal_entry_id: TARGET_ID, copy: true }, locked.supabase)).error
+    expect(lockedError.code).toBe('DOC_UPLOAD_PERIOD_LOCKED')
+    expect(locked.findCall('pending_operations', 'insert')).toBeUndefined()
+
+    const { supabase } = createTableMockSupabase({
+      document_attachments: {
+        data: { id: DOC_ID, file_name: 'kontoutdrag.pdf', mime_type: 'application/pdf', journal_entry_id: TARGET_ID, journal_entry_line_id: 'line-a' },
+      },
+      journal_entries: [{ data: TARGET }, { data: HOLDER }],
+      journal_entry_lines: { data: { id: 'line-b' } },
+      fiscal_periods: { data: OPEN_2026 },
+      pending_operations: [{ data: [] }],
+    })
+    const lineError = toToolError(
+      await refusal({ document_id: DOC_ID, journal_entry_id: TARGET_ID, journal_entry_line_id: 'line-b', copy: true }, supabase),
+    ).error
+    expect(lineError.code).toBe('DOC_LINK_ALREADY_LINKED')
+    expect(lineError.message_en).toContain('journal_entry_line_id cannot change')
+  })
+
+  it('declares copy as a boolean on the input schema', () => {
+    const props = (linkDocument.inputSchema as { properties: Record<string, { type: string }> }).properties
+    expect(props.copy.type).toBe('boolean')
   })
 })
 
