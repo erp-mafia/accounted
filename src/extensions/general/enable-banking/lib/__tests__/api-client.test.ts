@@ -755,6 +755,8 @@ describe('convertTransaction', () => {
     const tx: Required<Transaction> = {
       entry_reference: 'ENTRY-1',
       transaction_id: 'TX-DETAILS-1',
+      // Read raw by the sync to skip entries that are not booked; never stored.
+      status: 'BOOK',
       booking_date: '2025-03-10',
       value_date: '2025-03-11',
       transaction_amount: { amount: '12500.00', currency: 'SEK' },
