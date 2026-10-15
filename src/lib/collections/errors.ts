@@ -68,8 +68,6 @@ export const COLLECTIONS_TERMS_CHANGED = 'COLLECTIONS_TERMS_CHANGED'
 export const COLLECTIONS_PAYOUT_ACCOUNT_INVALID = 'COLLECTIONS_PAYOUT_ACCOUNT_INVALID'
 /** The company has no valid organisation number to apply with. */
 export const COLLECTIONS_ORG_NUMBER_MISSING = 'COLLECTIONS_ORG_NUMBER_MISSING'
-/** A sole trader's personnummer must be the one the firm is registered under. */
-export const COLLECTIONS_OWNER_NUMBER_MISMATCH = 'COLLECTIONS_OWNER_NUMBER_MISMATCH'
 
 /** The neutral word used when neither the catalogue nor the connection row names the provider. */
 export const PROVIDER_FALLBACK_NAME = { sv: 'inkassobolaget', en: 'the collection agency' } as const
@@ -171,10 +169,6 @@ export const COLLECTIONS_ERROR_MESSAGES: Readonly<Record<string, { sv: string; e
     sv: 'Lägg till företagets organisationsnummer under Företag först.',
     en: 'Add the company\'s organisation number under Company first.',
   },
-  COLLECTIONS_OWNER_NUMBER_MISMATCH: {
-    sv: 'Ägarens personnummer ska vara det som den enskilda firman är registrerad på.',
-    en: 'The owner\'s personal identity number must be the one the sole trader is registered under.',
-  },
   COLLECTION_NOT_ELIGIBLE: {
     sv: 'Fakturan uppfyller inte kraven för att skickas till inkasso.',
     en: 'The invoice does not meet the requirements for debt collection.',
@@ -234,6 +228,10 @@ export const COLLECTIONS_ERROR_MESSAGES: Readonly<Record<string, { sv: string; e
   COLLECTION_REGISTER_PAYMENT: {
     sv: 'Bokför betalningen på fakturan. Den rapporteras till {provider} och ärendet avslutas när hela beloppet är betalt.',
     en: 'Record the payment on the invoice. It is reported to {provider} and the case closes when the whole amount is paid.',
+  },
+  COLLECTION_START_VIA_HANDOVER: {
+    sv: 'Starta ärendet från fakturan med Skicka till inkasso, så att samma kontroller som vid en överlämning görs först.',
+    en: 'Start the case from the invoice with Send to debt collection, so the same checks as a handover run first.',
   },
   COLLECTION_WITHDRAW_FEE_UNACKNOWLEDGED: {
     sv: '{provider} kan ta ut en avgift för återkallelsen enligt sina villkor. Bekräfta det innan ärendet återkallas.',

@@ -2,6 +2,7 @@ import type { CollectionsFeatures } from '@accounted/connect-contract'
 import { roundOre } from '@/lib/money'
 import { luhnValidate } from '@/lib/bankgiro/luhn'
 import { getAmountToPay } from '@/lib/invoices/rounding'
+import { normalizeCountryCode } from '@/lib/vat/country-codes'
 import { ADULT_AGE, type DebtorPersonalNumber } from './personal-number'
 
 /**
@@ -173,6 +174,20 @@ export function debtorKindOf(customerType: string | null | undefined): 'business
   return customerType === 'individual' ? 'private' : 'business'
 }
 
+/**
+ * The customer's country as the ISO 3166-1 alpha-2 code the provider's
+ * debtor countries and the debtor address use: a name ("Sverige", "Sweden",
+ * any case), a code with spaces around it and the alpha-3 "SWE" all read as
+ * SE (normalizeCountryCode, which leaves alpha-3 codes out on purpose). A
+ * value nothing maps stays as written in upper case, so it still reads as
+ * foreign. Empty for no country.
+ */
+export function debtorCountryCode(country: string | null | undefined): string {
+  const raw = country?.trim() ?? ''
+  if (!raw) return ''
+  return normalizeCountryCode(raw) ?? (raw.toUpperCase() === 'SWE' ? 'SE' : raw.toUpperCase())
+}
+
 /** The postal address fields a handover needs that the customer lacks (i18n keys). */
 export function missingAddressFields(customer: Pick<EligibilityCustomer, 'address_line1' | 'postal_code' | 'city' | 'country'>): string[] {
   const missing: string[] = []
@@ -229,7 +244,7 @@ export function evaluateEligibility(facts: EligibilityFacts): Eligibility {
   // 4. Currency and the customer's country, per the provider's features.
   const debtorKind = debtorKindOf(customer?.customer_type)
   if (!features.currencies.includes(invoice.currency)) block('elig_currency')
-  const country = customer?.country?.trim().toUpperCase() ?? ''
+  const country = debtorCountryCode(customer?.country)
   const foreignType = customer?.customer_type === 'eu_business' || customer?.customer_type === 'non_eu_business'
   if (customer && (foreignType || (country && !features.debtorCountries.includes(country)))) block('elig_foreign')
   if (customer && debtorKind === 'private' && !features.privateDebtors) block('elig_private_unsupported')

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   collectionClaim,
+  debtorCountryCode,
   evaluateEligibility,
   missingAddressFields,
   normalizeOrgNumberDigits,
@@ -97,6 +98,18 @@ describe('evaluateEligibility', () => {
     expect(codes(facts({ invoice: { ...base.invoice, currency: 'EUR' } }))).toContain('elig_currency')
     expect(codes(facts({ customer: { ...base.customer!, country: 'NO' } }))).toContain('elig_foreign')
     expect(codes(facts({ customer: { ...base.customer!, customer_type: 'eu_business' } }))).toContain('elig_foreign')
+  })
+
+  it('reads a Swedish customer whose country is stored as a name or padded code as Swedish, not foreign', () => {
+    const base = facts()
+    for (const country of ['Sverige', 'Sweden', 'sverige', ' SE ', 'se', 'SWE']) {
+      expect(codes(facts({ customer: { ...base.customer!, country } })), country).not.toContain('elig_foreign')
+    }
+    // A Swedish business stored as "Sverige" still needs its org number.
+    expect(codes(facts({ customer: { ...base.customer!, country: 'Sverige', org_number: null } }))).toContain('debtor_missing_org_number')
+    for (const country of ['Norge', 'Norway', ' no ', 'Atlantis']) {
+      expect(codes(facts({ customer: { ...base.customer!, country } })), country).toContain('elig_foreign')
+    }
   })
 
   it('follows the provider features when the catalogue gives them', () => {
@@ -219,6 +232,16 @@ describe('collectionClaim', () => {
 })
 
 describe('debtor helpers', () => {
+  it('turns the stored country into the alpha-2 code the provider uses', () => {
+    expect(debtorCountryCode('Sverige')).toBe('SE')
+    expect(debtorCountryCode(' SE ')).toBe('SE')
+    expect(debtorCountryCode('SWE')).toBe('SE')
+    expect(debtorCountryCode('Tyskland')).toBe('DE')
+    expect(debtorCountryCode('Atlantis')).toBe('ATLANTIS')
+    expect(debtorCountryCode('  ')).toBe('')
+    expect(debtorCountryCode(null)).toBe('')
+  })
+
   it('lists the address fields a handover needs', () => {
     expect(missingAddressFields({ address_line1: 'Gatan 1', postal_code: '12', city: 'Ort', country: null })).toEqual(['postal_code', 'country'])
   })

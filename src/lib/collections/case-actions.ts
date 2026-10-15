@@ -42,7 +42,8 @@ import {
  * resume, withdraw, dispute, contest, the decisions the provider waits for,
  * and the start of reminders on a delivered invoice. Shared by POST
  * /api/invoices/[id]/collection/actions and the staged operation
- * collections.cases.action.
+ * collections.cases.action. `start` runs only from handOverInvoice, after
+ * the full handover checklist: those two doors refuse it.
  *
  * `start` and `approve_step` begin new work: they pass the start gates. They
  * and confirm_not_paid (the provider keeps pursuing the customer after it)
@@ -78,6 +79,13 @@ export interface CaseActionInput {
   dismissedTransactionIds?: string[]
   /** For `withdraw`: the person saw that the provider may charge for the withdrawal. */
   feeAcknowledged?: boolean
+  /**
+   * Set only by handOverInvoice, once the full handover checklist has passed
+   * (eligibility, the attestations the facts ask for, the amount the person
+   * saw). A `start` without it is refused: the action route and the case
+   * action tool cannot carry those facts.
+   */
+  handoverChecked?: boolean
   dryRun?: boolean
 }
 
@@ -212,6 +220,10 @@ export async function runCaseAction(deps: CollectionsServiceDeps, input: CaseAct
   if (LEDGER_ONLY_CASE_ACTIONS.has(input.action)) {
     // The customer says it is paid: book the payment (it is reported to the provider), or contest it.
     return refusal('COLLECTION_REGISTER_PAYMENT', { invoice_id: row.invoice_id })
+  }
+  if (input.action === 'start' && !input.handoverChecked) {
+    // Starting on a delivered claim is a handover: it runs the handover's checks first (handOverInvoice).
+    return refusal('COLLECTION_START_VIA_HANDOVER', { invoice_id: row.invoice_id })
   }
 
   const message = input.message?.trim() || null
@@ -375,6 +387,7 @@ export async function handOverInvoice(
       step: input.startStep ?? 'reminder',
       attestations: { bank: input.attestations?.bank },
       dismissedTransactionIds: input.dismissedTransactionIds,
+      handoverChecked: true,
       dryRun: input.dryRun,
     })
   }

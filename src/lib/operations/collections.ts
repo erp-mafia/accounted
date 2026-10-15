@@ -451,13 +451,14 @@ export const collectionsCasesAction = defineOperation({
   docs: {
     summary: 'Act on an invoice\'s open collection case: pause, resume, withdraw, mark disputed, or answer what the provider waits for.',
     description:
-      'Only the actions the case offers right now are accepted (gnubok_get_collection_case lists them). Pausing, resuming, withdrawing and disputing serve the open case and always run. Approving the next step, starting reminders, contesting a dispute, overriding the customer\'s "already paid" and approving legal action escalate against the customer: they re-run the bank check and only a person can approve them in Accounted.',
+      'Only the actions the case offers right now are accepted (gnubok_get_collection_case lists them). Pausing, resuming, withdrawing and disputing serve the open case and always run. Approving the next step, contesting a dispute, overriding the customer\'s "already paid" and approving legal action escalate against the customer: they re-run the bank check and only a person can approve them in Accounted.',
     useWhen: 'The case waits for a decision (stage awaiting_decision), the customer disputes the claim, or the company wants to pause or withdraw it.',
     doNotUseFor: 'Recording a payment (mark the invoice paid; it is reported to the provider).',
     pitfalls: [
       'dispute and confirm_not_paid need a message of at least ten characters.',
       'withdraw can cost a fee at the provider once its free period has passed (gnubok_get_collection_case withdraw_fee.may_apply): show the user, then pass fee_acknowledged=true.',
       'already_paid is never sent: record the payment on the invoice instead (409 COLLECTION_REGISTER_PAYMENT); it is reported to the provider.',
+      'start is not taken here: starting a delivered invoice is a handover, through gnubok_send_invoice_to_collection (409 COLLECTION_START_VIA_HANDOVER).',
       '409 CONNECTOR_COLLECTIONS_ACTION_UNAVAILABLE: the case does not offer that action in its current stage.',
     ],
     example: {
@@ -491,6 +492,7 @@ export const collectionsCasesAction = defineOperation({
     'COLLECTION_PAUSE_UNTIL_INVALID',
     'COLLECTION_WITHDRAW_FEE_UNACKNOWLEDGED',
     'COLLECTION_REGISTER_PAYMENT',
+    'COLLECTION_START_VIA_HANDOVER',
     'COLLECTION_NOT_ELIGIBLE',
     'COLLECTION_PAYMENT_NOT_REPORTED',
     'COLLECTION_BANK_CANDIDATES',

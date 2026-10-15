@@ -1,7 +1,6 @@
 import { z } from 'zod'
 import { normalizeOrgNumber } from '@/lib/invariants/org-number'
 import { isSaneDateString } from '@/lib/invariants/iso-date'
-import { expandPersonnummerTo12, validatePersonnummer } from '@/lib/salary/personnummer-format'
 
 /**
  * The activation form for collections (settings page, build spec 3.2), shared
@@ -25,7 +24,6 @@ export type ActivationErrorKey =
   | 'required'
   | 'invalid_email'
   | 'invalid_postal_code'
-  | 'invalid_personal_number'
   | 'invalid_vat_number'
   | 'invalid_amount'
   | 'invalid_percent'
@@ -67,22 +65,19 @@ export function pastDateError(value: string, today: string): ActivationErrorKey 
   return value > today ? 'date_in_future' : null
 }
 
-/** Twelve digits with the century, Luhn-checked, samordningsnummer allowed; null when it is not one. */
-export function normalizeOwnerPersonalNumber(value: string, now: Date = new Date()): string | null {
-  const twelve = expandPersonnummerTo12(value, now)
-  if (!twelve) return null
-  return validatePersonnummer(twelve).valid ? twelve : null
-}
+/** YYMMDD+NNNN: the personnummer of someone aged 100 or more. */
+const PLUS_FORM_RE = /^(\d{6})\s*\+\s*(\d{4})$/
 
 /**
- * The owner's personnummer prefilled for an enskild firma, whose org number
- * IS that personnummer (ten digits). The century is the most recent one
- * that does not put the birth date in the future; an owner aged 100 or more
- * edits it.
+ * The company's ten-digit organisationsnummer from what it stored: ten or
+ * twelve digits, with hyphens or spaces (normalizeOrgNumber), or with the
+ * plus an enskild firma's number carries when it is the personnummer of an
+ * owner aged 100 or more. Luhn-checked; null for anything else.
  */
-export function ownerPersonalNumberFromOrgNumber(orgNumber: string | null, now: Date = new Date()): string | null {
-  const ten = normalizeOrgNumber(orgNumber)
-  return ten ? normalizeOwnerPersonalNumber(ten, now) : null
+export function creditorOrgNumber(stored: string | null | undefined): string | null {
+  if (!stored) return null
+  const plus = PLUS_FORM_RE.exec(stored.trim())
+  return normalizeOrgNumber(plus ? plus[1] + plus[2] : stored)
 }
 
 /** An amount typed as kronor, at most two decimals. */
@@ -167,8 +162,6 @@ export interface CompanyStepInput {
   phone: string | null
   vatRegistered: boolean
   vatNumber: string | null
-  /** Required for an enskild firma, ignored otherwise. */
-  ownerPersonalNumber: string | null
   payout: { cashAccountId: string; kind: PayoutKind } | null
 }
 
@@ -199,7 +192,7 @@ export type FieldErrors<T> = Partial<Record<keyof T | string, ActivationErrorKey
 
 const blank = (value: string | null | undefined): boolean => !value || value.trim().length === 0
 
-export function validateCompanyStep(input: CompanyStepInput, ctx: { soleTrader: boolean; now?: Date }): FieldErrors<CompanyStepInput> {
+export function validateCompanyStep(input: CompanyStepInput): FieldErrors<CompanyStepInput> {
   const errors: FieldErrors<CompanyStepInput> = {}
   if (blank(input.name)) errors.name = 'required'
   else if (input.name.trim().length > 100) errors.name = 'too_long'
@@ -216,10 +209,6 @@ export function validateCompanyStep(input: CompanyStepInput, ctx: { soleTrader: 
   if (input.vatRegistered) {
     if (blank(input.vatNumber)) errors.vatNumber = 'required'
     else if (!isSwedishVatNumber(input.vatNumber!)) errors.vatNumber = 'invalid_vat_number'
-  }
-  if (ctx.soleTrader) {
-    if (blank(input.ownerPersonalNumber)) errors.ownerPersonalNumber = 'required'
-    else if (!normalizeOwnerPersonalNumber(input.ownerPersonalNumber!, ctx.now)) errors.ownerPersonalNumber = 'invalid_personal_number'
   }
   if (!input.payout) errors.payout = 'required'
   return errors
@@ -300,7 +289,6 @@ export const CompanyStepSchema = z.object({
   phone: z.string().max(60).nullable(),
   vatRegistered: z.boolean(),
   vatNumber: z.string().max(40).nullable(),
-  ownerPersonalNumber: z.string().max(20).nullable(),
   payout: z.object({ cashAccountId: z.string().uuid(), kind: z.enum(PAYOUT_KINDS) }).nullable(),
 })
 

@@ -8,17 +8,15 @@ import type {
 } from '@accounted/connect-contract'
 import { resolveCompanyEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import { todayIsoStockholm } from '@/lib/dates/iso'
-import { normalizeOrgNumber } from '@/lib/invariants/org-number'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import type { EntityType } from '@/types'
 import {
+  creditorOrgNumber,
   findPayoutOption,
   isEmail,
-  normalizeOwnerPersonalNumber,
   normalizeVatNumber,
-  ownerPersonalNumberFromOrgNumber,
   payoutOptions,
   validateCompanyStep,
   validateKycStep,
@@ -50,7 +48,6 @@ import {
   COLLECTIONS_DISABLED,
   COLLECTIONS_DISCONNECT_BLOCKED,
   COLLECTIONS_ORG_NUMBER_MISSING,
-  COLLECTIONS_OWNER_NUMBER_MISMATCH,
   COLLECTIONS_PAYOUT_ACCOUNT_INVALID,
   COLLECTIONS_PROVIDER_UNAVAILABLE,
   COLLECTIONS_TERMS_CHANGED,
@@ -230,9 +227,11 @@ export interface ActivationCompany {
   name: string
   orgNumber: string | null
   entityType: EntityType
-  /** Enskild firma: the owner's personnummer goes with the application. */
+  /**
+   * Enskild firma: applies as a business (sole_trader) under its org number,
+   * which is the owner's personnummer; nothing else about the owner is asked.
+   */
   soleTrader: boolean
-  ownerPersonalNumber: string | null
   addressLine1: string | null
   addressLine2: string | null
   postalCode: string | null
@@ -253,7 +252,6 @@ export interface ActivationContext {
 export async function loadActivationContext(
   db: Pick<SupabaseClient, 'from'>,
   companyId: string,
-  now: Date = new Date(),
 ): Promise<ActivationContext> {
   const [companyRes, settingsRes, accountsRes, defaultRes] = await Promise.all([
     db.from('companies').select('name, org_number, entity_type').eq('id', companyId).maybeSingle(),
@@ -287,7 +285,8 @@ export async function loadActivationContext(
     vat_number: string | null
   } | null
   const entityType = await resolveCompanyEntityType(db as SupabaseClient, companyId, company?.entity_type ?? settings?.entity_type)
-  const orgNumber = normalizeOrgNumber(company?.org_number ?? settings?.org_number ?? null)
+  const storedOrgNumber = company?.org_number ?? settings?.org_number ?? null
+  const orgNumber = creditorOrgNumber(storedOrgNumber)
   const soleTrader = usesPersonnummerAsOrgNumber(entityType)
   const options = payoutOptions((accountsRes.data ?? []) as PayoutSourceAccount[])
   const defaultId = (defaultRes.data as { cash_account_id: string } | null)?.cash_account_id ?? null
@@ -297,7 +296,6 @@ export async function loadActivationContext(
       orgNumber,
       entityType,
       soleTrader,
-      ownerPersonalNumber: soleTrader ? ownerPersonalNumberFromOrgNumber(orgNumber, now) : null,
       addressLine1: settings?.address_line1 ?? null,
       addressLine2: settings?.address_line2 ?? null,
       postalCode: settings?.postal_code ?? null,
@@ -382,7 +380,7 @@ export function buildOnboardingRequest(input: {
   if (!company.orgNumber) fail(COLLECTIONS_ORG_NUMBER_MISSING)
 
   const errors: Record<string, ActivationErrorKey> = {}
-  for (const [field, key] of Object.entries(validateCompanyStep(body.company, { soleTrader: company.soleTrader, now }))) {
+  for (const [field, key] of Object.entries(validateCompanyStep(body.company))) {
     if (key) errors[`company.${field}`] = key
   }
   for (const [field, key] of Object.entries(validateKycStep(body.kyc))) {
@@ -394,13 +392,6 @@ export function buildOnboardingRequest(input: {
     if (key) errors[`rules.${field}`] = key
   }
   if (Object.keys(errors).length > 0) throw new ActivationValidationError(errors)
-
-  if (company.soleTrader) {
-    const ownerNumber = normalizeOwnerPersonalNumber(body.company.ownerPersonalNumber ?? '', now)
-    // The firm is registered under the owner's personnummer: the ten
-    // significant digits must match, whatever century was typed.
-    if (!ownerNumber || ownerNumber.slice(2) !== company.orgNumber) fail(COLLECTIONS_OWNER_NUMBER_MISMATCH)
-  }
 
   const payout = body.company.payout ? findPayoutOption(context.payoutOptions, body.company.payout) : null
   if (!payout) fail(COLLECTIONS_PAYOUT_ACCOUNT_INVALID)
@@ -423,8 +414,8 @@ export function buildOnboardingRequest(input: {
       name: body.company.name.trim(),
       orgNumber: company.orgNumber,
       // An enskild firma onboards as a business with its ten-digit org number
-      // (the collections provider, 2026-10-07): the owner's twelve-digit
-      // personnummer is only checked against it above, never sent.
+      // (the collections provider, 2026-10-07): nothing beyond it is asked
+      // about the owner or sent.
       personalNumber: null,
       vatRegistered: body.company.vatRegistered,
       vatNumber: body.company.vatRegistered && body.company.vatNumber ? normalizeVatNumber(body.company.vatNumber) : null,
@@ -475,7 +466,7 @@ export async function submitOnboarding(deps: ConnectionServiceDeps, body: Onboar
   const adapter = requireAdapter(deps, row)
 
   const now = nowOf(deps)
-  const context = await loadActivationContext(deps.db, deps.companyId, now)
+  const context = await loadActivationContext(deps.db, deps.companyId)
   const consentedByName = await personName(deps.db, row.consented_by)
   const { request, payout } = buildOnboardingRequest({
     row,

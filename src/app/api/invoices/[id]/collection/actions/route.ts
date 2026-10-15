@@ -28,12 +28,13 @@ const ActionBodySchema = z.object({
  * POST /api/invoices/[id]/collection/actions: an action on the invoice's
  * open case (pause, optionally until a date; resume; withdraw, confirming
  * the fee once the provider's free days have passed; dispute; contest; the
- * decisions the provider waits for; starting reminders on a delivered
- * invoice). Only the actions the provider's last snapshot offers are
- * accepted. Starting, approving the next step and "it is not paid" re-check
- * that the invoice is owed and unpaid in the bank; everything else serves
- * the open case whatever the start gates say. "The customer has paid" is
- * answered by booking the payment, never sent as an action.
+ * decisions the provider waits for). Only the actions the provider's last
+ * snapshot offers are accepted. Approving the next step and "it is not paid"
+ * re-check that the invoice is owed and unpaid in the bank; everything else
+ * serves the open case whatever the start gates say. "The customer has paid"
+ * is answered by booking the payment, never sent as an action. Starting
+ * reminders on a delivered invoice is a handover (POST ../collection), which
+ * runs the full handover checklist: `start` is refused here.
  */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'invoice.collection.action',

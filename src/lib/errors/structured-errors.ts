@@ -7830,11 +7830,6 @@ const COLLECTIONS: Record<string, StructuredErrorEntry> = {
     message_sv: 'Lägg till företagets organisationsnummer under Företag först.',
     message_en: 'Add the company\'s organisation number under Company first.',
   },
-  COLLECTIONS_OWNER_NUMBER_MISMATCH: {
-    httpStatus: 400,
-    message_sv: 'Ägarens personnummer ska vara det som den enskilda firman är registrerad på.',
-    message_en: 'The owner\'s personal identity number must be the one the sole trader is registered under.',
-  },
   COLLECTION_NOT_ELIGIBLE: {
     httpStatus: 409,
     message_sv: 'Fakturan uppfyller inte kraven för att skickas till inkasso.',
@@ -7949,6 +7944,11 @@ const COLLECTIONS: Record<string, StructuredErrorEntry> = {
     message_sv: 'Bokför betalningen på fakturan. Den rapporteras till inkassobolaget och ärendet avslutas när hela beloppet är betalt.',
     message_en: 'Record the payment on the invoice. It is reported to the collection agency and the case closes when the whole amount is paid.',
     thrown_message_sv: true,
+  },
+  COLLECTION_START_VIA_HANDOVER: {
+    httpStatus: 409,
+    message_sv: 'Starta ärendet från fakturan med Skicka till inkasso, så att samma kontroller som vid en överlämning görs först.',
+    message_en: 'Start the case from the invoice with Send to debt collection, so the same checks as a handover run first.',
   },
   COLLECTION_WITHDRAW_FEE_UNACKNOWLEDGED: {
     httpStatus: 409,

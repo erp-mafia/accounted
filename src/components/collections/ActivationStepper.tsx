@@ -56,7 +56,6 @@ interface CompanyForm {
   phone: string
   vatRegistered: boolean
   vatNumber: string
-  ownerPersonalNumber: string
   /** `${cashAccountId}:${kind}`, or '' when none is chosen. */
   payout: string
 }
@@ -102,7 +101,6 @@ function companyInput(form: CompanyForm): CompanyStepInput {
     phone: orNull(form.phone),
     vatRegistered: form.vatRegistered,
     vatNumber: form.vatRegistered ? orNull(form.vatNumber) : null,
-    ownerPersonalNumber: orNull(form.ownerPersonalNumber),
     payout: cashAccountId && kind ? { cashAccountId, kind: kind as PayoutKind } : null,
   }
 }
@@ -172,7 +170,6 @@ export function ActivationStepper({ data, onChanged }: ActivationStepperProps) {
     phone: company0?.phone ?? '',
     vatRegistered: company0?.vatRegistered ?? false,
     vatNumber: company0?.vatNumber ?? '',
-    ownerPersonalNumber: company0?.ownerPersonalNumber ?? '',
     payout: defaultPayout,
   })
   const [kyc, setKyc] = useState<KycForm>({
@@ -194,7 +191,6 @@ export function ActivationStepper({ data, onChanged }: ActivationStepperProps) {
   })
 
   if (!activation || !profile) return null
-  const soleTrader = activation.company.soleTrader
 
   const errorText = (field: string): string | null => (errors[field] ? t(`error_${errors[field]}`) : null)
   const fieldError = (field: string) => {
@@ -226,7 +222,7 @@ export function ActivationStepper({ data, onChanged }: ActivationStepperProps) {
   }
 
   function validate(which: Step): Record<string, ActivationErrorKey> {
-    if (which === 'company') return prefixed('company', validateCompanyStep(companyInput(company), { soleTrader }))
+    if (which === 'company') return prefixed('company', validateCompanyStep(companyInput(company)))
     if (which === 'kyc') return prefixed('kyc', validateKycStep(kycInput(kyc)))
     if (which === 'rules') {
       return prefixed('rules', validateRulesStep(rulesInput(rules, ladderOffered), { today: todayIsoStockholm(), requireLadderChoice: ladderOffered }))
@@ -389,17 +385,6 @@ export function ActivationStepper({ data, onChanged }: ActivationStepperProps) {
               {fieldError('company.vatNumber')}
             </SettingsRow>
           </SettingsReveal>
-          {soleTrader ? (
-            <SettingsRow label={t('field_owner_personal_number')} htmlFor="coll-owner" help={tp('sole_trader_note')} align="baseline">
-              <SettingsInput
-                id="coll-owner"
-                inputMode="numeric"
-                value={company.ownerPersonalNumber}
-                onChange={(e) => setCompany({ ...company, ownerPersonalNumber: e.target.value })}
-              />
-              {fieldError('company.ownerPersonalNumber')}
-            </SettingsRow>
-          ) : null}
         </SettingsGroup>
       )}
 

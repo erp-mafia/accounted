@@ -345,6 +345,21 @@ describe('runLadderCron', () => {
     expect(rows.find((r) => r.id === 'other-1')).toMatchObject({ status: 'pending' })
   })
 
+  it('rejects a batch on the third daily run after it, also when that run starts seconds short of 72 hours', async () => {
+    const world = await ladderWorld()
+    const now = world.now().getTime()
+    world.db.seed('pending_operations', [
+      // Staged a few seconds into its run; today's run fired a few seconds early.
+      { id: 'third-run', company_id: COMPANY_ID, operation_type: 'collections_daily_batch', status: 'pending', created_at: new Date(now - 72 * 3_600_000 + 8_000).toISOString() },
+      { id: 'second-run', company_id: 'another-company', operation_type: 'collections_daily_batch', status: 'pending', created_at: new Date(now - 48 * 3_600_000 + 8_000).toISOString() },
+    ])
+    const summary = await runLadderCron(cronDeps(world, { loadFacts: async () => world.facts({ capability: false }) }))
+    expect(summary).toMatchObject({ expired: 1 })
+    const rows = world.db.rows('pending_operations')
+    expect(rows.find((r) => r.id === 'third-run')).toMatchObject({ status: 'rejected', result_data: { auto_rejected: true, reason: 'expired' } })
+    expect(rows.find((r) => r.id === 'second-run')).toMatchObject({ status: 'pending' })
+  })
+
   it('keeps going when one company fails', async () => {
     const world = await ladderWorld()
     const summary = await runLadderCron(

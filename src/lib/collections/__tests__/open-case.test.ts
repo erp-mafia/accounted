@@ -229,6 +229,12 @@ describe('openCollectionCase', () => {
     expect(world.openRequests[0].invoice.claimRemaining).toBe(750)
   })
 
+  it('hands over a Swedish customer whose country is stored as a name, with the debtor address in ISO code', async () => {
+    const world = await createCaseWorld({ customer: { country: 'Sverige' } })
+    expect(await openCollectionCase(world.deps(), HANDOVER)).toMatchObject({ ok: true, registered: true })
+    expect(world.openRequests[0].debtor.address.countryCode).toBe('SE')
+  })
+
   it('sends a consumer personnummer in transit only, and hands a consumer over without one', async () => {
     const consumer = { customer_type: 'individual', org_number: null, personal_number: '19800101-1231' }
     const world = await createCaseWorld({ customer: consumer })
