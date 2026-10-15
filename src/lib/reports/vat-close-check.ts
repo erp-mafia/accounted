@@ -1051,7 +1051,14 @@ export async function computeVatCloseCheck(
     })
   }
   const reconRes = recon.status
-  if (!reconRes.is_reconciled) {
+  // Verifikat dated before the bank's history (crm#1221) are outside Stäm
+  // av's comparison, but this gate keeps reading them as verifikat without a
+  // bank row (crm#185): the period's figures are exactly what they were
+  // before that split, so a momsperiod the bank never covered stays closed.
+  const beforeHistoryCount = reconRes.before_history_count ?? 0
+  const ledgerWithoutBankRow = reconRes.unmatched_gl_line_count + beforeHistoryCount
+  const periodDifference = roundOre(reconRes.difference - (reconRes.before_history_total ?? 0))
+  if (!reconRes.is_reconciled || beforeHistoryCount > 0) {
     // Every bank row is matched and verifikat without a bank row explain the
     // whole difference (the residual is under half an öre, the Stäm av
     // sign-off threshold). The bridge calls that avstämt, so the user can sign
@@ -1060,7 +1067,7 @@ export async function computeVatCloseCheck(
     // the hint the action that clears it (crm#185).
     const bankRowsMissing =
       reconRes.unmatched_transaction_count === 0 &&
-      reconRes.unmatched_gl_line_count > 0 &&
+      ledgerWithoutBankRow > 0 &&
       typeof reconRes.unexplained_difference === 'number' &&
       Math.abs(reconRes.unexplained_difference) < 0.005
     // Nothing is left to match, and the whole difference is verifikat that
@@ -1070,26 +1077,26 @@ export async function computeVatCloseCheck(
     // "0 omatchade" with a difference and send the agent off to match.
     const settledElsewhere =
       reconRes.unmatched_transaction_count === 0 &&
-      reconRes.unmatched_gl_line_count === 0 &&
+      ledgerWithoutBankRow === 0 &&
       (reconRes.settled_gl_entry_count ?? 0) > 0 &&
       typeof reconRes.unexplained_difference === 'number' &&
       Math.abs(reconRes.unexplained_difference) < 0.005
     blockers.push({
       kind: 'bank_unreconciled',
-      severity: Math.abs(reconRes.difference) > 100 ? 'high' : 'medium',
+      severity: Math.abs(periodDifference) > 100 ? 'high' : 'medium',
       count:
         reconRes.unmatched_transaction_count +
-        reconRes.unmatched_gl_line_count +
+        ledgerWithoutBankRow +
         (settledElsewhere ? reconRes.settled_gl_entry_count : 0),
       // The account is named from the RESOLVED scope, not hard-coded: for a
       // company with no 1930 row this check now reconciles its primary cash
       // account, and a message pointing at 1930 would send the user to an
       // account with no lines on it.
       message: settledElsewhere
-        ? `${reconRes.settled_gl_entry_count} verifikat på ${recon.scope.accountNumber} är kopplade mot verifikat daterade utanför perioden: periodens differens ${AGENT_AMOUNT_FORMAT.format(reconRes.difference)} kr är rättad i en annan period`
+        ? `${reconRes.settled_gl_entry_count} verifikat på ${recon.scope.accountNumber} är kopplade mot verifikat daterade utanför perioden: periodens differens ${AGENT_AMOUNT_FORMAT.format(periodDifference)} kr är rättad i en annan period`
         : bankRowsMissing
-        ? `${reconRes.unmatched_gl_line_count} verifikat på ${recon.scope.accountNumber} saknar banktransaktion: banken har inga rader för de datumen`
-        : `Bankavstämning visar differens ${reconRes.difference.toFixed(2)} kr (${reconRes.unmatched_transaction_count} omatchade banktransaktioner, ${reconRes.unmatched_gl_line_count} omatchade huvudbokslinjer på ${recon.scope.accountNumber})`,
+        ? `${ledgerWithoutBankRow} verifikat på ${recon.scope.accountNumber} saknar banktransaktion: banken har inga rader för de datumen`
+        : `Bankavstämning visar differens ${periodDifference.toFixed(2)} kr (${reconRes.unmatched_transaction_count} omatchade banktransaktioner, ${ledgerWithoutBankRow} omatchade huvudbokslinjer på ${recon.scope.accountNumber})`,
       hint: settledElsewhere
         ? SETTLED_ELSEWHERE_HINT
         : bankRowsMissing

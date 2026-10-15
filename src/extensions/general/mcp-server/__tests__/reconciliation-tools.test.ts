@@ -208,6 +208,60 @@ describe('reconciliation MCP tools', () => {
     })
   })
 
+  describe('bank verifikat before the bank history (crm#1221)', () => {
+    const BANK_KEY = 'bank:11111111-1111-4111-8111-111111111111'
+    const summary = { count: 222, total: -196108.17, history_start: '2026-07-17' }
+
+    it('items: a bank listing carries the bank block, never the skattekonto one', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      itemsMock.mockResolvedValue({
+        items: [], count: 0, total_count: 0, has_more: false, older_unmatched_count: 0, before_history: summary,
+      })
+      const out = (await tool('gnubok_list_reconciliation_items').execute(
+        { account_key: BANK_KEY, bucket: 'unmatched_ledger' },
+        COMPANY,
+        USER,
+        supabase as never,
+      )) as { before_history: Record<string, unknown> & { note: string } }
+      expect(out.before_history).toMatchObject(summary)
+      expect(out.before_history.note).toMatch(/^222 verifikat on this bank account are dated before history_start 2026-07-17/)
+      expect(out.before_history.note).toContain('bucket "before_history"')
+      expect(out.before_history.note).toContain('Do not book, match or ignore')
+      expect(out.before_history.note).toContain('gnubok_create_transactions')
+      expect(out.before_history.note).not.toContain('Skatteverket')
+    })
+
+    it('status: the bank block rides next to the bridge when the bank status has verifikat before its history', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      const bridge = [{ key: 'bank_transactions', amount: 700 }]
+      statusMock.mockResolvedValue({
+        account_key: BANK_KEY,
+        kind: 'bank',
+        bridge,
+        skattekonto: null,
+        bank: { history_start: '2026-07-17', before_history_count: 222, before_history_total: -196108.17, opening_difference: 0 },
+      })
+      const out = (await tool('gnubok_get_reconciliation_status').execute(
+        { account_key: BANK_KEY }, COMPANY, USER, supabase as never,
+      )) as Record<string, unknown> & { before_history: { note: string } }
+      expect(out.bridge).toBe(bridge)
+      expect(out.before_history).toMatchObject(summary)
+      expect(out.before_history.note).toContain('bank.opening_difference')
+
+      statusMock.mockResolvedValue({
+        account_key: BANK_KEY,
+        kind: 'bank',
+        bridge,
+        skattekonto: null,
+        bank: { history_start: '2026-01-02', before_history_count: 0, before_history_total: 0 },
+      })
+      const none = await tool('gnubok_get_reconciliation_status').execute(
+        { account_key: BANK_KEY }, COMPANY, USER, supabase as never,
+      )
+      expect(none).not.toHaveProperty('before_history')
+    })
+  })
+
   it('reconcile_match resolves pairs through a dry-run preview and stages them (dry_run returns staged: false)', async () => {
     const { supabase } = createQueuedMockSupabase()
     matchMock.mockResolvedValue({

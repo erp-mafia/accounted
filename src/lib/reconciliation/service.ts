@@ -156,10 +156,14 @@ function bankBridge(status: Awaited<ReturnType<typeof getBankReconciliationStatu
       items_bucket: 'ignored',
     })
   }
+  // Verifikat dated before the bank's history are outside the comparison
+  // (crm#1221): the ledger side then starts where the bank's does. They are
+  // no bridge line; the bank block carries their count and total.
+  const from = status.before_history_count > 0 ? status.history_start : null
   lines.push({
     key: 'ledger_balance',
-    label_sv: `Bokfört på ${accountNumber} i perioden`,
-    label_en: `Booked on ${accountNumber} in the period`,
+    label_sv: from ? `Bokfört på ${accountNumber} från ${from}` : `Bokfört på ${accountNumber} i perioden`,
+    label_en: from ? `Booked on ${accountNumber} from ${from}` : `Booked on ${accountNumber} in the period`,
     amount: status.gl_1930_period_movement,
     count: null,
     items_bucket: null,

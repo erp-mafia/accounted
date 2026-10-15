@@ -75,6 +75,8 @@ const BUCKET_ORDER: ReconciliationItemBucket[] = [
   'matched',
   'ignored',
   'upcoming',
+  // Bank only, and only once asked for: read on demand (beforeItems).
+  'before_history',
 ]
 
 /** Buckets that start folded: they explain the bridge but are not work. */
@@ -121,6 +123,10 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
   const [signoffOpen, setSignoffOpen] = useState(false)
   const [matcher, setMatcher] = useState<MatcherMatch[] | null>(null)
   const [bridgeOpen, setBridgeOpen] = useState(false)
+  // Bank: the verifikat dated before the bank's history (crm#1221), listed
+  // only when asked for. Null until read; a refresh reads them again.
+  const [beforeOpen, setBeforeOpen] = useState(false)
+  const [beforeItems, setBeforeItems] = useState<ReconciliationItem[] | null>(null)
   const searchParams = useSearchParams()
   const autorunRequested = searchParams.get('autorun') === '1'
   const autorunDone = useRef(false)
@@ -148,6 +154,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
       const itemsJson = await itemsRes.json()
       setStatus(statusJson.data as ReconciliationStatus)
       setItems(itemsJson.data as ItemsPayload)
+      setBeforeItems(null)
     } catch {
       setLoadError(true)
     }
@@ -164,13 +171,37 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
     onChanged()
   }, [load, onChanged])
 
+  useEffect(() => {
+    if (!beforeOpen || beforeItems !== null) return
+    let cancelled = false
+    void (async () => {
+      const qs = new URLSearchParams({
+        date_from: window.from,
+        date_to: window.to,
+        bucket: 'before_history',
+        limit: String(ITEMS_LIMIT),
+      })
+      try {
+        const res = await fetch(`${base}/items?${qs.toString()}`)
+        const json = res.ok ? await res.json() : null
+        if (!cancelled) setBeforeItems(((json?.data?.items ?? []) as ReconciliationItem[]))
+      } catch {
+        if (!cancelled) setBeforeItems([])
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [beforeOpen, beforeItems, base, window.from, window.to])
+
   const byBucket = useMemo(() => {
     const map = new Map<ReconciliationItemBucket, ReconciliationItem[]>()
     for (const b of BUCKET_ORDER) map.set(b, [])
     // A verifikat its proposals fully explain shows in its pair only, not again as missing on the other side.
     for (const item of dropProposedLedgerDuplicates(items?.items ?? [])) map.get(item.bucket)?.push(item)
+    if (beforeOpen && beforeItems) map.set('before_history', beforeItems)
     return map
-  }, [items])
+  }, [items, beforeOpen, beforeItems])
 
   const proposedCount = status?.counts.proposed ?? 0
   const bookableIds = useMemo(
@@ -519,6 +550,22 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
   const specificationLabel = specification ? (locale === 'en' ? specification.label_en : specification.label_sv) : null
 
   const bankRaw = status.bank as { bank_transaction_inflow?: number; bank_transaction_outflow?: number; bank_transaction_count?: number } | null
+  // The bank's history (crm#1221): verifikat dated before its first day are
+  // outside the comparison, which starts there. Said once, under the verdict.
+  const bankHistory =
+    !isSkv && !isManual
+      ? (status.bank as {
+          history_start?: string | null
+          before_history_count?: number
+          before_history_total?: number
+          opening_difference?: number | null
+        } | null)
+      : null
+  const historyStart = bankHistory?.history_start ?? null
+  const beforeCount = bankHistory?.before_history_count ?? 0
+  const openingDifference = beforeCount > 0 ? (bankHistory?.opening_difference ?? null) : null
+  // The period ends before the bank's first row: there is no bank side to compare.
+  const periodBeforeHistory = !!historyStart && window.to < historyStart
   const bankBreakdown =
     !isSkv && bankRaw && typeof bankRaw.bank_transaction_inflow === 'number' && typeof bankRaw.bank_transaction_outflow === 'number'
       ? t('tile_bank_breakdown', {
@@ -562,7 +609,10 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
         ? t('tile_ledger', { account: status.account_number })
         : t('tile_ledger_bank', { account: status.account_number }),
       value: money(status.ledger_balance),
-      sub: t('tile_per', { date: formatDate(asOfDate) }),
+      sub:
+        beforeCount > 0 && historyStart
+          ? t('tile_from', { date: formatDate(historyStart) })
+          : t('tile_per', { date: formatDate(asOfDate) }),
     },
     { key: 'difference', label: t('tile_difference'), value: money(status.difference), sub: '' },
     {
@@ -622,7 +672,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
       case 'upcoming':
         return t('bucket_upcoming')
       case 'before_history':
-        return t('bucket_before_history')
+        return isSkv ? t('bucket_before_history') : t('bucket_before_history_bank')
     }
   }
 
@@ -711,6 +761,38 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
               </p>
             )}
           </div>
+        )}
+        {beforeCount > 0 && historyStart && (
+          <p className="text-[12.5px] text-muted-foreground" data-ph-mask>
+            {t('before_history_line', {
+              count: beforeCount,
+              account: status.account_number,
+              date: formatDate(historyStart),
+              amount: formatCurrency(bankHistory?.before_history_total ?? 0, currency),
+            })}
+            {openingDifference != null && (
+              <>
+                {' '}
+                {Math.abs(openingDifference) < 0.005
+                  ? t('before_history_opening_ok', { account: status.account_number })
+                  : t('before_history_opening_diff', {
+                      account: status.account_number,
+                      amount: formatCurrency(Math.abs(openingDifference), currency),
+                    })}
+              </>
+            )}
+            <button type="button" onClick={() => setBeforeOpen((v) => !v)} className={cn(QUIET_LINK_CLASS, 'ml-3')}>
+              {beforeOpen ? t('hide') : t('before_history_show')}
+            </button>
+          </p>
+        )}
+        {periodBeforeHistory && historyStart && (
+          <p className="text-[12.5px] text-muted-foreground">
+            {t('before_history_window', { date: formatDate(historyStart) })}{' '}
+            <Link href="/import?mode=bank" className={QUIET_LINK_CLASS}>
+              {t('before_history_import')}
+            </Link>
+          </p>
         )}
       </div>
 
@@ -821,7 +903,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
         <p className="max-w-[560px] text-[13px] text-muted-foreground">
           {specificationLabel ? t('manual_spec_hint', { label: specificationLabel }) : t('manual_hint')}
         </p>
-      ) : items.items.length === 0 ? (
+      ) : items.items.length === 0 && (byBucket.get('before_history')?.length ?? 0) === 0 ? (
         <p className="text-[13px] text-muted-foreground">{t('all_clear')}</p>
       ) : (
         <div className="overflow-x-auto">
@@ -896,7 +978,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
                           onUnignore={() => void setIgnored(item, false)}
                           onBook={() => setBookRow(item)}
                           onLinkInstead={isSkv ? onMatchManually : undefined}
-                          onMarkIb={!isSkv && item.side === 'ledger' && item.bucket === 'unmatched_ledger' && item.ib_eligible ? () => void markOpeningBalance(item) : undefined}
+                          onMarkIb={!isSkv && item.side === 'ledger' && (item.bucket === 'unmatched_ledger' || item.bucket === 'before_history') && item.ib_eligible ? () => void markOpeningBalance(item) : undefined}
                           moveTargets={!isSkv && item.item_type === 'transaction' && item.bucket === 'unmatched_external' ? otherBankAccounts : []}
                           onMove={(target) => void moveToAccount(item, target)}
                         />

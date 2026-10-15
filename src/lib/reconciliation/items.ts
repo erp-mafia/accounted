@@ -3,6 +3,7 @@ import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import {
   alignLinkedTransactionsToWindow,
+  fetchBankHistoryStart,
   fetchJunctionLinkMap,
   fetchUnlinkedGLLines,
   openAmountByEntry,
@@ -69,8 +70,11 @@ export interface ListItemsResult {
   /** Unmatched rows dated before windowFrom (never hidden, only counted). */
   older_unmatched_count: number
   /**
-   * Skattekonto only, when any: open rows dated before history_start, which
-   * no default listing shows (bucket before_history lists them), crm#1153.
+   * When any: rows dated before history_start, which no default listing
+   * shows (bucket before_history lists them). Skattekonto: open Skatteverket
+   * rows the 1630 IB carries (crm#1153). Bank: verifikat on the account from
+   * before the first day the bank side covers, which no bank row can match
+   * (crm#1221).
    */
   before_history?: { count: number; total: number; history_start: string | null }
 }
@@ -491,8 +495,23 @@ export async function listAccountItems(
       }
     }
 
+    // The bank's history (crm#1221): verifikat dated before the first day the
+    // bank side covers have no bank row to match. When that day falls inside
+    // the window they are listed in before_history, not as missing on the
+    // bank, the split getReconciliationStatus counts them by.
+    const wantsLedger = buckets.includes('unmatched_ledger') || buckets.includes('before_history')
+    const historyStart = wantsLedger
+      ? await fetchBankHistoryStart(supabase, companyId, account.id, currency, Boolean(account.is_primary))
+      : null
+    const splitAt =
+      historyStart &&
+      (!options.windowFrom || historyStart > options.windowFrom) &&
+      (!options.windowTo || historyStart <= options.windowTo)
+        ? historyStart
+        : null
+
     let ledgerItems: Map<string, ReconciliationItem> | null = null
-    if (buckets.includes('unmatched_ledger')) {
+    if (wantsLedger) {
       const lines = await fetchUnlinkedGLLines(
         supabase,
         companyId,
@@ -537,7 +556,7 @@ export async function listAccountItems(
     }
 
     await attachEntries(supabase, companyId, buckets.flatMap((b) => byBucket.get(b) ?? []), persistedProposals)
-    if (buckets.includes('unmatched_ledger') || buckets.includes('matched')) {
+    if (wantsLedger || buckets.includes('matched')) {
       await applyLedgerSettlements(
         supabase,
         companyId,
@@ -549,8 +568,33 @@ export async function listAccountItems(
         ledgerItems,
       )
     }
+    // After the settlements: a settled verifikat is explained wherever it is
+    // dated, so only the open ones move. Nothing to match them with, so the
+    // verifikat itself is the action.
+    let beforeHistory: ListItemsResult['before_history']
+    if (splitAt) {
+      const ledger = byBucket.get('unmatched_ledger') ?? []
+      const before = ledger.filter((item) => item.date < splitAt)
+      byBucket.set('unmatched_ledger', ledger.filter((item) => item.date >= splitAt))
+      byBucket.set(
+        'before_history',
+        before.map((item) => ({
+          ...item,
+          bucket: 'before_history' as const,
+          before_history: true,
+          actions: item.actions.filter((a) => a !== 'match'),
+        })),
+      )
+      if (before.length > 0) {
+        beforeHistory = {
+          count: before.length,
+          total: roundOre(before.reduce((sum, item) => sum + item.amount, 0)),
+          history_start: splitAt,
+        }
+      }
+    }
     const all = buckets.flatMap((b) => byBucket.get(b) ?? [])
-    return page(all, limit, offset)
+    return { ...page(all, limit, offset), ...(beforeHistory ? { before_history: beforeHistory } : {}) }
   }
 
   return null

@@ -101,6 +101,7 @@ const BankFilePreviewStep = dynamic(() => import('@/components/import/BankFilePr
 const BankFileColumnMappingStep = dynamic(() => import('@/components/import/BankFileColumnMappingStep'), { loading: ImportStepLoading })
 const BankFileConfirmStep = dynamic(() => import('@/components/import/BankFileConfirmStep'), { loading: ImportStepLoading })
 const BankFileResultStep = dynamic(() => import('@/components/import/BankFileResultStep'), { loading: ImportStepLoading })
+const BankDepositSpecStep = dynamic(() => import('@/components/import/BankDepositSpecStep'), { loading: ImportStepLoading })
 const OpeningBalanceUploadStep = dynamic(() => import('@/components/import/OpeningBalanceUploadStep'), { loading: ImportStepLoading })
 const OpeningBalanceColumnMappingStep = dynamic(() => import('@/components/import/OpeningBalanceColumnMappingStep'), { loading: ImportStepLoading })
 const OpeningBalanceEditStep = dynamic(() => import('@/components/import/OpeningBalanceEditStep'), { loading: ImportStepLoading })
@@ -149,6 +150,10 @@ function BankFileImportWizard() {
   // The uploaded file was recognized as a skattekontoutdrag: the upload step
   // renders a pointer to the dedicated importer instead of a parse error.
   const [skattekontoDetected, setSkattekontoDetected] = useState(false)
+  // The uploaded file is Bankgirot's deposit specification (BG Max,
+  // crm#1170): it creates no rows; its own step attaches its payments to the
+  // bank rows that already exist.
+  const [depositSpecFile, setDepositSpecFile] = useState<File | null>(null)
 
   // Parse results
   const [parseResult, setParseResult] = useState<BankFileParseResult | null>(null)
@@ -266,6 +271,8 @@ function BankFileImportWizard() {
             )
           } else if (err.code === 'BANK_FILE_SKATTEKONTO_DETECTED') {
             setSkattekontoDetected(true)
+          } else if (err.code === 'BANK_FILE_DEPOSIT_SPEC_DETECTED') {
+            setDepositSpecFile(file)
           } else {
             setBankError(getErrorMessage(err) || 'Kunde inte läsa filen')
           }
@@ -402,6 +409,7 @@ function BankFileImportWizard() {
     setBankError(null)
     setBankErrorTitle(null)
     setSkattekontoDetected(false)
+    setDepositSpecFile(null)
     setRawFileContent('')
     setDuplicateInfo(null)
     setAccountMatch(null)
@@ -419,33 +427,37 @@ function BankFileImportWizard() {
         <AttnLine>{tTx('import_psd2_active_warning_body', { bankName: activePsd2Banks.join(', ') })}</AttnLine>
       )}
 
+      {depositSpecFile && <BankDepositSpecStep file={depositSpecFile} onNewImport={handleNewImport} />}
+
       {/* Progress */}
-      <Card>
-        <CardContent className="pt-6">
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm">
-              <span className="sm:hidden text-primary font-medium">
-                Steg {currentStepIndex + 1}/{steps.length}: {BANK_STEP_LABELS[bankStep]}
-              </span>
-              {steps.map((s, i) => (
-                <span
-                  key={s}
-                  className={cn(
-                    'hidden sm:inline',
-                    i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground'
-                  )}
-                >
-                  {BANK_STEP_LABELS[s]}
+      {!depositSpecFile && (
+        <Card>
+          <CardContent className="pt-6">
+            <div className="space-y-2">
+              <div className="flex justify-between text-sm">
+                <span className="sm:hidden text-primary font-medium">
+                  Steg {currentStepIndex + 1}/{steps.length}: {BANK_STEP_LABELS[bankStep]}
                 </span>
-              ))}
+                {steps.map((s, i) => (
+                  <span
+                    key={s}
+                    className={cn(
+                      'hidden sm:inline',
+                      i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground'
+                    )}
+                  >
+                    {BANK_STEP_LABELS[s]}
+                  </span>
+                ))}
+              </div>
+              <Progress value={progress} className="h-2" />
             </div>
-            <Progress value={progress} className="h-2" />
-          </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Step content */}
-      {bankStep === 'upload' && (
+      {bankStep === 'upload' && !depositSpecFile && (
         <BankFileUploadStep
           onFileSelect={handleFileSelect}
           isLoading={bankIsLoading}

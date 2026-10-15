@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { parseBankFile, generateFileHash, detectFileFormat } from '@/lib/import/bank-file/parser'
 import { detectSkattekontoFile } from '@/lib/import/skattekonto-file/parser'
+import { detectBgMax } from '@/lib/import/bgmax/parser'
 import { decodeFileContent } from '@/lib/import/shared/encoding'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -40,6 +41,17 @@ export const POST = withRouteContext(
     try {
       const arrayBuffer = await file.arrayBuffer()
       const content = decodeFileContent(arrayBuffer)
+
+      // Bankgirot's deposit specification (BG Max) is not a statement: its
+      // deposits are bank rows that already exist, so it never creates rows.
+      // The wizard sends it to the deposit-specification route, which
+      // attaches each deposit's payments to its row (crm#1170). No format
+      // override reaches past this: parsed as a statement it would only
+      // create rows that double the deposits.
+      if (detectBgMax(content)) {
+        return errorResponseFromCode('BANK_FILE_DEPOSIT_SPEC_DETECTED', opLog, { requestId })
+      }
+
       const fileHash = generateFileHash(content)
 
       const { data: existingImport } = await supabase

@@ -121,6 +121,19 @@ function ticketDb(): Db {
     cash_account_id: CASH,
     reference: null,
   })
+  // The bank's history starts before every window below (crm#1221): an
+  // ignored row from the year before, outside each window read, so no
+  // verifikat here is before the bank's history and every figure is the
+  // settlement's alone.
+  db.transactions.push({
+    ...db.transactions[0],
+    id: '0b000000-0000-4000-8000-0000000000ff',
+    date: '2025-12-31',
+    amount: 1,
+    journal_entry_id: null,
+    is_ignored: true,
+    reconciliation_method: null,
+  })
   return db
 }
 
@@ -173,12 +186,18 @@ function fakeSupabase(db: Db, options: { failTable?: string } = {}) {
     private payload: Row | Row[] | null = null
     private window: [number, number] | null = null
     private one: 'single' | 'maybe' | null = null
+    private sortBy: { column: string; ascending: boolean } | null = null
     constructor(
       private table: string,
       private rows: Row[],
     ) {}
     select() { return this }
-    order() { return this }
+    // The first order applies, as the primary key of a real ORDER BY: the
+    // bank's history start is the earliest row's date (crm#1221).
+    order(column: string, opts?: { ascending?: boolean }) {
+      this.sortBy ??= { column, ascending: opts?.ascending !== false }
+      return this
+    }
     insert(rows: Row | Row[]) { this.op = 'insert'; this.payload = Array.isArray(rows) ? rows : [rows]; return this }
     update(patch: Row) { this.op = 'update'; this.payload = patch; return this }
     eq(c: string, v: unknown) { this.filters.push((r) => r[c] === v); return this }
@@ -226,6 +245,10 @@ function fakeSupabase(db: Db, options: { failTable?: string } = {}) {
       if (this.op === 'update') {
         for (const r of hit) Object.assign(r, this.payload)
         return { data: hit, error: null, count: hit.length }
+      }
+      if (this.sortBy) {
+        const { column, ascending } = this.sortBy
+        hit = [...hit].sort((a, b) => String(a[column] ?? '').localeCompare(String(b[column] ?? '')) * (ascending ? 1 : -1))
       }
       if (this.window) hit = hit.slice(this.window[0], this.window[1] + 1)
       if (this.one) return { data: hit[0] ?? null, error: null, count: null }

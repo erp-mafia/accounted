@@ -2033,6 +2033,27 @@ function skattekontoBeforeHistoryBlock(summary: {
 }
 
 /**
+ * Verifikat on a bank account dated before the first day the bank side
+ * covers (bank.history_start, crm#1221): no bank row can match them, so the
+ * comparison starts at history_start. Both reconciliation reads say so with
+ * this block, so an agent never books or matches them to clear a difference.
+ */
+function bankBeforeHistoryBlock(summary: {
+  count: number
+  total: number
+  history_start: string | null
+}): { count: number; total: number; history_start: string | null; note: string } {
+  return {
+    ...summary,
+    note:
+      `${summary.count} verifikat on this bank account are dated before history_start ${summary.history_start ?? ''}, the first day the bank feed or an imported bank file covers: no bank row can match them, so they are in no bridge line, count or unexplained_difference. ` +
+      'List them with gnubok_list_reconciliation_items, bucket "before_history". Do not book, match or ignore anything for them. ' +
+      'To reconcile that time as well, import the older bank history (a bank file, or gnubok_create_transactions): history_start then moves earlier and they become matchable. ' +
+      'bank.opening_difference, when not null, compares the ledger balance before history_start with the bank\'s saldo that day.',
+  }
+}
+
+/**
  * gnubok_ignore_transaction for an id that is no bank transaction: the
  * "ignore" action gnubok_list_reconciliation_items offers on a skattekonto
  * row (crm#1178: an enskild firma's skattekonto holds the owner's private
@@ -13574,13 +13595,24 @@ export const tools: McpTool[] = [
         const { items: _items, ...rest } = status as typeof status & { items?: unknown }
         void _items
         const beforeHistoryCount = rest.skattekonto?.before_history_count ?? 0
-        return beforeHistoryCount > 0
+        if (beforeHistoryCount > 0) {
+          return {
+            ...rest,
+            before_history: skattekontoBeforeHistoryBlock({
+              count: beforeHistoryCount,
+              total: rest.skattekonto?.before_history_total ?? 0,
+              history_start: rest.skattekonto?.history_start ?? null,
+            }),
+          }
+        }
+        const bank = rest.bank as { before_history_count?: number; before_history_total?: number; history_start?: string | null } | null
+        return bank?.before_history_count
           ? {
               ...rest,
-              before_history: skattekontoBeforeHistoryBlock({
-                count: beforeHistoryCount,
-                total: rest.skattekonto?.before_history_total ?? 0,
-                history_start: rest.skattekonto?.history_start ?? null,
+              before_history: bankBeforeHistoryBlock({
+                count: bank.before_history_count,
+                total: bank.before_history_total ?? 0,
+                history_start: bank.history_start ?? null,
               }),
             }
           : rest
@@ -13618,7 +13650,7 @@ export const tools: McpTool[] = [
         bucket: {
           type: 'string',
           enum: ['proposed', 'unmatched_external', 'unmatched_ledger', 'matched', 'ignored', 'upcoming', 'before_history'],
-          description: 'before_history = skattekonto rows pre history_start',
+          description: 'before_history = rows pre history_start',
         },
         date_from: { type: 'string', description: 'YYYY-MM-DD; scopes lists, never counts' },
         date_to: { type: 'string', description: 'YYYY-MM-DD' },
@@ -13651,9 +13683,9 @@ export const tools: McpTool[] = [
         offset: args.offset as number | undefined,
       })
       if (!result) throw await unknownAccountKeyError(supabase, companyId, accountKey)
-      return result.before_history
-        ? { ...result, before_history: skattekontoBeforeHistoryBlock(result.before_history) }
-        : result
+      if (!result.before_history) return result
+      const block = accountKey.startsWith('bank:') ? bankBeforeHistoryBlock : skattekontoBeforeHistoryBlock
+      return { ...result, before_history: block(result.before_history) }
     },
   },
 

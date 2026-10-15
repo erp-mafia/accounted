@@ -3579,6 +3579,28 @@ const BANK_FILE: Record<string, StructuredErrorEntry> = {
     message_en:
       'This file looks like a Skatteverket tax account statement. Use the skattekonto import instead.',
   },
+  BANK_FILE_DEPOSIT_SPEC_DETECTED: {
+    httpStatus: 400,
+    message_sv:
+      'Filen är Bankgirots insättningsuppgifter (BG Max), inte ett kontoutdrag. Den kopplar inbetalningarna till bankrader som redan finns.',
+    message_en:
+      'This file is a Bankgirot deposit specification (BG Max), not a bank statement. It attaches the payments to bank rows that already exist.',
+  },
+  BGMAX_NOT_DEPOSIT_FILE: {
+    httpStatus: 400,
+    message_sv: 'Filen är inte en BG Max-fil med Bankgirots insättningsuppgifter.',
+    message_en: 'The file is not a BG Max deposit specification file.',
+  },
+  BGMAX_TEST_FILE: {
+    httpStatus: 400,
+    message_sv: 'Filen är märkt som testfil hos Bankgirot och kopplas inte till riktiga bankrader.',
+    message_en: 'The file is marked as a Bankgirot test file and is not attached to real bank rows.',
+  },
+  BGMAX_NO_DEPOSITS: {
+    httpStatus: 400,
+    message_sv: 'Filen innehåller inga insättningar som går att koppla: summan av betalningarna stämmer inte med insättningen, eller filen är avkortad.',
+    message_en: 'The file holds no deposit that can be attached: the payments do not add up to the deposit, or the file is truncated.',
+  },
   BANK_FILE_UNDO_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Bankfilsimporten kunde inte hittas.',

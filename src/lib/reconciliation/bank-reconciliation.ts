@@ -18,7 +18,9 @@ import {
 } from '@/lib/bookkeeping/ledger-line-amount'
 import { createLogger } from '@/lib/logger'
 import { chunk } from '@/lib/utils'
+import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { resolveLedgerSettlements } from './ledger-settlement-store'
+import { findOpeningBalanceFloor, sumAccountBalance } from './gl-balance'
 import { ID_READ_CHUNK, MAX_BANK_ROW_SPLIT } from './limits'
 
 const log = createLogger('reconciliation.bank')
@@ -147,10 +149,12 @@ export interface ReconciliationStatus {
    * still includes the opening balance.)
    */
   gl_1930_balance: number
-  /** Ledger movement on the bank account excluding only opening_balance: i.e.
-   *  the ledger balance minus IB. Storno/correction lines ARE included here
-   *  (they're part of the balance), so a corrected bank line reconciles against
-   *  its re-pointed feed transaction. This is what `difference` compares against. */
+  /** Ledger movement on the bank account excluding opening_balance: i.e.
+   *  the ledger balance minus IB, less the verifikat dated before the bank's
+   *  history (before_history_total, see history_start). Storno/correction
+   *  lines ARE included here (they're part of the balance), so a corrected
+   *  bank line reconciles against its re-pointed feed transaction. This is
+   *  what `difference` compares against. */
   gl_1930_period_movement: number
   /** IB on the bank account within the date range: surfaced separately so
    *  reconciliation doesn't treat it as an unmatched bank transaction. */
@@ -252,6 +256,47 @@ export interface ReconciliationStatus {
    * reported as if it meant something and `is_reconciled` is forced false.
    */
   not_reconcilable_reason: string | null
+  /**
+   * The first day the bank side covers on this account: the date of its
+   * earliest bank row (feed, imported bank file or created row, ignored rows
+   * included), whatever the window. Null when the account has no rows.
+   * Importing older history as a bank file moves it earlier by itself.
+   */
+  history_start: string | null
+  /**
+   * Verifikat on the account dated inside the window but before
+   * history_start that no bank row is linked to (crm#1221): bokfört före
+   * bankens historik. The bank has nothing to compare them with, so they are
+   * outside `difference`, the unmatched counts and `unexplained_difference`,
+   * and the comparison starts at history_start (see splitBeforeBankHistory).
+   * 0 when history_start is not inside the window.
+   */
+  before_history_count: number
+  /** Their open amounts on the account, signed like a bank movement. 0 when none. */
+  before_history_total: number
+  /**
+   * The ledger balance on the account just before the comparison starts:
+   * the opening balance plus the verifikat before the bank's history.
+   * Verifikat dated before history_start that a bank row is linked to belong
+   * to the comparison, as on the skattekonto. Null without a split, or when
+   * the balance before the window cannot be read.
+   */
+  ledger_balance_before_start: number | null
+  /**
+   * The bank's own saldo when its history starts: the balance it last
+   * reported less every non-ignored bank row up to that day. Null without a
+   * split, or when the bank reports no balance (a file-fed account).
+   */
+  saldo_at_start: number | null
+  /**
+   * saldo_at_start - ledger_balance_before_start: whether the books before
+   * the bank's history end where the bank starts. Informational, shown once:
+   * it is in neither `difference` nor `is_reconciled`, because the reported
+   * balance is a point-in-time figure (the same reason the bank block keeps
+   * it out of external_balance, lib/reconciliation/service.ts). Null when
+   * either side is unknown.
+   */
+  opening_difference: number | null
 }
 
 export interface ReconciliationOptions {
@@ -992,10 +1037,11 @@ export async function getReconciliationStatus(
   junctionLinks = aligned.junctionLinks
 
   // Verifikat settled against each other (a wrong verifikat and the rättelse
-  // booked by hand, crm#1074) are explained, not open work. Read last, after
-  // every other query of this function. A settlement is honoured only while
-  // it still holds (see ledger-settlement-store.ts), and its verifikat move
-  // from one explained term of the bridge to another, never out of it.
+  // booked by hand, crm#1074) are explained, not open work. Read after every
+  // query of this function except the bank's history below. A settlement is
+  // honoured only while it still holds (see ledger-settlement-store.ts), and
+  // its verifikat move from one explained term of the bridge to another,
+  // never out of it.
   const openByEntry = openAmountByEntry(unlinkedLines, currency)
   const settlements = await resolveLedgerSettlements(
     supabase,
@@ -1005,7 +1051,40 @@ export async function getReconciliationStatus(
     async (from, to) =>
       openAmountByEntry(await fetchGLLinesForMatching(supabase, companyId, bankAccount, from, to), currency),
   )
-  const openLines = unlinkedLines.filter((line) => !settlements.settled.has(line.journal_entry_id))
+
+  // The bank's history (crm#1221). A company that imported its books and
+  // then connected the bank has verifikat on the account from before the
+  // first day the bank side covers: the bank has no row for them, so they
+  // sat in the unmatched list and in `difference` for good, with nothing to
+  // match and "oförklarat" at 0. Those verifikat move out of the comparison,
+  // which then starts at history_start, the model the skattekonto has
+  // (skattekonto-reconciliation.ts). Read last: a failed read keeps the
+  // whole window in the comparison, as before.
+  const historyStart = await fetchBankHistoryStart(supabase, companyId, cashAccountId, currency, includeUnassigned)
+  const beforeHistory = splitBeforeBankHistory({
+    historyStart,
+    windowFrom: effectiveFrom,
+    windowTo: dateTo ?? null,
+    lines: unlinkedLines,
+    openByEntry,
+    settledEntryIds: new Set(settlements.settled.keys()),
+    // A foreign account's candidate lines carry no amount in its currency:
+    // the counted lines do (see ledgerLineAmountIn).
+    entryAmount: (entryId) => {
+      let sum = 0
+      for (const line of countedLines) {
+        if (entryOf(line)?.id !== entryId) continue
+        const amount = ledgerLineAmountIn(line, currency)
+        if (amount === null) return null
+        sum += amount
+      }
+      return roundOre(sum)
+    },
+  })
+  const beforeHistoryTotal = beforeHistory.total
+  const openLines = unlinkedLines.filter(
+    (line) => !settlements.settled.has(line.journal_entry_id) && !beforeHistory.entryIds.has(line.journal_entry_id),
+  )
 
   // Bank side: every NON-IGNORED feed transaction in the (floored) window. We
   // deliberately do NOT special-case rows linked to a reversed entry any more.
@@ -1060,10 +1139,11 @@ export async function getReconciliationStatus(
       return st === 'storno' || st === 'correction'
     })
     .reduce((sum, line) => sum + lineAmount(line), 0)
-  // Period movement = the ledger balance minus the opening balance. Everything
-  // else (real bookings, stornos and corrections alike) has (or should have)
-  // a bank-feed counterpart, so it stays in.
-  const glPeriodMovement = glBalance - glOpeningBalance
+  // Period movement = the ledger balance minus the opening balance, less the
+  // verifikat before the bank's history (beforeHistoryTotal, 0 without a
+  // split). Everything else (real bookings, stornos and corrections alike)
+  // has (or should have) a bank-feed counterpart, so it stays in.
+  const glPeriodMovement = glBalance - glOpeningBalance - beforeHistoryTotal
 
   // Matched/unmatched partition the RECONCILABLE (non-ignored) set, so
   // matched_count + unmatched_transaction_count always equals the number of
@@ -1102,15 +1182,40 @@ export async function getReconciliationStatus(
   // amounts stay in the period's difference and are carried on their own line.
   const settledOutside = [...settlements.settled.values()].filter((entry) => entry.outside_window)
   const settledGlLineTotal = roundOre(settledOutside.reduce((sum, entry) => sum + entry.amount, 0))
-  const unmatchedGlLineTotal = ledgerOnlyTotal === null ? null : roundOre(ledgerOnlyTotal - settledGlLineTotal)
+  // The verifikat before the bank's history left the movement above, so they
+  // leave the ledger-only total here too: the unexplained difference is the
+  // same figure with or without the split.
+  const ledgerOnlyInHistory = ledgerOnlyTotal === null ? null : roundOre(ledgerOnlyTotal - beforeHistoryTotal)
+  const unmatchedGlLineTotal =
+    ledgerOnlyInHistory === null ? null : roundOre(ledgerOnlyInHistory - settledGlLineTotal)
 
   // difference - unmatched transactions + ledger-only vouchers (unmatched plus
   // settled). See the field doc: zero means every krona of the difference is
   // identified and sitting in a list the user can open.
   const unexplainedDifference =
-    ledgerOnlyTotal === null
+    ledgerOnlyInHistory === null
       ? null
-      : roundOre(difference - roundOre(unmatchedTransactionTotal) + ledgerOnlyTotal)
+      : roundOre(difference - roundOre(unmatchedTransactionTotal) + ledgerOnlyInHistory)
+
+  // Where the books before the bank's history end against where the bank
+  // starts: shown once, outside the bridge (see opening_difference).
+  const opening = beforeHistory.splitAt
+    ? await bankOpeningComparison({
+        supabase,
+        companyId,
+        bankAccount,
+        currency,
+        cashAccountId,
+        includeUnassigned,
+        historyStart: beforeHistory.splitAt,
+        windowFrom: effectiveFrom,
+        windowTo: dateTo ?? null,
+        ibFloor,
+        openingBalanceInWindow: roundOre(glOpeningBalance),
+        beforeHistoryTotal,
+        windowRows: transactions,
+      })
+    : { ledger_balance_before_start: null, saldo_at_start: null, opening_difference: null }
 
   const notReconcilableReason =
     unconvertibleLines.length > 0 ? 'gl_lines_missing_currency_amount' : null
@@ -1151,6 +1256,238 @@ export async function getReconciliationStatus(
     unexplained_difference: unexplainedDifference,
     unconvertible_gl_line_count: unconvertibleLines.length,
     not_reconcilable_reason: notReconcilableReason,
+    history_start: historyStart,
+    before_history_count: beforeHistory.entryIds.size,
+    before_history_total: beforeHistoryTotal,
+    ...opening,
+  }
+}
+
+// ============================================================
+// The bank's history (crm#1221)
+// ============================================================
+
+/**
+ * The first day the bank side covers on one cash account: the date of its
+ * earliest bank row, scoped exactly as the reconciliation's own read
+ * (scopeTransactionsToAccount), ignored rows included (an ignored row is
+ * still a day the bank reported). Every source counts: the feed, an imported
+ * bank file, a row created through the API, so importing older history moves
+ * it earlier with nothing stored. Null when the account has no rows, or the
+ * read fails: the caller then compares the whole window, as before.
+ */
+export async function fetchBankHistoryStart(
+  supabase: SupabaseClient,
+  companyId: string,
+  cashAccountId: string | undefined,
+  currency: string,
+  includeUnassigned: boolean,
+): Promise<string | null> {
+  try {
+    let query = supabase.from('transactions').select('date').eq('company_id', companyId)
+    query = scopeTransactionsToAccount(query, cashAccountId, currency, includeUnassigned)
+    const { data, error } = await query.order('date', { ascending: true }).limit(1).maybeSingle()
+    if (error) {
+      log.warn('bank history start read failed', { companyId, cashAccountId, error: error.message })
+      return null
+    }
+    const date = (data as { date?: unknown } | null)?.date
+    return typeof date === 'string' && /^\d{4}-\d{2}-\d{2}/.test(date) ? date.slice(0, 10) : null
+  } catch (err) {
+    log.warn('bank history start read failed', {
+      companyId,
+      cashAccountId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return null
+  }
+}
+
+export interface BankHistorySplit {
+  /** history_start when it lies inside the window: the comparison starts there. Null otherwise. */
+  splitAt: string | null
+  /** The verifikat dated before splitAt that no bank row is linked to and no settlement explains. */
+  entryIds: Set<string>
+  /** Their open amounts on the account, signed like a bank movement. 0 without a split. */
+  total: number
+}
+
+/**
+ * Which ledger-only verifikat lie before the bank's history.
+ *
+ * Only when history_start falls inside the window (after its lower bound,
+ * on or before its end): a window that already starts inside the history
+ * has nothing before it, and a window that ends before the history has no
+ * bank side at all, so its verifikat stay listed as missing on the bank,
+ * the true state of a period no bank row covers.
+ *
+ * A verifikat before history_start that a bank row is linked to stays in
+ * the comparison with its row (a payment booked the day before the first
+ * bank row), and so does one a ledger-only settlement explains: only open
+ * verifikat move, at their open amount. An amount the account's currency
+ * cannot express leaves the whole window in the comparison.
+ */
+export function splitBeforeBankHistory(input: {
+  historyStart: string | null
+  windowFrom: string | null
+  windowTo: string | null
+  lines: Array<Pick<UnlinkedGLLine, 'journal_entry_id' | 'entry_date'>>
+  openByEntry: Map<string, number | null>
+  settledEntryIds: Set<string>
+  /** The verifikat's amount on the account from the counted lines, for an open amount that is null. */
+  entryAmount: (entryId: string) => number | null
+}): BankHistorySplit {
+  const none: BankHistorySplit = { splitAt: null, entryIds: new Set(), total: 0 }
+  const { historyStart, windowFrom, windowTo } = input
+  if (!historyStart) return none
+  if (windowFrom && historyStart <= windowFrom) return none
+  if (windowTo && historyStart > windowTo) return none
+  const entryIds = new Set<string>()
+  for (const line of input.lines) {
+    if (line.entry_date >= historyStart || input.settledEntryIds.has(line.journal_entry_id)) continue
+    entryIds.add(line.journal_entry_id)
+  }
+  let total = 0
+  for (const id of entryIds) {
+    const amount = input.openByEntry.get(id) ?? input.entryAmount(id)
+    if (amount === null || amount === undefined) return none
+    total += amount
+  }
+  return { splitAt: historyStart, entryIds, total: roundOre(total) }
+}
+
+type OpeningComparison = Pick<
+  ReconciliationStatus,
+  'ledger_balance_before_start' | 'saldo_at_start' | 'opening_difference'
+>
+
+type BalanceRow = { date: string | null; amount: number | string | null; is_ignored: boolean | null }
+
+/**
+ * The ledger balance on the account before the window starts. 0 when the
+ * window has no lower bound (the counted lines are all history) or starts at
+ * the account's opening balance (the IB restates everything before it).
+ * Otherwise read from the latest IB before the window, SEK only (a foreign
+ * account's earlier lines are not summed in its currency here). Null when
+ * that read fails or does not apply.
+ */
+async function ledgerBalanceBeforeWindow(input: {
+  supabase: SupabaseClient
+  companyId: string
+  bankAccount: string
+  currency: string
+  windowFrom: string | null
+  ibFloor: string | null
+}): Promise<number | null> {
+  const { supabase, companyId, bankAccount, windowFrom, ibFloor } = input
+  if (!windowFrom || windowFrom === ibFloor) return 0
+  if (input.currency !== 'SEK') return null
+  const floor = await findOpeningBalanceFloor(supabase, companyId, bankAccount, addDaysIso(windowFrom, -1))
+  return sumAccountBalance(supabase, companyId, bankAccount, {
+    ...(floor ? { fromDate: floor.date } : {}),
+    beforeDate: windowFrom,
+  })
+}
+
+/**
+ * The bank's saldo when its history starts: the balance it last reported
+ * (cash_accounts.balance, dated by balance_updated_at) less every non-ignored
+ * bank row dated up to that day. Every row is on or after history_start, so
+ * what remains is the saldo before the first one. The rows inside the window
+ * are already read; only those between the window's end and the balance day
+ * need a read. Null when the account reports no balance or the balance is
+ * older than the history itself.
+ */
+async function bankSaldoAtStart(input: {
+  supabase: SupabaseClient
+  companyId: string
+  currency: string
+  cashAccountId: string | undefined
+  includeUnassigned: boolean
+  historyStart: string
+  windowTo: string | null
+  windowRows: BalanceRow[]
+}): Promise<number | null> {
+  const { supabase, companyId, cashAccountId, historyStart, windowTo } = input
+  if (!cashAccountId) return null
+  const { data, error } = await supabase
+    .from('cash_accounts')
+    .select('balance, balance_updated_at')
+    .eq('company_id', companyId)
+    .eq('id', cashAccountId)
+    .maybeSingle()
+  if (error || !data) return null
+  const row = data as { balance: number | string | null; balance_updated_at: string | null }
+  const balance = row.balance == null ? Number.NaN : Number(row.balance)
+  const at = row.balance_updated_at ? new Date(row.balance_updated_at) : null
+  if (!Number.isFinite(balance) || !at || Number.isNaN(at.getTime())) return null
+  const balanceDate = todayIsoStockholm(at)
+  if (balanceDate < historyStart) return null
+
+  let sum = 0
+  for (const tx of input.windowRows) {
+    if (tx.is_ignored === true || typeof tx.date !== 'string' || tx.date > balanceDate) continue
+    sum += Number(tx.amount) || 0
+  }
+  if (windowTo && windowTo < balanceDate) {
+    const later = await fetchAllRows<{ id: string; amount: number | string | null; is_ignored: boolean | null }>(
+      ({ from, to }) => {
+        let query = supabase.from('transactions').select('id, amount, is_ignored').eq('company_id', companyId)
+        query = scopeTransactionsToAccount(query, cashAccountId, input.currency, input.includeUnassigned)
+        return query.gt('date', windowTo).lte('date', balanceDate).order('id').range(from, to)
+      },
+    )
+    for (const tx of later) {
+      if (tx.is_ignored !== true) sum += Number(tx.amount) || 0
+    }
+  }
+  return roundOre(balance - sum)
+}
+
+/**
+ * Where the books before the bank's history end against where the bank
+ * starts (opening_difference). The ledger side is the balance just before
+ * the comparison: what stood before the window, the opening balance in it,
+ * and the verifikat that moved out of the comparison. Never throws: a read
+ * that fails leaves its side unknown.
+ */
+async function bankOpeningComparison(input: {
+  supabase: SupabaseClient
+  companyId: string
+  bankAccount: string
+  currency: string
+  cashAccountId: string | undefined
+  includeUnassigned: boolean
+  historyStart: string
+  windowFrom: string | null
+  windowTo: string | null
+  ibFloor: string | null
+  openingBalanceInWindow: number
+  beforeHistoryTotal: number
+  windowRows: BalanceRow[]
+}): Promise<OpeningComparison> {
+  const settle = async <T>(what: string, read: () => Promise<T | null>): Promise<T | null> => {
+    try {
+      return await read()
+    } catch (err) {
+      log.warn(`bank opening comparison: ${what} read failed`, {
+        companyId: input.companyId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      return null
+    }
+  }
+  const before = await settle('ledger balance', () => ledgerBalanceBeforeWindow(input))
+  const ledgerBalanceBeforeStart =
+    before === null ? null : roundOre(before + input.openingBalanceInWindow + input.beforeHistoryTotal)
+  const saldoAtStart = await settle('bank saldo', () => bankSaldoAtStart(input))
+  return {
+    ledger_balance_before_start: ledgerBalanceBeforeStart,
+    saldo_at_start: saldoAtStart,
+    opening_difference:
+      saldoAtStart === null || ledgerBalanceBeforeStart === null
+        ? null
+        : roundOre(saldoAtStart - ledgerBalanceBeforeStart),
   }
 }
 
