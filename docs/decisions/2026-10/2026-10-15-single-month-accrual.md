@@ -1,0 +1,1 @@
+[2026-10-15] Periodisering accepts one calendar month (min 2 dropped, max 120 kept); only a period wholly in the invoice month is refused, as its two verifikat cancel out. Customer side checks in buildInvoiceWriteData (all doors meet there), supplier side in CreateSupplierInvoiceSchema.

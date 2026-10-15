@@ -108,7 +108,7 @@ import AccrualPeriodControl from '@/components/bookkeeping/AccrualPeriodControl'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { DEFAULT_DEFERRED_REVENUE_ACCOUNT } from '@/lib/bookkeeping/accruals/account-suggestions'
-import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
+import { countCalendarMonths, invoiceMonthOnlyAccrualRows } from '@/lib/bookkeeping/accruals/compute'
 import { cashAccountPayee, isUsableInvoicePayee } from '@/lib/cash-accounts/invoice-payee-rules'
 import type { InvoiceCopyInitial } from '@/lib/invoices/copy-invoice'
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
@@ -462,7 +462,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         let invalid = !start || !end || end < start
         if (!invalid) {
           try {
-            invalid = countCalendarMonths(start as string, end as string) < 2
+            // Throws on a malformed date; any whole month is a valid span.
+            countCalendarMonths(start as string, end as string)
           } catch {
             invalid = true
           }
@@ -572,6 +573,21 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           path: ['valid_until'],
           message: t('validation_valid_until_required'),
         })
+      }
+      // A periodisering period lying only in the invoice month moves nothing
+      // (the API refuses it); the row refine cannot see the invoice date.
+      if (data.invoice_date) {
+        // Same rows the row refine treats as periodiserade (an open strip).
+        for (const index of invoiceMonthOnlyAccrualRows(
+          data.invoice_date,
+          data.items.map((item) => (item.accrual_balance_account != null ? item : {})),
+        )) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['items', index, 'accrual_period_end'],
+            message: ta('invoice_month_only'),
+          })
+        }
       }
       // Grön teknik rules that span rows, from the same helper the API
       // validates with: hours on at least one row per installation type, and
@@ -4390,6 +4406,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                      honest and suppresses the SEK-only K2 hint on
                                      foreign-currency lines. */
                                   currency={watchCurrency}
+                                  invoiceDate={watchInvoiceDate}
                                   idPrefix={`accrual-invoice-${index}`}
                                   value={{
                                     start: item?.accrual_period_start ?? '',

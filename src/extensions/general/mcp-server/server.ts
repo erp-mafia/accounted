@@ -101,6 +101,7 @@ import {
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
 import { hasSIEFileExtension, SIE_FILE_EXTENSIONS_EN } from '@/lib/import/sie-file-extensions'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
+import { invoiceMonthOnlyAccrualRows } from '@/lib/bookkeeping/accruals/compute'
 import { foldSellerVatIntoCost, sellerVatAsCostNote, sellerVatIsCost } from '@/lib/bookkeeping/vat-registration'
 import { supplierInvoiceRoundingItem } from '@/lib/supplier-invoices/rounding-item'
 import {
@@ -21657,7 +21658,7 @@ export const tools: McpTool[] = [
       // previewed, or returned.
       const { data: invoice, error } = await supabase
         .from('invoices')
-        .select('id, invoice_number, status, document_type, quote_status, journal_entry_id, is_self_billed, credited_invoice_id, total, currency, customer_id, deduction_personnummer_encrypted, customer:customers(name)')
+        .select('id, invoice_number, status, document_type, quote_status, journal_entry_id, is_self_billed, credited_invoice_id, total, currency, customer_id, invoice_date, deduction_personnummer_encrypted, customer:customers(name)')
         .eq('id', invoiceId)
         .eq('company_id', companyId)
         .maybeSingle()
@@ -21812,6 +21813,21 @@ export const tools: McpTool[] = [
               'INVOICE_CREATE_ROT_RUT_VALIDATION',
               'Deduction lines (ROT, RUT, grön teknik) need a personnummer, which cannot be passed through MCP. ' +
               'Add it on the invoice in the web UI or on the customer card first, then retry.',
+            )
+          }
+        }
+
+        // Periodisering gate, same reason as the ROT/RUT one: a period lying
+        // only in the invoice month is refused at commit
+        // (buildInvoiceWriteData), and these rows and the date decide it now.
+        const effectiveInvoiceDate = (args.invoice_date as string | undefined) ?? (invoice.invoice_date as string | null)
+        if (typeof effectiveInvoiceDate === 'string') {
+          const invoiceMonthRows = invoiceMonthOnlyAccrualRows(effectiveInvoiceDate, items)
+          if (invoiceMonthRows.length > 0) {
+            throw codedRefusal(
+              'INVOICE_CREATE_ACCRUAL_INVOICE_MONTH',
+              `Line ${invoiceMonthRows.map((index) => index + 1).join(', ')}: the periodisering period lies only in the invoice month ` +
+              `(${effectiveInvoiceDate.slice(0, 7)}), so nothing would be deferred. Put the period in another month or drop accrual_period_start/accrual_period_end.`,
             )
           }
         }

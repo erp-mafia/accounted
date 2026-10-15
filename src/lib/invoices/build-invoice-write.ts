@@ -15,6 +15,7 @@ import { computeLineNet } from '@/lib/invoices/line-amounts'
 import { roundOre } from '@/lib/money'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { DEFAULT_DEFERRED_REVENUE_ACCOUNT } from '@/lib/bookkeeping/accruals/account-suggestions'
+import { invoiceMonthOnlyAccrualRows } from '@/lib/bookkeeping/accruals/compute'
 import {
   computeInvoiceDeductionTotal,
   computeLineDeductions,
@@ -348,6 +349,18 @@ export async function buildInvoiceWriteData(params: {
       .maybeSingle()
     if ((methodSettings?.accounting_method || 'accrual') !== 'accrual') {
       return { ok: false, code: 'INVOICE_CREATE_ACCRUAL_INVALID', details: { reason: 'accounting_method' } }
+    }
+    // A period lying only in the invoice month credits 29xx and debits it
+    // back in that same month: two verifikat that cancel out. Checked here,
+    // where every door's effective invoice date and rows meet (an edit that
+    // only moves the date reaches this with the stored rows).
+    const invoiceMonthRows = invoiceMonthOnlyAccrualRows(input.invoice_date, items)
+    if (invoiceMonthRows.length > 0) {
+      return {
+        ok: false,
+        code: 'INVOICE_CREATE_ACCRUAL_INVOICE_MONTH',
+        details: { rows: invoiceMonthRows.map((index) => index + 1), invoiceDate: input.invoice_date },
+      }
     }
   }
 
