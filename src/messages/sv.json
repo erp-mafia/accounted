@@ -12690,6 +12690,7 @@
     }
   },
   "settings_connections": {
+    "bank_switch_add_card": "Lägg in kort för nya kopplingen",
     "pos": "Kassasystem",
     "pos_help": "Hämtar varje affärsdag från kassasystemet till Kassarapporter.",
     "pos_state_attention": "{venue}: behöver åtgärd",

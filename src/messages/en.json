@@ -12690,6 +12690,7 @@
     }
   },
   "settings_connections": {
+    "bank_switch_add_card": "Add a card for the new connection",
     "pos": "Point of sale",
     "pos_help": "Fetches each business day from the point-of-sale system into POS reports.",
     "pos_state_attention": "{venue}: needs action",

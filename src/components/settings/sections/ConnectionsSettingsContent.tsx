@@ -82,7 +82,7 @@ export function ConnectionsSettingsContent() {
   const t = useTranslations('settings_connections')
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
-  const { company, isSandbox, role } = useCompany()
+  const { company, isSandbox, role, entitlementState } = useCompany()
   const companyId = company?.id ?? null
   const [status, setStatus] = useState<Status | null>(null)
   // Påminnelser och inkasso shows only where the installation offers it to
@@ -97,6 +97,10 @@ export function ConnectionsSettingsContent() {
   // Open Payments rows their renewal) and Koppla bank opens the flow here.
   const openPayments = useOpenPaymentsAvailability()
   const opAvailable = openPayments.status === 'available' && !isSandbox
+  // The new bank connection is for paying companies (lib/bank-feed/door.ts:
+  // the seeded trial does not open it); a trial without a card is told how
+  // to get it rather than shown nothing.
+  const trialWithoutCard = openPayments.status === 'unavailable' && entitlementState === 'trial' && !isSandbox
   const bankFlow = useBankConnectFlow('connections')
   // The signatory link: a firmatecknare who holds the bank access signs the
   // consent from a link, without a login. Owners and admins send it (the
@@ -473,6 +477,20 @@ export function ConnectionsSettingsContent() {
                 : null,
               href: '/settings/banking',
               connected: (status?.bankCount ?? 0) > 0,
+              // A cardless trial with a bank connection: the new connection
+              // (Open Payments, billed per consent) opens once a card is in,
+              // so say so where the switch would be instead of hiding it.
+              actions:
+                trialWithoutCard && (status?.bankCount ?? 0) > 0 ? (
+                  <>
+                    <Button variant="outline" size="sm" asChild>
+                      <Link href="/settings/banking">{t('manage')}</Link>
+                    </Button>
+                    <Button variant="outline" size="sm" asChild>
+                      <Link href="/settings/billing">{t('bank_switch_add_card')}</Link>
+                    </Button>
+                  </>
+                ) : undefined,
             })}
           {hasSkatteverket &&
             row({
