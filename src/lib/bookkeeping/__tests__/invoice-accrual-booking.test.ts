@@ -47,8 +47,15 @@ vi.mock('../vat-entries', async (importOriginal) => {
   }
 })
 
+// The upplupen kostnad guard reads each month-end's lock state.
+vi.mock('@/lib/api/v1/check-period-lock', () => ({
+  checkPeriodLock: vi.fn().mockResolvedValue({ locked: false, fiscal_period_id: 'period-1' }),
+}))
+
 const { createJournalEntry } = await import('../engine')
 const mockedCreateEntry = vi.mocked(createJournalEntry)
+const { checkPeriodLock } = await import('@/lib/api/v1/check-period-lock')
+const mockedCheckPeriodLock = vi.mocked(checkPeriodLock)
 
 const { createSupplierInvoiceRegistrationEntry, createSupplierCreditNoteEntry } =
   await import('../supplier-invoice-entries')
@@ -213,6 +220,96 @@ describe('supplier invoice registration with periodisering', () => {
     expect(lines).toContainEqual(
       expect.objectContaining({ account_number: '6110', debit_amount: 500 }),
     )
+  })
+})
+
+// Upplupen kostnad: July-September electricity on an invoice dated
+// 2026-10-05. The registration clears 2990 with the net; moms stays on the
+// invoice date (Dr 2641), and the months themselves book Dr 5020 / Cr 2990
+// on their last days afterwards (accruals service).
+describe('supplier invoice registration with an upplupen kostnad (29xx)', () => {
+  const invoice = () =>
+    makeSupplierInvoice({
+      id: 'si-1',
+      invoice_date: '2026-10-05',
+      subtotal: 3000,
+      vat_amount: 750,
+      total: 3750,
+    }) as SupplierInvoice
+  const items = () => [
+    makeSupplierItem({
+      description: 'El juli-september',
+      account_number: '5020',
+      line_total: 3000,
+      accrual_period_start: '2026-07-01',
+      accrual_period_end: '2026-09-30',
+      accrual_balance_account: '2990',
+    }),
+  ]
+
+  it('debits 2990 with the net and keeps the moms and 2440 on the invoice date', async () => {
+    await createSupplierInvoiceRegistrationEntry(
+      {} as never, 'company-1', 'user-1', invoice(), items(), 'swedish_business', 'Elbolaget',
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.entry_date).toBe('2026-10-05')
+    expect(input.lines).toContainEqual(expect.objectContaining({ account_number: '2990', debit_amount: 3000 }))
+    expect(input.lines.some((l) => l.account_number === '5020')).toBe(false)
+    expect(input.lines).toContainEqual(expect.objectContaining({ account_number: '2641', debit_amount: 750 }))
+    expect(input.lines).toContainEqual(expect.objectContaining({ account_number: '2440', credit_amount: 3750 }))
+    // Every month-end was checked before anything was posted.
+    expect(mockedCheckPeriodLock.mock.calls.map((call) => call[2])).toEqual([
+      '2026-07-31',
+      '2026-08-31',
+      '2026-09-30',
+    ])
+  })
+
+  it('refuses the whole registration, posting nothing, when one of the months is locked', async () => {
+    mockedCheckPeriodLock.mockImplementation(async (_s, _c, date) =>
+      date === '2026-09-30'
+        ? { locked: true, reason: 'company_lock_date_covers' }
+        : { locked: false, fiscal_period_id: 'period-1' },
+    )
+    try {
+      await expect(
+        createSupplierInvoiceRegistrationEntry(
+          {} as never, 'company-1', 'user-1', invoice(), items(), 'swedish_business',
+        ),
+      ).rejects.toMatchObject({
+        code: 'SI_ACCRUED_COST_PERIOD_LOCKED',
+        blocked: [{ date: '2026-09-30', reason: 'company_lock_date_covers' }],
+      })
+      expect(mockedCreateEntry).not.toHaveBeenCalled()
+    } finally {
+      mockedCheckPeriodLock.mockResolvedValue({ locked: false, fiscal_period_id: 'period-1' })
+    }
+  })
+
+  it('refuses a 29xx period reaching the invoice month even when the stored row skipped validation', async () => {
+    await expect(
+      createSupplierInvoiceRegistrationEntry(
+        {} as never, 'company-1', 'user-1',
+        // The invoice date moved back into the period after registration
+        // (a deferred invoice edited before Bokför).
+        { ...invoice(), invoice_date: '2026-09-15' },
+        items(),
+        'swedish_business',
+      ),
+    ).rejects.toMatchObject({ code: 'SI_ACCRUED_COST_PERIOD_INVALID' })
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+  })
+
+  it('a credit note credits 2990 back with the original rows', async () => {
+    await createSupplierCreditNoteEntry(
+      {} as never, 'company-1', 'user-1',
+      makeSupplierInvoice({ id: 'si-credit-1', is_credit_note: true, invoice_date: '2026-11-02' }) as SupplierInvoice,
+      items(),
+      'swedish_business',
+    )
+
+    expect(entryLines()).toContainEqual(expect.objectContaining({ account_number: '2990', credit_amount: 3000 }))
   })
 })
 

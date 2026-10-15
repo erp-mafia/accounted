@@ -144,3 +144,78 @@ describe('createSupplierInvoice dry run', () => {
     expectNothingWritten()
   })
 })
+
+// Upplupen kostnad (29xx): July-September electricity on an October invoice.
+// A month that cannot take its entry refuses the registration before an
+// ankomstnummer is drawn, live and dry run alike.
+describe('createSupplierInvoice with an upplupen kostnad', () => {
+  const accruedBody = () =>
+    body({
+      invoice_date: '2026-10-05',
+      due_date: '2026-11-04',
+      items: [
+        {
+          description: 'El juli-september',
+          amount: 3000,
+          account_number: '5020',
+          vat_rate: 0.25,
+          accrual_period_start: '2026-07-01',
+          accrual_period_end: '2026-09-30',
+          accrual_balance_account: '2990',
+        },
+      ],
+    })
+
+  beforeEach(() => {
+    setTable('fiscal_periods', { data: { id: 'fp-2026', is_closed: false, locked_at: null } })
+  })
+
+  for (const dryRun of [true, false]) {
+    it(`refuses a month on or before the company lock date and writes nothing (dryRun=${dryRun})`, async () => {
+      setTable('company_settings', {
+        data: { accounting_method: 'accrual', vat_registered: true, bookkeeping_locked_through: '2026-08-31' },
+      })
+
+      const result = await createSupplierInvoice(ctx(), accruedBody(), { dryRun })
+
+      expect(result).toMatchObject({
+        ok: false,
+        code: 'SI_CREATE_FAILED',
+        error: {
+          code: 'SI_ACCRUED_COST_PERIOD_LOCKED',
+          blocked: [
+            { date: '2026-07-31', reason: 'company_lock_date_covers' },
+            { date: '2026-08-31', reason: 'company_lock_date_covers' },
+          ],
+        },
+      })
+      expectNothingWritten()
+    })
+  }
+
+  it('previews the line on 2990 when every month is open', async () => {
+    setTable('company_settings', { data: { accounting_method: 'accrual', vat_registered: true } })
+
+    const result = await createSupplierInvoice(ctx(), accruedBody(), { dryRun: true })
+
+    if (!result.ok || !result.dryRun) throw new Error('expected a dry-run preview')
+    expect(result.preview.items[0]).toMatchObject({
+      account_number: '5020',
+      accrual_balance_account: '2990',
+      accrual_period_start: '2026-07-01',
+      accrual_period_end: '2026-09-30',
+    })
+    expectNothingWritten()
+  })
+
+  it('leaves the months to the Bokför step when booking is deferred', async () => {
+    setTable('company_settings', {
+      data: { accounting_method: 'accrual', defer_invoice_booking: true, bookkeeping_locked_through: '2026-08-31' },
+    })
+
+    const result = await createSupplierInvoice(ctx(), accruedBody(), { dryRun: true })
+
+    expect(result.ok).toBe(true)
+    expectNothingWritten()
+  })
+})

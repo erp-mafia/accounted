@@ -1416,10 +1416,12 @@ export interface SupplierInvoiceItem {
   // rate drives the fiktiv-moms + basbelopp booking. See the booking engine.
   reverse_charge_rate: number | null
 
-  // Periodisering (förutbetald kostnad): when set, the registration entry
-  // debits accrual_balance_account (17xx) instead of account_number, and an
-  // accrual_schedules row dissolves the net amount monthly over the period.
-  // VAT is never deferred. Both dates set together or not at all.
+  // Periodisering: when set, the registration entry debits
+  // accrual_balance_account instead of account_number, and an
+  // accrual_schedules row dissolves the net amount monthly over the period:
+  // 17xx is a förutbetald kostnad, 29xx an upplupen kostnad (months before
+  // the invoice month, each booked on its last day). VAT is never deferred.
+  // Both dates set together or not at all.
   accrual_period_start?: string | null
   accrual_period_end?: string | null
   accrual_balance_account?: string | null
@@ -2205,8 +2207,9 @@ export interface AccrualSchedule {
   supplier_invoice_item_id: string | null
   invoice_id: string | null
   invoice_item_id: string | null
-  // Interim balance account (17xx for expense, 29xx for revenue) and the
-  // P&L account each installment dissolves to. Strings, like all accounts.
+  // Interim balance account (17xx förutbetald or 29xx upplupen for expense,
+  // 29xx for revenue) and the P&L account each installment dissolves to.
+  // Strings, like all accounts.
   balance_account: string
   target_account: string
   // Net SEK amount as booked (ex VAT). Always equals the sum of installments.

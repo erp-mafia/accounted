@@ -1178,6 +1178,85 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices: behaviour shared 
     expect(typeof item.accrual_balance_account).toBe('string')
   })
 
+  it('an upplupen kostnad (29xx) books, and a month that could not post comes back as a warning', async () => {
+    install()
+    mockCreateSchedules.mockResolvedValueOnce({ created: 1, failed: 0, releasesFailed: 1 })
+
+    const res = await post({
+      ...baseBody,
+      items: [
+        {
+          description: 'El februari-april',
+          amount: 3000,
+          account_number: '5020',
+          vat_rate: 0.25,
+          accrual_period_start: '2026-02-01',
+          accrual_period_end: '2026-04-30',
+          accrual_balance_account: '2990',
+        },
+      ],
+    })
+
+    expect(res.status).toBe(201)
+    const [item] = mockCreateSchedules.mock.calls[0][4] as Array<Record<string, unknown>>
+    expect(item.accrual_balance_account).toBe('2990')
+    const body = await res.json()
+    expect(body.meta.warnings?.map((w: { code: string }) => w.code)).toContain('ACCRUAL_RELEASE_FAILED')
+  })
+
+  it('an upplupen kostnad on a locked month is refused with SI_ACCRUED_COST_PERIOD_LOCKED and nothing written', async () => {
+    install({
+      company_settings: {
+        data: { accounting_method: 'accrual', bookkeeping_locked_through: '2026-03-31' },
+        error: null,
+      },
+    })
+
+    const res = await post({
+      ...baseBody,
+      items: [
+        {
+          description: 'El februari-april',
+          amount: 3000,
+          account_number: '5020',
+          vat_rate: 0.25,
+          accrual_period_start: '2026-02-01',
+          accrual_period_end: '2026-04-30',
+          accrual_balance_account: '2990',
+        },
+      ],
+    })
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('SI_ACCRUED_COST_PERIOD_LOCKED')
+    expect(body.error.details.blocked.map((b: { date: string }) => b.date)).toEqual(['2026-02-28', '2026-03-31'])
+    expect(siInsert()).toBeUndefined()
+    expect(mockedReg).not.toHaveBeenCalled()
+  })
+
+  it('a 29xx period reaching the invoice month is a 400 asking for a split', async () => {
+    install()
+
+    const res = await post({
+      ...baseBody,
+      items: [
+        {
+          description: 'El april-maj',
+          amount: 3000,
+          account_number: '5020',
+          vat_rate: 0.25,
+          accrual_period_start: '2026-04-01',
+          accrual_period_end: '2026-05-31',
+          accrual_balance_account: '2990',
+        },
+      ],
+    })
+
+    expect(res.status).toBe(400)
+    expect(mockedReg).not.toHaveBeenCalled()
+  })
+
   it('a company that is not VAT-registered cannot book a line with moms (400 SI_CREATE_INVALID_INPUT)', async () => {
     install({
       company_settings: { data: { accounting_method: 'accrual', vat_registered: false }, error: null },

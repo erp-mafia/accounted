@@ -8,15 +8,17 @@ import {
   createSchedulesForCustomerInvoice,
   createSchedulesForSupplierInvoice,
 } from '@/lib/bookkeeping/accruals/from-invoices'
-import { createAccrualSchedule } from '@/lib/bookkeeping/accruals/service'
+import { createAccrualSchedule, postDueInstallments } from '@/lib/bookkeeping/accruals/service'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { AccrualSchedule, InvoiceItem, SupplierInvoiceItem } from '@/types'
 
 vi.mock('@/lib/bookkeeping/accruals/service', () => ({
   createAccrualSchedule: vi.fn(),
+  postDueInstallments: vi.fn(),
 }))
 
 const mockCreateAccrualSchedule = vi.mocked(createAccrualSchedule)
+const mockPostDueInstallments = vi.mocked(postDueInstallments)
 
 const COMPANY = 'company-1'
 const USER = 'user-1'
@@ -69,6 +71,7 @@ function makeInvoiceItem(overrides: Partial<InvoiceItem> = {}): InvoiceItem {
 beforeEach(() => {
   vi.clearAllMocks()
   mockCreateAccrualSchedule.mockResolvedValue({ id: 'sched-1' } as AccrualSchedule)
+  mockPostDueInstallments.mockResolvedValue({ posted: 1, failed: 0, skipped: 0, errors: [] })
 })
 
 describe('createSchedulesForSupplierInvoice', () => {
@@ -91,7 +94,7 @@ describe('createSchedulesForSupplierInvoice', () => {
       'je-origin',
     )
 
-    expect(result).toEqual({ created: 1, failed: 0 })
+    expect(result).toEqual({ created: 1, failed: 0, releasesFailed: 0 })
     // Item bag wins per key over the invoice default: identical merge to the
     // registration entry's interim 17xx line (groupExpenseBuckets).
     expect(mockCreateAccrualSchedule).toHaveBeenCalledWith(
@@ -151,6 +154,66 @@ describe('createSchedulesForSupplierInvoice', () => {
     )
 
     expect(mockCreateAccrualSchedule.mock.calls[0][3].description).toBe('Försäkring 2026 (leverantörsfaktura ankomstnr 9)')
+  })
+
+  it('creates an upplupen kostnad on 29xx and posts its months right after, counting failures', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([{ data: [] }])
+    // Jul-Sep electricity on an October invoice: all three months are due
+    // at once; one could not be posted.
+    mockPostDueInstallments.mockResolvedValueOnce({
+      posted: 2,
+      failed: 1,
+      skipped: 0,
+      errors: [{ installmentId: 'inst-3', message: 'locked' }],
+    })
+
+    const result = await createSchedulesForSupplierInvoice(
+      supabase as unknown as SupabaseClient,
+      COMPANY,
+      USER,
+      makeSupplierInvoice({ id: 'si-1', invoice_date: '2026-10-05' }),
+      [
+        makeSupplierItem({
+          account_number: '5020',
+          accrual_period_start: '2026-07-01',
+          accrual_period_end: '2026-09-30',
+          accrual_balance_account: '2990',
+        }),
+      ],
+      'je-origin',
+    )
+
+    expect(result).toEqual({ created: 1, failed: 0, releasesFailed: 1 })
+    expect(mockCreateAccrualSchedule).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY,
+      USER,
+      expect.objectContaining({ direction: 'expense', balanceAccount: '2990', targetAccount: '5020' }),
+      // Catch-up runs here so its failures reach the door, not inside.
+      expect.objectContaining({ postCatchUp: false, originJournalEntryId: 'je-origin' }),
+    )
+    expect(mockPostDueInstallments).toHaveBeenCalledWith(expect.anything(), COMPANY, {
+      userId: USER,
+      scheduleId: 'sched-1',
+    })
+  })
+
+  it('counts a catch-up that throws as a failed release, never as a failed schedule', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([{ data: [] }])
+    mockPostDueInstallments.mockRejectedValueOnce(new Error('connection reset'))
+
+    const result = await createSchedulesForSupplierInvoice(
+      supabase as unknown as SupabaseClient,
+      COMPANY,
+      USER,
+      makeSupplierInvoice({ id: 'si-1' }),
+      [makeSupplierItem()],
+      'je-origin',
+    )
+
+    expect(result).toEqual({ created: 1, failed: 0, releasesFailed: 1 })
   })
 })
 

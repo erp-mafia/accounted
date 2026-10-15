@@ -1,0 +1,1 @@
+[2026-10-15] Supplier-line 29xx accruals post on each month's last day and are never moved, a blocked month refuses the registration, a period into the invoice month is refused (no auto-split), API default stays 17xx: the cost belongs to its month and v1 callers get no silent change.

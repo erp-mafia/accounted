@@ -31,6 +31,10 @@ import { DIMENSION_RULE_POLICY } from '@/lib/bookkeeping/dimension-rule-policy'
 import { countCalendarMonths, invoiceMonthOnlyAccrualRows } from '@/lib/bookkeeping/accruals/compute'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { CUSTOMER_ADVANCE_ACCOUNT } from '@/lib/bookkeeping/overpayment'
+import {
+  isAccruedCostAccount,
+  periodEndsBeforeInvoiceMonth,
+} from '@/lib/bookkeeping/accruals/account-suggestions'
 import { ORE_ROUNDING_ACCOUNT } from '@/lib/money'
 import { DIMENSION_RULE_TYPES, ruleValueProblem } from '@/lib/dimensions/rule-value'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
@@ -274,10 +278,13 @@ const vatRateDecimal = z.union(
 /** Time string (HH:MM or HH:MM:SS) */
 const timeString = z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'Expected HH:MM or HH:MM:SS time format')
 
-/** Periodisering: interim accounts. Förutbetalda kostnader live on 17xx. */
-const prepaidExpenseAccount = z
+/**
+ * Periodisering of a cost: förutbetalda kostnader live on 17xx, upplupna
+ * kostnader (months before the invoice month) on 29xx.
+ */
+const expenseAccrualAccount = z
   .string()
-  .regex(/^17\d{2}$/, 'Balanskonto för periodiserad kostnad måste vara ett 17xx-konto')
+  .regex(/^(17|29)\d{2}$/, 'Balanskonto för periodiserad kostnad måste vara ett 17xx-konto (förutbetald) eller 29xx-konto (upplupen)')
 
 /** Periodisering: förutbetalda intäkter live on 29xx. */
 const deferredRevenueAccount = z
@@ -1774,12 +1781,14 @@ export const CreateSupplierInvoiceItemSchema = z.object({
   quantity: z.number().optional(),
   unit: z.string().optional(),
   unit_price: z.number().optional(),
-  // Periodisering (förutbetald kostnad): defer the line's net cost over the
-  // service period. The registration entry debits the 17xx interim account
-  // instead of account_number; input VAT is never deferred.
+  // Periodisering: spread the line's net cost over the service period. The
+  // registration entry debits the interim account instead of account_number;
+  // input VAT is never deferred. 17xx is a förutbetald kostnad (months from
+  // the invoice on), 29xx an upplupen kostnad (months before the invoice
+  // month, each booked on its last day).
   accrual_period_start: isoDate.nullable().optional(),
   accrual_period_end: isoDate.nullable().optional(),
-  accrual_balance_account: prepaidExpenseAccount.nullable().optional(),
+  accrual_balance_account: expenseAccrualAccount.nullable().optional(),
   // Dimensions PR7: per-item bag merged over the invoice's
   // default_dimensions on the expense line this item books to.
   dimensions: DimensionsBagSchema.optional(),
@@ -1924,6 +1933,22 @@ export const CreateSupplierInvoiceSchema = z.object({
       message: 'Perioden måste omfatta en annan månad än fakturamånaden',
     })
   }
+
+  // An upplupen kostnad (29xx) is the cost of months before the invoice
+  // month. A period that reaches the invoice month is refused, not split:
+  // the user splits the line (the invoice month's share is no accrual).
+  if (!ISO_DATE_RE.test(invoice.invoice_date)) return
+  invoice.items.forEach((item, index) => {
+    if (!isAccruedCostAccount(item.accrual_balance_account) || !item.accrual_period_end) return
+    if (periodEndsBeforeInvoiceMonth(item.accrual_period_end, invoice.invoice_date)) return
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['items', index, 'accrual_period_end'],
+      message:
+        'En upplupen kostnad (29xx) måste avse månader före fakturamånaden. Dela raden: ' +
+        'månaderna före fakturamånaden på 29xx och resten som förutbetald kostnad (17xx) eller direkt på kostnadskontot.',
+    })
+  })
 })
 
 // Pre-submit duplicate lookup for the supplier-invoice editor. Mirrors the

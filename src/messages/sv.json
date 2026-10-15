@@ -1356,6 +1356,8 @@
     "start_label": "Periodens start",
     "end_label": "Periodens slut",
     "account_label": "Balanskonto",
+    "accrued_cost_hint": "Upplupen kostnad: bokförs sista dagen i varje månad i perioden.",
+    "accrued_cost_period_invalid": "En upplupen kostnad måste avse månader före fakturamånaden. Dela raden om perioden fortsätter in i fakturans månad.",
     "remove_aria": "Ta bort periodisering",
     "preview": "{months} månader × {amount}, {first} till {last}",
     "preview_one_month": "Hela beloppet bokförs i {month}",

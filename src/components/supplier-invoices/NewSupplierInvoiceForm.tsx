@@ -35,7 +35,11 @@ import BankTransactionPicker from '@/components/transactions/BankTransactionPick
 import AccrualPeriodControl from '@/components/bookkeeping/AccrualPeriodControl'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
-import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
+import {
+  DEFAULT_PREPAID_EXPENSE_ACCOUNT,
+  expenseBalanceAccountAfterEdit,
+  suggestBalanceAccount,
+} from '@/lib/bookkeeping/accruals/account-suggestions'
 import {
   findReverseChargeAccountWarningRows,
   findUnflaggedForeignZeroVatRows,
@@ -1001,6 +1005,11 @@ export default function NewSupplierInvoiceForm({
   function renderAccrualPanel(index: number, idPrefix: string) {
     const item = watchedItems?.[index]
     if (!item || item.accrual_balance_account == null) return null
+    const accrualValue = {
+      start: item.accrual_period_start ?? '',
+      end: item.accrual_period_end ?? '',
+      balanceAccount: item.accrual_balance_account || DEFAULT_PREPAID_EXPENSE_ACCOUNT,
+    }
     return (
       <AccrualPeriodControl
         direction="expense"
@@ -1016,15 +1025,18 @@ export default function NewSupplierInvoiceForm({
         exchangeRate={parseFloat(watchedExchangeRate)}
         invoiceDate={watchedInvoiceDate}
         idPrefix={idPrefix}
-        value={{
-          start: item.accrual_period_start ?? '',
-          end: item.accrual_period_end ?? '',
-          balanceAccount: item.accrual_balance_account || '1790',
-        }}
+        value={accrualValue}
         onChange={(next) => {
           setValue(`items.${index}.accrual_period_start`, next.start, { shouldDirty: true })
           setValue(`items.${index}.accrual_period_end`, next.end, { shouldDirty: true })
-          setValue(`items.${index}.accrual_balance_account`, next.balanceAccount, { shouldDirty: true })
+          // A period wholly before the invoice month is an upplupen kostnad
+          // (29xx), otherwise a förutbetald (17xx): moving the dates across
+          // that line re-suggests the account, a picked account stands.
+          setValue(
+            `items.${index}.accrual_balance_account`,
+            expenseBalanceAccountAfterEdit(accrualValue, next, item.account_number || '', watchedInvoiceDate),
+            { shouldDirty: true },
+          )
         }}
         onRemove={() => toggleAccrual(index)}
       />

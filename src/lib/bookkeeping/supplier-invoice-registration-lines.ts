@@ -351,7 +351,7 @@ export function supplierInvoiceRowLines(
   const defaultDimensions = coerceDimensionsBag(header.default_dimensions)
 
   // Aggregate expense amounts by (account, dimensions) and convert to SEK.
-  // Periodiserade lines book their net to the 17xx interim account instead
+  // Periodiserade lines book their net to the 17xx/29xx interim account instead
   // of the cost account (resolveBookingAccount); VAT and 2440 are untouched:
   // moms is never deferred (redovisas på fakturadatum).
   const expenseBuckets = groupExpenseBuckets(

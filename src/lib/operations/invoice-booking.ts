@@ -267,7 +267,7 @@ export const supplierInvoicesBook = defineOperation({
   docs: {
     summary: 'Book a registered supplier invoice that was registered without a verifikat (the deferred Bokför step).',
     description:
-      'For companies with defer_invoice_booking=true (Registrera men bokför inte): POST /supplier-invoices registers the invoice without posting anything, and this step posts the registration verifikat afterwards (Debit cost accounts per line + 2641 ingående moms, or fiktiv moms for reverse charge; Credit 2440 Leverantörsskulder; periodiserade lines on 17xx with their schedules). Dated on the invoice date. The invoice is claimed with a compare-and-set, so a concurrent book, payment or credit cancels this entry instead of double-posting. The retained source document is anchored to the verifikat. Idempotent. Dry-runnable: the dry run previews the exact lines and writes nothing.',
+      'For companies with defer_invoice_booking=true (Registrera men bokför inte): POST /supplier-invoices registers the invoice without posting anything, and this step posts the registration verifikat afterwards (Debit cost accounts per line + 2641 ingående moms, or fiktiv moms for reverse charge; Credit 2440 Leverantörsskulder; periodiserade lines on 17xx or 29xx with their schedules). Dated on the invoice date. An upplupen kostnad (29xx line) books each month of its period on the last day of that month right after; a month that cannot take the entry refuses the booking with SI_ACCRUED_COST_PERIOD_LOCKED before anything is posted. The invoice is claimed with a compare-and-set, so a concurrent book, payment or credit cancels this entry instead of double-posting. The retained source document is anchored to the verifikat. Idempotent. Dry-runnable: the dry run previews the exact lines and writes nothing.',
     useWhen:
       'A supplier invoice is registered, approved or overdue, has no registration_journal_entry_id, and the company books supplier invoices in a separate step (defer_invoice_booking).',
     doNotUseFor:
@@ -312,6 +312,8 @@ export const supplierInvoicesBook = defineOperation({
     'SI_BOOK_CASH_METHOD',
     'PERIOD_LOCKED',
     'SI_BOOK_NO_FISCAL_PERIOD',
+    'SI_ACCRUED_COST_PERIOD_INVALID',
+    'SI_ACCRUED_COST_PERIOD_LOCKED',
     'SI_BOOK_CONFLICT',
     'SI_BOOK_FAILED',
   ],

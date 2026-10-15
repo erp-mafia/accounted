@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl'
 import type { UseFormGetValues, UseFormReset, UseFormSetValue } from 'react-hook-form'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
+import { suggestExpenseBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
 import {
   vatRateFromAi,
@@ -155,10 +155,10 @@ export function useInboxPrefill({
               vat_rate: vatRateFromAi(li.vatRate),
               accrual_period_start: withAccrual ? (sps as string) : undefined,
               accrual_period_end: withAccrual ? (spe as string) : undefined,
-              // No account yet → generic 1790; toggleAccrual re-suggests the
-              // same way once the user picks one.
+              // No account yet → generic 1790, or 2990 when the stated period
+              // lies wholly before the invoice month (upplupen kostnad).
               accrual_balance_account: withAccrual
-                ? suggestBalanceAccount('expense', '')
+                ? suggestExpenseBalanceAccount('', spe, extracted.invoice?.invoiceDate)
                 : undefined,
             }
           }),
