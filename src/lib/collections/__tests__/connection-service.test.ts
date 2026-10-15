@@ -59,7 +59,6 @@ function onboardingBody(overrides: { company?: Partial<OnboardingBody['company']
       phone: null,
       vatRegistered: true,
       vatNumber: 'SE556012579001',
-      ownerPersonalNumber: null,
       payout: { cashAccountId: CASH_ACCOUNT_ID, kind: 'bankgiro' },
       ...overrides.company,
     },
@@ -288,32 +287,48 @@ describe('the activation, step by step against the fake', () => {
 describe('a sole trader', () => {
   beforeEach(() => {
     db = createMemorySupabase()
-    // 811218-9876: a valid personnummer, the firm's org number.
-    seedCompany(db, { entityType: 'enskild_firma', orgNumber: '8112189876' })
+    // 19500118-2046, on Skatteverket's published list of test personnummer: the firm's org number.
+    seedCompany(db, { entityType: 'enskild_firma', orgNumber: '5001182046' })
   })
 
-  it('prefills the owner from the org number and onboards the firm with its org number alone', async () => {
-    const context = await loadActivationContext(db.client, COMPANY_ID, NOW)
-    expect(context.company).toMatchObject({ soleTrader: true, orgNumber: '8112189876', ownerPersonalNumber: '198112189876' })
+  it('onboards the firm with its org number alone, without asking for the owner\'s personnummer', async () => {
+    const context = await loadActivationContext(db.client, COMPANY_ID)
+    expect(context.company).toMatchObject({ soleTrader: true, orgNumber: '5001182046' })
+    expect(context.company).not.toHaveProperty('ownerPersonalNumber')
     const onboard = vi.spyOn(adapter, 'onboard')
     await consent()
-    await submitOnboarding(deps(), onboardingBody({ company: { ownerPersonalNumber: '19811218-9876' } }))
+    await submitOnboarding(deps(), onboardingBody())
     // The provider (2026-10-07) onboards an enskild firma as a business with its
-    // organisationsnummer: the owner's twelve-digit personnummer stays home.
+    // organisationsnummer: nothing else about the owner is asked or sent.
     const request = onboard.mock.calls[0]![1]
-    expect(request.creditor).toMatchObject({ kind: 'sole_trader', orgNumber: '8112189876', personalNumber: null })
-    expect(JSON.stringify(request)).not.toContain('198112189876')
+    expect(request.creditor).toMatchObject({ kind: 'sole_trader', orgNumber: '5001182046', personalNumber: null })
+    expect(JSON.stringify(request)).not.toContain('195001182046')
     expect(collectionsOnboardingRequestSchema.safeParse(request).success).toBe(true)
   })
 
-  it('refuses a missing, invalid or other person\'s number', async () => {
-    await consent()
-    const missing = await submitOnboarding(deps(), onboardingBody()).catch((e: unknown) => e)
-    expect((missing as ActivationValidationError).errors).toEqual({ 'company.ownerPersonalNumber': 'required' })
-    const invalid = await submitOnboarding(deps(), onboardingBody({ company: { ownerPersonalNumber: '198112189877' } })).catch((e: unknown) => e)
-    expect((invalid as ActivationValidationError).errors).toEqual({ 'company.ownerPersonalNumber': 'invalid_personal_number' })
-    // 19900101-0017 is valid but not the firm's.
-    await expectCode(submitOnboarding(deps(), onboardingBody({ company: { ownerPersonalNumber: '199001010017' } })), 'COLLECTIONS_OWNER_NUMBER_MISMATCH')
+  it('onboards as a business with the ten-digit org number, whatever form the company stored it in', async () => {
+    // The provider (2026-10-07): an enskild firma onboards as a business with its
+    // organisationsnummer, which is the owner's personnummer, not as a private person.
+    const forms: Array<[string, string]> = [
+      // Test personnummer from Skatteverket's published list (open data "Testpersonnummer").
+      ['5001182046', '5001182046'],
+      ['500118-2046', '5001182046'],
+      ['195001182046', '5001182046'],
+      ['19500118-2046', '5001182046'],
+      [' 500118 2046 ', '5001182046'],
+      // A plus marks an owner aged 100 or more: the same ten digits (18900101-9802).
+      ['900101+9802', '9001019802'],
+    ]
+    for (const [stored, orgNumber] of forms) {
+      db = createMemorySupabase()
+      seedCompany(db, { entityType: 'enskild_firma', orgNumber: stored })
+      const context = await loadActivationContext(db.client, COMPANY_ID)
+      expect(context.company, stored).toMatchObject({ soleTrader: true, orgNumber })
+      const onboard = vi.spyOn(adapter, 'onboard')
+      await consent()
+      await submitOnboarding(deps(), onboardingBody())
+      expect(onboard.mock.calls.at(-1)![1].creditor, stored).toMatchObject({ kind: 'sole_trader', orgNumber, personalNumber: null })
+    }
   })
 })
 
@@ -508,7 +523,7 @@ describe('idempotency keys', () => {
 
   it('builds the same application request for the same form', async () => {
     const row = await consent()
-    const context = await loadActivationContext(db.client, COMPANY_ID, NOW)
+    const context = await loadActivationContext(db.client, COMPANY_ID)
     const input = { row, body: onboardingBody(), context, consentedByName: 'Ada Admin', requireLadderChoice: true, now: NOW }
     expect(buildOnboardingRequest(input).request).toEqual(buildOnboardingRequest(input).request)
   })

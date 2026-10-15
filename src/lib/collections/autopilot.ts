@@ -325,13 +325,21 @@ export async function resolveBatchOwner(
 }
 
 /**
- * Reject a pending batch once it has waited BATCH_EXPIRY_HOURS: the
- * company's own (companyId), or every company's (null, the cron's sweep,
- * which also reaches a company whose gates or connection no longer let the
- * batch be approved). Returns how many were rejected.
+ * How much earlier than BATCH_EXPIRY_HOURS after its staging a daily run
+ * may reject a batch. The ladder cron fires once a day and stages the batch
+ * during its run, so the third run after it can start seconds short of 72
+ * hours; without this slack the batch would wait for the fourth (96 hours).
+ */
+export const BATCH_EXPIRY_RUN_SLACK_MS = 60 * 60_000
+
+/**
+ * Reject a pending batch once it has waited BATCH_EXPIRY_HOURS (less the
+ * run slack): the company's own (companyId), or every company's (null, the
+ * cron's sweep, which also reaches a company whose gates or connection no
+ * longer let the batch be approved). Returns how many were rejected.
  */
 export async function expireStaleBatches(db: Pick<SupabaseClient, 'from'>, companyId: string | null, now: Date): Promise<number> {
-  const cutoff = new Date(now.getTime() - BATCH_EXPIRY_HOURS * 3_600_000).toISOString()
+  const cutoff = new Date(now.getTime() - BATCH_EXPIRY_HOURS * 3_600_000 + BATCH_EXPIRY_RUN_SLACK_MS).toISOString()
   let query = db
     .from('pending_operations')
     .update({

@@ -18,7 +18,7 @@ import { seedForwardsAtRegistration } from './forwarding'
 import { isCollectionsError, type CollectionsError } from './errors'
 import { bankCheckSnapshot, type BankCheckResult } from './bank-check'
 import type { Eligibility } from './eligibility'
-import { normalizeOrgNumberDigits } from './eligibility'
+import { debtorCountryCode, normalizeOrgNumberDigits } from './eligibility'
 import {
   HandoverNotFoundError,
   loadHandoverContext,
@@ -187,7 +187,7 @@ function debtorFor(customer: HandoverCustomer, eligibility: Eligibility, persona
       line2: trim(customer.address_line2, 100),
       postalCode: customer.postal_code!.trim().slice(0, 12),
       city: customer.city!.trim().slice(0, 60),
-      countryCode: (customer.country ?? 'SE').trim().toUpperCase(),
+      countryCode: debtorCountryCode(customer.country ?? 'SE'),
     },
   }
 }

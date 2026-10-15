@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CollectionsCaseActionRequest } from '@accounted/connect-contract'
 import { eventBus } from '@/lib/events'
-import { runCaseAction } from '../case-actions'
+import { handOverInvoice, runCaseAction } from '../case-actions'
 import { openCollectionCase } from '../open-case'
 import { refreshCase } from '../invoice-collection'
 import { loadOpenCaseForInvoice } from '../case'
 import { CollectionsError } from '../errors'
 import type { CollectionsAdapter } from '../port'
-import { createCaseWorld, ENV_OFF, INVOICE_ID, MINUTE, OPENED_AT, type CaseWorld } from './case-fixtures'
+import { encodeFakeCaseRef } from '../adapters/fake'
+import { CONNECTION_ID, createCaseWorld, ENV_OFF, INVOICE_ID, MINUTE, OPENED_AT, type CaseWorld } from './case-fixtures'
 import { ADMIN_ID, COMPANY_ID } from './memory-supabase'
 
 vi.mock('../case-document', async () => {
@@ -49,6 +50,56 @@ async function worldWithCase(minutes: number, options: { actions?: CollectionsCa
   world.clock.now = OPENED_AT + minutes * MINUTE
   await refreshCase({ db: world.db.client, adapterFor: () => adapter, now: world.now }, opened.case)
   return { world, adapter, sent, deps: (o: Parameters<CaseWorld['deps']>[0] = {}) => world.deps({ adapterFor: () => adapter, ...o }) }
+}
+
+/** A world where the provider only delivered the invoice and watches it: its claim waits for an explicit start. */
+async function worldWithDeliveredClaim() {
+  const world = await createCaseWorld()
+  const sent: CollectionsCaseActionRequest[] = []
+  const adapter: CollectionsAdapter = {
+    ...world.adapter,
+    async caseAction(ctx, input) {
+      sent.push(input)
+      return world.fake.caseAction(ctx, input)
+    },
+  }
+  const at = new Date(OPENED_AT).toISOString()
+  world.db.seed('collection_cases', [
+    {
+      id: 'case-watch',
+      company_id: COMPANY_ID,
+      invoice_id: INVOICE_ID,
+      connection_id: CONNECTION_ID,
+      origin: 'distribution',
+      start_step: 'invoice',
+      submission_status: 'registered',
+      submission_request: null,
+      submission_attempts: 1,
+      provider_case_ref: encodeFakeCaseRef({ step: 'invoice', openedAt: OPENED_AT, claimAmount: 1250, claimRemaining: 1250, invoiceRef: INVOICE_ID }),
+      provider_case_number: null,
+      parent_case_ref: null,
+      stage: 'invoice_sent',
+      decision_kind: null,
+      is_open: true,
+      close_reason: null,
+      actions: ['start', 'withdraw'],
+      claim_amount: 1250,
+      outstanding_principal: 1250,
+      outstanding_total: 1250,
+      bank_check: {},
+      opened_by: ADMIN_ID,
+      opened_at: at,
+      closed_at: null,
+      last_synced_at: null,
+      sync_error: null,
+      paused_by_sweep: false,
+      last_bank_checked_at: null,
+      created_at: at,
+      updated_at: at,
+    },
+  ])
+  world.clock.now += 2 * MINUTE
+  return { world, sent, deps: (o: Parameters<CaseWorld['deps']>[0] = {}) => world.deps({ adapterFor: () => adapter, ...o }) }
 }
 
 describe('runCaseAction', () => {
@@ -275,6 +326,33 @@ describe('runCaseAction', () => {
       ok: true,
       case: { stage: 'collection' },
     })
+  })
+
+  it('takes start only through the handover, which runs the full handover checklist first', async () => {
+    const { world, deps, sent } = await worldWithDeliveredClaim()
+    // An invoice the handover refuses (a currency the provider does not take): the action route and tool sent start anyway.
+    Object.assign(world.db.rows('invoices')[0]!, { currency: 'EUR' })
+    for (const channel of ['web', 'agent'] as const) {
+      expect(await runCaseAction(deps({ channel }), { invoiceId: INVOICE_ID, action: 'start', step: 'reminder' })).toMatchObject({
+        ok: false,
+        code: 'COLLECTION_START_VIA_HANDOVER',
+        status: 409,
+        details: { invoice_id: INVOICE_ID },
+      })
+    }
+    expect(sent).toEqual([])
+    expect(await handOverInvoice(deps(), { invoiceId: INVOICE_ID, expectedRemaining: 1250, startStep: 'reminder' })).toMatchObject({
+      ok: false,
+      code: 'COLLECTION_NOT_ELIGIBLE',
+    })
+    expect(sent).toEqual([])
+
+    Object.assign(world.db.rows('invoices')[0]!, { currency: 'SEK' })
+    expect(await handOverInvoice(deps(), { invoiceId: INVOICE_ID, expectedRemaining: 1250, startStep: 'reminder' })).toMatchObject({
+      ok: true,
+      case: { id: 'case-watch', stage: 'reminder' },
+    })
+    expect(sent).toMatchObject([{ action: 'start', step: 'reminder' }])
   })
 })
 

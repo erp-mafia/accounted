@@ -81,7 +81,6 @@ const ONBOARDING_BODY = {
     phone: null,
     vatRegistered: true,
     vatNumber: 'SE556012579001',
-    ownerPersonalNumber: null,
     payout: { cashAccountId: CASH_ACCOUNT_ID, kind: 'bankgiro' },
   },
   kyc: {

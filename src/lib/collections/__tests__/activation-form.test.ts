@@ -4,9 +4,7 @@ import {
   isAmount,
   isSwedishPostalCode,
   isSwedishVatNumber,
-  normalizeOwnerPersonalNumber,
   OnboardingBodySchema,
-  ownerPersonalNumberFromOrgNumber,
   pastDateError,
   payoutOptions,
   SettingsPatchSchema,
@@ -16,8 +14,6 @@ import {
   validateRulesStep,
   type CompanyStepInput,
 } from '../activation-form'
-
-const NOW = new Date('2026-10-04T08:00:00Z')
 
 const company: CompanyStepInput = {
   name: 'Test AB',
@@ -29,7 +25,6 @@ const company: CompanyStepInput = {
   phone: null,
   vatRegistered: false,
   vatNumber: null,
-  ownerPersonalNumber: null,
   payout: { cashAccountId: 'acc', kind: 'bankgiro' },
 }
 
@@ -71,26 +66,6 @@ describe('payout choices', () => {
   })
 })
 
-describe('the owner of an enskild firma', () => {
-  it('expands the firm\'s org number to twelve digits with the century', () => {
-    expect(ownerPersonalNumberFromOrgNumber('811218-9876', NOW)).toBe('198112189876')
-    expect(ownerPersonalNumberFromOrgNumber('8112189877', NOW)).toBeNull()
-    expect(ownerPersonalNumberFromOrgNumber(null, NOW)).toBeNull()
-  })
-
-  it('accepts ten or twelve digits, with - or +, and samordningsnummer', () => {
-    expect(normalizeOwnerPersonalNumber('19811218-9876', NOW)).toBe('198112189876')
-    expect(normalizeOwnerPersonalNumber('811218-9876', NOW)).toBe('198112189876')
-    // + marks a person aged 100 or more: the century before.
-    expect(normalizeOwnerPersonalNumber('251010-1237', NOW)).toBe('202510101237')
-    expect(normalizeOwnerPersonalNumber('251010+1237', NOW)).toBe('192510101237')
-    // Samordningsnummer: day + 60.
-    expect(normalizeOwnerPersonalNumber('701063-2391', NOW)).toBe('197010632391')
-    expect(normalizeOwnerPersonalNumber('701063-2392', NOW)).toBeNull()
-    expect(normalizeOwnerPersonalNumber('abc', NOW)).toBeNull()
-  })
-})
-
 describe('rules', () => {
   it('reads amounts as kronor with at most two decimals', () => {
     expect(isAmount(0)).toBe(true)
@@ -119,14 +94,14 @@ describe('rules', () => {
 
 describe('company and know-your-customer steps', () => {
   it('checks the fields a provider needs', () => {
-    expect(validateCompanyStep(company, { soleTrader: false })).toEqual({})
+    expect(validateCompanyStep(company)).toEqual({})
     expect(isSwedishPostalCode('11122')).toBe(true)
     expect(isSwedishPostalCode('1112')).toBe(false)
     expect(isSwedishVatNumber('SE 5560 1257 9001')).toBe(true)
     expect(isSwedishVatNumber('556012579001')).toBe(false)
     expect(
-      validateCompanyStep({ ...company, name: ' ', vatRegistered: true, vatNumber: null, payout: null }, { soleTrader: true, now: NOW }),
-    ).toEqual({ name: 'required', vatNumber: 'required', ownerPersonalNumber: 'required', payout: 'required' })
+      validateCompanyStep({ ...company, name: ' ', vatRegistered: true, vatNumber: null, payout: null }),
+    ).toEqual({ name: 'required', vatNumber: 'required', payout: 'required' })
   })
 
   it('asks for a description whenever a question is answered yes', () => {
@@ -171,6 +146,16 @@ describe('request schemas', () => {
     })
     expect(parsed.success).toBe(false)
     expect(parsed.error!.issues.map((i) => [i.path.join('.'), i.message])).toEqual([['kyc.businessDescription', 'required']])
+  })
+
+  it('no longer takes the owner\'s personnummer: a form that still sends one is accepted and the number dropped', () => {
+    const parsed = OnboardingBodySchema.safeParse({
+      company: { ...company, ownerPersonalNumber: '195001182046', payout: { cashAccountId: '33333333-3333-4333-8333-333333333333', kind: 'bankgiro' } },
+      kyc: { businessDescription: 'Bygg', invoicesAbroad: false, invoicesAbroadDescription: null, pep: false, pepDescription: null, sanctions: false, sanctionsDescription: null },
+      rules: { minimumAmount: 1, defaultStartStep: 'reminder', reminderFeeTermsSince: null, lateInterest: null, ladderMode: 'off' },
+    })
+    expect(parsed.success).toBe(true)
+    expect(parsed.data!.company).not.toHaveProperty('ownerPersonalNumber')
   })
 
   it('needs a signer e-mail only when the provider mails the link', () => {
