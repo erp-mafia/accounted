@@ -28,7 +28,14 @@ vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
   })),
 }))
 
-import { computeVatCloseCheck, RC_BASIS_MISSING_HINT, REVENUE_ACCOUNT_WITHOUT_RUTA_HINT } from '@/lib/reports/vat-close-check'
+import {
+  computeVatCloseCheck,
+  RC_BASIS_ADVISORY_HINT,
+  RC_BASIS_MISSING_HINT,
+  REVENUE_ACCOUNT_WITHOUT_RUTA_HINT,
+  vatFilingVerdict,
+} from '@/lib/reports/vat-close-check'
+import { vatCheckFingerprint } from '@/lib/vat/check-reviews'
 import { calculateVatDeclaration } from '@/lib/reports/vat-declaration'
 import { vatTotalsRpcResult } from './vat-totals-rpc-double'
 
@@ -61,6 +68,7 @@ function mockSupabase(
     vat_taxable_base_over_40m: false,
   },
   companyEntityType: 'aktiebolag' | 'enskild_firma' | null = null,
+  extraTables: Record<string, unknown[]> = {},
 ) {
   const entries = [
     ...new Map(
@@ -116,6 +124,7 @@ function mockSupabase(
       if (table === 'companies') {
         return makeChain(companyEntityType ? [{ entity_type: companyEntityType }] : [])
       }
+      if (extraTables[table]) return makeChain(extraTables[table])
       return makeChain([])
     },
     // The missing-underlag blocker reads the verifikat_without_documents RPC,
@@ -502,6 +511,91 @@ describe('gnubok_vat_close_check: declaration completeness', () => {
     expect(blocker.severity).toBe('medium')
     expect(blocker.hint).not.toBe(RC_BASIS_MISSING_HINT)
     expect(result.rutor.ruta21).toBe(5000)
+    // crm#1171: the agent is told where the basis is and how to accept it,
+    // and the finding says it can be marked reviewed.
+    expect(blocker.hint).toBe(RC_BASIS_ADVISORY_HINT)
+    expect(finding).toEqual(expect.objectContaining({ reviewable: true, review: null }))
+  })
+
+  // crm#1171: the user confirmed the basis in e2 belongs to e1's purchase and
+  // marked the advisory reviewed. It stays in declaration_checks with the
+  // review and leaves the blockers, until the figures change.
+  it('drops a reviewed advisory from the blockers and reports who reviewed it', async () => {
+    const lines: MockLine[] = [
+      { entry: 'e1', account_number: '6540', debit_amount: 5000 },
+      { entry: 'e1', account_number: '2440', credit_amount: 5000 },
+      { entry: 'e1', account_number: '2614', credit_amount: 1250 },
+      { entry: 'e1', account_number: '2645', debit_amount: 1250 },
+      { entry: 'e2', account_number: '4535', debit_amount: 5000 },
+      { entry: 'e2', account_number: '4598', credit_amount: 5000 },
+    ]
+    const plain = mockSupabase(lines)
+    const declaration = await calculateVatDeclaration(plain, 'company-1', 'monthly', 2026, 1)
+    const { checks, gaps } = await vatFilingVerdict(plain, 'company-1', declaration)
+    const advisory = checks.find((c) => c.code === 'RC_BASIS_MISSING')!
+    const reviewRow = {
+      check_code: 'RC_BASIS_MISSING',
+      action: 'reviewed',
+      fingerprint: vatCheckFingerprint(advisory, { declaration, gaps }),
+      note: 'Basbeloppet är bokat i e2',
+      source: 'agent',
+      actor: 'user-1',
+      created_at: '2026-10-15T09:00:00Z',
+    }
+
+    const reviewed = await computeVatCloseCheck(
+      PERIOD,
+      'company-1',
+      mockSupabase(lines, [], undefined, null, { vat_check_reviews: [reviewRow] }),
+    )
+    expect(reviewed.blockers.find((b) => b.check_code === 'RC_BASIS_MISSING')).toBeUndefined()
+    expect(reviewed.declaration_checks.find((c) => c.code === 'RC_BASIS_MISSING')).toEqual(
+      expect.objectContaining({
+        status: 'WARNING',
+        reviewable: true,
+        review: expect.objectContaining({ reviewed_by: 'user-1', note: 'Basbeloppet är bokat i e2', source: 'agent' }),
+      }),
+    )
+
+    // A review of other figures is no review: the warning is back.
+    const stale = await computeVatCloseCheck(
+      PERIOD,
+      'company-1',
+      mockSupabase(lines, [], undefined, null, {
+        vat_check_reviews: [{ ...reviewRow, fingerprint: 'v1:0000000000000000' }],
+      }),
+    )
+    expect(stale.blockers.find((b) => b.check_code === 'RC_BASIS_MISSING')?.severity).toBe('medium')
+    expect(stale.declaration_checks.find((c) => c.code === 'RC_BASIS_MISSING')?.review).toBeNull()
+  })
+
+  it('never lets a stored review quiet a blocking finding', async () => {
+    // The #1164 shape: fiktiv moms with no basbelopp anywhere. A review row for
+    // the code exists (say from before the basis was reversed); it does not apply.
+    const result = await computeVatCloseCheck(
+      PERIOD,
+      'company-1',
+      mockSupabase(
+        [
+          { entry: 'e1', account_number: '6540', debit_amount: 5000 },
+          { entry: 'e1', account_number: '2440', credit_amount: 5000 },
+          { entry: 'e1', account_number: '2614', credit_amount: 1250 },
+          { entry: 'e1', account_number: '2645', debit_amount: 1250 },
+        ],
+        [],
+        undefined,
+        null,
+        {
+          vat_check_reviews: [
+            { check_code: 'RC_BASIS_MISSING', action: 'reviewed', fingerprint: 'v1:0000000000000000', note: null, source: 'web', actor: 'user-1', created_at: 't' },
+          ],
+        },
+      ),
+    )
+    const finding = result.declaration_checks.find((c) => c.code === 'RC_BASIS_MISSING')
+    expect(finding).toEqual(expect.objectContaining({ status: 'ERROR', reviewable: false, review: null }))
+    expect(result.blockers.find((b) => b.check_code === 'RC_BASIS_MISSING')?.severity).toBe('high')
+    expect(result.ready_to_close).toBe(false)
   })
 
   // #3387: sales on a class 3 account with no momskod and no momssats reach no

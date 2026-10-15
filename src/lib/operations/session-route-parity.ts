@@ -506,6 +506,8 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/reports/vat-declaration/filings': covered([`POST ${V}/reports/vat-declaration/filings`]),
   'DELETE /api/reports/vat-declaration/filings': covered([`DELETE ${V}/reports/vat-declaration/filings`]),
   'POST /api/reports/vat-declaration/rc-basis-gaps/fix': gap('P3', 'add the missing reverse-charge basbelopp pair'),
+  'POST /api/reports/vat-declaration/check-reviews': covered(['gnubok_mark_vat_check_reviewed'], 'staged; a person approves the agent\'s review'),
+  'DELETE /api/reports/vat-declaration/check-reviews': uiOnly('taking back a VAT warning review is the reviewer\'s own act in the momsdeklaration view'),
   'POST /api/vat/validate': uiOnly('read-only VIES VAT-number check for a form, exposed as POST'),
   'POST /api/tax-assessment-notices': gap('P3', 'register a slutskattebesked'),
   'PATCH /api/tax-assessment-notices/:id': gap('P3'),

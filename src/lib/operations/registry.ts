@@ -200,6 +200,7 @@ import {
   vatFilingsMark,
   vatFilingsUnmark,
 } from './vat-filings'
+import { vatCheckReviewsMark } from './vat-check-reviews'
 import { agiFilingsMark } from './agi-filings'
 import {
   arsredovisningAddSignatory,
@@ -412,6 +413,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   vatFilingsList,
   vatFilingsMark,
   vatFilingsUnmark,
+  // vat-check-reviews (MCP only: the web view has its own check-reviews route)
+  vatCheckReviewsMark,
   // agi-filings (MCP only: the dashboard completes a deadline by id)
   agiFilingsMark,
   // arsredovisning

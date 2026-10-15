@@ -351,25 +351,25 @@ export function validateAnnualReportCompleteness(
       disclosures.long_term_debt_over_five_years_confirmed,
       'AR-NOTE-LONG-DEBT-UNCONFIRMED',
       'Uppgiften om långfristiga skulder som förfaller efter mer än fem år är inte bekräftad.',
-      'Kryssa i "Jag har kontrollerat uppgiften" under Lagstadgade upplysningar längre ner och klicka på Spara texten.',
+      'Kryssa i "Jag har kontrollerat uppgiften" under Lagstadgade upplysningar och klicka på Spara texten.',
     ],
     [
       disclosures.securities_pledged_confirmed,
       'AR-NOTE-SECURITIES-UNCONFIRMED',
       'Uppgiften om ställda säkerheter är inte bekräftad.',
-      'Kryssa i "Jag har kontrollerat ställda säkerheter" under Lagstadgade upplysningar längre ner och klicka på Spara texten.',
+      'Kryssa i "Jag har kontrollerat ställda säkerheter" under Lagstadgade upplysningar och klicka på Spara texten.',
     ],
     [
       disclosures.contingent_liabilities_confirmed,
       'AR-NOTE-CONTINGENT-UNCONFIRMED',
       'Uppgiften om eventualförpliktelser är inte bekräftad.',
-      'Kryssa i "Jag har kontrollerat eventualförpliktelser" under Lagstadgade upplysningar längre ner och klicka på Spara texten.',
+      'Kryssa i "Jag har kontrollerat eventualförpliktelser" under Lagstadgade upplysningar och klicka på Spara texten.',
     ],
     [
       disclosures.parent_company_confirmed,
       'AR-NOTE-PARENT-UNCONFIRMED',
       'Uppgiften om koncern- och moderföretagsförhållanden är inte bekräftad.',
-      'Kryssa i "Jag har kontrollerat koncernförhållandet" under Lagstadgade upplysningar längre ner och klicka på Spara texten.',
+      'Kryssa i "Jag har kontrollerat koncernförhållandet" under Lagstadgade upplysningar och klicka på Spara texten.',
     ],
   ]
   for (const [confirmed, code, message, remediation] of disclosureChecks) {

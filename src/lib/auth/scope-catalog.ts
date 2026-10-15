@@ -370,6 +370,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_book_vat_settlement: 'bookkeeping:write',
   gnubok_mark_vat_period_filed: 'bookkeeping:write',
   gnubok_unmark_vat_period_filed: 'bookkeeping:write',
+  gnubok_mark_vat_check_reviewed: 'bookkeeping:write',
   gnubok_mark_agi_period_filed: 'payroll:write',
   // Operation registry, wave 2: booking, payment files, utlägg, payroll.
   gnubok_send_payslips: 'payroll:write',

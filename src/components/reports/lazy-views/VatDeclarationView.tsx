@@ -46,6 +46,12 @@ import {
   withRcBasisGapFindings,
   type RcBasisGapScan,
 } from '@/lib/reports/vat-filing-gate'
+import type { RcBasisGap } from '@/lib/reports/rc-basis-gaps'
+import {
+  applyVatCheckReviews,
+  type VatCheckReview,
+  type VatCheckReviewInputs,
+} from '@/lib/vat/check-reviews'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import type {
   VatSettlementDateReason,
@@ -553,9 +559,14 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
   // because the filing gate lives here and the worklist unmounts as soon as
   // the user leaves steg 1. Tagged with the PERIOD it was requested for (see
   // gapScanPeriodKey), so a korrigering refetches without the gate falling
-  // open in between; count === null means "not known" (scan failed), which is
-  // deliberately NOT the same as zero.
-  const [gapScan, setGapScan] = useState<{ key: string; count: number | null } | null>(null)
+  // open in between; gaps === null means "not known" (scan failed), which is
+  // deliberately NOT the same as an empty list. The list itself (not only its
+  // length) is kept because a reviewed warning's fingerprint reads it.
+  const [gapScan, setGapScan] = useState<{ key: string; gaps: RcBasisGap[] | null } | null>(null)
+  // Reviewed warnings for the period (crm#1171), tagged like the scan. A
+  // failed read is an empty list: the warnings simply stay unreviewed.
+  const [checkReviews, setCheckReviews] = useState<{ key: string; reviews: VatCheckReview[] } | null>(null)
+  const [reviewsRefreshKey, setReviewsRefreshKey] = useState(0)
 
   // Company settings drive both the momsregistrerad gate and the default
   // periodicity (moms_period in Inställningar). Applied once per company the
@@ -776,16 +787,45 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
         // brister": it becomes a visible warning row (so the banner cannot
         // claim all-clear on a check that never ran) but does not block, or a
         // network hiccup would lock the user out of a statutory deadline.
-        if (!res.ok || json?.error) setGapScan({ key: gapScanPeriodKey, count: null })
-        else setGapScan({ key: gapScanPeriodKey, count: (json?.data?.gaps ?? []).length })
+        if (!res.ok || json?.error) setGapScan({ key: gapScanPeriodKey, gaps: null })
+        else setGapScan({ key: gapScanPeriodKey, gaps: Array.isArray(json?.data?.gaps) ? json.data.gaps : [] })
       })
       .catch(() => {
-        if (!cancelled) setGapScan({ key: gapScanPeriodKey, count: null })
+        if (!cancelled) setGapScan({ key: gapScanPeriodKey, gaps: null })
       })
     return () => {
       cancelled = true
     }
   }, [fetchKey, gapScanPeriodKey, periodType, year, period, fiscalPeriodId])
+
+  // The period's reviewed warnings, keyed by the period like the scan and read
+  // again after a mark or an undo. The last list for the same period stays in
+  // force while the next one loads: a review only applies while its
+  // fingerprint matches the figures on screen, so a stale list cannot quiet a
+  // warning whose figures moved.
+  useEffect(() => {
+    if (!fetchKey || periodType === null || !gapScanPeriodKey) return
+    const params = new URLSearchParams({
+      period_type: periodType,
+      year: String(year),
+      period: String(period),
+    })
+    if (periodType === 'yearly') params.set('fiscal_period_id', fiscalPeriodId)
+    const key = gapScanPeriodKey
+    let cancelled = false
+    fetch(`/api/reports/vat-declaration/check-reviews?${params.toString()}`)
+      .then(async (res) => {
+        const json = await res.json().catch(() => null)
+        if (cancelled) return
+        setCheckReviews({ key, reviews: res.ok && Array.isArray(json?.data) ? json.data : [] })
+      })
+      .catch(() => {
+        if (!cancelled) setCheckReviews({ key, reviews: [] })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [fetchKey, gapScanPeriodKey, reviewsRefreshKey, periodType, year, period, fiscalPeriodId])
 
   // Derived fetch state: the previous declaration stays visible (dimmed)
   // while the next period loads.
@@ -809,9 +849,9 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
   const gapScanSettled = gapScan !== null && gapScan.key === gapScanPeriodKey
   const rcBasisScan: RcBasisGapScan = !gapScanSettled
     ? { status: 'pending' }
-    : gapScan.count === null
+    : gapScan.gaps === null
       ? { status: 'unavailable' }
-      : { status: 'scanned', gapCount: gapScan.count }
+      : { status: 'scanned', gapCount: gapScan.gaps.length }
   // The declaration carries the 2645/2647 totals (rcInputAccountTotals), so
   // RC_INPUT_VAT_MISMATCH compares rutor 30-32 against the reverse-charge INPUT
   // accounts instead of the ruta 48 aggregate. Without them, 50 000 kr of
@@ -825,7 +865,7 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
   // The class 3 accounts that reach no ruta travel on the payload too
   // (REVENUE_ACCOUNT_WITHOUT_RUTA, #3387); absent on an older response, which
   // keeps that warning silent.
-  const checks = data
+  const rawChecks = data
     ? withRcBasisGapFindings(
         runVatDeclarationChecks(data.rutor, rcInputTotalsFromDeclaration(data), {
           revenueAccountsWithoutRuta: data.revenueAccountsWithoutRuta,
@@ -836,9 +876,23 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
           : undefined,
       )
     : []
+  // Reviews (crm#1171) apply over the same declaration and gap list the
+  // server fingerprinted, and only to WARNINGs: the gate below reads the same
+  // ERRORs either way. Null inputs while the scan is pending: nothing is
+  // reviewable before the scan has answered.
+  const reviewInputs: VatCheckReviewInputs | null =
+    data && gapScanSettled ? { declaration: data, gaps: gapScan.gaps } : null
+  const reviewsSettled = checkReviews !== null && checkReviews.key === gapScanPeriodKey
+  const checks =
+    reviewInputs && reviewsSettled ? applyVatCheckReviews(rawChecks, checkReviews.reviews, reviewInputs) : rawChecks
   const checksBlocked = isFilingBlocked(checks)
   const errorCount = checks.filter((c) => c.status === 'ERROR').length
-  const warningCount = checks.filter((c) => c.status === 'WARNING').length
+  const warningCount = checks.filter((c) => c.status === 'WARNING' && !c.review).length
+  // The per-verifikat gaps are advisory (the period matches per momssats):
+  // the worklist then offers no Korrigera, which would count the basis twice.
+  const rcBasisAdvisory =
+    rcBasisScan.status === 'scanned' &&
+    checks.some((c) => c.code === 'RC_BASIS_MISSING' && c.status === 'WARNING')
   // Latch the automatic landing step once per period, as a render-phase
   // adjustment when the period's declaration first settles. Deriving it live
   // from checksBlocked navigated the user away mid-work: the refetch after a
@@ -1119,6 +1173,9 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
               period={period}
               fiscalPeriodId={isYearly ? fiscalPeriodId : undefined}
               onCorrected={() => setRetryKey((k) => k + 1)}
+              reviewInputs={reviewInputs}
+              rcBasisAdvisory={rcBasisAdvisory}
+              onReviewsChanged={() => setReviewsRefreshKey((k) => k + 1)}
             />
               <div className="flex justify-end">
                 <Button variant="outline" size="sm" onClick={() => setChosenStep(2)}>

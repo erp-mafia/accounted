@@ -58,6 +58,51 @@ export interface VatDeclarationCheck {
   detail?: string
   /** Optional rutor that the user should investigate. */
   rutor?: Array<keyof VatDeclarationRutor>
+  /**
+   * Set only on a WARNING a person has reviewed for this period while its
+   * figures still match the review (applyVatCheckReviews,
+   * src/lib/vat/check-reviews.ts). Never set on an ERROR.
+   */
+  review?: VatCheckReviewMark
+}
+
+/** Every finding code, for validating a code that arrives over the wire (a review names one). */
+export const VAT_DECLARATION_CHECK_CODES = [
+  'RC_BASIS_MISSING',
+  'RC_OUTPUT_MISSING',
+  'RC_INPUT_VAT_MISMATCH',
+  'SUMMA_MOMS_DRIFT',
+  'TAXABLE_SALES_WITHOUT_OUTPUT',
+  'IMPORT_BASE_WITHOUT_OUTPUT',
+  'IMPORT_OUTPUT_WITHOUT_BASE',
+  'OUTPUT_VAT_WITHOUT_SALES_BASE',
+  'SALES_OUTPUT_VAT_SHORTFALL',
+  'REVENUE_ACCOUNT_WITHOUT_RUTA',
+] as const satisfies ReadonlyArray<VatDeclarationCheck['code']>
+
+/** Who accepted a WARNING for the period, when, and why. */
+export interface VatCheckReviewMark {
+  reviewed_at: string
+  /** auth user id of the person who marked it, or who approved the agent's proposal. */
+  reviewed_by: string
+  /** Display name or e-mail, when the reader could resolve it. */
+  reviewed_by_label?: string | null
+  note: string | null
+  /** web: marked in the momsdeklaration view; agent: an approved gnubok_mark_vat_check_reviewed. */
+  source: 'web' | 'agent'
+}
+
+/**
+ * Self-assessed utgående moms (rutor 30-32, 60-62) with no deductible input
+ * VAT in the period at all (ruta 48 zero). With full avdragsrätt that is never
+ * right, and the close check escalates RC_INPUT_VAT_MISMATCH to a blocker in
+ * exactly this case, so such a finding is not one a review may quiet.
+ */
+export function selfAssessedVatWithoutAnyInputVat(rutor: VatDeclarationRutor): boolean {
+  const eps = 0.5
+  const selfAssessed =
+    rutor.ruta30 + rutor.ruta31 + rutor.ruta32 + rutor.ruta60 + rutor.ruta61 + rutor.ruta62
+  return selfAssessed > eps && rutor.ruta48 <= eps
 }
 
 /**

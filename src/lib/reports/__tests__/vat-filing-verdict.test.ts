@@ -75,7 +75,15 @@ describe('vatFilingVerdict', () => {
   it('lets a complete declaration through', async () => {
     const verdict = await vatFilingVerdict({} as never, 'company-1', COMPLETE)
 
-    expect(verdict).toEqual({ checks: [], blocked: false })
+    expect(verdict).toEqual({ checks: [], blocked: false, gaps: [] })
+  })
+
+  it('hands back the scanned gaps for review fingerprints, and null when the scan failed', async () => {
+    const gaps = [{ entryId: 'je-1', rcOutputAccount: '2614', rcOutputAmount: 25, missingBasisAmount: 100 }]
+    mockFindRcBasisGaps.mockResolvedValueOnce(gaps)
+    expect((await vatFilingVerdict({} as never, 'company-1', COMPLETE)).gaps).toEqual(gaps)
+    mockFindRcBasisGaps.mockRejectedValueOnce(new Error('db down'))
+    expect((await vatFilingVerdict({} as never, 'company-1', COMPLETE)).gaps).toBeNull()
   })
 
   it('blocks on per-verifikat gaps when the period identity is also broken', async () => {

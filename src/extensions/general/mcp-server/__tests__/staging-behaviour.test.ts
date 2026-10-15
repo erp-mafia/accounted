@@ -69,6 +69,29 @@ vi.mock('@/lib/reports/vat-settlement', async (importOriginal) => {
   }
 })
 
+// The momsdeklaration a VAT warning review recomputes reads the same jsonb
+// RPC. Replaced by a fixed quarter whose 2645 falls short of its fiktiv moms
+// (an RC_INPUT_VAT_MISMATCH WARNING) so gnubok_mark_vat_check_reviewed reaches
+// its staging insert; the checks, the gap scan and the review read run for real.
+vi.mock('@/lib/reports/vat-declaration', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/reports/vat-declaration')>()
+  const rutor = Object.fromEntries(
+    ['05', '06', '07', '08', '10', '11', '12', '20', '21', '22', '23', '24', '30', '31', '32', '35', '36', '37', '38', '39', '40', '41', '42', '48', '49', '50', '60', '61', '62'].map(
+      (n) => [`ruta${n}`, 0],
+    ),
+  )
+  return {
+    ...actual,
+    calculateVatDeclaration: async () => ({
+      period: { type: 'quarterly', year: 2026, period: 1, start: '2026-01-01', end: '2026-03-31' },
+      rutor: { ...rutor, ruta21: 1000, ruta30: 250, ruta48: 100, ruta49: 150 },
+      rcInputAccountTotals: { '2645': { debit: 100, credit: 0 } },
+      rcBasisByRate: { r25: 1000, r12: 0, r6: 0 },
+      revenueAccountsWithoutRuta: [],
+    }),
+  }
+})
+
 // The årsredovisning builder reads the whole ledger through dozens of shaped
 // queries this generic client cannot answer. It is replaced by a fixed,
 // complete K2 model (statements tie, every check green) so
@@ -647,6 +670,10 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
       company_settings: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 },
       deadlines: { tax_deadline_type: 'moms_quarterly', tax_period: '2026-Q2', is_completed: false, status: 'upcoming' },
     },
+  },
+  // A reviewed VAT warning (crm#1171): the mocked quarter's RC_INPUT_VAT_MISMATCH.
+  gnubok_mark_vat_check_reviewed: {
+    args: { period_type: 'quarterly', year: 2026, period: 1, check_code: 'RC_INPUT_VAT_MISMATCH', note: 'Begränsad avdragsrätt' },
   },
   gnubok_unmark_vat_period_filed: {
     args: { period_type: 'yearly', year: 2025, period: 1 },

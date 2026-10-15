@@ -24,6 +24,8 @@ interface LinkParams {
   document_id?: string
   transaction_id?: string
   journal_entry_id?: string
+  /** A single link staged as a copy claims nothing either (crm#1171 item 9). */
+  copy?: boolean
   /** copy: the row links a new copy of the document, never the document itself (crm#1207). */
   links?: { document_id?: string; journal_entry_id?: string; copy?: boolean }[]
 }
@@ -67,7 +69,7 @@ export async function loadDocumentClaimsAndWaitingLinks(
 
   for (const op of pending) {
     const p = op.params ?? {}
-    if (p.document_id && wanted.has(p.document_id)) {
+    if (p.document_id && wanted.has(p.document_id) && p.copy !== true) {
       add({ document_id: p.document_id, operation_id: op.id, transaction_id: p.transaction_id ?? null, journal_entry_id: p.journal_entry_id ?? null })
     }
     for (const link of p.links ?? []) {

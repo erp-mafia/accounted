@@ -91,6 +91,10 @@ const RISK_TIERS = {
   // A Skatteverket-confirmed filing is never relabelled or reopened.
   mark_vat_period_filed: 'low',
   unmark_vat_period_filed: 'low',
+  // A person's review of an advisory momsdeklaration WARNING (crm#1171): no
+  // verifikat, nothing sent; never applies to an ERROR, lapses when the
+  // figures change.
+  mark_vat_check_reviewed: 'low',
   mark_agi_period_filed: 'low',
   // Operation registry, wave 2: booking, payment files, utlägg, payroll.
   send_payslips: 'medium',

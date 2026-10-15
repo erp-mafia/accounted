@@ -21,7 +21,7 @@ vi.mock('@/lib/core/documents/document-service', async (importOriginal) => ({
   uploadDocument: (...args: unknown[]) => uploadDocument(...args),
 }))
 
-import { checkDocumentLink, linkDocumentCopyToVoucher } from '../link-document'
+import { checkDocumentLink, linkDocumentCopyToVoucher, linkDocumentToVoucher } from '../link-document'
 
 const DOC = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
 const JE = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
@@ -155,6 +155,70 @@ describe('linkDocumentCopyToVoucher', () => {
     const result = await linkDocumentCopyToVoucher(asClient(supabase), 'company-1', 'user-1', { document_id: DOC, journal_entry_id: JE })
 
     expect(result).toEqual({ ok: false, code: 'NOT_FOUND', details: { resource: 'journal_entry', field: 'journal_entry_id' } })
+    expect(uploadDocument).not.toHaveBeenCalled()
+  })
+})
+
+describe('linkDocumentToVoucher with copy (crm#1171 item 9): the one door every caller uses', () => {
+  const HOLDER = { status: 'posted', voucher_series: 'A', voucher_number: 22 }
+  const input = { document_id: DOC, journal_entry_id: JE, copy: true }
+
+  it('copies a document another verifikat holds, naming the source; the source is never written', async () => {
+    const { supabase, findCall } = supabaseFor([
+      { data: HELD_BY_ORIGINAL }, { data: CORRECTION }, { data: HOLDER }, // the plain check: held elsewhere
+      { data: HELD_BY_ORIGINAL }, { data: CORRECTION }, { data: OPEN_PERIOD }, // the copy's rules
+      { data: SOURCE }, { data: [] },
+    ])
+
+    const result = await linkDocumentToVoucher(asClient(supabase), 'company-1', input, { userId: 'user-1' })
+
+    expect(result).toMatchObject({ ok: true, dryRun: false, copy_of_document_id: DOC, document: { id: 'copy-1', journal_entry_id: JE } })
+    expect(uploadDocument).toHaveBeenCalledTimes(1)
+    expect(findCall('document_attachments', 'update')).toBeUndefined()
+  })
+
+  it('a dry run says a copy would be made and writes nothing', async () => {
+    const { supabase } = supabaseFor([
+      { data: HELD_BY_ORIGINAL }, { data: CORRECTION }, { data: HOLDER },
+      { data: HELD_BY_ORIGINAL }, { data: CORRECTION }, { data: OPEN_PERIOD },
+    ])
+
+    const result = await linkDocumentToVoucher(asClient(supabase), 'company-1', input, { dryRun: true })
+
+    expect(result).toMatchObject({ ok: true, dryRun: true, copy_of_document_id: DOC })
+    expect(download).not.toHaveBeenCalled()
+    expect(uploadDocument).not.toHaveBeenCalled()
+  })
+
+  it('links a free document itself: no copy when nothing else holds it', async () => {
+    const { supabase } = supabaseFor([
+      { data: { ...HELD_BY_ORIGINAL, journal_entry_id: null } }, { data: CORRECTION }, { data: OPEN_PERIOD },
+    ])
+
+    const result = await linkDocumentToVoucher(asClient(supabase), 'company-1', input, { dryRun: true })
+
+    expect(result).toMatchObject({ ok: true, dryRun: true, copy_of_document_id: null })
+  })
+
+  it('without copy, a document another verifikat holds is refused as before', async () => {
+    const { supabase } = supabaseFor([{ data: HELD_BY_ORIGINAL }, { data: CORRECTION }, { data: HOLDER }])
+
+    const result = await linkDocumentToVoucher(asClient(supabase), 'company-1', { document_id: DOC, journal_entry_id: JE }, { userId: 'user-1' })
+
+    expect(result).toMatchObject({ ok: false, code: 'DOC_LINK_ALREADY_LINKED', details: { current_journal_entry_id: ORIGINAL_JE } })
+    expect(uploadDocument).not.toHaveBeenCalled()
+  })
+
+  it('refuses a copy into a locked period, and never copies without the acting user', async () => {
+    const locked = supabaseFor([
+      { data: HELD_BY_ORIGINAL }, { data: CORRECTION }, { data: HOLDER },
+      { data: HELD_BY_ORIGINAL }, { data: CORRECTION }, { data: { ...OPEN_PERIOD, locked_at: '2026-09-01T00:00:00Z' } },
+    ])
+    expect(await linkDocumentToVoucher(asClient(locked.supabase), 'company-1', input, { userId: 'user-1' }))
+      .toMatchObject({ ok: false, code: 'PERIOD_LOCKED' })
+
+    const noUser = supabaseFor([{ data: HELD_BY_ORIGINAL }, { data: CORRECTION }, { data: HOLDER }])
+    await expect(linkDocumentToVoucher(asClient(noUser.supabase), 'company-1', input)).rejects.toThrow(/acting user/)
     expect(uploadDocument).not.toHaveBeenCalled()
   })
 })

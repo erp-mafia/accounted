@@ -3605,7 +3605,7 @@ function documentLinkFailureMessage(err: unknown): string {
 
 async function commitLinkDocumentToVoucher(
   supabase: SupabaseClient,
-  _userId: string,
+  userId: string,
   companyId: string,
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
@@ -3617,6 +3617,26 @@ async function commitLinkDocumentToVoucher(
   }
 
   try {
+    // Staged as a copy (crm#1171 item 9): staging saw the document held by,
+    // or proposed for, another verifikat, so this one gets a byte-identical
+    // copy whatever is approved first. The document itself never moves.
+    if (params.copy === true) {
+      const copied = await linkDocumentCopyToVoucher(supabase, companyId, userId, {
+        document_id: documentId,
+        journal_entry_id: journalEntryId,
+        journal_entry_line_id: journalEntryLineId ?? null,
+      })
+      if (!copied.ok) return documentLinkRefusalResult(copied)
+      return {
+        data: {
+          document_id: copied.document.id,
+          file_name: copied.document.file_name,
+          journal_entry_id: copied.document.journal_entry_id,
+          journal_entry_line_id: copied.document.journal_entry_line_id ?? null,
+          copy_of_document_id: documentId,
+        },
+      }
+    }
     const outcome = await linkDocumentToVoucher(
       supabase,
       companyId,

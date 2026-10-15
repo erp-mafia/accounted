@@ -8,7 +8,12 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 /**
  * POST /api/documents/[id]/link: link a document to a journal entry.
  *
- * Body: { journal_entry_id: string, journal_entry_line_id?: string, inbox_item_id?: string, transaction_id?: string }
+ * Body: { journal_entry_id: string, journal_entry_line_id?: string, inbox_item_id?: string, transaction_id?: string, copy?: boolean }
+ *
+ * `copy` (crm#1171 item 9): a document another verifikat holds, a bank
+ * statement covering several fees, gets a byte-identical copy on this
+ * verifikat instead of the 409; the response's copy_of_document_id names the
+ * original. The Verifikat picker sends it only after the user confirmed.
  *
  * The rules are lib/documents/link-document.ts, shared with v1 and the MCP
  * tools: ownership, the line belonging to the verifikat, a set link never
@@ -30,7 +35,7 @@ export const POST = withRouteContext(
   'document.link',
   async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
-    const { supabase, companyId, log, requestId } = ctx
+    const { supabase, companyId, user, log, requestId } = ctx
     const opLog = log.child({ documentId: id })
 
     const parsed = LinkDocumentSchema.safeParse(await request.json().catch(() => null))
@@ -53,7 +58,8 @@ export const POST = withRouteContext(
         journal_entry_id: body.journal_entry_id,
         journal_entry_line_id: body.journal_entry_line_id,
         inbox_item_id: body.inbox_item_id,
-      })
+        copy: body.copy,
+      }, { userId: user.id })
       if (!outcome.ok) {
         if (outcome.code === 'NOT_FOUND' && outcome.details.resource === 'journal_entry') {
           return errorResponseFromCode('DOC_LINK_ENTRY_NOT_FOUND', opLog, { requestId })
@@ -75,7 +81,7 @@ export const POST = withRouteContext(
       if (body.transaction_id) {
         const { error: pinError } = await supabase
           .from('transactions')
-          .update({ document_id: id })
+          .update({ document_id: document.id })
           .eq('id', body.transaction_id)
           .eq('company_id', companyId!)
           // Never swap an existing pin: keeps "first linked doc wins" semantics
@@ -91,7 +97,7 @@ export const POST = withRouteContext(
         }
       }
 
-      return NextResponse.json({ data: document })
+      return NextResponse.json({ data: document, copy_of_document_id: outcome.copy_of_document_id })
     } catch (err) {
       opLog.error('document link failed', err as Error, {
         journalEntryId: body.journal_entry_id,

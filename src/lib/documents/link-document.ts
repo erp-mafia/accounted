@@ -29,7 +29,14 @@
  *     yet handled is stamped with the verifikat (stampInboxItemsForLinkedDocument,
  *     CAS on both link columns, so a supplier-invoice item never gets a second
  *     link). An inbox_item_id the caller sends no longer decides which item is
- *     stamped: an item that does not carry the document is never touched.
+ *     stamped: an item that does not carry the document is never touched;
+ *   - one underlag on several verifikat (a bank statement covering several
+ *     fees, a rättelse resting on the original's invoice) is a byte-identical
+ *     copy per verifikat, never a second link of the same row: with `copy`
+ *     a document another verifikat holds is copied onto this one
+ *     (linkDocumentCopyToVoucher) instead of refused. Without it the refusal
+ *     stands, since a second verifikat on the same receipt is usually the
+ *     same purchase booked twice.
  *
  * The triggers stay authoritative: a write that races past these checks is
  * still refused there, and linkToJournalEntry throws it typed
@@ -60,6 +67,12 @@ export interface LinkDocumentInput {
    * makes a link that stamped nothing worth a log line (see expectInboxItem).
    */
   inbox_item_id?: string | null
+  /**
+   * When another verifikat holds the document, link a byte-identical copy to
+   * this one instead of refusing (crm#1171 item 9). A document nothing else
+   * holds is linked itself, so the flag is safe to send on every call.
+   */
+  copy?: boolean
 }
 
 export interface LinkDocumentTarget {
@@ -67,6 +80,8 @@ export interface LinkDocumentTarget {
     id: string
     file_name: string
     mime_type: string | null
+    /** What the document is, when read (receipt, bank_statement, ...); null until typed. */
+    doc_type?: string | null
     journal_entry_id: string | null
     journal_entry_line_id: string | null
   }
@@ -111,8 +126,22 @@ export type LinkDocumentRefusal =
   | { ok: false; code: 'PERIOD_LOCKED'; details: { period: LinkDocumentPeriod } }
 
 export type LinkDocumentResult =
-  | { ok: true; dryRun: true; target: LinkDocumentTarget }
-  | { ok: true; dryRun: false; target: LinkDocumentTarget; document: DocumentAttachment }
+  | {
+      ok: true
+      dryRun: true
+      target: LinkDocumentTarget
+      /** The document a copy would be made of; null when the document itself is linked. */
+      copy_of_document_id: string | null
+    }
+  | {
+      ok: true
+      dryRun: false
+      target: LinkDocumentTarget
+      /** The row now on the verifikat: the document itself, or its copy. */
+      document: DocumentAttachment
+      /** The document the row is a copy of; null when the document itself was linked. */
+      copy_of_document_id: string | null
+    }
   | LinkDocumentRefusal
 
 /**
@@ -141,7 +170,7 @@ export async function checkDocumentLink(
   const [docRes, entryRes] = await Promise.all([
     supabase
       .from('document_attachments')
-      .select('id, file_name, mime_type, journal_entry_id, journal_entry_line_id')
+      .select('id, file_name, mime_type, doc_type, journal_entry_id, journal_entry_line_id')
       .eq('id', input.document_id)
       .eq('company_id', companyId)
       .maybeSingle(),
@@ -222,6 +251,11 @@ export async function checkDocumentLink(
  * nothing is written. Throws when the write itself fails (a trigger that
  * refused a racing change, a database fault).
  *
+ * With `input.copy`, a document another verifikat holds gets a byte-identical
+ * copy on this one (linkDocumentCopyToVoucher, which needs `userId`, the
+ * uploader of the copy); the result names the source in copy_of_document_id.
+ * A line change on the same verifikat is refused either way.
+ *
  * `expectInboxItem`: log a link that stamped no inbox item. Defaults to
  * whether the caller named one; the MCP doors pass true, since a document an
  * agent uploads always gets an inbox item, while a document uploaded straight
@@ -231,11 +265,30 @@ export async function linkDocumentToVoucher(
   supabase: SupabaseClient,
   companyId: string,
   input: LinkDocumentInput,
-  options: { dryRun?: boolean; expectInboxItem?: boolean } = {},
+  options: { dryRun?: boolean; expectInboxItem?: boolean; userId?: string } = {},
 ): Promise<LinkDocumentResult> {
   const check = await checkDocumentLink(supabase, companyId, input)
-  if (!check.ok) return check
-  if (options.dryRun) return { ok: true, dryRun: true, target: check.target }
+  if (!check.ok) {
+    if (input.copy && check.code === 'DOC_LINK_ALREADY_LINKED' && !check.details.line_change) {
+      if (options.dryRun) {
+        const copyCheck = await checkDocumentLink(supabase, companyId, input, { asCopy: true })
+        if (!copyCheck.ok) return copyCheck
+        return { ok: true, dryRun: true, target: copyCheck.target, copy_of_document_id: input.document_id }
+      }
+      if (!options.userId) throw new Error('document link: a copy needs the acting user')
+      const copied = await linkDocumentCopyToVoucher(supabase, companyId, options.userId, input)
+      if (!copied.ok) return copied
+      return {
+        ok: true,
+        dryRun: false,
+        target: copied.target,
+        document: copied.document,
+        copy_of_document_id: copied.source_document_id,
+      }
+    }
+    return check
+  }
+  if (options.dryRun) return { ok: true, dryRun: true, target: check.target, copy_of_document_id: null }
 
   const document = await linkToJournalEntry(
     supabase,
@@ -248,7 +301,7 @@ export async function linkDocumentToVoucher(
   await stampInboxItemsForLinkedDocument(supabase, companyId, input.document_id, input.journal_entry_id, {
     expectInboxItem: options.expectInboxItem ?? Boolean(input.inbox_item_id),
   })
-  return { ok: true, dryRun: false, target: check.target, document }
+  return { ok: true, dryRun: false, target: check.target, document, copy_of_document_id: null }
 }
 
 export type LinkDocumentCopyResult =
@@ -257,6 +310,8 @@ export type LinkDocumentCopyResult =
       /** The row now on the verifikat: the new copy, or one already there. */
       document: DocumentAttachment
       source_document_id: string
+      /** The source document and the verifikat, as the link rules read them. */
+      target: LinkDocumentTarget
       /** True when the verifikat already held these exact bytes: nothing was written. */
       reused: boolean
     }
@@ -316,7 +371,7 @@ export async function linkDocumentCopyToVoucher(
     .limit(1)
   if (presentError) throw dbError(presentError, 'document copy: target lookup failed')
   const already = (present as DocumentAttachment[] | null)?.[0]
-  if (already) return { ok: true, document: already, source_document_id: source.id, reused: true }
+  if (already) return { ok: true, document: already, source_document_id: source.id, target: check.target, reused: true }
 
   // The row was read through the caller's client, company-scoped; the
   // service role only fetches the bytes that row names (as the upload
@@ -345,5 +400,5 @@ export async function linkDocumentCopyToVoucher(
       extractionOwner: 'none',
     },
   )
-  return { ok: true, document, source_document_id: source.id, reused: false }
+  return { ok: true, document, source_document_id: source.id, target: check.target, reused: false }
 }

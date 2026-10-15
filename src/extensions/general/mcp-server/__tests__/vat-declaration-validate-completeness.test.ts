@@ -53,6 +53,9 @@ vi.mock('@/lib/reports/rc-basis-gaps', () => ({
 }))
 
 import { tools } from '../server'
+import { vatCheckFingerprint } from '@/lib/vat/check-reviews'
+import { runVatDeclarationChecks } from '@/lib/reports/vat-declaration-checks'
+import { withRcBasisGapFindings } from '@/lib/reports/vat-filing-gate'
 
 const validate = tools.find((t) => t.name === 'gnubok_vat_declaration_validate')!
 
@@ -231,6 +234,55 @@ describe('gnubok_vat_declaration_validate', () => {
     expect(result.completeness_checks.find((c) => c.code === 'RC_BASIS_MISSING')?.status)
       .toBe('WARNING')
     expect(result.completeness_ok).toBe(true)
+  })
+
+  // crm#1171: the user reviewed that advisory for the period. It is reported
+  // with its review and no longer counted as a warning to review.
+  it('reports a reviewed advisory with its review and leaves it out of the warning count', async () => {
+    const gaps = [{ entryId: 'je-1', rcOutputAccount: '2614', rcOutputAmount: 1250, missingBasisAmount: 5000 }]
+    mockFindRcBasisGaps.mockResolvedValue(gaps)
+    const rutor = makeRutor({ ruta20: 5000, ruta30: 1250, ruta48: 1250 })
+    const rcBasisByRate = { r25: 5000, r12: 0, r6: 0 }
+    const rcInputTotals = rcInput({ '2645': 1250 })
+    setDeclaration(rutor, rcInputTotals, rcBasisByRate)
+    skvOk()
+    const declaration = {
+      period: { type: 'monthly', year: 2026, period: 1, start: '2026-01-01', end: '2026-01-31' },
+      rutor,
+      rcInputAccountTotals: rcInputTotals,
+      rcBasisByRate,
+    }
+    const advisory = withRcBasisGapFindings(
+      runVatDeclarationChecks(rutor, new Map(Object.entries(rcInputTotals))),
+      { status: 'scanned', gapCount: 1 },
+      { rutor, rcBasisByRate },
+    ).find((c) => c.code === 'RC_BASIS_MISSING')!
+    const reviewRow = {
+      check_code: 'RC_BASIS_MISSING',
+      action: 'reviewed',
+      fingerprint: vatCheckFingerprint(advisory, { declaration: declaration as never, gaps }),
+      note: 'Rättelse A61',
+      source: 'web',
+      actor: 'user-1',
+      created_at: '2026-10-15T09:00:00Z',
+    }
+    const rows = (table: string) => (table === 'vat_check_reviews' ? [reviewRow] : [])
+    const chain = (table: string): Record<string, unknown> => {
+      const c: Record<string, unknown> = {}
+      for (const m of ['select', 'eq', 'in', 'order', 'limit']) c[m] = () => c
+      c.then = (resolve: (v: unknown) => void) => resolve({ data: rows(table), error: null })
+      return c
+    }
+    const db = { from: (table: string) => chain(table) } as never
+
+    const result = (await validate.execute(ARGS, 'company-1', 'user-1', db, { type: 'api_key' })) as ValidateResult & {
+      completeness_checks: Array<{ code: string; reviewable?: boolean; review?: { note: string | null } | null }>
+    }
+
+    const finding = result.completeness_checks.find((c) => c.code === 'RC_BASIS_MISSING')
+    expect(finding).toEqual(expect.objectContaining({ status: 'WARNING', reviewable: true, review: expect.objectContaining({ note: 'Rättelse A61' }) }))
+    expect(result.completeness_ok).toBe(true)
+    expect(result.summary).toContain('Vår kontroll av underlaget: inga fel.')
   })
 
   // #3387: the declaration carries the class 3 accounts that reach no ruta.

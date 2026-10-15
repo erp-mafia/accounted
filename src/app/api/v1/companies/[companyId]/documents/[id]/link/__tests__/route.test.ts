@@ -28,9 +28,16 @@ vi.mock('@/lib/entitlements/multi-user', async () => {
   return { ...actual, getMultiUserState: vi.fn().mockResolvedValue({ state: 'active' }), isMembershipDormant: () => false }
 })
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
+// The real rules run; a test can answer one call itself (the copy, which
+// would read and archive file bytes).
+vi.mock('@/lib/documents/link-document', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/documents/link-document')>()
+  return { ...actual, linkDocumentToVoucher: vi.fn(actual.linkDocumentToVoucher) }
+})
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { createTableMockSupabase } from '@/tests/helpers'
+import { linkDocumentToVoucher } from '@/lib/documents/link-document'
 import { POST as link } from '../route'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
@@ -188,12 +195,78 @@ describe('POST /documents/:id/link', () => {
     const res = await post({ journal_entry_id: JE_ID, inbox_item_id: INBOX_ID })
 
     expect(res.status).toBe(200)
-    expect((await res.json()).data).toEqual({ id: DOC_ID, journal_entry_id: JE_ID, journal_entry_line_id: null, file_name: 'kvitto.pdf' })
+    expect((await res.json()).data).toEqual({
+      id: DOC_ID, journal_entry_id: JE_ID, journal_entry_line_id: null, file_name: 'kvitto.pdf', copy_of_document_id: null,
+    })
     expect(client.calls).toContainEqual(
       expect.objectContaining({ table: 'document_attachments', method: 'update', args: [{ journal_entry_id: JE_ID, journal_entry_line_id: null }] }),
     )
     const inboxEq = client.calls.filter((c) => c.table === 'invoice_inbox_items' && c.method === 'eq').map((c) => c.args)
     expect(inboxEq).toContainEqual(['document_id', DOC_ID])
     expect(inboxEq).not.toContainEqual(['id', INBOX_ID])
+  })
+
+  describe('copy: true, one underlag on several verifikat (crm#1171 item 9)', () => {
+    const COPY_ID = '44444444-4444-4444-8444-444444444444'
+
+    it('the 409 for a document held elsewhere names copy: true as the way to share it', async () => {
+      mockServiceClient.mockReturnValue(makeClient({
+        company_members: MEMBER,
+        document_attachments: { data: { ...DOC, journal_entry_id: HOLDER_ID } },
+        journal_entries: [{ data: ENTRY }, { data: { status: 'posted', voucher_series: 'A', voucher_number: 22 } }],
+      }))
+
+      const { error } = await (await post({ journal_entry_id: JE_ID })).json()
+
+      expect(error.code).toBe('DOC_LINK_ALREADY_LINKED')
+      expect(error.details.message).toContain('send copy: true')
+    })
+
+    it('a dry run with copy previews a copy of a document another verifikat holds and writes nothing', async () => {
+      const client = makeClient({
+        company_members: MEMBER,
+        document_attachments: { data: { ...DOC, journal_entry_id: HOLDER_ID } },
+        // The plain check reads the verifikat and the holder; the copy check the verifikat again.
+        journal_entries: [{ data: ENTRY }, { data: { status: 'posted', voucher_series: 'A', voucher_number: 22 } }, { data: ENTRY }],
+        fiscal_periods: { data: OPEN },
+      })
+      mockServiceClient.mockReturnValue(client)
+
+      const res = await post({ journal_entry_id: JE_ID, copy: true }, { query: '?dry_run=true' })
+
+      expect(res.status).toBe(200)
+      expect((await res.json()).data.preview).toMatchObject({ id: DOC_ID, journal_entry_id: JE_ID, copy_of_document_id: DOC_ID })
+      expect(documentWrites(client)).toEqual([])
+      expect(client.calls.some((c) => c.table === 'document_attachments' && c.method === 'insert')).toBe(false)
+    })
+
+    it('passes copy and the acting user to the shared rules and answers with the copy and its source', async () => {
+      mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER }))
+      vi.mocked(linkDocumentToVoucher).mockResolvedValueOnce({
+        ok: true,
+        dryRun: false,
+        target: { document: { ...DOC, journal_entry_id: HOLDER_ID }, entry: ENTRY },
+        document: { id: COPY_ID, file_name: 'kvitto.pdf', journal_entry_id: JE_ID, journal_entry_line_id: null } as never,
+        copy_of_document_id: DOC_ID,
+      })
+
+      const res = await post({ journal_entry_id: JE_ID, copy: true })
+
+      expect(res.status).toBe(200)
+      expect((await res.json()).data).toEqual({
+        id: COPY_ID, journal_entry_id: JE_ID, journal_entry_line_id: null, file_name: 'kvitto.pdf', copy_of_document_id: DOC_ID,
+      })
+      expect(vi.mocked(linkDocumentToVoucher)).toHaveBeenCalledWith(
+        expect.anything(),
+        COMPANY_ID,
+        expect.objectContaining({ document_id: DOC_ID, journal_entry_id: JE_ID, copy: true }),
+        expect.objectContaining({ userId: 'user-1' }),
+      )
+    })
+
+    it('400 for a copy that is not a boolean', async () => {
+      mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER }))
+      expect((await post({ journal_entry_id: JE_ID, copy: 'yes' })).status).toBe(400)
+    })
   })
 })

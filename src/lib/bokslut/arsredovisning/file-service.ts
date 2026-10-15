@@ -31,6 +31,7 @@ import type { IxbrlArsredovisningInput } from '@/lib/bokslut/ixbrl/types'
 import { buildCanonicalAnnualReport } from './model'
 import { getAnnualReportVersion } from './version-service'
 import { getVersionIxbrlInput } from './version-ixbrl'
+import { pdfModeForVersionStatus } from './signature-pages'
 import type { ArsredovisningData } from './types'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
@@ -83,7 +84,10 @@ export async function getArsredovisningPdfFile(
       // K3 documents need the kassaflöde + equity-changes pages and the
       // richer noter; K2 (the default) keeps its template unchanged.
       const PdfComponent = data.accounting_framework === 'k3' ? ArsredovisningK3PDF : ArsredovisningPDF
-      const bytes = await renderToBuffer(PdfComponent({ data }))
+      // Only a version locked for signature prints blank signature and
+      // intyg lines to fill in by hand; the live draft and versionsutkast
+      // explain those pages instead (crm#1171, crm#1172).
+      const bytes = await renderToBuffer(PdfComponent({ data, mode: pdfModeForVersionStatus(versionStatus) }))
       // "-utkast" until the version is signed; sanitised so a stray quote or
       // newline in the date can never break the header.
       const safePeriodEnd = data.fiscal_period.period_end.replace(/[^\w.-]/g, '_')

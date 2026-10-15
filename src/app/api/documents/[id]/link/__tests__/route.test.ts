@@ -24,7 +24,15 @@ vi.mock('@/lib/init', () => ({
   ensureInitialized: vi.fn(),
 }))
 
+// The real rules run; a test can answer one call itself (a copy reads and
+// archives file bytes).
+vi.mock('@/lib/documents/link-document', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/documents/link-document')>()
+  return { ...actual, linkDocumentToVoucher: vi.fn(actual.linkDocumentToVoucher) }
+})
+
 import { POST } from '../route'
+import { linkDocumentToVoucher } from '@/lib/documents/link-document'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { NextResponse } from 'next/server'
 
@@ -294,5 +302,67 @@ describe('POST /api/documents/[id]/link', () => {
     expect(body.error.code).toBe('DOC_LINK_ENTRY_NOT_FOUND')
     expect(findCalls('document_attachments', 'update')).toHaveLength(0)
     expect(mockSupabase.from).not.toHaveBeenCalledWith('invoice_inbox_items')
+  })
+
+  describe('copy: true, one underlag on several verifikat (crm#1171 item 9)', () => {
+    const copyResult = {
+      ok: true as const,
+      dryRun: false as const,
+      target: {
+        document: { id: 'doc-1', file_name: 'kontoutdrag.pdf', mime_type: 'application/pdf', journal_entry_id: OTHER_JE_ID, journal_entry_line_id: null },
+        entry: { id: JE_ID, entry_date: '2026-09-22', description: 'Bankavgift', voucher_series: 'A', voucher_number: 23, status: 'posted', fiscal_period_id: null },
+      },
+      document: { id: 'copy-1', file_name: 'kontoutdrag.pdf', journal_entry_id: JE_ID, journal_entry_line_id: null } as never,
+      copy_of_document_id: 'doc-1',
+    }
+
+    it('passes copy and the signed-in user to the shared rules and answers with the copy and its source', async () => {
+      vi.mocked(linkDocumentToVoucher).mockResolvedValueOnce(copyResult)
+
+      const res = await POST(makeReq({ journal_entry_id: JE_ID, copy: true }), createMockRouteParams({ id: 'doc-1' }))
+      const { status, body } = await parseJsonResponse<{ data: { id: string }; copy_of_document_id: string | null }>(res)
+
+      expect(status).toBe(200)
+      expect(body.data.id).toBe('copy-1')
+      expect(body.copy_of_document_id).toBe('doc-1')
+      expect(vi.mocked(linkDocumentToVoucher)).toHaveBeenCalledWith(
+        mockSupabase,
+        'company-1',
+        expect.objectContaining({ document_id: 'doc-1', journal_entry_id: JE_ID, copy: true }),
+        { userId: 'user-1' },
+      )
+    })
+
+    it('pins the copy, the row on this verifikat, to the transaction', async () => {
+      vi.mocked(linkDocumentToVoucher).mockResolvedValueOnce(copyResult)
+      enqueue({ data: null }) // transaction pin update
+
+      const res = await POST(makeReq({ journal_entry_id: JE_ID, copy: true, transaction_id: TX_ID }), createMockRouteParams({ id: 'doc-1' }))
+
+      expect(res.status).toBe(200)
+      expect(findCalls('transactions', 'update')).toEqual([[{ document_id: 'copy-1' }]])
+    })
+
+    it('answers a plain link with copy_of_document_id null', async () => {
+      enqueue({ data: { id: 'doc-1', file_name: 'x.pdf', mime_type: 'application/pdf', journal_entry_id: null, journal_entry_line_id: null } })
+      enqueue({ data: { id: JE_ID, status: 'posted', fiscal_period_id: null } })
+      enqueue({ data: { id: JE_ID } })
+      enqueue({ data: { id: 'doc-1', journal_entry_id: JE_ID, file_name: 'x.pdf' } })
+      enqueue({ data: [] }) // inbox stamp
+
+      const res = await POST(makeReq({ journal_entry_id: JE_ID, copy: true }), createMockRouteParams({ id: 'doc-1' }))
+      const { status, body } = await parseJsonResponse<{ data: { id: string }; copy_of_document_id: string | null }>(res)
+
+      expect(status).toBe(200)
+      expect(body.data.id).toBe('doc-1')
+      expect(body.copy_of_document_id).toBeNull()
+    })
+
+    it('rejects a copy flag that is not a boolean', async () => {
+      const res = await POST(makeReq({ journal_entry_id: JE_ID, copy: 'yes' }), createMockRouteParams({ id: 'doc-1' }))
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+      expect(status).toBe(400)
+      expect(body.error.code).toBe('VALIDATION_ERROR')
+    })
   })
 })

@@ -340,6 +340,7 @@ import {
   getScopedReconciliationStatus,
   toCompletenessFindings,
   vatFilingVerdict,
+  vatFilingVerdictWithReviews,
 } from '@/lib/reports/vat-close-check'
 import { describeAliasConflicts, describeArgHint, normalizeReportArgAliases } from './report-arg-aliases'
 import { decodeToolArgs } from './unicode-escape-guard'
@@ -2464,17 +2465,30 @@ function lockedLinkPeriod(
 /**
  * What a refused link says when the document belongs to another verifikat
  * and this one needs the same underlag (crm#1207: a rättelse resting on the
- * original's invoice). Re-uploading the file is no way out: the signed-URL
- * upload returns the existing document for identical bytes, and an agent
- * then changed a byte to get a new id. A copy row in the bulk tool archives
- * a byte-identical copy at approval instead.
+ * original's invoice; crm#1171 item 9: one bank statement, several fees).
+ * Re-uploading the file is no way out: the signed-URL upload returns the
+ * existing document for identical bytes, and an agent then changed a byte to
+ * get a new id. copy: true archives a byte-identical copy at approval instead.
  */
-function sharedUnderlagCopyHint(documentId: string, journalEntryId: string): string {
+function sharedUnderlagCopyHint(): string {
   return (
-    'If this verifikat needs the same underlag too (a correction resting on the original\'s invoice, a statement covering ' +
-    'several fees), stage gnubok_link_documents_to_vouchers with links: [{ document_id: ' +
-    `"${documentId}", journal_entry_id: "${journalEntryId}", copy: true }]: approval archives a byte-identical copy ` +
-    'on this verifikat and the original stays where it is. Do not re-upload or alter the file.'
+    'If this verifikat needs the same underlag too (a statement covering several fees, a correction resting on the ' +
+    'original\'s invoice), stage this link again with copy: true: approval archives a byte-identical copy on this ' +
+    'verifikat and the original stays where it is. Do not re-upload or alter the file.'
+  )
+}
+
+/**
+ * The approver's note on a staged copy of a receipt or an invoice: the same
+ * one on two verifikat is more often one purchase booked twice than one
+ * underlag backing two events (an invoice paid in parts is the exception).
+ */
+const DOUBLE_BOOKING_DOC_TYPES = new Set(['receipt', 'supplier_invoice', 'customer_invoice'])
+function copyDoubleBookingNote(docType: string | null | undefined): string | null {
+  if (!docType || !DOUBLE_BOOKING_DOC_TYPES.has(docType)) return null
+  return (
+    'Underlaget är ett kvitto eller en faktura som redan styrker en annan verifikation. Samma köp kan då bli bokfört två ' +
+    'gånger: godkänn kopian bara om underlaget verkligen styrker båda, till exempel en faktura som betalas i flera delar.'
   )
 }
 
@@ -16090,17 +16104,19 @@ export const tools: McpTool[] = [
     keywords: ['koppla underlag', 'verifikat', 'kvitto'],
     title: 'Link Document to Voucher',
     // The bulk tool is search-only, so this description is where an agent
-    // linking 130 receipts one at a time learns it exists (crm#1207). Paid
-    // for by the two property descriptions below: tools/list sits at its
-    // ceiling (payload-size.bench.test.ts).
-    description: 'Stage linking a document to a POSTED verifikation (no bank-tx row); unbooked: gnubok_create_voucher with inbox_item_id (BFL 5 kap 6§). Targets: gnubok_list_verifikat_without_documents via gnubok_call_tool. Many links, or a shared underlag: gnubok_link_documents_to_vouchers.',
+    // linking 130 receipts one at a time learns it exists (crm#1207). copy
+    // (crm#1171 item 9) is paid for by the shorter description and the
+    // dropped document_id description: tools/list sits at its ceiling
+    // (payload-size.bench.test.ts).
+    description: 'Stage linking a document to a POSTED verifikation (no bank-tx row); unbooked: gnubok_create_voucher with inbox_item_id (BFL 5 kap 6§). Targets: gnubok_list_verifikat_without_documents via gnubok_call_tool. Many links: gnubok_link_documents_to_vouchers.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        document_id: { type: 'string', description: 'Document UUID' },
+        document_id: { type: 'string' },
         journal_entry_id: { type: 'string', description: 'Verifikat UUID' },
-        journal_entry_line_id: { type: 'string', description: 'Optional UUID to pin the doc to a specific debit/credit line' },
+        journal_entry_line_id: { type: 'string', description: 'Pin to one line' },
+        copy: { type: 'boolean', description: 'Already on another verifikat: archive an identical copy' },
         ...STAGING_ARGS_PROPERTIES,
       },
       required: ['document_id', 'journal_entry_id'],
@@ -16112,6 +16128,7 @@ export const tools: McpTool[] = [
       const documentId = args.document_id as string
       const journalEntryId = args.journal_entry_id as string
       const journalEntryLineId = typeof args.journal_entry_line_id === 'string' ? args.journal_entry_line_id : undefined
+      const wantsCopy = args.copy === true
       if (!documentId) throw badArgument('document_id', 'document_id is required')
       if (!journalEntryId) throw badArgument('journal_entry_id', 'journal_entry_id is required')
 
@@ -16121,18 +16138,26 @@ export const tools: McpTool[] = [
       // Staging a link the commit refuses only moved the refusal to approval:
       // a preview that looked fine, then a failure in /pending (agent
       // feedback seq 932068, 824135). Refused here, dry_run included.
-      const check = await checkDocumentLink(supabase, companyId, {
+      const linkInput = {
         document_id: documentId,
         journal_entry_id: journalEntryId,
         journal_entry_line_id: journalEntryLineId ?? null,
-      })
+      }
+      let check = await checkDocumentLink(supabase, companyId, linkInput)
+      // Held by another verifikat and copy asked for: every other rule still
+      // applies to this verifikat, and approval archives a copy (crm#1171 item 9).
+      let copy = false
+      if (!check.ok && wantsCopy && check.code === 'DOC_LINK_ALREADY_LINKED' && !check.details.line_change) {
+        copy = true
+        check = await checkDocumentLink(supabase, companyId, linkInput, { asCopy: true })
+      }
       if (!check.ok) {
         if (check.code === 'DOC_LINK_ALREADY_LINKED') {
           throw codedRefusal(
             'DOC_LINK_ALREADY_LINKED',
             check.details.line_change
               ? `The document is already linked to a line of this verifikat (journal_entry_line_id cannot change once set, BFL 5 kap 6 §).`
-              : `${documentHeldElsewhereReasonEn(check.details.holder)} ${sharedUnderlagCopyHint(documentId, journalEntryId)}`,
+              : `${documentHeldElsewhereReasonEn(check.details.holder)} ${sharedUnderlagCopyHint()}`,
           )
         }
         if (check.code === 'PERIOD_LOCKED') {
@@ -16164,33 +16189,47 @@ export const tools: McpTool[] = [
       // Another waiting proposal links this document to a different
       // verifikat: whichever is approved second is refused by the same
       // immutability trigger, so the warning used to invite an approval that
-      // could never commit (crm#1158). Refused here, dry_run included.
+      // could never commit (crm#1158). Refused here, dry_run included, unless
+      // this link is a copy, which leaves the document to the other proposal.
       const proposedElsewhere = conflictingVoucherClaims(claims, journalEntryId)
       if (proposedElsewhere.length > 0) {
-        throw codedRefusal(
-          'DOC_LINK_PROPOSED_ELSEWHERE',
-          `The document is already proposed for another verifikat: ${proposedElsewhere
-            .map((c) => `pending operation ${c.operation_id} (journal_entry_id ${c.journal_entry_id})`)
-            .join('; ')}. A document can be linked to only one verifikat, so at most one of these links can be approved. ` +
-            `${sharedUnderlagCopyHint(documentId, journalEntryId)} If the other proposal is the wrong one, reject it ` +
-            'with gnubok_reject_pending_operation first, then stage this link again.',
-        )
+        if (wantsCopy) {
+          copy = true
+        } else {
+          throw codedRefusal(
+            'DOC_LINK_PROPOSED_ELSEWHERE',
+            `The document is already proposed for another verifikat: ${proposedElsewhere
+              .map((c) => `pending operation ${c.operation_id} (journal_entry_id ${c.journal_entry_id})`)
+              .join('; ')}. A document can be linked to only one verifikat, so at most one of these links can be approved. ` +
+              `${sharedUnderlagCopyHint()} If the other proposal is the wrong one, reject it ` +
+              'with gnubok_reject_pending_operation first, then stage this link again.',
+          )
+        }
       }
-      const sharedNote = sharedDocumentWarning(claims, { journal_entry_id: journalEntryId })
+      // A copy claims nothing, so the shared-document warning (only one
+      // verifikat can hold it) does not apply to it; a receipt or an invoice
+      // copied onto a second verifikat gets the double-booking note instead.
+      const note = copy ? copyDoubleBookingNote(doc.doc_type) : sharedDocumentWarning(claims, { journal_entry_id: journalEntryId })
 
       return stage({
         supabase,
         companyId,
         userId,
         type: 'link_document_to_voucher',
-        title: `Koppla bilaga: ${doc.file_name} → verifikat ${voucherLabel}`,
-        params: { document_id: documentId, journal_entry_id: journalEntryId, journal_entry_line_id: journalEntryLineId ?? null },
+        title: `${copy ? 'Koppla kopia av bilaga' : 'Koppla bilaga'}: ${doc.file_name} → verifikat ${voucherLabel}`,
+        params: {
+          document_id: documentId,
+          journal_entry_id: journalEntryId,
+          journal_entry_line_id: journalEntryLineId ?? null,
+          ...(copy ? { copy: true } : {}),
+        },
         preview: {
           document_file_name: doc.file_name,
           document_mime_type: doc.mime_type,
           document_already_linked: currentlyLinkedToSameJe,
           document_currently_linked_to_other: currentlyLinkedToOther,
           document_current_journal_entry_id: doc.journal_entry_id ?? null,
+          ...(copy ? { copy: true } : {}),
           voucher_label: voucherLabel,
           voucher_date: je.entry_date,
           voucher_description: je.description,
@@ -16200,7 +16239,7 @@ export const tools: McpTool[] = [
         actor,
         ...stagingOptions(args),
         dateForPeriodCheck: je.entry_date,
-        ...(sharedNote ? { complianceNote: sharedNote } : {}),
+        ...(note ? { complianceNote: note } : {}),
         // Two waiting already, this is the third: an agent working down a
         // list, each link its own approval (crm#1207: 131 of them). Said at
         // the third and then every tenth, not on every call: in prod 65 % of
@@ -17369,7 +17408,10 @@ export const tools: McpTool[] = [
       // from: the gate every filing path refuses on.
       const { redovisare, redovisningsperiod, momsuppgift, declaration } =
         await buildMomsuppgift(supabase, companyId, { periodType, year, period })
-      const { checks: completenessChecks, blocked } = await vatFilingVerdict(supabase, companyId, declaration)
+      // Reviewed warnings (crm#1171) are reported with their review and no
+      // longer counted as warnings to review; blocked is the same either way.
+      const { checks: completenessChecks, blocked, inputs: reviewInputs } =
+        await vatFilingVerdictWithReviews(supabase, companyId, declaration)
       const completenessOk = !blocked
 
       try {
@@ -17386,7 +17428,7 @@ export const tools: McpTool[] = [
         const skvErrors = countSkvKontrollErrors(kontrollresultat)
         const arithmeticOk = skvErrors === 0
         const errorCount = completenessChecks.filter((c) => c.status === 'ERROR').length
-        const warningCount = completenessChecks.length - errorCount
+        const warningCount = completenessChecks.filter((c) => c.status === 'WARNING' && !c.review).length
         return {
           redovisare,
           redovisningsperiod,
@@ -17394,7 +17436,7 @@ export const tools: McpTool[] = [
           kontrollresultat,
           arithmetic_ok: arithmeticOk,
           completeness_ok: completenessOk,
-          completeness_checks: toCompletenessFindings(completenessChecks),
+          completeness_checks: toCompletenessFindings(completenessChecks, reviewInputs),
           summary: [
             arithmeticOk
               ? 'Skatteverket: räknar ihop utan fel (kontrollerar bara summorna, inte underlaget).'

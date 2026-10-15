@@ -1299,6 +1299,10 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // through which date with the numbers as they stood, plus reopen stamps.
   // Part of the avstämningsdokumentation an auditor asks for; kept.
   { name: 'account_reconciliations', file: 'account_reconciliations.json', orderBy: 'signed_at' },
+  // Reviews of momsdeklaration warnings: who accepted which WARNING for which
+  // VAT period, with the fingerprint of the figures and the note. Part of the
+  // record of how the declaration was checked, so it is kept (crm#1171).
+  { name: 'vat_check_reviews', file: 'vat_check_reviews.json', orderBy: 'created_at' },
   // Verifikat settled against each other in a reconciliation (a wrong
   // verifikat and the rättelse booked by hand): which, by whom, when, and the
   // undo stamps. The reason those verifikat are not open items; kept with the
