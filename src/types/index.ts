@@ -559,6 +559,9 @@ export interface CompanySettings {
   // overrides it per invoice.
   invoice_qr_mode: InvoiceQrMode
   invoice_show_logo: boolean
+  // Print the article number column on the invoice PDF and send it as the
+  // seller's item identifier in the e-invoice (default false, crm#1084).
+  invoice_show_article_number?: boolean
   invoice_show_company_name: boolean
   invoice_company_name_position: 'header' | 'footer'
   invoice_late_fee_text: string | null
@@ -1747,6 +1750,10 @@ export interface InvoiceItem {
   // booking in generatePerRateLines().
   article_id?: string | null
   revenue_account?: string | null
+  /** The article's number, frozen-copied at line-create time like revenue_account
+   *  (crm#1084). Printed when company_settings.invoice_show_article_number is on;
+   *  null on free-text rows and on lines written before the column existed. */
+  article_number?: string | null
 
   // Kundorder line this invoice line was created from. The order line's
   // invoiced quantity is DERIVED from these links (never stored), so an

@@ -431,7 +431,7 @@ POST /companies/{companyId}/transactions/{id}/match-supplier-invoice : Match a n
 POST /companies/{companyId}/transactions/{id}/refresh-exchange-rate : Fill in the Riksbanken rate and SEK amount of an unbooked foreign-currency transaction [scope:transactions:write risk:low idempotent dry-run]
 POST /companies/{companyId}/transactions/{id}/uncategorize : Reverse the categorization of a transaction (storno + reset) [scope:transactions:write risk:medium idempotent dry-run]
 POST /companies/{companyId}/transactions/batch-categorize : Categorize up to 100 transactions in one call (partial-success) [scope:transactions:write risk:medium idempotent dry-run reversible]
-POST /companies/{companyId}/transactions/bulk-book : Book several same-day SEK bank transactions as one samlingsverifikat [scope:transactions:write risk:high idempotent dry-run]
+POST /companies/{companyId}/transactions/bulk-book : Book several SEK bank transactions as one samlingsverifikat, or link them to one posted verifikat [scope:transactions:write risk:high idempotent dry-run]
 POST /companies/{companyId}/transactions/ingest : Bulk-ingest transactions (up to 500 per call) [scope:transactions:write risk:medium idempotent dry-run]
 ```
 

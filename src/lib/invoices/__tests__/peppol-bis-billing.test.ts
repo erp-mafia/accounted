@@ -696,3 +696,39 @@ describe('generatePeppolBisBillingInvoice', () => {
     })
   })
 })
+
+// crm#1084: the article number frozen on the line travels as BT-155 (Item
+// Seller's identifier) when the company prints article numbers.
+describe('generatePeppolBisBillingInvoice: article number', () => {
+  function inputWithArticleLine(showArticleNumber: boolean | undefined) {
+    const input = makeValidInput()
+    input.company = makeCompanySettings({ ...input.company, invoice_show_article_number: showArticleNumber })
+    input.items = [
+      { ...input.items[0], article_id: 'art-1', article_number: 'A-<100>' },
+      { ...input.items[1], article_id: null, article_number: null },
+    ]
+    return input
+  }
+
+  it('sends the number as SellersItemIdentification, after Name and before ClassifiedTaxCategory', () => {
+    const result = generatePeppolBisBillingInvoice(inputWithArticleLine(true))
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const firstLine = result.xml.slice(result.xml.indexOf('<cac:InvoiceLine>'), result.xml.indexOf('</cac:InvoiceLine>'))
+    expect(firstLine).toContain('<cac:SellersItemIdentification>\n        <cbc:ID>A-&lt;100&gt;</cbc:ID>\n      </cac:SellersItemIdentification>')
+    expect(firstLine.indexOf('<cbc:Name>')).toBeLessThan(firstLine.indexOf('<cac:SellersItemIdentification>'))
+    expect(firstLine.indexOf('<cac:SellersItemIdentification>')).toBeLessThan(firstLine.indexOf('<cac:ClassifiedTaxCategory>'))
+    // The free-text line carries none.
+    expect(result.xml.split('<cac:SellersItemIdentification>')).toHaveLength(2)
+  })
+
+  it('sends no seller item identifier while the setting is off', () => {
+    for (const setting of [false, undefined]) {
+      const result = generatePeppolBisBillingInvoice(inputWithArticleLine(setting))
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.xml).not.toContain('SellersItemIdentification')
+    }
+  })
+})

@@ -48,6 +48,7 @@ export const PDF_LABELS = {
     orgNo: 'Org.nr:',
     vat: 'VAT:',
     // Table columns
+    colArticleNumber: 'Art.nr',
     colDescription: 'Beskrivning',
     colQty: 'Antal',
     colUnitPrice: 'à-pris',
@@ -131,6 +132,7 @@ export const PDF_LABELS = {
     custNo: 'Customer no.:',
     orgNo: 'Reg. no.:',
     vat: 'VAT:',
+    colArticleNumber: 'Item no.',
     colDescription: 'Description',
     colQty: 'Qty',
     colUnitPrice: 'Unit price',

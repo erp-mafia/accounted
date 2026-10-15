@@ -77,7 +77,7 @@ function enqueueHappyPath(
   enqueue({ data: articleRows, error: null })
   enqueue({ data: { vat_registered: true }, error: null })
   enqueue({ data: [{ account_number: '3041' }], error: null })
-  enqueue({ data: articleRows.map((row) => ({ id: row.id })), error: null })
+  enqueue({ data: articleRows.map((row) => ({ id: row.id, article_number: row.article_number ?? null })), error: null })
   enqueue({ data: null, error: null })
   enqueue({ data: null, error: null })
   enqueue({ data: { id: 'op-1' }, error: null })
@@ -340,5 +340,45 @@ describe('gnubok_create_invoice: free-text rows (issue #1642 follow-up)', () => 
     expect(result.preview.subtotal).toBe(2000)
     expect(result.preview.vat_amount).toBe(500)
     expect(result.preview.total).toBe(2500)
+  })
+})
+
+describe('gnubok_create_invoice: article line text follows the customer language (crm#1084)', () => {
+  const BILINGUAL = { ...ARTICLE, name_en: 'Consulting hour', article_number: 'A-100' }
+
+  async function stage(customer: Record<string, unknown>, article: Record<string, unknown>, line: Record<string, unknown> = {}) {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueHappyPath(enqueue, customer, [article])
+    return (await createInvoice.execute(
+      {
+        customer_id: customer.id,
+        invoice_date: '2026-05-12',
+        items: [{ article_id: ARTICLE_ID, quantity: 1, ...line }],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: { items: Array<Record<string, unknown>> } }
+  }
+
+  it('takes the English name for a customer whose language is en', async () => {
+    const result = await stage({ ...EU_CUSTOMER, language: 'en' }, BILINGUAL)
+    expect(result.staged).toBe(true)
+    expect(result.preview.items[0]).toMatchObject({ description: 'Consulting hour', article_id: ARTICLE_ID })
+  })
+
+  it('keeps the Swedish name for a Swedish-language customer', async () => {
+    const result = await stage({ ...CUSTOMER, language: 'sv' }, BILINGUAL)
+    expect(result.preview.items[0]).toMatchObject({ description: 'Konsulttimme' })
+  })
+
+  it('falls back to the Swedish name when the article has no English name', async () => {
+    const result = await stage({ ...EU_CUSTOMER, language: 'en' }, { ...ARTICLE, name_en: null })
+    expect(result.preview.items[0]).toMatchObject({ description: 'Konsulttimme' })
+  })
+
+  it("never overrides the agent's own description", async () => {
+    const result = await stage({ ...EU_CUSTOMER, language: 'en' }, BILINGUAL, { description: 'Senior consulting, May' })
+    expect(result.preview.items[0]).toMatchObject({ description: 'Senior consulting, May' })
   })
 })

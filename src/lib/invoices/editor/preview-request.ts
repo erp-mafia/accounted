@@ -10,7 +10,8 @@ import {
  * /api/invoices/preview-pdf and preview-email), built from the same form
  * values and through the same body builder as the write path, so what the
  * preview prints is what the saved invoice prints. The preview schemas strip
- * the keys they do not render (article links, accounts, dimensions).
+ * the keys they do not render (accounts, dimensions); the article link stays
+ * for the article number column.
  */
 
 export interface QuoteValidityFields {

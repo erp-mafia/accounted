@@ -349,6 +349,44 @@ describe('POST /api/invoices/[id]/convert', () => {
       expect(updates.some((u) => u.quote_status === 'accepted')).toBe(true)
       expect(updates.some((u) => u.status === 'cancelled')).toBe(false)
     })
+
+    // crm#1084: the invoice prints what the accepted quote printed. The line
+    // text (in the customer's language) and the article number travel from
+    // the quote's own line; the article is never read again.
+    it("carries each quote line's text and article number onto the invoice", async () => {
+      const quoteLine = {
+        sort_order: 0,
+        description: 'Consulting hour',
+        quantity: 10,
+        unit: 'tim',
+        unit_price: 1000,
+        line_total: 10000,
+        article_id: 'art-1',
+        article_number: 'A-100',
+      }
+      const freeLine = { ...baseProforma.items[0], sort_order: 1 }
+      enqueue({ data: { ...baseQuote, items: [quoteLine, freeLine] }, error: null })
+      enqueue({ data: null, error: null })
+      enqueue({ data: null, count: 0, error: null })
+      enqueue({ data: { id: 'inv-1', invoice_number: null, document_type: 'invoice' }, error: null })
+      enqueue({ data: null, error: null })
+      enqueue({ data: [{ id: 'q-1' }], error: null })
+      enqueue({ data: 'F-043', error: null })
+      enqueue({ data: { id: 'inv-1', invoice_number: 'F-043', document_type: 'invoice', items: [] }, error: null })
+
+      const response = await POST(
+        createMockRequest('/api/invoices/q-1/convert', { method: 'POST' }),
+        createMockRouteParams({ id: 'q-1' })
+      )
+
+      expect(response.status).toBe(200)
+      const rows = findCall('invoice_items', 'insert')?.[0] as Array<Record<string, unknown>>
+      expect(rows.map((r) => [r.description, r.article_id, r.article_number])).toEqual([
+        ['Consulting hour', 'art-1', 'A-100'],
+        ['Konsultation', null, null],
+      ])
+      expect(mockSupabase.from).not.toHaveBeenCalledWith('articles')
+    })
   })
 
   describe('foreign-currency sources', () => {

@@ -56,6 +56,7 @@ import {
   type NextStep,
 } from '@/components/invoices/invoice-editor-flow'
 import { sortArticles } from '@/lib/articles/sort'
+import { articleLineName, documentLanguageOf, planArticleNameSwap, type DocumentLanguage } from '@/lib/articles/line-name'
 import ArticleCombobox from '@/components/invoices/ArticleCombobox'
 import { getAmountToPay } from '@/lib/invoices/rounding'
 import { computeLineNet, hasLineDiscount } from '@/lib/invoices/line-amounts'
@@ -232,7 +233,7 @@ export type InvoiceEditorProps = (
 // Subset of Article fields the line picker needs to pre-fill a row.
 type ArticleOption = Pick<
   Article,
-  'id' | 'article_number' | 'name' | 'type' | 'unit' | 'price_excl_vat' | 'vat_rate' | 'revenue_account' | 'currency' | 'housework_type'
+  'id' | 'article_number' | 'name' | 'name_en' | 'type' | 'unit' | 'price_excl_vat' | 'vat_rate' | 'revenue_account' | 'currency' | 'housework_type'
 >
 
 function RequiredMark() {
@@ -686,6 +687,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // Numeric-aware order by article number ('2' before '10', unnumbered last):
   // the picker should follow the user's own numbering, not the alphabet.
   const articles = useMemo(() => sortArticles(articleRows as ArticleOption[]), [articleRows])
+  // Read by the customer-switch effect without making it re-run (and re-fill
+  // the due date) every time the article list refreshes.
+  const articlesRef = useRef<ArticleOption[]>(articles)
+  useEffect(() => {
+    articlesRef.current = articles
+  }, [articles])
   const [savingArticleIndex, setSavingArticleIndex] = useState<number | null>(null)
   // Active balance-sheet and revenue accounts for the optional per-line
   // posting override, plus which rows currently show that picker.
@@ -765,6 +772,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // correct, so the first resolution must only RECORD the baseline, never snap.
   // A fresh form has no such baseline, so there the first pick does snap.
   const didSeedVatSnapBaseline = useRef(!(isEditMode || isCopyMode))
+  // The document language of the customer currently selected (crm#1084). A
+  // customer switch moves the article lines still carrying the article's name
+  // in this language to the new one. A fresh form's lines are filled in
+  // Swedish until a customer is picked; edit and copy record the saved
+  // invoice's language on the first resolution (didSeedVatSnapBaseline).
+  const previousLanguageRef = useRef<DocumentLanguage>('sv')
   // The Er referens the editor filled in from the customer card itself
   // (lib/invoices/editor/customer-reference.ts); null once it is the user's.
   const prefilledReferenceRef = useRef<string | null>(null)
@@ -1028,7 +1041,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     const a = articles.find((x) => x.id === articleId)
     if (!a) return
     setValue(`items.${index}.article_id`, a.id, { shouldDirty: true })
-    setValue(`items.${index}.description`, a.name, { shouldValidate: true, shouldDirty: true })
+    // The English benämning on an invoice to an English-language customer.
+    setValue(`items.${index}.description`, articleLineName(a, documentLanguageOf(selectedCustomer)), {
+      shouldValidate: true,
+      shouldDirty: true,
+    })
     if (a.unit) setValue(`items.${index}.unit`, a.unit, { shouldDirty: true })
     setValue(`items.${index}.unit_price`, Number(a.price_excl_vat) || 0, { shouldValidate: true, shouldDirty: true })
     // Only adopt the article's VAT rate when it belongs to the customer's
@@ -1616,8 +1633,19 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             })) {
               setValue(`items.${snap.index}.vat_rate`, snap.rate)
             }
+            // Article lines follow the new customer's language, unless the
+            // user changed their text (planArticleNameSwap).
+            for (const swap of planArticleNameSwap({
+              items: getValues('items') ?? [],
+              articles: articlesRef.current,
+              from: previousLanguageRef.current,
+              to: documentLanguageOf(customer),
+            })) {
+              setValue(`items.${swap.index}.description`, swap.description, { shouldDirty: true })
+            }
           }
         }
+        previousLanguageRef.current = documentLanguageOf(customer)
         previousDefaultRateRef.current = nextDefaultRate
         didSeedVatSnapBaseline.current = true
         didInitialCustomerSync.current = true
@@ -2873,7 +2901,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const todayIso = format(new Date(), 'yyyy-MM-dd')
   // The document's language follows the customer card (there is no
   // per-invoice language): English drops the OCR row and relabels the PDF.
-  const documentLanguage: 'sv' | 'en' = selectedCustomer?.language === 'en' ? 'en' : 'sv'
+  const documentLanguage: DocumentLanguage = documentLanguageOf(selectedCustomer)
   // The invoice date against the lock date and the fiscal periods, only where
   // sending books on it (a faktura under faktureringsmetoden).
   const dateLock =

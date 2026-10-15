@@ -53,6 +53,14 @@ describe('buildCreditNoteItem', () => {
     })
   })
 
+  it('prints the article number the original printed (crm#1084)', () => {
+    expect(buildCreditNoteItem('credit-1', item({ article_id: 'art-1', article_number: 'A-100' }))).toMatchObject({
+      article_id: 'art-1',
+      article_number: 'A-100',
+    })
+    expect(buildCreditNoteItem('credit-1', item()).article_number).toBeNull()
+  })
+
   it('carries discount_percent so the kreditfaktura face arithmetic multiplies out', () => {
     // Original: 2 x 1000 with 10% rabatt → net 1800. The credit row must keep
     // the discount, or -2 x 1000 next to Summa -1800 prints with no visible

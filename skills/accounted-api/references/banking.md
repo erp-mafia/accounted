@@ -4448,16 +4448,16 @@ Example response `200`:
 
 ### `POST /api/v1/companies/{companyId}/transactions/bulk-book`
 
-**Book several same-day SEK bank transactions as one samlingsverifikat.**
+**Book several SEK bank transactions as one samlingsverifikat, or link them to one posted verifikat.**
 `scope:transactions:write · risk:high · idempotent · dry-run`
 
-Books up to 200 transactions of the same date into ONE verifikat (samlingsverifikation, BFL 5 kap 6 §), in exactly one of three ways: existing_journal_entry_id links them to an already-posted voucher whose bank net equals their sum (nothing new is posted); template_id + mode + entry_description expands a booking template per row (one_line_per_tx) or on the sum (sum_per_account); manual_lines + entry_description posts caller-built balanced lines. SEK only. The dry run answers the lines and the signed sum (tx_sum). Idempotent. Dry-runnable.
+Puts up to 200 transactions on ONE verifikat (samlingsverifikation, BFL 5 kap 6 §), in exactly one of three ways: existing_journal_entry_id links them to an already-posted voucher whose bank net equals their sum (nothing new is posted; the rows may be of several dates, e.g. a month of Stripe fee rows settled by the verifikat of Stripe's monthly fee invoice); template_id + mode + entry_description expands a booking template per row (one_line_per_tx) or on the sum (sum_per_account); manual_lines + entry_description posts caller-built balanced lines. A new verifikat needs rows of one date. SEK only. The dry run answers the lines and the signed sum (tx_sum). Idempotent. Dry-runnable.
 
-**Use when:** Many small same-day rows of one kind (Swish sales, card fees, a daily settlement) should be one verifikat.
-**Do not use for:** Rows on different dates, foreign-currency rows (book them one by one), or one row against invoices (POST /transactions/{id}/match-batch).
+**Use when:** Many small same-day rows of one kind (Swish sales, card fees, a daily settlement) should be one verifikat, or one posted verifikat settles rows of several days (a samlingsfaktura of at most a month, such as Stripe's monthly fee invoice).
+**Do not use for:** A new verifikat over rows of several dates (a monthly samlingsverifikat is not legal: one per date), foreign-currency rows (book them one by one), or one row against invoices (POST /transactions/{id}/match-batch).
 
 **Pitfalls:**
-- All rows must share one date and direction, and currency SEK: BULK_BOOK_MIXED_CURRENCY / BULK_BOOK_FOREIGN_CURRENCY otherwise.
+- All rows must share one direction and currency SEK, and one date unless they are linked to an existing verifikat: BULK_BOOK_DATE_MISMATCH / BULK_BOOK_DIRECTION_MISMATCH / BULK_BOOK_MIXED_CURRENCY / BULK_BOOK_FOREIGN_CURRENCY otherwise.
 - A row that looks already booked returns 409 TRANSACTION_BOOK_POSSIBLE_DUPLICATE naming it; resend with force=true only after reviewing the candidate (each dismissal is logged in behandlingshistorik).
 - manual_lines accounts must be active in the company's chart (BULK_BOOK_INVALID_ACCOUNT) and balance; amounts are kronor, account numbers strings.
 - A posted samlingsverifikat is permanent: undo with storno (POST /journal-entries/{id}/reverse).

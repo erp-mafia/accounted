@@ -48,6 +48,12 @@ describe('v1 invoice projections feed the render amount path', () => {
     expect(parse(INVOICE_FULL_COLUMNS)).toContain(column)
   })
 
+  // The v1 send renders the PDF and the e-invoice from these rows: without
+  // it the article number column would be blank on this surface only.
+  it('INVOICE_ITEM_FULL_COLUMNS carries article_number (crm#1084)', () => {
+    expect(parse(INVOICE_ITEM_FULL_COLUMNS)).toContain('article_number')
+  })
+
   it('never selects the encrypted personnummer blob', () => {
     expect(INVOICE_FULL_COLUMNS).not.toContain('deduction_personnummer_encrypted')
     expect(INVOICE_PDF_COLUMNS).not.toContain('deduction_personnummer_encrypted')

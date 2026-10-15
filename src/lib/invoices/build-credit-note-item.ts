@@ -18,6 +18,8 @@ export function buildCreditNoteItem(invoiceId: string, item: InvoiceItem) {
     vat_amount: -(item.vat_amount ? Math.abs(item.vat_amount) : 0),
     revenue_account: item.revenue_account ?? null,
     article_id: item.article_id ?? null,
+    // The kreditfaktura prints the article number its original printed.
+    article_number: item.article_number ?? null,
     deduction_type: item.deduction_type ?? null,
     // Positive magnitude, unlike the negated amounts above: invoice_items has
     // CHECK (deduction_amount >= 0). The reversing verifikat books 1513 from

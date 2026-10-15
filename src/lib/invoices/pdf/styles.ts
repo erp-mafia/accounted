@@ -289,6 +289,11 @@ export function createStyles(branding?: InvoiceBranding) {
       borderBottomWidth: TABLE_ROW_RULE_PT,
       borderBottomColor: HAIRLINE,
     },
+    // Printed first when invoice_show_article_number is on and a row has one.
+    colArticleNumber: {
+      flex: 1.1,
+      paddingRight: 6,
+    },
     colDescription: {
       flex: 4.6,
       paddingRight: 8,

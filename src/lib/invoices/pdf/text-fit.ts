@@ -41,12 +41,14 @@ export function approxWidthPt(word: string): number {
 }
 
 /**
- * The narrowest description column (the VAT column shown) is about 220pt; a
- * full-width box is about 495pt. The budgets sit well under those so an
- * estimate error still lands inside the column.
+ * The narrowest description column (the VAT and the article number columns
+ * shown) is about 200pt; a full-width box is about 495pt. The article number
+ * column is about 43pt at its narrowest. The budgets sit well under those so
+ * an estimate error still lands inside the column.
  */
 export const DESCRIPTION_COLUMN_PT = 160
 export const FULL_WIDTH_BOX_PT = 440
+export const ARTICLE_NUMBER_COLUMN_PT = 36
 
 export function wrapWholeWordsWithin(budgetPt: number): (word: string) => string[] {
   return (word: string): string[] => {
@@ -72,6 +74,7 @@ export function wrapWholeWordsWithin(budgetPt: number): (word: string) => string
 }
 
 export const wrapDescriptionWords = wrapWholeWordsWithin(DESCRIPTION_COLUMN_PT)
+export const wrapArticleNumberWords = wrapWholeWordsWithin(ARTICLE_NUMBER_COLUMN_PT)
 export const wrapFullWidthWords = wrapWholeWordsWithin(FULL_WIDTH_BOX_PT)
 
 /**

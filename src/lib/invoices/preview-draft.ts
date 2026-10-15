@@ -211,6 +211,39 @@ function printsPayableMethod(
   }))
 }
 
+/**
+ * The numbers the write path would copy onto the draft's article lines
+ * (build-invoice-write.ts): from the company's own articles, and only when
+ * the company prints them. A failed read previews without the numbers
+ * rather than refusing the preview.
+ */
+async function previewArticleNumbers(
+  supabase: SupabaseClient,
+  companyId: string,
+  company: CompanySettings,
+  rows: PreviewItemInput[],
+): Promise<Map<string, string | null>> {
+  const numbers = new Map<string, string | null>()
+  if (company.invoice_show_article_number !== true) return numbers
+  const ids = Array.from(
+    new Set(rows.filter((row) => row.line_type !== 'text').map((row) => row.article_id).filter((id): id is string => !!id)),
+  )
+  if (ids.length === 0) return numbers
+  const { data, error } = await supabase
+    .from('articles')
+    .select('id, article_number')
+    .eq('company_id', companyId)
+    .in('id', ids)
+  if (error) {
+    log.warn('preview article numbers could not be read; previewing without them', { error: error.message })
+    return numbers
+  }
+  for (const row of (data ?? []) as Array<{ id: string; article_number: string | null }>) {
+    numbers.set(row.id, row.article_number?.trim() || null)
+  }
+  return numbers
+}
+
 export async function buildInvoicePreviewDraft(params: {
   supabase: SupabaseClient
   companyId: string
@@ -369,7 +402,7 @@ async function buildDraftPreview(params: {
 
   const rows: PreviewItemInput[] = input.items.length > 0
     ? input.items
-    : [{ line_type: 'text', description: PREVIEW_PLACEHOLDER_ROW_TEXT[language], quantity: 0, unit: '', unit_price: 0 }]
+    : [{ line_type: 'text', description: PREVIEW_PLACEHOLDER_ROW_TEXT[language], quantity: 0, unit: '', unit_price: 0, article_id: null }]
 
   // The deduction each row stores, as the write path computes it
   // (computeLineDeductions): whole kronor per claim on a SEK invoice.
@@ -391,6 +424,10 @@ async function buildDraftPreview(params: {
         { currency },
       )
     : []
+
+  // The article number each row would carry (crm#1084), read only when the
+  // invoice prints it.
+  const articleNumbers = await previewArticleNumbers(supabase, companyId, company, rows)
 
   const nowIso = new Date().toISOString()
   const items = rows.map((item, index): InvoiceItem => {
@@ -431,6 +468,8 @@ async function buildDraftPreview(params: {
       unit: item.unit,
       unit_price: item.unit_price,
       discount_percent: discountPercent,
+      article_id: item.article_id ?? null,
+      article_number: item.article_id ? (articleNumbers.get(item.article_id) ?? null) : null,
       line_total: roundOre(lineNet),
       vat_rate: rate,
       // The write path's per-line VAT, from the unrounded net.

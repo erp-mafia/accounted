@@ -30,15 +30,24 @@ const TX_1 = '11111111-1111-4111-8111-111111111111'
 const TX_2 = '22222222-2222-4222-8222-222222222222'
 const JE_1 = '33333333-3333-4333-8333-333333333333'
 
-async function stage(txRows: Array<Record<string, unknown>>) {
+async function stage(txRows: Array<Record<string, unknown>>, body: Record<string, unknown> = { existing_journal_entry_id: JE_1 }) {
   const { supabase, enqueue } = createQueuedMockSupabase()
   enqueue({ data: txRows, error: null }) // transactions fetch: the first query
   return bulkBook.execute(
-    { tx_ids: txRows.map((t) => t.id), existing_journal_entry_id: JE_1 },
+    { tx_ids: txRows.map((t) => t.id), ...body },
     'company-1',
     'user-1',
     supabase as never,
   )
+}
+
+/** A new samlingsverifikat: the path the one-day rule applies to. */
+const NEW_ENTRY = {
+  entry_description: 'Kortavgifter',
+  manual_lines: [
+    { account_number: '6570', debit_amount: 300, credit_amount: 0, currency: 'SEK' },
+    { account_number: '1930', debit_amount: 0, credit_amount: 300, currency: 'SEK' },
+  ],
 }
 
 beforeEach(() => {
@@ -46,16 +55,21 @@ beforeEach(() => {
 })
 
 describe('gnubok_bulk_book_transactions: BFL 5 kap 6 § refusals', () => {
-  it('cites the statute and the per-day split when dates differ', async () => {
-    const err = await stage([
-      { id: TX_1, amount: -100, currency: 'SEK', date: '2026-05-12', journal_entry_id: null },
-      { id: TX_2, amount: -200, currency: 'SEK', date: '2026-05-13', journal_entry_id: null },
-    ]).catch((e: unknown) => e as Error & { code?: string })
+  it('cites the statute and the per-day split when the dates of a new samlingsverifikat differ', async () => {
+    const err = await stage(
+      [
+        { id: TX_1, amount: -100, currency: 'SEK', date: '2026-05-12', journal_entry_id: null },
+        { id: TX_2, amount: -200, currency: 'SEK', date: '2026-05-13', journal_entry_id: null },
+      ],
+      NEW_ENTRY,
+    ).catch((e: unknown) => e as Error & { code?: string })
 
     expect(err).toBeInstanceOf(Error)
     expect((err as Error).message).toContain('BFL 5 kap 6')
     expect((err as Error).message).toMatch(/likartade affärshändelser on the same day/)
     expect((err as Error).message).toMatch(/once per date/)
+    // ...and names the one way rows of several days share a verifikat.
+    expect((err as Error).message).toMatch(/link them with existing_journal_entry_id/)
     expect((err as Error & { code?: string }).code).toBe('BULK_BOOK_DATE_MISMATCH')
   })
 

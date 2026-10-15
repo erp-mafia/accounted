@@ -50,6 +50,7 @@ import {
   fitsOnOnePage,
   keepTogetherLineCap,
   splitParagraphs,
+  wrapArticleNumberWords,
   wrapDescriptionWords,
   wrapFullWidthWords,
 } from '@/lib/invoices/pdf/text-fit'
@@ -87,6 +88,18 @@ export {
   USABLE_PAGE_HEIGHT_PT,
 } from '@/lib/invoices/pdf/geometry'
 
+
+/**
+ * Whether the line table prints the article number column: the company's
+ * setting is on and at least one row with amounts carries a number.
+ */
+export function articleNumberColumnShown(
+  company: Pick<CompanySettings, 'invoice_show_article_number'>,
+  items: InvoiceItem[],
+): boolean {
+  if (company.invoice_show_article_number !== true) return false
+  return items.some((item) => !isTextLikeLine(item) && Boolean(item.article_number?.trim()))
+}
 
 export function buildPdfVatBreakdown(items: InvoiceItem[]): Map<number, { base: number; vat: number }> {
   const vatByRate = new Map<number, { base: number; vat: number }>()
@@ -314,6 +327,11 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
     ? new Set(billableItems.map((item) => item.vat_rate))
     : new Set<number>()
   const showVatColumn = hasPerLineVat && uniqueRates.size > 1
+
+  // Article number column (crm#1084): only when the company turned it on and
+  // a row carries a number, so a free-text invoice, and every invoice written
+  // before the number was copied onto its lines, prints as before.
+  const showArticleNumberColumn = articleNumberColumnShown(company, items)
 
   const vatByRate = hasPerLineVat
     ? buildPdfVatBreakdown(billableItems)
@@ -703,6 +721,9 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             it repeats on every page the table continues to. */}
         <View>
           <View style={styles.tableHeader} fixed minPresenceAhead={HEADING_MIN_PRESENCE_AHEAD}>
+            {showArticleNumberColumn && (
+              <Text style={[styles.colArticleNumber, styles.tableHeaderText]}>{L.colArticleNumber}</Text>
+            )}
             <Text style={[styles.colDescription, styles.tableHeaderText]}>{L.colDescription}</Text>
             <Text style={[styles.colQty, styles.tableHeaderText]}>{L.colQty}</Text>
             {!isDeliveryNote && (
@@ -735,6 +756,12 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 style={styles.tableRow}
                 wrap={!fitsOnOnePage(descriptionCellBudget(item), DESCRIPTION_COLUMN_PT, rowLineCap)}
               >
+                {showArticleNumberColumn && (
+                  // Blank for a row that is not from an article.
+                  <Text style={styles.colArticleNumber} hyphenationCallback={wrapArticleNumberWords}>
+                    {item.article_number?.trim() || ' '}
+                  </Text>
+                )}
                 <View style={styles.colDescription}>
                   <Text hyphenationCallback={wrapDescriptionWords}>{item.description}</Text>
                   {/* A discount is stated on the row (ML 17 kap 24 § p.10:

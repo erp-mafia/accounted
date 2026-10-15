@@ -120,6 +120,64 @@ describe('gnubok_bulk_book_transactions: staged from the operation', () => {
     expect(inserted.title).toMatch(/^Länka 2 transaktioner \+250,00 SEK 2026-05-12 till verifikat: Swish 0701/)
   })
 
+  it('links rows of several dates (a month of Stripe fee rows) to one posted verifikat', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        { ...rows[0], amount: -3.25, description: 'Stripe-avgift', date: '2026-09-03' },
+        { ...rows[1], amount: -12, description: 'Stripe: Billing - Usage Fee', date: '2026-10-02' },
+      ],
+      error: null,
+    }) // transactions
+    enqueue({ data: { id: JE, status: 'posted', entry_date: '2026-09-30' }, error: null }) // link target
+    enqueue({ data: null, error: null }) // resolvePeriodStatusForDate: 2 layers
+    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'op-bulk-link-month' }, error: null }) // pending_operations insert
+
+    const result = (await bulkBook.execute(
+      { tx_ids: [TX_1, TX_2], existing_journal_entry_id: JE },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as Staged
+
+    expect(result.staged).toBe(true)
+    expect(result.preview).toMatchObject({
+      tx_count: 2,
+      tx_date: '2026-09-03',
+      tx_date_to: '2026-10-02',
+      tx_sum: -15.25,
+      direction: 'expense',
+      mode: 'link_existing',
+    })
+    // The period of the latest row, which here is later than the verifikat.
+    expect(findCall('fiscal_periods', 'lte')).toEqual(['period_start', '2026-10-02'])
+    const inserted = findCall('pending_operations', 'insert')?.[0] as Record<string, unknown>
+    expect(inserted.title).toMatch(/^Länka 2 transaktioner -15,25 SEK 2026-09-03 t\.o\.m\. 2026-10-02 till verifikat: Stripe-avgift/)
+  })
+
+  it('still refuses rows of several dates for a new samlingsverifikat, before staging', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: [rows[0], { ...rows[1], date: '2026-05-13' }], error: null })
+
+    await expect(
+      bulkBook.execute(
+        {
+          tx_ids: [TX_1, TX_2],
+          entry_description: 'Swish',
+          manual_lines: [
+            { account_number: '1930', debit_amount: 250, credit_amount: 0, currency: 'SEK' },
+            { account_number: '3001', debit_amount: 0, credit_amount: 250, currency: 'SEK' },
+          ],
+        },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toMatchObject({ code: 'BULK_BOOK_DATE_MISMATCH' })
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+
   it('refuses a row that already has a verifikat, before staging', async () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: [rows[0], { ...rows[1], journal_entry_id: 'je-other' }], error: null })
