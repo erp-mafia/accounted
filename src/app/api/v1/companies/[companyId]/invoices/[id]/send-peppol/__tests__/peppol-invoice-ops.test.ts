@@ -11,7 +11,7 @@
  * network accepted it, and the idempotent replay.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { makeCompanySettings, makeCustomer, makeInvoice, isIdempotencyClaim } from '@/tests/helpers'
+import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
 import { PeppolTransportError, registerPeppolTransport, type PeppolTransport } from '@/lib/invoices/peppol-transport'
 import { createConnectorPeppolTransport } from '@/lib/invoices/transports/connector'
 
@@ -99,9 +99,9 @@ const WRITES = new Set(['insert', 'update', 'upsert', 'delete'])
 /** withApiV1's own bookkeeping (the idempotency cache) is not the operation's. */
 const DOOR_TABLES = new Set(['idempotency_keys', 'company_members'])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (!DOOR_TABLES.has(c.table) && WRITES.has(c.method)) || (c.table === 'rpc' && !isIdempotencyClaim(c)))
+  client.calls.some((c) => (!DOOR_TABLES.has(c.table) && WRITES.has(c.method)) || c.table === 'rpc')
 const rpcNames = (client: ReturnType<typeof makeClient>) =>
-  client.calls.filter((c) => c.table === 'rpc' && !isIdempotencyClaim(c)).map((c) => c.method)
+  client.calls.filter((c) => c.table === 'rpc').map((c) => c.method)
 /** The arguments of every lifecycle event the send recorded, in order. */
 const eventArgs = (client: ReturnType<typeof makeClient>) =>
   client.calls

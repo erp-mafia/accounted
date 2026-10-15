@@ -51,7 +51,6 @@ import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-key
 import { GET as listClaims, POST as createClaim } from '../route'
 import { GET as getClaim, DELETE as deleteClaim } from '../[id]/route'
 import { POST as recordPayout } from '../payouts/route'
-import { isIdempotencyClaim, routeRpcCalls } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -104,7 +103,7 @@ const BOOKS = new Set([
   'transactions',
 ])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || (c.method === 'rpc' && !isIdempotencyClaim(c)))
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || c.method === 'rpc')
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const CLAIM_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
@@ -675,7 +674,7 @@ describe('POST /api/v1/companies/:companyId/expense-claims/payouts', () => {
       { account_number: '2893', debit_amount: 500, credit_amount: 0 },
       { account_number: '1930', debit_amount: 0, credit_amount: 500 },
     ])
-    expect(routeRpcCalls(client.rpc)).toEqual([])
+    expect(client.rpc).not.toHaveBeenCalled()
     expect(wrote(client)).toBe(false)
   })
 

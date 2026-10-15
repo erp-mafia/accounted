@@ -55,7 +55,6 @@ import { DELETE as deleteInvoice } from '../route'
 import { POST as uncredit } from '../uncredit/route'
 import { PATCH as moveItem } from '../items/[itemId]/route'
 import { POST as bankEntered } from '../bank-entered/route'
-import { isIdempotencyClaim, routeRpcCalls } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -98,7 +97,7 @@ function makeClient(byTable: Record<string, TableResp | TableResp[]>) {
 const WRITES = new Set(['insert', 'update', 'upsert', 'delete'])
 const BOOKS = new Set(['supplier_invoices', 'supplier_invoice_items', 'journal_entries', 'journal_entry_lines', 'chart_of_accounts'])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || (c.method === 'rpc' && !isIdempotencyClaim(c)))
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || c.method === 'rpc')
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const SI_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -419,7 +418,7 @@ describe('PATCH /api/v1/companies/:companyId/supplier-invoices/:id/items/:itemId
     const res = await patch({ account_number: '6550' })
     expect(res.status).toBe(200)
     expect((await res.json()).data).toEqual({ changed: true, corrected: false })
-    expect(routeRpcCalls(client.rpc)).toEqual([])
+    expect(client.rpc).not.toHaveBeenCalled()
   })
 
   it('corrects a posted registration verifikat inline through correct_entry_lines_inline', async () => {
@@ -465,7 +464,7 @@ describe('PATCH /api/v1/companies/:companyId/supplier-invoices/:id/items/:itemId
     expect((await res.json()).error.code).toBe('SI_ITEM_ACCOUNT_NO_MATCHING_LINE')
     const updates = client.calls.filter((c) => c.table === 'supplier_invoice_items' && c.method === 'update')
     expect(updates.map((u) => u.args[0])).toEqual([{ account_number: '6550' }, { account_number: '6580' }])
-    expect(routeRpcCalls(client.rpc)).toEqual([])
+    expect(client.rpc).not.toHaveBeenCalled()
   })
 
   it('a dry run plans the rättelse, calls no RPC and writes nothing (not even the account backfill)', async () => {
@@ -508,7 +507,7 @@ describe('PATCH /api/v1/companies/:companyId/supplier-invoices/:id/items/:itemId
     const body = await res.json()
     expect(res.status).toBe(200)
     expect(body.data.preview).toMatchObject({ old_account: '6580', new_account: '6550', corrects_verifikat: true, journal_entry_id: JE_ID })
-    expect(routeRpcCalls(client.rpc)).toEqual([])
+    expect(client.rpc).not.toHaveBeenCalled()
     expect(backfillMock).not.toHaveBeenCalled()
     expect(wrote(client)).toBe(false)
   })

@@ -41,7 +41,6 @@ import { POST as previewBatch } from '../preview/route'
 import { GET as getBatch } from '../[id]/route'
 import { GET as downloadFile } from '../[id]/file/route'
 import { POST as cancelBatch } from '../[id]/cancel/route'
-import { routeRpcCalls, isIdempotencyClaim } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -85,7 +84,7 @@ const WRITES = new Set(['insert', 'update', 'upsert', 'delete'])
 /** Business tables only: withApiV1's own bookkeeping (idempotency, usage) is not the operation's. */
 const BOOKS = new Set(['supplier_payment_batches', 'supplier_payment_batch_items', 'supplier_invoices'])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || (c.table === 'rpc' && !isIdempotencyClaim(c)))
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || c.table === 'rpc')
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const BATCH_ID = 'b1111111-1111-4111-8111-111111111111'
@@ -369,8 +368,8 @@ describe('POST /supplier-payment-batches', () => {
         download: '/api/v1/companies/{companyId}/supplier-payment-batches/{supplier_payment_batch_id}/file',
       },
     })
-    expect(routeRpcCalls(client.rpc)).toHaveLength(1)
-    const [fn, args] = routeRpcCalls(client.rpc)[0] as [string, Record<string, unknown>]
+    expect(client.rpc).toHaveBeenCalledTimes(1)
+    const [fn, args] = client.rpc.mock.calls[0] as [string, Record<string, unknown>]
     expect(fn).toBe('create_supplier_payment_batch')
     expect(args).toMatchObject({
       p_company_id: COMPANY_ID,
@@ -404,7 +403,7 @@ describe('POST /supplier-payment-batches', () => {
       ],
     })
     expect(body.data.preview.msg_id).toBeUndefined()
-    expect(routeRpcCalls(client.rpc)).toEqual([])
+    expect(client.rpc).not.toHaveBeenCalled()
     expect(wrote(client)).toBe(false)
   })
 
@@ -469,7 +468,7 @@ describe('POST /supplier-payment-batches', () => {
     const confirmed = eligibleClient({ supplier_payment_batch_items: active })
     mockServiceClient.mockReturnValue(confirmed)
     expect((await post({ items: [{ supplier_invoice_id: INVOICE_A }], confirm_already_batched: true })).status).toBe(201)
-    expect((routeRpcCalls(confirmed.rpc)[0] as [string, Record<string, unknown>])[1].p_confirm_already_batched).toBe(true)
+    expect((confirmed.rpc.mock.calls[0] as [string, Record<string, unknown>])[1].p_confirm_already_batched).toBe(true)
   })
 
   it('expected_payees locks a two-request flow: 409 SI_BATCH_PAYEE_CHANGED when the payee differs, 201 when it holds', async () => {

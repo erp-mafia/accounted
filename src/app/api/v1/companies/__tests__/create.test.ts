@@ -53,18 +53,11 @@ function makeSupabase(teamId: string | null, idempotency = createIdempotencyKeys
   }
   return {
     from: vi.fn((table: string) => (table === 'idempotency_keys' ? idempotency.table() : chain)),
-    // claim_idempotency_key goes to the in-memory table; every other RPC is
-    // create_company_for_user.
-    rpc: vi.fn((fn: string, params: Record<string, unknown>) =>
-      fn === 'claim_idempotency_key' ? idempotency.rpc(fn, params) : Promise.resolve({ data: COMPANY_ID, error: null }),
-    ),
+    rpc: vi.fn().mockResolvedValue({ data: COMPANY_ID, error: null }),
     chain,
     idempotency,
   }
 }
-
-const creationCalls = (supabase: ReturnType<typeof makeSupabase>) =>
-  supabase.rpc.mock.calls.filter(([fn]) => fn === 'create_company_for_user')
 
 function makeRequest(body: unknown, headers: Record<string, string> = {}): Request {
   return new Request('https://x.test/api/v1/companies', {
@@ -252,7 +245,7 @@ describe('POST /api/v1/companies', () => {
     expect(retryBody.data.id).toBe(COMPANY_ID)
 
     expect(mocks.createCompanyCore).toHaveBeenCalledTimes(1)
-    expect(creationCalls(supabase)).toHaveLength(1)
+    expect(supabase.rpc).toHaveBeenCalledTimes(1)
     // Stored under the company the first call created, scoped to company creation.
     expect(supabase.idempotency.rows).toHaveLength(1)
     expect(supabase.idempotency.rows[0]).toMatchObject({
@@ -330,36 +323,6 @@ describe('POST /api/v1/companies', () => {
     const retry = await createCompany(makeRequest(validBody, { 'Idempotency-Key': 'fail-then-ok' }), staticRouteContext())
     expect(retry.status).toBe(201)
     expect(mocks.createCompanyCore).toHaveBeenCalledTimes(2)
-  })
-
-  it('answers a repeat sent while the first create still runs with 409 IDEMPOTENCY_KEY_IN_PROGRESS', async () => {
-    const supabase = makeSupabase(TEAM_ID)
-    mockServiceClient.mockReturnValue(supabase)
-    let finishFirst: () => void = () => {}
-    mocks.createCompanyCore.mockImplementationOnce(
-      async (_client: unknown, _input: unknown, createRow: () => Promise<{ data: unknown; error: unknown }>) => {
-        await new Promise<void>((resolve) => {
-          finishFirst = resolve
-        })
-        const { data } = await createRow()
-        return { companyId: data as string }
-      },
-    )
-
-    const first = createCompany(makeRequest(validBody, { 'Idempotency-Key': 'overlap-1' }), staticRouteContext())
-    await vi.waitFor(() => expect(mocks.createCompanyCore).toHaveBeenCalledTimes(1))
-
-    const overlapping = await createCompany(makeRequest(validBody, { 'Idempotency-Key': 'overlap-1' }), staticRouteContext())
-    expect(overlapping.status).toBe(409)
-    expect(overlapping.headers.get('Retry-After')).toBe('2')
-    expect((await overlapping.json()).error.code).toBe('IDEMPOTENCY_KEY_IN_PROGRESS')
-
-    finishFirst()
-    expect((await first).status).toBe(201)
-    const retry = await createCompany(makeRequest(validBody, { 'Idempotency-Key': 'overlap-1' }), staticRouteContext())
-    expect(retry.status).toBe(200)
-    expect(retry.headers.get('Idempotent-Replayed')).toBe('true')
-    expect(creationCalls(supabase)).toHaveLength(1)
   })
 
   it('maps a creation failure to INTERNAL_ERROR', async () => {

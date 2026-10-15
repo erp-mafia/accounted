@@ -6,19 +6,16 @@
  * directly had neither: a client that resends a broken call (the stateless
  * MCP revision's recovery path) wrote twice. withRetryKey gives such a tool
  * the same contract the staging tools have, through the same table
- * (idempotency_keys, lib/api/idempotency.ts): the key is claimed per
- * (user, company, key) with a hash of the arguments before the tool runs, a
- * repeat with the same key and arguments returns the first answer with
- * `idempotency_replay: true` and runs nothing, the same key with other
- * arguments is IDEMPOTENCY_KEY_REUSE, and a repeat that arrives while the
- * first call still runs (a client resending a stream it saw break) is
- * IDEMPOTENCY_KEY_IN_PROGRESS (retryable) instead of a second write.
+ * (idempotency_keys, lib/api/idempotency.ts): the first answer is stored per
+ * (user, company, key) with a hash of the arguments, a repeat with the same
+ * key and arguments returns it with `idempotency_replay: true` and runs
+ * nothing, and the same key with other arguments is IDEMPOTENCY_KEY_REUSE.
  *
  * It wraps execute, so every caller of the tool (the tools/call dispatcher,
  * the Tasks path) inherits it, and it declares the argument in inputSchema
  * itself, so the declaration and the handling cannot drift apart.
  *
- * Only a success is stored: a thrown failure releases the claim, and the
+ * Only a success is stored: a thrown failure wrote nothing to replay, and the
  * caller may retry it with the same key. A preview (a call that writes
  * nothing, such as dry_run) is neither looked up nor stored, so the real call
  * after it may reuse the key. No key, no change: there is no derived default,
@@ -26,7 +23,13 @@
  * writes (two receipts with the same amount, two companies with one name).
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { claimIdempotencyKey, hashRequest, type IdempotencyScope } from '@/lib/api/idempotency'
+import {
+  checkIdempotencyKey,
+  checkUserScopedIdempotencyKey,
+  hashRequest,
+  storeIdempotencyResponse,
+  type IdempotencyScope,
+} from '@/lib/api/idempotency'
 import type { ActorContext, McpTool } from './server'
 
 /** The argument every key-taking write declares, staging or direct. */
@@ -40,7 +43,7 @@ export interface RetryKeyOptions {
   preview?: (args: Record<string, unknown>) => boolean
   /**
    * For a tool that has no company until it runs (gnubok_create_company):
-   * the key is claimed per (user, scope) and the answer stored under the
+   * the key is looked up per (user, scope) and the answer stored under the
    * company the result names. Without it the key is scoped to the call's
    * company, and a call with none (a company-independent tool on a user
    * with no company) runs uncached.
@@ -77,31 +80,26 @@ export function withRetryKey(tool: McpTool, options: RetryKeyOptions = {}): McpT
       // Private dispatcher fields (__keyScopes, ...) are not the caller's payload.
       const payload = Object.fromEntries(Object.entries(rest).filter(([name]) => !name.startsWith('__')))
       const requestHash = hashRequest({ tool: tool.name, args: payload, ...(scoped ? {} : { companyId }) })
-      // Throws IDEMPOTENCY_KEY_REUSE / IDEMPOTENCY_KEY_IN_PROGRESS, which the
-      // dispatcher answers in the structured tool-error shape.
-      const outcome = await claimIdempotencyKey(supabase, {
-        userId,
-        companyId: scoped ? null : companyId,
-        scope: scoped ? scoped.scope : 'mcp_tool',
-        key,
-        requestHash,
-      })
-      if ('replay' in outcome) return { ...outcome.replay.body, idempotency_replay: true }
+      const hit = scoped
+        ? await checkUserScopedIdempotencyKey(supabase, userId, scoped.scope, key, requestHash)
+        : await checkIdempotencyKey(supabase, userId, companyId, key, requestHash)
+      if (hit) return { ...hit.body, idempotency_replay: true }
 
-      const { claim } = outcome
-      let result: unknown
-      try {
-        result = await run(rest, companyId, userId, supabase, actor)
-      } catch (err) {
-        await claim.release()
-        throw err
-      }
-      const storeUnder = isRecord(result) ? (scoped ? scoped.companyFromResult(result) : companyId) : undefined
-      if (isRecord(result) && storeUnder) {
-        await claim.complete('success', result, scoped ? { companyId: storeUnder } : {})
-      } else {
-        // Nothing to replay (no record, or no company created): a retry runs again.
-        await claim.release()
+      const result = await run(rest, companyId, userId, supabase, actor)
+      if (isRecord(result)) {
+        const storeUnder = scoped ? scoped.companyFromResult(result) : companyId
+        if (storeUnder) {
+          await storeIdempotencyResponse(
+            supabase,
+            userId,
+            storeUnder,
+            key,
+            requestHash,
+            'success',
+            result,
+            scoped ? scoped.scope : 'mcp_tool',
+          )
+        }
       }
       return result
     },

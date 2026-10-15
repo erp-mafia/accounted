@@ -45,7 +45,6 @@ import { POST as createCashAccount } from '../route'
 import { PATCH as updateCashAccount } from '../[id]/route'
 import { POST as setPrimary } from '../[id]/set-primary/route'
 import { PUT as setPayeeDefault } from '../payee-defaults/route'
-import { isIdempotencyClaim, routeRpcCalls } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -89,7 +88,7 @@ const WRITES = new Set(['insert', 'update', 'upsert', 'delete'])
 /** Business tables only: withApiV1's own bookkeeping (idempotency, usage) is not the operation's. */
 const BOOKS = new Set(['cash_accounts', 'invoice_payee_defaults', 'chart_of_accounts'])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || (c.method === 'rpc' && !isIdempotencyClaim(c)))
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || c.method === 'rpc')
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const CA_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
@@ -373,7 +372,7 @@ describe('POST /api/v1/companies/:companyId/cash-accounts/:id/set-primary', () =
     const client = makeClient({ company_members: MEMBER })
     mockServiceClient.mockReturnValue(client)
     expect((await post()).status).toBe(403)
-    expect(routeRpcCalls(client.rpc)).toEqual([])
+    expect(client.rpc).not.toHaveBeenCalled()
   })
 
   it('400 CASH_ACCOUNT_PRIMARY_INELIGIBLE when the RPC refuses', async () => {
@@ -399,7 +398,7 @@ describe('POST /api/v1/companies/:companyId/cash-accounts/:id/set-primary', () =
     const refused = await post('?dry_run=true')
     expect(refused.status).toBe(400)
     expect((await refused.json()).error.details.reason).toBe('not_sek')
-    expect(routeRpcCalls(eur.rpc)).toEqual([])
+    expect(eur.rpc).not.toHaveBeenCalled()
 
     const sek = makeClient({ company_members: OWNER, cash_accounts: { data: row(), error: null } })
     mockServiceClient.mockReturnValue(sek)

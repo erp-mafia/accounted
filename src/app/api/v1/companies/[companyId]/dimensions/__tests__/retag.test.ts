@@ -24,7 +24,6 @@ vi.mock('@supabase/supabase-js', async () => {
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST as retag } from '../retag/route'
-import { routeRpcCalls, isIdempotencyClaim } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -143,7 +142,7 @@ describe('POST /api/v1/companies/:companyId/dimensions/retag', () => {
       const res = await retag(post(body), params)
       expect(res.status, JSON.stringify(body)).toBe(400)
       expect((await res.json()).error.code).toBe('VALIDATION_ERROR')
-      expect(client.calls.some((c) => c.table === 'journal_entry_lines' || (c.table === 'rpc' && !isIdempotencyClaim(c)))).toBe(false)
+      expect(client.calls.some((c) => c.table === 'journal_entry_lines' || c.table === 'rpc')).toBe(false)
     }
   })
 
@@ -167,7 +166,7 @@ describe('POST /api/v1/companies/:companyId/dimensions/retag', () => {
       failed: [{ line_id: LINE_FOREIGN, error: 'Verifikationsraden hittades inte.' }],
       mode: 'merge',
     })
-    const rpcCalls = client.calls.filter((c) => c.table === 'rpc' && !isIdempotencyClaim(c))
+    const rpcCalls = client.calls.filter((c) => c.table === 'rpc')
     expect(rpcCalls.map((c) => c.method)).toEqual(['retag_line_dimensions', 'retag_line_dimensions'])
     expect(rpcCalls[0].args[0]).toEqual({
       p_company_id: COMPANY_ID,
@@ -189,7 +188,7 @@ describe('POST /api/v1/companies/:companyId/dimensions/retag', () => {
     expect(res.status).toBe(200)
     expect((await res.json()).data).toMatchObject({ retagged: 1, mode: 'replace' })
     expect(client.calls.some((c) => c.table === 'journal_entry_lines')).toBe(false)
-    expect(client.calls.find((c) => c.table === 'rpc' && !isIdempotencyClaim(c))?.args[0]).toMatchObject({ p_dimensions: { '6': 'P001' } })
+    expect(client.calls.find((c) => c.table === 'rpc')?.args[0]).toMatchObject({ p_dimensions: { '6': 'P001' } })
   })
 
   it('400 DIMENSION_RETAG_FAILED with every refusal when no line could be retagged', async () => {
@@ -228,6 +227,6 @@ describe('POST /api/v1/companies/:companyId/dimensions/retag', () => {
       missing_line_ids: [LINE_FOREIGN],
       unchanged_lines: 0,
     })
-    expect(routeRpcCalls(client.rpc)).toEqual([])
+    expect(client.rpc).not.toHaveBeenCalled()
   })
 })

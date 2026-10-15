@@ -70,26 +70,6 @@ describe('gnubok_list_pending_operations', () => {
     expect(result.has_more).toBe(false)
   })
 
-  it('carries task_state on every row, as the v1 endpoints answer it', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({
-      data: [
-        { id: 'op-1', status: 'pending', rejection_category: null },
-        { id: 'op-2', status: 'committed', rejection_category: null },
-        { id: 'op-3', status: 'rejected', rejection_category: 'failed' },
-        { id: 'op-4', status: 'rejected', rejection_category: 'expired' },
-      ],
-      error: null,
-      count: 4,
-    })
-
-    const result = (await listTool.execute({ status: 'pending' }, 'company-1', 'user-1', supabase as never, {
-      type: 'api_key',
-    })) as { operations: Array<{ id: string; task_state: string }> }
-
-    expect(result.operations.map((op) => op.task_state)).toEqual(['working', 'completed', 'failed', 'cancelled'])
-  })
-
   it('signals has_more + next_offset when more rows exist beyond the page', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [{ id: 'op-1' }], error: null, count: 50 })

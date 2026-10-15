@@ -366,8 +366,7 @@ import {
   matchSupplierId,
   supplierIdentityFrom,
 } from '@/lib/suppliers/match-supplier'
-import { assertNoPlaintextPersonnummer } from '@/lib/pending-operations/staging-pii-guard'
-import { pendingOperationTaskState, type TaskStateSource } from '@/lib/pending-operations/task-state'
+import { assertNoPlaintextPersonnummer } from './staging-pii-guard'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { withSIEExternalReport } from '@/lib/import/sie-period-read'
 import {
@@ -24129,7 +24128,7 @@ export const tools: McpTool[] = [
       let query = supabase
         .from('pending_operations')
         .select(
-          'id, company_id, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, created_at, resolved_at, result_data, rejection_category',
+          'id, company_id, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, created_at, resolved_at, result_data',
           { count: 'exact' }
         )
         .eq('status', status)
@@ -24143,14 +24142,7 @@ export const tools: McpTool[] = [
         .range(offset, offset + limit - 1)
       if (error) throw new Error(`Failed to list pending operations: ${error.message}`)
 
-      // task_state: the status in the MCP Tasks / A2A vocabulary, as the v1
-      // pending-operations endpoints answer it (lib/pending-operations/
-      // task-state.ts). Data only: the item schema is an open object, so
-      // tools/list does not grow.
-      const rows = ((data ?? []) as Array<Record<string, unknown>>).map((row): Record<string, unknown> => ({
-        ...row,
-        task_state: pendingOperationTaskState(row as unknown as TaskStateSource),
-      }))
+      const rows = (data ?? []) as Array<Record<string, unknown>>
       const operations = acrossCompanies
         ? rows.map((row) => ({
             ...row,

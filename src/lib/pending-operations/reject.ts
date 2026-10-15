@@ -1,7 +1,6 @@
 /**
  * Reject pending operations: the one write behind every "no" to a staged
- * proposal (the dashboard's single and bulk reject, the MCP reject tool and
- * the v1 REST reject endpoint).
+ * proposal (the dashboard's single and bulk reject, and the MCP reject tool).
  *
  * Each door parses its own input (the app requires a category, MCP lets an
  * agent relay a bare no without inventing one) and maps the per-id outcome
@@ -42,8 +41,7 @@ export interface RejectPendingOperationsInput {
   /** Trimmed free text; the door enforces its own length. */
   reason?: string
   actor: RejectActor
-  /** The door: the dashboard, the MCP tool, or the v1 REST endpoint. */
-  channel: 'app' | 'mcp' | 'api'
+  channel: 'app' | 'mcp'
 }
 
 export type RejectOutcome =

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { assertNoPlaintextPersonnummer } from '@/lib/pending-operations/staging-pii-guard'
+import { assertNoPlaintextPersonnummer } from '../staging-pii-guard'
 
 describe('assertNoPlaintextPersonnummer', () => {
   it('throws on a top-level plaintext personnummer key in params', () => {

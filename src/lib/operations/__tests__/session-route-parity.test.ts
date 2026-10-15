@@ -160,25 +160,6 @@ describe('session route parity manifest', () => {
     expect(unknown, '`by` must name a registered v1 endpoint or a TOOL_SCOPE_MAP tool').toEqual([])
   })
 
-  it('gives the dashboard approve and reject routes a v1 door beside the MCP tool', () => {
-    // An attest flow built outside Accounted decides staged writes over REST
-    // as it does over MCP: every dashboard approval verb names both doors.
-    const V = '/api/v1/companies/:companyId/pending-operations/:id'
-    const expected: Record<string, string[]> = {
-      'POST /api/pending-operations/:id/commit': [`POST ${V}/approve`, 'gnubok_approve_pending_operation'],
-      'POST /api/pending-operations/bulk-commit': [`POST ${V}/approve`, 'gnubok_approve_pending_operation'],
-      'POST /api/pending-operations/:id/reject': [`POST ${V}/reject`, 'gnubok_reject_pending_operation'],
-      'POST /api/pending-operations/bulk-reject': [`POST ${V}/reject`, 'gnubok_reject_pending_operation'],
-    }
-    const registered = new Set(listEndpoints().map((e) => `${e.method} ${e.path}`))
-    for (const [key, doors] of Object.entries(expected)) {
-      const entry = SESSION_ROUTE_PARITY[key]
-      expect(entry?.status, key).toBe('covered')
-      if (entry?.status === 'covered') expect(entry.by, key).toEqual(expect.arrayContaining(doors))
-      expect(registered.has(doors[0]), doors[0]).toBe(true)
-    }
-  })
-
   it('gives every ui-only and machine entry a reason', () => {
     const bare = Object.entries(SESSION_ROUTE_PARITY)
       .filter(([, e]) => (e.status === 'ui-only' || e.status === 'machine') && e.reason.trim() === '')
