@@ -86,6 +86,10 @@ const nextConfig: NextConfig = {
   // debt that vitest never type-checks (see DECISIONS.md 2026-08-20).
   typescript: {
     tsconfigPath: 'tsconfig.build.json',
+    // GitLab CI's build job sets SKIP_BUILD_TYPECHECK: its checks job runs
+    // tsc over tsconfig.json after `next typegen`, a superset of this check.
+    // Vercel builds never set it, so every deploy still type-checks.
+    ignoreBuildErrors: process.env.SKIP_BUILD_TYPECHECK === '1',
   },
   // Multiple lockfiles exist above this project (e.g. a parent yarn.lock),
   // which makes Turbopack infer the wrong workspace root. Pin it explicitly.

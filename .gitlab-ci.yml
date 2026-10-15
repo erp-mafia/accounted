@@ -1,5 +1,5 @@
 # GitLab CI for the ledger, run on the group's own runner (ci-runner-1,
-# Hetzner, two jobs at a time). It took over the gates of the GitHub workflows
+# Hetzner, five jobs at a time). It took over the gates of the GitHub workflows
 # core-build.yml and test-pg-real.yml when the repository moved to GitLab
 # (2026-10-05); those workflows are gone.
 #
@@ -33,7 +33,7 @@ stages:
 
 # Checks run on merge requests only: with squash merges onto a straight
 # history, main receives exactly the tree its merge request already tested.
-# main runs the production jobs only.
+# main runs the production jobs and the checks cache warm-up only.
 .mr-only:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -49,6 +49,15 @@ stages:
 .npm:
   cache:
     - *npm-cache
+
+# tsc's incremental state and ESLint's result cache. Only main writes it
+# (checks-cache); merge requests read it. The lockfile is in the key, so a
+# TypeScript or ESLint upgrade starts clean.
+.checks-state-cache: &checks-state-cache
+  key:
+    prefix: checks-state
+    files: [package-lock.json]
+  paths: [.ci-cache/]
 
 # The prologue every core job needs: dependencies
 # and a zero-extension registry, because CI builds core with no extensions.
@@ -87,17 +96,14 @@ checks:
   stage: checks
   extends: [.setup-core, .mr-only]
   needs: []
-  # tsc's incremental state and ESLint's result cache, kept on the runner
-  # between pipelines like the npm cache and shared by every merge request: a
-  # cold tsc takes nine minutes on the shared box, a warm one rechecks only the
-  # files the merge request touched (and still reports every stored error).
-  # The lockfile is in the key, so a TypeScript or ESLint upgrade starts clean.
+  # Reads main's tsc and ESLint state, so a warm tsc rechecks only what this
+  # merge request changed (and still reports every stored error). It does not
+  # write it back: when every merge request wrote it, each job started from
+  # whatever unrelated branch saved last, and tsc took 4 to 13 minutes.
   cache:
     - *npm-cache
-    - key:
-        prefix: checks-state
-        files: [package-lock.json]
-      paths: [.ci-cache/]
+    - <<: *checks-state-cache
+      policy: pull
   variables:
     CHECKS_CACHE_DIR: .ci-cache
   script:
@@ -109,6 +115,10 @@ checks:
     # mtime: a checkout rewrites every mtime.
     - mkdir -p "$CHECKS_CACHE_DIR"
     - npm run check:lint -- --cache --cache-location "$CHECKS_CACHE_DIR/eslint" --cache-strategy content
+    # The route types next build generates (.next/types, validator.ts). With
+    # them this tsc checks a superset of what the build's own type check
+    # covers, so the build job skips that pass (SKIP_BUILD_TYPECHECK).
+    - npx next typegen
     - npm run check:types
     - npm run check:guards
     - npm run validate:packs
@@ -125,6 +135,29 @@ checks:
         exit 1
       fi
 
+# Writes the tsc and ESLint state every merge request's checks job reads. Each
+# merge to main starts from the previous main's state, so it rechecks only what
+# that merge changed. It gates nothing: a failure leaves the state one merge
+# older, and the job shows as a warning.
+checks-cache:
+  stage: checks
+  extends: .setup-core
+  needs: []
+  allow_failure: true
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "push"
+  cache:
+    - *npm-cache
+    - <<: *checks-state-cache
+      when: always
+  variables:
+    CHECKS_CACHE_DIR: .ci-cache
+  script:
+    - mkdir -p "$CHECKS_CACHE_DIR"
+    - npx next typegen
+    - npm run check:types
+    - npm run check:lint -- --cache --cache-location "$CHECKS_CACHE_DIR/eslint" --cache-strategy content
+
 build:
   stage: test
   extends: [.setup-core, .mr-only]
@@ -133,6 +166,10 @@ build:
     # The Next.js build worker OOMs on Node's default heap since 2026-08-19
     # (bundle growth); the runner has 16 GB plus swap.
     NODE_OPTIONS: --max-old-space-size=8192
+    # The checks job's tsc already covers this build's type check (see there);
+    # running it again here cost 5.7 minutes per pipeline. Vercel builds leave
+    # it unset and still type-check.
+    SKIP_BUILD_TYPECHECK: "1"
   script:
     - npm run build
 
@@ -180,8 +217,16 @@ pg-upgrade:
   needs: []
   variables:
     GIT_DEPTH: "0"
+  # Only a merge request that adds a migration, or changes what the upgrade
+  # replays and seeds, has anything to upgrade-test; the rest no longer start
+  # a Postgres container just to find that out.
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - supabase/migrations/**/*
+        - supabase/bootstrap.sql
+        - tests/pg/bootstrap.sql
+        - tests/pg/upgrade/**/*
   script:
     - |
       set -euo pipefail
