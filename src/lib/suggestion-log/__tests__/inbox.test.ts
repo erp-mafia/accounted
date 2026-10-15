@@ -1,5 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { runInOperationCommit } from '@/lib/pending-operations/commit-scope'
 import { loadEntryLines, recordInboxDecision, snapshotInboxExtraction, type InboxSnapshot } from '../inbox'
+import { inboxInputHash } from '../provenance'
+import { passed } from '../checks'
 
 const mockGetActor = vi.fn()
 vi.mock('@/lib/bookkeeping/actor-context', () => ({
@@ -30,15 +33,53 @@ const edited = { ...reading, invoice: { invoiceNumber: 'F-2' } }
 beforeEach(() => {
   vi.clearAllMocks()
   mockGetActor.mockReturnValue(undefined)
+  vi.stubEnv('VERCEL_GIT_COMMIT_SHA', '')
+  vi.stubEnv('NEXT_PUBLIC_BUILD_ID', '')
 })
 
+afterEach(() => {
+  vi.unstubAllEnvs()
+})
+
+const SHA = 'e'.repeat(64)
+
 describe('snapshotInboxExtraction', () => {
-  it("takes the document's reading (the model's own) over the item's edited one", async () => {
-    const { client } = fakeClient({ document_attachments: { data: { extracted_data: reading, extraction_model: 'claude-sonnet' } } })
+  it("takes the document's reading (the model's own) over the item's edited one, with the rules and inputs it is decided on", async () => {
+    const { client } = fakeClient({
+      document_attachments: { data: { extracted_data: reading, extraction_model: 'claude-sonnet', sha256_hash: SHA } },
+    })
 
     const snap = await snapshotInboxExtraction(client as never, 'company-1', { id: 'item-1', document_id: 'doc-1', extracted_data: edited })
 
-    expect(snap).toEqual({ companyId: 'company-1', inboxItemId: 'item-1', documentId: 'doc-1', extraction: reading, model: 'claude-sonnet' })
+    expect(snap).toEqual({
+      companyId: 'company-1',
+      inboxItemId: 'item-1',
+      documentId: 'doc-1',
+      extraction: reading,
+      model: 'claude-sonnet',
+      ruleVersion: 'inbox-extraction.1',
+      inputHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+    })
+  })
+
+  it("hashes the document's bytes in: the same reading on another file is another input", async () => {
+    const hashWith = async (sha: string) =>
+      (await snapshotInboxExtraction(
+        fakeClient({ document_attachments: { data: { extracted_data: reading, extraction_model: 'claude-sonnet', sha256_hash: sha } } }).client as never,
+        'company-1',
+        { id: 'item-1', document_id: 'doc-1' },
+      )).inputHash
+
+    expect(await hashWith(SHA)).toBe(await hashWith(SHA))
+    expect(await hashWith(SHA)).not.toBe(await hashWith('f'.repeat(64)))
+  })
+
+  it('hashes an item without a document over its own reading', async () => {
+    const { client } = fakeClient()
+
+    const snap = await snapshotInboxExtraction(client as never, 'company-1', { id: 'item-1', document_id: null, extracted_data: edited })
+
+    expect(snap).toMatchObject({ extraction: edited, ruleVersion: 'inbox-extraction.1', inputHash: expect.stringMatching(/^[0-9a-f]{64}$/) })
   })
 
   it('falls back to the item when the document was never read (skipped or failed)', async () => {
@@ -49,17 +90,26 @@ describe('snapshotInboxExtraction', () => {
     expect(snap).toMatchObject({ extraction: edited, model: null })
   })
 
-  it('never throws on a failed read', async () => {
+  it('never throws on a failed read, and then records no inputs hash: the document is unknown', async () => {
     const { client } = fakeClient({ document_attachments: { data: null, error: { message: 'timeout' } } })
 
     const snap = await snapshotInboxExtraction(client as never, 'company-1', { id: 'item-1', document_id: 'doc-1', extracted_data: null })
 
     expect(snap.extraction).toBeNull()
+    expect(snap.inputHash).toBeNull()
   })
 })
 
 describe('recordInboxDecision', () => {
-  const snap: InboxSnapshot = { companyId: 'company-1', inboxItemId: 'item-1', documentId: 'doc-1', extraction: reading, model: 'claude-sonnet' }
+  const snap: InboxSnapshot = {
+    companyId: 'company-1',
+    inboxItemId: 'item-1',
+    documentId: 'doc-1',
+    extraction: reading,
+    model: 'claude-sonnet',
+    ruleVersion: 'inbox-extraction.1+a38016f12abc',
+    inputHash: 'a'.repeat(64),
+  }
 
   it('writes an inbox_item row for the registration, as the deciding user', async () => {
     const { client, inserts } = fakeClient()
@@ -83,8 +133,41 @@ describe('recordInboxDecision', () => {
         actor_type: 'user',
         resolved_by: 'user-1',
         final: { supplier_invoice_id: 'si-1', journal_entry_id: 'je-1', changed_fields: ['invoice_number'], fields: { accounts: ['6212'] } },
+        rule_version: 'inbox-extraction.1+a38016f12abc',
+        input_hash: 'a'.repeat(64),
+        checks: null,
+        pending_operation_id: null,
       },
     })
+    // No approval policy decides an underlag, so neither a policy nor a band is written.
+    expect(inserts[0].row).not.toHaveProperty('policy_version')
+    expect(inserts[0].row).not.toHaveProperty('confidence_band')
+  })
+
+  it('records the guards the door ran and the operation whose approval carried the decision', async () => {
+    const { client, inserts } = fakeClient()
+    const checks = [passed('already_booked'), passed('period_lock')]
+
+    await runInOperationCommit('op-7', () =>
+      recordInboxDecision(client as never, snap, { supplier_invoice_id: 'si-1', fields: {} }, 'user-1', checks),
+    )
+
+    expect(inserts[0].row).toMatchObject({ checks, pending_operation_id: 'op-7' })
+  })
+
+  it('lets an auditor recompute the inputs hash from the recorded row and the document', async () => {
+    const { client } = fakeClient({ document_attachments: { data: { extracted_data: reading, extraction_model: 'claude-sonnet', sha256_hash: SHA } } })
+    const taken = await snapshotInboxExtraction(client as never, 'company-1', { id: 'item-1', document_id: 'doc-1' })
+    const recorder = fakeClient()
+
+    await recordInboxDecision(recorder.client as never, taken, { supplier_invoice_id: 'si-1', fields: { invoice_number: 'F-1' } }, 'user-1')
+
+    const row = recorder.inserts[0].row as { input_hash: string; document_id: string; suggestions: Array<Record<string, unknown>> }
+    expect(row.input_hash).toBe(inboxInputHash({
+      documentId: row.document_id,
+      documentSha256: SHA,
+      suggestions: row.suggestions.map(({ matches_final: _matched, ...offered }) => offered) as never,
+    }))
   })
 
   it('records a deletion against the document only, so the row outlives the item', async () => {

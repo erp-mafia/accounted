@@ -1265,7 +1265,12 @@ describe('unmatchLink / setItemIgnored', () => {
       const result = await setItemIgnored(supabase as never, COMPANY, `bank:${CASH}`, R1, true, USER)
       expect(result).toEqual({ external_id: R1, is_ignored: true })
       expect(findCalls('transactions', 'update')[0][0]).toEqual({ is_ignored: true })
-      expect(recordDecisionsMock).toHaveBeenCalledWith(supabase, snapshot, [{ transactionId: R1, final: null }], USER)
+      expect(recordDecisionsMock).toHaveBeenCalledWith(
+        supabase,
+        snapshot,
+        [{ transactionId: R1, final: null, checks: [{ id: 'already_booked', result: 'pass', detail: null }] }],
+        USER,
+      )
     })
 
     it('restores an ignored row without an anchor check, and is a no-op when already in that state', async () => {

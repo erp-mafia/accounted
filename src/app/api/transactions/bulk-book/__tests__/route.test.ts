@@ -76,6 +76,7 @@ import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
+import { recordDecisions } from '@/lib/suggestion-log/record'
 
 const TX1 = '11111111-1111-4111-8111-111111111111'
 const TX2 = '22222222-2222-4222-8222-222222222222'
@@ -678,6 +679,21 @@ describe('POST /api/transactions/bulk-book: duplicate guard', () => {
         }),
       }),
     )
+    // Each row's decision says whether force bypassed a candidate for it.
+    // Linking to an existing verifikat posts no lines: no chart or period check.
+    const decisions = vi.mocked(recordDecisions).mock.calls[0][2]
+    expect(decisions.map((d) => [d.transactionId, d.checks])).toEqual([
+      [TX1, [
+        { id: 'already_booked', result: 'pass', detail: null },
+        { id: 'currency', result: 'pass', detail: null },
+        { id: 'duplicate', result: 'pass', detail: null },
+      ]],
+      [TX2, [
+        { id: 'already_booked', result: 'pass', detail: null },
+        { id: 'currency', result: 'pass', detail: null },
+        { id: 'duplicate', result: 'warn', detail: `force:journal_entry:${CANDIDATE.journal_entry_id}` },
+      ]],
+    ])
   })
 
   it('fails open when detection itself throws (a guard failure never blocks a booking)', async () => {
@@ -698,6 +714,12 @@ describe('POST /api/transactions/bulk-book: duplicate guard', () => {
     })
     const response = await POST(request)
     expect(response.status).toBe(200)
+    // The guard that could not run is recorded as such, not as a pass.
+    const decisions = vi.mocked(recordDecisions).mock.calls[0][2]
+    expect(decisions.map((d) => d.checks?.find((c) => c.id === 'duplicate'))).toEqual([
+      { id: 'duplicate', result: 'warn', detail: 'detection_failed' },
+      { id: 'duplicate', result: 'warn', detail: 'detection_failed' },
+    ])
   })
 })
 

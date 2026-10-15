@@ -1,13 +1,23 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { proposeForTransactions } from '@/lib/transactions/propose'
+import { BANK_PROPOSAL_RULES_REVISION, proposeForTransactions } from '@/lib/transactions/propose'
+import { DIRECT_BOOKING_POLICY_VERSION } from '@/lib/transactions/direct-booking'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { getActor } from '@/lib/bookkeeping/actor-context'
 import { getTemplateById } from '@/lib/bookkeeping/booking-templates'
+import { committingOperationId } from '@/lib/pending-operations/commit-scope'
 import { createLogger } from '@/lib/logger'
 import type { BookingProposal, ProposalBooking } from '@/lib/bookkeeping/proposal'
 import type { AssistantRead } from '@/lib/agent/categorize/read-shape'
 import type { EntityType, JournalEntry, MappingResult, Transaction, TransactionCategory, VatTreatment } from '@/types'
-import { businessAccountOfLines, classifyBankLineDecision, type BankLineFinal } from './classify'
+import {
+  businessAccountOfLines,
+  classifyBankLineDecision,
+  offeredSuggestions,
+  type BankLineFinal,
+  type LoggedRead,
+} from './classify'
+import type { DecisionCheck } from './checks'
+import { bankLineInputHash, reasoningSha256, withProgramVersion } from './provenance'
 
 /**
  * Writes suggestion_log rows for decisions on bank lines.
@@ -16,8 +26,13 @@ import { businessAccountOfLines, classifyBankLineDecision, type BankLineFinal } 
  *   1. snapshotSuggestions() BEFORE booking: what proposeForTransactions
  *      offers for the rows right now. Taken before the booking because the
  *      learning that runs after one (mapping rule, counterparty template)
- *      would otherwise leak the decision into its own suggestions.
- *   2. recordDecisions() AFTER the booking succeeded: one row per bank line.
+ *      would otherwise leak the decision into its own suggestions. It also
+ *      fixes what the decision is made on: the rules version and the hash of
+ *      the inputs (./provenance.ts).
+ *   2. recordDecisions() AFTER the booking succeeded: one row per bank line,
+ *      with the guards the door ran, the band the acted-on suggestion fell
+ *      in under the direct-booking policy, and the pending operation whose
+ *      approval carried it (when an agent staged it).
  *
  * Neither step can fail a booking: a failed snapshot records an empty list,
  * a failed write is logged and dropped. The log describes bookkeeping, it is
@@ -30,10 +45,58 @@ import { businessAccountOfLines, classifyBankLineDecision, type BankLineFinal } 
 
 const log = createLogger('suggestion-log')
 
+export interface SnapshotEntry {
+  proposals: BookingProposal[]
+  read: AssistantRead | null
+  documentId: string | null
+  /** SHA-256 of the inputs (./provenance.ts); null when the document's hash could not be read. */
+  inputHash?: string | null
+}
+
 export interface SuggestionSnapshot {
   companyId: string
   entityType?: EntityType
-  byTransaction: Map<string, { proposals: BookingProposal[]; read: AssistantRead | null; documentId: string | null }>
+  /** The rules the suggestions came from; unset when the snapshot failed. */
+  ruleVersion?: string
+  byTransaction: Map<string, SnapshotEntry>
+}
+
+/** The stored read as the log keeps it: its reasoning only as a hash. */
+export function loggedRead(read: AssistantRead | null | undefined): LoggedRead | null {
+  if (!read) return null
+  return {
+    model: read.model,
+    prompt_sha256: read.prompt_sha256 ?? null,
+    agreement: read.agreement,
+    from_candidate: read.from_candidate,
+    reasoning_sha256: reasoningSha256(read.reasoning),
+  }
+}
+
+/** The hashes of the documents pinned to the rows, or null when they could not be read. */
+async function documentHashes(
+  supabase: SupabaseClient,
+  companyId: string,
+  documentIds: string[],
+): Promise<Map<string, string | null> | null> {
+  const hashes = new Map<string, string | null>()
+  if (documentIds.length === 0) return hashes
+  try {
+    const { data, error } = await supabase
+      .from('document_attachments')
+      .select('id, sha256_hash')
+      .eq('company_id', companyId)
+      .in('id', documentIds)
+    if (error) throw new Error(error.message)
+    for (const doc of (data ?? []) as Array<{ id: string; sha256_hash: string | null }>) hashes.set(doc.id, doc.sha256_hash ?? null)
+    return hashes
+  } catch (err) {
+    log.warn('document hashes unavailable; decisions are recorded without an input hash', {
+      companyId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return null
+  }
 }
 
 export async function snapshotSuggestions(
@@ -56,13 +119,29 @@ export async function snapshotSuggestions(
       proposeForTransactions(supabase, companyId, transactions),
     ])
     snapshot.entityType = entityType
+    const hashes = await documentHashes(
+      supabase,
+      companyId,
+      [...new Set(transactions.map((tx) => tx.document_id).filter((id): id is string => !!id))],
+    )
     for (const tx of transactions) {
+      const proposals = proposed.proposals[tx.id] ?? []
+      const read = proposed.assistant_reads[tx.id] ?? null
+      const documentId = tx.document_id ?? null
       snapshot.byTransaction.set(tx.id, {
-        proposals: proposed.proposals[tx.id] ?? [],
-        read: proposed.assistant_reads[tx.id] ?? null,
-        documentId: tx.document_id ?? null,
+        proposals,
+        read,
+        documentId,
+        inputHash: hashes
+          ? bankLineInputHash({
+              transaction: tx,
+              documentSha256: documentId ? (hashes.get(documentId) ?? null) : null,
+              suggestions: offeredSuggestions(proposals, loggedRead(read)).suggestions,
+            })
+          : null,
       })
     }
+    snapshot.ruleVersion = withProgramVersion(BANK_PROPOSAL_RULES_REVISION)
   } catch (err) {
     log.warn('suggestion snapshot failed; decisions are recorded without suggestions', {
       companyId,
@@ -78,6 +157,8 @@ export interface BankLineDecision {
   actedOn?: string | null
   /** What was booked; null when the bank line was dismissed. */
   final: BankLineFinal | null
+  /** The guards the door ran before this decision (./checks.ts); omitted when it does not report them. */
+  checks?: DecisionCheck[] | null
 }
 
 export async function recordDecisions(
@@ -89,11 +170,12 @@ export async function recordDecisions(
   if (decisions.length === 0) return
   try {
     const actorType = getActor()?.type ?? 'user'
+    const pendingOperationId = committingOperationId()
     const rows = decisions.map((d) => {
       const taken = snapshot.byTransaction.get(d.transactionId)
       const classified = classifyBankLineDecision({
         proposals: taken?.proposals ?? [],
-        read: taken?.read ?? null,
+        read: loggedRead(taken?.read),
         actedOn: d.actedOn,
         final: d.final,
         entityType: snapshot.entityType,
@@ -109,6 +191,14 @@ export async function recordDecisions(
         outcome: classified.outcome,
         actor_type: actorType,
         resolved_by: userId,
+        // A row the snapshot did not reach has no recorded inputs or rules.
+        rule_version: taken ? (snapshot.ruleVersion ?? null) : null,
+        input_hash: taken?.inputHash ?? null,
+        // The policy is recorded with the band it decided, never without.
+        policy_version: classified.confidence_band ? DIRECT_BOOKING_POLICY_VERSION : null,
+        confidence_band: classified.confidence_band,
+        checks: d.checks ?? null,
+        pending_operation_id: pendingOperationId,
       }
     })
     const { error } = await supabase.from('suggestion_log').insert(rows)

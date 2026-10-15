@@ -27,6 +27,15 @@ import type { Transaction, EntityType, CategorizationTemplate, MappingRule } fro
  * proposal the read puts in another reverse-charge box keeps its place and
  * carries the read's box, which sends it to a review (disputeReverseChargeBox).
  */
+/**
+ * The rules behind a bank line's suggestions, recorded with every decision
+ * as suggestion_log.rule_version (with the program version, which pins the
+ * exact code). Bump by hand when what proposeForTransactions offers for the
+ * same row changes on purpose: a source added or dropped, the order, the
+ * contest or box-dispute rules.
+ */
+export const BANK_PROPOSAL_RULES_REVISION = 'bank-proposals.1'
+
 export interface Proposed {
   proposals: Record<string, BookingProposal[]>
   /** Fresh stored reads by transaction id, so a review opens with the assistant's line. */

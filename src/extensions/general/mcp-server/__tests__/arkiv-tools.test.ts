@@ -252,6 +252,36 @@ describe('Arkiv tools', () => {
     expect(failed.journal_entry.decision_unavailable).toBe(true)
   })
 
+  it('get_record adds the recorded rules version and band to the compact decision, and the operation it names', async () => {
+    const TX = '11111111-1111-4111-8111-111111111111'
+    const OP = '0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a'
+    const RECEIPT = '33333333-3333-4333-8333-333333333333'
+    enqueue({ data: { id: JE, voucher_series: 'A', voucher_number: 15, entry_date: '2026-10-16', description: 'Kontorsstol' } })
+    enqueue({ data: [] }) // no attachments
+    enqueue({
+      data: [{
+        id: RECEIPT, kind: 'bank_line', transaction_id: TX, inbox_item_id: null, document_id: null,
+        suggestions: [{ source: 'rule', source_id: 'rule:r1', rank: 0, proposal: { booking: { kind: 'account', account: '5410', vat_treatment: 'standard_25', category: 'expense_equipment' }, debit_account: '5410', credit_account: '1930', vat_treatment: 'standard_25' }, confidence: 0.92, model: null, prompt_sha256: null, matches_final: true }],
+        acted_on: 0, final: { journal_entry_id: JE, booking: null, account: '5410', vat_treatment: 'standard_25', lines: [] },
+        outcome: 'accepted', actor_type: 'api_key', resolved_by: 'user-1', created_at: '2026-10-16T10:00:00.000Z',
+        rule_version: 'bank-proposals.1+a38016f12abc', policy_version: 'direct-booking.1;assistant_sure=0.8;counterpart_seen=3;calibrator=none',
+        input_hash: 'a'.repeat(64), checks: [{ id: 'period_lock', result: 'pass', detail: null }], confidence_band: 'direct', pending_operation_id: OP,
+      }],
+    })
+    enqueue({ data: [{ id: OP, operation_type: 'categorize_transaction', actor_type: 'mcp_oauth', actor_id: 'key-2', actor_label: 'Claude', risk_level: 'low', agent_metadata: null, created_at: '2026-10-16T09:59:00.000Z', resolved_at: '2026-10-16T10:00:01.000Z', journal_entry_id: JE, registration_journal_entry_id: null }] })
+    enqueue({ data: [{ id: JE, voucher_series: 'A', voucher_number: 15, status: 'posted', committed_actor_label: 'Claude', commit_method: 'agent' }] })
+    const out = (await tool('gnubok_get_record').execute({ record_ref: `journal_entry:${JE}` }, CO, 'user-1', supabase)) as { journal_entry: { decision?: Record<string, unknown> } }
+    expect(out.journal_entry.decision).toMatchObject({
+      receipt_id: RECEIPT,
+      proposed_by: { pending_operation_id: OP, actor_type: 'mcp_oauth', label: 'Claude' },
+      rule_version: 'bank-proposals.1+a38016f12abc',
+      confidence_band: 'direct',
+    })
+    // Kept compact: the full provenance is in the v1 receipt and the behandlingshistorik.
+    expect(out.journal_entry.decision).not.toHaveProperty('policy_version')
+    expect(out.journal_entry.decision).not.toHaveProperty('checks')
+  })
+
   it('get_record reports a missing record', async () => {
     enqueue({ data: null })
     await expect(tool('gnubok_get_record').execute({ record_ref: `party:${AGR}` }, CO, 'user-1', supabase)).rejects.toThrow('Record not found')

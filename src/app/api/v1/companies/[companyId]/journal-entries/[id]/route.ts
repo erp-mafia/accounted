@@ -78,7 +78,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/journal-entries/:id',
   summary: 'Retrieve a single verifikation by id.',
   description:
-    'Returns the full journal entry including all lines, dimensions, the storno chain (reverses_id, reversed_by_id, correction_of_id), and decision_receipts: who decided the booking (person, API key or agent), the suggestions on offer, which one was booked and its recorded confidence.',
+    'Returns the full journal entry including all lines, dimensions, the storno chain (reverses_id, reversed_by_id, correction_of_id), and decision_receipts: who decided the booking (person, API key or agent), the suggestions on offer, which one was booked, its recorded confidence, and the rules, approval policy, inputs hash and guards it was decided under.',
   useWhen:
     'You need the full verifikation for audit / reconciliation, or to display the line-by-line breakdown.',
   doNotUseFor:
@@ -86,8 +86,9 @@ registerEndpoint({
   pitfalls: [
     'Cancelled drafts are returned (no filter on status here); inspect status before assuming the entry is posted.',
     'Lines are sorted by sort_order; the order matters for display but not for accounting (the sum across lines is the meaningful quantity).',
-    `decision_receipts holds at most ${MAX_RECEIPTS_PER_SUBJECT} receipts: a samlingsverifikat carries one per bank line. It is null (unknown) when the receipts could not be read; an empty list means none were recorded. rule_version, policy_version, input_hash, checks and confidence_band are null until they are recorded at decision time.`,
+    `decision_receipts holds at most ${MAX_RECEIPTS_PER_SUBJECT} receipts: a samlingsverifikat carries one per bank line. It is null (unknown) when the receipts could not be read; an empty list means none were recorded. rule_version, policy_version, input_hash, checks and confidence_band are recorded at decision time from 2026-10-16 and null on earlier decisions; they are never derived when read.`,
     "confidence.basis 'model_reported' is the reading model's own score for an underlag, not evidence; only 'backing' comes from deterministic evidence.",
+    'checks lists only the guards that ran: an absent guard did not apply, it did not pass. A warn result is an override (force, allow_duplicate, confirm_no_match) or a guard that could not run; its detail says which.',
   ],
   example: {
     response: {
@@ -110,17 +111,23 @@ registerEndpoint({
             decided_by: { actor_type: 'api_key', user_id: '3f2a…', label: 'Integration', commit_method: 'api_key' },
             proposed_by: null,
             candidates: [
-              { source: 'rule', source_id: 'rule:9d1f…', rank: 0, accounts: ['6570'], vat_treatment: 'exempt', confidence: 0.92, model: null, prompt_sha256: null, matches_final: true, contested: false },
+              { source: 'rule', source_id: 'rule:9d1f…', rank: 0, accounts: ['6570'], vat_treatment: 'exempt', confidence: 0.92, model: null, prompt_sha256: null, matches_final: true, contested: false, agreement: null, from_candidate: null, reasoning_sha256: null },
             ],
-            chosen: { source: 'rule', source_id: 'rule:9d1f…', rank: 0, accounts: ['6570'], vat_treatment: 'exempt', confidence: 0.92, model: null, prompt_sha256: null, matches_final: true, contested: false },
+            chosen: { source: 'rule', source_id: 'rule:9d1f…', rank: 0, accounts: ['6570'], vat_treatment: 'exempt', confidence: 0.92, model: null, prompt_sha256: null, matches_final: true, contested: false, agreement: null, from_candidate: null, reasoning_sha256: null },
             booked: { journal_entry_id: '0e9c…', voucher: 'A142', entry_status: 'posted', account: '6570', vat_treatment: 'exempt', supplier_invoice_id: null, changed_fields: [] },
             evidence: { transaction_id: '7b3a…', inbox_item_id: null, document_ids: [] },
             confidence: { value: 0.92, basis: 'backing' },
-            rule_version: null,
-            policy_version: null,
-            input_hash: null,
-            checks: null,
-            confidence_band: null,
+            rule_version: 'bank-proposals.1+a38016f12abc',
+            policy_version: 'direct-booking.1;assistant_sure=0.8;counterpart_seen=3;calibrator=none',
+            input_hash: '4f1c…',
+            checks: [
+              { id: 'already_booked', result: 'pass', detail: null },
+              { id: 'duplicate', result: 'pass', detail: null },
+              { id: 'counter_legs', result: 'pass', detail: null },
+              { id: 'chart', result: 'pass', detail: null },
+              { id: 'period_lock', result: 'pass', detail: null },
+            ],
+            confidence_band: 'direct',
           },
         ],
       },

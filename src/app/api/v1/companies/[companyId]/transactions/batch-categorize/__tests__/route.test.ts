@@ -470,6 +470,7 @@ describe('POST batch-categorize', () => {
       expect.objectContaining({ id: TX_A, cash_account_id: 'cash-1' }),
       expect.objectContaining({ credit_account: '1931' }),
       undefined,
+      { rubricVersion: undefined },
     )
   })
 
@@ -605,6 +606,7 @@ describe('POST batch-categorize', () => {
       expect.objectContaining({ id: TX_B }),
       expect.objectContaining({ credit_account: '1931' }),
       undefined,
+      { rubricVersion: undefined },
     )
   })
 

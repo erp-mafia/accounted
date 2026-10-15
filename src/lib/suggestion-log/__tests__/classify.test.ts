@@ -112,6 +112,44 @@ describe('classifyBankLineDecision', () => {
       proposal: { booking: { kind: 'account', account: '6540' }, vat_treatment: 'standard_25' },
     })
   })
+
+  it("keeps the assistant read's agreement, candidate origin and reasoning hash on the assistant only", () => {
+    const out = classifyBankLineDecision({
+      proposals: [counterparty, assistant],
+      read: { ...read, agreement: 0.67, from_candidate: true, reasoning_sha256: 'r'.repeat(64) },
+      final: final(),
+    })
+    expect(out.suggestions[0]).not.toHaveProperty('agreement')
+    expect(out.suggestions[1]).toMatchObject({ agreement: 0.67, from_candidate: true, reasoning_sha256: 'r'.repeat(64) })
+  })
+
+  it('keeps the evidence the direct-booking policy reads, only the keys the proposal carried', () => {
+    const out = classifyBankLineDecision({
+      proposals: [{ ...counterparty, seen_count: 4, rule_mode: 'propose' }, assistant],
+      final: final(),
+    })
+    expect(out.suggestions[0].evidence).toEqual({ seen_count: 4, rule_mode: 'propose' })
+    expect(out.suggestions[1]).not.toHaveProperty('evidence')
+  })
+
+  it("bands the acted-on suggestion by the direct-booking policy, on the proposal as offered", () => {
+    const habit = { ...counterparty, seen_count: 3, rule_mode: 'propose' as const }
+    expect(classifyBankLineDecision({ proposals: [habit], actedOn: 'cp:abc', final: final({ account: '6230' }) }).confidence_band).toBe('direct')
+    // Contested by the read: never booked from the row, whatever the habit.
+    expect(
+      classifyBankLineDecision({ proposals: [{ ...habit, contested: true }], actedOn: 'cp:abc', final: final({ account: '6230' }) }).confidence_band,
+    ).toBe('review')
+    // The assistant's own 0.82 is backing-floored, but without a receipt behind it the row opens a review.
+    expect(classifyBankLineDecision({ proposals: [assistant], actedOn: 'assistant:tx-1', final: final() }).confidence_band).toBe('review')
+    expect(
+      classifyBankLineDecision({ proposals: [{ ...assistant, has_underlag: true }], actedOn: 'assistant:tx-1', final: final() }).confidence_band,
+    ).toBe('direct')
+  })
+
+  it('has no band without an acted-on suggestion', () => {
+    expect(classifyBankLineDecision({ proposals: [counterparty], final: final() }).confidence_band).toBeNull()
+    expect(classifyBankLineDecision({ proposals: [counterparty], actedOn: 'cp:abc', final: null }).confidence_band).toBeNull()
+  })
 })
 
 describe('businessAccountOfLines', () => {

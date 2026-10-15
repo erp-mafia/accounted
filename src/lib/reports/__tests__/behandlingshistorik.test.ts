@@ -1356,6 +1356,31 @@ describe('decisionEvents', () => {
     expect(byId['decision:sl-3']).toMatchObject({ event: 'Bokfört utan förslag', object: 'Banktransaktion', details: ['Inga förslag fanns'] })
   })
 
+  it('names the rules, policy and band it was decided under, and every guard that did not simply pass', () => {
+    const [ev] = decisionEvents(buildDecisionReceipts([row({
+      actor_type: 'user',
+      rule_version: 'bank-proposals.1+a38016f12abc',
+      policy_version: 'direct-booking.1;assistant_sure=0.8;counterpart_seen=3;calibrator=none',
+      input_hash: 'a'.repeat(64),
+      confidence_band: 'review',
+      checks: [
+        { id: 'already_booked', result: 'pass', detail: null },
+        { id: 'duplicate', result: 'warn', detail: 'force:journal_entry:je-0' },
+        { id: 'period_lock', result: 'pass', detail: null },
+      ],
+    })], { entries: new Map(), operations: new Map() }))
+    expect(ev.details).toEqual([
+      'Förslag: 2 (regel, assistenten)',
+      'Valt förslag: regel, konto 5410',
+      'Säkerhet: 92 %',
+      'Bokfört konto: 5410',
+      'Regelversion: bank-proposals.1+a38016f12abc',
+      'Policy: direct-booking.1;assistant_sure=0.8;counterpart_seen=3;calibrator=none, bedömning: krävde granskning',
+      'Kontroller: 3',
+      'Kontroll med varning: dubblettkontroll (force:journal_entry:je-0)',
+    ])
+  })
+
   it('a samlingsverifikat is one event carrying its count', () => {
     const events = decisionEvents(buildDecisionReceipts([
       row({ id: 'sl-a', created_at: '2026-03-10T09:30:01.000Z' }),
@@ -1371,6 +1396,12 @@ describe('decisionEvents', () => {
       count: 3,
       details: ['3 banktransaktioner i en verifikation', 'Förslag följt: 2', 'Bokfört utan förslag: 1', 'Föreslaget av: MCP-anslutning: Claude'],
     })
+  })
+
+  it('a samlingsverifikat names the rules version its decisions share', () => {
+    const shared = { created_at: '2026-03-10T09:30:01.000Z', rule_version: 'bank-proposals.1+a38016f12abc' }
+    const [ev] = decisionEvents(buildDecisionReceipts([row({ id: 'sl-a', ...shared }), row({ id: 'sl-b', ...shared })], ctx))
+    expect(ev.details).toContain('Regelversion: bank-proposals.1+a38016f12abc')
   })
 })
 

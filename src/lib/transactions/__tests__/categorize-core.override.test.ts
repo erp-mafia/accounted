@@ -210,6 +210,14 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
           account: '4020',
           booking: { kind: 'account', account: '4020', vat_treatment: 'exempt', category: 'expense_other' },
         }),
+        // The approval door runs no invoice-match intercept, so none is recorded.
+        checks: [
+          { id: 'already_booked', result: 'pass', detail: null },
+          { id: 'duplicate', result: 'pass', detail: null },
+          { id: 'counter_legs', result: 'pass', detail: null },
+          { id: 'chart', result: 'pass', detail: null },
+          { id: 'period_lock', result: 'pass', detail: null },
+        ],
       }],
       'user-1',
     )

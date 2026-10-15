@@ -1,0 +1,1 @@
+[2026-10-15] journal_entries.rubric_version is stamped from the snapshot's rule_version only where the decision commits through commitEntry (categorize-core, the book route); bulk-book's RPC and underlag registration entries stay NULL rather than widen the RPC or the supplier-invoice paths.

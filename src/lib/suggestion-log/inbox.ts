@@ -1,8 +1,18 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getActor } from '@/lib/bookkeeping/actor-context'
+import { committingOperationId } from '@/lib/pending-operations/commit-scope'
 import { createLogger } from '@/lib/logger'
-import { classifyInboxDecision, resultAccounts, type InboxFields, type InboxFinal } from './inbox-classify'
+import {
+  INBOX_EXTRACTION_RULES_REVISION,
+  classifyInboxDecision,
+  offeredInboxSuggestions,
+  resultAccounts,
+  type InboxFields,
+  type InboxFinal,
+} from './inbox-classify'
 import type { BankLineFinal } from './classify'
+import type { DecisionCheck } from './checks'
+import { inboxInputHash, withProgramVersion } from './provenance'
 
 /**
  * Writes suggestion_log rows for decisions on inbox items (underlag).
@@ -13,8 +23,14 @@ import type { BankLineFinal } from './classify'
  *      That is document_attachments.extracted_data, which only the model
  *      writes (the inbox mirrors each extraction onto the document); the
  *      inbox item's own extracted_data takes the person's edits, so it is
- *      the fallback only for an item whose document carries no reading.
- *   2. recordInboxDecision() after it succeeded.
+ *      the fallback only for an item whose document carries no reading. It
+ *      also fixes the rules version and the hash of the inputs (the
+ *      document's own hash and the suggestion, ./provenance.ts).
+ *   2. recordInboxDecision() after it succeeded, with the guards the door
+ *      ran and the pending operation whose approval carried it. No approval
+ *      policy decides an underlag (every one is registered by a person or an
+ *      approved operation, and the reading's score is the model's own), so
+ *      policy_version and confidence_band stay null.
  *
  * Neither step can fail the booking: errors are logged and dropped.
  *
@@ -30,6 +46,26 @@ export interface InboxSnapshot {
   documentId: string | null
   extraction: unknown | null
   model: string | null
+  /** The rules the suggestion is read with (suggestion_log.rule_version). */
+  ruleVersion?: string
+  /** SHA-256 of the inputs; null when the document could not be read. */
+  inputHash?: string | null
+}
+
+function withInputs(snapshot: InboxSnapshot, documentSha256: string | null): InboxSnapshot {
+  return {
+    ...snapshot,
+    ruleVersion: withProgramVersion(INBOX_EXTRACTION_RULES_REVISION),
+    inputHash: inboxInputHash({
+      documentId: snapshot.documentId,
+      documentSha256,
+      suggestions: offeredInboxSuggestions({
+        extraction: snapshot.extraction,
+        model: snapshot.model,
+        sourceId: snapshot.documentId ?? snapshot.inboxItemId,
+      }),
+    }),
+  }
 }
 
 export async function snapshotInboxExtraction(
@@ -44,11 +80,11 @@ export async function snapshotInboxExtraction(
     extraction: item.extracted_data ?? null,
     model: null,
   }
-  if (!snapshot.documentId) return snapshot
+  if (!snapshot.documentId) return withInputs(snapshot, null)
   try {
     const { data, error } = await supabase
       .from('document_attachments')
-      .select('extracted_data, extraction_model')
+      .select('extracted_data, extraction_model, sha256_hash')
       .eq('id', snapshot.documentId)
       .eq('company_id', companyId)
       .maybeSingle()
@@ -59,6 +95,7 @@ export async function snapshotInboxExtraction(
       snapshot.extraction = data.extracted_data
       snapshot.model = model
     }
+    return withInputs(snapshot, (data?.sha256_hash as string | null | undefined) ?? null)
   } catch (err) {
     log.warn('extraction snapshot failed; the inbox item reading is used instead', {
       companyId,
@@ -66,7 +103,8 @@ export async function snapshotInboxExtraction(
       error: err instanceof Error ? err.message : String(err),
     })
   }
-  return snapshot
+  // The document's hash is unknown, so the inputs are not fully known either.
+  return { ...withInputs(snapshot, null), inputHash: null }
 }
 
 /** The posted lines of a verifikat, for doors that do not have them at hand. */
@@ -118,6 +156,8 @@ export async function recordInboxDecision(
   snapshot: InboxSnapshot,
   booking: InboxBooking | null,
   userId: string | null,
+  /** The guards the door ran before this decision (./checks.ts); omitted when it does not report them. */
+  checks?: DecisionCheck[] | null,
 ): Promise<void> {
   try {
     if (!booking && !snapshot.documentId) return
@@ -151,6 +191,10 @@ export async function recordInboxDecision(
       outcome: classified.outcome,
       actor_type: getActor()?.type ?? 'user',
       resolved_by: userId,
+      rule_version: snapshot.ruleVersion ?? null,
+      input_hash: snapshot.inputHash ?? null,
+      checks: checks ?? null,
+      pending_operation_id: committingOperationId(),
     })
     if (error) throw new Error(error.message)
   } catch (err) {

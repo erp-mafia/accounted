@@ -45,6 +45,7 @@ describe('deleteInboxItem: suggestion_log', () => {
       expect.objectContaining({ inboxItemId: 'item-1', documentId: 'doc-1' }),
       null,
       'user-1',
+      [{ id: 'already_booked', result: 'pass', detail: null }],
     )
   })
 

@@ -482,6 +482,14 @@ describe('POST /api/transactions/[id]/categorize', () => {
         transactionId: 'tx-1',
         actedOn: 'assistant:tx-1',
         final: expect.objectContaining({ journal_entry_id: 'je-1', account: '6200' }),
+        // A 6200 booking has no open invoice to match, so the intercept is not recorded.
+        checks: [
+          { id: 'already_booked', result: 'pass', detail: null },
+          { id: 'duplicate', result: 'pass', detail: null },
+          { id: 'counter_legs', result: 'pass', detail: null },
+          { id: 'chart', result: 'pass', detail: null },
+          { id: 'period_lock', result: 'pass', detail: null },
+        ],
       }],
       'user-1',
     )
@@ -754,6 +762,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
       expect.objectContaining({ id: 'tx-1' }),
       expect.objectContaining({ dimensions: { '1': 'KS1', '6': 'P001' } }),
       undefined,
+      { rubricVersion: undefined },
     )
   })
 

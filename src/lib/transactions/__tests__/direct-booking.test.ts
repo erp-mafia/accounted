@@ -1,5 +1,34 @@
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { booksWithoutReview } from '../direct-booking'
+import { DIRECT_BOOKING_POLICY_REVISION, DIRECT_BOOKING_POLICY_VERSION, booksWithoutReview, confidenceBand } from '../direct-booking'
+
+describe('DIRECT_BOOKING_POLICY_VERSION', () => {
+  it('spells the thresholds into the recorded policy version', () => {
+    expect(DIRECT_BOOKING_POLICY_VERSION).toBe('direct-booking.1;assistant_sure=0.8;counterpart_seen=3;calibrator=none')
+  })
+
+  /**
+   * Every decision records this version with its band, so the version must
+   * change whenever the policy does. Edited direct-booking.ts? If
+   * booksWithoutReview now decides differently for any proposal, bump
+   * DIRECT_BOOKING_POLICY_REVISION. Either way, pin the new content hash here.
+   */
+  it('is pinned to the policy file: an edit must decide whether the revision moves', () => {
+    // Line endings normalised, so a CRLF checkout pins the same content.
+    const source = readFileSync(join(__dirname, '..', 'direct-booking.ts'), 'utf8').replace(/\r\n/g, '\n')
+    expect({
+      revision: DIRECT_BOOKING_POLICY_REVISION,
+      sha256: createHash('sha256').update(source).digest('hex'),
+    }).toEqual({ revision: 1, sha256: '79475d8a7ea723ddbc9262e8c2e9bf6428e037b12229da1bfa6ef95f91005f8b' })
+  })
+
+  it('bands a proposal by whether the row books it without a review', () => {
+    expect(confidenceBand({ source: 'rule', confidence: 0.9, rule_own: true })).toBe('direct')
+    expect(confidenceBand({ source: 'recent', confidence: 0.45 })).toBe('review')
+  })
+})
 
 describe('booksWithoutReview', () => {
   it('books a matched rule of the company\'s own, not a system default or one asking for review', () => {

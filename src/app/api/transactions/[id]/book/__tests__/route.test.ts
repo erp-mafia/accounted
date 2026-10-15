@@ -87,6 +87,7 @@ async function useRealGuard() {
 }
 
 import { POST } from '../route'
+import { recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
 
 const VALID_UUID = '550e8400-e29b-41d4-a716-446655440000'
 const SIBLING_UUID = '660e8400-e29b-41d4-a716-446655440111'
@@ -344,7 +345,35 @@ describe('POST /api/transactions/[id]/book', () => {
     expect(seen).toEqual({ type: 'user' })
     expect(defaultCommitMethod(seen)).toBe('user_accept')
     // No method passed: the engine derives it, so the route cannot forget it.
-    expect(mockCreateJournalEntry.mock.calls[0]).toHaveLength(4)
+    // The sixth argument is the rules version the snapshot was taken under.
+    expect(mockCreateJournalEntry.mock.calls[0]).toHaveLength(6)
+    expect(mockCreateJournalEntry.mock.calls[0][4]).toBeUndefined()
+  })
+
+  it('records the guards it ran and stamps the rules version on the voucher', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null })
+    enqueue({ data: tx, error: null })
+    mockCreateJournalEntry.mockResolvedValue(makeJournalEntry({ id: 'je-new' }))
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
+    vi.mocked(snapshotSuggestions).mockResolvedValueOnce({
+      companyId: 'company-1',
+      ruleVersion: 'bank-proposals.1+a38016f12abc',
+      byTransaction: new Map(),
+    })
+
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/book', { method: 'POST', body: validBody }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(mockCreateJournalEntry.mock.calls[0][5]).toBe('bank-proposals.1+a38016f12abc')
+    expect(vi.mocked(recordDecisions).mock.calls[0][2][0].checks).toEqual([
+      { id: 'already_booked', result: 'pass', detail: null },
+      { id: 'duplicate', result: 'pass', detail: null },
+      { id: 'counter_legs', result: 'pass', detail: null },
+      { id: 'bank_line_direction', result: 'pass', detail: null },
+    ])
   })
 
   it('creates journal entry and links to transaction (happy path)', async () => {
@@ -390,7 +419,7 @@ describe('POST /api/transactions/[id]/book', () => {
       bank_booking_context: [{ transaction_id: tx.id, cash_account_id: null, settlement_account: '1930',
         date: tx.date, amount: tx.amount, currency: tx.currency }],
       lines: validBody.lines,
-    })
+    }, undefined, undefined)
 
     expect(emitSpy).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'transaction.categorized' })
@@ -429,6 +458,8 @@ describe('POST /api/transactions/[id]/book', () => {
       'company-1',
       'user-1',
       expect.objectContaining({ source_type: 'bank_transaction', voucher_series: 'M' }),
+      undefined,
+      undefined,
     )
   })
 
@@ -459,6 +490,8 @@ describe('POST /api/transactions/[id]/book', () => {
       'company-1',
       'user-1',
       expect.objectContaining({ voucher_series: 'V' }),
+      undefined,
+      undefined,
     )
     // No cash_accounts series lookup: the explicit pick short-circuits it.
     const seriesLookups = findCalls('cash_accounts', 'select').filter((args) => args[0] === 'voucher_series')
@@ -559,6 +592,8 @@ describe('POST /api/transactions/[id]/book', () => {
       'company-1',
       'user-1',
       expect.objectContaining({ voucher_series: 'M' }),
+      undefined,
+      undefined,
     )
   })
 

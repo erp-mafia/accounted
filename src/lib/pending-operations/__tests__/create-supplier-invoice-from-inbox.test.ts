@@ -201,6 +201,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
       expect.objectContaining({ inboxItemId: 'inbox-1' }),
       expect.objectContaining({ supplier_invoice_id: 'inv-1', journal_entry_id: 'je-100' }),
       expect.any(String),
+      [{ id: 'already_booked', result: 'pass', detail: null }, { id: 'payee_alert', result: 'pass', detail: null }],
     )
   })
 

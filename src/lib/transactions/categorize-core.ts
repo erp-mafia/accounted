@@ -48,6 +48,7 @@ import { buildTransactionEntryLines, createTransactionJournalEntry } from '@/lib
 import { finalFromCategorize, recordDecisions, snapshotSuggestions, type SuggestionSnapshot } from '@/lib/suggestion-log/record'
 import { loadEntryLines, recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
 import { bookedTotals } from '@/lib/suggestion-log/inbox-classify'
+import { duplicateCheck, passed, warned, type DecisionCheck, type DuplicateVerdict } from '@/lib/suggestion-log/checks'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
 import {
@@ -71,6 +72,7 @@ import {
 import { runBookingDuplicateGuard } from '@/lib/transactions/booking-duplicate-guard'
 import { assertTransactionBookable } from '@/lib/transactions/is-booked'
 import { findInvoiceMatchSuggestion } from '@/lib/transactions/invoice-match-suggestion'
+import { invoiceMatchSide } from '@/lib/transactions/invoice-match-side'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { createLogger, type Logger } from '@/lib/logger'
@@ -184,6 +186,8 @@ export interface CategorizeBooked {
   category: TransactionCategory
   already_had_journal_entry: boolean
   transaction: Transaction
+  /** The guards this booking ran, as its decision records them (lib/suggestion-log/checks.ts). */
+  checks: DecisionCheck[]
 }
 
 export interface CategorizeRefusal {
@@ -629,6 +633,8 @@ export async function categorizeTransaction(
       ? (junctionLinks as Array<{ journal_entry_id: string; role?: string | null }>)
       : [],
   })
+  // The guards this booking runs, in order, for its decision record.
+  const checks: DecisionCheck[] = []
   let wouldBook = true
   if (!bookable.ok) {
     const flagsOnly = options.onBooked === 'update_flags' && bookable.via === 'pointer'
@@ -638,6 +644,8 @@ export async function categorizeTransaction(
     if (!dryRun) return updateFlagsOnly(supabase, companyId, transaction, input)
     // A dry run on a booked row previews the kontering a fresh row would get.
     wouldBook = false
+  } else {
+    checks.push(passed('already_booked'))
   }
 
   const target: BookingTarget = {
@@ -659,7 +667,7 @@ export async function categorizeTransaction(
   // leaves a behandlingshistorik record on a live call (BFNAR 2013:2 p. 9.16).
   if (wouldBook) {
     if (input.allow_duplicate === true) {
-      if (!dryRun) await recordAllowedDuplicate(supabase, companyId, userId, target, options.exclude, txLog)
+      if (!dryRun) checks.push(duplicateCheck(await recordAllowedDuplicate(supabase, companyId, userId, target, options.exclude, txLog)))
     } else {
       const verdict = await runBookingDuplicateGuard(supabase, companyId, userId, target, input, txLog, {
         exclude: options.exclude,
@@ -667,6 +675,7 @@ export async function categorizeTransaction(
         via: options.forceVia,
       })
       if (!verdict.ok) return refuseFor(verdict.code, verdict.details as Record<string, unknown>)
+      checks.push(duplicateCheck(verdict.verdict))
     }
   }
 
@@ -712,6 +721,7 @@ export async function categorizeTransaction(
           },
         )
       }
+      if (input.vat_treatment === 'reverse_charge') checks.push(passed('reverse_charge_seller_vat'))
     }
   }
 
@@ -721,6 +731,8 @@ export async function categorizeTransaction(
   })
   if (!mapped.ok) return { ...mapped, transaction }
   const { mappingResult } = mapped
+  // The mapping returns only after guardCounterLegs let its legs through.
+  checks.push(passed('counter_legs'))
 
   // Every account the verifikat posts to must be in the chart or seedable
   // from BAS: a missing one would otherwise make the engine throw mid-flight.
@@ -735,6 +747,7 @@ export async function categorizeTransaction(
       message: { sv: `Följande konton behöver aktiveras: ${missingAccounts.join(', ')}` },
     })
   }
+  checks.push(passed('chart'))
 
   // Invoice-match intercept: a plain 244x / 151x categorization an open
   // supplier / customer invoice covers is refused with the candidates, so the
@@ -755,6 +768,14 @@ export async function categorizeTransaction(
     if (invoiceSuggestion) {
       return refuseFor(invoiceSuggestion.code, invoiceSuggestion.details as Record<string, unknown>)
     }
+    // Recorded only where the intercept applies: a 5410 booking has no invoice to match.
+    const side = invoiceMatchSide({
+      transaction,
+      debitAccount: mappingResult.debit_account,
+      creditAccount: mappingResult.credit_account,
+      isBusiness,
+    })
+    if (side) checks.push(input.confirm_no_match ? warned('invoice_match', 'confirm_no_match') : passed('invoice_match', side))
   }
 
   if (wouldBook) {
@@ -773,6 +794,7 @@ export async function categorizeTransaction(
         ...(isBusiness ? {} : { suggested_action: 'ignore' }),
       })
     }
+    checks.push(passed('period_lock'))
   }
 
   if (dryRun) {
@@ -802,7 +824,10 @@ export async function categorizeTransaction(
   const suggestionSnapshot = options.suggestionSnapshot ?? (await snapshotSuggestions(supabase, companyId, [txId]))
   let bookedEntry: JournalEntry | null
   try {
-    bookedEntry = await createTransactionJournalEntry(supabase, companyId, userId, transaction, mappingResult, input.notes)
+    bookedEntry = await createTransactionJournalEntry(supabase, companyId, userId, transaction, mappingResult, input.notes, {
+      // The voucher carries the rules its decision was made under.
+      rubricVersion: suggestionSnapshot.ruleVersion,
+    })
   } catch (err) {
     // An account deactivated between the check above and the engine call.
     if (err instanceof AccountsNotInChartError) {
@@ -851,6 +876,7 @@ export async function categorizeTransaction(
       category: isBusiness ? (input.category ?? finalCategory) : 'private',
       vatTreatment: input.vat_treatment ?? null,
     }),
+    checks,
   }], userId)
 
   // Compare-and-set on the pointer as read: a concurrent booking of the same
@@ -951,6 +977,7 @@ export async function categorizeTransaction(
       category: finalCategory,
       already_had_journal_entry: false,
       transaction: updatedTransaction,
+      checks,
     },
   }
 }
@@ -987,6 +1014,8 @@ async function updateFlagsOnly(
       category,
       already_had_journal_entry: true,
       transaction,
+      // Nothing was booked, so no booking guard ran.
+      checks: [],
     },
   }
 }
@@ -1012,10 +1041,16 @@ async function recordAllowedDuplicate(
   target: BookingTarget,
   exclude: BookingDuplicateExclusions | undefined,
   txLog: Logger,
-): Promise<void> {
+): Promise<DuplicateVerdict> {
+  let dismissed: BookedDuplicateCandidate | null
   try {
-    const dismissed = await detectBookingDuplicate(supabase, companyId, target, exclude)
-    if (!dismissed) return
+    dismissed = await detectBookingDuplicate(supabase, companyId, target, exclude)
+  } catch (err) {
+    txLog.warn('duplicate detection for the allow_duplicate record failed', err as Error)
+    return { kind: 'detection_failed' }
+  }
+  if (!dismissed) return { kind: 'allowed_none' }
+  try {
     await appendProcessingHistory({
       companyId,
       correlationId: target.id,
@@ -1044,6 +1079,7 @@ async function recordAllowedDuplicate(
   } catch (logErr) {
     txLog.warn('failed to record duplicate-dismissal behandlingshistorik', logErr as Error)
   }
+  return { kind: 'allowed', journal_entry_id: dismissed.journal_entry_id ?? null, transaction_id: dismissed.transaction_id ?? null }
 }
 
 // ── The approval doors' result shape ─────────────────────────────────
@@ -1059,6 +1095,8 @@ export interface CategorizeCoreResult {
    */
   errorCode?: string
   status?: number
+  /** On a booking: the guards it ran (never persisted in result_data; the bulk-inbox driver records them). */
+  checks?: DecisionCheck[]
 }
 
 export interface CategorizeMatchedTransactionOpts {
@@ -1143,7 +1181,10 @@ export async function categorizeMatchedTransaction(
   })
   if (outcome.ok) {
     const booked = outcome.dryRun ? null : outcome.booked
-    return { data: { journal_entry_id: booked?.journal_entry_id ?? null, category: booked?.category ?? opts.category } }
+    return {
+      data: { journal_entry_id: booked?.journal_entry_id ?? null, category: booked?.category ?? opts.category },
+      ...(booked ? { checks: booked.checks } : {}),
+    }
   }
   return coreResultFromRefusal(outcome)
 }
@@ -1338,12 +1379,15 @@ export async function bulkBookMatchedInboxItems(
 
     // The bank line's own row came from categorizeMatchedTransaction; this
     // one records the underlag: booked as read, or with a total that differs.
+    // Its guards are the bank line's booking's: that is what booked the
+    // underlag. The item was checked unbooked above, so already_booked
+    // covers both.
     const postedLines = await loadEntryLines(supabase, companyId, bookedJeId)
     await recordInboxDecision(supabase, extractionSnapshot, {
       journal_entry_id: bookedJeId,
       fields: postedLines.length > 0 ? bookedTotals(postedLines) : {},
       lines: postedLines,
-    }, userId)
+    }, userId, [passed('already_booked'), ...(result.checks ?? []).filter((c) => c.id !== 'already_booked')])
   }
 
   return { booked, skipped }

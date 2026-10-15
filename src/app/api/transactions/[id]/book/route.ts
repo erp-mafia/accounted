@@ -14,6 +14,7 @@ import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-det
 import { assertTransactionBookable } from '@/lib/transactions/is-booked'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { finalFromLines, linesOf, recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
+import { duplicateCheck, passed, type DecisionCheck, type DuplicateVerdict } from '@/lib/suggestion-log/checks'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
@@ -52,6 +53,9 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         details: { journal_entry_id: bookable.journalEntryId, via: bookable.via },
       })
     }
+    // The guards this booking runs, in order, for its decision record.
+    const checks: DecisionCheck[] = [passed('already_booked')]
+    let duplicateVerdict: DuplicateVerdict = { kind: 'clear' }
 
     // Booking-time duplicate guard: if another transaction with the same
     // date+amount+account is already booked, booking this one would double-count
@@ -99,6 +103,11 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
           },
         })
       } else {
+        duplicateVerdict = {
+          kind: 'forced',
+          journal_entry_id: candidate.journal_entry_id ?? null,
+          transaction_id: candidate.transaction_id ?? null,
+        }
         dupLog.warn('booking-time duplicate guard bypassed', {
           reason: 'force=true',
           transactionId: id,
@@ -149,7 +158,9 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         })
       }
       dupLog.warn('booking-time duplicate detection failed (continuing)', err as Error)
+      duplicateVerdict = { kind: 'detection_failed' }
     }
+    checks.push(duplicateCheck(duplicateVerdict))
 
     // A 19xx counter line that is a twin of the transaction's own cash account
     // (same IBAN, same currency: the other ledger of one connection, or a
@@ -173,6 +184,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         details: { accountNumber: refusedLedger },
       })
     }
+    checks.push(passed('counter_legs'))
 
     // Series: the dialog's explicit pick wins; otherwise the bank account the
     // row will sit on after this booking (the live sibling when the guard
@@ -207,6 +219,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         details: { settlement_account: settlementAccount, required_side: withdrawal ? 'credit' : 'debit' },
       })
     }
+    checks.push(passed('bank_line_direction'))
 
     // What was on offer, taken before the booking.
     const suggestionSnapshot = await snapshotSuggestions(supabase, companyId, [id])
@@ -223,7 +236,8 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         bank_booking_context: [bankBookingContext(transaction, settlementAccount, repointCashAccountId)],
         lines,
         ...(voucherSeries ? { voucher_series: voucherSeries } : {}),
-      })
+        // The voucher carries the rules its decision was made under.
+      }, undefined, suggestionSnapshot.ruleVersion)
     } catch (err) {
       const typed = bookkeepingErrorResponse(err)
       if (typed) return typed
@@ -288,6 +302,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     await recordDecisions(supabase, suggestionSnapshot, [{
       transactionId: id,
       final: finalFromLines(journalEntry.id, linesOf(journalEntry)),
+      checks,
     }], user.id)
 
     await propagateUnderlagForBookedTransaction(supabase, companyId, id, journalEntry.id)

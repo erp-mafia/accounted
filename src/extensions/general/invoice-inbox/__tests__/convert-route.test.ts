@@ -281,6 +281,7 @@ describe('POST /items/:id/convert', () => {
         fields: expect.objectContaining({ invoice_number: 'F-2024-001', invoice_date: VALID_CONVERT_BODY.invoice_date }),
       }),
       'user-1',
+      [{ id: 'already_booked', result: 'pass', detail: null }, { id: 'payee_alert', result: 'pass', detail: null }],
     )
   })
 
