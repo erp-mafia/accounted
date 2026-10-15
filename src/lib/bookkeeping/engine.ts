@@ -825,6 +825,12 @@ export async function cancelDraftEntry(
  * the audit_log COMMIT row (migration 20260619120000). No scope → NULLs.
  * A caller that passes no commitMethod records the one its actor implies
  * (defaultCommitMethod), so WHO and HOW are stamped together.
+ *
+ * Event: the RPC itself writes the journal_entry.committed row to event_log,
+ * in the commit transaction (migration 20261016001100), so the event cannot
+ * be lost between the commit and the emit. The emit below still drives the
+ * webhook fan-out and extension handlers; the event-log handler's own write
+ * for this entry hits the same dedupe_key and is a no-op.
  */
 export async function commitEntry(
   supabase: SupabaseClient,

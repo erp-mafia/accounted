@@ -38,6 +38,17 @@ describe('public webhook event catalogue', () => {
     expect(enumValues).toEqual([...PUBLIC_WEBHOOK_EVENTS])
   })
 
+  it('is exactly the item enum of the v1 create endpoint event_types list', () => {
+    const spec = generateOpenApiSpec('https://unit.test')
+    const op = (spec.paths['/api/v1/companies/{companyId}/webhooks'] as Record<string, unknown>).post as {
+      requestBody: {
+        content: Record<string, { schema: { properties: Record<string, { items?: { enum?: unknown[] } }> } }>
+      }
+    }
+    const itemEnum = op.requestBody.content['application/json'].schema.properties.event_types.items?.enum
+    expect(itemEnum).toEqual([...PUBLIC_WEBHOOK_EVENTS])
+  })
+
   it('is exactly the list the docs page renders', () => {
     const section = WEBHOOKS_MD.split('## Event types')[1]?.split('## Payload shape')[0] ?? ''
     const documented = [...section.matchAll(/^- `([a-z_]+\.[a-z_]+)`/gm)].map((m) => m[1])

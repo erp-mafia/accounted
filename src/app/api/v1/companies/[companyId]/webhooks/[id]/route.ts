@@ -2,8 +2,10 @@
  * /api/v1/companies/{companyId}/webhooks/{id}: get / update / delete.
  *
  * GET   : return the full webhook row (no secret).
- * PATCH : update name, description, webhook_url, active. Cannot change
- *          event_type (immutable: would require re-pinning api_version).
+ * PATCH : update name, description, webhook_url, active, and the event
+ *          types the webhook receives (event_types, or the single legacy
+ *          event_type; the list is replaced, api_version_pinned is kept:
+ *          the pin fixes payload shapes, not which events are subscribed).
  *          A new webhook_url is a new endpoint: the webhooks_verification_guard
  *          trigger resets its verification (and ends any grace window), so
  *          nothing is delivered to it until it passes the handshake.
@@ -27,6 +29,14 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { validateWebhookUrl } from '@/lib/webhooks/url-guard'
+import { hasScope } from '@/lib/auth/api-keys'
+import {
+  WebhookEventTypeListSchema,
+  WebhookEventTypeSchema,
+  payrollEventTypesIn,
+  refineWebhookEventTypeFields,
+  resolveWebhookEventTypes,
+} from '@/lib/webhooks/subscription-event-types'
 import {
   WEBHOOK_VERIFICATION_COLUMNS,
   WEBHOOK_VERIFICATION_RESPONSE_FIELDS,
@@ -34,7 +44,7 @@ import {
   type VerificationTimestamps,
 } from '@/lib/webhooks/verification'
 
-const WEBHOOK_DETAIL_COLUMNS = `id, name, description, event_type, webhook_url, active, api_version_pinned, disabled_at, disabled_reason, created_at, updated_at, ${WEBHOOK_VERIFICATION_COLUMNS}`
+const WEBHOOK_DETAIL_COLUMNS = `id, name, description, event_type, event_types, webhook_url, active, api_version_pinned, disabled_at, disabled_reason, created_at, updated_at, ${WEBHOOK_VERIFICATION_COLUMNS}`
 
 const EXAMPLE_VERIFIED = {
   verification_status: 'verified' as const,
@@ -50,7 +60,8 @@ const WebhookDetail = z.object({
   id: z.string().uuid(),
   name: z.string(),
   description: z.string().nullable(),
-  event_type: z.string(),
+  event_type: z.string().describe('The first of event_types, kept for clients that read a single type.'),
+  event_types: z.array(z.string()).describe('Every event type this webhook receives.'),
   webhook_url: z.string(),
   active: z.boolean(),
   api_version_pinned: z.string(),
@@ -72,8 +83,15 @@ const PatchWebhookSchema = z
       .refine((u) => u.startsWith('https://'), { message: 'webhook_url must use https://' })
       .optional(),
     active: z.boolean().optional(),
+    event_types: WebhookEventTypeListSchema.optional().describe(
+      'Replaces the event types this webhook receives, one or more.',
+    ),
+    event_type: WebhookEventTypeSchema.optional().describe(
+      'A single event type, accepted for clients written before event_types: the webhook then receives only it. When both are sent it must be one of event_types.',
+    ),
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required.' })
+  .superRefine(refineWebhookEventTypeFields)
 
 // ──────────────────────────────────────────────────────────────────
 // GET: detail
@@ -99,6 +117,7 @@ registerEndpoint({
         name: 'CRM sync',
         description: null,
         event_type: 'invoice.paid',
+        event_types: ['invoice.paid'],
         webhook_url: 'https://example.com/hooks/gnubok',
         active: true,
         api_version_pinned: '2026-05-12',
@@ -149,14 +168,15 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/webhooks/:id',
   summary: 'Update a webhook subscription.',
   description:
-    'Update the URL, name, description, or active flag. event_type is immutable: delete and recreate to change it. Setting active=false manually pauses delivery without deleting; setting active=true clears any disabled_at/disabled_reason set by the auto-disable on HTTP 410. A new webhook_url resets verification to \'pending\' (and ends any grace window): nothing is delivered to the new URL until it passes the ownership handshake, which Accounted attempts within a minute; POST /webhooks/{id}/verify runs it immediately.',
+    'Update the URL, name, description, active flag, or the event types the webhook receives (event_types replaces the list; a single event_type is still accepted). api_version_pinned is kept. Setting active=false manually pauses delivery without deleting; setting active=true clears any disabled_at/disabled_reason set by the auto-disable on HTTP 410. A new webhook_url resets verification to \'pending\' (and ends any grace window): nothing is delivered to the new URL until it passes the ownership handshake, which Accounted attempts within a minute; POST /webhooks/{id}/verify runs it immediately.',
   useWhen: 'You need to point an existing webhook at a new URL or temporarily pause delivery.',
   doNotUseFor:
-    'Rotating the signing secret: use POST /webhooks/{id}/rotate-secret, which issues a fresh secret in place and keeps the webhook id and delivery history. Changing event_type: delete and recreate.',
+    'Rotating the signing secret: use POST /webhooks/{id}/rotate-secret, which issues a fresh secret in place and keeps the webhook id and delivery history.',
   pitfalls: [
     'Re-enabling a webhook (active: true) does NOT replay deliveries that went to dead status while it was disabled: those need POST /webhook-deliveries/{id}/retry.',
     'Changing webhook_url withholds deliveries until the new URL is verified: have the new receiver answer webhook.verification before you switch.',
     'active: true does not bypass verification: a pending or paused endpoint stays without deliveries until it passes the handshake.',
+    'event_types replaces the whole list: send every type the webhook should keep. Listing salary_run.* or agi.generated requires payroll:read.',
   ],
   example: {
     request: { active: true },
@@ -166,6 +186,7 @@ registerEndpoint({
         name: 'CRM sync',
         description: null,
         event_type: 'invoice.paid',
+        event_types: ['invoice.paid'],
         webhook_url: 'https://example.com/hooks/gnubok',
         active: true,
         api_version_pinned: '2026-05-12',
@@ -198,6 +219,20 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     const parsed = PatchWebhookSchema.safeParse(rawBody)
     if (!parsed.success) return v1ValidationError(ctx, parsed.error)
     const body = parsed.data
+    const eventTypes = resolveWebhookEventTypes(body)
+
+    // Same elevated-scope gate as create: listing a payroll type routes
+    // lönesummor and skatteavdrag to the receiver.
+    const payrollTypes = eventTypes ? payrollEventTypesIn(eventTypes) : []
+    if (payrollTypes.length > 0 && !hasScope(ctx.scopes, 'payroll:read')) {
+      return v1ErrorResponseFromCode('INSUFFICIENT_SCOPE', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          required_scope: 'payroll:read',
+          reason: `Subscribing to ${payrollTypes.join(', ')} requires payroll:read in addition to webhooks:manage.`,
+        },
+      })
+    }
 
     // SSRF guard on webhook_url change: same DNS/IP-class validation as
     // POST /webhooks. Skip when webhook_url isn't being changed.
@@ -213,7 +248,12 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
 
     // Re-enable clears disabled_at/disabled_reason (legitimate operator
     // action after fixing the receiver). Manual disable sets them.
-    const update: Record<string, unknown> = { ...body }
+    const { event_type: _eventType, event_types: _eventTypes, ...fields } = body
+    const update: Record<string, unknown> = { ...fields }
+    if (eventTypes) {
+      update.event_type = eventTypes[0]
+      update.event_types = eventTypes
+    }
     if (body.active === true) {
       update.disabled_at = null
       update.disabled_reason = null
@@ -242,7 +282,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     // before/after pair is what makes the audit row reconstructible.
     const { data: prior } = await ctx.supabase
       .from('webhooks')
-      .select('name, description, webhook_url, active, disabled_at, disabled_reason, verified_at')
+      .select('name, description, event_type, event_types, webhook_url, active, disabled_at, disabled_reason, verified_at')
       .eq('company_id', ctx.companyId!)
       .eq('id', id)
       .maybeSingle()
@@ -282,6 +322,8 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       new_state: {
         name: d.name,
         description: d.description,
+        event_type: d.event_type,
+        event_types: d.event_types,
         webhook_url: d.webhook_url,
         active: d.active,
         disabled_at: d.disabled_at,
@@ -344,7 +386,7 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
       .delete()
       .eq('company_id', ctx.companyId!)
       .eq('id', id)
-      .select('name, event_type, webhook_url, active')
+      .select('name, event_type, event_types, webhook_url, active')
       .maybeSingle()
 
     if (error) return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
@@ -355,7 +397,9 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
     // captures the attempt: record_id + actor_id + action + timestamp
     // is the minimum CC6.3 attribution contract; old_state degrades
     // to null.
-    const p = deleted as { name: string; event_type: string; webhook_url: string; active: boolean } | null
+    const p = deleted as
+      | { name: string; event_type: string; event_types: string[]; webhook_url: string; active: boolean }
+      | null
     const { error: auditErr } = await ctx.supabase.from('audit_log').insert({
       user_id: ctx.userId,
       company_id: ctx.companyId,

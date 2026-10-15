@@ -1,0 +1,1 @@
+[2026-10-15] Webhook subscriptions keep event_type (= first listed, CHECKed to be listed) beside the new event_types text[], synced by a trigger, not a join table: every reader and old writer of the single column keeps working, and dispatch is one array-contains filter.

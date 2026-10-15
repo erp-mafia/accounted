@@ -2,37 +2,24 @@ import { eventBus } from '@/lib/events/bus'
 import type { CoreEventType } from '@/lib/events/types'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { createLogger } from '@/lib/logger'
+import { PUBLIC_WEBHOOK_EVENTS } from '@/lib/webhooks/public-events'
+import { eventDedupeKey } from '@/lib/events/dedupe-key'
 
 const log = createLogger('event-log')
 
 /**
- * Event types persisted to the event_log table for external automation platforms.
- * Excludes noise events that are always followed by an actionable event.
+ * Persisted event types that are NOT in the public webhook catalogue: internal
+ * lifecycle events external automation still polls, MCP telemetry, agent
+ * feedback and the bank-consent audit trail. Every public event is persisted
+ * anyway (PERSISTED_EVENT_TYPES below): never list a catalogue event here.
  */
-const PERSISTED_EVENT_TYPES: CoreEventType[] = [
-  'journal_entry.committed',
-  'journal_entry.reversed',
-  'journal_entry.corrected',
-  'document.uploaded',
+const INTERNAL_PERSISTED_EVENT_TYPES: CoreEventType[] = [
   'document.accessed',
   'document.deleted',
-  'invoice.created',
   'invoice.draft_deleted',
-  'invoice.sent',
   'invoice.cancelled',
-  'credit_note.created',
   'transaction.synced',
-  'transaction.categorized',
-  'transaction.reconciled',
-  'period.locked',
-  'period.year_closed',
-  'customer.created',
   'article.deleted',
-  'supplier.created',
-  'supplier_invoice.registered',
-  'supplier_invoice.approved',
-  'supplier_invoice.paid',
-  'supplier_invoice.credited',
   'invoice.match_confirmed',
   'supplier_invoice.match_confirmed',
   'supplier_invoice.confirmed',
@@ -72,8 +59,23 @@ const PERSISTED_EVENT_TYPES: CoreEventType[] = [
   'bank_connection.sync_failed',
 ]
 
+/**
+ * Event types persisted to the event_log table, which GET /api/events serves.
+ *
+ * Every event in the public webhook catalogue (lib/webhooks/public-events.ts)
+ * is persisted, derived rather than hand-listed: the pull feed is how a
+ * receiver that missed a webhook catches up, so an event that can be pushed
+ * but not polled is lost for good once its delivery dies. A hand-copied list
+ * drifted here before (11 of the 28 public events were never written).
+ */
+export const PERSISTED_EVENT_TYPES: ReadonlyArray<CoreEventType> = [
+  ...new Set<CoreEventType>([...PUBLIC_WEBHOOK_EVENTS, ...INTERNAL_PERSISTED_EVENT_TYPES]),
+]
+
 // Excluded (with reasoning):
 // - journal_entry.drafted: always followed by .committed
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /**
  * Extract the primary entity ID from an event payload.
@@ -96,15 +98,16 @@ function extractEntityId(payload: Record<string, unknown>): string | null {
   // Flat-string ID fields on events that don't carry a full entity object.
   // Bank connection events fall into this category: the connection lives in
   // an extension table, so we record its id directly. invoice.draft_deleted
-  // carries only invoiceId because the row is already gone.
-  if (typeof payload.connectionId === 'string') {
-    return payload.connectionId
-  }
-  if (typeof payload.invoiceId === 'string') {
-    return payload.invoiceId
-  }
-  if (typeof payload.articleId === 'string') {
-    return payload.articleId
+  // carries only invoiceId because the row is already gone. The payroll and
+  // reconciliation events carry ids only. event_log.entity_id is a uuid
+  // column, so a value that is not one is skipped instead of failing the
+  // whole insert (the event matters more than its index column).
+  const flatIdKeys = [
+    'connectionId', 'invoiceId', 'articleId', 'salaryRunId', 'agiId', 'signoffId', 'externalId',
+  ] as const
+  for (const key of flatIdKeys) {
+    const id = payload[key]
+    if (typeof id === 'string' && UUID_PATTERN.test(id)) return id
   }
 
   // For journal_entry.corrected: use the corrected entry's ID
@@ -163,6 +166,12 @@ function isTelemetryEvent(eventType: string): boolean {
 /**
  * Persist a single event to the event_log table.
  * Retries once on network-class failures ("fetch failed") after a short delay.
+ *
+ * A deduped type (lib/events/dedupe-key.ts) is written with its natural key
+ * and ON CONFLICT DO NOTHING: journal_entry.committed is already in event_log
+ * when commit_journal_entry posted the entry (same transaction), so this
+ * write only lands for an entry posted another way. The retry is safe for the
+ * same reason.
  */
 async function persistEvent(
   eventType: string,
@@ -172,19 +181,25 @@ async function persistEvent(
   data: Record<string, unknown>
 ): Promise<void> {
   const supabase = createServiceClientNoCookies()
+  const dedupeKey = eventDedupeKey(eventType, entityId)
   const row = {
     user_id: userId,
     company_id: companyId,
     event_type: eventType,
     entity_id: entityId,
     data,
+    ...(dedupeKey ? { dedupe_key: dedupeKey } : {}),
   }
+  const write = () =>
+    dedupeKey
+      ? supabase.from('event_log').upsert(row, { onConflict: 'dedupe_key', ignoreDuplicates: true })
+      : supabase.from('event_log').insert(row)
 
-  let { error } = await supabase.from('event_log').insert(row)
+  let { error } = await write()
 
   if (error && isTransientNetworkError(error.message)) {
     await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS))
-    ;({ error } = await supabase.from('event_log').insert(row))
+    ;({ error } = await write())
   }
 
   if (error) {

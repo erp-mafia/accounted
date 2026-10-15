@@ -133,3 +133,15 @@ export type PublicWebhookEventType = (typeof PUBLIC_WEBHOOK_EVENT_GROUPS)[number
 export const PUBLIC_WEBHOOK_EVENTS: ReadonlyArray<PublicWebhookEventType> = PUBLIC_WEBHOOK_EVENT_GROUPS.flatMap(
   (group) => group.events.map((event) => event.type),
 )
+
+/**
+ * Payroll-grade events: salary_run.* and agi.* describe lönesummor and
+ * skatteavdrag, so reading them from outside needs `payroll:read` on top of
+ * the surface's own scope, whether pushed (webhook create) or polled
+ * (GET /api/events).
+ */
+export const PAYROLL_EVENT_PREFIXES = ['salary_run.', 'agi.'] as const
+
+export function isPayrollEvent(eventType: string): boolean {
+  return PAYROLL_EVENT_PREFIXES.some((prefix) => eventType.startsWith(prefix))
+}
