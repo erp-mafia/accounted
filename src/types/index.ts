@@ -2787,6 +2787,7 @@ export type TaxDeadlineType =
   | 'inkomstdeklaration_ef'
   | 'inkomstdeklaration_ab'
   | 'inkomstdeklaration_ekonomisk_forening'
+  | 'inkomstdeklaration_ideell_forening'
   | 'arsredovisning'
   | 'arsredovisning_ekonomisk_forening'
   | 'arsstamma'

@@ -4,7 +4,7 @@
  */
 
 import type { TaxDeadlineType, EntityType, MomsPeriod, TaxFilingMethod } from '@/types'
-import { fiscalYearLockedToCalendar, isEntityType, preparesForenklatArsbokslut } from '@/lib/company/entity-type'
+import { filesIncomeReturn, fiscalYearLockedToCalendar, isEntityType, preparesForenklatArsbokslut } from '@/lib/company/entity-type'
 import { isBankingDay } from './swedish-holidays'
 
 // Condition function type for determining if a deadline applies
@@ -332,6 +332,18 @@ function ink2DigitalFilingDates(year: number, settings: CompanySettingsForDeadli
   }
   return results
 }
+
+/**
+ * Inkomstdeklaration 3 (ideell förening). Skatteverket's INK3 table ("Du ska
+ * ha skickat in inkomstdeklaration 3", #47) is the INK2 table above and holds
+ * for digital and paper filing alike: räkenskapsår ending January-April 1
+ * December the same year, May-June 15 January, July-August 1 April and
+ * September-December 1 August the year after, moved to the next banking day
+ * by the generator (2 August 2027 for a 2026 calendar year). There is no
+ * byråanstånd for INK3 (Skatteverket skrivelse 2022-11-02), so no later
+ * date exists for a byrå's clients.
+ */
+const ink3FilingDates = ink2DigitalFilingDates
 
 /**
  * Seven months after the fiscal year end: the Bolagsverket filing deadline
@@ -907,6 +919,19 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     priority: 'critical',
     linkedReportType: null,
     generateDates: ink2DigitalFilingDates,
+  },
+
+  // Inkomstdeklaration 3 for the form whose return the product prepares as
+  // INK3 (ideell förening, lib/reports/ink3). Read from the profile, not the
+  // form name, so another INK3 form gets the deadline with its profile.
+  {
+    type: 'inkomstdeklaration_ideell_forening',
+    titleTemplate: 'Inkomstdeklaration 3 {periodLabel}',
+    description: 'Inkomstdeklaration 3 (INK3) för ideell förening',
+    condition: (s) => isEntityType(s.entity_type) && filesIncomeReturn(s.entity_type) === 'INK3',
+    priority: 'critical',
+    linkedReportType: 'ink3-declaration',
+    generateDates: ink3FilingDates,
   },
 
   // Årsredovisning och revisionsberättelse (ekonomisk förening): within seven

@@ -1,0 +1,1 @@
+[2026-10-15] INK3's taxable column is split per account (#47, founder decision, option (i)): each income and cost account is exempt, taxable or shared per company and räkenskapsår, with an override per ruta; the user states whether the förening is allmännyttig, the product never decides it.

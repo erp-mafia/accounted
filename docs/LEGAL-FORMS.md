@@ -58,7 +58,7 @@ export interface LegalFormProfile {
     memberCapital: boolean
   }
   filings: {
-    /** The return the product prepares for the form; null when none is modelled (ideell: INK3 not built). */
+    /** The return the product prepares for the form; null when none is modelled (ideell: INK3 as an underlag, lib/reports/ink3). */
     incomeReturn: 'INK2' | 'NE' | 'INK3' | null
     booksCurrentTax: boolean
     corporateTaxDispositions: boolean
@@ -116,8 +116,8 @@ A form is not supported when onboarding accepts its label. It is supported when 
 | SIE import and export: equity accounts, opening-balance difference account, prior-year result | `src/lib/import` |
 | Payroll: allowed, personnel accounts, form-specific rules | `src/lib/salary` |
 | Year-end: closing account, carry, wizard steps, documents (årsredovisning; for ideell förening the förenklat årsbokslut, BFNAR 2010:1, #46) | `src/lib/core/bookkeeping`, `src/lib/bokslut`, `src/lib/bokslut/forenklat-arsbokslut`, `src/components/bookkeeping/year-end` |
-| Filings: the right return is reachable, the wrong ones are hidden and refuse | `src/lib/reports`, `src/lib/bokslut/arsredovisning` |
-| Deadlines: at least the form's statutory set, no empty-list banner | `src/lib/tax/deadline-config.ts` |
+| Filings: the right return is reachable, the wrong ones are hidden and refuse (ideell förening: the INK3 underlag, typed into Skatteverket's e-tjänst; no SRU file) | `src/lib/reports` (`ink2`, `ne-bilaga`, `ink3`), `src/lib/bokslut/arsredovisning` |
+| Deadlines: at least the form's statutory set, no empty-list banner (the income return's deadline follows `filings.incomeReturn`) | `src/lib/tax/deadline-config.ts` |
 | Reports and navigation | `src/lib/reports/catalog.ts`, `src/components/dashboard` |
 | MCP tools, v1 API enums, agent skills and atoms say the same as the app | `src/extensions/general/mcp-server`, `src/app/api/v1` |
 | Copy in `sv` and `en`, help page, docs | `src/messages/*.json`, `src/app/(dashboard)/help` |

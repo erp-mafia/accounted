@@ -1,0 +1,1 @@
+[2026-10-15] INK3 for ideell förening ships as an underlag only (#47, founder decision, path (a)): INK3R (both columns), INK3S and INK3SUF per ruta as PDF, v1 JSON and a read-only MCP tool, typed into Skatteverket's e-tjänst; no SRU file, XBRL or submission. SRU bilagor (b) may reuse the engine.

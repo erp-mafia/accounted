@@ -1,6 +1,6 @@
 /**
  * Filing and year-end report reads that neither v1 nor MCP served before:
- * INK2, NE-bilaga, periodisk sammanställning, kassaflödesanalys,
+ * INK2, NE-bilaga, the INK3 underlag, periodisk sammanställning, kassaflödesanalys,
  * behandlingshistorik, bokslutsbilagor, the KPI report, resultat per
  * dimension and the audit trail. Rules live in
  * lib/reports/filing-report-service.ts, lib/reports/kpi-report.ts and
@@ -284,6 +284,129 @@ export const reportsNeBilaga = defineOperation({
         sru_file: sruFileRef(ctx, 'ne-bilaga', period_id),
       },
     })
+  },
+})
+
+// ─────────────────────────────────────────────────────────────────
+// INK3 underlag (ideell förening)
+// ─────────────────────────────────────────────────────────────────
+
+const Ink3AccountLineSchema = z.object({
+  accountNumber: z.string(),
+  accountName: z.string(),
+  amount: z.number(),
+  treatment: z.enum(['exempt', 'taxable', 'shared']).nullable(),
+})
+
+const Ink3FieldSchema = z.object({
+  code: z.string().describe('SRU field code, e.g. 8651.'),
+  blankett: z.enum(['INK3R', 'INK3S', 'INK3SUF']),
+  ruta: z.string().nullable().describe('The printed row, e.g. 6.2; null for an unnumbered box.'),
+  label: z.string().describe("Skatteverket's label, in Swedish."),
+  column: z
+    .enum(['bokforing', 'skattepliktig'])
+    .nullable()
+    .describe('INK3R income statement: bokforing = enligt redovisningen, skattepliktig = som ska tas upp/dras av.'),
+  sign: z.enum(['+', '-', '*']).nullable(),
+  datatyp: z.string(),
+  value: z
+    .union([z.number(), z.boolean(), z.string()])
+    .nullable()
+    .describe('What to type in: whole kronor, a ticked box, or text. The override when there is one.'),
+  computed: z.number().nullable().describe('What the books or the arithmetic give before any override.'),
+  source: z.enum(['books', 'computed', 'input', 'override']),
+  overridable: z.boolean(),
+  needsInput: z.boolean().describe("True when the ruta waits for the user's figure (a shared or unclassified account)."),
+  needsInputReason: z.enum(['shared_account', 'unclassified_account', 'not_computable']).nullable(),
+  accounts: z.array(Ink3AccountLineSchema),
+})
+
+export const reportsInk3 = defineOperation({
+  id: 'reports.ink3',
+  kind: 'read',
+  scope: 'reports:read',
+  risk: 'low',
+  reversible: false,
+  docs: {
+    summary: 'INK3 underlag (ideell förening): INK3R, INK3S and INK3SUF values per ruta for a räkenskapsår.',
+    description:
+      "The figures an ideell förening types into Skatteverket's e-tjänst Inkomstdeklaration 2, 3 och 4, by field code: INK3R (balance sheet from the closed books; income statement in two columns, enligt redovisningen from the books before the resultatavslut and som ska tas upp/dras av from the company's per-account treatment), INK3S (7.1/7.2, 7.5a and 7.9/7.10 computed, the rest entered) and INK3SUF (entered; part of filing only when the company states the förening is allmännyttig). Overrides the company saved replace the computed figure. filing holds every field with a value. Only beskattningsperiod 2026P4 is pinned. Read-only: nothing is filed and no SRU file exists; the user signs the first page in the e-tjänst.",
+    useWhen: "Preparing or checking an ideell förening's INK3 after bokslut, or answering what goes in a ruta.",
+    doNotUseFor:
+      'Aktiebolag or ekonomisk förening (GET /reports/ink2), enskild firma (GET /reports/ne-bilaga), deciding whether the förening is allmännyttig (the company states it), or submitting anything to Skatteverket.',
+    pitfalls: [
+      'Only for ideell förening: another legal form answers 400 TAX_DECL_INK3_WRONG_LEGAL_FORM.',
+      'Only räkenskapsår in a pinned beskattningsperiod (2026P4: ending 2026-09-01 to 2026-12-31); others answer 422 TAX_DECL_INK3_PERIOD_NOT_SUPPORTED.',
+      'A field with needsInput true has no final figure yet: a shared or unclassified account feeds it. The treatments and overrides are set in the app, not over v1 or MCP.',
+      'allmannyttig null means the company has not stated it; INK3SUF is left out of filing until it says yes.',
+      'Amounts are whole kronor with öre dropped.',
+    ],
+    example: {
+      request: { period_id: '7c2b…' },
+      response: {
+        data: {
+          fiscalYear: { fiscal_period_id: '7c2b…', name: '2026', start: '2026-01-01', end: '2026-12-31', isClosed: true },
+          beskattningsperiod: '2026P4',
+          allmannyttig: true,
+          sufApplicable: true,
+          filing: { '8650': 42000, '8653': 120000, '8673': 120000, '8663': 18000, '8685': 9000, '8686': 9000, '8695': 9000, '8822': 'X' },
+          totals: { totalAssets: 310000, totalEquityLiabilities: 310000, bookkeepingResult: 18000, taxableResult: 9000, taxableSurplus: 9000 },
+          complete: true,
+          warnings: [],
+        },
+        meta: META,
+      },
+    },
+  },
+  input: z.object({ period_id: PERIOD_ID }),
+  output: z
+    .object({
+      fiscalYear: FiscalYear,
+      beskattningsperiod: z.string(),
+      fieldTable: z.object({ beskattningsperiod: z.string(), files: z.array(z.string()) }),
+      companyInfo: z.object({ companyName: z.string(), orgNumber: z.string().nullable() }),
+      allmannyttig: z.boolean().nullable(),
+      sufApplicable: z.boolean(),
+      fields: z.array(Ink3FieldSchema),
+      filing: z.record(z.string(), z.union([z.number(), z.string()])),
+      accounts: z.array(
+        z.object({
+          accountNumber: z.string(),
+          accountName: z.string(),
+          ruta: z.string(),
+          amount: z.number(),
+          treatment: z.enum(['exempt', 'taxable', 'shared']).nullable(),
+        }),
+      ),
+      totals: z.object({
+        totalAssets: z.number(),
+        totalEquityLiabilities: z.number(),
+        bookkeepingResult: z.number(),
+        taxableResult: z.number(),
+        taxableSurplus: z.number(),
+      }),
+      complete: z.boolean(),
+      warnings: z.array(z.string()),
+    })
+    .loose(),
+  errorCodes: [
+    'FISCAL_PERIOD_NOT_FOUND',
+    'TAX_DECL_INK3_WRONG_LEGAL_FORM',
+    'TAX_DECL_INK3_PERIOD_NOT_SUPPORTED',
+    'TAX_DECL_GENERATION_FAILED',
+  ],
+  http: { method: 'GET', path: '/api/v1/companies/:companyId/reports/ink3' },
+  mcp: {
+    name: 'gnubok_get_ink3_underlag',
+    title: 'INK3 Underlag (Inkomstdeklaration 3, ideell förening)',
+    description:
+      "Ideell förening INK3 underlag for a räkenskapsår: INK3R (both columns), INK3S and INK3SUF by field code, to type into Skatteverket's e-tjänst. Read-only; nothing is filed. Rutor with needsInput wait for the user's figure.",
+    keywords: ['ink3', 'inkomstdeklaration 3', 'ideell förening', 'förening deklaration', 'ink3r', 'ink3s', 'ink3suf', 'särskild uppgift'],
+  },
+  run: async (ctx, { period_id }) => {
+    const outcome = await (await reports()).getInk3Underlag(ctx, period_id)
+    if (!outcome.ok || outcome.dryRun) return asDocumented(outcome)
+    return asDocumented({ ok: true, data: qualifyFiscalYear(outcome.data) })
   },
 })
 

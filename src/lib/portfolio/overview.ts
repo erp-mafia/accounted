@@ -42,7 +42,7 @@ export const DEADLINE_KIND_TYPES: Record<
   vat: ['moms_monthly', 'moms_quarterly', 'moms_yearly', 'oss_quarterly', 'ioss_monthly'],
   agi: ['arbetsgivardeklaration'],
   f_skatt: ['f_skatt', 'skatteinbetalning'],
-  inkomstdeklaration: ['inkomstdeklaration_ef', 'inkomstdeklaration_ab'],
+  inkomstdeklaration: ['inkomstdeklaration_ef', 'inkomstdeklaration_ab', 'inkomstdeklaration_ideell_forening'],
   arsredovisning: ['arsredovisning', 'arsstamma'],
 }
 

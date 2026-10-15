@@ -110,7 +110,7 @@ describe('legal forms: capability readers', () => {
   it('report the filing capabilities of each form', () => {
     expect(filesIncomeReturn('aktiebolag')).toBe('INK2')
     expect(filesIncomeReturn('enskild_firma')).toBe('NE')
-    expect(filesIncomeReturn('ideell_forening')).toBeNull()
+    expect(filesIncomeReturn('ideell_forening')).toBe('INK3')
     expect(booksCurrentTax('aktiebolag')).toBe(true)
     expect(booksCurrentTax('ideell_forening')).toBe(false)
     expect(supportsCorporateTaxDispositions('aktiebolag')).toBe(true)
