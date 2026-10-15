@@ -281,9 +281,13 @@ export function RunEmployeesTable({
                             </span>
                           </Button>
                         )}
-                        {/* Payslip PDF */}
+                        {/* Payslip PDF: the copy the employee receives, so it
+                            follows the payslip section switches in Settings.
+                            A preview, so opening it never fixes the run's
+                            sections. Employer cost and every calculation step
+                            stay on this page (Beräkningsdetaljer, the KPIs). */}
                         <a
-                          href={`/api/salary/runs/${runId}/payslips/${sre.employee_id}/pdf`}
+                          href={`/api/salary/runs/${runId}/payslips/${sre.employee_id}/pdf?audience=employee&preview=1`}
                           target="_blank"
                           rel="noopener noreferrer"
                           onClick={e => e.stopPropagation()}

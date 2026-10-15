@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { parsePayslipAudienceParam } from '@/lib/salary/payslips/build-payslip-data'
+import { parsePayslipAudienceParam, parsePayslipPreviewParam } from '@/lib/salary/payslips/build-payslip-data'
 import { loadPayslip, preparePayslip, renderPayslipPdf } from '@/lib/salary/payslips/load-payslip'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { contentDisposition } from '@/lib/api/content-disposition'
@@ -27,6 +27,13 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
  * the copy renders from the run's stored snapshot when it has one, else from
  * the switches, and nothing is written, because the database keeps a
  * snapshot forever and a read must never cause a permanent write.
+ *
+ * `?audience=employee&preview=1` is the employer looking at that copy before
+ * handing it out (the payslip icon on the run's employee rows): it renders
+ * exactly what the employee would get, the stored snapshot or the switches,
+ * and never issues the run, whoever asks. Opening a payslip to check it must
+ * not fix the sections the employee later receives. A preview of the employer
+ * view means nothing, so `preview` without `audience=employee` is refused.
  */
 export const GET = withRouteContext<{ params: Promise<{ id: string; employeeId: string }> }>(
   'salary.run.payslip.pdf',
@@ -44,13 +51,23 @@ export const GET = withRouteContext<{ params: Promise<{ id: string; employeeId: 
         reason: dbError(cause, 'payslip sections unavailable').message,
       })
 
-    const audienceKind = parsePayslipAudienceParam(new URL(request.url).searchParams.get('audience'))
+    const searchParams = new URL(request.url).searchParams
+    const audienceKind = parsePayslipAudienceParam(searchParams.get('audience'))
     if (!audienceKind) {
       return errorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
         messageSv: 'Ogiltig mottagare för lönespecifikationen',
         messageEn: 'Invalid payslip audience: use employer or employee.',
         details: { field: 'audience' },
+      })
+    }
+    const preview = parsePayslipPreviewParam(searchParams.get('preview'))
+    if (preview === null || (preview && audienceKind !== 'employee')) {
+      return errorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        messageSv: 'Ogiltig förhandsvisning av lönespecifikationen',
+        messageEn: 'Invalid payslip preview: use preview=1 together with audience=employee.',
+        details: { field: 'preview' },
       })
     }
 
@@ -74,10 +91,13 @@ export const GET = withRouteContext<{ params: Promise<{ id: string; employeeId: 
     }
 
     // Only a member who may write the run issues it, through the caller's own
-    // RLS-scoped client (the same write gate and client as the payslip send).
-    // A viewer renders from the run as stored and writes nothing.
+    // RLS-scoped client (the same write gate and client as the payslip send),
+    // and only when handing the copy out. A viewer and a preview render from
+    // the run as stored and write nothing.
     const mayIssue =
-      audienceKind === 'employee' && (await requireWritePermission(supabase, ctx.user.id, { companyId, role: ctx.role })).ok
+      audienceKind === 'employee' &&
+      !preview &&
+      (await requireWritePermission(supabase, ctx.user.id, { companyId, role: ctx.role })).ok
     const prepared = await preparePayslip(supabase, loaded.payslip, {
       companyId: companyId!,
       audience: audienceKind,
