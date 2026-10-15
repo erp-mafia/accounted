@@ -1036,7 +1036,7 @@ export async function POST(request: Request) {
           payroll,
         }),
       )
-      .select('id, employee_id')
+      .select('id, employee_id, salary_run_id')
 
     if (runEmployeesError) throw runEmployeesError
 
@@ -1047,6 +1047,7 @@ export async function POST(request: Request) {
           companyId,
           annaEmployeeId,
           erikEmployeeId,
+          bookedRunId: bookedRun.id,
           runEmployees: runEmployeeRows,
           payroll,
         }),

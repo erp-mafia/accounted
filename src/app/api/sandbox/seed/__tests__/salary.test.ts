@@ -564,10 +564,10 @@ describe('sandbox salary run employee seed data', () => {
 
 describe('sandbox salary line item seed data', () => {
   const inserted = [
-    { id: 'sre-booked-anna', employee_id: ANNA_ID },
-    { id: 'sre-booked-erik', employee_id: ERIK_ID },
-    { id: 'sre-draft-anna', employee_id: ANNA_ID },
-    { id: 'sre-draft-erik', employee_id: ERIK_ID },
+    { id: 'sre-booked-anna', employee_id: ANNA_ID, salary_run_id: 'run-booked' },
+    { id: 'sre-booked-erik', employee_id: ERIK_ID, salary_run_id: 'run-booked' },
+    { id: 'sre-draft-anna', employee_id: ANNA_ID, salary_run_id: 'run-draft' },
+    { id: 'sre-draft-erik', employee_id: ERIK_ID, salary_run_id: 'run-draft' },
   ]
 
   function lineItems() {
@@ -575,6 +575,7 @@ describe('sandbox salary line item seed data', () => {
       companyId: COMPANY_ID,
       annaEmployeeId: ANNA_ID,
       erikEmployeeId: ERIK_ID,
+      bookedRunId: 'run-booked',
       runEmployees: inserted,
       payroll: PAYROLL,
     })
@@ -598,12 +599,17 @@ describe('sandbox salary line item seed data', () => {
     }
   })
 
-  it('takes the BAS account from the salary account map, as a string', () => {
+  it('gives the booked run the account it was booked on and the draft run none', () => {
     for (const row of lineItems()) {
-      expect(typeof row.account_number).toBe('string')
-      expect(row.account_number).toBe(lineItemAccount(row.item_type, { employmentType: 'employee' }))
-      // Ordinary employees: 7210 Löner till tjänstemän.
-      expect(row.account_number).toBe('7210')
+      if (row.salary_run_employee_id.startsWith('sre-booked')) {
+        expect(row.account_number).toBe(lineItemAccount(row.item_type, { employmentType: 'employee' }))
+        // Ordinary employees: 7210 Löner till tjänstemän.
+        expect(row.account_number).toBe('7210')
+      } else {
+        // An unbooked line carries no cached default: the booking resolves
+        // it from the employee's category (account-mapping.ts).
+        expect(row.account_number).toBeNull()
+      }
     }
   })
 
@@ -629,7 +635,12 @@ describe('sandbox salary line item seed data', () => {
       companyId: COMPANY_ID,
       annaEmployeeId: ANNA_ID,
       erikEmployeeId: ERIK_ID,
-      runEmployees: runEmployees.map((r, i) => ({ id: `sre-${i}`, employee_id: r.employee_id })),
+      bookedRunId: BOOKED_RUN_ID,
+      runEmployees: runEmployees.map((r, i) => ({
+        id: `sre-${i}`,
+        employee_id: r.employee_id,
+        salary_run_id: r.salary_run_id as string,
+      })),
       payroll: PAYROLL,
     })
 
@@ -644,7 +655,8 @@ describe('sandbox salary line item seed data', () => {
         companyId: COMPANY_ID,
         annaEmployeeId: ANNA_ID,
         erikEmployeeId: ERIK_ID,
-        runEmployees: [{ id: 'sre-x', employee_id: 'someone-else' }],
+        bookedRunId: 'run-booked',
+        runEmployees: [{ id: 'sre-x', employee_id: 'someone-else', salary_run_id: 'run-booked' }],
         payroll: PAYROLL,
       }),
     ).toThrow(/unknown employee/)

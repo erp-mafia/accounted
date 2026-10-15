@@ -599,27 +599,33 @@ export interface SandboxSalaryLineItemsInput {
   companyId: string
   annaEmployeeId: string
   erikEmployeeId: string
+  /** The booked run: only its lines carry an account (see below). */
+  bookedRunId: string
   /**
    * The inserted salary_run_employees rows. Insert with
-   * `.select('id, employee_id')` and pass the result straight in: the line
-   * item's content depends only on which employee the row belongs to, since
-   * both runs pay the same amounts.
+   * `.select('id, employee_id, salary_run_id')` and pass the result straight
+   * in: the line item's amounts depend only on which employee the row belongs
+   * to, since both runs pay the same amounts.
    */
-  runEmployees: Array<{ id: string; employee_id: string }>
+  runEmployees: Array<{ id: string; employee_id: string; salary_run_id: string }>
   payroll: SandboxPayroll
 }
 
 /**
  * One payslip line per calculation row: Grundlön for the månadsavlönad,
- * Timlön (80 tim × 245 kr) for the timavlönad. The seeded runs are booked,
- * so the lines carry the account they were booked on, from lineItemAccount
- * so the seed cannot drift from the salary account map (both resolve to 7210
- * Löner till tjänstemän for a tjänsteman with employment_type 'employee').
+ * Timlön (80 tim × 245 kr) for the timavlönad. A line's account_number is
+ * an override only, resolved at booking when it is null (account-mapping.ts
+ * lineItemAccount). The booked run's lines carry the account they were
+ * booked on, from lineItemAccount so the seed cannot drift from the salary
+ * account map (7210 Löner till tjänstemän for a tjänsteman with
+ * employment_type 'employee'); the draft run's lines carry none, like every
+ * unbooked line, so they follow the employee's category until booked.
  */
 export function buildSandboxSalaryLineItems({
   companyId,
   annaEmployeeId,
   erikEmployeeId,
+  bookedRunId,
   runEmployees,
   payroll,
 }: SandboxSalaryLineItemsInput) {
@@ -647,7 +653,8 @@ export function buildSandboxSalaryLineItems({
       is_vacation_basis: true,
       is_gross_deduction: false,
       is_net_deduction: false,
-      account_number: lineItemAccount(itemType, { employmentType: 'employee' }),
+      account_number:
+        sre.salary_run_id === bookedRunId ? lineItemAccount(itemType, { employmentType: 'employee' }) : null,
       sort_order: 0,
     }
   })
