@@ -361,6 +361,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_mark_no_document_required: 'bookkeeping:write',
   gnubok_get_rattelse_log: 'reports:read',
   gnubok_get_ink2_declaration: 'reports:read',
+  gnubok_get_ink3_underlag: 'reports:read',
   gnubok_get_ne_bilaga: 'reports:read',
   gnubok_get_periodisk_sammanstallning: 'reports:read',
   gnubok_get_cash_flow_statement: 'reports:read',

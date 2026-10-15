@@ -186,6 +186,7 @@ import {
   reportsBokslutsbilagor,
   reportsDimensionPnl,
   reportsInk2,
+  reportsInk3,
   reportsKassaflodesanalys,
   reportsKpi,
   reportsNeBilaga,
@@ -399,6 +400,7 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   journalEntriesRattelseLog,
   // filing-reports
   reportsInk2,
+  reportsInk3,
   reportsNeBilaga,
   reportsPeriodiskSammanstallning,
   reportsKassaflodesanalys,

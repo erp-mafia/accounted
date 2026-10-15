@@ -12,7 +12,7 @@ import type { EntityType } from '@/types'
  *
  * The fields describe what THIS PRODUCT does for the form, not what the law
  * says in general. `filings.incomeReturn` is null for a form whose return is
- * not modelled yet, even when the statute names one (ideell förening: INK3).
+ * not modelled yet, even when the statute names one.
  */
 export interface LegalFormProfile {
   /** ISO 3166-1 alpha-2. Fixed until a second country exists; then a key, not a refactor. */

@@ -303,6 +303,7 @@ const navItems: NavItem[] = [
   { href: '/bookkeeping/year-end/arsredovisning', labelKey: 'annual_report', icon: ScrollText, group: 'skatt', entityOnly: ['aktiebolag', 'ekonomisk_forening'] },
   { href: '/reports/ink2-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', entityOnly: ['aktiebolag', 'ekonomisk_forening'] },
   { href: '/reports/ne-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', entityOnly: 'enskild_firma' },
+  { href: '/reports/ink3-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', entityOnly: ['ideell_forening'] },
 ]
 
 // Byrå cockpit sidebar (lean mode): while a byrå team member is on a
@@ -468,7 +469,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
         pathname.startsWith('/reports') &&
         !pathname.startsWith('/reports/vat-declaration') &&
         !pathname.startsWith('/reports/ink2-declaration') &&
-        !pathname.startsWith('/reports/ne-declaration')
+        !pathname.startsWith('/reports/ne-declaration') &&
+        !pathname.startsWith('/reports/ink3-declaration')
       )
     }
     return pathname.startsWith(href)

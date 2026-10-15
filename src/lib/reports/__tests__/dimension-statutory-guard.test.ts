@@ -82,6 +82,7 @@ const STATUTORY_GENERATORS = [
   'lib/reports/continuity-check.ts',
   'lib/reports/periodisk-sammanstallning.ts',
   'lib/reports/ink2/ink2-engine.ts',
+  'lib/reports/ink3/ink3-engine.ts',
   'lib/reports/ne-bilaga/ne-engine.ts',
   'lib/bokslut/arsredovisning/build-data.ts',
   'lib/bokslut/ixbrl/build-input.ts',

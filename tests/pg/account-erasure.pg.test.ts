@@ -100,6 +100,7 @@ const RETAINED = new Set([
   'arkiv_findings.resolved_by_user_id', // Who closed a lint finding.
   'event_log.user_id',
   'fiscal_period_tax_adjustments.user_id',
+  'ink3_underlag_inputs.updated_by', // Who last saved a förening's INK3 inputs; the company keeps the record.
   'fiscal_periods.user_id',
   'journal_entries.user_id',
   'journal_entry_no_doc_required.user_id',

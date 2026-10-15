@@ -980,6 +980,100 @@ Response `200` (`application/zip`).
 
 ---
 
+### `GET /api/v1/companies/{companyId}/reports/ink3`
+
+**INK3 underlag (ideell förening): INK3R, INK3S and INK3SUF values per ruta for a räkenskapsår.**
+`scope:reports:read · risk:low · idempotent`
+
+The figures an ideell förening types into Skatteverket's e-tjänst Inkomstdeklaration 2, 3 och 4, by field code: INK3R (balance sheet from the closed books; income statement in two columns, enligt redovisningen from the books before the resultatavslut and som ska tas upp/dras av from the company's per-account treatment), INK3S (7.1/7.2, 7.5a and 7.9/7.10 computed, the rest entered) and INK3SUF (entered; part of filing only when the company states the förening is allmännyttig). Overrides the company saved replace the computed figure. filing holds every field with a value. Only beskattningsperiod 2026P4 is pinned. Read-only: nothing is filed and no SRU file exists; the user signs the first page in the e-tjänst.
+
+**Use when:** Preparing or checking an ideell förening's INK3 after bokslut, or answering what goes in a ruta.
+**Do not use for:** Aktiebolag or ekonomisk förening (GET /reports/ink2), enskild firma (GET /reports/ne-bilaga), deciding whether the förening is allmännyttig (the company states it), or submitting anything to Skatteverket.
+
+**Pitfalls:**
+- Only for ideell förening: another legal form answers 400 TAX_DECL_INK3_WRONG_LEGAL_FORM.
+- Only räkenskapsår in a pinned beskattningsperiod (2026P4: ending 2026-09-01 to 2026-12-31); others answer 422 TAX_DECL_INK3_PERIOD_NOT_SUPPORTED.
+- A field with needsInput true has no final figure yet: a shared or unclassified account feeds it. The treatments and overrides are set in the app, not over v1 or MCP.
+- allmannyttig null means the company has not stated it; INK3SUF is left out of filing until it says yes.
+- Amounts are whole kronor with öre dropped.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `period_id` | query | `string` | yes | The fiscal period (räkenskapsår) id, from GET /fiscal-periods. |
+
+Response `200`:
+```ts
+{
+  data: {
+    fiscalYear: { fiscal_period_id: string, name: string, start: string, end: string, isClosed: boolean },
+    beskattningsperiod: string,
+    fieldTable: { beskattningsperiod: string, files: string[] },
+    companyInfo: { companyName: string, orgNumber: string | null },
+    allmannyttig: boolean | null,
+    sufApplicable: boolean,
+    fields: { code: string, blankett: "INK3R" | "INK3S" | "INK3SUF", ruta: string | null, label: string, column: "bokforing" | "skattepliktig" | null, sign: "+" | "-" | "*" | null, datatyp: string, value: number | boolean | string | null, computed: number | null, source: "books" | "computed" | "input" | "override", overridable: boolean, needsInput: boolean, needsInputReason: "shared_account" | "unclassified_account" | "not_computable" | null, accounts: { accountNumber: string, accountName: string, amount: number, treatment: "exempt" | "taxable" | "shared" | null }[] }[],
+    filing: Record<string, number | string>,
+    accounts: { accountNumber: string, accountName: string, ruta: string, amount: number, treatment: "exempt" | "taxable" | "shared" | null }[],
+    totals: { totalAssets: number, totalEquityLiabilities: number, bookkeepingResult: number, taxableResult: number, taxableSurplus: number },
+    complete: boolean,
+    warnings: string[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "fiscalYear": {
+      "fiscal_period_id": "7c2b…",
+      "name": "2026",
+      "start": "2026-01-01",
+      "end": "2026-12-31",
+      "isClosed": true
+    },
+    "beskattningsperiod": "2026P4",
+    "allmannyttig": true,
+    "sufApplicable": true,
+    "filing": {
+      "8650": 42000,
+      "8653": 120000,
+      "8663": 18000,
+      "8673": 120000,
+      "8685": 9000,
+      "8686": 9000,
+      "8695": 9000,
+      "8822": "X"
+    },
+    "totals": {
+      "totalAssets": 310000,
+      "totalEquityLiabilities": 310000,
+      "bookkeepingResult": 18000,
+      "taxableResult": 9000,
+      "taxableSurplus": 9000
+    },
+    "complete": true,
+    "warnings": []
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `GET /api/v1/companies/{companyId}/reports/journal-register`
 
 **Journal register (verifikationsregister) for a fiscal period.**

@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 330 endpoints.
+  pagination, scopes), and all 331 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -152,7 +152,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 330 operations. Paths are shown without
+API version `2026-05-12`, 331 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (12)
@@ -502,7 +502,7 @@ POST /companies/{companyId}/salary-runs/{id}/send-payslips : Email every employe
 POST /companies/{companyId}/salary-runs/{id}/unapprove : Recall the approval of a salary run (approved back to review) [scope:payroll:write risk:medium idempotent dry-run reversible]
 ```
 
-### Reports (36)
+### Reports (37)
 
 Full detail: [references/reports.md](references/reports.md)
 
@@ -523,6 +523,7 @@ GET /companies/{companyId}/reports/income-statement : Income statement (resultat
 GET /companies/{companyId}/reports/income-statement/pdf : Income statement (resultaträkning) as a PDF [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/ink2 : INK2 inkomstdeklaration (aktiebolag): INK2, INK2R and INK2S fields for a räkenskapsår [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/ink2/sru : INK2 SRU files (INFO.SRU + BLANKETTER.SRU) as a zip, for upload at skatteverket.se [scope:reports:read risk:low idempotent]
+GET /companies/{companyId}/reports/ink3 : INK3 underlag (ideell förening): INK3R, INK3S and INK3SUF values per ruta for a räkenskapsår [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/journal-register : Journal register (verifikationsregister) for a fiscal period [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/kassaflodesanalys : Kassaflödesanalys (cash flow statement, indirect method) for a räkenskapsår [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/kpi : Business KPIs (nyckeltal) for a fiscal period, as the dashboard shows them [scope:reports:read risk:low idempotent]

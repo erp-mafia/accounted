@@ -1322,6 +1322,10 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // to copy down and asserting one here would fabricate it.
   { name: 'rot_rut_payout_request_items', file: 'rot_rut_payout_request_items.json', via: { parent: 'rot_rut_payout_requests', fk: 'request_id' } },
   { name: 'fiscal_period_tax_adjustments', file: 'fiscal_period_tax_adjustments.json', orderBy: 'created_at' },
+  // What an ideell förening entered for its INK3 underlag per räkenskapsår:
+  // the allmännyttig statement, the exempt/taxable/shared treatment per
+  // account and the ruta overrides. The bridge from the books to the return.
+  { name: 'ink3_underlag_inputs', file: 'ink3_underlag_inputs.json', orderBy: 'created_at' },
   { name: 'tax_assessment_notices', file: 'tax_assessment_notices.json', orderBy: 'created_at' },
   { name: 'arsredovisning_narratives', file: 'arsredovisning_narratives.json' },
   { name: 'annual_report_profiles', file: 'annual_report_profiles.json', orderBy: 'created_at' },

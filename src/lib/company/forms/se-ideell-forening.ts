@@ -6,9 +6,10 @@ import type { LegalFormProfile } from './types'
  * AB 2099/2098 pair on the BAS 2060-2069 group (DECISIONS.md 2026-09-08).
  * Money settled with a member is a plain short-term liability on 2890.
  *
- * INK3 is the statutory return but is not modelled, so `incomeReturn` stays
- * null until it is; the same for årsredovisning (#2072 step 2). The year-end
- * document is the förenklat årsbokslut in the BFNAR 2010:1 bilaga 2 layout.
+ * The return is INK3, prepared as an underlag (lib/reports/ink3, #47): the
+ * figures to type into Skatteverket's e-tjänst, no SRU file. Årsredovisning
+ * is not modelled (#2072 step 2). The year-end document is the förenklat
+ * årsbokslut in the BFNAR 2010:1 bilaga 2 layout.
  */
 export const SE_IDEELL_FORENING: LegalFormProfile = {
   jurisdiction: 'SE',
@@ -34,7 +35,7 @@ export const SE_IDEELL_FORENING: LegalFormProfile = {
     memberCapital: false,
   },
   filings: {
-    incomeReturn: null,
+    incomeReturn: 'INK3',
     booksCurrentTax: false,
     corporateTaxDispositions: false,
     arsredovisning: false,

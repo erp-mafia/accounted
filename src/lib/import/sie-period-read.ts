@@ -9,7 +9,7 @@ const EXTERNAL_LEDGER_REPORTS = new Set([
   'gnubok_vat_declaration_validate',
   // Filing reports served by the operation registry (lib/operations/filing-reports.ts,
   // vat-settlement.ts): the v1 doors hold the lease by their reports.* id.
-  'gnubok_get_ink2_declaration','gnubok_get_ne_bilaga','gnubok_get_periodisk_sammanstallning',
+  'gnubok_get_ink2_declaration','gnubok_get_ink3_underlag','gnubok_get_ne_bilaga','gnubok_get_periodisk_sammanstallning',
   'gnubok_get_cash_flow_statement','gnubok_get_bokslutsbilagor','gnubok_get_behandlingshistorik',
   'gnubok_get_vat_settlement_proposal',
   'gnubok_get_forenklat_arsbokslut',

@@ -17,7 +17,7 @@ import { DATE_RANGE_SLUGS, DIMENSION_FILTER_SLUGS, getReport } from '@/lib/repor
 import { huvudbokDrilldownHref, parseDrilldownParams } from '@/lib/reports/report-drilldown'
 import type { FiscalPeriod } from '@/types'
 
-import { isEntityType, usesInk2 } from '@/lib/company/entity-type'
+import { filesIncomeReturn, isEntityType, usesInk2 } from '@/lib/company/entity-type'
 const TrialBalanceView = dynamic(() => import('./lazy-views/TrialBalanceView'), { loading: ReportBodyLoading })
 const IncomeStatementView = dynamic(() => import('./lazy-views/IncomeStatementView'), { loading: ReportBodyLoading })
 const BalanceSheetView = dynamic(() => import('./lazy-views/BalanceSheetView'), { loading: ReportBodyLoading })
@@ -40,6 +40,10 @@ const PeriodiskSammanstallningView = dynamic(() =>
 )
 const INK2DeclarationView = dynamic(() =>
   import('./INK2DeclarationView').then((module) => ({ default: module.INK2DeclarationView })),
+  { loading: ReportBodyLoading },
+)
+const INK3UnderlagView = dynamic(() =>
+  import('./INK3UnderlagView').then((module) => ({ default: module.INK3UnderlagView })),
   { loading: ReportBodyLoading },
 )
 const BehandlingshistorikView = dynamic(() =>
@@ -122,6 +126,7 @@ function FocusedReportInner({
 
   const isEnskildFirma = company?.entity_type === 'enskild_firma'
   const filesInk2 = isEntityType(company?.entity_type) && usesInk2(company.entity_type)
+  const filesInk3 = isEntityType(company?.entity_type) && filesIncomeReturn(company.entity_type) === 'INK3'
 
   // Drilling from a report into the general ledger is a route change, so the
   // account lands in the URL and the browser back button returns to the report.
@@ -207,6 +212,7 @@ function FocusedReportInner({
           accountFilter={accountFilter}
           isEnskildFirma={isEnskildFirma}
           filesInk2={filesInk2}
+          filesInk3={filesInk3}
           onNavigateToAccount={navigateToAccount}
         />
       ) : (
@@ -230,6 +236,7 @@ function FocusedView({
   accountFilter,
   isEnskildFirma,
   filesInk2,
+  filesInk3,
   onNavigateToAccount,
 }: {
   slug: string
@@ -240,6 +247,7 @@ function FocusedView({
   accountFilter: string | null
   isEnskildFirma: boolean
   filesInk2: boolean
+  filesInk3: boolean
   onNavigateToAccount: (account: string) => void
 }) {
   switch (slug) {
@@ -263,6 +271,8 @@ function FocusedView({
       return isEnskildFirma ? <NEDeclarationView periodId={periodId} /> : null
     case 'ink2-declaration':
       return filesInk2 ? <INK2DeclarationView periodId={periodId} /> : null
+    case 'ink3-declaration':
+      return filesInk3 ? <INK3UnderlagView key={periodId} periodId={periodId} /> : null
     case 'huvudbok':
       return <GeneralLedgerView periodId={periodId} initialAccountFilter={accountFilter} dimensionFilter={dimensionFilter} dateRange={dateRange} />
     case 'grundbok':

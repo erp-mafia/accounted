@@ -3346,6 +3346,21 @@ const TAX_DECL: Record<string, StructuredErrorEntry> = {
     message_sv: 'SRU-filen kan inte laddas ner förrän bokföringen är rättad. Orsaken står i NE-bilagans varningar.',
     message_en: 'The NE-bilaga SRU file is refused until the books are corrected. details.reason and the NE-bilaga warnings name the cause.',
   },
+  // INK3 underlag for ideell förening (lib/reports/ink3, founder decisions on #47).
+  TAX_DECL_INK3_WRONG_LEGAL_FORM: {
+    httpStatus: 400,
+    message_sv: 'INK3-underlaget gäller bara ideella föreningar.',
+    message_en: 'The INK3 underlag is only for an ideell förening.',
+  },
+  TAX_DECL_INK3_PERIOD_NOT_SUPPORTED: {
+    httpStatus: 422,
+    // The refusal names the räkenskapsår's period and the pinned ones.
+    thrown_message_sv: true,
+    message_sv:
+      'Skatteverkets fältkoder för räkenskapsårets beskattningsperiod är inte inlagda, så INK3-underlaget kan inte tas fram för det året.',
+    message_en:
+      "Skatteverket's INK3 field codes for this räkenskapsår's beskattningsperiod are not pinned, so the underlag is refused rather than guessed. details names the period and the supported ones.",
+  },
   VAT_ESKD_SETTINGS_MISSING: {
     httpStatus: 404,
     message_sv: 'Företagsinställningar saknas: momsdeklarationsfilen kan inte skapas.',

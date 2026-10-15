@@ -1,0 +1,1 @@
+[2026-10-15] INK3 inputs are one row per company and räkenskapsår (ink3_underlag_inputs) with jsonb maps for treatments and overrides, not two child tables: one RLS set, one save, CHECK functions hold the shape; the sums (6.20, 6.21, 7.1, 7.2, 7.9, 7.10) are never overridable.

@@ -268,6 +268,7 @@ import '@/app/api/v1/companies/[companyId]/journal-entries/[id]/rattelse-log/rou
 import '@/app/api/v1/companies/[companyId]/journal-entries/no-document-required/route'
 import '@/app/api/v1/companies/[companyId]/reports/ink2/route'
 import '@/app/api/v1/companies/[companyId]/reports/ink2/sru/route'
+import '@/app/api/v1/companies/[companyId]/reports/ink3/route'
 import '@/app/api/v1/companies/[companyId]/reports/ne-bilaga/route'
 import '@/app/api/v1/companies/[companyId]/reports/ne-bilaga/sru/route'
 import '@/app/api/v1/companies/[companyId]/reports/periodisk-sammanstallning/route'

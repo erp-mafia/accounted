@@ -5,7 +5,7 @@
  * dashboard routes under /api/reports.
  *
  * Every function here READS. The generators are the dashboard's own
- * (lib/reports/ink2, ne-bilaga, periodisk-sammanstallning, vat-declaration,
+ * (lib/reports/ink2, ne-bilaga, ink3, periodisk-sammanstallning, vat-declaration,
  * kassaflodesanalys, bokslutsbilagor, behandlingshistorik, dimension-pnl);
  * nothing here recomputes a figure. What this layer adds is what the machine
  * doors need and a thrown Error cannot give: a 404 for a period that is not
@@ -25,6 +25,9 @@ import {
   NESruBlockedError,
 } from '@/lib/reports/ne-bilaga/sru-generator'
 import type { NEDeclaration } from '@/lib/reports/ne-bilaga/types'
+import { generateInk3Underlag } from '@/lib/reports/ink3/ink3-engine'
+import { Ink3PeriodNotSupportedError } from '@/lib/reports/ink3/field-table'
+import type { Ink3Underlag } from '@/lib/reports/ink3/types'
 import { encodeISO88591 } from '@/lib/reports/sru-encoding'
 import {
   generatePeriodiskSammanstallning,
@@ -198,6 +201,36 @@ export async function getNeSruFile(ctx: OperationContext, periodId: string): Pro
       return { ok: false, code: 'TAX_DECL_NE_SRU_BLOCKED', details: { reason: getUserErrorMessage(err) } }
     }
     return declarationFailure(ctx, err, 'ne-bilaga sru')
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// INK3 underlag (ideell förening)
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * The INK3 underlag the dashboard shows. No file: the user types the figures
+ * into Skatteverket's e-tjänst (founder decision on #47, path (a)).
+ */
+export async function getInk3Underlag(
+  ctx: OperationContext,
+  periodId: string,
+): Promise<OperationOutcome<Ink3Underlag>> {
+  const period = await loadReportPeriod(ctx, periodId)
+  if (!period.ok) return period
+  try {
+    if (filesIncomeReturn(await companyEntityType(ctx)) !== 'INK3') return { ok: false, code: 'TAX_DECL_INK3_WRONG_LEGAL_FORM' }
+    return { ok: true, data: await generateInk3Underlag(ctx.supabase, ctx.companyId, periodId) }
+  } catch (err) {
+    if (err instanceof Ink3PeriodNotSupportedError) {
+      return {
+        ok: false,
+        code: 'TAX_DECL_INK3_PERIOD_NOT_SUPPORTED',
+        messageSv: err.message,
+        details: { beskattningsperiod: err.beskattningsperiod, supported: err.supported },
+      }
+    }
+    return declarationFailure(ctx, err, 'ink3')
   }
 }
 

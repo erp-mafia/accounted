@@ -1,0 +1,1 @@
+[2026-10-15] The INK3 deadline shows for every ideell förening, not only above the filing thresholds (founder decision on !419): fastighetsskatt, särskild löneskatt or a föreläggande can trigger filing unseen by the product, and an unneeded reminder costs less than a missed return.

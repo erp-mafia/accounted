@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import Link from 'next/link'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -230,13 +231,15 @@ export function DispositionsStep({
     (item) => item.status === 'needs_correction',
   ) ?? false
 
-  // Three-way by capability, never by form name. Depreciation applies to
-  // every form (skattemässig hanteras separat). A form that files an NE
-  // return replaces the corporate dispositioner with the NE-bilaga
-  // declaration section; a form with neither (ideell förening today) gets
-  // a note that nothing further is prepared for it yet.
+  // By capability, never by form name. Depreciation applies to every form
+  // (skattemässig hanteras separat). A form that files an NE return replaces
+  // the corporate dispositioner with the NE-bilaga declaration section; a
+  // form that files INK3 (ideell förening) is pointed at the INK3 underlag,
+  // where its tax adjustments and taxable/exempt split are prepared; a form
+  // with neither gets a note that nothing further is prepared for it yet.
   if (!supportsCorporateTaxDispositions(proposal.entityType)) {
     const fiscalYear = parseInt(proposal.fiscalPeriod.period_end.slice(0, 4), 10)
+    const incomeReturn = filesIncomeReturn(proposal.entityType)
     return (
       <div className="space-y-6">
         <DepreciationPanel
@@ -244,12 +247,28 @@ export function DispositionsStep({
           onPosted={() => void loadProposals()}
           onTaxDirtyChange={setTaxDepreciationDirty}
         />
-        {filesIncomeReturn(proposal.entityType) === 'NE' ? (
+        {incomeReturn === 'NE' ? (
           <EfDeclarationSection
             fiscalPeriodId={periodId}
             bookedSurplus={proposal.netResultBefore}
             fiscalYear={fiscalYear}
           />
+        ) : incomeReturn === 'INK3' ? (
+          <Card>
+            <CardContent className="p-6 text-sm text-muted-foreground">
+              Inga bokslutsdispositioner bokförs för den här företagsformen. Skattemässiga
+              justeringar och fördelningen mellan skattefri och skattepliktig verksamhet görs i
+              underlaget för inkomstdeklaration 3, som också visar vad som ska skrivas in i
+              Skatteverkets e-tjänst. Avskrivningarna ovan bokförs som vanligt; gå vidare för att
+              förhandsgranska bokslutet.{' '}
+              <Link
+                href="/reports/ink3-declaration"
+                className="text-foreground underline underline-offset-2"
+              >
+                Öppna INK3-underlaget
+              </Link>
+            </CardContent>
+          </Card>
         ) : (
           <Card>
             <CardContent className="p-6 text-sm text-muted-foreground">

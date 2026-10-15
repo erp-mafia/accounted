@@ -509,6 +509,10 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/reports/vat-declaration/rc-basis-gaps/fix': gap('P3', 'add the missing reverse-charge basbelopp pair'),
   'POST /api/reports/vat-declaration/check-reviews': covered(['gnubok_mark_vat_check_reviewed'], 'staged; a person approves the agent\'s review'),
   'DELETE /api/reports/vat-declaration/check-reviews': uiOnly('taking back a VAT warning review is the reviewer\'s own act in the momsdeklaration view'),
+  'PUT /api/reports/ink3/inputs': gap(
+    'P2',
+    'INK3 account treatments, the allmännyttig statement and ruta overrides; v1 and MCP read the underlag only in this step (founder decision on #47)',
+  ),
   'POST /api/vat/validate': uiOnly('read-only VIES VAT-number check for a form, exposed as POST'),
   'POST /api/tax-assessment-notices': gap('P3', 'register a slutskattebesked'),
   'PATCH /api/tax-assessment-notices/:id': gap('P3'),
@@ -776,4 +780,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 133
+export const GAP_CEILING = 134

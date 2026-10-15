@@ -64,7 +64,7 @@ export interface ReportDescriptor {
   /**
    * Accepts the per-dimension value filter (?dim_no/&dim_code → jsonb @>).
    * P&L-safe reports ONLY: statutory outputs (balance sheet, balansrapport,
-   * kassaflöde, årsredovisning, INK2, NE, VAT, SIE) must never carry this
+   * kassaflöde, årsredovisning, INK2, INK3, NE, VAT, SIE) must never carry this
    * flag; a filtered filing is a wrong filing. The whitelist is pinned by
    * lib/reports/__tests__/dimension-statutory-guard.test.ts.
    */
@@ -252,6 +252,19 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     category: 'tax_vat',
     entityType: ['aktiebolag', 'ekonomisk_forening'],
     params: 'fiscal',
+  },
+  {
+    // INK3 underlag (#47): the figures an ideell förening types into
+    // Skatteverket's e-tjänst. No file is filed from here.
+    slug: 'ink3-declaration',
+    labelKey: 'name_ink3_declaration',
+    descKey: 'desc_ink3_declaration',
+    category: 'tax_vat',
+    entityType: ['ideell_forening'],
+    params: 'fiscal',
+    exports: ['pdf'],
+    searchTerms:
+      'ink3 inkomstdeklaration 3 deklaration förening ink3r ink3s ink3suf räkenskapsschema skattemässiga justeringar särskild uppgift skattefri skattepliktig allmännyttig',
   },
 
   // --- Huvudböcker (ledgers) ---
