@@ -146,7 +146,10 @@
  *      loads on first use (from eventBus.emit() and the registry getters); a
  *      static import puts every extension back into that entry's cold start,
  *      or into the browser build. Implementation and rationale in
- *      static-init-import.mjs. No allowlist.
+ *      static-init-import.mjs. No allowlist. Counted beside it,
+ *      lazy-init-reach: server entries that reach lib/initialized.ts. The
+ *      bundler follows its dynamic import, so each compiles lib/init and every
+ *      extension; may only go down, and --update cannot raise it.
  *   16. limit-above-page: a PostgREST `.limit(N)` with N above 1000, or a
  *      reader's `{ limit: N }` option above 1000. max-rows
  *      answers it with 1000 rows and no error, so the written cap is a silent
@@ -220,7 +223,7 @@ import {
   findExtensionRouteFindings,
   UNGATED_EXTENSION_ROUTES,
 } from './extension-route-guards.mjs'
-import { findStaticInitImports } from './static-init-import.mjs'
+import { findInitReach } from './static-init-import.mjs'
 import { findLimitsAbovePage, LIMIT_ABOVE_PAGE_ALLOWED } from './limit-above-page.mjs'
 import { findLocalTestMocks, LOCAL_SUPABASE_CHAIN_ALLOWED } from './local-test-mock.mjs'
 import {
@@ -1205,6 +1208,7 @@ function findRawUserErrors() {
   return [...new Set(findings)].sort()
 }
 
+const initReach = findInitReach(SOURCE_ROOT)
 const current = {
   rawRouteAuth: findRawRouteAuth(),
   naiveOreRound: countNaiveRound(),
@@ -1219,7 +1223,8 @@ const current = {
   rawUserErrors: findRawUserErrors(),
   sekLabelledAmounts: findSekLabelledFxAmounts(SOURCE_ROOT),
   extensionRoutes: findExtensionRouteFindings(SOURCE_ROOT),
-  staticInitImports: findStaticInitImports(SOURCE_ROOT),
+  staticInitImports: initReach.staticInitImports,
+  lazyInitEntries: initReach.lazyInitEntries,
   offLadderRadii: findOffLadderRadii(),
   foldedPublicFlags: findFoldedPublicFlags(),
   dialogOverflowRisk: findDialogOverflowRisks(),
@@ -1254,6 +1259,14 @@ if (isUpdate) {
   const frozenGrantFiles = frozenBaseline.tableWithoutGrant?.files
   const grandfatheredGrantFiles = grandfatheredFiles(frozenGrantFiles, tableWithoutGrantFiles)
   const grandfatheredPatchFiles = grandfatheredFiles(frozenBaseline.functiondefPatch?.files, functiondefPatchFiles)
+  // lazy-init-reach is frozen too: --update may lower it, never raise it. A
+  // rise is what OOM-killed the Vercel build on 2026-10-15.
+  const lazyInitNow = current.lazyInitEntries.map((o) => o.entry)
+  const frozenLazyInit = frozenBaseline.lazyInitReach
+  const lazyInitReach =
+    frozenLazyInit && lazyInitNow.length > frozenLazyInit.count
+      ? frozenLazyInit
+      : { count: lazyInitNow.length, files: lazyInitNow }
   const baseline = {
     _comment:
       'Ratchet baseline for scripts/checks/no-new-antipatterns.mjs. These counts may only decrease. Re-run with --update after a migration lowers them. Goal: both reach 0 (A1 route-auth campaign, D1 rounding codemod).',
@@ -1285,6 +1298,7 @@ if (isUpdate) {
       count: grandfatheredPatchFiles.length,
       files: grandfatheredPatchFiles,
     },
+    lazyInitReach,
   }
   fs.writeFileSync(BASELINE_PATH, JSON.stringify(baseline, null, 2) + '\n')
   console.log(
@@ -1651,6 +1665,29 @@ if (newLimitsAbovePage.length) {
 // (lib/initialized.ts); a static import from an entry loads every extension
 // on that entry's cold start again, and from a client module it pulls them
 // into the browser build.
+// 1h2. lazy-init-reach: counted, may only go down. A server entry that
+// reaches lib/initialized.ts compiles lib/init and every extension (the
+// bundler follows the dynamic import), so each new one adds about 1,400
+// modules to the production build. Fifty more OOM-killed it on 2026-10-15.
+const lazyInitBaseline = baseline.lazyInitReach
+if (lazyInitBaseline && current.lazyInitEntries.length > lazyInitBaseline.count) {
+  failed = true
+  const known = new Set(lazyInitBaseline.files ?? [])
+  const added = current.lazyInitEntries.filter((o) => !known.has(o.entry))
+  console.error(
+    `\n✗ lazy-init-reach: ${current.lazyInitEntries.length} server entries reach lib/initialized.ts ` +
+      `(baseline ${lazyInitBaseline.count}, +${current.lazyInitEntries.length - lazyInitBaseline.count}). ` +
+      'Each one compiles lib/init and every extension into the production build:',
+  )
+  added.slice(0, 30).forEach(({ entry, chain }) => console.error(`    ${entry}\n      via ${chain.join(' -> ')}`))
+  if (added.length > 30) console.error(`    ... and ${added.length - 30} more`)
+  console.error(
+    '  → find the first module in the chain that only needs a pure helper from a module that emits\n' +
+      '    (or imports the event bus), and move that helper to a module of its own that does not.\n' +
+      '  → --update cannot raise this count.',
+  )
+}
+
 if (current.staticInitImports.length) {
   failed = true
   console.error(
@@ -1903,6 +1940,7 @@ if (
   fixedDialogOverflow.length ||
   fixedRawRefs.length ||
   fixedProviderHosts.length ||
+  (lazyInitBaseline && current.lazyInitEntries.length < lazyInitBaseline.count) ||
   current.naiveOreRound < baseline.naiveOreRound.count ||
   current.literalLegalForm.length < literalLegalFormBaseline
 ) {
@@ -1922,6 +1960,10 @@ if (
     console.log(`    naive-ore-round: -${baseline.naiveOreRound.count - current.naiveOreRound} occurrence(s)`)
   if (fixedProviderHosts.length)
     console.log(`    provider-host: -${fixedProviderHosts.length} file(s) no longer call a provider directly`)
+  if (lazyInitBaseline && current.lazyInitEntries.length < lazyInitBaseline.count)
+    console.log(
+      `    lazy-init-reach: -${lazyInitBaseline.count - current.lazyInitEntries.length} server entr(ies) no longer compile lib/init`,
+    )
   console.log('    Run with --update to ratchet the baseline down and lock in the gains.')
 }
 if (migratedDirectAi.length) {
@@ -1967,5 +2009,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, hand-written-sie-extensions: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, static-init-import: 0, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, client-server-only: ${current.clientServerOnly.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), unsigned-provider-names: ${current.unsignedProviderNames.skipped ? 'skipped' : current.unsignedProviderNames.findings.length}, table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), functiondef-patch: ${functiondefPatchFiles.length}/${functiondefPatchBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s), utc-today: ${current.utcToday.length} in ${UTC_TODAY_ALLOWED.size} allowlisted file(s), decision-log: 0).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, hand-written-sie-extensions: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, static-init-import: 0, lazy-init-reach: ${current.lazyInitEntries.length}/${lazyInitBaseline?.count ?? 'no baseline'}, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, client-server-only: ${current.clientServerOnly.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), unsigned-provider-names: ${current.unsignedProviderNames.skipped ? 'skipped' : current.unsignedProviderNames.findings.length}, table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), functiondef-patch: ${functiondefPatchFiles.length}/${functiondefPatchBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s), utc-today: ${current.utcToday.length} in ${UTC_TODAY_ALLOWED.size} allowlisted file(s), decision-log: 0).`,
 )
