@@ -35,7 +35,7 @@ samples.baseline = []
 for (let i = 0; i < 12; i++) { await sample('baseline'); await delay(300) }
 if (existsSync('.env.sie-acceptance.json')) copyFileSync('.env.sie-acceptance.json', '.env.sie-acceptance.previous.json')
 const output = createWriteStream('.env.sie-acceptance-repeat.log')
-const child = spawn(process.execPath, ['--import', 'tsx', 'scripts/sie-import/acceptance-staging.ts'], {
+const child = spawn(process.execPath, ['--import', 'tsx', '--conditions', 'react-server', 'scripts/sie-import/acceptance-staging.ts'], {
   windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
 })
 child.stdout.pipe(output, { end: false }); child.stderr.pipe(output, { end: false })

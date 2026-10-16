@@ -1,4 +1,4 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env -S npx tsx --conditions react-server
 /**
  * Administrative undo of an executed year-end closing (bokslut).
  *
@@ -48,15 +48,15 @@
  *
  * Usage:
  *   # Dry run (read-only) against the env in .env.local
- *   npx tsx scripts/undo-year-end-closing.ts --company-id <uuid> --period-id <uuid>
+ *   npx tsx --conditions react-server scripts/undo-year-end-closing.ts --company-id <uuid> --period-id <uuid>
  *
  *   # Apply, attributing to a specific user. --confirm-url must restate the
  *   # target Supabase URL so the operator confirms WHICH environment mutates.
- *   npx tsx scripts/undo-year-end-closing.ts --company-id <uuid> --period-id <uuid> \
+ *   npx tsx --conditions react-server scripts/undo-year-end-closing.ts --company-id <uuid> --period-id <uuid> \
  *     --user-id <uuid> --commit --confirm-url https://<project>.supabase.co
  *
  *   # Against another environment (e.g. production)
- *   npx tsx scripts/undo-year-end-closing.ts --env-file .env.prod.local ...
+ *   npx tsx --conditions react-server scripts/undo-year-end-closing.ts --env-file .env.prod.local ...
  *
  * Run against staging first; only run against prod after reviewing the dry-run.
  */

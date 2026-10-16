@@ -1,4 +1,4 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env -S npx tsx --conditions react-server
 /**
  * Conservative historical catch-up for the year-open result transfer
  * (2099 -> 2098).
@@ -26,14 +26,14 @@
  *
  * Usage:
  *   # Preview every company. Read-only.
- *   npx tsx scripts/repair-result-appropriation.ts
+ *   npx tsx --conditions react-server scripts/repair-result-appropriation.ts
  *
  *   # Preview one company or one exact period.
- *   npx tsx scripts/repair-result-appropriation.ts --company-id <uuid>
- *   npx tsx scripts/repair-result-appropriation.ts --company-id <uuid> --period-id <uuid>
+ *   npx tsx --conditions react-server scripts/repair-result-appropriation.ts --company-id <uuid>
+ *   npx tsx --conditions react-server scripts/repair-result-appropriation.ts --company-id <uuid> --period-id <uuid>
  *
  *   # Apply one reviewed period only.
- *   npx tsx scripts/repair-result-appropriation.ts --commit \
+ *   npx tsx --conditions react-server scripts/repair-result-appropriation.ts --commit \
  *     --company-id <uuid> --period-id <uuid> --user-id <uuid>
  *
  * Run a reviewed dry-run against staging first. Production writes require

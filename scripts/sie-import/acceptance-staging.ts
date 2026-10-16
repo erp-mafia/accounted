@@ -85,7 +85,7 @@ try {
   writeFileSync('.env.sie-acceptance.json',JSON.stringify(report,null,2))
 
   console.log('Submitted both jobs; starting worker fault injection')
-  const child=fork('scripts/sie-import/acceptance-worker.ts',[job.id],{execArgv:['--import','tsx'],stdio:['ignore','pipe','pipe','ipc']})
+  const child=fork('scripts/sie-import/acceptance-worker.ts',[job.id],{execArgv:['--import','tsx','--conditions','react-server'],stdio:['ignore','pipe','pipe','ipc']})
   child.stdout?.resume()
   let childError=''
   child.stderr?.on('data',data=>{childError+=String(data).slice(-1500)})

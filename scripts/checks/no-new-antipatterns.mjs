@@ -206,6 +206,15 @@
  *   24. kernel-import: lib/bookkeeping/engine.ts or lib/core/** importing an
  *      outer business module (invoices, reports, bokslut, import, api, ...).
  *      Tracked as (file, module) edges; a new edge fails. Same module as 22.
+ *   25. script-init-condition: a script that loads lib/init (it calls
+ *      registerScriptInitLoader()) run with tsx somewhere the repository
+ *      writes it down (package.json, a doc, a usage comment, a shebang, a
+ *      spawn or fork) without the react-server condition, or a script that
+ *      calls registerInitLoader() itself. Without the condition lib/init
+ *      cannot load (server-only throws), and until 2026-10-16 every such
+ *      script posted with each event reaching no handler; the helper now
+ *      stops it at start. No allowlist. Implementation and rationale in
+ *      script-init-condition.mjs.
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -235,6 +244,7 @@ import { findUiUniformityFindings, UI_UNIFORMITY_HINTS } from './ui-uniformity.m
 import { findTablesWithoutGrant, grandfatheredFiles, grantHint } from './table-without-grant.mjs'
 import { findFunctiondefPatches, FUNCTIONDEF_PATCH_HINT } from './functiondef-patch.mjs'
 import { findDecisionLogFindings, DECISION_LOG_HINT } from './decision-log.mjs'
+import { findScriptInitConditionFindings, SCRIPT_INIT_CONDITION_HINT } from './script-init-condition.mjs'
 import {
   findExtensionRouteFindings,
   UNGATED_EXTENSION_ROUTES,
@@ -1264,6 +1274,7 @@ const current = {
   unsignedProviderNames: checkUnsignedProviderNames(),
   functiondefPatch: findFunctiondefPatches(ROOT),
   decisionLog: findDecisionLogFindings(ROOT),
+  scriptInitCondition: findScriptInitConditionFindings(ROOT).findings,
   jurisdictionWelds: findJurisdictionWelds(SOURCE_ROOT),
 }
 
@@ -1783,6 +1794,21 @@ if (current.decisionLog.length) {
   console.error(`  → ${DECISION_LOG_HINT}`)
 }
 
+// 1h3. script-init-condition: no allowlist. A script that loads lib/init and
+// is run without the react-server condition cannot load it; until 2026-10-16
+// it then posted with every event reaching no handler.
+if (current.scriptInitCondition.length) {
+  failed = true
+  console.error(
+    `\n✗ script-init-condition: ${current.scriptInitCondition.length} invocation(s) of a script that loads lib/init ` +
+      'without the react-server condition, or a script registering the server loader itself:',
+  )
+  current.scriptInitCondition.forEach(({ rule, file, line, text }) =>
+    console.error(`    ${file}${line ? `:${line}` : ''} (${rule}): ${text}`),
+  )
+  console.error(`  → ${SCRIPT_INIT_CONDITION_HINT}`)
+}
+
 // 1i. local-test-mock: a test that hand-rolls a helper tests/ already shares
 // (local-test-mock.mjs). The thenable-chain allowlist may only shrink; a local
 // cronRequest or setActiveCompany is a hard failure.
@@ -2170,5 +2196,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, hand-written-sie-extensions: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, static-init-import: 0, lazy-init-reach: ${current.lazyInitEntries.length}/${lazyInitBaseline?.count ?? 'no baseline'}, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, client-server-only: ${current.clientServerOnly.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), unsigned-provider-names: ${current.unsignedProviderNames.skipped ? 'skipped' : current.unsignedProviderNames.findings.length}, table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), functiondef-patch: ${functiondefPatchFiles.length}/${functiondefPatchBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s), utc-today: ${current.utcToday.length} in ${UTC_TODAY_ALLOWED.size} allowlisted file(s), bas-account-literal: ${current.jurisdictionWelds.basAccountLiteral.length} in ${Object.keys(basLiteralCounts).length} file(s), sek-literal: ${current.jurisdictionWelds.sekLiteral.length} in ${Object.keys(sekLiteralCounts).length} file(s), kernel-import: ${kernelImportEdgeCount} edge(s), decision-log: 0).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, hand-written-sie-extensions: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, static-init-import: 0, lazy-init-reach: ${current.lazyInitEntries.length}/${lazyInitBaseline?.count ?? 'no baseline'}, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, client-server-only: ${current.clientServerOnly.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), unsigned-provider-names: ${current.unsignedProviderNames.skipped ? 'skipped' : current.unsignedProviderNames.findings.length}, table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), functiondef-patch: ${functiondefPatchFiles.length}/${functiondefPatchBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s), utc-today: ${current.utcToday.length} in ${UTC_TODAY_ALLOWED.size} allowlisted file(s), bas-account-literal: ${current.jurisdictionWelds.basAccountLiteral.length} in ${Object.keys(basLiteralCounts).length} file(s), sek-literal: ${current.jurisdictionWelds.sekLiteral.length} in ${Object.keys(sekLiteralCounts).length} file(s), kernel-import: ${kernelImportEdgeCount} edge(s), decision-log: 0, script-init-condition: 0).`,
 )
