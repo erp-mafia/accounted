@@ -48,6 +48,7 @@
     "payments -> deadlines": 1,
     "payments -> invoicing": 2,
     "payments -> payroll": 5,
+    "payments -> skatteverket": 1,
     "payroll -> deadlines": 1,
     "payroll -> payments": 6,
     "skatteverket -> transactions": 1,

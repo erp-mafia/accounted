@@ -26,6 +26,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
@@ -68,12 +69,18 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { SKATTEKONTO_ACCOUNT_DEFAULT, isSkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 import { useSkattekontoLedgerProposalCount } from '@/components/skattekonto/use-ledger-proposal-count'
+import { fetchPaymentsAvailability } from '@/components/payments/payments-client'
 
 const SkattekontoMatchDialog = dynamic(
   () =>
     import('@/components/skattekonto/SkattekontoMatchDialog').then(
       (module) => module.SkattekontoMatchDialog,
     ),
+  { loading: DialogLoadingSkeleton },
+)
+
+const PaySkattekontoViaBankDialog = dynamic(
+  () => import('@/components/payments/PaySkattekontoViaBankDialog'),
   { loading: DialogLoadingSkeleton },
 )
 
@@ -114,6 +121,16 @@ export default function SkattekontoPage() {
   const tStart = useTranslations('start_cards')
   const hasSkvCapability = useCapability(CAPABILITY.skatteverket)
   const [showPayment, setShowPayment] = useState(false)
+  // Betala via banken is offered where bank payments are switched on for the
+  // company (GET /api/payments/availability), beside the manual details.
+  const [bankPaymentsAvailable, setBankPaymentsAvailable] = useState(false)
+  const [showBankPayment, setShowBankPayment] = useState(false)
+  // /skattekonto?betala=1 (the Hem row Betala in till Skatteverket) opens the
+  // payment at once: through the bank where it is switched on, else the
+  // details to pay by hand.
+  const [paymentAsked] = useState(
+    () => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('betala') === '1',
+  )
   const [saldo, setSaldo] = useState<SaldoEnvelope | null>(null)
   const [tx, setTx] = useState<TransaktionerEnvelope['data'] | null>(null)
   // The company's skattekonto account (1630, or 2012 for an enskild firma that
@@ -246,6 +263,34 @@ export default function SkattekontoPage() {
   useEffect(() => {
     void reload()
   }, [reload])
+
+  useEffect(() => {
+    let cancelled = false
+    const asked = () => {
+      if (!paymentAsked || cancelled) return
+      // Once: a reload of the page shows it without opening the payment again.
+      window.history.replaceState(null, '', window.location.pathname)
+    }
+    fetchPaymentsAvailability()
+      .then((data) => {
+        if (cancelled) return
+        setBankPaymentsAvailable(data.available)
+        if (paymentAsked) {
+          if (data.available) setShowBankPayment(true)
+          else setShowPayment(true)
+        }
+        asked()
+      })
+      .catch(() => {
+        if (cancelled) return
+        setBankPaymentsAvailable(false)
+        if (paymentAsked) setShowPayment(true)
+        asked()
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [paymentAsked])
 
   // Auto-recover from the "inte anslutet" empty state when the user returns
   // to this tab: the connect flow lives in Inställningar (often completed in
@@ -980,8 +1025,30 @@ export default function SkattekontoPage() {
               </div>
             )}
           </dl>
+          {bankPaymentsAvailable && (
+            <DialogFooter>
+              <Button
+                onClick={() => {
+                  setShowPayment(false)
+                  setShowBankPayment(true)
+                }}
+              >
+                {t('payment_pay_via_bank')}
+              </Button>
+            </DialogFooter>
+          )}
         </DialogContent>
       </Dialog>
+
+      {showBankPayment && (
+        <PaySkattekontoViaBankDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setShowBankPayment(false)
+          }}
+          onDone={() => void reload()}
+        />
+      )}
     </div>
   )
 }

@@ -9,6 +9,7 @@
  * An account whose bank cannot be named confidently is refused, never guessed.
  */
 
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { normalizeIban } from '@/lib/cash-accounts/ledger-slots'
 import { isValidIban } from '@/lib/supplier-invoices/payment-details-backfill'
 import { lookupBicByBankName, lookupBicByClearing } from '@/lib/salary/payment/bank-account'
@@ -87,4 +88,27 @@ export function resolveDebtor(account: DebtorAccountSource, connection: DebtorCo
       psu_type: connection?.psu_type ?? null,
     },
   }
+}
+
+/**
+ * The company's account a payment leaves from, as the debtor snapshot an
+ * order carries: the cash account and the bank connection behind it, through
+ * resolveDebtor. 'not_found' for an account the company does not have. Every
+ * prepare reads it here (supplier invoices, the skattekonto), so they pay
+ * from an account by one rule.
+ */
+export async function loadDebtor(
+  supabase: SupabaseClient,
+  companyId: string,
+  cashAccountId: string,
+): Promise<DebtorResolution | { ok: false; reason: 'not_found' }> {
+  const { data: account } = await supabase
+    .from('cash_accounts')
+    .select('id, iban, currency, name, enabled, bank_connection:bank_connections(bank_name, affiliated_aspsp_id, psu_type)')
+    .eq('id', cashAccountId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (!account) return { ok: false, reason: 'not_found' }
+  const acct = account as unknown as DebtorAccountSource & { bank_connection: DebtorConnectionSource | null }
+  return resolveDebtor(acct, acct.bank_connection)
 }

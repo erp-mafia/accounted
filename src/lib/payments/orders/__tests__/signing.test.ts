@@ -635,6 +635,40 @@ describe('startPaymentSigning', () => {
     expect(provider.startSigning).not.toHaveBeenCalled()
   })
 
+  it('signs a skattekonto payment in one basket with a supplier payment: it has no invoice to check', async () => {
+    const provider = fakeProvider()
+    registerPaymentInitiationProvider(provider)
+    const tax = { purpose: 'skattekonto', supplier_invoice_id: null, payee_name: 'Skatteverket', payee_source: 'skatteverket', amount: 11000, reference: '1655954700217' } as const
+    db.setTable('payment_orders', [
+      { data: [order('o1'), order('t1', tax)] }, // preview
+      { data: [{ id: 'o1' }] },
+      { data: [{ id: 'o1' }] },
+      { data: [{ id: 't1' }] },
+      { data: [{ id: 't1' }] },
+      { data: [waitingOrder('o1', 1), waitingOrder('t1', 2, tax)] }, // beginSca: still waiting
+      { data: null },
+      { data: [waitingOrder('o1', 1, { status: 'awaiting_signature' }), waitingOrder('t1', 2, { ...tax, status: 'awaiting_signature' })] },
+    ])
+    db.setTable('rpc:claim_payment_orders_for_signing', { data: { ok: true, batch: batch(), orders: [claimedOrder('o1'), claimedOrder('t1', tax)] } })
+    db.setTable('payment_order_batches', [
+      { data: batch({ provider_batch_id: 'basket-at-bank' }) },
+      { data: batch({ provider_batch_id: 'basket-at-bank' }) },
+      { data: batch({ provider_batch_id: 'basket-at-bank', status: 'awaiting_signature', provider_authorisation_id: 'auth-1' }) },
+      { data: batch({ status: 'awaiting_signature' }) },
+    ])
+
+    const result = await startPaymentSigning(ctx, { orderIds: ['o1', 't1'], method: 'qr', signer: SIGNER })
+
+    expect(result.ok).toBe(true)
+    expect(provider.startSigning).toHaveBeenCalledTimes(1)
+    const instructions = (provider.createPayment as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[1])
+    expect(instructions[1]).toMatchObject({
+      amount: 11000,
+      payee: { type: 'bankgiro', bankgiro: '50501055', name: 'Skatteverket' },
+      reference: { type: 'ocr', value: '1655954700217' },
+    })
+  })
+
   it('refuses without a signer personnummer and with orders that are not approved', async () => {
     registerPaymentInitiationProvider(fakeProvider())
     db.setTable('payment_orders', { data: [order('o1')] })

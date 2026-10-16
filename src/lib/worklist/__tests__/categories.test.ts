@@ -948,8 +948,9 @@ describe('listSkattekontoPaymentDue', () => {
   const TODAY = '2026-09-08'
   const company = { org_number: '559547-0021', entity_type: 'aktiebolag' }
   // Queue order follows the function's `from` calls: upcoming rows and the
-  // balance snapshot (one parallel wave), then the company, then the OCR
-  // resolver's own snapshot read.
+  // balance snapshot (one parallel wave), then the company's bank payments to
+  // the skattekonto, then the company, then the OCR resolver's own snapshot
+  // read.
   const snapshot = (saldoSkatteverket: number) => ({
     data: { value: { saldo: { saldoSkatteverket }, fetchedAt: 1757300000000 } },
   })
@@ -989,6 +990,7 @@ describe('listSkattekontoPaymentDue', () => {
       ],
     })
     enqueue(snapshot(4000.25))
+    enqueue({ data: [] })
     enqueue({ data: company })
     // OCR resolver: no reported OCR in the snapshot, so it is derived.
     enqueue({ data: null })
@@ -1008,6 +1010,7 @@ describe('listSkattekontoPaymentDue', () => {
       data: [{ transaktionsdatum: '2026-09-12', forfallodatum: null, belopp_skatteverket: -2500 }],
     })
     enqueue({ data: null })
+    enqueue({ data: [] })
     enqueue({ data: company })
     enqueue({ data: null })
     const due = await listSkattekontoPaymentDue(supabase, COMPANY, TODAY)
@@ -1019,6 +1022,7 @@ describe('listSkattekontoPaymentDue', () => {
       data: [{ transaktionsdatum: '2026-09-12', forfallodatum: '2026-09-12', belopp_skatteverket: -1000 }],
     })
     enqueue(snapshot(-250))
+    enqueue({ data: [] })
     enqueue({ data: company })
     enqueue({ data: null })
     const due = await listSkattekontoPaymentDue(supabase, COMPANY, TODAY)
@@ -1030,6 +1034,7 @@ describe('listSkattekontoPaymentDue', () => {
       data: [{ transaktionsdatum: '2026-09-12', forfallodatum: '2026-09-12', belopp_skatteverket: -1000 }],
     })
     enqueue({ data: null })
+    enqueue({ data: [] })
     enqueue({ data: { org_number: null, entity_type: 'aktiebolag' } })
     const due = await listSkattekontoPaymentDue(supabase, COMPANY, TODAY)
     expect(due).toMatchObject({ amount: 1000, ocr: null, bankgiro: '5050-1055' })
@@ -1048,12 +1053,79 @@ describe('listSkattekontoPaymentDue', () => {
       data: [{ transaktionsdatum: '2026-09-12', forfallodatum: '2026-09-12', belopp_skatteverket: -1000 }],
     })
     enqueue({ data: null })
+    enqueue({ data: [] })
     enqueue({ data: company })
     enqueue({ data: null })
     await expect(countSkattekontoPaymentDue(supabase, COMPANY, TODAY)).resolves.toBe(1)
     enqueue({ data: [] })
     enqueue({ data: null })
     await expect(countSkattekontoPaymentDue(supabase, COMPANY, TODAY)).resolves.toBe(0)
+  })
+
+  it('subtracts bank payments to the skattekonto on their way, and executed ones the saldo cannot show yet', async () => {
+    enqueue({
+      data: [{ transaktionsdatum: '2026-09-12', forfallodatum: '2026-09-12', belopp_skatteverket: -15000 }],
+    })
+    // Fetched 2025-09-08T02:53:20Z.
+    enqueue(snapshot(4000))
+    enqueue({
+      data: [
+        { amount: '3000.25', status: 'awaiting_signature', executed_at: null },
+        { amount: 1000, status: 'approved', executed_at: null },
+        // Executed after the saldo was fetched: not in the saldo yet.
+        { amount: 2000, status: 'executed', executed_at: '2025-09-08T09:00:00Z' },
+        // Executed before it: the saldo already holds it.
+        { amount: 500, status: 'executed', executed_at: '2025-09-07T09:00:00Z' },
+      ],
+    })
+    enqueue({ data: company })
+    enqueue({ data: null })
+    const due = await listSkattekontoPaymentDue(supabase, COMPANY, TODAY)
+    expect(due).toMatchObject({ charge: 15000, balance: 4000, amount: 4999.75 })
+    expect(findCalls('payment_orders', 'eq')).toContainEqual(['purpose', 'skattekonto'])
+    expect(findCall('payment_orders', 'in')).toEqual([
+      'status',
+      ['approved', 'submitted', 'awaiting_signature', 'awaiting_second_signer', 'accepted', 'executed'],
+    ])
+  })
+
+  it('never asks again for a charge a bank payment on its way covers', async () => {
+    enqueue({
+      data: [{ transaktionsdatum: '2026-09-12', forfallodatum: '2026-09-12', belopp_skatteverket: -1000 }],
+    })
+    enqueue(snapshot(250))
+    enqueue({ data: [{ amount: 750, status: 'submitted', executed_at: null }] })
+    await expect(listSkattekontoPaymentDue(supabase, COMPANY, TODAY)).resolves.toBeNull()
+    expect(mockSupabase.from).not.toHaveBeenCalledWith('companies')
+  })
+
+  it('without a snapshot counts the payments on their way but no executed one', async () => {
+    enqueue({
+      data: [{ transaktionsdatum: '2026-09-12', forfallodatum: '2026-09-12', belopp_skatteverket: -2500 }],
+    })
+    enqueue({ data: null })
+    enqueue({
+      data: [
+        { amount: 1000, status: 'accepted', executed_at: null },
+        { amount: 2500, status: 'executed', executed_at: '2026-09-07T09:00:00Z' },
+      ],
+    })
+    enqueue({ data: company })
+    enqueue({ data: null })
+    const due = await listSkattekontoPaymentDue(supabase, COMPANY, TODAY)
+    expect(due).toMatchObject({ charge: 2500, balance: null, amount: 1500 })
+  })
+
+  it('keeps the whole shortfall when the payments cannot be read', async () => {
+    enqueue({
+      data: [{ transaktionsdatum: '2026-09-12', forfallodatum: '2026-09-12', belopp_skatteverket: -1000 }],
+    })
+    enqueue(snapshot(0))
+    enqueue({ error: { message: 'boom' } })
+    enqueue({ data: company })
+    enqueue({ data: null })
+    const due = await listSkattekontoPaymentDue(supabase, COMPANY, TODAY)
+    expect(due).toMatchObject({ amount: 1000 })
   })
 })
 

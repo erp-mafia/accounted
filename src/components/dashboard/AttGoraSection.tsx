@@ -648,7 +648,7 @@ export default function AttGoraSection({
                   <div>
                     {skattekontoPayment && (
                       <WorklistRow
-                        href="/skattekonto"
+                        href="/skattekonto?betala=1"
                         icon={Landmark}
                         label={t('row_skattekonto_payment')}
                         detail={

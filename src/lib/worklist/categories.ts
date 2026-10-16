@@ -1245,15 +1245,53 @@ export async function countPaymentsVerificationDue(
 const SKATTEVERKET_EXTENSION_ID = 'skatteverket'
 const BALANCE_SNAPSHOT_KEY = 'skattekonto_balance_snapshot'
 
+/** A skattekonto payment through the bank that a person approved and the bank has not finished: from approved to accepted. */
+const SKATTEKONTO_PAYMENT_UNDERWAY_STATUSES = ['approved', 'submitted', 'awaiting_signature', 'awaiting_second_signer', 'accepted'] as const
+
+/**
+ * What the company's bank payments to the skattekonto (payment_orders with
+ * purpose 'skattekonto') already cover and the synced saldo cannot show yet:
+ * every order on its way to the bank (approved up to accepted), and every one
+ * the bank executed after the saldo was fetched. A draft nobody approved pays
+ * nothing. Without a snapshot (fetchedAtMs null) only the orders on their way
+ * count, since nothing tells whether an executed one already reached the
+ * charge the company reads. A failed read covers nothing, so the row keeps
+ * showing the shortfall.
+ */
+async function skattekontoPaymentsUnderway(
+  supabase: SupabaseClient,
+  companyId: string,
+  fetchedAtMs: number | null,
+): Promise<number> {
+  const { data, error } = await supabase
+    .from('payment_orders')
+    .select('amount, status, executed_at')
+    .eq('company_id', companyId)
+    .eq('purpose', 'skattekonto')
+    .in('status', [...SKATTEKONTO_PAYMENT_UNDERWAY_STATUSES, 'executed'])
+  if (error) {
+    logAndZero('skattekonto_payment_due', companyId, error)
+    return 0
+  }
+  const covering = ((data ?? []) as Array<{ amount: number | string; status: string; executed_at: string | null }>).filter(
+    (order) =>
+      order.status !== 'executed' ||
+      (fetchedAtMs !== null && order.executed_at !== null && Date.parse(order.executed_at) > fetchedAtMs),
+  )
+  return sumOre(covering.map((order) => Number(order.amount)))
+}
+
 /**
  * The next skattekonto charge the balance does not cover, or null.
  *
  * Server-side twin of the /skattekonto page's "Nästa dragning" math: the
  * earliest due date on or after today among Skatteverket's upcoming rows
  * (ignored rows included, Skatteverket draws them regardless of our flag),
- * the sum drawn that day, and the shortfall against the last synced saldo.
- * Nothing to pay in (no upcoming charge, or a saldo that covers it) is null,
- * so the Att göra row only appears when money actually has to move.
+ * the sum drawn that day, and the shortfall against the last synced saldo,
+ * less what the company's bank payments to the skattekonto already cover
+ * (skattekontoPaymentsUnderway). Nothing to pay in (no upcoming charge, a
+ * saldo that covers it, or a payment on its way that does) is null, so the
+ * Att göra row only appears when money actually has to move.
  *
  * Soft-fails to null with a logged error, like every other category.
  */
@@ -1297,13 +1335,18 @@ export async function listSkattekontoPaymentDue(
   // A failed snapshot read is "balance unknown", never "balance zero": the
   // full charge is then the honest amount to show.
   const snapshotValue = snapshotRes.error ? null : (snapshotRes.data?.value as
-    | { saldo?: { saldoSkatteverket?: unknown } }
+    | { saldo?: { saldoSkatteverket?: unknown }; fetchedAt?: unknown }
     | null
     | undefined)
   const rawBalance = Number(snapshotValue?.saldo?.saldoSkatteverket)
   const balance = snapshotValue && Number.isFinite(rawBalance) ? roundOre(rawBalance) : null
   if (balance !== null && balance >= charge) return null
-  const amount = balance === null ? charge : roundOre(charge - balance)
+  const shortfall = balance === null ? charge : roundOre(charge - balance)
+  // A payment made through the bank is not in the saldo yet: Hem and the
+  // payment dialog must never ask for it again.
+  const fetchedAt = typeof snapshotValue?.fetchedAt === 'number' ? snapshotValue.fetchedAt : null
+  const amount = roundOre(shortfall - (await skattekontoPaymentsUnderway(supabase, companyId, fetchedAt)))
+  if (amount <= 0) return null
 
   const { data: company, error: companyError } = await supabase
     .from('companies')
