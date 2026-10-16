@@ -1,0 +1,1 @@
+[2026-10-15] Bank claims ignore archived companies by filtering the callback's service-role membership read like user_company_ids(), not by switching cash accounts off on archive or disconnect: read-side only, no backfill, and a disconnected live company keeps its CSV claim (crm#1241).
