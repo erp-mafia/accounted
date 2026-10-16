@@ -7,6 +7,9 @@ import { parseArgs } from 'node:util'
 import dotenv from 'dotenv'
 import { createServiceRoleClient } from '../../src/lib/supabase/service-client'
 import { invoiceFixture, providerPage, type LoadProvider } from './fixtures'
+import { registerScriptInitLoader } from '../lib/register-init-loader'
+
+registerScriptInitLoader()
 
 const PROJECT = 'metjnjrhvujscngnpzdv'
 const { values } = parseArgs({ options: {

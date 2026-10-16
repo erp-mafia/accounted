@@ -73,6 +73,9 @@ config({ path: arg('env-file') ?? '.env.local' })
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { getSwedishLocalDate, reverseEntry } from '../src/lib/bookkeeping/engine'
 import { evaluateYearEndUndoGate } from './lib/year-end-undo-gate'
+import { registerScriptInitLoader } from './lib/register-init-loader'
+
+registerScriptInitLoader()
 
 const COMPANY_ID = arg('company-id')
 const PERIOD_ID = arg('period-id')

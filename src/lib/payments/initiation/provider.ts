@@ -28,6 +28,7 @@
 
 import type { PaymentOrderStatus } from '@/lib/payments/orders/status'
 import { whenInitialized } from '@/lib/initialized'
+import { globalSingleton } from '@/lib/global-singleton'
 
 export type PaymentProviderId = 'open_payments'
 
@@ -241,7 +242,12 @@ export function providerWriteOutcome(error: unknown): ProviderWriteOutcome {
   return error.retryable ? 'not_sent' : 'refused'
 }
 
-const providers = new Map<PaymentProviderId, PaymentInitiationProvider>()
+// Process-wide (lib/global-singleton.ts): lib/init registers the provider
+// through its own copy of this module, a route reads it through another.
+const providers = globalSingleton(
+  'paymentInitiationProviders',
+  () => new Map<PaymentProviderId, PaymentInitiationProvider>(),
+)
 
 export function registerPaymentInitiationProvider(provider: PaymentInitiationProvider): void {
   providers.set(provider.id, provider)

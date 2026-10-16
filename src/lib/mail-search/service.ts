@@ -10,6 +10,7 @@
  * a CI build with zero extensions has to compile.
  */
 import { whenInitialized } from '@/lib/initialized'
+import { globalSingleton } from '@/lib/global-singleton'
 
 /** What the hunt knows about the purchase it is trying to find a receipt for. */
 export interface MailSearchQuery {
@@ -165,14 +166,18 @@ class NoopMailSearchService implements MailSearchService {
   releaseCache(): void {}
 }
 
-let mailSearchService: MailSearchService = new NoopMailSearchService()
+// Process-wide (lib/global-singleton.ts): the mail extension registers
+// through the copy of this module lib/init loads, a route reads through its own.
+const holder = globalSingleton('mailSearchService', (): { service: MailSearchService } => ({
+  service: new NoopMailSearchService(),
+}))
 
 /** The registered service, after the extensions have loaded (lib/initialized.ts). */
 export async function getMailSearchService(): Promise<MailSearchService> {
   await whenInitialized()
-  return mailSearchService
+  return holder.service
 }
 
 export function registerMailSearchService(svc: MailSearchService): void {
-  mailSearchService = svc
+  holder.service = svc
 }

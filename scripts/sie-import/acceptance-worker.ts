@@ -1,5 +1,8 @@
 import {readFileSync} from 'node:fs'
 import dotenv from 'dotenv'
+import {registerScriptInitLoader} from '../lib/register-init-loader'
+
+registerScriptInitLoader()
 
 async function main(){
 Object.assign(process.env,dotenv.parse(readFileSync('.env.sie-runtime.local')),{SIE_IMPORT_JOBS:'true'})

@@ -175,7 +175,7 @@ interface ExtensionContext {
 - **Delivery:** the bus (`src/lib/events/bus.ts`) runs all handlers for an event concurrently with `Promise.allSettled`. A rejected handler is logged and never fails the emitter.
 - **Payload types:** event names and payloads live in `src/lib/events/types.ts`. Type payloads with `EventPayload<'<event>'>`.
 - **ctx may be missing:** the registry builds `ctx` when the event fires, from `createClient()` and the payload's `userId` and `companyId`. When that fails (no `userId`, or no request scope), the handler receives `ctx === undefined`, so always handle that case. An event emitted from a cron job or webhook may also carry a client without a signed-in user.
-- **Initialization:** handlers are subscribed when `src/lib/init.ts` runs `loadExtensions()`. It loads on first use (`src/lib/initialized.ts`): `eventBus.emit()` awaits it before the first event of a process is dispatched, and the registry reads (`await extensionRegistry.get()`, `getAll()`) await it before answering. Nothing calls `ensureInitialized()` at module level; `npm run check:guards` (static-init-import) fails an entry point that imports `@/lib/init` statically, since that loads every extension on its cold start.
+- **Initialization:** handlers are subscribed when `src/lib/init.ts` runs `loadExtensions()`. `src/instrumentation.ts` loads it when the server boots, and is the only module in the app that imports it (`src/lib/initialized.ts`): `eventBus.emit()` waits for that load before the first event of a process is dispatched, and the registry reads (`await extensionRegistry.get()`, `getAll()`) wait for it before answering. Extension code therefore runs in the instrumentation hook's copy of every module it imports; the bus, the registries and the request scopes (actor, AI meter, execution budget) are process-wide (`src/lib/global-singleton.ts`), so it sees what the route that emitted sees. `npm run check:guards` (static-init-import) fails any other import of `@/lib/init`, static or dynamic, since the bundler would compile every extension into that entry again.
 
 ## API routes
 
@@ -297,7 +297,7 @@ Tests live in `src/extensions/general/<id>/__tests__/`. Run them with `npx vites
 3. **Importing `@/extensions/` from core.** This includes `src/lib/`, `src/app/api/` outside `src/app/api/extensions/`, `src/components/` outside `src/components/extensions/`, and `src/types/index.ts`.
 4. **Assuming `ctx` exists.** It can be undefined in event handlers, and it is always undefined for `skipAuth` and `skipCompanyContext` routes.
 5. **Calling `settings.set(key, null)`.** Use `settings.clear(key)`.
-6. **Importing `@/lib/init` or calling `ensureInitialized()`.** `eventBus.emit()` and the registry reads load it on first use; `await` them instead.
+6. **Importing `@/lib/init` or calling `ensureInitialized()`.** `src/instrumentation.ts` loads it at boot, and `eventBus.emit()` and the registry reads wait for it; `await` them instead.
 7. **Scaffolding with a sector other than `general`**, or following steps 4 and 5 of the `create-extension` output.
 8. **Adding a file under `src/app/api/extensions/<id>/` without the registry gate**, or importing another extension from it.
 9. **Writing journal entries directly** instead of through `src/lib/bookkeeping/engine.ts`.

@@ -1,0 +1,1 @@
+[2026-10-16] With no init loader registered, whenInitialized() resolves without initialising and warns once per process instead of throwing: an emit must never fail a write that already happened; scripts and test suites that post or emit register the loader at their start.

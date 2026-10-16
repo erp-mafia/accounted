@@ -5,6 +5,9 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { randomUUID, randomBytes } from 'node:crypto'
 import dotenv from 'dotenv'
 import { createClient } from '@supabase/supabase-js'
+import { registerScriptInitLoader } from '../lib/register-init-loader'
+
+registerScriptInitLoader()
 
 interface Fixture {
   company: string

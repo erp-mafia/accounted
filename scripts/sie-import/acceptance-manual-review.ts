@@ -3,6 +3,9 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import dotenv from 'dotenv'
 import { createClient } from '@supabase/supabase-js'
+import { registerScriptInitLoader } from '../lib/register-init-loader'
+
+registerScriptInitLoader()
 
 // Uses only the existing synthetic browser company on designated staging.
 // Leaves the renewed review visible for browser verification.

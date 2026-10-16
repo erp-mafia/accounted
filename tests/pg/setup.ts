@@ -1,5 +1,11 @@
 import { Pool, type PoolClient } from 'pg'
 import { afterAll, beforeAll } from 'vitest'
+import { registerInitLoader } from '@/lib/initialized'
+
+// No instrumentation hook outside Next.js: register the loader it registers,
+// so the first event loads the real lib/init (the event_log handler, the
+// webhook fan-out, every extension) as it does in the app.
+registerInitLoader(() => import('@/lib/init').then((m) => m.ensureInitialized()))
 
 // Shared pool for the pg-real project. DATABASE_URL must point at a Postgres
 // instance that already has every migration from supabase/migrations/ applied

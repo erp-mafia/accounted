@@ -1,10 +1,11 @@
 /**
  * invoice.sent reaches event_log with no module-level init anywhere.
  *
- * Entry points no longer call ensureInitialized(): eventBus.emit() loads
- * lib/init (the event_log handler, the webhook fan-out, every extension) on
- * the first event and resolves only after the handlers ran
- * (lib/initialized.ts). This issues an invoice through issueAndBookInvoice,
+ * Entry points no longer call ensureInitialized(): eventBus.emit() waits for
+ * the registered loader of lib/init (the event_log handler, the webhook
+ * fan-out, every extension) on the first event and resolves only after the
+ * handlers ran (lib/initialized.ts; instrumentation.ts registers the loader
+ * in the app, tests/pg/setup.ts here). This issues an invoice through issueAndBookInvoice,
  * the issue core that mark-sent and bulk Bokför share, against real Postgres
  * in a cold module graph with the real lib/init: importing it must not load
  * lib/init, and the event_log row must be committed by the time it returns.
@@ -21,7 +22,8 @@ import { sqlClient } from './sql-supabase-client'
 
 const state = vi.hoisted(() => ({ initLoads: 0, service: null as unknown }))
 
-// Counts loads of the real lib/init; only lib/initialized.ts imports it.
+// Counts loads of the real lib/init; only the loader tests/pg/setup.ts
+// registers imports it.
 vi.mock('@/lib/init', async (importOriginal) => {
   state.initLoads++
   return importOriginal()

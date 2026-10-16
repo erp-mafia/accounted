@@ -18,7 +18,8 @@ import type { AgentActorContext } from '@/lib/agent/tools/types'
  * focus and the user expects a staged card.
  *
  * The mcp-server extension registers the tool loader when lib/init loads it,
- * which the first lookup triggers (lib/initialized.ts). In a core-only build
+ * which instrumentation.ts starts at boot and the first lookup waits for
+ * (lib/initialized.ts). In a core-only build
  * nothing is registered, so this returns an empty list and the assistant
  * answers from the prompt + snapshot alone: the graceful, correct degradation.
  */

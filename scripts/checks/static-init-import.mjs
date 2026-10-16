@@ -1,20 +1,25 @@
 /**
- * Guard: no server entry point imports lib/init, or the extension list it
- * loads, statically.
+ * Guard: lib/init, and the extension list it loads, is imported by
+ * instrumentation.ts and by nothing else that a server entry or a client
+ * module can reach.
  *
  * lib/init wires the core event handlers and loads every enabled extension.
- * It loads on first use instead (lib/initialized.ts): eventBus.emit() and
- * every getter of a registry that init fills await the same memoised dynamic
- * import, so a request that neither emits nor reads such a registry loads no
- * extension, and one that does can never see the bus or a registry before
- * init has filled it. Until 2026-10-11 about 300 entries called
- * ensureInitialized() at module scope, so every one of them paid for every
- * extension on a cold start; a static import from any entry, directly or
- * through a module it imports, would quietly bring that back.
+ * instrumentation.ts register() registers its loader when the server boots
+ * (a dynamic import, Node.js runtime only), and eventBus.emit() and every
+ * getter of a registry that init fills wait for that loader
+ * (lib/initialized.ts). Until 2026-10-11 about 300 entries called
+ * ensureInitialized() at module scope; until 2026-10-16 lib/initialized.ts
+ * itself imported lib/init dynamically, and since the bundler follows a
+ * dynamic import, every server entry that touched the event bus or a
+ * registry getter compiled lib/init and every extension (474 of about 1,090
+ * entries, with every Vercel production build OOM-killed on 2026-10-15). An
+ * import of lib/init anywhere a server entry can reach, static or dynamic,
+ * would quietly bring that back.
  *
- * "Static" is the runtime import graph: `import` and `export ... from`
- * declarations, type-only ones excluded. Dynamic `import()` is the sanctioned
- * way in and is not followed.
+ * The graph is the runtime import graph the bundler builds: `import` and
+ * `export ... from` declarations, dynamic `import('...')` and `require('...')`
+ * with a literal specifier; type-only imports excluded. The one sanctioned
+ * edge is instrumentation.ts's dynamic import of lib/init.
  *
  * Entry points: every App Router file convention Next.js runs on the server
  * (route handlers, pages, layouts, templates, metadata routes, ...), every
@@ -22,35 +27,40 @@
  * files.
  *
  * Client modules ('use client') get a stricter rule: they must not reach
- * lib/initialized.ts either. A client page that imports a pure helper from a
- * server module that also emits pulls in the event bus, and the bus's dynamic
- * import of lib/init then drags every extension into the browser build, which
- * fails it. Import the helper from a module of its own.
+ * lib/initialized.ts either, statically or dynamically. The event bus and the
+ * registries are server state, filled in the server process by the loader
+ * instrumentation.ts registers; a client module that imports a pure helper
+ * from a server module that also emits ships the bus to the browser, where
+ * emit() reaches no handler and the event is lost. Import the helper from a
+ * module of its own. A 'use server' module is where the client walk stops:
+ * the client bundle gets a reference to each action, not the module's code.
  *
  * No allowlist.
  *
  * A second, counted question rides on the same graph: which server entries
- * reach lib/initialized.ts (findInitReach().lazyInitEntries). That is the
- * sanctioned way in at runtime, but the bundler follows its dynamic import,
- * so every such entry compiles lib/init and every extension. On 2026-10-15
- * fifty more of them (one shared helper importing period-service, which
- * imports the event bus) came with the merge after which every Vercel
- * production build was OOM-killed. no-new-antipatterns.mjs ratchets the count.
+ * reach lib/init, following dynamic imports too, which is what compiles every
+ * extension into an entry (findInitReach().lazyInitEntries). With the loader
+ * in instrumentation.ts that is instrumentation.ts alone.
+ * no-new-antipatterns.mjs ratchets the count.
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import ts from 'typescript'
 
 /** Modules that load every extension: lib/init and what it loads them through. */
-export const FORBIDDEN_STATIC_IMPORTS = [
+export const FORBIDDEN_IMPORTS = [
   'lib/init.ts',
   'lib/extensions/loader.ts',
   'lib/extensions/_generated/extension-list.ts',
 ]
-/** The dynamic way in to lib/init: the event bus and the registry getters import it. */
+/** The module every extension is compiled through. */
+export const INIT_MODULE = 'lib/init.ts'
+/** The one module that may import lib/init, and only dynamically. */
+export const INIT_IMPORTER = 'instrumentation.ts'
+/** The event bus's and the registry getters' wait for the loader. */
 export const LAZY_INIT_MODULE = 'lib/initialized.ts'
-/** What a client module must not reach either: the dynamic way in to lib/init. */
-export const FORBIDDEN_CLIENT_IMPORTS = [...FORBIDDEN_STATIC_IMPORTS, LAZY_INIT_MODULE]
+/** What a client module must not reach: lib/init, and the server state behind lib/initialized.ts. */
+export const FORBIDDEN_CLIENT_IMPORTS = [...FORBIDDEN_IMPORTS, LAZY_INIT_MODULE]
 
 // The App Router file conventions Next.js runs on the server.
 const APP_ENTRY_RE =
@@ -94,13 +104,8 @@ function findClientModules(sourceRoot) {
   }).sort()
 }
 
-function findEntryPoints(sourceRoot) {
-  const appEntries = walkFiles(path.join(sourceRoot, 'app'), (_full, name) => APP_ENTRY_RE.test(name))
-  const rootEntries = fs
-    .readdirSync(sourceRoot)
-    .filter((name) => ROOT_ENTRY_RE.test(name))
-    .map((name) => path.join(sourceRoot, name))
-  const serverActions = walkFiles(sourceRoot, (full, name) => {
+function findServerActionModules(sourceRoot) {
+  return walkFiles(sourceRoot, (full, name) => {
     if (!/\.tsx?$/.test(name) || /\.test\.tsx?$/.test(name)) return false
     try {
       return USE_SERVER_RE.test(fs.readFileSync(full, 'utf8'))
@@ -108,6 +113,14 @@ function findEntryPoints(sourceRoot) {
       return false
     }
   })
+}
+
+function findEntryPoints(sourceRoot, serverActions) {
+  const appEntries = walkFiles(path.join(sourceRoot, 'app'), (_full, name) => APP_ENTRY_RE.test(name))
+  const rootEntries = fs
+    .readdirSync(sourceRoot)
+    .filter((name) => ROOT_ENTRY_RE.test(name))
+    .map((name) => path.join(sourceRoot, name))
   return [...new Set([...appEntries, ...rootEntries, ...serverActions])].sort()
 }
 
@@ -122,31 +135,49 @@ function isTypeOnlyImport(node) {
   return bindings.elements.length > 0 && bindings.elements.every((el) => el.isTypeOnly)
 }
 
-/** The runtime specifiers of a module's static import and re-export declarations. */
-function staticSpecifiers(fileName, text) {
-  const source = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, false)
-  const specifiers = []
-  for (const stmt of source.statements) {
-    if (ts.isImportDeclaration(stmt) && ts.isStringLiteral(stmt.moduleSpecifier)) {
-      if (!isTypeOnlyImport(stmt)) specifiers.push(stmt.moduleSpecifier.text)
-    } else if (
-      ts.isExportDeclaration(stmt) &&
-      stmt.moduleSpecifier &&
-      ts.isStringLiteral(stmt.moduleSpecifier) &&
-      !stmt.isTypeOnly
-    ) {
-      specifiers.push(stmt.moduleSpecifier.text)
-    }
-  }
-  return specifiers
+/** A literal module specifier: 'x', "x" or `x` without substitutions. */
+function literalSpecifier(node) {
+  return node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : null
 }
 
 /**
- * Every server entry point under sourceRoot whose static import graph reaches
- * one of FORBIDDEN_STATIC_IMPORTS, and every client module whose graph
- * reaches one of FORBIDDEN_CLIENT_IMPORTS, each with one import chain that
- * proves it (sourceRoot-relative, forward-slash paths, entry first) and its
- * kind ('server' or 'client').
+ * The runtime imports of a module, each `{ specifier, dynamic }`: import and
+ * re-export declarations (static), and `import('...')` / `require('...')`
+ * calls with a literal specifier anywhere in the module (dynamic).
+ */
+function moduleImports(fileName, text) {
+  const source = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, false)
+  const found = []
+  const visit = (node) => {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+      if (!isTypeOnlyImport(node)) found.push({ specifier: node.moduleSpecifier.text, dynamic: false })
+      return
+    }
+    if (ts.isExportDeclaration(node)) {
+      if (node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier) && !node.isTypeOnly) {
+        found.push({ specifier: node.moduleSpecifier.text, dynamic: false })
+      }
+      return
+    }
+    if (ts.isCallExpression(node)) {
+      const isImport = node.expression.kind === ts.SyntaxKind.ImportKeyword
+      const isRequire = ts.isIdentifier(node.expression) && node.expression.text === 'require'
+      const specifier = isImport || isRequire ? literalSpecifier(node.arguments[0]) : null
+      if (specifier) found.push({ specifier, dynamic: true })
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(source)
+  return found
+}
+
+/**
+ * Every server entry point under sourceRoot that reaches one of
+ * FORBIDDEN_IMPORTS other than through instrumentation.ts's dynamic import of
+ * lib/init, and every client module that reaches one of
+ * FORBIDDEN_CLIENT_IMPORTS, each with one import chain that proves it
+ * (sourceRoot-relative, forward-slash paths, entry first) and its kind
+ * ('server' or 'client'). Static and dynamic imports alike.
  */
 export function findStaticInitImports(sourceRoot) {
   return findInitReach(sourceRoot).staticInitImports
@@ -154,11 +185,12 @@ export function findStaticInitImports(sourceRoot) {
 
 /**
  * Both questions from one graph walk: `staticInitImports` as above, and
- * `lazyInitEntries`, every server entry whose static graph reaches
- * LAZY_INIT_MODULE, in the same shape and sorted by entry.
+ * `lazyInitEntries`, every server entry whose graph reaches INIT_MODULE
+ * (sanctioned edge included), in the same shape and sorted by entry.
  */
 export function findInitReach(sourceRoot) {
   const rel = (p) => path.relative(sourceRoot, p).split(path.sep).join('/')
+  const abs = (r) => path.join(sourceRoot, r)
   const edges = new Map()
 
   const resolve = (fromAbs, spec) => {
@@ -177,38 +209,50 @@ export function findInitReach(sourceRoot) {
     return null
   }
 
-  const edgesOf = (abs) => {
-    if (!edges.has(abs)) {
-      let next = []
+  /** The resolved runtime imports of a module, each `{ to, dynamic }`. */
+  const edgesOf = (file) => {
+    if (!edges.has(file)) {
+      const next = []
       try {
-        next = staticSpecifiers(abs, fs.readFileSync(abs, 'utf8'))
-          .map((spec) => resolve(abs, spec))
-          .filter((n) => n && !isTestPath(rel(n)))
+        for (const { specifier, dynamic } of moduleImports(file, fs.readFileSync(file, 'utf8'))) {
+          const to = resolve(file, specifier)
+          if (to && !isTestPath(rel(to))) next.push({ to, dynamic })
+        }
       } catch {
         // unreadable: no edges
       }
-      edges.set(abs, next)
+      edges.set(file, next)
     }
-    return edges.get(abs)
+    return edges.get(file)
   }
 
-  // 1. The static graph reachable from the entries, built once.
-  const serverEntries = findEntryPoints(sourceRoot)
+  // 1. The graph reachable from the entries, dynamic imports included, built once.
+  const serverActions = findServerActionModules(sourceRoot)
+  const serverEntries = findEntryPoints(sourceRoot, serverActions)
   const clientModules = findClientModules(sourceRoot)
   const stack = [...serverEntries, ...clientModules]
   while (stack.length > 0) {
-    for (const next of edgesOf(stack.pop())) if (!edges.has(next)) stack.push(next)
-  }
-  const importers = new Map()
-  for (const [from, targets] of edges) {
-    for (const to of targets) {
-      if (!importers.has(to)) importers.set(to, [])
-      importers.get(to).push(from)
-    }
+    for (const { to } of edgesOf(stack.pop())) if (!edges.has(to)) stack.push(to)
   }
 
-  const offendersFor = (kind, entries, forbiddenRel) => {
-    const forbidden = new Set(forbiddenRel.map((f) => path.join(sourceRoot, f)))
+  const initImporter = abs(INIT_IMPORTER)
+  const initModule = abs(INIT_MODULE)
+  const isSanctioned = (from, edge) => from === initImporter && edge.to === initModule && edge.dynamic
+  // A client module that imports a 'use server' module gets a reference to
+  // each action, not the module's code: the client walk stops there.
+  const actionModules = new Set(serverActions)
+  const isServerActionImport = (_from, edge) => actionModules.has(edge.to)
+
+  const offendersFor = (kind, entries, forbiddenRel, skipEdge) => {
+    const forbidden = new Set(forbiddenRel.map(abs))
+    const importers = new Map()
+    for (const [from, targets] of edges) {
+      for (const edge of targets) {
+        if (skipEdge(from, edge)) continue
+        if (!importers.has(edge.to)) importers.set(edge.to, [])
+        importers.get(edge.to).push(from)
+      }
+    }
     // 2. Every module that can reach a forbidden one (reverse reachability).
     const reaching = new Set([...forbidden].filter((f) => edges.has(f)))
     const queue = [...reaching]
@@ -233,10 +277,11 @@ export function findInitReach(sourceRoot) {
           hit = current
           break
         }
-        for (const next of edgesOf(current)) {
-          if (reaching.has(next) && !parent.has(next)) {
-            parent.set(next, current)
-            bfs.push(next)
+        for (const edge of edgesOf(current)) {
+          if (skipEdge(current, edge)) continue
+          if (reaching.has(edge.to) && !parent.has(edge.to)) {
+            parent.set(edge.to, current)
+            bfs.push(edge.to)
           }
         }
       }
@@ -249,9 +294,9 @@ export function findInitReach(sourceRoot) {
 
   return {
     staticInitImports: [
-      ...offendersFor('server', serverEntries, FORBIDDEN_STATIC_IMPORTS),
-      ...offendersFor('client', clientModules, FORBIDDEN_CLIENT_IMPORTS),
+      ...offendersFor('server', serverEntries, FORBIDDEN_IMPORTS, isSanctioned),
+      ...offendersFor('client', clientModules, FORBIDDEN_CLIENT_IMPORTS, isServerActionImport),
     ],
-    lazyInitEntries: offendersFor('server', serverEntries, [LAZY_INIT_MODULE]),
+    lazyInitEntries: offendersFor('server', serverEntries, [INIT_MODULE], () => false),
   }
 }

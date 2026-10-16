@@ -16,6 +16,8 @@
  * returns undefined: the same no-attribution default as a server call
  * outside a runWithActor() scope.
  */
+import { globalSingleton } from '@/lib/global-singleton'
+
 export interface CommitActor {
   /** Matches the journal_entries.committed_actor_type CHECK constraint. */
   type: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'system' | 'agent_chat'
@@ -39,16 +41,20 @@ export interface ActorStore {
   getStore(): CommitActor | undefined
 }
 
-let store: ActorStore | null = null
+// Per process, not per module copy (lib/global-singleton.ts): engine.ts may
+// run in a copy of this module whose graph never imported ./actor-context-node
+// (extension code, which lib/init loads from instrumentation.ts), and must
+// still see the storage a route bound.
+const binding = globalSingleton('commitActorStore', (): { store: ActorStore | null } => ({ store: null }))
 
 /** Bind the server-side AsyncLocalStorage. Called by ./actor-context-node. */
 export function bindActorStore(s: ActorStore): void {
-  store = s
+  binding.store = s
 }
 
 /** The actor for the current async execution scope, if any. */
 export function getActor(): CommitActor | undefined {
-  return store?.getStore()
+  return binding.store?.getStore()
 }
 
 /**

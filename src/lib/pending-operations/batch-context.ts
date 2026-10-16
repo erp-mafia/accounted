@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { globalSingleton } from '@/lib/global-singleton'
 import type { RiskLevel } from './risk-tiers'
 
 /**
@@ -22,7 +23,13 @@ interface StagingBatchStore {
   refusedHighRisk: string | null
 }
 
-const stagingBatchContext = new AsyncLocalStorage<StagingBatchStore>()
+// One scope per process, not per module copy (lib/global-singleton.ts): a
+// route opens it through its copy of this module, and extension code, which
+// lib/init loads from instrumentation.ts, reads it through another.
+const stagingBatchContext = globalSingleton(
+  'stagingBatchContext',
+  () => new AsyncLocalStorage<StagingBatchStore>(),
+)
 
 /** Run `fn` with `batchId` visible to every staging call it makes. */
 export function runWithStagingBatch<T>(batchId: string, fn: () => Promise<T>): Promise<T> {

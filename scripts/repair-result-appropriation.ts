@@ -51,6 +51,9 @@ import {
   type HistoricalResultRepairAssessment,
   type HistoricalResultRepairReason,
 } from '../src/lib/core/bookkeeping/result-appropriation-repair'
+import { registerScriptInitLoader } from './lib/register-init-loader'
+
+registerScriptInitLoader()
 
 function arg(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`)

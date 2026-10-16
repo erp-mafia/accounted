@@ -13,7 +13,7 @@ vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn() }))
 beforeEach(() => { vi.clearAllMocks(); eventBus.clear() })
 ```
 
-`lib/init` is stubbed for every unit test (`tests/unit/setup.ts`), so the first `eventBus.emit()` or registry read loads no real extension: a test sees only the handlers it registers.
+`lib/init` is stubbed for every unit test (`tests/unit/setup.ts`, which also registers the init loader that `src/instrumentation.ts` registers in the app), so the first `eventBus.emit()` or registry read loads no real extension: a test sees only the handlers it registers. The bus and the registries are process-wide (`src/lib/global-singleton.ts`): a test that calls `vi.resetModules()` for fresh state calls `resetGlobalSingletons()` too.
 
 ## Mock Context
 
