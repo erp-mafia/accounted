@@ -77,3 +77,21 @@ reviewed, deliberate coupling, or after removing edges, rewrite the baseline:
     UPDATE_BOUNDARY_BASELINE=1 npx vitest run --project unit src/lib/modules/__tests__/boundary.test.ts
 
 A shrinking count passes and prints a reminder to lower the baseline.
+
+## Phase 1's exit check
+
+The building-blocks plan closes Phase 1 when "every new posting has an actor
+and a receipt; a harness on a service account sees the capabilities, stages an
+attest over REST and receives the decision as an event that survives a crash."
+That sentence is an automated test against real Postgres:
+`tests/pg/phase1-exit-check.pg.test.ts` (`npm run test:pg`). It drives the v1
+route handlers as a harness would: the owner creates a service account and
+mints its key, the key reads `GET /capabilities`, stages a balanced verifikat
+with `?stage=true` and approves it, the posted row carries the actor, the
+verified principal and the sponsor, and the decision arrives as
+`journal_entry.committed` on `GET /api/events`. Killing the committing
+connection before and after COMMIT shows the verifikat and its outbox row are
+written together or not at all. Only the HTTP hop to PostgREST is replaced
+(`tests/pg/postgrest-over-pg.ts` runs each request as SQL); the file header
+lists every seam. The receipt half does not hold yet for a staged and approved
+posting (its `decision_receipts` is empty) and is kept there as an `it.fails`.
