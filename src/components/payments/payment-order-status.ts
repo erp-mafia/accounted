@@ -86,3 +86,20 @@ export const PERMANENT_SIGNING_FAILURES: ReadonlySet<string> = new Set([
   'AMOUNT_LIMITATION_CONTROL_FAILED',
   'SCA_REDIRECT_UNSUPPORTED',
 ])
+
+/**
+ * The pauses between reads of a payment the bank is still confirming after
+ * the BankID (follow_up): short at first, when the bank usually answers, then
+ * longer, capped at 30 s. The server stops following a few minutes after the
+ * signing (FOLLOW_BANK_CONFIRMATION_MS); the reads also run out here, so a
+ * screen left open never polls without end.
+ */
+const FOLLOW_UP_DELAYS_MS: readonly number[] = [2_000, 3_000, 5_000, 10_000, 15_000]
+const FOLLOW_UP_MAX_DELAY_MS = 30_000
+export const FOLLOW_UP_MAX_READS = 20
+
+/** The pause before read number `attempt` (from 0), or null when the reads have run out. */
+export function followUpDelayMs(attempt: number): number | null {
+  if (attempt < 0 || attempt >= FOLLOW_UP_MAX_READS) return null
+  return FOLLOW_UP_DELAYS_MS[attempt] ?? FOLLOW_UP_MAX_DELAY_MS
+}

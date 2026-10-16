@@ -101,3 +101,31 @@ export function isOpenPaymentOrder(order: {
 export const OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES: readonly PaymentOrderStatus[] = PAYMENT_ORDER_STATUSES.filter(
   (status) => status === 'executed' || !FINAL_PAYMENT_ORDER_STATUSES.has(status),
 )
+
+/**
+ * Signing statuses a finalised BankID leaves on its batch
+ * (payment_order_batches.status): the person signed, and nothing in that
+ * signing waits for them any more.
+ */
+export const SIGNING_FINISHED_BATCH_STATUSES: ReadonlySet<string> = new Set(['signed', 'awaiting_second_signer'])
+
+/**
+ * The bank is confirming the payment: its BankID finalised (the batch is
+ * signed) while the bank still answers that it has only received it (RCVD),
+ * so the order stays awaiting_signature (applyProviderState never moves an
+ * order on a 'submitted' answer). Nothing is left to sign. A bank may confirm
+ * one payment of a basket minutes after the rest (crm desk #1267,
+ * Handelsbanken); the signing poll follows it for a while, then the status
+ * sync. Shown as such, not as waiting for a signature.
+ */
+export function isBankConfirming(
+  order: { status: PaymentOrderStatus | string; outcome_unknown_at?: string | null },
+  batchStatus: string | null | undefined,
+): boolean {
+  return (
+    order.status === 'awaiting_signature' &&
+    !order.outcome_unknown_at &&
+    typeof batchStatus === 'string' &&
+    SIGNING_FINISHED_BATCH_STATUSES.has(batchStatus)
+  )
+}

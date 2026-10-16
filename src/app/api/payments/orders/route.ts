@@ -4,7 +4,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { preparePaymentOrders } from '@/lib/payments/orders/prepare'
-import { PAYMENT_ORDER_STATUSES } from '@/lib/payments/orders/status'
+import { isBankConfirming, PAYMENT_ORDER_STATUSES } from '@/lib/payments/orders/status'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { INVOICE_DOCUMENT_COLUMNS } from '@/lib/payments/orders/invoice-document'
 
@@ -20,6 +20,7 @@ const PrepareSchema = z.object({
 /**
  * GET /api/payments/orders: the company's bank payment orders, newest first.
  * ?status=draft,approved narrows; ?supplier_invoice_id=... finds one invoice's orders.
+ * bank_confirming: signed, and the bank has not confirmed the payment yet.
  */
 export const GET = withRouteContext('payment_orders.list', async (request, { supabase, companyId }) => {
   const url = new URL(request.url)
@@ -45,7 +46,25 @@ export const GET = withRouteContext('payment_orders.list', async (request, { sup
   if (invoiceId && z.uuid().safeParse(invoiceId).success) query = query.eq('supplier_invoice_id', invoiceId)
   const { data, error } = await query
   if (error) throw error
-  return NextResponse.json({ data: data ?? [] })
+  const rows = data ?? []
+
+  // An order still awaiting_signature in a signing that finished is not
+  // waiting for anyone: the bank is confirming it (isBankConfirming). Only
+  // those orders' signings are read.
+  const signingIds = [...new Set(rows.filter((r) => r.status === 'awaiting_signature' && r.batch_id).map((r) => r.batch_id as string))]
+  const signingStatus = new Map<string, string>()
+  if (signingIds.length > 0) {
+    const { data: batches, error: batchError } = await supabase
+      .from('payment_order_batches')
+      .select('id, status')
+      .eq('company_id', companyId)
+      .in('id', signingIds)
+    if (batchError) throw batchError
+    for (const b of (batches ?? []) as Array<{ id: string; status: string }>) signingStatus.set(b.id, b.status)
+  }
+  return NextResponse.json({
+    data: rows.map((r) => ({ ...r, bank_confirming: isBankConfirming(r, r.batch_id ? signingStatus.get(r.batch_id) : null) })),
+  })
 })
 
 /**

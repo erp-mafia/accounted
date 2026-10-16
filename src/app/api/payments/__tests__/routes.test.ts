@@ -159,6 +159,39 @@ describe('payment orders before the bank has them', () => {
     expect(findCall('payment_orders', 'in')).toEqual(['status', ['draft']])
   })
 
+  it('marks an order still awaiting signature in a finished signing as the bank confirming it (crm desk #1267)', async () => {
+    const OTHER_BATCH = '55555555-5555-4555-8555-555555555555'
+    enqueue({
+      data: [
+        draftOrder({ id: 'late', status: 'awaiting_signature', batch_id: BATCH, provider_payment_id: 'pay-1' }),
+        draftOrder({ id: 'done', status: 'accepted', batch_id: BATCH, provider_payment_id: 'pay-2' }),
+        draftOrder({ id: 'signing', status: 'awaiting_signature', batch_id: OTHER_BATCH, provider_payment_id: 'pay-3' }),
+      ],
+    })
+    enqueue({ data: [{ id: BATCH, status: 'signed' }, { id: OTHER_BATCH, status: 'awaiting_signature' }] })
+
+    const { status, body } = await parseJsonResponse<{ data: Array<{ id: string; bank_confirming: boolean }> }>(
+      await listOrders(createMockRequest('/api/payments/orders'), { params: Promise.resolve({}) }),
+    )
+
+    expect(status).toBe(200)
+    expect(body.data.map((o) => [o.id, o.bank_confirming])).toEqual([['late', true], ['done', false], ['signing', false]])
+    // Only the signings of orders awaiting signature are read, for this company.
+    expect(findCall('payment_order_batches', 'eq')).toEqual(['company_id', 'company-1'])
+    expect(findCall('payment_order_batches', 'in')).toEqual(['id', [BATCH, OTHER_BATCH]])
+  })
+
+  it('reads no signing when no order awaits a signature', async () => {
+    enqueue({ data: [draftOrder()] })
+
+    const { body } = await parseJsonResponse<{ data: Array<{ bank_confirming: boolean }> }>(
+      await listOrders(createMockRequest('/api/payments/orders'), { params: Promise.resolve({}) }),
+    )
+
+    expect(body.data[0]!.bank_confirming).toBe(false)
+    expect(findCall('payment_order_batches', 'select')).toBeUndefined()
+  })
+
   it('approve answers 404 for an order that is not the company', async () => {
     enqueue({ data: [] })
 

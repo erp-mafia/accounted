@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   canMovePaymentOrder,
+  isBankConfirming,
   isOpenPaymentOrder,
   OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES,
   PAYMENT_ORDER_STATUSES,
@@ -70,5 +71,20 @@ describe('payment order statuses', () => {
       // Every candidate is open for at least one order, so the read never drops an open order.
       expect(isOpenPaymentOrder({ status, supplier_invoice_payment_id: null })).toBe(true)
     }
+  })
+})
+
+describe('isBankConfirming', () => {
+  it('is an order still awaiting_signature in a signing that finished: the bank has not confirmed it yet', () => {
+    expect(isBankConfirming({ status: 'awaiting_signature' }, 'signed')).toBe(true)
+    expect(isBankConfirming({ status: 'awaiting_signature' }, 'awaiting_second_signer')).toBe(true)
+  })
+
+  it('is not while the BankID still runs, nor for an order that moved on, nor one whose outcome is unknown', () => {
+    expect(isBankConfirming({ status: 'awaiting_signature' }, 'awaiting_signature')).toBe(false)
+    expect(isBankConfirming({ status: 'awaiting_signature' }, null)).toBe(false)
+    expect(isBankConfirming({ status: 'accepted' }, 'signed')).toBe(false)
+    expect(isBankConfirming({ status: 'submitted' }, 'signed')).toBe(false)
+    expect(isBankConfirming({ status: 'awaiting_signature', outcome_unknown_at: '2026-10-16T12:15:00Z' }, 'signed')).toBe(false)
   })
 })

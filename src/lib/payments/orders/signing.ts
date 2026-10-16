@@ -68,6 +68,7 @@ import type { PaymentOrderEvent } from './types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { createServiceClient } from '@/lib/supabase/server'
 import { applyProviderState } from './apply-state'
+import { isBankConfirming } from './status'
 import { recordVerificationCheck } from './verification-record'
 import { verificationRequiredFor } from './readiness'
 import { buildPartyContext, type SignerInput } from './party'
@@ -98,8 +99,24 @@ export interface SigningView {
   failure_code: string | null
   /** Which BankID step the bank is at when it signs in several; null when it does not say. */
   step: SigningStep | null
-  orders: Array<{ id: string; status: string; provider_status: string | null; outcome_unknown: boolean }>
+  /**
+   * The signing is over and the bank is still confirming a payment of it
+   * (bank_confirming): the poll reads those payments again, so ask again.
+   * False once the bank confirmed them, and after FOLLOW_BANK_CONFIRMATION_MS
+   * (the status sync follows them from there).
+   */
+  follow_up: boolean
+  /** bank_confirming: signed, and the bank has not confirmed it yet (isBankConfirming). Nothing is left to sign. */
+  orders: Array<{ id: string; status: string; provider_status: string | null; outcome_unknown: boolean; bank_confirming: boolean }>
 }
+
+/**
+ * How long after a finalised BankID the signing poll keeps reading a payment
+ * the bank still answers RCVD for. Handelsbanken confirmed one payment of a
+ * basket of five a few minutes after the rest (crm desk #1267); past this the
+ * status sync (every 15 minutes) follows it.
+ */
+export const FOLLOW_BANK_CONFIRMATION_MS = 5 * 60_000
 
 /**
  * Codes after which signing again cannot help: the person lacks the rights
@@ -251,6 +268,7 @@ function view(
   challenge: SigningChallenge | null,
   failure: string | null,
   step: SigningStep | null = null,
+  followUp = false,
 ): SigningView {
   return {
     batch_id: batch.id,
@@ -258,8 +276,22 @@ function view(
     challenge,
     failure_code: failure,
     step,
-    orders: orders.map((o) => ({ id: o.id, status: o.status, provider_status: o.provider_status, outcome_unknown: Boolean(o.outcome_unknown_at) })),
+    follow_up: followUp,
+    orders: orders.map((o) => ({
+      id: o.id,
+      status: o.status,
+      provider_status: o.provider_status,
+      outcome_unknown: Boolean(o.outcome_unknown_at),
+      bank_confirming: isBankConfirming(o, batch.status),
+    })),
   }
+}
+
+/** The signed payments of a finished signing the bank still answers RCVD for, while the poll follows them. */
+function confirmingAtBank(batch: PaymentOrderBatchRow, orders: PaymentOrderRow[], now = Date.now()): PaymentOrderRow[] {
+  const signedAt = batch.signed_at ? Date.parse(batch.signed_at) : Number.NaN
+  if (!Number.isFinite(signedAt) || now - signedAt >= FOLLOW_BANK_CONFIRMATION_MS) return []
+  return orders.filter((o) => isBankConfirming(o, batch.status) && Boolean(o.provider_payment_id))
 }
 
 /**
@@ -1079,7 +1111,9 @@ export async function pollPaymentSigning(
     return { ok: true, data: view(batch, orders, null, null) }
   }
   if (batch.status !== 'awaiting_signature' || !batch.provider_authorisation_id) {
-    return { ok: true, data: view(batch, orders, null, null) }
+    const confirming = confirmingAtBank(batch, orders)
+    if (confirming.length === 0) return { ok: true, data: view(batch, orders, null, null) }
+    return followBankConfirmation(ctx, provider, writer, { batch, orders }, confirming, input.signer)
   }
   const target = targetOf(batch, orders)
   if (!target) return { ok: false, code: 'PAYMENT_SIGNING_NOT_ACTIVE' }
@@ -1146,5 +1180,45 @@ export async function pollPaymentSigning(
     .eq('status', 'awaiting_signature')
     .eq('provider_authorisation_id', batch.provider_authorisation_id)
   const after = await loadBatch(writer, ctx.companyId, batch.id)
-  return { ok: true, data: view(after?.batch ?? batch, after?.orders ?? orders, null, null) }
+  const finished = after?.batch ?? batch
+  const current = after?.orders ?? orders
+  // A payment the bank still answers RCVD for is signed all the same: the
+  // poll keeps reading it for a while (followBankConfirmation).
+  return { ok: true, data: view(finished, current, null, null, null, confirmingAtBank(finished, current).length > 0) }
+}
+
+/**
+ * A finished signing whose bank has not confirmed every payment yet: one of
+ * a basket may answer RCVD for minutes after a finalised BankID (crm desk
+ * #1267). Each poll within FOLLOW_BANK_CONFIRMATION_MS reads those payments
+ * again and applies what the bank answers. RCVD still moves nothing
+ * (applyProviderState); past the window the status sync follows them.
+ */
+async function followBankConfirmation(
+  ctx: OperationContext,
+  provider: PaymentInitiationProvider,
+  writer: SupabaseClient,
+  loaded: { batch: PaymentOrderBatchRow; orders: PaymentOrderRow[] },
+  confirming: PaymentOrderRow[],
+  signer: SignerInput,
+): Promise<OperationOutcome<SigningView>> {
+  const { batch, orders } = loaded
+  const party = await buildPartyContext(ctx, confirming[0]!, signer, { batchId: batch.id })
+  if (!party.ok) {
+    // Not able to ask now: the status sync follows the payments instead.
+    return { ok: true, data: view(batch, orders, null, null) }
+  }
+  for (const order of confirming) {
+    if (!order.provider_payment_id) continue
+    try {
+      const state = await provider.getPaymentState(party.ctx, order.provider_payment_id, order.provider_payment_product ?? 'domestic')
+      await applyProviderState(writer, order, state, ctx.userId, ctx.log)
+    } catch (error) {
+      ctx.log.warn('payment status after signing could not be read again', { orderId: order.id, code: errorCodeOf(error) })
+    }
+  }
+  const after = await loadBatch(writer, ctx.companyId, batch.id)
+  const finished = after?.batch ?? batch
+  const current = after?.orders ?? orders
+  return { ok: true, data: view(finished, current, null, null, null, confirmingAtBank(finished, current).length > 0) }
 }
