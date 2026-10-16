@@ -100,6 +100,8 @@ export interface PaymentOrder {
   matched_at: string | null
   created_at: string
   updated_at: string
+  /** Signed, and the bank has not confirmed the payment yet: nothing is left to sign (isBankConfirming). Absent from servers before it. */
+  bank_confirming?: boolean
   /** The invoice paid, with what its document states (lib/payments/orders/invoice-document). */
   supplier_invoice: (InvoiceDocumentSource & {
     id: string
@@ -181,7 +183,10 @@ export interface SigningView {
   failure_code: string | null
   /** Which step the bank is at, when it says. */
   step: SigningStep | null
-  orders: Array<{ id: string; status: string; provider_status: string | null; outcome_unknown: boolean }>
+  /** The signing is over and the bank is still confirming a payment of it: ask again (with a growing pause). Absent from servers before it. */
+  follow_up?: boolean
+  /** bank_confirming: signed, the bank has not confirmed it yet; nothing is left to sign. Absent from servers before it. */
+  orders: Array<{ id: string; status: string; provider_status: string | null; outcome_unknown: boolean; bank_confirming?: boolean }>
 }
 
 /** BankID in our screen (qr, same_device) or on the bank's own page (redirect); a bank that signs only there gets redirect whatever is asked. */

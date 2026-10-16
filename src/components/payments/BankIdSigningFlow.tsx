@@ -16,7 +16,7 @@ import { BankMark } from '@/components/banks/BankMark'
 import { PsuAuthoriserField } from '@/components/bankid/PsuAuthoriserField'
 import { normalizePsuAuthoriserId, takesPsuAuthoriserId } from '@/lib/bank-feed/psu-authoriser'
 import type { PaymentSigningReturn } from '@/lib/payments/orders/return-url'
-import { PAYMENT_ORDER_STATUS_BADGE, PERMANENT_SIGNING_FAILURES } from './payment-order-status'
+import { followUpDelayMs, PAYMENT_ORDER_STATUS_BADGE, PERMANENT_SIGNING_FAILURES } from './payment-order-status'
 import { VerificationStateText } from './VerificationStateText'
 import { verificationStep } from '@/lib/payments/orders/readiness'
 import { BankPaymentsAllowanceLine } from './BankPaymentsAllowance'
@@ -149,7 +149,9 @@ function resumedView(batchId: string): SigningView {
  *            A bank that signs on its own page gets one line and one button,
  *            Fortsätt till {bank}; coming back from it (resume), the stage
  *            waits for the bank's answer without a QR.
- *   done:    where each payment stands at the bank
+ *   done:    where each payment stands at the bank; one the bank is still
+ *            confirming after the BankID reads as such (not as waiting for a
+ *            signature) and is read again for a few minutes
  * The flow never approves anything: it only signs orders that are already
  * approved (Godkänn and Signera are never one button).
  */
@@ -440,6 +442,40 @@ export function BankIdSigningFlow({
     }
   }, [polling, batchId, typedNumber, typedAuthoriser, setStage, client])
 
+  // After the BankID: a payment the bank is still confirming (crm desk #1267)
+  // is read again, with a growing pause, while the server follows it
+  // (follow_up). The server stops a few minutes after the signing, then the
+  // status sync takes over; the pauses run out on their own as well.
+  const followingUp = stage === 'done' && signing?.follow_up === true
+  useEffect(() => {
+    if (!followingUp || !batchId) return
+    const controller = new AbortController()
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let stopped = false
+    let attempt = 0
+    const tick = async () => {
+      try {
+        const view = await client.poll({ batchId, personalNumber: typedNumber, psuAuthoriserId: typedAuthoriser }, controller.signal)
+        if (stopped) return
+        setSigning(view)
+        if (!view.follow_up) return
+      } catch {
+        // A missed read is tried again after the next pause; an abort ends here.
+        if (stopped) return
+      }
+      attempt += 1
+      const delay = followUpDelayMs(attempt)
+      if (delay !== null) timer = setTimeout(tick, delay)
+    }
+    const first = followUpDelayMs(0)
+    if (first !== null) timer = setTimeout(tick, first)
+    return () => {
+      stopped = true
+      controller.abort()
+      if (timer) clearTimeout(timer)
+    }
+  }, [followingUp, batchId, typedNumber, typedAuthoriser, client])
+
   // A new step from the bank: note when it began and that it happened.
   const step = signing?.status === 'awaiting_signature' ? (signing.step ?? null) : null
   const stepBatch = signing?.batch_id ?? null
@@ -629,6 +665,8 @@ export function BankIdSigningFlow({
   const anyWithBank = (signing?.orders ?? []).some((o) =>
     ['submitted', 'awaiting_signature', 'awaiting_second_signer', 'accepted', 'executed'].includes(o.status),
   )
+  // Signed, and the bank has not confirmed them yet: nothing waits for a signature.
+  const confirming = (signing?.orders ?? []).filter((o) => o.bank_confirming).length
   return (
     <div className="space-y-4">
       {doneFailure && <AttnLine>{providerCodeText(t, doneFailure) ?? t('signing_failed_permanent', { code: doneFailure })}</AttnLine>}
@@ -643,6 +681,8 @@ export function BankIdSigningFlow({
                 {order && <span className="tabular-nums">{formatCurrency(Number(order.amount), order.currency)}</span>}
                 {o.outcome_unknown ? (
                   <Badge variant="warning">{t('status_outcome_unknown')}</Badge>
+                ) : o.bank_confirming ? (
+                  <Badge variant="outline">{t('status_bank_confirming')}</Badge>
                 ) : variant ? (
                   <Badge variant={variant}>{statusLabel(o.status)}</Badge>
                 ) : (
@@ -653,6 +693,11 @@ export function BankIdSigningFlow({
           )
         })}
       </ul>
+      {confirming > 0 && (
+        <p className="text-[12.5px] text-muted-foreground">
+          {signing?.follow_up ? t('result_bank_confirming', { count: confirming }) : t('result_bank_confirming_later', { count: confirming })}
+        </p>
+      )}
       {anyWithBank && (
         <p className="text-[12.5px] text-muted-foreground">
           {signing?.status === 'awaiting_second_signer' ? t('result_second_signer') : t('result_hint')}

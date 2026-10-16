@@ -236,11 +236,18 @@ export function PaymentOrdersPage() {
 
   async function cancel(order: PaymentOrder) {
     const atBank = order.status !== 'draft' && order.status !== 'approved'
+    const label = orderInvoiceLabel(order)
+    // Signed, the bank confirming it: a cancel is a recall the bank may want a login for, said as such.
+    const confirming = order.bank_confirming === true
     await confirm(
       {
         title: t('cancel_title'),
-        description: atBank ? t('cancel_at_bank_description', { label: orderInvoiceLabel(order) }) : t('cancel_description', { label: orderInvoiceLabel(order) }),
-        confirmLabel: t('cancel_confirm'),
+        description: confirming
+          ? t('cancel_bank_confirming_description', { label })
+          : atBank
+            ? t('cancel_at_bank_description', { label })
+            : t('cancel_description', { label }),
+        confirmLabel: confirming ? t('cancel_bank_confirming_confirm') : t('cancel_confirm'),
         cancelLabel: t('cancel_keep'),
         variant: 'warning',
       },
@@ -471,6 +478,10 @@ export function PaymentOrdersPage() {
                               <Badge variant="warning" className="font-normal">
                                 {tStatus('status_outcome_unknown')}
                               </Badge>
+                            ) : order.bank_confirming ? (
+                              <Badge variant="outline" className="font-normal">
+                                {tStatus('status_bank_confirming')}
+                              </Badge>
                             ) : variant ? (
                               <Badge variant={variant} className="font-normal">
                                 {statusLabel(order.status)}
@@ -522,7 +533,7 @@ export function PaymentOrdersPage() {
                                 )}
                                 {canCancel(order) && !held && (
                                   <button type="button" className={QUIET_LINK_CLASS} onClick={() => cancel(order)} disabled={busyId !== null}>
-                                    {t('cancel_one')}
+                                    {order.bank_confirming ? t('cancel_bank_confirming_one') : t('cancel_one')}
                                   </button>
                                 )}
                               </span>

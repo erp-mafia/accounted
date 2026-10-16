@@ -23,7 +23,7 @@ vi.mock('@/lib/auth/resource-psu', () => ({
   rememberBatchPsu: (...a: unknown[]) => mock.rememberBatchPsu(...a),
 }))
 
-import { PERMANENT_SIGNING_FAILURES, pollPaymentSigning, restartPaymentSigning, startPaymentSigning } from '../signing'
+import { FOLLOW_BANK_CONFIRMATION_MS, PERMANENT_SIGNING_FAILURES, pollPaymentSigning, restartPaymentSigning, startPaymentSigning } from '../signing'
 import { PERMANENT_SIGNING_FAILURES as CLIENT_PERMANENT_SIGNING_FAILURES } from '@/components/payments/payment-order-status'
 
 let db: ReturnType<typeof createTableMockSupabase>
@@ -1249,6 +1249,127 @@ describe('pollPaymentSigning', () => {
     expect(orderPatches().map((p) => p.status)).toEqual(['accepted', 'awaiting_second_signer'])
     const batchPatch = db.findCalls('payment_order_batches', 'update').map(([p]) => (p as { status?: string }).status)
     expect(batchPatch).toContain('awaiting_second_signer')
+  })
+
+  describe('a payment the bank confirms after the rest of the signing (crm desk #1267)', () => {
+    const secondsAgo = (s: number) => new Date(Date.now() - s * 1000).toISOString()
+    const signed = (signedAt: string) => batch({ ...signing, status: 'signed', signed_at: signedAt })
+    const acceptedO1 = waitingOrder('o1', 1, { status: 'accepted', provider_status: 'ACSP' })
+    const lateO2 = waitingOrder('o2', 2, { status: 'awaiting_signature', provider_status: 'RCVD' })
+
+    it('reports a payment still RCVD after a finalised BankID as the bank confirming it, not as waiting for a signature, and keeps following it', async () => {
+      const provider = fakeProvider({
+        pollSigning: vi.fn().mockResolvedValue({ state: 'finalised', challenge: null, failureCode: null }),
+        getPaymentState: vi
+          .fn()
+          .mockResolvedValueOnce({ providerStatus: 'ACSP', status: 'accepted', messages: [] })
+          .mockResolvedValueOnce({ providerStatus: 'RCVD', status: 'submitted', messages: [] }),
+      })
+      registerPaymentInitiationProvider(provider)
+      db.setTable('payment_order_batches', [{ data: signing }, { data: null }, { data: signed(secondsAgo(0)) }])
+      db.setTable('payment_orders', [{ data: inSigning }, { data: [{ id: 'o1' }] }, { data: [{ id: 'o2' }] }, { data: [acceptedO1, lateO2] }])
+
+      const result = await pollPaymentSigning(ctx, { batchId: 'batch-1', signer: SIGNER })
+
+      if (!result.ok || result.dryRun) throw new Error('unexpected')
+      expect(result.data.status).toBe('signed')
+      expect(result.data.follow_up).toBe(true)
+      expect(result.data.orders).toEqual([
+        expect.objectContaining({ id: 'o1', status: 'accepted', bank_confirming: false }),
+        expect.objectContaining({ id: 'o2', status: 'awaiting_signature', bank_confirming: true }),
+      ])
+      // RCVD moved nothing: o2 only had its provider status written.
+      expect(orderPatches().map((p) => p.status)).toEqual(['accepted', undefined])
+      expect(orderPatches()[1]).toMatchObject({ provider_status: 'RCVD' })
+    })
+
+    it('reads that payment again on the next poll, and stops following once the bank accepted it', async () => {
+      const provider = fakeProvider({
+        pollSigning: vi.fn(),
+        getPaymentState: vi.fn().mockResolvedValue({ providerStatus: 'ACSP', status: 'accepted', messages: [] }),
+      })
+      registerPaymentInitiationProvider(provider)
+      db.setTable('payment_order_batches', { data: signed(secondsAgo(30)) })
+      db.setTable('payment_orders', [
+        { data: [acceptedO1, lateO2] },
+        { data: [{ id: 'o2' }] },
+        { data: [acceptedO1, waitingOrder('o2', 2, { status: 'accepted', provider_status: 'ACSP' })] },
+      ])
+
+      const result = await pollPaymentSigning(ctx, { batchId: 'batch-1', signer: SIGNER })
+
+      if (!result.ok || result.dryRun) throw new Error('unexpected')
+      // The BankID is over: only the late payment is read, the signing is not polled.
+      expect(provider.pollSigning).not.toHaveBeenCalled()
+      expect(provider.getPaymentState).toHaveBeenCalledTimes(1)
+      expect(provider.getPaymentState).toHaveBeenCalledWith(expect.anything(), 'pay-2', 'swedish-giro')
+      expect(orderPatches()).toEqual([expect.objectContaining({ status: 'accepted', provider_status: 'ACSP' })])
+      expect(db.findCalls('payment_orders', 'eq')).toContainEqual(['status', 'awaiting_signature'])
+      expect(result.data.follow_up).toBe(false)
+      expect(result.data.orders.every((o) => !o.bank_confirming)).toBe(true)
+    })
+
+    it('stops following when the bank executed it', async () => {
+      registerPaymentInitiationProvider(fakeProvider({ getPaymentState: vi.fn().mockResolvedValue({ providerStatus: 'ACSC', status: 'executed', messages: [] }) }))
+      db.setTable('payment_order_batches', { data: signed(secondsAgo(60)) })
+      db.setTable('payment_orders', [
+        { data: [acceptedO1, lateO2] },
+        { data: [{ id: 'o2' }] },
+        { data: [acceptedO1, waitingOrder('o2', 2, { status: 'executed', provider_status: 'ACSC' })] },
+      ])
+
+      const result = await pollPaymentSigning(ctx, { batchId: 'batch-1', signer: SIGNER })
+
+      if (!result.ok || result.dryRun) throw new Error('unexpected')
+      expect(orderPatches()).toEqual([expect.objectContaining({ status: 'executed' })])
+      expect(result.data.follow_up).toBe(false)
+    })
+
+    it('keeps following while the bank still answers RCVD, never moving the order back', async () => {
+      const provider = fakeProvider({ getPaymentState: vi.fn().mockResolvedValue({ providerStatus: 'RCVD', status: 'submitted', messages: [] }) })
+      registerPaymentInitiationProvider(provider)
+      db.setTable('payment_order_batches', { data: signed(secondsAgo(90)) })
+      db.setTable('payment_orders', [{ data: [acceptedO1, lateO2] }, { data: [{ id: 'o2' }] }, { data: [acceptedO1, lateO2] }])
+
+      const result = await pollPaymentSigning(ctx, { batchId: 'batch-1', signer: SIGNER })
+
+      if (!result.ok || result.dryRun) throw new Error('unexpected')
+      expect(orderPatches()).toHaveLength(1)
+      expect(orderPatches()[0]!.status).toBeUndefined()
+      expect(events()).toEqual([])
+      expect(result.data.follow_up).toBe(true)
+      expect(result.data.orders[1]).toMatchObject({ status: 'awaiting_signature', bank_confirming: true })
+    })
+
+    it('hands the payment to the status sync once the follow-up window is over', async () => {
+      const provider = fakeProvider()
+      registerPaymentInitiationProvider(provider)
+      db.setTable('payment_order_batches', { data: signed(new Date(Date.now() - FOLLOW_BANK_CONFIRMATION_MS - 1000).toISOString()) })
+      db.setTable('payment_orders', { data: [acceptedO1, lateO2] })
+
+      const result = await pollPaymentSigning(ctx, { batchId: 'batch-1', signer: SIGNER })
+
+      if (!result.ok || result.dryRun) throw new Error('unexpected')
+      expect(provider.getPaymentState).not.toHaveBeenCalled()
+      expect(orderPatches()).toEqual([])
+      expect(result.data.follow_up).toBe(false)
+      // Still signed and still confirming at the bank: never shown as waiting for a signature.
+      expect(result.data.orders[1]).toMatchObject({ status: 'awaiting_signature', bank_confirming: true })
+    })
+
+    it('reads nothing for anyone but the person who signed', async () => {
+      const provider = fakeProvider()
+      registerPaymentInitiationProvider(provider)
+      db.setTable('payment_order_batches', { data: { ...signed(secondsAgo(10)), signer_user_id: 'someone-else' } })
+      db.setTable('payment_orders', { data: [acceptedO1, lateO2] })
+
+      const result = await pollPaymentSigning(ctx, { batchId: 'batch-1', signer: SIGNER })
+
+      if (!result.ok || result.dryRun) throw new Error('unexpected')
+      expect(provider.getPaymentState).not.toHaveBeenCalled()
+      expect(result.data).toMatchObject({ follow_up: false })
+      expect(result.data.orders[1]).toMatchObject({ bank_confirming: true })
+    })
   })
 })
 
