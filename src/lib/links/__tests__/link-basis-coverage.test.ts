@@ -12,7 +12,9 @@
  *
  * Stamping a SQL writer means restating its newest definition in a new
  * migration with link_basis / link_evidence in its inserts and updates (the
- * functiondef-patch guard forbids patching), with a pg-real test.
+ * functiondef-patch guard forbids patching), with a pg-real test. A SQL
+ * writer resolves its basis through public.resolve_link_basis
+ * (20261016180100), the twin of ./stamp.ts.
  */
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
@@ -46,19 +48,16 @@ const SQL_MOVES_AND_RESTORES: Record<string, string> = {
 }
 
 /**
- * SQL functions that write a new link without a basis yet: the follow-up.
- * Each is a restatement of a large posting RPC, out of this change's scope.
- * Shrink-only.
+ * SQL functions that write a new link without a basis yet. Both are reached
+ * by callers whose bases differ in a way neither the arguments nor the actor
+ * show, so the function cannot pick one: stamping them waits for the caller
+ * to name its basis. Shrink-only.
  */
 const SQL_NOT_YET_STAMPED: Record<string, string> = {
-  attach_supplier_invoice_settlement_voucher: 'supplier_invoice_payments row for an existing settlement voucher.',
-  bulk_book_transactions: 'samlingsverifikat: transaction_voucher_links rows and the N=1 pointer.',
-  create_document_version: 'a new version row of a linked document; should carry the original version basis.',
-  create_expense_payout_batch: 'the payout bank row pointer.',
-  link_invoice_to_voucher: 'invoice_payments row against an existing voucher.',
-  link_supplier_invoice_to_voucher: 'supplier_invoice_payments row against an existing voucher.',
-  match_batch_allocate: 'invoice_payments / supplier_invoice_payments rows and the bank row pointer of a multi-match.',
-  relink_stranded_transactions: 'bank rows relinked to SIE-imported verifikat by unique amount and date.',
+  attach_supplier_invoice_settlement_voucher:
+    'supplier_invoice_payments row for an already settled invoice. A person resolving their own references (attach-settlement-voucher.ts), the provider-migration linker and the Bokio completion (complete_bokio_supplier_invoice) all call it, with no actor: user_confirmed and import_carried_over look alike here.',
+  link_supplier_invoice_to_voucher:
+    'supplier_invoice_payments row against an existing voucher. A person picks the pair, but the migration auto-linker (bulk-reconcile-supplier-vouchers.ts, a reference or amount rule) and commit_provider_migration_followup (positional, no actor: a carried-over payment) reach it too, and nothing in the call tells a rule or an import from a person.',
 }
 
 describe('link-basis coverage ratchet', () => {

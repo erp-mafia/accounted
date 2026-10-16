@@ -1,0 +1,1 @@
+[2026-10-16] attach_supplier_invoice_settlement_voucher and link_supplier_invoice_to_voucher stay unstamped in the ratchet: a person's pick, a migration rule and a carried-over import reach them with nothing in the call to tell them apart, so any basis would be a guess.
