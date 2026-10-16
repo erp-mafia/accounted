@@ -68,7 +68,7 @@ const JournalEntryRead = JournalEntryDetail.extend({
     .array(DecisionReceiptSchema)
     .nullable()
     .describe(
-      'How the verifikation was decided, newest first: one receipt per recorded decision (bank line or underlag) that booked it. Empty for a voucher no recorded decision produced (hand-made, imported, or booked before decisions were logged). Null when the receipts could not be read this time: unknown, not "none"; retry the read.',
+      'How the verifikation was decided, newest first: one receipt per recorded decision (bank line, underlag, or an approved staged operation) that booked it. Empty for a voucher no recorded decision produced (hand-made, imported, or booked before decisions were logged). Null when the receipts could not be read this time: unknown, not "none"; retry the read.',
     ),
 })
 

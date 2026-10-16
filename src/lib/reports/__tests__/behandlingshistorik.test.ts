@@ -1639,6 +1639,37 @@ describe('decisionEvents', () => {
     })
   })
 
+  it('an approved staged operation: the agentförslag, who staged it and the approval policy', () => {
+    const staged = { ...op, id: 'op-7', operation_type: 'create_voucher', actor_type: 'service_account', actor_label: 'Attestharness', risk_level: 'medium', agent_metadata: { model: 'claude-x' } }
+    const [ev] = decisionEvents(buildDecisionReceipts([row({
+      id: 'sl-op',
+      kind: 'operation',
+      transaction_id: null,
+      pending_operation_id: 'op-7',
+      suggestions: [{ source: 'pending_operation', source_id: 'op-7', rank: 0, proposal: { operation_type: 'create_voucher', risk_level: 'medium' }, confidence: null, model: 'claude-x', prompt_sha256: null, matches_final: true }],
+      final: { journal_entry_id: 'entry-1', operation_type: 'create_voucher', journal_entry_ids: ['entry-1'] },
+      actor_type: 'user',
+      policy_version: 'staged-approval.1;approver=person',
+      confidence_band: 'review',
+      input_hash: 'b'.repeat(64),
+    })], { ...ctx, operationsById: new Map([['op-7', staged]]) }))
+    expect(ev).toMatchObject({
+      id: 'decision:sl-op',
+      code: 'decision.accepted',
+      event: 'Agentförslag godkänt',
+      object: 'A12',
+      actor: { type: 'user', user_id: 'user-1' },
+    })
+    expect(ev.details).toEqual([
+      'Gäller: agentförslag',
+      'Förslag: 1 (agentförslag)',
+      'Valt förslag: agentförslag',
+      'Modell: claude-x',
+      'Föreslaget av: Tjänstekonto: Attestharness',
+      'Policy: staged-approval.1;approver=person, bedömning: krävde granskning',
+    ])
+  })
+
   it('a samlingsverifikat names the rules version its decisions share', () => {
     const shared = { created_at: '2026-03-10T09:30:01.000Z', rule_version: 'bank-proposals.1+a38016f12abc' }
     const [ev] = decisionEvents(buildDecisionReceipts([row({ id: 'sl-a', ...shared }), row({ id: 'sl-b', ...shared })], ctx))

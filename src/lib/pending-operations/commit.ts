@@ -71,6 +71,7 @@ import { getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
 import { createServiceClient } from '@/lib/supabase/server'
 import { revokeServiceAccount } from '@/lib/service-accounts/service'
 import { runInOperationCommit } from './commit-scope'
+import { recordOperationDecision } from '@/lib/suggestion-log/operation'
 import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
 import {
   existingOpeningBalanceMessage,
@@ -6816,12 +6817,15 @@ async function commitPendingOperationInner(
   //    must not run side-effects. Without this, both callers can pass the
   //    in-memory status check and double-book journal entries, send duplicate
   //    emails, etc.
+  //    updated_at is the claim's own time on the database clock (the
+  //    update_updated_at_column trigger): the decision receipt below records
+  //    only vouchers posted from then on.
   const { data: claimed, error: claimError } = await supabase
     .from('pending_operations')
     .update({ status: 'committing' })
     .eq('id', pendingOp.id)
     .eq('status', 'pending')
-    .select('id')
+    .select('id, updated_at')
     .maybeSingle()
 
   if (claimError) {
@@ -7328,6 +7332,21 @@ async function commitPendingOperationInner(
       companyId,
     })
   }
+
+  // The decision receipt: one suggestion_log row per voucher this approval
+  // posted, naming the operation, who approved it and under which policy, so
+  // a staged-and-approved posting answers a receipt like a categorized bank
+  // line does. After the commit and never part of it: the writer logs and
+  // drops every failure (lib/suggestion-log/operation.ts).
+  const claimedAt = (claimed as { updated_at?: unknown }).updated_at
+  await recordOperationDecision(supabase, {
+    companyId,
+    userId,
+    operation: pendingOp,
+    resultData: result.data,
+    claimedAt: typeof claimedAt === 'string' ? claimedAt : null,
+    actor: opts.actor,
+  })
 
   return {
     status: 'committed',

@@ -29,9 +29,10 @@
  *      transaction: a connection killed before COMMIT loses the verifikat and
  *      the event together, one killed after COMMIT keeps both.
  *
- * The receipt half of "an actor and a receipt" does not hold for this
- * posting: GET /journal-entries/{id} answers decision_receipts: []. Kept as
- * an it.fails with the reason, next to the passing walk.
+ * The receipt half of "an actor and a receipt": GET /journal-entries/{id}
+ * answers a decision receipt for the posting, which commitPendingOperation
+ * records after the commit (src/lib/suggestion-log/operation.ts) and which
+ * names the pending operation, who staged it and who approved it.
  *
  * What is not real, and why. pg-real has Postgres and nothing else: no
  * PostgREST, no GoTrue, no Next.js runtime.
@@ -59,6 +60,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Client } from 'pg'
 import { eventDedupeKey } from '@/lib/events/dedupe-key'
+import { operationInputHash } from '@/lib/suggestion-log/provenance'
+import { DecisionReceiptSchema } from '@/lib/suggestion-log/receipts'
 import { createServiceClientNoCookies, generateApiKey, validateApiKey } from '@/lib/auth/api-keys'
 import { GET as capabilitiesRoute } from '@/app/api/v1/companies/[companyId]/capabilities/route'
 import { POST as createServiceAccountRoute } from '@/app/api/v1/companies/[companyId]/service-accounts/route'
@@ -459,7 +462,7 @@ describe('Phase 1 exit check (pg)', () => {
       [entryId],
     )
     expect(audit.rows).toEqual([{ user_id: h.ownerId, actor_type: 'service_account', actor_label: ACCOUNT_NAME }])
-    // The client's read of the posting answers (receipts are read, not unknown); what they hold is the it.fails below.
+    // The client's read of the posting answers (receipts are read, not unknown); what they hold is the receipt test below.
     const read = await readEntry(h, entryId)
     expect(read).toMatchObject({ id: entryId, voucher_number: entry.rows[0].voucher_number })
     expect(Array.isArray(read.decision_receipts)).toBe(true)
@@ -489,31 +492,71 @@ describe('Phase 1 exit check (pg)', () => {
     expect(stored[0]!.dedupe_key).toBe(eventDedupeKey('journal_entry.committed', entryId))
   })
 
-  // GAP against "every new posting has an actor and a receipt". The actor
-  // half holds (test 4-5). The receipt half does not for a posting that a
-  // service account staged and that was approved through a pending
-  // operation: GET /journal-entries/{id} answers decision_receipts: [] for
-  // it. Decision receipts are suggestion_log rows (src/lib/suggestion-log/
-  // receipts.ts reads only those, and joins the pending operation onto a
-  // row it already found), and only the bank-line and underlag doors
-  // (categorize, bulk book, inbox, attest of a supplier invoice) write one;
-  // commitPendingOperation writes none for the operation it commits. So the
-  // decision is recorded (pending_operations row with the proposer, the
-  // posted row's actor columns, audit_log) but no receipt names it, and a
-  // harness reading the posting cannot get from it to who proposed it.
-  // Flip to it() once a staged-and-approved posting answers a receipt.
-  it.fails('receipt: a posting staged by the service account and approved answers a decision receipt naming the pending operation', async () => {
+  // "Every new posting has an actor and a receipt", the receipt half (the
+  // actor half is test 4-5). A posting that a service account staged and
+  // that was approved through a pending operation answers a decision receipt
+  // on GET /journal-entries/{id}: commitPendingOperation records one
+  // suggestion_log row of kind 'operation' per voucher the approval posted
+  // (src/lib/suggestion-log/operation.ts), after the commit and never as
+  // part of it, and the reader (src/lib/suggestion-log/receipts.ts) joins
+  // the pending operation (who staged it) and the voucher (the approving
+  // credential's label) onto it.
+  it('receipt: a posting staged by the service account and approved answers a decision receipt naming the pending operation', async () => {
     const h = await seedHarness()
     const { operationId, entryId } = await stageAndApprove(h)
     const read = await readEntry(h, entryId)
-    expect(read.decision_receipts).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          decided_by: expect.objectContaining({ actor_type: 'service_account', label: ACCOUNT_NAME }),
-          proposed_by: expect.objectContaining({ pending_operation_id: operationId, actor_type: 'service_account' }),
-        }),
-      ]),
+    expect(read.decision_receipts).toHaveLength(1)
+    const receipt = read.decision_receipts![0]!
+    expect(DecisionReceiptSchema.safeParse(receipt).success).toBe(true)
+    expect(receipt).toMatchObject({
+      subject_kind: 'operation',
+      outcome: 'accepted',
+      decided_by: { actor_type: 'service_account', user_id: h.ownerId, label: ACCOUNT_NAME, commit_method: 'api_key' },
+      proposed_by: {
+        pending_operation_id: operationId,
+        operation_type: 'set_opening_balances_manual',
+        actor_type: 'service_account',
+        actor_id: h.apiKeyId,
+        label: ACCOUNT_NAME,
+        risk_level: 'high',
+      },
+      chosen: { source: 'pending_operation', source_id: operationId, matches_final: true },
+      booked: { journal_entry_id: entryId, voucher: `A${read.voucher_number}`, entry_status: 'posted' },
+      confidence: { value: null, basis: null },
+      // The key approved its own staging, unattended: it has no ceiling.
+      policy_version: 'staged-approval.1;approver=credential;unattended_limit=none',
+      confidence_band: 'direct',
+      checks: null,
+    })
+
+    // The hash names the approved preview: recomputable from the committed
+    // (immutable) pending_operations row.
+    const op = await getPool().query<{ status: string; operation_type: string; params: unknown; preview_data: unknown }>(
+      `SELECT status, operation_type, params, preview_data FROM public.pending_operations WHERE id = $1`,
+      [operationId],
     )
+    expect(op.rows[0]!.status).toBe('committed')
+    expect(receipt.input_hash).toBe(
+      operationInputHash({ operationType: op.rows[0]!.operation_type, params: op.rows[0]!.params, preview: op.rows[0]!.preview_data }),
+    )
+
+    // In the log itself: one row, the operation as its subject.
+    const logged = await getPool().query(
+      `SELECT kind, pending_operation_id, final->>'journal_entry_id' AS journal_entry_id, outcome, acted_on, actor_type, resolved_by
+         FROM public.suggestion_log WHERE company_id = $1`,
+      [h.companyId],
+    )
+    expect(logged.rows).toEqual([
+      {
+        kind: 'operation',
+        pending_operation_id: operationId,
+        journal_entry_id: entryId,
+        outcome: 'accepted',
+        acted_on: 0,
+        actor_type: 'service_account',
+        resolved_by: h.ownerId,
+      },
+    ])
   })
 
   it('5: the event is written in the commit transaction: a crash before COMMIT loses verifikat and event together', async () => {

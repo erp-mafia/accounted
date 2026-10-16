@@ -36,8 +36,9 @@ import {
  * (`journal_entries.committed_at` + the trigger-written immutable `audit_log`,
  * `journal_entry_rattelse_log`, `company_migration_resets`, `sie_imports`,
  * `bank_file_imports`, `collection_cases` and the company's decisions in
- * `collection_case_events`, and the decisions on bank lines and underlag in
- * `suggestion_log`, read as decision receipts) and turns them into one
+ * `collection_case_events`, and the decisions on bank lines, underlag and
+ * approved staged operations in `suggestion_log`, read as decision receipts)
+ * and turns them into one
  * chronological list of human-readable events. It never writes.
  *
  * Event labels are Swedish in both locales: the report is räkenskapsinformation
@@ -1996,7 +1997,8 @@ export function appReleaseEvents(rows: AppReleaseRow[]): RawBehandlingshistorikE
 }
 
 // ============================================================
-// Beslut och förslag: decisions on bank lines and underlag
+// Beslut och förslag: decisions on bank lines, underlag and approved
+// staged operations (agentförslag)
 // ============================================================
 
 const DECISION_SOURCE_LABELS: Record<DecisionCandidate['source'], string> = {
@@ -2006,6 +2008,7 @@ const DECISION_SOURCE_LABELS: Record<DecisionCandidate['source'], string> = {
   counterparty_template: 'motpartsmall',
   recent: 'tidigare bokning',
   extraction: 'dokumentläsning',
+  pending_operation: 'agentförslag',
 }
 
 const DECISION_OUTCOME_LABELS: Record<Exclude<DecisionReceipt['outcome'], 'dismissed'>, string> = {
@@ -2068,12 +2071,26 @@ function decisionProvenanceDetails(r: DecisionReceipt): string[] {
   return details
 }
 
+const DECISION_SUBJECT_LABELS: Record<DecisionReceipt['subject_kind'], { one: string; many: string }> = {
+  bank_line: { one: 'banktransaktion', many: 'banktransaktioner' },
+  inbox_item: { one: 'underlag', many: 'underlag' },
+  operation: { one: 'agentförslag', many: 'agentförslag' },
+}
+
 function decisionSubject(kind: DecisionReceipt['subject_kind']): string {
-  return kind === 'bank_line' ? 'banktransaktion' : 'underlag'
+  return DECISION_SUBJECT_LABELS[kind].one
+}
+
+/** The subject standing in for a voucher number the report does not know. */
+function decisionObject(kind: DecisionReceipt['subject_kind']): string {
+  const one = decisionSubject(kind)
+  return one.charAt(0).toUpperCase() + one.slice(1)
 }
 
 function decisionEventLabel(r: DecisionReceipt): string {
   if (r.outcome === 'dismissed') return r.subject_kind === 'bank_line' ? 'Banktransaktion ignorerad' : 'Underlag raderat'
+  // An approval books exactly what was staged: no suggestion to follow or change.
+  if (r.subject_kind === 'operation') return 'Agentförslag godkänt'
   return DECISION_OUTCOME_LABELS[r.outcome]
 }
 
@@ -2125,7 +2142,7 @@ function decisionEvent(r: DecisionReceipt): RawBehandlingshistorikEvent {
     category: 'beslut',
     code: `decision.${r.outcome}`,
     event: decisionEventLabel(r),
-    object: r.booked?.voucher ?? (r.subject_kind === 'bank_line' ? 'Banktransaktion' : 'Underlag'),
+    object: r.booked?.voucher ?? decisionObject(r.subject_kind),
     actor: { type: r.decided_by.actor_type, user_id: r.decided_by.user_id, actor_label: r.decided_by.label },
     details: decisionDetails(r),
     source: 'suggestion_log',
@@ -2175,7 +2192,7 @@ export function decisionEvents(receipts: DecisionReceipt[]): RawBehandlingshisto
       object: first.booked?.voucher ?? null,
       actor: { type: first.decided_by.actor_type, user_id: first.decided_by.user_id, actor_label: first.decided_by.label },
       details: [
-        `${sorted.length} ${first.subject_kind === 'bank_line' ? 'banktransaktioner' : 'underlag'} i en verifikation`,
+        `${sorted.length} ${DECISION_SUBJECT_LABELS[first.subject_kind].many} i en verifikation`,
         ...[...counts.entries()].map(([label, n]) => `${label}: ${n}`),
         ...(proposer ? [proposer] : []),
         // One insert, one snapshot: the rows share their rules version.

@@ -1,0 +1,1 @@
+[2026-10-16] The staged-operation receipt is written after the commit, best effort, never in its transaction: the commit spans several PostgREST requests with no shared transaction, and the voucher's actor columns, pending_operations and audit_log stay the record of truth.
