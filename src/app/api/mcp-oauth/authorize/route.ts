@@ -181,7 +181,7 @@ async function requireAal2(
   return shouldEnforceMfa(user) ? stepUp('/mfa/enroll') : null
 }
 
-function errorRedirect(request: Request, redirectUri: string, state: string | null, error: string, desc: string): Response {
+async function errorRedirect(request: Request, redirectUri: string, state: string | null, error: string, desc: string): Promise<Response> {
   const url = new URL(redirectUri)
   url.searchParams.set('error', error)
   url.searchParams.set('error_description', desc)
@@ -189,7 +189,7 @@ function errorRedirect(request: Request, redirectUri: string, state: string | nu
   // RFC 9207: identify the issuer in every authorization response so clients
   // can detect mix-up attacks. Must equal the issuer that discovery
   // advertised for the host the client connected through.
-  url.searchParams.set('iss', resolveDiscoveryBaseUrl(request))
+  url.searchParams.set('iss', await resolveDiscoveryBaseUrl(request))
   return NextResponse.redirect(url.toString(), 303)
 }
 
@@ -1301,7 +1301,7 @@ export async function POST(request: Request) {
   if (state) callbackUrl.searchParams.set('state', state)
   // RFC 9207: issuer identification in the authorization response. Must match
   // the issuer discovery advertises for the host the client connected through.
-  callbackUrl.searchParams.set('iss', resolveDiscoveryBaseUrl(request))
+  callbackUrl.searchParams.set('iss', await resolveDiscoveryBaseUrl(request))
 
   // 303 See Other: forces browser to GET the callback URL, even though this
   // handler was reached via POST. NextResponse.redirect() defaults to 307,

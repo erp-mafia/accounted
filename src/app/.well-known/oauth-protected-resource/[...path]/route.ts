@@ -23,5 +23,5 @@ export async function GET(
   if (resourcePath !== MCP_RESOURCE_PATH) {
     return NextResponse.json({ error: 'not_found' }, { status: 404 })
   }
-  return NextResponse.json(buildProtectedResourceMetadata(request))
+  return NextResponse.json(await buildProtectedResourceMetadata(request))
 }
