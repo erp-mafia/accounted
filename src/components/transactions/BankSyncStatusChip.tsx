@@ -13,6 +13,7 @@ import {
   getChipState,
   type ConnectionRow,
 } from '@/lib/transactions/bank-sync-chip-state'
+import { chooseAccountsHref } from '@/lib/bank-feed/connection-links'
 
 export function useAgeFormatter() {
   const t = useTranslations('transactions')
@@ -44,7 +45,7 @@ export default function BankSyncStatusChip() {
     const load = () => {
       supabase
         .from('bank_connections')
-        .select('id, status, last_synced_at, consent_expires')
+        .select('id, status, last_synced_at, consent_expires, aggregator')
         .eq('company_id', companyId)
         .then(({ data, error }) => {
           if (cancelled) return
@@ -108,12 +109,13 @@ export default function BankSyncStatusChip() {
 
   if (state.kind === 'selection') {
     // The bank is authorized but no accounts were chosen, so nothing syncs.
-    // Links straight into the account picker for that connection: the
-    // settings panel opens it from ?select_accounts=, the same parameter the
-    // bank callback lands on. Same neutral shape + ochre text as 'expiring'.
+    // Links straight into the account choice for that connection: Koppla
+    // banken for an Open Payments row, the Enable Banking panel's picker for
+    // the rest (lib/bank-feed/connection-links.ts). Same neutral shape +
+    // ochre text as 'expiring'.
     return (
       <Link
-        href={`/settings/banking?select_accounts=${encodeURIComponent(state.connectionId)}`}
+        href={chooseAccountsHref({ id: state.connectionId, aggregator: state.aggregator })}
         className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-secondary/60"
       >
         <AlertTriangle className="h-3.5 w-3.5" />

@@ -32,6 +32,8 @@ import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { isSelfHosted } from '@/lib/env/public-flags'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { chooseAccountsHref, isOpenPaymentsRow, renewOpenPaymentsHref } from '@/lib/bank-feed/connection-links'
+import { isBankBusy, isSyncCooldown, OpenPaymentsClientError, syncOpenPaymentsConnection } from '@/components/bank-feed/open-payments-client'
 
 export type { BankConn }
 
@@ -69,7 +71,7 @@ export function useBankSync() {
     const supabase = createClient()
     supabase
       .from('bank_connections')
-      .select('id, bank_name, status, provider, last_synced_at')
+      .select('id, bank_name, status, provider, last_synced_at, aggregator')
       // Include expired/error so the reconnect entry point survives a reload:
       // not just active connections that can sync. Include pending_selection
       // too: a bank that is authorized but whose accounts were never chosen
@@ -90,6 +92,12 @@ export function useBankSync() {
   // Re-authorize an existing connection in place: posts the connection_id so
   // the server reuses the same row, then hands off to the bank's consent screen.
   async function reconnect(conn: BankConn) {
+    // An Open Payments consent is renewed in Koppla banken, never through
+    // the Enable Banking connect route.
+    if (isOpenPaymentsRow(conn)) {
+      router.push(renewOpenPaymentsHref(conn))
+      return
+    }
     setBusyConnection(conn.id)
     try {
       const country = conn.provider?.split('-').pop()?.toUpperCase() || 'SE'
@@ -115,7 +123,51 @@ export function useBankSync() {
     }
   }
 
+  function syncedDescription(imported: number | undefined, duplicates: number | undefined): string {
+    // Surface skipped duplicates too: a renewal that dedupes correctly
+    // imports 0 rows, which without this line reads as a broken sync.
+    // Joined with '. ' so the two sentences do not run together (the
+    // imported-count strings are shared with the BankSyncSinceLastVisit
+    // chip and deliberately carry no trailing period).
+    return [
+      imported === 1
+        ? t('bank_sync_new_since_last_visit_one')
+        : t('bank_sync_new_since_last_visit_many', { count: imported ?? 0 }),
+      typeof duplicates === 'number' && duplicates > 0
+        ? duplicates === 1
+          ? t('bank_sync_duplicates_skipped_one')
+          : t('bank_sync_duplicates_skipped_many', { count: duplicates })
+        : null,
+    ]
+      .filter(Boolean)
+      .join('. ')
+  }
+
+  // An Open Payments row reads through its own route, with the person
+  // present; the Enable Banking sync route never finds it. A read the bank
+  // or the cooldown holds back is said calmly: the feed runs on its own.
+  async function syncOpenPayments(conn: BankConn) {
+    setBusyConnection(conn.id)
+    try {
+      const data = await syncOpenPaymentsConnection(conn.id)
+      toast({ title: t('bank_sync_button_now'), description: syncedDescription(data.imported, data.duplicates) })
+      notifyBankSyncUpdated()
+      void invalidateReferenceData('ref:cash-accounts')
+      router.refresh()
+    } catch (error) {
+      const calm = isSyncCooldown(error) || isBankBusy(error)
+      toast({
+        title: t('bank_sync_button_now'),
+        description: getUserErrorMessage(error instanceof OpenPaymentsClientError ? error.body : error),
+        ...(calm ? {} : { variant: 'destructive' as const }),
+      })
+    } finally {
+      clearBusyConnection(conn.id)
+    }
+  }
+
   async function syncConnection(conn: BankConn) {
+    if (isOpenPaymentsRow(conn)) return syncOpenPayments(conn)
     setBusyConnection(conn.id)
     try {
       const res = await fetch('/api/extensions/ext/enable-banking/sync', {
@@ -145,26 +197,7 @@ export function useBankSync() {
         }
         throw new Error(data.error || 'Sync failed')
       }
-      toast({
-        title: t('bank_sync_button_now'),
-        // Surface skipped duplicates too: a renewal that dedupes correctly
-        // imports 0 rows, which without this line reads as a broken sync.
-        // Joined with '. ' so the two sentences do not run together (the
-        // imported-count strings are shared with the BankSyncSinceLastVisit
-        // chip and deliberately carry no trailing period).
-        description: [
-          data.imported === 1
-            ? t('bank_sync_new_since_last_visit_one')
-            : t('bank_sync_new_since_last_visit_many', { count: data.imported ?? 0 }),
-          typeof data.duplicates === 'number' && data.duplicates > 0
-            ? data.duplicates === 1
-              ? t('bank_sync_duplicates_skipped_one')
-              : t('bank_sync_duplicates_skipped_many', { count: data.duplicates })
-            : null,
-        ]
-          .filter(Boolean)
-          .join('. '),
-      })
+      toast({ title: t('bank_sync_button_now'), description: syncedDescription(data.imported, data.duplicates) })
       // Tell the neighbouring status chip to refetch so it doesn't keep showing
       // the pre-sync "synced Nd ago" until a hard reload.
       notifyBankSyncUpdated()
@@ -184,12 +217,12 @@ export function useBankSync() {
   }
 
   // A connection waiting for account selection already holds a live consent:
-  // finish it in the account picker instead of re-authorizing. The settings
-  // panel opens the picker from ?select_accounts=, the same parameter the
-  // bank callback lands on. Reconnecting here would cost a BankID round trip
-  // and park the row in 'expired' for its duration.
+  // finish it in the account choice instead of re-authorizing: Koppla banken
+  // for an Open Payments row, the Enable Banking panel's picker for the rest
+  // (lib/bank-feed/connection-links.ts). Reconnecting here would cost a
+  // BankID round trip and park the row in 'expired' for its duration.
   function chooseAccounts(conn: BankConn) {
-    router.push(`/settings/banking?select_accounts=${encodeURIComponent(conn.id)}`)
+    router.push(chooseAccountsHref(conn))
   }
 
   // Active connections sync; a connection waiting for account selection opens
@@ -201,6 +234,8 @@ export function useBankSync() {
     if (busyId !== null || syncingAll) return
     if (conn.status === 'active') return syncConnection(conn)
     if (conn.status === 'pending_selection') return chooseAccounts(conn)
+    // An Open Payments read that failed is tried again; its consent still stands.
+    if (conn.status === 'error' && isOpenPaymentsRow(conn)) return syncConnection(conn)
     return reconnect(conn)
   }
 
