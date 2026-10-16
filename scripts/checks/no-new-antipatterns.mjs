@@ -2047,7 +2047,9 @@ if (baseline.basAccountLiteral && basLiteralRatchet.grown.length) {
   console.error(
     '  → Accounted is going multi-country with Sweden as jurisdiction pack one, and an account number\n' +
       "    at a call site is a place the next country's chart cannot reach. Read the account from one\n" +
-      '    named role instead: an existing constant (RESULT_ACCOUNT, VAT_SETTLEMENT_ACCOUNT,\n' +
+      "    named role instead: resolveAccountRole(company, 'accounts_receivable') from\n" +
+      '    lib/bookkeeping/account-roles (a new role goes there, its BAS account in se-bas.ts), an\n' +
+      '    existing constant (RESULT_ACCOUNT, VAT_SETTLEMENT_ACCOUNT,\n' +
       '    SALARY_ACCOUNTS, ...), the legal-form profile (lib/company/forms), or the chart data\n' +
       '    (getBASReference). If the logic is Swedish-only (a Swedish filing, a BAS-shaped rule), put it,\n' +
       '    or the new named role, in SE pack territory: SE_PACK_TERRITORY in\n' +

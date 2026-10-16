@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { manualLink, ledgerLineAmountIn } from './bank-reconciliation'
+import { DEFAULT_SETTLEMENT_ACCOUNT } from './cash-account-scope'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 
 /**
@@ -84,7 +85,7 @@ async function resolveSettlementAccount(
   const { data } = cashAccountId
     ? await query.eq('id', cashAccountId).maybeSingle()
     : await query.eq('is_primary', true).maybeSingle()
-  return (data?.ledger_account as string | undefined) ?? '1930'
+  return (data?.ledger_account as string | undefined) ?? DEFAULT_SETTLEMENT_ACCOUNT
 }
 
 /** Fuzzy band tolerance: the widest amount slack any persisted suggestion was

@@ -45,6 +45,7 @@ import type { InvoiceExtractionResult } from '@/types'
 import { equalOre, roundOre } from '@/lib/money'
 import { resolveSekAmountOrNull } from '@/lib/bookkeeping/currency-utils'
 import { sellerVatIsCost, type VatRegistration } from '@/lib/bookkeeping/vat-registration'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 
 export type BookDirectLineRole = 'cost' | 'vat' | 'settlement'
 
@@ -92,9 +93,9 @@ export interface BookDirectPayloadLine {
   dimensions?: Record<string, string>
 }
 
-const DEFAULT_SETTLEMENT_ACCOUNT = '1930'
-/** Ingående moms, the same default the dialog seeded before this module existed. */
-const INPUT_VAT_ACCOUNT = '2641'
+const DEFAULT_SETTLEMENT_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'bank')
+/** Ingående moms (2641), the same default the dialog seeded before this module existed. */
+const INPUT_VAT_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'input_vat')
 
 function isGeneratedRole(role: BookDirectLineRole | undefined): role is BookDirectLineRole {
   return role === 'cost' || role === 'vat' || role === 'settlement'

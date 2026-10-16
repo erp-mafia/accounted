@@ -1,0 +1,1 @@
+[2026-10-16] Account role ids are neutral, stable snake_case (bank, accounts_receivable, vat_settlement, ...); output VAT roles name the rate (output_vat_25/12/6) so a pack supplies the rates its country has and omits the rest, instead of tier names whose meaning differs per country.

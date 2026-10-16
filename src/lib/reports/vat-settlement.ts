@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { addDaysIso } from '@/lib/dates/iso'
 import { roundOre } from '@/lib/money'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import {
   formatPeriodLabel,
   loadVatDeclarationLedger,
@@ -39,12 +40,12 @@ import type { VatPeriodType } from '@/types'
  * settlement never changes the report it was created from.
  */
 
-/** Redovisningskonto för moms: net VAT to pay (credit). */
-export const VAT_SETTLEMENT_ACCOUNT = '2650'
-/** Momsfordran: net VAT refund (debit). */
-export const VAT_REFUND_ACCOUNT = '1650'
-/** Öres- och kronutjämning: absorbs the filed whole-krona truncation gap. */
-export const VAT_ROUNDING_ACCOUNT = '3740'
+/** Redovisningskonto för moms (2650): net VAT to pay (credit). */
+export const VAT_SETTLEMENT_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'vat_settlement')
+/** Momsfordran (1650): net VAT refund (debit). */
+export const VAT_REFUND_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'vat_receivable')
+/** Öres- och kronutjämning (3740): absorbs the filed whole-krona truncation gap. */
+export const VAT_ROUNDING_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'rounding')
 
 export interface VatSettlementProposalLine {
   account_number: string

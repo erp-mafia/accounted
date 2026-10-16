@@ -1,0 +1,36 @@
+import type { AccountRole } from './roles'
+
+/**
+ * The SE pack's accounts per role: the BAS 2026 accounts the product books
+ * on by default (names from lib/bookkeeping/bas-data). SE pack territory in
+ * scripts/checks/jurisdiction-welds.mjs: the account numbers are the point
+ * of this file, so bas-account-literal does not count them.
+ *
+ * Complete by type: Sweden answers every role, so adding a role to
+ * ./roles.ts does not compile until it has a BAS account here. Each value is
+ * the literal the call sites spelled before they asked for the role, so
+ * moving a site here changes no booking; __tests__/account-roles.test.ts
+ * pins every one.
+ */
+export const SE_BAS_ACCOUNT_ROLES: Readonly<Record<AccountRole, string>> = Object.freeze({
+  /** 1930 Företagskonto. */
+  bank: '1930',
+  /** 1510 Kundfordringar. */
+  accounts_receivable: '1510',
+  /** 2440 Leverantörsskulder. */
+  accounts_payable: '2440',
+  /** 2611 Utgående moms på försäljning inom Sverige, 25 %. */
+  output_vat_25: '2611',
+  /** 2621 Utgående moms på försäljning inom Sverige, 12 %. */
+  output_vat_12: '2621',
+  /** 2631 Utgående moms på försäljning inom Sverige, 6 %. */
+  output_vat_6: '2631',
+  /** 2641 Debiterad ingående moms. */
+  input_vat: '2641',
+  /** 2650 Redovisningskonto för moms. */
+  vat_settlement: '2650',
+  /** 1650 Momsfordran. */
+  vat_receivable: '1650',
+  /** 3740 Öres- och kronutjämning. */
+  rounding: '3740',
+})

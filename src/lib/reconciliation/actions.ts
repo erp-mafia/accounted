@@ -34,6 +34,7 @@ import {
 } from './skattekonto-split'
 import { settleLedgerEntries, undoLedgerSettlement, type LedgerSettlement } from './ledger-settlement'
 import { parseAccountKey } from './schemas'
+import { DEFAULT_SETTLEMENT_ACCOUNT } from './cash-account-scope'
 
 const log = createLogger('reconciliation/actions')
 
@@ -527,14 +528,14 @@ export async function matchPairs(
   let ledgerAccount: string | null = null
   const resolveLedgerAccount = async (): Promise<string> => {
     if (ledgerAccount) return ledgerAccount
-    if (parsed.kind !== 'bank') return '1930'
+    if (parsed.kind !== 'bank') return DEFAULT_SETTLEMENT_ACCOUNT
     const { data: account } = await supabase
       .from('cash_accounts')
       .select('ledger_account')
       .eq('company_id', companyId)
       .eq('id', parsed.cashAccountId)
       .maybeSingle<{ ledger_account: string }>()
-    ledgerAccount = account?.ledger_account ?? '1930'
+    ledgerAccount = account?.ledger_account ?? DEFAULT_SETTLEMENT_ACCOUNT
     return ledgerAccount
   }
 

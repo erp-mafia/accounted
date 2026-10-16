@@ -4,6 +4,7 @@ import {
   DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
   type ReconciliationOptions,
 } from './bank-reconciliation'
+import { DEFAULT_SETTLEMENT_ACCOUNT } from './cash-account-scope'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('reconciliation.unattended-sweep')
@@ -174,7 +175,7 @@ export async function runUnattendedReconciliationSweep(
       : [
           {
             cashAccountId: null,
-            accountNumber: '1930',
+            accountNumber: DEFAULT_SETTLEMENT_ACCOUNT,
             currency: 'SEK',
             includeUnassigned: true,
           },

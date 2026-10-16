@@ -19,7 +19,7 @@ import { fiscalYearLockedToCalendar, isEntityType } from '@/lib/company/entity-t
 import { nextDay } from '@/lib/core/bookkeeping/kontantmetod-cutoff'
 import { codedRefusal } from '@/lib/errors/refusal'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
-import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope'
+import { DEFAULT_SETTLEMENT_ACCOUNT, resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope'
 import { findRcBasisGaps, type RcBasisGap } from '@/lib/reports/rc-basis-gaps'
 import { computeVatDeclaration, type MomsredovisningDetection, rcInputTotalsFromDeclaration, VAT_SETTLEMENT_NET_ACCOUNTS, type VatPeriodSource, type VatSettlementShapedEntry } from '@/lib/reports/vat-declaration'
 import { revenueAccountWithoutRutaFinding, runVatDeclarationChecks, selfAssessedVatWithoutAnyInputVat, type VatCheckReviewMark, type VatDeclarationCheck, type VatDeclarationCheckStatus } from '@/lib/reports/vat-declaration-checks'
@@ -771,7 +771,7 @@ export async function getScopedReconciliationStatus(
 ) {
   const scope = await resolveCashAccountScope(supabase, companyId, accountNumber)
 
-  if (!scope.found && accountNumber !== undefined && accountNumber !== '1930') {
+  if (!scope.found && accountNumber !== undefined && accountNumber !== DEFAULT_SETTLEMENT_ACCOUNT) {
     // Coded: as a plain Error it reached agents as UNKNOWN_ERROR ("Försök
     // igen") for 1630, 1931, 1932 and 1940, and no retry finds an account the
     // company does not have. 1630 is the skattekonto, keyed on its own.

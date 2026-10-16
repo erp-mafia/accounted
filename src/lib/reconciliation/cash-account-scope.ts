@@ -1,10 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 
 /**
  * The settlement account the reconciliation defaults to when a caller does not
- * name one. Always a string: BAS codes are identifiers, never numbers.
+ * name one: the bank account role (BAS 1930 in the SE pack). Always a string:
+ * account numbers are identifiers, never numbers.
  */
-export const DEFAULT_SETTLEMENT_ACCOUNT = '1930'
+export const DEFAULT_SETTLEMENT_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'bank')
 
 /**
  * The trailing arguments getReconciliationStatus / runReconciliation need in

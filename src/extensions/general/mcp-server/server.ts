@@ -344,6 +344,7 @@ import { getByraMembership } from '@/lib/clients/fetch-client-overview'
 import { companyCurrentResource } from './resources/company-current'
 import { findUnknownArgKeys, listArgKeys, listRequiredArgKeys, shortestExampleFor } from './arg-guard'
 import { parseVatPeriodArgs } from '@/lib/reports/vat-period-args'
+import { VAT_ROUNDING_ACCOUNT } from '@/lib/reports/vat-settlement'
 import {
   AGENT_AMOUNT_FORMAT,
   computeVatCloseCheck,
@@ -14364,7 +14365,7 @@ export const tools: McpTool[] = [
           rule_label: enriched.booking_suggestion.label,
           // A VAT refund that clears 1650 within 1 kr books the gap on 3740.
           ...(enriched.booking_suggestion.ore_rounding
-            ? { ore_rounding_account: '3740', ore_rounding_amount: enriched.booking_suggestion.ore_rounding }
+            ? { ore_rounding_account: VAT_ROUNDING_ACCOUNT, ore_rounding_amount: enriched.booking_suggestion.ore_rounding }
             : {}),
           ...(twins.length > 0 ? { ledger_twins: twins } : {}),
           ...(cover ? { ledger_cover: cover } : {}),
@@ -14637,7 +14638,7 @@ export const tools: McpTool[] = [
               suggested_counter_account: r.booking_suggestion?.account ?? null,
               rule_label: r.booking_suggestion?.label ?? null,
               ...(r.booking_suggestion?.ore_rounding
-                ? { ore_rounding_account: '3740', ore_rounding_amount: r.booking_suggestion.ore_rounding }
+                ? { ore_rounding_account: VAT_ROUNDING_ACCOUNT, ore_rounding_amount: r.booking_suggestion.ore_rounding }
                 : {}),
               ...(twins.length > 0 ? { ledger_twins: twins } : {}),
               ...(holdById.get(r.id)?.kind === 'planned_link' ? { ledger_cover: holdById.get(r.id) } : {}),
