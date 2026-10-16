@@ -29,7 +29,7 @@ Response `200`:
 ```ts
 {
   data: {
-    webhooks: { id: string, name: string, event_type: string, event_types: string[], webhook_url: string, active: boolean, api_version_pinned: string, disabled_at: string | null, disabled_reason: string | null, created_at: string, verification_status: "verified" | "pending" | "grace_period" | "paused", verified_at: string | null, verification_grace_ends_at: string | null, verification_attempts: number, verification_last_attempt_at: string | null, verification_last_error: string | null, verification_next_attempt_at: string | null }[]
+    webhooks: { id: string, handle?: string, name: string, event_type: string, event_types: string[], webhook_url: string, active: boolean, api_version_pinned: string, disabled_at: string | null, disabled_reason: string | null, created_at: string, verification_status: "verified" | "pending" | "grace_period" | "paused", verified_at: string | null, verification_grace_ends_at: string | null, verification_attempts: number, verification_last_attempt_at: string | null, verification_last_error: string | null, verification_next_attempt_at: string | null }[]
   },
   meta: {
     request_id: string,
@@ -132,6 +132,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     name: string,
     event_type: string,
     event_types: string[],
@@ -222,6 +223,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     name: string,
     description: string | null,
     event_type: string,
@@ -334,6 +336,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     name: string,
     description: string | null,
     event_type: string,
@@ -447,7 +450,7 @@ Returns deliveries for the webhook in newest-first order. Each row carries the c
 Response `200`:
 ```ts
 {
-  data: { id: string, webhook_id: string, event_type: string, status: "pending" | "in_flight" | "delivered" | "failed" | "dead", attempts: number, next_attempt_at: string, response_status: number | null, response_body: string | null, error: string | null, request_id: string | null, created_at: string, delivered_at: string | null }[],
+  data: { id: string, handle?: string, webhook_id: string, event_type: string, status: "pending" | "in_flight" | "delivered" | "failed" | "dead", attempts: number, next_attempt_at: string, response_status: number | null, response_body: string | null, error: string | null, request_id: string | null, created_at: string, delivered_at: string | null }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -511,7 +514,7 @@ Generates a fresh HMAC signing secret for the webhook and returns it EXACTLY ONC
 Response `200`:
 ```ts
 {
-  data: { id: string, secret: string, rotated_at: string },
+  data: { id: string, handle?: string, secret: string, rotated_at: string },
   meta: {
     request_id: string,
     api_version: string,
@@ -618,6 +621,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     webhook_url: string,
     verification_status: "verified" | "pending" | "grace_period" | "paused",
     verified_at: string | null,

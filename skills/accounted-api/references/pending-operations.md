@@ -35,7 +35,7 @@ Returns the company's pending operations newest first: writes staged for approva
 Response `200`:
 ```ts
 {
-  data: { pending_operation_id: string, company_id: string, operation_type: string, title: string, status: "pending" | "committing" | "committed" | "rejected" | "failed_partial", task_state: "working" | "completed" | "failed" | "cancelled", risk_level: "low" | "medium" | "high", preview: Record<string, unknown>, result: Record<string, unknown> | null, rejection_category: string | null, rejection_reason: string | null, actor_type: string, actor_id: string | null, actor_label: string | null, batch_id: string | null, created_at: string, resolved_at: string | null, links: { self: string, approve: string, reject: string } }[],
+  data: { pending_operation_id: string, handle?: string, company_id: string, operation_type: string, title: string, status: "pending" | "committing" | "committed" | "rejected" | "failed_partial", task_state: "working" | "completed" | "failed" | "cancelled", risk_level: "low" | "medium" | "high", preview: Record<string, unknown>, result: Record<string, unknown> | null, rejection_category: string | null, rejection_reason: string | null, actor_type: string, actor_id: string | null, actor_label: string | null, batch_id: string | null, created_at: string, resolved_at: string | null, links: { self: string, approve: string, reject: string } }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -114,6 +114,7 @@ Response `200`:
 {
   data: {
     pending_operation_id: string,
+    handle?: string,
     company_id: string,
     operation_type: string,
     title: string,
@@ -221,6 +222,7 @@ Response `200`:
 {
   data: {
     pending_operation_id: string,
+    handle?: string,
     company_id: string,
     operation_type: string,
     title: string,
@@ -333,6 +335,7 @@ Response `200`:
 {
   data: {
     pending_operation_id: string,
+    handle?: string,
     company_id: string,
     operation_type: string,
     title: string,

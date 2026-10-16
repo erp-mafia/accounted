@@ -87,6 +87,31 @@ every endpoint: `400` validation, `401` bad key, `403` missing scope, `404`,
 https://app.gnubok.se/docs/api/errors. Only endpoint-specific codes are
 mentioned per endpoint below.
 
+**Typed handles.** Responses add `handle` next to the id of the resources
+they return (the endpoint schemas show where):
+`<prefix>_<the UUID as 32 lowercase hex, no dashes>`, so journal entry
+`0e9c41d2-a1b0-4c6f-9a3e-5b7d8c9f0a1b` is `je_0e9c41d2a1b04c6f9a3e5b7d8c9f0a1b`.
+It is the same id spelled with its type: store the handle and you always know
+what an id names. Every path id and every body or query field named for a
+resource (`journal_entry_id`, `credited_invoice_id`, `invoice_ids`,
+`period_id`, ...) accepts the handle or the plain UUID; the plain UUID keeps
+working everywhere. A handle of the wrong type (an `inv_` invoice handle where
+a journal entry id belongs) is refused with `400 HANDLE_TYPE_MISMATCH` before
+anything is read: `error.details.issues[]` names the `field`, the
+`expected_prefix` it takes (null: plain UUID only) and the `received_prefix`.
+Id fields keep their names and values (`journal_entry_id` still holds the
+UUID); only `handle` is added. Prefixes are permanent: `cmp` company, `je`
+journal entry, `inv` customer invoice (quotes and credit notes too), `sinv`
+supplier invoice, `cus` customer, `sup` supplier, `txn` bank transaction,
+`doc` document, `pop` pending operation, `fp` fiscal period, `emp` employee,
+`srun` salary run, `art` article, `ast` fixed asset, `dim` dimension, `dimv`
+dimension value, `inbx` inbox item, `exp` expense claim, `cash` cash account,
+`pmt` payment order, `spb` supplier payment batch, `wh` webhook, `whd`
+webhook delivery, `op` async operation. Sub-resources without a prefix
+(salary lines, benefits, reconciliation signoffs) take the plain UUID only.
+MCP tools accept handles in their id arguments too and still answer plain
+UUIDs.
+
 **Cursor pagination.** List endpoints take `?cursor=` and return
 `meta.next_cursor`; loop until it is absent/null. A stale or tampered cursor
 is NOT an error: the first page is returned again, so terminate on

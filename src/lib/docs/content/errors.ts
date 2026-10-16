@@ -19,7 +19,7 @@ interface DomainGroup {
 }
 
 const DOMAINS: DomainGroup[] = [
-  { label: 'Generic', description: 'Cross-cutting codes returned by any endpoint.', prefixes: ['UNKNOWN_', 'INTERNAL_', 'VALIDATION_', 'UNAUTHORIZED', 'MFA_', 'FORBIDDEN', 'NOT_FOUND', 'CONFLICT', 'RATE_LIMITED', 'NOT_IMPLEMENTED', 'COMPANY_CONTEXT_', 'IDEMPOTENCY_', 'INSUFFICIENT_SCOPE'] },
+  { label: 'Generic', description: 'Cross-cutting codes returned by any endpoint.', prefixes: ['UNKNOWN_', 'INTERNAL_', 'VALIDATION_', 'UNAUTHORIZED', 'MFA_', 'FORBIDDEN', 'NOT_FOUND', 'CONFLICT', 'RATE_LIMITED', 'NOT_IMPLEMENTED', 'COMPANY_CONTEXT_', 'IDEMPOTENCY_', 'INSUFFICIENT_SCOPE', 'HANDLE_'] },
   { label: 'Bookkeeping engine', description: 'Errors from the journal-entry lifecycle (create, commit, reverse, correct).', prefixes: ['BOOKKEEPING_', 'JOURNAL_', 'VOUCHER_'] },
   { label: 'Periods + year-end', description: 'Fiscal period locking, year-end closing, opening balances, FX revaluation.', prefixes: ['PERIOD_', 'YEAR_END_', 'OPENING_BALANCE_', 'FX_'] },
   { label: 'Invoices', description: 'Customer invoice lifecycle: draft, send, mark paid, credit.', prefixes: ['INVOICE_', 'CREDIT_NOTE_', 'CUSTOMER_'] },

@@ -39,6 +39,7 @@ import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-key
 import { createTableMockSupabase } from '@/tests/helpers'
 import { linkDocumentToVoucher } from '@/lib/documents/link-document'
 import { POST as link } from '../route'
+import { toHandle } from '@/lib/handles'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -196,7 +197,7 @@ describe('POST /documents/:id/link', () => {
 
     expect(res.status).toBe(200)
     expect((await res.json()).data).toEqual({
-      id: DOC_ID, journal_entry_id: JE_ID, journal_entry_line_id: null, file_name: 'kvitto.pdf', copy_of_document_id: null,
+      id: DOC_ID, handle: toHandle('document', DOC_ID), journal_entry_id: JE_ID, journal_entry_line_id: null, file_name: 'kvitto.pdf', copy_of_document_id: null,
     })
     expect(client.calls).toContainEqual(
       expect.objectContaining({ table: 'document_attachments', method: 'update', args: [{ journal_entry_id: JE_ID, journal_entry_line_id: null }] }),
@@ -254,7 +255,7 @@ describe('POST /documents/:id/link', () => {
 
       expect(res.status).toBe(200)
       expect((await res.json()).data).toEqual({
-        id: COPY_ID, journal_entry_id: JE_ID, journal_entry_line_id: null, file_name: 'kvitto.pdf', copy_of_document_id: DOC_ID,
+        id: COPY_ID, handle: toHandle('document', COPY_ID), journal_entry_id: JE_ID, journal_entry_line_id: null, file_name: 'kvitto.pdf', copy_of_document_id: DOC_ID,
       })
       expect(vi.mocked(linkDocumentToVoucher)).toHaveBeenCalledWith(
         expect.anything(),

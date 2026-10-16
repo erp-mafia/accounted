@@ -33,7 +33,7 @@ Response `200`:
 ```ts
 {
   data: {
-    articles: { id: string, article_number: string | null, name: string, name_en: string | null, type: "vara" | "tjanst", unit: string, price_excl_vat: number, currency: string, vat_rate: number, revenue_account: string | null, cost_price: number | null, ean: string | null, housework_type: string | null, notes: string | null, active: boolean, created_at: string, updated_at: string }[]
+    articles: { id: string, handle?: string, article_number: string | null, name: string, name_en: string | null, type: "vara" | "tjanst", unit: string, price_excl_vat: number, currency: string, vat_rate: number, revenue_account: string | null, cost_price: number | null, ean: string | null, housework_type: string | null, notes: string | null, active: boolean, created_at: string, updated_at: string }[]
   },
   meta: {
     request_id: string,
@@ -108,7 +108,7 @@ Returns active customers in created-first order. Pass ?include_archived=true to 
 Response `200`:
 ```ts
 {
-  data: { id: string, name: string, customer_type: "individual" | "swedish_business" | "eu_business" | "non_eu_business", email: string | null, org_number: string | null, vat_number: string | null, default_payment_terms: number, party_id?: string | null, archived_at: string | null, created_at: string }[],
+  data: { id: string, handle?: string, name: string, customer_type: "individual" | "swedish_business" | "eu_business" | "non_eu_business", email: string | null, org_number: string | null, vat_number: string | null, default_payment_terms: number, party_id?: string | null, archived_at: string | null, created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -214,6 +214,7 @@ Response `200`:
 {
   data: {
     id: string | null,
+    handle?: string,
     name: string,
     customer_type: "individual" | "swedish_business" | "eu_business" | "non_eu_business",
     customer_number: string | null,
@@ -302,6 +303,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     name: string,
     customer_type: string,
     customer_number: string | null,
@@ -431,6 +433,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     name: string,
     customer_type: string,
     customer_number: string | null,

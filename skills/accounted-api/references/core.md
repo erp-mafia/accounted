@@ -31,7 +31,7 @@ Response `200`:
     mode: "live" | "test",
     scopes: string[],
     company_access: "all_memberships" | "allowlist",
-    companies: { id: string, role: "owner" | "admin" | "member" | "viewer", access: "read_write" | "read_only", read_only_code: "ROLE_READ_ONLY" | "CONNECTION_READ_ONLY" | null }[]
+    companies: { id: string, handle?: string, role: "owner" | "admin" | "member" | "viewer", access: "read_write" | "read_only", read_only_code: "ROLE_READ_ONLY" | "CONNECTION_READ_ONLY" | null }[]
   },
   meta: {
     request_id: string,
@@ -102,7 +102,7 @@ Returns every non-archived company the API key user is a member of, together wit
 Response `200`:
 ```ts
 {
-  data: { id: string, name: string, org_number: string | null, entity_type: string, role: "owner" | "admin" | "member" | "viewer", created_at: string }[],
+  data: { id: string, handle?: string, name: string, org_number: string | null, entity_type: string, role: "owner" | "admin" | "member" | "viewer", created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -199,6 +199,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     name: string,
     entity_type: "enskild_firma" | "aktiebolag" | "ideell_forening" | "ekonomisk_forening",
     org_number: string | null,
@@ -1455,6 +1456,7 @@ Response `200`:
 {
   data: {
     operation_id: string,
+    handle?: string,
     type: string,
     status: "queued" | "running" | "succeeded" | "failed" | "cancelled",
     progress?: Record<string, unknown>,

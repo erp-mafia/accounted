@@ -36,7 +36,7 @@ Returns active employees in created-first order. Pass ?include_inactive=true to 
 Response `200`:
 ```ts
 {
-  data: { id: string, first_name: string, last_name: string, personnummer_masked: string, employment_type: "employee" | "company_owner" | "board_member", personnel_category: "arbetare" | "tjansteman", employment_start: string, employment_end: string | null, salary_type: "monthly" | "hourly", monthly_salary: number | null, hourly_rate: number | null, f_skatt_status: "a_skatt" | "f_skatt" | "fa_skatt" | "not_verified", is_active: boolean, created_at: string }[],
+  data: { id: string, handle?: string, first_name: string, last_name: string, personnummer_masked: string, employment_type: "employee" | "company_owner" | "board_member", personnel_category: "arbetare" | "tjansteman", employment_start: string, employment_end: string | null, salary_type: "monthly" | "hourly", monthly_salary: number | null, hourly_rate: number | null, f_skatt_status: "a_skatt" | "f_skatt" | "fa_skatt" | "not_verified", is_active: boolean, created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -170,6 +170,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     first_name: string,
     last_name: string,
     personnummer_masked: string,
@@ -262,6 +263,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     first_name: string,
     last_name: string,
     personnummer: string,
@@ -427,6 +429,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     first_name: string,
     last_name: string,
     employment_type: "employee" | "company_owner" | "board_member",

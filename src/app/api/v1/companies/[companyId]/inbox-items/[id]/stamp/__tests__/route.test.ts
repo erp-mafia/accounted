@@ -27,6 +27,7 @@ vi.mock('@supabase/supabase-js', async () => {
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST } from '../route'
 import { createTableMockSupabase } from '@/tests/helpers'
+import { toHandle } from '@/lib/handles'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -119,7 +120,7 @@ describe('POST /api/v1/companies/{companyId}/inbox-items/{id}/stamp', () => {
     const res = await POST(req({ body: { journal_entry_id: JE_ID } }), params())
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body.data).toEqual({ id: ITEM_ID, created_journal_entry_id: JE_ID })
+    expect(body.data).toEqual({ id: ITEM_ID, handle: toHandle('inbox_item', ITEM_ID), created_journal_entry_id: JE_ID })
   })
 
   it('is idempotent when the item is already stamped with the same entry', async () => {
@@ -165,7 +166,7 @@ describe('POST /api/v1/companies/{companyId}/inbox-items/{id}/stamp', () => {
     })
     const res = await POST(req({ body: { journal_entry_id: JE_ID } }), params())
     expect(res.status).toBe(200)
-    expect((await res.json()).data).toEqual({ id: ITEM_ID, created_journal_entry_id: JE_ID })
+    expect((await res.json()).data).toEqual({ id: ITEM_ID, handle: toHandle('inbox_item', ITEM_ID), created_journal_entry_id: JE_ID })
   })
 
   it('409 when the item is already stamped with a different entry', async () => {

@@ -36,7 +36,7 @@ Cursor-paginated list of journal entries ordered by created_at DESC, id ASC (new
 Response `200`:
 ```ts
 {
-  data: { id: string, fiscal_period_id: string, voucher_series: string, voucher_number: number, entry_date: string, description: string, status: "draft" | "posted" | "cancelled", source_type: string, created_at: string }[],
+  data: { id: string, handle?: string, fiscal_period_id: string, voucher_series: string, voucher_number: number, entry_date: string, description: string, status: "draft" | "posted" | "cancelled", source_type: string, created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -144,6 +144,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     fiscal_period_id: string,
     voucher_series: string,
     voucher_number: number,
@@ -215,6 +216,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     fiscal_period_id: string,
     voucher_series: string,
     voucher_number: number,
@@ -446,6 +448,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     status: string,
     fiscal_period_id: string,
     entry_date: string,
@@ -533,6 +536,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     fiscal_period_id: string,
     voucher_series: string,
     voucher_number: number,
@@ -604,7 +608,14 @@ Atomically advances the voucher series and flips the draft to posted. The vouche
 Response `200`:
 ```ts
 {
-  data: { id: string, voucher_series: string, voucher_number: number, status: "posted", entry_date: string },
+  data: {
+    id: string,
+    handle?: string,
+    voucher_series: string,
+    voucher_number: number,
+    status: "posted",
+    entry_date: string
+  },
   meta: {
     request_id: string,
     api_version: string,

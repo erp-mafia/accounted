@@ -641,7 +641,7 @@ Response `200`:
 ```ts
 {
   data: {
-    dimensions: { id: string, sie_dim_no: number, name: string, parent_sie_dim_no: number | null, resets_annually: boolean, is_system: boolean, is_active: boolean, sort_order: number, values: { id: string, code: string, name: string, is_active: boolean, start_date: string | null, end_date: string | null }[] }[]
+    dimensions: { id: string, handle?: string, sie_dim_no: number, name: string, parent_sie_dim_no: number | null, resets_annually: boolean, is_system: boolean, is_active: boolean, sort_order: number, values: { id: string, code: string, name: string, is_active: boolean, start_date: string | null, end_date: string | null }[] }[]
   },
   meta: {
     request_id: string,
@@ -728,7 +728,7 @@ Response `200`:
 ```ts
 {
   data: {
-    dimension: { id: string, sie_dim_no: number, name: string, parent_sie_dim_no: number | null, resets_annually: boolean, is_system: boolean, is_active: boolean, sort_order: number }
+    dimension: { id: string, handle?: string, sie_dim_no: number, name: string, parent_sie_dim_no: number | null, resets_annually: boolean, is_system: boolean, is_active: boolean, sort_order: number }
   },
   meta: {
     request_id: string,
@@ -804,6 +804,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     sie_dim_no: number,
     name: string,
     parent_sie_dim_no: number | null,
@@ -946,6 +947,7 @@ Response `200`:
 {
   data: {
     id: string | null,
+    handle?: string,
     dimension_id: string,
     code: string,
     name: string,
@@ -1029,6 +1031,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     dimension_id: string,
     code: string,
     name: string,
@@ -1093,7 +1096,7 @@ Hard-deletes a dimension value (SIE #OBJEKT) that no journal line references. Va
 Response `200`:
 ```ts
 {
-  data: { deleted: true, id: string },
+  data: { deleted: true, id: string, handle?: string },
   meta: {
     request_id: string,
     api_version: string,
@@ -1589,7 +1592,7 @@ Response `200`:
 ```ts
 {
   data: {
-    fiscal_periods: { id: string, name: string, period_start: string, period_end: string, is_closed: boolean, closed_at: string | null, locked_at: string | null, previous_period_id: string | null, created_at: string, duration_days: number, exceeds_18_months: boolean }[]
+    fiscal_periods: { id: string, handle?: string, name: string, period_start: string, period_end: string, is_closed: boolean, closed_at: string | null, locked_at: string | null, previous_period_id: string | null, created_at: string, duration_days: number, exceeds_18_months: boolean }[]
   },
   meta: {
     request_id: string,
@@ -1667,7 +1670,7 @@ Response `200`:
 ```ts
 {
   data: {
-    fiscal_period: { id: string, name: string, period_start: string, period_end: string, is_closed: boolean, closed_at: string | null, closed_externally: boolean, locked_at: string | null, previous_period_id: string | null, created_at: string }
+    fiscal_period: { id: string, handle?: string, name: string, period_start: string, period_end: string, is_closed: boolean, closed_at: string | null, closed_externally: boolean, locked_at: string | null, previous_period_id: string | null, created_at: string }
   },
   meta: {
     request_id: string,
@@ -1746,6 +1749,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     name: string,
     period_start: string,
     period_end: string,
@@ -2575,7 +2579,7 @@ Sets is_closed=true + closed_at on the period. /year-end already locks and close
 Response `200`:
 ```ts
 {
-  data: { id: string, is_closed: true, closed_at: string },
+  data: { id: string, handle?: string, is_closed: true, closed_at: string },
   meta: {
     request_id: string,
     api_version: string,
@@ -2633,6 +2637,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     name: string,
     period_start: string,
     period_end: string,
@@ -2777,7 +2782,7 @@ Sets locked_at on the period. Refuses if uncategorised business transactions rem
 Response `200`:
 ```ts
 {
-  data: { id: string, locked_at: string, is_closed: boolean },
+  data: { id: string, handle?: string, locked_at: string, is_closed: boolean },
   meta: {
     request_id: string,
     api_version: string,
@@ -3348,6 +3353,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     name: string,
     period_start: string,
     period_end: string,
@@ -3420,6 +3426,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     name: string,
     period_start: string,
     period_end: string,

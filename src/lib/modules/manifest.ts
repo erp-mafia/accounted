@@ -472,6 +472,7 @@ export const INFRA_LIB_FOLDERS: readonly string[] = Object.freeze([
   'errors',
   'events',
   'extensions',
+  'handles',
   'hooks',
   'http',
   'lists',

@@ -12,7 +12,11 @@
  *      (`/health`, `/openapi.json`) skip the scope check but still validate
  *      the token when one is supplied. Authenticated endpoints (`/api-key`)
  *      require a valid token and skip the scope check.
- *   4. When the URL contains `companyId`, verifies the API key's user has
+ *   4. Reads typed handles (`je_...`, `cmp_...`, ./handles.ts) in the path,
+ *      query and body as their UUIDs, refusing a wrong-type one with
+ *      HANDLE_TYPE_MISMATCH, and stamps `handle` on the responses of the
+ *      endpoints that declare their resource type.
+ *   4b. When the URL contains `companyId`, verifies the API key's user has
  *      access to that company via `company_members`. Multi-company keys are
  *      supported transparently: the URL is the source of truth. A key with a
  *      company allowlist (api_key_companies) is additionally refused outside
@@ -96,6 +100,7 @@ import {
 import { createLogger, type Logger } from '@/lib/logger'
 import { isPreviewToken, MALFORMED_PREVIEW_TOKEN_MESSAGE, PREVIEW_TOKEN_HEADER } from '@/lib/operations/preview-token'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from './errors'
+import { handleDeclarationFor, normalizeV1Handles, withResponseHandles } from './handles'
 import { WRAPPED_RESPONSE_HEADERS } from './security-headers'
 import { API_V1_VERSION, API_V1_VERSION_HEADER } from './version'
 
@@ -797,10 +802,30 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       // no `.companyId`) and the catch below turns it into a 500 for every
       // valid key. Dynamic routes still pass a real `Promise<{ companyId }>`.
       // Guard the await and default to an empty param set.
-      const resolvedParams = ((await params?.params) ?? {}) as Record<
+      const rawParams = ((await params?.params) ?? {}) as Record<
         string,
         string | string[] | undefined
       >
+
+      // 5a. Typed handles (./handles.ts): a je_/inv_/cmp_... handle in the
+      //     path, the query string or the body becomes its plain UUID
+      //     here, so the company gate, the idempotency hash and every
+      //     handler see the id they always saw. A handle of the wrong type
+      //     is refused before anything is read. A request without handles
+      //     passes on as the same Request with the same params.
+      const handles = await normalizeV1Handles(request, rawParams)
+      if (!handles.ok) {
+        userLog.warn('handle type mismatch', { fields: handles.mismatches.map((m) => m.field) })
+        return await v1ErrorResponseFromCode('HANDLE_TYPE_MISMATCH', userLog, {
+          requestId,
+          details: { issues: handles.mismatches },
+        })
+      }
+      const resolvedParams = handles.params
+      const handlerRequest = handles.request
+      const handlerParams = handles.changed
+        ? ({ ...params, params: Promise.resolve(resolvedParams) } as unknown as P)
+        : params
       const rawCompanyId = resolvedParams.companyId
       const companyId = typeof rawCompanyId === 'string' ? rawCompanyId : undefined
 
@@ -943,11 +968,13 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       // 8. If idempotency-key supplied, claim it before the write runs. A
       //    dry run writes nothing, so it claims nothing: it only looks the
       //    key up (a finished call with another body is still key reuse).
-      let workingRequest = request
+      let workingRequest = handlerRequest
       if (idempotencyKey && isMutation && companyId) {
-        const { body, cloned } = await readBodyForHash(request)
+        const { body, cloned } = await readBodyForHash(handlerRequest)
         workingRequest = cloned
-        const reqHash = buildRequestHash({ method: request.method, path, body, dryRun, stage })
+        // The handle-free path and body: a retry that spells an id as a
+        // handle is the same request as one that sends the UUID.
+        const reqHash = buildRequestHash({ method: request.method, path: handles.path, body, dryRun, stage })
         if (dryRun) {
           try {
             const hit = await checkIdempotencyKey(supabase, auth.userId, companyId, idempotencyKey, reqHash)
@@ -1014,10 +1041,19 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       //
       // `api_key` is the honest label for this surface: a gnubok_sk_ bearer
       // token. The OAuth/MCP surfaces set their own actor and are unaffected.
-      const response = await runWithActor(
+      let response: Response = await runWithActor(
         { type: 'api_key', label: auth.apiKeyName ?? 'Unnamed API key' },
-        () => withSIEExternalReport(supabase,companyId,operation,()=>handler(workingRequest,ctx,params)),
+        () => withSIEExternalReport(supabase,companyId,operation,()=>handler(workingRequest,ctx,handlerParams)),
       )
+
+      // 9b. Typed handles on the way out: the endpoints in V1_HANDLE_COVERAGE
+      //     gain `handle` next to their resource's id (./handles.ts). Before
+      //     the claim settles, so a replay answers the same body. A dry run
+      //     or a staging answers a preview, not the resource: left alone.
+      const handleDecl = handleDeclarationFor(operation)
+      if (handleDecl && !dryRun && !stage) {
+        response = await withResponseHandles(response, handleDecl)
+      }
 
       // Signal test mode on every test-key response so integrators can see the
       // request was simulation-only without inspecting the body.

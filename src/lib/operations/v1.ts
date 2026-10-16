@@ -39,6 +39,7 @@ import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1, type ApiV1Context } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
+import { addHandles, STAGED_PENDING_OPERATION_HANDLES } from '@/lib/api/v1/handles'
 import { moduleForOperationId } from '@/lib/modules/resolve'
 import { toPendingOperationView } from '@/lib/pending-operations/view'
 import { operationPreviewToken, previewStaleFailure } from './preview-token'
@@ -238,13 +239,16 @@ async function v1StageResponse(
       { requestId: ctx.requestId, log: ctx.log, previewToken: staged.previewToken },
     )
   }
-  return ok(
+  // The pending operation gains its typed handle (pop_...) next to
+  // pending_operation_id, as on the pending-operations endpoints.
+  const staged202 = addHandles(
     {
       ...toPendingOperationView(staged.row),
       ...(staged.periodStatus ? { period_status: staged.periodStatus } : {}),
     },
-    { requestId: ctx.requestId, status: 202 },
-  )
+    STAGED_PENDING_OPERATION_HANDLES,
+  ).value
+  return ok(staged202, { requestId: ctx.requestId, status: 202 })
 }
 
 /** True when every input field is supplied by the path (a bare DELETE). */

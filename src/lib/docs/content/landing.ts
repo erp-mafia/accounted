@@ -96,6 +96,20 @@ Errors return an \`error\` object instead of \`data\` (and carry no \`meta\` blo
 
 Every error code is documented in the [error reference](/docs/api/errors).
 
+## Ids and typed handles
+
+Resource ids are UUIDs, and the resources a response returns also carry a **typed handle** next to their id: the same id spelled with its type, \`<prefix>_<the UUID as 32 lowercase hex, no dashes>\`. A journal entry \`0e9c41d2-a1b0-4c6f-9a3e-5b7d8c9f0a1b\` is \`je_0e9c41d2a1b04c6f9a3e5b7d8c9f0a1b\`, so a stored handle always says what it names:
+
+\`\`\`json
+{ "data": { "id": "0e9c41d2-a1b0-4c6f-9a3e-5b7d8c9f0a1b", "handle": "je_0e9c41d2a1b04c6f9a3e5b7d8c9f0a1b", "voucher_number": 142 } }
+\`\`\`
+
+- **Send either form.** Every path id and every body or query field named for a resource (\`journal_entry_id\`, \`credited_invoice_id\`, \`invoice_ids\`, \`period_id\`, ...) accepts the handle or the plain UUID. Plain UUIDs keep working everywhere; nothing about an existing request changes.
+- **A wrong type is refused at the door.** An \`inv_\` invoice handle where a journal entry id belongs answers \`400 HANDLE_TYPE_MISMATCH\` before anything is read. \`error.details.issues[]\` names the \`field\`, the \`expected_prefix\` it takes (null when it takes a plain UUID only) and the \`received_prefix\`.
+- **Additive output.** Id fields keep their names and values (\`journal_entry_id\` still holds the UUID); only \`handle\` is added, on the resource objects whose type is known. The OpenAPI spec shows it, with its pattern, on each endpoint that returns it.
+- **Permanent prefixes.** A prefix is never renamed or reused: \`cmp\` company, \`je\` journal entry, \`inv\` customer invoice (quotes and credit notes too), \`sinv\` supplier invoice, \`cus\` customer, \`sup\` supplier, \`txn\` bank transaction, \`doc\` document, \`pop\` pending operation, \`fp\` fiscal period, \`emp\` employee, \`srun\` salary run, \`art\` article, \`ast\` fixed asset, \`dim\` dimension, \`dimv\` dimension value, \`inbx\` inbox item, \`exp\` expense claim, \`cash\` cash account, \`pmt\` payment order, \`spb\` supplier payment batch, \`wh\` webhook, \`whd\` webhook delivery, \`op\` async operation. Sub-resources without a prefix (salary lines, benefits, reconciliation signoffs) take the plain UUID only.
+- **MCP.** The MCP tools accept handles in their id arguments too; their answers still carry plain UUIDs.
+
 ## Where to go next
 
 - **[Quickstart cookbook](/docs/api/cookbook/quickstart)**: send your first invoice in five minutes.
