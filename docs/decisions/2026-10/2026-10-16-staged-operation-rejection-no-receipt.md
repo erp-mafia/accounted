@@ -1,0 +1,1 @@
+[2026-10-16] A rejected staged operation gets no decision receipt: it posts nothing a receipt could be read by, and the rejection already records who, when, category and reason on pending_operations plus a PendingOperationRejected audit row.

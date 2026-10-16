@@ -93,5 +93,6 @@ verified principal and the sponsor, and the decision arrives as
 connection before and after COMMIT shows the verifikat and its outbox row are
 written together or not at all. Only the HTTP hop to PostgREST is replaced
 (`tests/pg/postgrest-over-pg.ts` runs each request as SQL); the file header
-lists every seam. The receipt half does not hold yet for a staged and approved
-posting (its `decision_receipts` is empty) and is kept there as an `it.fails`.
+lists every seam. The receipt half: the staged and approved posting answers a
+decision receipt on `GET /journal-entries/{id}`, which commitPendingOperation
+records after the commit (`src/lib/suggestion-log/operation.ts`).

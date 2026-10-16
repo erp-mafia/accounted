@@ -1,0 +1,1 @@
+[2026-10-16] A staged-operation receipt covers only voucher ids its result names that were posted at or after the claim's updated_at: a link or storno names vouchers it did not post, and the database-clock claim time tells them apart without hooking the engine.

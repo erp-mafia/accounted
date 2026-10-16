@@ -1,0 +1,1 @@
+[2026-10-16] The staged-operation input_hash is SHA-256 over the row's params and preview_data, not the pv1 preview token: the token is never stored on the row and hand-written executors have none, while the committed row is immutable, so the hash stays recomputable.

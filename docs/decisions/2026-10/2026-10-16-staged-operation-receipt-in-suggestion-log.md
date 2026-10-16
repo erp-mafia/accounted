@@ -1,0 +1,1 @@
+[2026-10-16] An approved staged operation's receipt is a suggestion_log row of kind 'operation', one per voucher it posted: the receipts reader reads only that table, and no existing subject (bank line, underlag) fits a manual IB or a free voucher, so two CHECKs widen instead of a second store.

@@ -8,7 +8,9 @@ import { insertAuthUser, insertCompanyMember, insertTransaction, seedCompany } f
  * suggestion_log (20261011140008): one row per bookkeeping decision. Members
  * read their own company's rows and record their own decisions, viewers and
  * strangers cannot write, nobody can change a row, and a row leaves only
- * with the bank line, inbox item, document or company it describes.
+ * with the bank line, inbox item, document or company it describes. An
+ * approved staged operation is a decision too (kind 'operation',
+ * 20261016150000), named by its pending_operation_id.
  */
 
 const SUGGESTIONS = JSON.stringify([
@@ -167,6 +169,66 @@ describe('suggestion_log', () => {
     ).rejects.toThrow(/suggestion_log_final/)
     const { rowCount } = await insert(`transaction_id, outcome`, `$2, 'dismissed'`, [transactionId])
     expect(rowCount).toBe(1)
+  })
+
+  it('records an approved staged operation as a decision whose subject is the operation', async () => {
+    const operationId = randomUUID()
+    const suggestions = JSON.stringify([
+      { source: 'pending_operation', source_id: operationId, rank: 0, proposal: { operation_type: 'create_voucher', risk_level: 'medium' }, matches_final: true },
+    ])
+    const final = JSON.stringify({ journal_entry_id: randomUUID(), operation_type: 'create_voucher' })
+    const insertOperation = (client: Pool | PoolClient, pendingOperationId: string | null) =>
+      client.query<{ id: string }>(
+        `INSERT INTO public.suggestion_log
+           (company_id, kind, pending_operation_id, suggestions, acted_on, final, outcome, actor_type, resolved_by,
+            policy_version, confidence_band, input_hash)
+         VALUES ($1, 'operation', $2, $3::jsonb, 0, $4::jsonb, 'accepted', 'user', $5,
+                 'staged-approval.1;approver=person', 'review', $6)
+         RETURNING id`,
+        [companyId, pendingOperationId, suggestions, final, userId, 'b'.repeat(64)],
+      )
+
+    // A member records the approval they made, and reads it back: no bank
+    // line, inbox item or document, the operation is the subject.
+    const recorded = await withUserContext(userId, async (client) => {
+      const { rows } = await insertOperation(client, operationId)
+      return (
+        await client.query(
+          `SELECT kind, pending_operation_id, transaction_id, inbox_item_id, document_id, confidence_band
+             FROM public.suggestion_log WHERE id = $1`,
+          [rows[0]!.id],
+        )
+      ).rows
+    })
+    expect(recorded).toEqual([
+      { kind: 'operation', pending_operation_id: operationId, transaction_id: null, inbox_item_id: null, document_id: null, confidence_band: 'review' },
+    ])
+
+    // Without the operation it names nothing.
+    await expect(insertOperation(getPool(), null)).rejects.toThrow(/suggestion_log_subject/)
+    // A kind outside the vocabulary is refused.
+    await expect(
+      getPool().query(
+        `INSERT INTO public.suggestion_log (company_id, kind, pending_operation_id, outcome, actor_type)
+         VALUES ($1, 'voucher', $2, 'dismissed', 'user')`,
+        [companyId, operationId],
+      ),
+    ).rejects.toThrow(/suggestion_log_kind_check/)
+    // The bank-line and underlag subjects are unchanged: an operation id does not stand in for them.
+    await expect(
+      getPool().query(
+        `INSERT INTO public.suggestion_log (company_id, kind, pending_operation_id, outcome, actor_type)
+         VALUES ($1, 'bank_line', $2, 'dismissed', 'user')`,
+        [companyId, operationId],
+      ),
+    ).rejects.toThrow(/suggestion_log_subject/)
+    await expect(
+      getPool().query(
+        `INSERT INTO public.suggestion_log (company_id, kind, pending_operation_id, outcome, actor_type)
+         VALUES ($1, 'inbox_item', $2, 'dismissed', 'user')`,
+        [companyId, operationId],
+      ),
+    ).rejects.toThrow(/suggestion_log_subject/)
   })
 
   it('refuses an actor outside the commit vocabulary', async () => {

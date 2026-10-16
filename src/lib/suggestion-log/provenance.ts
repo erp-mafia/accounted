@@ -22,6 +22,11 @@ import type { InboxSuggestion } from './inbox-classify'
  *       with matches_final removed from every element }
  *   underlag (schema 'inbox_item.v1'):
  *     { schema, document_id, document_sha256, suggestions: as above }
+ *   approved staged operation (schema 'pending_operation.v1'):
+ *     { schema, operation_type, params, preview: preview_data }, read off
+ *     the pending_operations row the approval committed. The approver was
+ *     shown preview_data and the commit ran params, and the row is
+ *     immutable once committed, so the hash names that exact preview.
  *
  * The transaction fields are read when the snapshot is taken; a field the
  * person edits later (an unbooked row's working title) no longer matches,
@@ -96,6 +101,22 @@ export function inboxInputHash(input: {
       document_id: input.documentId,
       document_sha256: input.documentSha256,
       suggestions: input.suggestions,
+    }),
+  )
+}
+
+/** The approved preview and the params the commit ran, as one staged operation's decision inputs. */
+export function operationInputHash(input: {
+  operationType: string
+  params: unknown
+  preview: unknown
+}): string {
+  return sha256Hex(
+    canonicalJson({
+      schema: 'pending_operation.v1',
+      operation_type: input.operationType,
+      params: input.params ?? null,
+      preview: input.preview ?? null,
     }),
   )
 }

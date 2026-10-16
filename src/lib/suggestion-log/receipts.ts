@@ -12,7 +12,10 @@ import { DECISION_CHECK_RESULTS } from './checks'
  * read back into one typed receipt. No table of its own.
  *
  * A receipt is one suggestion_log row (the suggestions on offer, the one
- * acted on, what was booked, who decided), joined with:
+ * acted on, what was booked, who decided), about a bank line, an underlag or
+ * an approved staged operation (kind 'operation', written by ./operation.ts
+ * after commitPendingOperation, one per voucher the approval posted), joined
+ * with:
  *   - the booked voucher's committed actor columns (credential label, HOW it
  *     was committed, voucher number), which the commit RPC stamps on the
  *     immutable entry;
@@ -30,10 +33,12 @@ import { DECISION_CHECK_RESULTS } from './checks'
  * come from deterministic backing (rules, templates, history; an assistant
  * read is floored and capped by candidate backing), so they are 'backing'. An
  * inbox extraction's score is the reading model's own number, so it is
- * labelled 'model_reported' and never presented as evidence.
+ * labelled 'model_reported' and never presented as evidence. A staged
+ * operation carries no score: its basis is null.
  *
  * rule_version, policy_version, input_hash, checks and confidence_band are
- * read as they were recorded at decision time (./record.ts, ./inbox.ts),
+ * read as they were recorded at decision time (./record.ts, ./inbox.ts,
+ * ./operation.ts),
  * never derived here: the rules and thresholds in force now are not the ones
  * a past decision was made under. A row written before they were recorded
  * answers explicit nulls, not omissions, so a reader can tell "not recorded"
@@ -56,7 +61,15 @@ export const DECISION_ACTOR_TYPES = [
 ] as const
 export type DecisionActorType = (typeof DECISION_ACTOR_TYPES)[number]
 
-const CANDIDATE_SOURCES = ['assistant', 'rule', 'catalog', 'counterparty_template', 'recent', 'extraction'] as const
+const CANDIDATE_SOURCES = [
+  'assistant',
+  'rule',
+  'catalog',
+  'counterparty_template',
+  'recent',
+  'extraction',
+  'pending_operation',
+] as const
 
 const DecisionCandidateSchema = z.object({
   source: z.enum(CANDIDATE_SOURCES),
@@ -64,7 +77,9 @@ const DecisionCandidateSchema = z.object({
   rank: z.number().int(),
   accounts: z
     .array(z.string())
-    .describe('The business account the suggestion books (bank line), or the result accounts read off the document (underlag).'),
+    .describe(
+      "The business account the suggestion books (bank line), or the result accounts read off the document (underlag). Empty for a staged operation: the voucher's own lines are what it booked.",
+    ),
   vat_treatment: z.string().nullable(),
   confidence: z.number().nullable(),
   model: z.string().nullable(),
@@ -97,7 +112,9 @@ const DecisionCheckSchema = z.object({
 
 export const DecisionReceiptSchema = z.object({
   receipt_id: z.string().uuid().describe('The suggestion_log row.'),
-  subject_kind: z.enum(['bank_line', 'inbox_item']),
+  subject_kind: z
+    .enum(['bank_line', 'inbox_item', 'operation'])
+    .describe('operation: a staged operation (MCP, REST ?stage=true, Att göra) approved and committed; its one candidate is the staged proposal, named by proposed_by.'),
   decided_at: z.string(),
   outcome: z
     .enum(['accepted', 'changed', 'manual', 'dismissed'])
@@ -122,7 +139,7 @@ export const DecisionReceiptSchema = z.object({
       approved_at: z.string().nullable(),
     })
     .nullable()
-    .describe('The staged operation that carried the decision, when an agent proposed it and a person approved it.'),
+    .describe('The staged operation that carried the decision, when it was staged (by an agent, a key or a person) and then approved.'),
   candidates: z.array(DecisionCandidateSchema),
   chosen: DecisionCandidateSchema.nullable(),
   booked: z
@@ -146,7 +163,7 @@ export const DecisionReceiptSchema = z.object({
     basis: z
       .enum(['backing', 'model_reported'])
       .nullable()
-      .describe("backing: derived from deterministic evidence. model_reported: the reading model's own score, not evidence."),
+      .describe("backing: derived from deterministic evidence. model_reported: the reading model's own score, not evidence. Null without a score (a staged operation)."),
   }),
   rule_version: z
     .string()
@@ -157,12 +174,14 @@ export const DecisionReceiptSchema = z.object({
   policy_version: z
     .string()
     .nullable()
-    .describe('The approval policy confidence_band was evaluated under, thresholds included (direct-booking.<revision>;...). Null without a band.'),
+    .describe(
+      'The approval policy confidence_band was evaluated under, thresholds included: direct-booking.<revision>;... for a bank line, staged-approval.<revision>;approver=person|credential[;unattended_limit=<SEK>|none] for a staged operation. Null without a band.',
+    ),
   input_hash: z
     .string()
     .nullable()
     .describe(
-      'SHA-256 of the canonical JSON of the decision inputs, taken before booking: the bank line or underlag fields, its document hash and the suggestions (without matches_final). Recomputable from the records it names. Null when not recorded.',
+      'SHA-256 of the canonical JSON of the decision inputs, taken before booking: the bank line or underlag fields, its document hash and the suggestions (without matches_final); for a staged operation, its params and the preview the approver was shown. Recomputable from the records it names. Null when not recorded.',
     ),
   checks: z
     .array(DecisionCheckSchema)
@@ -174,7 +193,7 @@ export const DecisionReceiptSchema = z.object({
     .enum(['direct', 'review'])
     .nullable()
     .describe(
-      "Under policy_version at decision time: direct, the acted-on suggestion books without a review; review, it opens one. From deterministic evidence, never the model's own score. Null without an acted-on suggestion, and for an underlag.",
+      "Under policy_version at decision time: direct, the acted-on suggestion books without a review; review, it opens one. From deterministic evidence, never the model's own score. For a staged operation: review when a person approved it, direct when a key credential did within its unattended ceiling. Null without an acted-on suggestion, and for an underlag.",
     ),
 })
 
@@ -186,7 +205,7 @@ export type DecisionSubject = { journalEntryId: string } | { transactionId: stri
 /** A suggestion_log row as the reader selects it. */
 export interface SuggestionLogRow {
   id: string
-  kind: 'bank_line' | 'inbox_item'
+  kind: 'bank_line' | 'inbox_item' | 'operation'
   transaction_id: string | null
   inbox_item_id: string | null
   document_id: string | null
@@ -311,6 +330,11 @@ function checksFrom(raw: unknown): DecisionReceipt['checks'] {
 
 type DecisionCheckResultValue = (typeof DECISION_CHECK_RESULTS)[number]
 
+function confidenceBasis(chosen: DecisionCandidate | null): DecisionReceipt['confidence']['basis'] {
+  if (!chosen || chosen.source === 'pending_operation') return null
+  return chosen.source === 'extraction' ? 'model_reported' : 'backing'
+}
+
 function bandFrom(raw: unknown): DecisionReceipt['confidence_band'] {
   return raw === 'direct' || raw === 'review' ? raw : null
 }
@@ -384,7 +408,7 @@ export function buildDecisionReceipt(row: SuggestionLogRow, ctx: ReceiptContext)
     },
     confidence: {
       value: chosen?.confidence ?? null,
-      basis: chosen ? (chosen.source === 'extraction' ? 'model_reported' : 'backing') : null,
+      basis: confidenceBasis(chosen),
     },
     rule_version: str(row.rule_version),
     policy_version: str(row.policy_version),
