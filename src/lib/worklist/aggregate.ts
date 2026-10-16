@@ -9,6 +9,8 @@ import type {
 } from './types'
 import type { WorklistCounts } from './types'
 import type { MissingUnderlagSample } from './missing-underlag'
+import { listOpenSuggestions } from '@/lib/suggestions/list'
+import type { OpenSuggestion } from '@/lib/suggestions/types'
 import { isArkivBrainEnabled, isArkivSectionEnabled } from '@/lib/arkiv/flag'
 import {
   countBankSwitchDue,
@@ -92,6 +94,12 @@ export interface GetWorklistCountsOptions {
    * length instead of a second read.
    */
   supplierPayeeChangesDue?: SupplierPayeeChangeDue[] | Promise<SupplierPayeeChangeDue[]>
+  /**
+   * The open suggestions the caller is already fetching (Hem renders one
+   * Förslag card each, at most three): the count is the list's length
+   * instead of a second read.
+   */
+  openSuggestions?: OpenSuggestion[] | Promise<OpenSuggestion[]>
 }
 
 export async function getWorklistCounts(
@@ -113,6 +121,7 @@ export async function getWorklistCounts(
     overdueInvoices,
     deadlineAction,
     pendingOperations,
+    suggestion,
     reconciliationDue,
     expensePayout,
     skattekontoPaymentDue,
@@ -143,6 +152,9 @@ export async function getWorklistCounts(
     getOverdueInvoicesDue(supabase, companyId),
     countDeadlinesNeedingAction(supabase, companyId),
     countPendingOperations(supabase, companyId),
+    options.openSuggestions
+      ? Promise.resolve(options.openSuggestions).then((s) => s.length)
+      : listOpenSuggestions(supabase, companyId).then((s) => s.length),
     countReconciliationDue(supabase, companyId),
     options.expensePayoutsDue
       ? Promise.resolve(options.expensePayoutsDue).then((p) => p.length)
@@ -186,6 +198,7 @@ export async function getWorklistCounts(
       overdue_invoice: overdueInvoice,
       deadline_action: deadlineAction,
       pending_operations: pendingOperations,
+      suggestion,
       reconciliation_due: reconciliationDue,
       expense_payout: expensePayout,
       skattekonto_payment_due: skattekontoPaymentDue,
@@ -211,6 +224,7 @@ export async function getWorklistCounts(
       (overdueInvoice > 0 ? 1 : 0) +
       deadlineAction +
       pendingOperations +
+      suggestion +
       reconciliationDue +
       expensePayout +
       skattekontoPaymentDue +

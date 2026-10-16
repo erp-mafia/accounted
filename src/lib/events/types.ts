@@ -166,6 +166,10 @@ export type CoreEvent =
   // Zettle organization lifecycle: same audit doctrine as shopify.*.
   | { type: 'zettle.connected'; payload: { connectionId: string; organizationUuid: string; userId: string; companyId: string } }
   | { type: 'zettle.disconnected'; payload: { connectionId: string; organizationUuid: string | null; reason: 'user' | 'revoked_upstream'; userId: string; companyId: string } }
+  // A point-of-sale venue connected through Accounted Connect
+  // (lib/pos-sales/service.ts connectPosVenue). Internal: not persisted to
+  // event_log and not a public webhook; the suggestion detectors listen to it.
+  | { type: 'pos.connected'; payload: { connectionId: string; provider: string; userId: string; companyId: string } }
   // Periods
   | { type: 'period.locked'; payload: { period: FiscalPeriod; userId: string; companyId: string } }
   | { type: 'period.unlocked'; payload: { period: FiscalPeriod; userId: string; companyId: string } }
@@ -190,6 +194,10 @@ export type CoreEvent =
   // Supplier Invoice Inbox
   | { type: 'supplier_invoice.confirmed'; payload: { inboxItem: InvoiceInboxItem; supplierInvoice: SupplierInvoice; userId: string; companyId: string } }
   // Salary
+  // An employee registered (lib/salary/employee-commands.ts createEmployee,
+  // every door). Ids only, never personal data. Internal: not persisted to
+  // event_log and not a public webhook; the suggestion detectors listen to it.
+  | { type: 'employee.created'; payload: { employeeId: string; userId: string; companyId: string } }
   | { type: 'salary_run.created'; payload: { salaryRunId: string; periodYear: number; periodMonth: number; userId: string; companyId: string } }
   | { type: 'salary_run.approved'; payload: { salaryRunId: string; approvedBy: string; userId: string; companyId: string } }
   | { type: 'salary_run.approval_reverted'; payload: { salaryRunId: string; revertedBy: string; deletedAgiDeclarationId: string | null; userId: string; companyId: string } }

@@ -21,6 +21,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { CreateEmployeeSchema, UpdateEmployeeSchema } from '@/lib/api/schemas'
+import { eventBus } from '@/lib/events'
 import {
   decryptPersonnummer,
   encryptPersonnummer,
@@ -301,6 +302,17 @@ export async function createEmployee(
   }
 
   const masked = maskRow(data as unknown as Record<string, unknown>)
+  // Every door creates through here, so the event names every new employee
+  // once: ids only, never the person's details. The bus logs a failing
+  // handler and never throws at the emitter; the guard covers the emit call.
+  try {
+    await eventBus.emit({
+      type: 'employee.created',
+      payload: { employeeId: masked.id as string, userId: args.userId, companyId: args.companyId },
+    })
+  } catch {
+    // The employee exists; an event that could not be sent changes nothing for it.
+  }
   return {
     ok: true,
     data: { ...summaryOf(masked, masked.id as string), row: project(masked, args.columns) },

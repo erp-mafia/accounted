@@ -214,6 +214,7 @@ import { uiWidgets, findUiWidget, WIDGET_MIME_TYPE } from './widgets'
 import { dataResources, findResource, parseResourceQuery } from './resources'
 import { buildLedgerContext } from '@/lib/agent-context/ledger-context'
 import { capabilityDigest, capabilitySurface, loadCompanyCapabilities } from '@/lib/modules/capabilities'
+import { listOpenSuggestions } from '@/lib/suggestions/list'
 import type { ModuleId } from '@/lib/modules/manifest'
 import { moduleForTool } from './tool-modules'
 import { prompts, findPrompt } from './prompts'
@@ -4169,6 +4170,16 @@ async function commitStagedOperation(params: {
   return result
 }
 
+/**
+ * How the agent answers a briefing suggestion: the existing approve and
+ * reject tools carry all three answers (the database reads the rejection
+ * reason, migration 20261016200600). Said once per briefing, not per item.
+ */
+const SUGGESTIONS_HOW =
+  'Raise each suggestion with the user in chat and relay the answer. Ja: gnubok_approve_pending_operation with operation_id. ' +
+  'Inte nu: gnubok_reject_pending_operation with operation_id (asked again in 30 days). ' +
+  'Visa aldrig: gnubok_reject_pending_operation with operation_id and reason "Visa aldrig" (never asked again).'
+
 export const tools: McpTool[] = [
   {
     // The bridge that makes `catalogVisibility: 'search'` usable on hosts that
@@ -6625,6 +6636,14 @@ export const tools: McpTool[] = [
         }
       })()
 
+      // Open suggestions (lib/suggestions): package switches the system
+      // proposed, at most three, ranked: the same records Att göra shows as
+      // Förslag cards. The agent raises them in chat and relays the user's
+      // answer through the approve and reject tools. Omitted when there are
+      // none, so a company without suggestions pays no payload; undeclared
+      // in outputSchema like capabilities (tools/list budget). Never throws.
+      const openSuggestionsRead = listOpenSuggestions(supabase, companyId)
+
       // Skatteverket connection health, so the agent warns the user at
       // session start instead of discovering a dead session mid-task.
       // Best-effort and emitted only when a connection (or verified system
@@ -6843,6 +6862,7 @@ export const tools: McpTool[] = [
       const arkivDigest = await safeArkivDigest
       const inboxAddress = await inboxAddressRead
       const capabilities = await safeCapabilities
+      const openSuggestions = await openSuggestionsRead
       const capabilityDigestRows = capabilities ? capabilityDigest(capabilities) : null
       // The company's profile beside the digest: which starting point decides
       // the packages tools/list shows, and the packages that are off (by the
@@ -6884,6 +6904,17 @@ export const tools: McpTool[] = [
         ...(skvConnection ? { skatteverket_connection: skvConnection } : {}),
         ...(capabilityDigestRows ? { capabilities: capabilityDigestRows } : {}),
         ...(capabilitiesProfile ? { capabilities_profile: capabilitiesProfile } : {}),
+        ...(openSuggestions.length > 0
+          ? {
+              suggestions: openSuggestions.map((s) => ({
+                suggestion_id: s.suggestion_id,
+                operation_id: s.pending_operation_id,
+                title: s.title,
+                reason: s.reason,
+              })),
+              suggestions_how: SUGGESTIONS_HOW,
+            }
+          : {}),
         // Always present, so the absence of an address is a stated fact and
         // not something the agent has to infer from a missing key. The note
         // also names the direct upload: an agent holding the file bytes

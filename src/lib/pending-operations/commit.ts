@@ -70,6 +70,7 @@ import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import { getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
 import { createServiceClient } from '@/lib/supabase/server'
 import { revokeServiceAccount } from '@/lib/service-accounts/service'
+import { PackageSwitchParamsSchema, switchCompanyPackage } from '@/lib/suggestions/package-switch'
 import { runInOperationCommit } from './commit-scope'
 import { recordOperationDecision } from '@/lib/suggestion-log/operation'
 import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
@@ -1309,6 +1310,55 @@ async function commitRevokeServiceAccount(
       revoked_by: account.revoked_by,
     },
   }
+}
+
+/**
+ * enable_package and disable_package (Profiles and Suggestions, step 3): the
+ * company's choice to show or hide a package such as Lön, staged by a
+ * suggestion detector (lib/suggestions) and approved by a person, in the app
+ * or through their own agent. set_company_package_choice (migration
+ * 20261016200400) is the authority, called through the service client on
+ * every path: it re-checks that the approver is an owner or admin (403
+ * hands the op back to pending for one who is), refuses to switch off while
+ * the package has open obligations (409, with the obligations named), and
+ * writes the choice with who decided plus the audit row behandlingshistorik
+ * shows. A service account's own key never decides a package: the approval
+ * goes back for a person to give.
+ */
+async function commitPackageSwitch(
+  userId: string,
+  companyId: string,
+  pendingOp: PendingOperation,
+  enabled: boolean
+): Promise<ExecutorResult> {
+  const parsed = PackageSwitchParamsSchema.safeParse(pendingOp.params)
+  if (!parsed.success) return invalidStagedParams(parsed.error)
+  const actor = getActor()
+  if (actor?.type === 'service_account') {
+    const entry = getErrorEntry('PACKAGE_SWITCH_NEEDS_PERSON')
+    return {
+      error: entry?.message_sv ?? 'PACKAGE_SWITCH_NEEDS_PERSON',
+      errorCode: 'PACKAGE_SWITCH_NEEDS_PERSON',
+      status: entry?.httpStatus ?? 403,
+    }
+  }
+  const result = await switchCompanyPackage(createServiceClient(), {
+    companyId,
+    userId,
+    pendingOperationId: pendingOp.id,
+    enabled,
+    params: parsed.data,
+    actor: { type: actor?.type ?? 'user', ...(actor?.label ? { label: actor.label } : {}) },
+  })
+  if (!result.ok) {
+    return {
+      error: result.message_sv,
+      errorCode: result.code,
+      status: result.status,
+      ...(result.obligations ? { data: { obligations: result.obligations } } : {}),
+    }
+  }
+  return { data: result.data }
 }
 
 /**
@@ -6988,6 +7038,12 @@ async function commitPendingOperationInner(
         break
       case 'revoke_service_account':
         result = await commitRevokeServiceAccount(userId, companyId, pendingOp.params)
+        break
+      case 'enable_package':
+        result = await commitPackageSwitch(userId, companyId, pendingOp, true)
+        break
+      case 'disable_package':
+        result = await commitPackageSwitch(userId, companyId, pendingOp, false)
         break
       case 'import_sie':
         result = await commitImportSie(supabase, userId, companyId, pendingOp.params)

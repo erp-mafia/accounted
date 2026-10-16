@@ -6,9 +6,10 @@
  * it starts with, a company switches packages, and the menu, the agent
  * briefing and MCP's tools/list hide by package. Users never see a module.
  *
- * Read-only today. No profile exists yet and nothing switches a package, so
- * every company resolves to every package on (./capabilities.ts): the map
- * changes what the readers decide with, not what they show.
+ * Pure data. A company's own choice for a package is written only by an
+ * approved enable_package or disable_package (lib/suggestions/
+ * package-switch.ts); every company without a profile or a choice resolves
+ * to every package on (./capabilities.ts).
  *
  * Ids are country-neutral and internal: the list is the design's proposal
  * and may change until the API publishes packages; after that, add packages

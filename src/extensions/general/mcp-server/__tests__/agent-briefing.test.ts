@@ -20,6 +20,10 @@ vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: vi.fn(),
 }))
 
+vi.mock('@/lib/suggestions/list', () => ({
+  listOpenSuggestions: vi.fn().mockResolvedValue([]),
+}))
+
 vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/api-keys')>()
   return {
@@ -645,6 +649,50 @@ describe('capabilities digest', () => {
     expect(result).not.toHaveProperty('capabilities')
     expect(result).not.toHaveProperty('capabilities_profile')
     expect(result.company.company_id).toBe(COMPANY)
+  })
+})
+
+describe('suggestions (Profiles and Suggestions, step 3)', () => {
+  const tool = () => tools.find((t) => t.name === 'gnubok_get_agent_briefing')!
+  // Not a uuid, as in the blocks above: the capabilities read refuses it at
+  // once instead of reaching tables this mock does not shape.
+  const COMPANY = 'company-1'
+
+  it('lists the open suggestions compactly, with how to answer each through approve and reject', async () => {
+    const { listOpenSuggestions } = await import('@/lib/suggestions/list')
+    vi.mocked(listOpenSuggestions).mockResolvedValueOnce([
+      {
+        suggestion_id: 's-1',
+        pending_operation_id: 'op-1',
+        detector: 'first-employee',
+        suggestion_key: 'enable_package:payroll',
+        operation_type: 'enable_package',
+        package_id: 'payroll',
+        title: 'Slå på Lön?',
+        reason: 'Du har registrerat en anställd.',
+        created_at: '2026-10-16T10:00:00Z',
+      },
+    ])
+    const supabase = mockSupabase({ profile: null })
+    const result = (await tool().execute({}, COMPANY, 'user-1', supabase as never, { type: 'api_key' })) as {
+      suggestions?: unknown
+      suggestions_how?: string
+    }
+    expect(listOpenSuggestions).toHaveBeenCalledWith(supabase, COMPANY)
+    expect(result.suggestions).toEqual([
+      { suggestion_id: 's-1', operation_id: 'op-1', title: 'Slå på Lön?', reason: 'Du har registrerat en anställd.' },
+    ])
+    expect(result.suggestions_how).toContain('gnubok_approve_pending_operation')
+    expect(result.suggestions_how).toContain('gnubok_reject_pending_operation')
+    expect(result.suggestions_how).toContain('"Visa aldrig"')
+    expect(JSON.stringify(result.suggestions).length + (result.suggestions_how?.length ?? 0)).toBeLessThan(800)
+  })
+
+  it('leaves both keys out when nothing is open, so a company without suggestions pays nothing', async () => {
+    const supabase = mockSupabase({ profile: null })
+    const result = await tool().execute({}, COMPANY, 'user-1', supabase as never, { type: 'api_key' })
+    expect(result).not.toHaveProperty('suggestions')
+    expect(result).not.toHaveProperty('suggestions_how')
   })
 })
 

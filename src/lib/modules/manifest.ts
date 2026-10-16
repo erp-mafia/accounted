@@ -508,6 +508,7 @@ export const INFRA_LIB_FOLDERS: readonly string[] = Object.freeze([
   'security',
   'settings',
   'stripe',
+  'suggestions',
   'supabase',
   'support',
   'theme',

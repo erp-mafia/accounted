@@ -187,6 +187,9 @@ function originLabel(
         : t('origin_service_account_plain')
     case 'cron':
       return t('origin_cron')
+    // A suggestion a detector staged on its own (lib/suggestions).
+    case 'system':
+      return t('origin_system')
     default:
       return null
   }
@@ -726,7 +729,8 @@ export default function PendingOperationsPage() {
           op.actor_type === 'mcp_oauth' ||
           op.actor_type === 'service_account' ||
           op.actor_type === 'cron' ||
-          op.actor_type === 'agent_chat'
+          op.actor_type === 'agent_chat' ||
+          op.actor_type === 'system'
         )
       case 'high_risk':
         return op.risk_level === 'high'

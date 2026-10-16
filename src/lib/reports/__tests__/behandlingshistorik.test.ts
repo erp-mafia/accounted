@@ -566,6 +566,40 @@ describe('auditRowToEvent: system changes', () => {
     expect(revoked).toMatchObject({ code: 'service_account.revoked', event: 'Tjänstekonto återkallat' })
   })
 
+  it('company_capability_config: a package switched on or off is a dated settings line, capability keys are not', () => {
+    const on = auditRowToEvent(
+      auditRow({
+        table_name: 'company_capability_config',
+        action: 'INSERT',
+        actor_type: 'api_key',
+        actor_label: 'Claude',
+        new_state: { capability_key: 'package:payroll', enabled: true, source: 'suggestion' },
+      }),
+    )!
+    expect(on).toMatchObject({
+      category: 'installningar',
+      code: 'package.switched_on',
+      event: 'Paket påslaget',
+      object: 'Lön',
+      details: ['Källa: godkänt förslag'],
+      actor: { type: 'api_key', actor_label: 'Claude' },
+    })
+
+    const off = auditRowToEvent(
+      auditRow({
+        table_name: 'company_capability_config',
+        action: 'UPDATE',
+        old_state: { capability_key: 'package:assets', enabled: true, source: 'suggestion' },
+        new_state: { capability_key: 'package:assets', enabled: false, source: 'company' },
+      }),
+    )!
+    expect(off).toMatchObject({ code: 'package.switched_off', event: 'Paket avstängt', object: 'Inventarier', details: ['Källa: företagets eget val'] })
+
+    expect(
+      auditRowToEvent(auditRow({ table_name: 'company_capability_config', action: 'UPDATE', new_state: { capability_key: 'ai', enabled: false } })),
+    ).toBeNull()
+  })
+
   it('a commit by a service account names the account and its sponsor', () => {
     const event = commitEventFromEntry({
       ...baseEntry,

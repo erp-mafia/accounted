@@ -2714,8 +2714,16 @@ export type PendingOperationStatus = 'pending' | 'committing' | 'committed' | 'r
 
 // 'agent_chat' = the in-app AI chat (DB CHECK widened in migration
 // 20260519090000_actor_type_agent_chat). 'service_account' = a service
-// account's key (20261016120100).
-export type PendingOperationActorType = 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'agent_chat' | 'service_account'
+// account's key (20261016120100). 'system' = a suggestion a detector staged
+// on its own (lib/suggestions, 20261016200200), labelled 'Accounted'.
+export type PendingOperationActorType =
+  | 'user'
+  | 'api_key'
+  | 'mcp_oauth'
+  | 'cron'
+  | 'agent_chat'
+  | 'service_account'
+  | 'system'
 export type PendingOperationRiskLevel = 'low' | 'medium' | 'high'
 
 export interface PendingOperationAgentMetadata {

@@ -165,6 +165,14 @@ const RISK_TIERS = {
   // integration stops mid-run. The commit re-checks that the approver is an
   // owner or admin (revoke_service_account, migration 20261016120000).
   revoke_service_account: 'high',
+  // Package switches (Profiles and Suggestions, step 3; lib/suggestions):
+  // a company's choice to show or hide a package such as Lön. No booking
+  // impact and no external side-effect, and either switch is undone by the
+  // other. Switching off is refused while the package has open obligations
+  // (set_company_package_choice, migration 20261016200400), and the commit
+  // re-checks that the approver is an owner or admin.
+  enable_package: 'low',
+  disable_package: 'low',
   update_dimension: 'low',
   // Deleting is refused by the DB guard when anything is booked on the
   // dimension, but it removes the dimension and its values for good.

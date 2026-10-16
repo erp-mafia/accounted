@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createFakeDb, type FakeDb } from './fake-db'
+import { eventBus } from '@/lib/events'
 
 const h = vi.hoisted(() => ({ db: null as unknown as FakeDb }))
 vi.mock('@/lib/auth/api-keys', () => ({ createServiceClientNoCookies: () => h.db.client }))
@@ -80,9 +81,16 @@ describe('venues and connecting', () => {
         { status: 200 },
       )
     })
+    const emit = vi.spyOn(eventBus, 'emit')
     const outcome = await connectPosVenue(ctx(), { provider: 'heynow', venue_ref: '5550000000000001', sync_from: '2026-09-30' })
     expect(outcome).toMatchObject({ ok: true, created: true })
     const row = h.db.tables.pos_connections[0]
+    // The new connection is announced once, ids only (the suggestion detectors listen).
+    expect(emit).toHaveBeenCalledWith({
+      type: 'pos.connected',
+      payload: { connectionId: row.id, provider: 'heynow', userId: 'user-1', companyId: COMPANY },
+    })
+    emit.mockRestore()
     expect(row).toMatchObject({
       company_id: COMPANY,
       provider: 'heynow',
