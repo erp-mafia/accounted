@@ -171,6 +171,12 @@ export const V1_HANDLE_COVERAGE: Readonly<Record<string, HandleDeclaration>> = O
   'salary-runs.correct': { type: 'salary_run', at: 'correction_run' },
 
   // Webhooks
+  'service-accounts.list': { type: 'service_account', at: 'service_accounts' },
+  'service-accounts.create': { type: 'service_account' },
+  'service-accounts.get': { type: 'service_account' },
+  'service-accounts.revoke': { type: 'service_account' },
+  'service-accounts.keys.create': { type: 'api_key' },
+  'service-accounts.keys.revoke': { type: 'api_key' },
   'webhooks.list': { type: 'webhook', at: 'webhooks' },
   'webhooks.get': WH,
   'webhooks.create': WH,

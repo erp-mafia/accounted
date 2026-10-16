@@ -174,6 +174,39 @@ describe('v1 handlers run inside the commit-actor scope', () => {
     expect(seen?.label).toBe('Unnamed API key')
   })
 
+  it("acts as service_account, named after the account, for a service account's key", async () => {
+    mockValidate.mockResolvedValue({
+      userId: 'sponsor-1',
+      companyId: COMPANY,
+      scopes: ['companies:read'],
+      apiKeyId: 'key-sa',
+      apiKeyName: 'Nyckel 1',
+      mode: 'live',
+      unattendedCommitLimit: null,
+      allowedCompanyIds: [COMPANY],
+      readOnlyCompanyIds: null,
+      serviceAccount: { id: 'sa-1', name: 'Nattlig fakturasynk' },
+    } as Awaited<ReturnType<typeof validateApiKey>>)
+
+    let seen: ReturnType<typeof getActor>
+    let ctxSeen: { actor: unknown; serviceAccount: unknown; userId: string } | undefined
+    const handler = withApiV1(OPERATION, async (_req, ctx) => {
+      seen = getActor()
+      ctxSeen = { actor: ctx.actor, serviceAccount: ctx.serviceAccount, userId: ctx.userId }
+      return ok({ ok: true }, { requestId: ctx.requestId })
+    })
+
+    await handler(makeRequest(URL_FOR), staticParams())
+
+    expect(seen).toEqual({ type: 'service_account', label: 'Nattlig fakturasynk' })
+    // The rows it writes carry the sponsor: the user the key acts as.
+    expect(ctxSeen).toEqual({
+      actor: { type: 'service_account', label: 'Nattlig fakturasynk' },
+      serviceAccount: { id: 'sa-1', name: 'Nattlig fakturasynk' },
+      userId: 'sponsor-1',
+    })
+  })
+
   it('leaves no actor bound after the request completes', async () => {
     // AsyncLocalStorage must not leak across requests: a later unattributed
     // path must stay unattributed rather than inherit the previous caller.

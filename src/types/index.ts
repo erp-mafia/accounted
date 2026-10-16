@@ -2157,7 +2157,8 @@ export interface JournalEntry {
   commit_method: string | null
   // WHO relayed the commit; complements commit_method = HOW. Stamped at
   // commit time since migration 20260619120000. actor_type is NULL or one of
-  // 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'system' | 'agent_chat'
+  // 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'system' | 'agent_chat' |
+  // 'service_account'
   // (the DB CHECK is the authority); actor_label is a credential snapshot
   // (e.g. the API key name).
   committed_actor_type: string | null
@@ -2705,8 +2706,9 @@ export type { PendingOperationType }
 export type PendingOperationStatus = 'pending' | 'committing' | 'committed' | 'rejected' | 'failed_partial'
 
 // 'agent_chat' = the in-app AI chat (DB CHECK widened in migration
-// 20260519090000_actor_type_agent_chat).
-export type PendingOperationActorType = 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'agent_chat'
+// 20260519090000_actor_type_agent_chat). 'service_account' = a service
+// account's key (20261016120100).
+export type PendingOperationActorType = 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'agent_chat' | 'service_account'
 export type PendingOperationRiskLevel = 'low' | 'medium' | 'high'
 
 export interface PendingOperationAgentMetadata {
@@ -3556,7 +3558,7 @@ export interface AuditLogEntry {
   table_name: string | null
   record_id: string | null
   actor_id: string | null
-  actor_type: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'agent_chat' | 'system' | null
+  actor_type: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'agent_chat' | 'system' | 'service_account' | null
   actor_label: string | null
   old_state: Record<string, unknown> | null
   new_state: Record<string, unknown> | null

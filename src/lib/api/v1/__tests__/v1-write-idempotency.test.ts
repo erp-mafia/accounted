@@ -52,6 +52,19 @@ const KEY_OPTIONAL_WRITES: Record<string, RetryExemption> = {
     reason:
       'Documented until 2026-10-15 as ignoring Idempotency-Key, so existing callers send none; requiring it would break them. Honoured when sent (handlerIdempotency), and the reference says to send one.',
   },
+  'POST /api/v1/companies/:companyId/service-accounts/:id/revoke': {
+    kind: 'idempotent',
+    reason: 'Revocation is a compare-and-set on revoked_at under a row lock: a repeat answers the account as already revoked.',
+  },
+  'POST /api/v1/companies/:companyId/service-accounts/:id/keys': {
+    kind: 'outside_books',
+    reason:
+      'Mints a credential whose secret is shown once (secretResponse): replaying it would store the plaintext key in idempotency_keys. A repeat mints a second key, outside the books, listed on the account and revocable.',
+  },
+  'POST /api/v1/companies/:companyId/service-accounts/:id/keys/:keyId/revoke': {
+    kind: 'idempotent',
+    reason: 'Revocation is a compare-and-set on revoked_at under a row lock: a repeat answers the key as already revoked.',
+  },
   'PATCH /api/v1/companies/:companyId/employees/:id': {
     kind: 'idempotent',
     reason: 'Sets the fields sent: a repeat writes the same values.',

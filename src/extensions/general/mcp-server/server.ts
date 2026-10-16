@@ -849,6 +849,14 @@ export interface ActorContext {
    * Only meaningful for `type: 'api_key'`.
    */
   oauthKey?: boolean
+  /**
+   * The service account the key belongs to (lib/service-accounts), or
+   * null/absent for a person's key. The connection keeps `type: 'api_key'`
+   * for every access decision (the key acts as the account's sponsor, in the
+   * account's company only); the records it writes name the actor
+   * 'service_account' with the account's name as the label.
+   */
+  serviceAccountId?: string | null
 }
 
 // ── JSON-RPC types ───────────────────────────────────────────
@@ -1847,7 +1855,9 @@ async function stagePendingOperation(
       title,
       params,
       preview_data: previewData,
-      actor_type: actor.type,
+      // A service account's key stages as the service account (its label is
+      // the account's name); every other connection as its own type.
+      actor_type: actor.type === 'api_key' && actor.serviceAccountId ? 'service_account' : actor.type,
       actor_id: actor.id ?? null,
       actor_label: actor.label ?? null,
       agent_metadata: await loadSkillProvenance(supabase, companyId, userId, actor),
@@ -4059,7 +4069,13 @@ async function commitStagedOperation(params: {
   // actor, and not on the connection's ActorContext, whose type 'api_key'
   // decides company access and limits.
   const commitActorType =
-    actor?.type !== 'api_key' ? 'user' : actor.oauthKey === true ? 'mcp_oauth' : 'api_key'
+    actor?.type !== 'api_key'
+      ? 'user'
+      : actor.serviceAccountId
+        ? 'service_account'
+        : actor.oauthKey === true
+          ? 'mcp_oauth'
+          : 'api_key'
 
   const result = await commitPendingOperation(supabase, userId, companyId, operation, {
     commitMethod,
@@ -25840,6 +25856,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
   let unattendedCommitLimit: number | null = null
   let allowedCompanyIds: string[] | null = null
   let readOnlyCompanyIds: string[] | null = null
+  let serviceAccountId: string | null = null
   // `?company=<uuid>` on the URL: the connection is pinned to that company
   // (validated against membership and the allowlist below, per request).
   let pinnedCompanyId: string | null = null
@@ -25870,6 +25887,12 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       allowedCompanyIds,
       readOnlyCompanyIds,
     } = authResult)
+    // A service account's key is labelled with the account's name: it is the
+    // actor every record names (the key's own name is only a key label).
+    if (authResult.serviceAccount) {
+      serviceAccountId = authResult.serviceAccount.id
+      apiKeyName = authResult.serviceAccount.name
+    }
   } else {
     // Anonymous traffic has no key to rate-limit on: per truncated IP instead.
     // No-op without Upstash (self-hosted), like the OAuth register endpoint.
@@ -25884,7 +25907,8 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
   // Classify the key BEFORE its label is replaced below: the reserved name is
   // the OAuth key's only marker, and the commit stamp reads this flag rather
   // than the display label (actor.oauthKey).
-  const oauthKey = Boolean(apiKeyId) && apiKeyName === OAUTH_MCP_KEY_NAME
+  // A service account's key is never an OAuth connection, whatever its name.
+  const oauthKey = Boolean(apiKeyId) && !serviceAccountId && apiKeyName === OAUTH_MCP_KEY_NAME
   // Keep the OAuth key's classification name stable: onboarding depends on it.
   // Display identity comes from the server-stored provider, never a client header.
   if (oauthKey && apiKeyId && apiKeyName) {
@@ -25972,6 +25996,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         readOnlyCompanyIds,
         pinnedCompanyId,
         oauthKey,
+        serviceAccountId,
       }
 
   // ── Simple company mode ──

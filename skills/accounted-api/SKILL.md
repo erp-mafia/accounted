@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 336 endpoints.
+  pagination, scopes), and all 342 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -107,7 +107,8 @@ supplier invoice, `cus` customer, `sup` supplier, `txn` bank transaction,
 `srun` salary run, `art` article, `ast` fixed asset, `dim` dimension, `dimv`
 dimension value, `inbx` inbox item, `exp` expense claim, `cash` cash account,
 `pmt` payment order, `spb` supplier payment batch, `wh` webhook, `whd`
-webhook delivery, `op` async operation. Sub-resources without a prefix
+webhook delivery, `op` async operation, `svc` service account, `key` API key.
+Sub-resources without a prefix
 (salary lines, benefits, reconciliation signoffs) take the plain UUID only.
 MCP tools accept handles in their id arguments too and still answer plain
 UUIDs.
@@ -212,10 +213,10 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 336 operations. Paths are shown without
+API version `2026-05-12`, 342 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
-### Core (13)
+### Core (19)
 
 Full detail: [references/core.md](references/core.md)
 
@@ -227,6 +228,12 @@ GET /companies/{companyId}/capabilities : Which building blocks this company can
 POST /companies/{companyId}/peppol/access-request : Ask the operators to switch on Peppol for the company (sending, optionally receiving) [scope:companies:write risk:medium idempotent dry-run]
 GET /companies/{companyId}/peppol/registration : Read the company's Peppol receiving status: access grant, eligibility and registration [scope:companies:read risk:low idempotent]
 POST /companies/{companyId}/peppol/registration : Register the company as a Peppol participant so it can receive e-invoices [scope:companies:write risk:high idempotent dry-run]
+GET /companies/{companyId}/service-accounts : List the company's service accounts [scope:service_accounts:manage risk:low idempotent]
+POST /companies/{companyId}/service-accounts : Create a service account with a human sponsor [scope:service_accounts:manage risk:medium idempotent reversible]
+GET /companies/{companyId}/service-accounts/{id} : Show one service account with its keys [scope:service_accounts:manage risk:low idempotent]
+POST /companies/{companyId}/service-accounts/{id}/keys : Mint an API key for a service account; the secret is shown once [scope:service_accounts:manage risk:high reversible]
+POST /companies/{companyId}/service-accounts/{id}/keys/{keyId}/revoke : Revoke one key of a service account [scope:service_accounts:manage risk:medium idempotent]
+POST /companies/{companyId}/service-accounts/{id}/revoke : Revoke a service account and all its keys [scope:service_accounts:manage risk:high idempotent]
 GET /companies/{companyId}/settings : Read the company settings [scope:companies:read risk:low idempotent]
 PATCH /companies/{companyId}/settings : Partially update company settings (contact, invoicing, reminders, voucher series, toggles) [scope:companies:write risk:medium idempotent dry-run reversible]
 PATCH /companies/{companyId}/settings/bookkeeping-lock : Set, move or remove the company-wide bookkeeping lock date [scope:companies:write risk:high idempotent dry-run reversible]

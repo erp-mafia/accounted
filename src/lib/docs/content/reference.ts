@@ -76,6 +76,7 @@ const RESOURCES: ResourceGroup[] = [
   { slug: 'pending-operations', label: 'Pending operations', description: 'The approval door for staged writes: list and read pending operations with their status and task_state, approve one (commit it and get the outcome) or reject it. A write sent with ?stage=true waits here until it is decided.', matcher: (p) => /\/pending-operations(\/|$)/.test(p) },
   { slug: 'health', label: 'Health', description: 'Unauthenticated liveness check.', matcher: (p) => /^\/api\/v1\/health$/.test(p) },
   { slug: 'api-key', label: 'API key', description: 'What the calling key may do: its mode, scopes, and the companies it reaches with write access per company. Any valid key may call it.', matcher: (p) => /^\/api\/v1\/api-key$/.test(p) },
+  { slug: 'service-accounts', label: 'Service accounts', description: 'An integration\'s own principal with a human sponsor: create, list, read and revoke service accounts, and mint or revoke their keys. Writes by their keys are recorded as the service account, acting for the sponsor.', matcher: (p) => /\/service-accounts(\/|$)/.test(p) },
 ]
 
 /** Discover the resource a given endpoint path belongs to. Returns null if it doesn't fit any. */

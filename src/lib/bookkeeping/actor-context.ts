@@ -19,8 +19,13 @@
 import { globalSingleton } from '@/lib/global-singleton'
 
 export interface CommitActor {
-  /** Matches the journal_entries.committed_actor_type CHECK constraint. */
-  type: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'system' | 'agent_chat'
+  /**
+   * Matches the journal_entries.committed_actor_type CHECK constraint.
+   * 'service_account': a key of a service account (lib/service-accounts),
+   * whose label is the account's name; the row's user_id is its sponsor, the
+   * person the account acts for.
+   */
+  type: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'system' | 'agent_chat' | 'service_account'
   /** Human-readable credential label, e.g. the API key name. */
   label?: string
   /**
@@ -30,8 +35,9 @@ export interface CommitActor {
    * verifies which credential is acting, so the value is bound to a verified
    * key rather than asserted by the caller.
    *
-   * Only ever set for a key credential: `type: 'api_key'`, or `'mcp_oauth'`,
-   * whose OAuth access token is itself a minted key. Human approvals, cron
+   * Only ever set for a key credential: `type: 'api_key'`, `'mcp_oauth'`,
+   * whose OAuth access token is itself a minted key, or `'service_account'`,
+   * a service account's key. Human approvals, cron
    * and the cookie-session routes cannot reach the check that reads it.
    */
   unattendedCommitLimit?: number | null
@@ -72,6 +78,7 @@ export function defaultCommitMethod(
       return 'user_accept'
     case 'api_key':
     case 'mcp_oauth':
+    case 'service_account':
       return 'api_key'
     case 'agent_chat':
       return 'agent'

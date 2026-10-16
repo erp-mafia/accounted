@@ -13,7 +13,8 @@
  *   - commit_method 'api_key' and the key as the commit actor, so every
  *     journal entry the operation posts says a credential relayed the
  *     approval, not a first-party session (BFNAR 2013:2 behandlingshistorik);
- *     a key minted by the MCP OAuth sign-in says mcp_oauth;
+ *     a key minted by the MCP OAuth sign-in says mcp_oauth, a service
+ *     account's key says service_account with the account's name;
  *   - the key's unattended ceiling, enforced inside the commit;
  *   - the user's e-mail for attribution (committed_by_email, send_invoice cc);
  *   - one PendingOperationApproved processing-history row per attempt, with
@@ -39,6 +40,11 @@ export interface ApiKeyApprover {
   apiKeyId: string | undefined
   apiKeyName: string | undefined
   unattendedCommitLimit: number | null
+  /**
+   * The service account the approving key belongs to, or null/absent for a
+   * person's key. userId is then the account's sponsor.
+   */
+  serviceAccount?: { id: string; name: string } | null
 }
 
 export type ApiApprovalResult =
@@ -98,8 +104,13 @@ export async function approvePendingOperationAsApiKey(
   if (requiresWebApproval(operation.operation_type, operation.params)) return { kind: 'web_only', operation }
   if (operation.risk_level === 'high' && !confirmed) return { kind: 'confirmation_required', operation }
 
-  const label = approver.apiKeyName
-  const commitActorType = label === OAUTH_MCP_KEY_NAME ? 'mcp_oauth' : 'api_key'
+  const serviceAccount = approver.serviceAccount ?? null
+  const label = serviceAccount ? serviceAccount.name : approver.apiKeyName
+  const commitActorType = serviceAccount
+    ? 'service_account'
+    : label === OAUTH_MCP_KEY_NAME
+      ? 'mcp_oauth'
+      : 'api_key'
   const userEmail = await resolveUserEmail(supabase, approver.userId, log)
 
   const result = await commitPendingOperation(supabase, approver.userId, companyId, operation, {

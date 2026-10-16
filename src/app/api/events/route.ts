@@ -94,10 +94,11 @@ export async function GET(request: Request) {
   if (token?.startsWith('gnubok_sk_')) {
     const authResult = await validateApiKey(token)
     if ('error' in authResult) {
-      // validateApiKey only ever returns 401 (bad/unknown/refresh token) or
-      // 429 (rate limit): map both onto the canonical envelope, same as v1.
+      // validateApiKey returns 401 (bad/unknown/refresh token), 429 (rate
+      // limit) or a coded refusal (a suspended service account): map them
+      // onto the canonical envelope, same as v1.
       return errorResponseFromCode(
-        authResult.status === 429 ? 'RATE_LIMITED' : 'UNAUTHORIZED',
+        authResult.code ?? (authResult.status === 429 ? 'RATE_LIMITED' : 'UNAUTHORIZED'),
         log,
         { reason: authResult.error },
       )

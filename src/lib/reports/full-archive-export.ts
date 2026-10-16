@@ -1391,6 +1391,8 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   community_feedback: 'upvotes on shared community agent instructions; not räkenskapsinformation',
   api_keys: 'secrets',
   api_key_companies: 'per-key company allowlist (API access control), not räkenskapsinformation',
+  service_accounts:
+    'non-human principals and their sponsors (API access control), not räkenskapsinformation; their creation and revocation are in audit_log and every write names the account by label',
   bank_connect_invites: 'signatory link tokens (secrets, hashed) for a bank consent; expire in 7 days, not räkenskapsinformation',
   supplier_invoice_attest_links: 'attest mail link tokens (secrets, hashed) for one attester and one invoice; expire in 7 days, not räkenskapsinformation (every decision made through them is exported in supplier_invoice_attestations)',
   payment_signing_links: 'signing link tokens (secrets, hashed) for a basket of bank payments; expire in 72 hours, not räkenskapsinformation (the payment orders and their events, who approved and who signed, are exported)',

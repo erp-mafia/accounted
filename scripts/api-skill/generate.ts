@@ -50,9 +50,9 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'core.md',
     title: 'Core',
-    members: ['health', 'api-key', 'companies', 'capabilities', 'operations', 'settings', 'peppol'],
+    members: ['health', 'api-key', 'companies', 'capabilities', 'operations', 'settings', 'peppol', 'service-accounts'],
     blurb:
-      'Connectivity, the calling key\'s own grant, company discovery, which modules a company can use (capabilities), async-operation polling, and company settings. ' +
+      'Connectivity, the calling key\'s own grant, company discovery, which modules a company can use (capabilities), async-operation polling, company settings, and service accounts (an integration\'s own principal, with a human sponsor). ' +
       'Every session starts with GET /companies to resolve the companyId that all other URLs need.',
   },
   {

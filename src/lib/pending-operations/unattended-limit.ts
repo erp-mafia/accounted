@@ -122,8 +122,9 @@ export function priceOperation(
  * True when this commit needs a human first.
  *
  * Written NULL-first in every clause. Absence of a limit, absence of a price,
- * and any actor that is not a key credential (api_key, or mcp_oauth: an OAuth
- * access token is itself a minted key) all return false, so the control can
+ * and any actor that is not a key credential (api_key; mcp_oauth: an OAuth
+ * access token is itself a minted key; service_account: a service account's
+ * key) all return false, so the control can
  * only ever narrow what an API key does unattended and can never touch a
  * human, a cron or an in-app approval.
  */
@@ -138,7 +139,8 @@ export function exceedsUnattendedLimit(params: {
       ? params.limit
       : null
 
-  const isKeyCredential = params.actorType === 'api_key' || params.actorType === 'mcp_oauth'
+  const isKeyCredential =
+    params.actorType === 'api_key' || params.actorType === 'mcp_oauth' || params.actorType === 'service_account'
   if (!isKeyCredential || limit === null) {
     return { exceeded: false, attempted: null, limit }
   }

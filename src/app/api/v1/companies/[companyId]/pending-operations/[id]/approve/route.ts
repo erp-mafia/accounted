@@ -136,6 +136,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         apiKeyId: ctx.apiKeyId,
         apiKeyName: ctx.apiKeyName,
         unattendedCommitLimit: ctx.unattendedCommitLimit,
+        serviceAccount: ctx.serviceAccount,
       },
       log: ctx.log,
     })

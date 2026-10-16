@@ -537,6 +537,46 @@ describe('auditRowToEvent: system changes', () => {
     expect(usage).toBeNull()
   })
 
+  it('service_accounts: created and revoked, as the credential that acted', () => {
+    const created = auditRowToEvent(
+      auditRow({
+        table_name: 'service_accounts',
+        action: 'INSERT',
+        actor_type: 'api_key',
+        actor_label: 'Ägarens nyckel',
+        new_state: { name: 'Nattlig synk', revoked_at: null },
+      }),
+    )!
+    expect(created).toMatchObject({
+      category: 'atkomst',
+      code: 'service_account.created',
+      event: 'Tjänstekonto skapat',
+      object: 'Nattlig synk',
+      actor: { type: 'api_key', actor_label: 'Ägarens nyckel' },
+    })
+
+    const revoked = auditRowToEvent(
+      auditRow({
+        table_name: 'service_accounts',
+        action: 'UPDATE',
+        old_state: { name: 'Nattlig synk', revoked_at: null },
+        new_state: { name: 'Nattlig synk', revoked_at: '2026-10-16T10:00:00Z' },
+      }),
+    )!
+    expect(revoked).toMatchObject({ code: 'service_account.revoked', event: 'Tjänstekonto återkallat' })
+  })
+
+  it('a commit by a service account names the account and its sponsor', () => {
+    const event = commitEventFromEntry({
+      ...baseEntry,
+      id: 'e-sa',
+      user_id: 'user-1',
+      committed_actor_type: 'service_account',
+      committed_actor_label: 'Nattlig synk',
+    })!
+    expect(event.actor).toEqual({ type: 'service_account', user_id: 'user-1', actor_label: 'Nattlig synk' })
+  })
+
   it('global actions land in ovrigt regardless of table; registers are ignored', () => {
     const sec = auditRowToEvent(
       auditRow({ table_name: 'webhooks', action: 'SECURITY_EVENT', actor_type: 'system', description: 'Signature mismatch' }),
@@ -743,6 +783,11 @@ describe('formatActorLabel', () => {
     expect(formatActorLabel({ type: 'agent_chat', user_id: 'user-1', actor_label: null }, labels)).toBe('Assistenten, på uppdrag av anna@example.se')
     expect(formatActorLabel({ type: 'cron', user_id: null, actor_label: null }, labels)).toBe('Schemalagd körning')
     expect(formatActorLabel({ type: 'system', user_id: null, actor_label: 'seed' }, labels)).toBe('Systemet: seed')
+    // A service account acts for its sponsor, the user the row carries.
+    expect(formatActorLabel({ type: 'service_account', user_id: 'user-1', actor_label: 'Nattlig synk' }, labels)).toBe(
+      'Tjänstekonto: Nattlig synk, på uppdrag av anna@example.se',
+    )
+    expect(formatActorLabel({ type: 'service_account', user_id: null, actor_label: null }, labels)).toBe('Tjänstekonto')
   })
 })
 
