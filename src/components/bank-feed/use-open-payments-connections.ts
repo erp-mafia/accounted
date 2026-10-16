@@ -62,6 +62,29 @@ export function useOpenPaymentsConnections(companyId: string | null): BankConnec
 
   useEffect(() => onBankSyncUpdated(refresh), [refresh])
 
+  // A change made outside this page sends no signal here: a switch finished
+  // after the BankID app on a phone (the browser may have reloaded the page
+  // mid-flow), in another tab, or by a firmatecknare on the signatory link.
+  // Without a fresh read the page kept the old Enable Banking row beside the
+  // new one, still offering the switch. Read again when the page is shown,
+  // at most every five seconds.
+  useEffect(() => {
+    let last = 0
+    const onShown = () => {
+      if (document.visibilityState !== 'visible') return
+      const now = Date.now()
+      if (now - last < 5_000) return
+      last = now
+      refresh()
+    }
+    document.addEventListener('visibilitychange', onShown)
+    window.addEventListener('pageshow', onShown)
+    return () => {
+      document.removeEventListener('visibilitychange', onShown)
+      window.removeEventListener('pageshow', onShown)
+    }
+  }, [refresh])
+
   const list = rows ?? []
   return {
     rows,
