@@ -1,0 +1,1 @@
+[2026-10-16] link_basis/link_evidence are nullable on six link tables, CHECKs added NOT VALID and validated in a separate migration, no backfill: a link made before 2026-10-16 stays NULL (not recorded), never guessed from other columns.

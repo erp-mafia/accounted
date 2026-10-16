@@ -1,0 +1,1 @@
+[2026-10-16] lib/links/link-basis joins KERNEL_INNER_MODULES and lib/core takes resolved basis columns from its callers: the vocabulary is pure shared infrastructure, while reading the approval scope (pending-operations) stays outside the kernel.

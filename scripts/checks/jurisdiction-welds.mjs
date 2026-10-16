@@ -128,6 +128,7 @@ export const KERNEL_INNER_MODULES = [
   'lib/events/bus',
   'lib/events/types',
   'lib/invariants/', // the shared format contracts hand-rolled-invariant points at
+  'lib/links/link-basis', // the link-basis vocabulary: constants, a Zod schema and pure functions, no business logic
   'lib/logger',
   'lib/money',
   'lib/observability/',

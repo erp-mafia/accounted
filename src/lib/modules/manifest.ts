@@ -142,6 +142,10 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
       // the company's bookkeeping (privacy policy section 5) and read by the
       // behandlingshistorik, so it sits with the ledger, not with one block.
       'suggestion-log',
+      // Why each link to a verifikat exists (link basis): stamped by every
+      // block that links records to the books and read with the voucher, so
+      // it sits with the ledger beside the decision log.
+      'links',
       // The bank and cash account register (BAS 19xx plus verifikationsserie)
       // exists without any bank feed and is read by the engine itself and by
       // five blocks.
