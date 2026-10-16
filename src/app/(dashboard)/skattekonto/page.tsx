@@ -57,7 +57,9 @@ import {
   Copy,
   RefreshCw,
 } from 'lucide-react'
-import { useCapability } from '@/contexts/CompanyContext'
+import { useCapability, useCompany } from '@/contexts/CompanyContext'
+import { createClient } from '@/lib/supabase/client'
+import { SKATTEKONTO_PAYMENT_COVER_STATUSES, skattekontoPaymentsCovering, type SkattekontoPaymentOrderCover } from '@/lib/payments/orders/skattekonto-underway'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import type {
   SkatteverketSaldoResponse,
@@ -132,6 +134,26 @@ export default function SkattekontoPage() {
     () => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('betala') === '1',
   )
   const [saldo, setSaldo] = useState<SaldoEnvelope | null>(null)
+  // The company's bank payments to the skattekonto that the saldo may not
+  // show yet (members read payment_orders; a failed read counts nothing).
+  const companyId = useCompany().company?.id ?? null
+  const [skattekontoOrders, setSkattekontoOrders] = useState<SkattekontoPaymentOrderCover[]>([])
+  useEffect(() => {
+    if (!companyId) return
+    let cancelled = false
+    createClient()
+      .from('payment_orders')
+      .select('amount, status, executed_at')
+      .eq('company_id', companyId)
+      .eq('purpose', 'skattekonto')
+      .in('status', [...SKATTEKONTO_PAYMENT_COVER_STATUSES])
+      .then(({ data, error }) => {
+        if (!cancelled && !error) setSkattekontoOrders((data ?? []) as SkattekontoPaymentOrderCover[])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [companyId, saldo])
   const [tx, setTx] = useState<TransaktionerEnvelope['data'] | null>(null)
   // The company's skattekonto account (1630, or 2012 for an enskild firma that
   // runs it there), as the rows' list route reports it.
@@ -645,10 +667,17 @@ export default function SkattekontoPage() {
   const toggleSelect = selection.toggle
 
   const saldoNow = saldo?.data ? saldo.data.saldoSkatteverket : null
-  const shortfall =
+  // A bank payment to the skattekonto is not in the saldo until the next
+  // sync: the shortfall counts it, by the rule Hem and the payment dialog use
+  // (lib/payments/orders/skattekonto-underway.ts), so this line never asks for
+  // money already on its way.
+  const fetchedAtMs = saldo?.fetchedAt ? Date.parse(saldo.fetchedAt) : Number.NaN
+  const paymentsCovering = skattekontoPaymentsCovering(skattekontoOrders, Number.isFinite(fetchedAtMs) ? fetchedAtMs : null)
+  const missing =
     nextCharge && saldoNow !== null && saldoNow < nextCharge.amount
-      ? Math.round((nextCharge.amount - saldoNow) * 100) / 100
+      ? Math.round((nextCharge.amount - saldoNow - paymentsCovering) * 100) / 100
       : null
+  const shortfall = missing !== null && missing > 0 ? missing : null
 
   const helpNode = (
     <HelpPopover>
