@@ -103,7 +103,8 @@ function ClientMark({ kind, size = 'md' }: { kind: ConnectionKind | ConnectTarge
 /**
  * Settings → API & MCP, the part a non-developer uses: what is connected to
  * the books, and how to connect one more. Connections are the company's live
- * API keys: sign-ins from the MCP OAuth flow (one per client sign-in) and
+ * API keys (from the byrå cockpit: the person's own, across every client):
+ * sign-ins from the MCP OAuth flow (one per client sign-in) and
  * keys made by hand under Utvecklare. With nothing connected, Claude is the
  * hero: it is the path for nearly everyone and the only one-click link.
  */

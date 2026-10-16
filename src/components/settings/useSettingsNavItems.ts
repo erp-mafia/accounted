@@ -13,8 +13,9 @@ import {
 
 /**
  * Byrå settings scope: settings opened from the cockpit carry ?ctx=byra
- * (links in the user menu / mobile nav). In that scope only account-level
- * and byrå-level sections show: everything company-scoped (bokföring, skatt,
+ * (links in the user menu / mobile nav). In that scope only personal and
+ * byrå-level sections show (the Du group, and API och MCP, whose connections
+ * belong to the person): everything company-scoped (bokföring, skatt,
  * fakturering, mallar, ...) is edited from inside the client company, never
  * from the cockpit. Honored only for byrå team members; cosmetic only, the
  * section pages keep their own auth.
