@@ -1,0 +1,1 @@
+[2026-10-16] New role ids name what BAS separates: operating_fx_gain/loss (3960/7960, not financial FX), input_vat_reverse_charge_foreign (2645, EU and third country per BAS 2026) and _domestic (2647), added as a pair because the reverse-charge VAT checks read both.

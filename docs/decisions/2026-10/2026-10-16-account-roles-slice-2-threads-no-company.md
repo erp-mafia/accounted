@@ -1,0 +1,1 @@
+[2026-10-16] Account roles slice 2 threads no company: no role site loads a companies row, and CompanyContext's company is selected without jurisdiction (dashboard layout), so passing it would throw; every site keeps PINNED_JURISDICTION rather than adding a read.

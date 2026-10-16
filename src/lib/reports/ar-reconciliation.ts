@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { hasPreRegisterArInPeriod } from '@/lib/invoices/invoice-register-coverage'
 import {
   fetchSkatteverketSettled,
@@ -143,7 +144,11 @@ export async function generateARReconciliation(
         .eq('company_id', companyId)
         .eq('fiscal_period_id', periodId)
         .in('status', ['posted', 'reversed']),
-    filterLines: (q: EntryLinesQuery) => q.in('account_number', ['1510', '1513']),
+    filterLines: (q: EntryLinesQuery) =>
+      q.in('account_number', [
+        resolveAccountRole(PINNED_JURISDICTION, 'accounts_receivable'),
+        resolveAccountRole(PINNED_JURISDICTION, 'rot_rut_receivable'),
+      ]),
     attachEntriesAs: null,
   })
 

@@ -18,6 +18,7 @@ import { type EntryLinesQuery, fetchLinesByEntryIds } from '@/lib/bookkeeping/en
 import { fiscalYearLockedToCalendar, isEntityType } from '@/lib/company/entity-type'
 import { nextDay } from '@/lib/core/bookkeeping/kontantmetod-cutoff'
 import { codedRefusal } from '@/lib/errors/refusal'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { DEFAULT_SETTLEMENT_ACCOUNT, resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope'
 import { findRcBasisGaps, type RcBasisGap } from '@/lib/reports/rc-basis-gaps'
@@ -269,8 +270,8 @@ async function computeVatReportWithRutor(
     const t = declaration.rcInputAccountTotals?.[account]
     return t ? roundOre(t.debit - t.credit) : 0
   }
-  const calculatedInput2645 = debitBalance('2645')
-  const calculatedInput2647 = debitBalance('2647')
+  const calculatedInput2645 = debitBalance(resolveAccountRole(PINNED_JURISDICTION, 'input_vat_reverse_charge_foreign'))
+  const calculatedInput2647 = debitBalance(resolveAccountRole(PINNED_JURISDICTION, 'input_vat_reverse_charge_domestic'))
 
   const monthNames = ['Januari', 'Februari', 'Mars', 'April', 'Maj', 'Juni',
     'Juli', 'Augusti', 'September', 'Oktober', 'November', 'December']

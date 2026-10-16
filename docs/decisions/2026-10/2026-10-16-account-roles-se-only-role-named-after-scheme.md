@@ -1,0 +1,1 @@
+[2026-10-16] An SE-only role (rot_rut_receivable, BAS 1513) is an ordinary role named after its Swedish scheme: the SE pack answers it, a future pack omits it and resolveAccountRole refuses with ACCOUNT_ROLE_NOT_IN_PACK; no optional lookup until a second pack needs one.

@@ -42,6 +42,7 @@ import { applyTemplate, deriveTemplateLinesFromBooking } from '@/lib/bookkeeping
 import { BOOKING_TEMPLATES, findMatchingTemplates } from '@/lib/bookkeeping/booking-templates'
 import { useProposalPreview } from '@/lib/hooks/use-proposal-preview'
 import { isGeneratedVatAccount, isReverseChargeBasisLeg } from '@/lib/bookkeeping/vat-entries'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { roundOre, sumOre, formatAmountInput } from '@/lib/money'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
@@ -113,13 +114,15 @@ let bookingRowKey = 0
 const nextRowKey = () => ++bookingRowKey
 
 const EXCLUDED_TEMPLATE_CATEGORIES = ['salary', 'year_end', 'vat', 'tax_account', 'private_transfer']
+/** 2645 in the SE pack. PINNED_JURISDICTION: CompanyContext's company is loaded without its jurisdiction. */
+const FOREIGN_REVERSE_CHARGE_INPUT_VAT = resolveAccountRole(PINNED_JURISDICTION, 'input_vat_reverse_charge_foreign')
 /** Expense-shaped library template: every business line is a debit and no
  *  2614/2645 legs: the country selector owns the reverse-charge variant. */
 const isExpenseLibraryTemplate = (tpl: BookingTemplateWithUsage) => {
   const business = tpl.lines.filter((l) => l.type === 'business')
   if (business.length === 0) return false
   if (!business.every((l) => l.side === 'debit')) return false
-  if (tpl.lines.some((l) => l.account === '2614' || l.account === '2645')) return false
+  if (tpl.lines.some((l) => l.account === '2614' || l.account === FOREIGN_REVERSE_CHARGE_INPUT_VAT)) return false
   return true
 }
 

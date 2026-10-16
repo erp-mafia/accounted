@@ -1,4 +1,5 @@
 import type { VatDeclarationRutor, VatRevenueAccountWithoutRuta } from '@/types'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 
 /**
  * Local pre-flight checks for the momsdeklaration, run BEFORE the SKV
@@ -202,9 +203,13 @@ export function revenueAccountWithoutRutaFinding(
  * (the summary parent), 2642 (frivillig betalningsskyldighet), 2646 (uthyrning)
  * and 2649 (blandad verksamhet, the deductible portion of shared costs in
  * general). Counting 2649 as RC input would reintroduce exactly the aggregation
- * this check exists to remove.
+ * this check exists to remove. Read as the account roles
+ * input_vat_reverse_charge_foreign and input_vat_reverse_charge_domestic.
  */
-const RC_INPUT_ACCOUNTS = ['2645', '2647'] as const
+const RC_INPUT_ACCOUNTS: readonly string[] = [
+  resolveAccountRole(PINNED_JURISDICTION, 'input_vat_reverse_charge_foreign'),
+  resolveAccountRole(PINNED_JURISDICTION, 'input_vat_reverse_charge_domestic'),
+]
 
 /** Period debit balance (debit minus credit) of 2645 + 2647. */
 function reverseChargeInputVat(accountTotals: VatCheckAccountTotals): number {

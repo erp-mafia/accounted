@@ -28,6 +28,7 @@ import { vatCodeRuleForAccount } from '@/lib/bookkeeping/voucher-line-vat-code'
 import { useProposalPreview } from '@/lib/hooks/use-proposal-preview'
 import { useProposalWhy } from './proposal-why'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import JournalEntryPreview from './JournalEntryPreview'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
@@ -52,6 +53,14 @@ import type { TransactionWithInvoice } from './transaction-types'
 import type { VatTreatment, EntityType } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { useSkattekontoAccount } from '@/components/skattekonto/use-skattekonto-account'
+
+/**
+ * Self-assessed input VAT on a purchase from abroad (2645 in the SE pack): no
+ * document carries it, so the document-VAT comparison skips it.
+ * PINNED_JURISDICTION: CompanyContext's company is loaded without its
+ * jurisdiction.
+ */
+const FOREIGN_REVERSE_CHARGE_INPUT_VAT = resolveAccountRole(PINNED_JURISDICTION, 'input_vat_reverse_charge_foreign')
 
 interface QuickReviewDialogProps {
   open: boolean
@@ -489,7 +498,7 @@ export default function QuickReviewDialog({
   const proposedVatSek = basePreview.lines
     .filter((l) =>
       (previewTx?.amount ?? 0) < 0
-        ? l.side === 'debet' && l.account.startsWith('264') && l.account !== '2645'
+        ? l.side === 'debet' && l.account.startsWith('264') && l.account !== FOREIGN_REVERSE_CHARGE_INPUT_VAT
         : l.side === 'kredit' && /^26[123]/.test(l.account),
     )
     .reduce((sum, l) => sum + l.amount, 0)

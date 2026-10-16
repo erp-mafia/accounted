@@ -257,6 +257,9 @@ describe('generateARReconciliation', () => {
     expect(result.ar_ledger_total).toBe(1500)
     expect(result.account_1510_balance).toBe(1500)
     expect(result.is_reconciled).toBe(true)
+    // The GL side reads exactly these two accounts (account roles
+    // accounts_receivable and rot_rut_receivable in the SE pack).
+    expect(calls).toContainEqual({ method: 'in', args: ['account_number', ['1510', '1513']] })
   })
 
   it('counts posted AND reversed 1510 lines (corrected invoice nets correctly)', async () => {
