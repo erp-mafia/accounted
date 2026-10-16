@@ -8,19 +8,22 @@ import { McpConnectionsPanel } from '@/components/settings/McpConnectionsPanel'
 import { OAuthClientsPanel } from '@/components/settings/OAuthClientsPanel'
 import { SettingsGroup, SettingsReveal, SettingsSectionHeader } from '@/components/settings/SettingsRows'
 import { useApiKeys } from '@/components/settings/useApiKeys'
+import { useByraSettingsScope } from '@/components/settings/useSettingsNavItems'
 import { cn } from '@/lib/utils'
 
 /**
  * Settings → API & MCP. What is connected comes first (or, with nothing
  * connected, how to connect Claude); the developer tools (API keys, OAuth
  * redirect registrations) sit at the bottom, because most people never need
- * them.
+ * them. Opened from the byrå cockpit (?ctx=byra) the list is the person's own
+ * connections across every client, not the open company's.
  */
 export function ApiSettingsContent() {
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
   const t = useTranslations('settings_api_keys')
-  const { keys, companies, isLoading, refetch, revoke } = useApiKeys()
+  const byraScope = useByraSettingsScope()
+  const { keys, companies, isLoading, refetch, revoke } = useApiKeys({ mine: byraScope })
   const [showOAuthClients, setShowOAuthClients] = useState(false)
 
   return (

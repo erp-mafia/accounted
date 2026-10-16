@@ -1,0 +1,1 @@
+[2026-10-16] API och MCP is a personal settings section, shown in byrå scope too. There it lists the caller's own keys across companies, and revoke/edit address the active company's or the caller's own keys, anchored on the key's company: a connection is its owner's, not the open company's.

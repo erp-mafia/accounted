@@ -53,7 +53,16 @@ export function settingsMessageKey(id: string): string {
  */
 export function visibleSettingsSections(scope: SettingsSectionScope): SettingsSection[] {
   const { hasCompany, byraScope, byraRole, hasMcpExtension } = scope
-  const section = (id: string, href: string, group: SettingsGroupKey, show: boolean) => ({ id, href, group, show })
+  // `personal`: the section edits something that belongs to the person, not
+  // to the active company, so it also shows in byrå scope. Every section in
+  // the Du group is personal; a section filed in another group opts in.
+  const section = (
+    id: string,
+    href: string,
+    group: SettingsGroupKey,
+    show: boolean,
+    personal = group === 'account',
+  ) => ({ id, href, group, show, personal })
 
   // Löner shows for every company: "Företaget betalar löner" lives at the top
   // of the section, so hiding the section for a form without default payroll
@@ -81,7 +90,11 @@ export function visibleSettingsSections(scope: SettingsSectionScope): SettingsSe
     section('invoicing', '/settings/invoicing', 'sales', hasCompany),
     section('sending', '/settings/sending', 'sales', hasCompany),
     section('connections', '/settings/connections', 'tools', hasCompany),
-    section('api', '/settings/api', 'tools', hasCompany && hasMcpExtension),
+    // API och MCP is personal: a connection belongs to the person who made it
+    // and reaches the companies picked when it was made, whichever company is
+    // open. A byrå user connects their clients from the cockpit, without
+    // opening one of them first.
+    section('api', '/settings/api', 'tools', hasCompany && hasMcpExtension, true),
   ]
 
   return (
@@ -89,7 +102,7 @@ export function visibleSettingsSections(scope: SettingsSectionScope): SettingsSe
       .filter((d) => d.show)
       // Byrå scope hides every company-scoped section: those are edited from
       // inside the client company where it is obvious WHICH company they hit.
-      .filter((d) => !byraScope || d.group === 'account')
-      .map(({ show: _show, ...s }) => s)
+      .filter((d) => !byraScope || d.personal)
+      .map(({ show: _show, personal: _personal, ...s }) => s)
   )
 }
