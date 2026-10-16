@@ -1,0 +1,1 @@
+[2026-10-16] Triggers clear transactions.link_basis when journal_entry_id changes and the same UPDATE sets no basis, except a move between a verifikat and its correction: unlinkers and SQL writers that do not stamp yet must not leave a stale reason.

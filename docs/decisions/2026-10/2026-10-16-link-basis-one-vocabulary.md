@@ -1,0 +1,1 @@
+[2026-10-16] One closed link-basis vocabulary in src/lib/links/link-basis.ts (10 values) plus small optional link_evidence on every new link: a link row said that two records belong together, never why, and agents can invent matches to make a check pass.
