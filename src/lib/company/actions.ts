@@ -10,6 +10,7 @@ import {
 import { setActiveCompany, CompanyContextError } from '@/lib/company/context'
 import { revalidatePath } from 'next/cache'
 import { createCompanyCore } from '@/lib/company/create-company'
+import { profilesApplyOnSignup } from '@/lib/modules/signup-profile'
 import { isEntityType, isEntityTypeCreatable } from '@/lib/company/entity-type'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
@@ -215,6 +216,11 @@ async function createCompanyFromOnboardingImpl(params: {
       settings: params.settings,
       fiscalPeriod: params.fiscalPeriod,
       ticLookup: params.ticLookup,
+      // Public signup (any team but a byrå's) takes the profile derived from
+      // the legal form only while PROFILES_APPLY_ON_SIGNUP is on; until then
+      // it is recorded as a suggestion and the company keeps Standard. A
+      // byrå's client company picks its profile in the byrå's invite form.
+      applyDerivedProfile: (teamRow as { kind?: string } | null)?.kind !== 'byra' && profilesApplyOnSignup(),
     },
     createCompanyRow,
     rollbackClient,

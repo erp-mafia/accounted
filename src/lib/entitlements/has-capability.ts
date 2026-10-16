@@ -274,6 +274,11 @@ export interface CapabilityAxes {
    * never looked up as grants. Empty when none were asked for.
    */
   disabledConfigKeys: ReadonlySet<string>
+  /**
+   * Of the extra `configKeys`, the ones a row explicitly turns on (enabled =
+   * true): a package switched on wins over a profile that leaves it off.
+   */
+  enabledConfigKeys: ReadonlySet<string>
 }
 
 export interface CapabilityAxesOptions {
@@ -303,7 +308,7 @@ export async function readCapabilityAxes(
   const unique = [...new Set(keys)]
   const configOnly = [...new Set(options.configKeys ?? [])].filter((key) => !(unique as string[]).includes(key))
   if (unique.length === 0 && configOnly.length === 0) {
-    return { entitled: new Set(), disabled: new Set(), disabledConfigKeys: new Set() }
+    return { entitled: new Set(), disabled: new Set(), disabledConfigKeys: new Set(), enabledConfigKeys: new Set() }
   }
   const queried = unique.filter((key) => !isBypassedFor(key))
 
@@ -311,11 +316,12 @@ export async function readCapabilityAxes(
     queried.length > 0
       ? readGrants(supabase, companyId, queried)
       : Promise.resolve({ data: [] as GrantRow[], error: null }),
+    // Every row of these keys, on or off: a row that is not enabled = true
+    // turns its key off; a config-only key turned on is a package switch.
     supabase
       .from('company_capability_config')
-      .select('capability_key')
+      .select('capability_key, enabled')
       .eq('company_id', companyId)
-      .eq('enabled', false)
       .in('capability_key', [...unique, ...configOnly]),
   ])
   if (grants.error) {
@@ -330,12 +336,16 @@ export async function readCapabilityAxes(
     if (grantIsActive(row.expires_at, now)) entitled.add(row.capability_key as CapabilityKey)
   }
   const configOnlySet = new Set(configOnly)
-  const disabledKeys = ((configs.data ?? []) as Array<{ capability_key: string }>).map((row) => row.capability_key)
+  const rows = (configs.data ?? []) as Array<{ capability_key: string; enabled?: boolean | null }>
+  const disabledKeys = rows.filter((row) => row.enabled !== true).map((row) => row.capability_key)
   const disabled = new Set<CapabilityKey>(
     disabledKeys.filter((key) => !configOnlySet.has(key)).map((key) => key as CapabilityKey),
   )
   const disabledConfigKeys = new Set(disabledKeys.filter((key) => configOnlySet.has(key)))
-  return { entitled, disabled, disabledConfigKeys }
+  const enabledConfigKeys = new Set(
+    rows.filter((row) => row.enabled === true && configOnlySet.has(row.capability_key)).map((row) => row.capability_key),
+  )
+  return { entitled, disabled, disabledConfigKeys, enabledConfigKeys }
 }
 
 /** Bilingual paywall copy, shared by every transport (HTTP route, MCP tool, commit executor). */
@@ -493,6 +503,12 @@ export interface CompanyEntitlements {
    * Empty when the paywall is bypassed, which reads no config.
    */
   disabledConfigKeys: string[]
+  /**
+   * Every company_capability_config key with enabled = true: for the
+   * capabilities resolver, where a package switched on wins over a profile
+   * that leaves it off. Empty when the paywall is bypassed.
+   */
+  enabledConfigKeys: string[]
 }
 
 /** company_subscriptions.status values that count as a live subscription. */
@@ -595,6 +611,7 @@ export async function getCompanyEntitlements(
       coverage: null,
       entitledCapabilities: [...PAID_CAPABILITIES],
       disabledConfigKeys: [],
+      enabledConfigKeys: [],
     }
   }
   // Fail-closed: never interpolate a non-UUID.
@@ -608,6 +625,7 @@ export async function getCompanyEntitlements(
       coverage: null,
       entitledCapabilities: [],
       disabledConfigKeys: [],
+      enabledConfigKeys: [],
     }
   }
   // Self-hosted: every local capability is held outright; only the connector
@@ -628,12 +646,14 @@ export async function getCompanyEntitlements(
   // per RLS) distinguishes a churned payer from an expired trial: cancelled
   // subscriptions have their stripe grants deleted, so the grants alone
   // cannot tell the two apart.
-  const [{ data: configs }, { data: subscription }, { data: grants }] = await Promise.all([
+  const [{ data: configRows }, { data: subscription }, { data: grants }] = await Promise.all([
+    // Every config row, on or off (a handful per company at most): the rows
+    // turned off subtract below, the rows turned on reach the capabilities
+    // resolver as package switches.
     supabase
       .from('company_capability_config')
       .select('capability_key, enabled')
-      .eq('company_id', companyId)
-      .eq('enabled', false),
+      .eq('company_id', companyId),
     supabase
       .from('company_subscriptions')
       .select('status')
@@ -702,14 +722,19 @@ export async function getCompanyEntitlements(
     }
   }
 
-  const disabledConfigKeys = (configs ?? []).map((c) => (c as { capability_key: string }).capability_key)
+  // A row that is not enabled = true turns its key off, as the
+  // enabled = false filter this read had before decided.
+  const allConfigs = (configRows ?? []) as Array<{ capability_key: string; enabled?: boolean | null }>
+  const configs = allConfigs.filter((c) => c.enabled !== true)
+  const disabledConfigKeys = configs.map((c) => c.capability_key)
+  const enabledConfigKeys = allConfigs.filter((c) => c.enabled === true).map((c) => c.capability_key)
   const entitledCapabilities = PAID_CAPABILITIES.filter((k) => entitled.has(k))
 
   if (selfHosted) {
     // No trial on a self-host: 'paid' while a connector grant is active,
     // 'none' otherwise (never the hosted trial copy). Explicit disables still
     // apply.
-    for (const c of configs ?? []) {
+    for (const c of configs) {
       entitled.delete((c as { capability_key: string }).capability_key)
     }
     return {
@@ -722,6 +747,7 @@ export async function getCompanyEntitlements(
       coverage: null,
       entitledCapabilities,
       disabledConfigKeys,
+      enabledConfigKeys,
     }
   }
   // Paying/comped companies are not "on trial" even if the seeded trial rows
@@ -773,6 +799,7 @@ export async function getCompanyEntitlements(
       coverage,
       entitledCapabilities,
       disabledConfigKeys,
+      enabledConfigKeys,
     }
   }
 
@@ -780,7 +807,7 @@ export async function getCompanyEntitlements(
   // from the config axis by design (see lib/entitlements/multi-user-state.ts),
   // but it is also never written to company_capability_config, so the plain
   // subtraction stays correct for the capabilities list.
-  for (const c of configs ?? []) {
+  for (const c of configs) {
     entitled.delete((c as { capability_key: string }).capability_key)
   }
 
@@ -793,5 +820,6 @@ export async function getCompanyEntitlements(
     coverage,
     entitledCapabilities,
     disabledConfigKeys,
+    enabledConfigKeys,
   }
 }

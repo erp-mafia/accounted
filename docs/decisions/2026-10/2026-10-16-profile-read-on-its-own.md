@@ -1,0 +1,1 @@
+[2026-10-16] The profile is read in a query of its own that resolves to Standard on failure, never in the company row or the dashboard's membership join: a deploy that reaches the database before the migration, or a failed read, then shows every package instead of breaking the dashboard.

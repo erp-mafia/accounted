@@ -20,6 +20,13 @@ vi.mock('@/lib/auth/invite-tokens', () => ({
   hashInviteToken: (t: string) => `hash-${t}`,
 }))
 
+// The profile a byrå prepared: mocked so the queued table mock's order stays
+// untouched; its reads are covered in lib/company/__tests__/client-profile.test.ts.
+const readPreparedProfileMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/company/client-profile', () => ({
+  readPreparedProfile: (...args: unknown[]) => readPreparedProfileMock(...args),
+}))
+
 import { GET, POST } from '../route'
 
 const mockUser = { id: 'user-1', email: 'invitee@test.se' }
@@ -36,6 +43,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   reset()
   requireAuthMock.mockResolvedValue({ user: mockUser, supabase: serviceSupabase, error: null })
+  readPreparedProfileMock.mockResolvedValue(null)
 })
 
 describe('POST /api/team/accept', () => {
@@ -307,5 +315,48 @@ describe('GET /api/team/accept (byrå-team invitations)', () => {
     const res = await GET(makeGetReq('abc'))
     const { status } = await parseJsonResponse(res)
     expect(status).toBe(404)
+  })
+})
+
+describe('GET /api/team/accept (company invitations)', () => {
+  function makeGetReq(token: string) {
+    return new NextRequest(`http://localhost/api/team/accept?token=${token}`)
+  }
+  const companyInvite = {
+    id: 'inv-1',
+    email: 'kund@test.se',
+    status: 'pending',
+    expires_at: new Date(Date.now() + 86_400_000).toISOString(),
+    company_id: 'company-1',
+    invited_by: 'byra-user',
+    companies: { name: 'Klient AB' },
+  }
+
+  it('names the profile the byrå prepared for the client', async () => {
+    readPreparedProfileMock.mockResolvedValue({ id: 'sole-trader', name: 'Sole trader', name_sv: 'Enskild firma' })
+    enqueue({ data: companyInvite })
+    enqueue({ data: false }) // rpc check_email_exists
+
+    const res = await GET(makeGetReq('abc'))
+    const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(res)
+    expect(status).toBe(200)
+    expect(body.data).toMatchObject({
+      type: 'company',
+      companyName: 'Klient AB',
+      alreadyHasAccount: false,
+      preparedProfile: { id: 'sole-trader', name: 'Sole trader', name_sv: 'Enskild firma' },
+    })
+    expect(readPreparedProfileMock).toHaveBeenCalledWith(serviceSupabase, 'company-1', 'byra-user')
+  })
+
+  it('answers null when nothing was prepared, and the invite still loads', async () => {
+    enqueue({ data: { ...companyInvite, invited_by: 'client-owner' } })
+    enqueue({ data: true })
+
+    const res = await GET(makeGetReq('abc'))
+    const { status, body } = await parseJsonResponse<{ data: { preparedProfile: unknown; companyName: string } }>(res)
+    expect(status).toBe(200)
+    expect(body.data.preparedProfile).toBeNull()
+    expect(body.data.companyName).toBe('Klient AB')
   })
 })

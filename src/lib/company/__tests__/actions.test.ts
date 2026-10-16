@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('next/cache', () => ({
   revalidatePath: vi.fn(),
@@ -646,5 +646,91 @@ describe('createCompanyFromOnboarding: first-session books gate', () => {
     await createCompanyFromOnboarding({ ...params, booksGate: true } as Parameters<typeof createCompanyFromOnboarding>[0])
 
     expect(gateCookieSets()).toHaveLength(0)
+  })
+})
+
+describe('createCompanyFromOnboarding: the profile derived from the legal form', () => {
+  const params = (entityType: string) => ({
+    teamId: 'team-1',
+    settings: { entity_type: entityType, company_name: 'Ny Firma' },
+    fiscalPeriod: { startDate: '2026-01-01', endDate: '2026-12-31', name: 'Räkenskapsår 2026' },
+  })
+
+  function setup(teamKind: 'personal' | 'byra') {
+    const built = buildSupabase({
+      user: { id: 'user-1' },
+      results: {
+        teams: { maybeSingle: { data: { kind: teamKind } } },
+        team_members: { maybeSingle: { data: { role: 'owner' } } },
+      },
+      rpcResults: { create_company_with_owner: { data: 'new-company-id' }, seed_chart_of_accounts: { data: null } },
+    })
+    mockCreateClient.mockResolvedValue(built.supabase as never)
+    const profileWrites = () =>
+      built.calls
+        .filter((c) => c.table === 'companies' && c.method === 'update')
+        .map((c) => c.args[0] as Record<string, unknown>)
+        .filter((row) => 'suggested_profile_id' in row)
+    return { ...built, profileWrites }
+  }
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('records the derived profile as a suggestion only, while PROFILES_APPLY_ON_SIGNUP is off', async () => {
+    vi.stubEnv('PROFILES_APPLY_ON_SIGNUP', '')
+    const { profileWrites } = setup('personal')
+    const result = await createCompanyFromOnboarding(params('aktiebolag'))
+    expect(result.companyId).toBe('new-company-id')
+    expect(profileWrites()).toEqual([
+      { suggested_profile_id: 'limited-company-no-employees', suggested_profile_version: 1, profile_id: null, profile_version: null },
+    ])
+  })
+
+  it.each([
+    ['enskild_firma', 'sole-trader'],
+    ['ideell_forening', 'association'],
+  ])('derives %s -> %s', async (entityType, profile) => {
+    vi.stubEnv('PROFILES_APPLY_ON_SIGNUP', '')
+    vi.stubEnv('NEXT_PUBLIC_IDEELL_FORENING_ENABLED', 'true')
+    const { profileWrites } = setup('personal')
+    await createCompanyFromOnboarding(params(entityType))
+    expect(profileWrites()).toEqual([
+      { suggested_profile_id: profile, suggested_profile_version: 1, profile_id: null, profile_version: null },
+    ])
+  })
+
+  it('applies the derived profile on public signup once the instance sets PROFILES_APPLY_ON_SIGNUP', async () => {
+    vi.stubEnv('PROFILES_APPLY_ON_SIGNUP', 'true')
+    const { profileWrites } = setup('personal')
+    await createCompanyFromOnboarding(params('enskild_firma'))
+    expect(profileWrites()).toEqual([
+      { suggested_profile_id: 'sole-trader', suggested_profile_version: 1, profile_id: 'sole-trader', profile_version: 1 },
+    ])
+  })
+
+  it('never applies it to a byrå client company, even with the flag on: the byrå picks in its invite form', async () => {
+    vi.stubEnv('PROFILES_APPLY_ON_SIGNUP', 'true')
+    const { profileWrites } = setup('byra')
+    await createCompanyFromOnboarding(params('aktiebolag'))
+    expect(profileWrites()).toEqual([
+      { suggested_profile_id: 'limited-company-no-employees', suggested_profile_version: 1, profile_id: null, profile_version: null },
+    ])
+  })
+
+  it('still creates the company when the suggestion cannot be written', async () => {
+    vi.stubEnv('PROFILES_APPLY_ON_SIGNUP', '')
+    const built = buildSupabase({
+      user: { id: 'user-1' },
+      results: {
+        teams: { maybeSingle: { data: { kind: 'personal' } } },
+        companies: { update: { error: { message: 'column "suggested_profile_id" does not exist' } } },
+      },
+      rpcResults: { create_company_with_owner: { data: 'new-company-id' }, seed_chart_of_accounts: { data: null } },
+    })
+    mockCreateClient.mockResolvedValue(built.supabase as never)
+    const result = await createCompanyFromOnboarding(params('aktiebolag'))
+    expect(result).toEqual({ companyId: 'new-company-id', registeredOffice: null })
   })
 })

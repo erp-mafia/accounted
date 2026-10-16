@@ -1,0 +1,1 @@
+[2026-10-16] Every published profile version stays in code and a company resolves the version it stored: a new version can then never take a package away from a company that has one, as the design requires; changing a profile appends the next version and new companies get the latest.

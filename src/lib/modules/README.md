@@ -6,8 +6,9 @@ declares every module; nothing else does. Modules group into packages
 (`packages.ts`), the level a person recognises and switches. The resolved
 capabilities object (below) says, per package and per module, what one
 company can use; the menu, MCP's tools/list and the agent briefing read it.
-Today every company resolves to everything it could already use, so nothing
-any reader shows has changed.
+A company without a stored profile, which is every company that existed
+before profiles, resolves to everything it could already use, so nothing any
+reader shows has changed for it.
 
 ## What resolves from the manifest
 
@@ -41,7 +42,45 @@ is in exactly one package or in `NON_PACKAGE_MODULES`
 (`__tests__/packages.test.ts`). Ids are internal until the API publishes
 packages. A company's choice for a package is the
 `company_capability_config` key `package:<id>` (absent: the profile decides;
-`enabled = false`: off).
+`enabled = false`: off; `enabled = true`: on, over the profile).
+
+## Profiles
+
+`profiles.ts` holds the profiles of the design's proposed table as versioned
+data over the packages: Enskild firma (`sole-trader`), Aktiebolag utan
+anställda (`limited-company-no-employees`), Aktiebolag med anställda
+(`limited-company-with-employees`), Handel med kassa eller webbshop
+(`retail`), Förening (`association`) and Standard (allt på) (`standard`,
+every package on). Each states every switchable package as on or off
+(`__tests__/profiles.test.ts`). Every published version stays in the file;
+a change appends the next version, and a company resolves the version it
+stored, so a new version never takes a package from a company that has it.
+The ids are country-neutral; the country pack still decides which packages
+exist. The list is a proposal until Jakob confirms it.
+
+A company stores its profile in `companies.profile_id` and
+`profile_version` (migration `20261016190000`; a CHECK holds the ids, so a
+new profile widens it). NULL is Standard, so no existing company changed.
+`readStoredProfile()` reads it in a query of its own that resolves to
+Standard on failure. How a company gets one:
+
+- **Public signup**: no extra step. Company creation derives the profile
+  from the legal form (`deriveSignupProfile`) and records it in
+  `companies.suggested_profile_id` and version, which switches nothing. It
+  becomes the company's profile only while the instance sets
+  `PROFILES_APPLY_ON_SIGNUP` (`signup-profile.ts`, off by default; Jakob
+  flips it after confirming the lists). The MCP and v1 creation paths record
+  the suggestion and never apply it.
+- **Byrå invitation**: the byrå picks the client's profile in the invite
+  form (Inställningar, Medlemmar) of a client company on its team; the form
+  preselects the stored profile, else the recorded suggestion, else
+  Standard. The invited client sees "Din byrå har förberett: <profil>" on
+  `/invite/[token]` (`lib/company/client-profile.ts`).
+- **Existing companies**: Standard, unless their byrå picks a profile.
+
+Nothing writes a profile through the API or MCP yet; that arrives with
+suggestions. `GET /api/v1/companies/{companyId}/capabilities` and the
+briefing (`capabilities_profile`) name it.
 
 ## Capabilities: what one company can use
 
@@ -60,17 +99,20 @@ packages. A company's choice for a package is the
   published report: `status` (`active`, `needs_plan`, `off`, `unsupported`),
   `reasons` (`unsupported_country`, `unsupported_legal_form`, `needs_plan`,
   `disabled_by_company`, `dependency_unavailable`) and `resolution`.
-- `profile`: `standard` ("Standard (allt på)", every package on), implicit
-  for every company until profiles are stored.
+- `profile`: the stored profile (`source: 'stored'`), or `standard`
+  ("Standard (allt på)", every package on, `source: 'implicit'`) when none
+  is stored. Its package defaults sit beneath the company's own package
+  choices, which win both ways.
 
-Inputs that exist today: `companies.jurisdiction`, the plan grants and
+Inputs: `companies.jurisdiction`, the stored profile, the plan grants and
 `company_capability_config` (through `readCapabilityAxes`, or
 `getCompanyEntitlements` where the dashboard already reads it; capability
 keys and package switches in one config query), and the payroll offer rule.
 Kernels are always on. A capability key turned off, or a country the module
 does not cover, makes dependents unavailable; a package switch and a plan or
-legal-form gate do not. `winding_down` is reserved: nothing can be switched
-off yet, so obligations are not loaded (`openObligations` is the input).
+legal-form gate do not. `winding_down` is reserved: only a profile picked
+when a company starts out leaves a package off yet, so obligations are not
+loaded (`openObligations` is the input).
 
 Readers:
 
@@ -83,7 +125,8 @@ Readers:
   the door, as before.
 - `capabilityDigest()` is the briefing's list of modules that are not
   active; `publishedCapabilities()` is what
-  `GET /api/v1/companies/{companyId}/capabilities` serves, unchanged.
+  `GET /api/v1/companies/{companyId}/capabilities` serves: the module report
+  unchanged, plus `profile`.
 - Every main navigation item declares its module
   (`components/dashboard/__tests__/nav-modules.test.ts`).
 

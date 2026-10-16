@@ -31,6 +31,7 @@ import {
   capabilityInputsFromEntitlements,
   capabilitySurface,
   capabilitySurfaceWithoutCompany,
+  readStoredProfile,
   resolveCapabilities,
 } from '@/lib/modules/capabilities'
 import { getAiStatus } from '@/lib/ai'
@@ -288,6 +289,7 @@ export default async function DashboardLayout({
     { data: seedCashAccounts },
     hostBrand,
     brandByTeam,
+    storedProfile,
   ] = await Promise.all([
     getDashboardSettings(),
     // Agent identity, name + avatar, surfaced on the FAB and chat
@@ -330,6 +332,9 @@ export default async function DashboardLayout({
         )
         .concat(byraTeam ? [byraTeam.id] : []),
     ),
+    // The company's profile, in a read of its own that resolves to Standard
+    // when it fails, so the membership join above never carries the column.
+    readStoredProfile(supabase, companyId),
   ])
   const hasWebshop = navFlags.hasWebshop
   const hasMileageTrips = navFlags.hasMileageTrips
@@ -459,6 +464,8 @@ export default async function DashboardLayout({
           ledgerCurrency: companyRow.ledger_currency,
           entityType,
           paysSalaries,
+          profileId: storedProfile?.id,
+          profileVersion: storedProfile?.version,
         },
         entitlements,
       ),

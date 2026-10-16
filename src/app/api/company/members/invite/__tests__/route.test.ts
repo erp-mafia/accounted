@@ -41,6 +41,16 @@ vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: () => serviceSupabase,
 }))
 
+// The byrå's profile pick: mocked so the queued table mock's enqueue order
+// stays untouched; the reads themselves are covered in
+// lib/company/__tests__/client-profile.test.ts. Null (not a byrå client) by
+// default, which is every pre-existing case below.
+const clientProfileMocks = vi.hoisted(() => ({
+  readClientProfileChoice: vi.fn(),
+  storeClientProfile: vi.fn(),
+}))
+vi.mock('@/lib/company/client-profile', () => clientProfileMocks)
+
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 
 vi.mock('@/lib/auth/invite-tokens', () => ({
@@ -115,6 +125,8 @@ beforeEach(() => {
   })
   brandSenderMock.getBaseUrlForBrand.mockReturnValue('http://localhost:3000')
   inviteUserByEmailMock.mockResolvedValue({ data: { user: { id: 'new-user' } }, error: null })
+  clientProfileMocks.readClientProfileChoice.mockResolvedValue(null)
+  clientProfileMocks.storeClientProfile.mockResolvedValue({ error: null })
 })
 
 afterEach(() => {
@@ -604,5 +616,81 @@ describe('POST /api/company/members/invite: AUTH_SIGNUPS_DISABLED provisioning',
     expect(sendEmailMock).not.toHaveBeenCalled()
     expect(body.data.inviteUrl).toBe('https://app.accounted.test/invite/tok-plain')
     consoleWarnSpy.mockRestore()
+  })
+})
+
+describe('POST /api/company/members/invite: the byrå picks the client profile', () => {
+  const enqueueHappyPath = () => {
+    enqueue({ data: { role: 'admin' } }) // caller membership
+    enqueue({ data: [] }) // existing members
+    enqueue({ data: null }) // existing invite
+    enqueue({ data: { name: 'Klient AB' } }) // company name
+    enqueue({ data: null }) // insert invitation
+  }
+
+  it('requires a profile from the byrå of a client company', async () => {
+    clientProfileMocks.readClientProfileChoice.mockResolvedValue({ current: null, preselected: 'sole-trader' })
+    enqueue({ data: { role: 'admin' } })
+    const { status, body } = await parseJsonResponse<{ error: string }>(await post({ email: 'kund@example.com' }))
+    expect(status).toBe(400)
+    expect(body.error).toBe('Välj vilken profil kunden ska starta med.')
+    expect(clientProfileMocks.storeClientProfile).not.toHaveBeenCalled()
+    expect(sendEmailMock).not.toHaveBeenCalled()
+  })
+
+  it('stores the picked profile on the client company before inviting', async () => {
+    clientProfileMocks.readClientProfileChoice.mockResolvedValue({ current: null, preselected: 'limited-company-no-employees' })
+    enqueueHappyPath()
+    const { status } = await parseJsonResponse(
+      await post({ email: 'kund@example.com', profile_id: 'limited-company-with-employees' }),
+    )
+    expect(status).toBe(200)
+    expect(clientProfileMocks.readClientProfileChoice).toHaveBeenCalledWith(serviceSupabase, 'company-1', 'user-1')
+    expect(clientProfileMocks.storeClientProfile).toHaveBeenCalledWith(
+      serviceSupabase,
+      'company-1',
+      'limited-company-with-employees',
+    )
+    expect(sendEmailMock).toHaveBeenCalled()
+  })
+
+  it('writes nothing when the pick is the profile the company already has', async () => {
+    clientProfileMocks.readClientProfileChoice.mockResolvedValue({ current: 'retail', preselected: 'retail' })
+    enqueueHappyPath()
+    const { status } = await parseJsonResponse(await post({ email: 'kund@example.com', profile_id: 'retail' }))
+    expect(status).toBe(200)
+    expect(clientProfileMocks.storeClientProfile).not.toHaveBeenCalled()
+  })
+
+  it('creates no invitation when the profile cannot be stored', async () => {
+    clientProfileMocks.readClientProfileChoice.mockResolvedValue({ current: null, preselected: 'standard' })
+    clientProfileMocks.storeClientProfile.mockResolvedValue({ error: { message: 'boom' } })
+    enqueue({ data: { role: 'admin' } })
+    enqueue({ data: [] })
+    enqueue({ data: null })
+    enqueue({ data: { name: 'Klient AB' } })
+    const { status, body } = await parseJsonResponse<{ error: string }>(
+      await post({ email: 'kund@example.com', profile_id: 'association' }),
+    )
+    expect(status).toBe(500)
+    expect(body.error).toBe('Kunde inte spara kundens profil.')
+    expect(sendEmailMock).not.toHaveBeenCalled()
+  })
+
+  it("refuses a profile from anyone who is not the client's byrå", async () => {
+    enqueue({ data: { role: 'owner' } })
+    const { status, body } = await parseJsonResponse<{ error: string }>(
+      await post({ email: 'kollega@example.com', profile_id: 'sole-trader' }),
+    )
+    expect(status).toBe(403)
+    expect(body.error).toBe('Bara kundens byrå kan välja profil.')
+    expect(clientProfileMocks.storeClientProfile).not.toHaveBeenCalled()
+  })
+
+  it('refuses a profile id that does not exist', async () => {
+    clientProfileMocks.readClientProfileChoice.mockResolvedValue({ current: null, preselected: 'standard' })
+    enqueue({ data: { role: 'admin' } })
+    const { status } = await parseJsonResponse(await post({ email: 'kund@example.com', profile_id: 'freelancer' }))
+    expect(status).toBe(400)
   })
 })

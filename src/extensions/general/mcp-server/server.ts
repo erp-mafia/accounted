@@ -6844,6 +6844,21 @@ export const tools: McpTool[] = [
       const inboxAddress = await inboxAddressRead
       const capabilities = await safeCapabilities
       const capabilityDigestRows = capabilities ? capabilityDigest(capabilities) : null
+      // The company's profile beside the digest: which starting point decides
+      // the packages tools/list shows, and the packages that are off (by the
+      // profile or the company's own choice), so the agent can say why a tool
+      // is not listed. standard / implicit and an empty list for every company
+      // without a stored profile. Undeclared in outputSchema, like the digest.
+      const capabilitiesProfile = capabilities
+        ? {
+            id: capabilities.profile.id,
+            version: capabilities.profile.version,
+            name: capabilities.profile.name,
+            name_sv: capabilities.profile.name_sv,
+            source: capabilities.profile.source,
+            packages_off: capabilities.packages.filter((p) => p.availability === 'off').map((p) => p.id),
+          }
+        : null
       // The same view of the packages tools/list takes for a single-company
       // connection, so recommended_tools never calls a tool listed that the
       // list leaves out.
@@ -6868,6 +6883,7 @@ export const tools: McpTool[] = [
         ...(arkivDigest ? { arkiv: arkivDigest } : {}),
         ...(skvConnection ? { skatteverket_connection: skvConnection } : {}),
         ...(capabilityDigestRows ? { capabilities: capabilityDigestRows } : {}),
+        ...(capabilitiesProfile ? { capabilities_profile: capabilitiesProfile } : {}),
         // Always present, so the absence of an address is a stated fact and
         // not something the agent has to infer from a missing key. The note
         // also names the direct upload: an agent holding the file bytes

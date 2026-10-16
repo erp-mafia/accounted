@@ -256,10 +256,10 @@ Example response `200`:
 **Which building blocks this company can use, and why not.**
 `scope:companies:read · risk:low · idempotent`
 
-Lists every module (the OpenAPI tags) for the company with a status, the reasons behind it and a resolution sentence, like Stripe account capabilities. Statuses: active (usable now); needs_plan (the paid plan does not include it: upgrade, or on a self-hosted instance add a connector key); off (turned off for this company); unsupported (not offered for this company: its country, or its legal form, such as payroll for an enskild firma that has not said it pays salaries). Reasons, the deciding one first: unsupported_country, unsupported_legal_form, needs_plan, disabled_by_company, dependency_unavailable (a module it needs is unsupported or off; it then takes that status). Kernels (platform, ledger) are always active. This is a read-only report of the gates that already exist: there is no per-company module switch yet, it arrives later.
+Lists every module (the OpenAPI tags) for the company with a status, the reasons behind it and a resolution sentence, like Stripe account capabilities. Statuses: active (usable now); needs_plan (the paid plan does not include it: upgrade, or on a self-hosted instance add a connector key); off (turned off for this company); unsupported (not offered for this company: its country, or its legal form, such as payroll for an enskild firma that has not said it pays salaries). Reasons, the deciding one first: unsupported_country, unsupported_legal_form, needs_plan, disabled_by_company, dependency_unavailable (a module it needs is unsupported or off; it then takes that status). Kernels (platform, ledger) are always active. profile names the company profile (sole-trader, limited-company-no-employees, limited-company-with-employees, retail, association, or standard, every package on): the starting point for which packages the app menu and the MCP tool list show. A module in a package the profile leaves off is hidden there but keeps its status and still answers when called. A company without a stored profile has standard (source implicit). This is a read-only report: nothing here changes a profile or a module.
 
 **Use when:** At the start of an integration or agent session, before calling endpoints of an optional module (bank feed, payroll, Skatteverket filing, collections, the AI agent), or to explain to a user why something is unavailable.
-**Do not use for:** Turning a module on or off: nothing here writes. API key scopes are a separate axis (GET /api/v1/api-key); a module can be active while the key lacks the scope for its endpoints.
+**Do not use for:** Turning a module on or off, or changing the profile: nothing here writes. API key scopes are a separate axis (GET /api/v1/api-key); a module can be active while the key lacks the scope for its endpoints.
 
 **Pitfalls:**
 - A status is a snapshot: a plan change or a settings change moves it. Re-read it rather than caching it for a session.
@@ -276,6 +276,7 @@ Response `200`:
   data: {
     jurisdiction: string,
     ledger_currency: string,
+    profile: { id: "sole-trader" | "limited-company-no-employees" | "limited-company-with-employees" | "retail" | "association" | "standard", version: number, name: string, name_sv: string, source: "stored" | "implicit" },
     modules: { id: string, kind: "kernel" | "block", name: string, name_sv: string, summary: string, depends_on: string[], status: "active" | "off" | "needs_plan" | "unsupported", reasons: ("unsupported_country" | "unsupported_legal_form" | "needs_plan" | "disabled_by_company" | "dependency_unavailable")[], resolution: string | null }[]
   },
   meta: {
@@ -296,6 +297,13 @@ Example response `200`:
   "data": {
     "jurisdiction": "SE",
     "ledger_currency": "SEK",
+    "profile": {
+      "id": "standard",
+      "version": 1,
+      "name": "Standard (everything on)",
+      "name_sv": "Standard (allt på)",
+      "source": "implicit"
+    },
     "modules": [
       {
         "id": "ledger",

@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { hashInviteToken } from '@/lib/auth/invite-tokens'
 import { acceptPendingTeamInviteByToken } from '@/lib/company/pending-invites'
+import { readPreparedProfile } from '@/lib/company/client-profile'
 
 interface TeamInviteRow {
   id: string
@@ -33,7 +34,7 @@ export async function GET(request: NextRequest) {
 
   const { data: companyInvite } = await serviceClient
     .from('company_invitations')
-    .select('id, email, status, expires_at, company_id, companies:company_id(name)')
+    .select('id, email, status, expires_at, company_id, invited_by, companies:company_id(name)')
     .eq('token_hash', tokenHash)
     .single()
 
@@ -44,9 +45,12 @@ export async function GET(request: NextRequest) {
 
     const expired = new Date(companyInvite.expires_at) < new Date()
 
-    const { data: alreadyHasAccount } = await serviceClient.rpc('check_email_exists', {
-      email_to_check: companyInvite.email,
-    })
+    // The profile the client's byrå prepared (Profiles and Suggestions), read
+    // on its own so a failed read only leaves the line off the page.
+    const [{ data: alreadyHasAccount }, preparedProfile] = await Promise.all([
+      serviceClient.rpc('check_email_exists', { email_to_check: companyInvite.email }),
+      readPreparedProfile(serviceClient, companyInvite.company_id, companyInvite.invited_by),
+    ])
 
     return NextResponse.json({
       data: {
@@ -55,6 +59,7 @@ export async function GET(request: NextRequest) {
         email: companyInvite.email,
         expired,
         alreadyHasAccount,
+        preparedProfile,
       },
     })
   }

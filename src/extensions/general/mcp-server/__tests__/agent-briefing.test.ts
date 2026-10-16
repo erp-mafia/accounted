@@ -616,6 +616,21 @@ describe('capabilities digest', () => {
     expect(result.capabilities).toEqual([])
   })
 
+  it('names the profile beside the digest: Standard, implicit, no package off, for a company without a stored one', async () => {
+    const supabase = withCapabilityReads({ entityType: 'aktiebolag', paysSalaries: null, grants: ALL_GRANTS })
+    const result = (await tool().execute({}, COMPANY, 'user-1', supabase as never, { type: 'api_key' })) as {
+      capabilities_profile?: unknown
+    }
+    expect(result.capabilities_profile).toEqual({
+      id: 'standard',
+      version: 1,
+      name: 'Standard (everything on)',
+      name_sv: 'Standard (allt på)',
+      source: 'implicit',
+      packages_off: [],
+    })
+  })
+
   it('leaves the key out, and still briefs, when the report cannot be read', async () => {
     const supabase = withCapabilityReads({
       entityType: 'aktiebolag',
@@ -628,6 +643,7 @@ describe('capabilities digest', () => {
       company: { company_id: string }
     }
     expect(result).not.toHaveProperty('capabilities')
+    expect(result).not.toHaveProperty('capabilities_profile')
     expect(result.company.company_id).toBe(COMPANY)
   })
 })

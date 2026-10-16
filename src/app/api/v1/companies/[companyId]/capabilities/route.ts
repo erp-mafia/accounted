@@ -18,6 +18,7 @@ import {
   loadCompanyCapabilities,
   publishedCapabilities,
 } from '@/lib/modules/capabilities'
+import { PROFILE_IDS } from '@/lib/modules/profiles'
 
 const ModuleCapability = z.object({
   id: z.string().describe('Module id: the OpenAPI tag and x-module of the endpoints it owns.'),
@@ -33,9 +34,24 @@ const ModuleCapability = z.object({
   resolution: z.string().nullable().describe('One sentence a client can show; null when active.'),
 })
 
+const Profile = z
+  .object({
+    id: z.enum(PROFILE_IDS).describe('Profile id, country-neutral. standard: every package on.'),
+    version: z.number().int().describe('The version of the profile whose defaults apply.'),
+    name: z.string(),
+    name_sv: z.string(),
+    source: z
+      .enum(['stored', 'implicit'])
+      .describe('stored: the company has this profile. implicit: none is stored, so Standard (allt på) applies.'),
+  })
+  .describe(
+    'The company profile: the starting point that decides which packages its menus and tool list show. Read-only here.',
+  )
+
 const CapabilitiesResponse = z.object({
   jurisdiction: z.string().describe('ISO 3166-1 alpha-2 country whose law the books follow. Only SE today.'),
   ledger_currency: z.string().describe('ISO 4217 currency of the ledger. Only SEK today.'),
+  profile: Profile,
   modules: z.array(ModuleCapability).describe('Every module, kernels first, in the order of the OpenAPI tags.'),
 })
 
@@ -49,11 +65,13 @@ registerEndpoint({
     'Statuses: active (usable now); needs_plan (the paid plan does not include it: upgrade, or on a self-hosted instance add a connector key); ' +
     'off (turned off for this company); unsupported (not offered for this company: its country, or its legal form, such as payroll for an enskild firma that has not said it pays salaries). ' +
     'Reasons, the deciding one first: unsupported_country, unsupported_legal_form, needs_plan, disabled_by_company, dependency_unavailable (a module it needs is unsupported or off; it then takes that status). ' +
-    'Kernels (platform, ledger) are always active. This is a read-only report of the gates that already exist: there is no per-company module switch yet, it arrives later.',
+    'Kernels (platform, ledger) are always active. ' +
+    'profile names the company profile (sole-trader, limited-company-no-employees, limited-company-with-employees, retail, association, or standard, every package on): the starting point for which packages the app menu and the MCP tool list show. ' +
+    'A module in a package the profile leaves off is hidden there but keeps its status and still answers when called. A company without a stored profile has standard (source implicit). This is a read-only report: nothing here changes a profile or a module.',
   useWhen:
     'At the start of an integration or agent session, before calling endpoints of an optional module (bank feed, payroll, Skatteverket filing, collections, the AI agent), or to explain to a user why something is unavailable.',
   doNotUseFor:
-    'Turning a module on or off: nothing here writes. API key scopes are a separate axis (GET /api/v1/api-key); a module can be active while the key lacks the scope for its endpoints.',
+    'Turning a module on or off, or changing the profile: nothing here writes. API key scopes are a separate axis (GET /api/v1/api-key); a module can be active while the key lacks the scope for its endpoints.',
   pitfalls: [
     'A status is a snapshot: a plan change or a settings change moves it. Re-read it rather than caching it for a session.',
     'needs_plan only covers the paid parts of a module; the module\'s free endpoints keep answering. The resolution says what unlocks it.',
@@ -64,6 +82,13 @@ registerEndpoint({
       data: {
         jurisdiction: 'SE',
         ledger_currency: 'SEK',
+        profile: {
+          id: 'standard',
+          version: 1,
+          name: 'Standard (everything on)',
+          name_sv: 'Standard (allt på)',
+          source: 'implicit',
+        },
         modules: [
           {
             id: 'ledger',
@@ -118,7 +143,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>('capabi
     if (!capabilities) {
       return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, { requestId: ctx.requestId })
     }
-    // The module report v1 has always served; packages stay internal for now.
+    // The module report v1 has always served, and the company's profile.
     return ok(publishedCapabilities(capabilities), { requestId: ctx.requestId })
   } catch (err) {
     ctx.log.error('capabilities.get failed', err as Error)
