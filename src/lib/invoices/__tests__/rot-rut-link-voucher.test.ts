@@ -5,7 +5,7 @@ import {
   listRotRutPayoutVoucherCandidates,
 } from '../rot-rut-link-voucher'
 
-const { supabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 const client = supabase as never
 
 beforeEach(() => reset())
@@ -103,5 +103,7 @@ describe('listRotRutPayoutVoucherCandidates', () => {
     enqueue({ data: [] })
     const { data } = await listRotRutPayoutVoucherCandidates(client, 'company-1', '2026-08-25')
     expect(data).toEqual([])
+    // The picker reads lines on 1513 (the rot_rut_receivable role in the SE pack).
+    expect(findCalls('journal_entry_lines', 'eq')).toContainEqual(['account_number', '1513'])
   })
 })

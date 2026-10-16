@@ -33,4 +33,16 @@ export const SE_BAS_ACCOUNT_ROLES: Readonly<Record<AccountRole, string>> = Objec
   vat_receivable: '1650',
   /** 3740 Öres- och kronutjämning. */
   rounding: '3740',
+  /** 2420 Förskott från kunder. */
+  customer_advances: '2420',
+  /** 3960 Valutakursvinster på fordringar och skulder av rörelsekaraktär. */
+  operating_fx_gain: '3960',
+  /** 7960 Valutakursförluster på fordringar och skulder av rörelsekaraktär. */
+  operating_fx_loss: '7960',
+  /** 2645 Beräknad ingående moms på förvärv från utlandet. */
+  input_vat_reverse_charge_foreign: '2645',
+  /** 2647 Ingående moms omvänd betalningsskyldighet varor och tjänster i Sverige. */
+  input_vat_reverse_charge_domestic: '2647',
+  /** 1513 Kundfordringar: delad faktura (ROT/RUT, SE-only). */
+  rot_rut_receivable: '1513',
 })

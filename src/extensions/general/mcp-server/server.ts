@@ -345,6 +345,7 @@ import { companyCurrentResource } from './resources/company-current'
 import { findUnknownArgKeys, listArgKeys, listRequiredArgKeys, shortestExampleFor } from './arg-guard'
 import { parseVatPeriodArgs } from '@/lib/reports/vat-period-args'
 import { VAT_ROUNDING_ACCOUNT } from '@/lib/reports/vat-settlement'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import {
   AGENT_AMOUNT_FORMAT,
   computeVatCloseCheck,
@@ -20152,9 +20153,10 @@ export const tools: McpTool[] = [
 
       let bankAmount = 0
       let receivableCredit = 0
+      const rotRutReceivable = resolveAccountRole(PINNED_JURISDICTION, 'rot_rut_receivable')
       for (const line of (voucher.lines ?? []) as Array<{ account_number: string; debit_amount: number; credit_amount: number }>) {
         const net = Number(line.debit_amount) - Number(line.credit_amount)
-        if (line.account_number === '1513') receivableCredit -= net
+        if (line.account_number === rotRutReceivable) receivableCredit -= net
         else if (line.account_number.startsWith('19')) bankAmount += net
       }
       const expectedTotal = roundOre(requests.reduce((sum, r) => sum + expectedRotRutPayoutAmount(r), 0))
@@ -20995,7 +20997,14 @@ export const tools: McpTool[] = [
         type: 'run_currency_revaluation',
         title: `Valutaomvärdering ${closingDate}`,
         params: { fiscal_period_id: fiscalPeriodId, closing_date: closingDate },
-        preview: { fiscal_period_id: fiscalPeriodId, closing_date: closingDate, posts_to: ['3960', '7960'] },
+        preview: {
+          fiscal_period_id: fiscalPeriodId,
+          closing_date: closingDate,
+          posts_to: [
+            resolveAccountRole(PINNED_JURISDICTION, 'operating_fx_gain'),
+            resolveAccountRole(PINNED_JURISDICTION, 'operating_fx_loss'),
+          ],
+        },
         actor,
         next: {
           description: 'After approval, confirm the new FX-adjusted balances via gnubok_get_balance_sheet.',

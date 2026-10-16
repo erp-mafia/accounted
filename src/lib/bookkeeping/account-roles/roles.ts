@@ -12,7 +12,9 @@
  * renamed or given another meaning, because packs, tests and (later) the
  * posting port and its booking proposals key on them. A role belongs here
  * only when a call site needs it; per-rate VAT roles name the rate, so a pack
- * supplies the rates its country has and leaves the others out.
+ * supplies the rates its country has and leaves the others out. A role for a
+ * Swedish scheme (rot_rut_receivable) is SE-only the same way: the SE pack
+ * answers it and any other pack omits it.
  */
 export const ACCOUNT_ROLES = [
   /** The bank account a payment settles on when nothing names a specific one. */
@@ -35,6 +37,24 @@ export const ACCOUNT_ROLES = [
   'vat_receivable',
   /** Rounding differences: minor-unit and whole-unit rounding on payments and filings. */
   'rounding',
+  /** Advances received from customers: a liability to refund or offset against a later invoice. */
+  'customer_advances',
+  /** Exchange-rate gains on operating receivables and payables (not on financial items). */
+  'operating_fx_gain',
+  /** Exchange-rate losses on operating receivables and payables (not on financial items). */
+  'operating_fx_loss',
+  /** Input VAT the buyer self-assesses on a reverse-charge acquisition from abroad (EU or third country). */
+  'input_vat_reverse_charge_foreign',
+  /** Input VAT the buyer self-assesses on a domestic reverse-charge purchase. */
+  'input_vat_reverse_charge_domestic',
+  /**
+   * SE-only: the tax authority's share of a ROT/RUT invoice (fakturamodellen),
+   * a receivable until the payout clears it. Named after the Swedish scheme
+   * because only a country with that scheme has the account: a pack without
+   * it leaves the role out, and resolveAccountRole refuses it there
+   * (ACCOUNT_ROLE_NOT_IN_PACK) instead of borrowing the BAS number.
+   */
+  'rot_rut_receivable',
 ] as const
 
 export type AccountRole = (typeof ACCOUNT_ROLES)[number]

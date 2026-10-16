@@ -1,0 +1,1 @@
+[2026-10-16] Account roles slice 2 moves 23 read-side and preview literals; posting constants for its new roles (CUSTOMER_ADVANCE_ACCOUNT, FX_GAIN/LOSS_ACCOUNT, ROT_RUT_RECEIVABLE_ACCOUNT) keep their literal, pinned equal to the role, so the posting slice moves them without a booking change.

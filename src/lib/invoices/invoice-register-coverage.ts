@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { isRegisteredFromBooks } from './registered-from-books'
 
 /**
@@ -82,7 +83,11 @@ export const INVOICE_ENGINE_SOURCE_TYPES = [
 const INVOICE_ENGINE_SOURCE_TYPES_FILTER =
   '(' + INVOICE_ENGINE_SOURCE_TYPES.map((t) => `"${t}"`).join(',') + ')'
 
-const AR_ACCOUNTS = ['1510', '1513']
+/** The receivables an invoice verifikat debits (SE pack: 1510, and 1513 for a ROT/RUT invoice's Skatteverket share). */
+const AR_ACCOUNTS = [
+  resolveAccountRole(PINNED_JURISDICTION, 'accounts_receivable'),
+  resolveAccountRole(PINNED_JURISDICTION, 'rot_rut_receivable'),
+]
 
 /**
  * True when a posted, non-engine verifikat with an AR debit line exists

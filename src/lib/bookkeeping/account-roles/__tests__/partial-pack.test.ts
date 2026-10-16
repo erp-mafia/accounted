@@ -26,4 +26,16 @@ describe('a pack that does not answer every role', () => {
     expect((error as AccountRoleError).role).toBe('output_vat_12')
     expect((error as AccountRoleError).jurisdiction).toBe('SE')
   })
+
+  it('refuses an SE-only role a pack leaves out, instead of borrowing the BAS number', () => {
+    let error: unknown
+    try {
+      resolveAccountRole({ jurisdiction: 'SE' }, 'rot_rut_receivable')
+    } catch (err) {
+      error = err
+    }
+    expect(error).toBeInstanceOf(AccountRoleError)
+    expect((error as AccountRoleError).code).toBe('ACCOUNT_ROLE_NOT_IN_PACK')
+    expect((error as AccountRoleError).role).toBe('rot_rut_receivable')
+  })
 })

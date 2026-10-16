@@ -11,6 +11,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 
 export type LinkRotRutPayoutVoucherErrorCode =
   | 'ROT_RUT_REQUEST_NOT_FOUND'
@@ -90,6 +91,9 @@ interface CandidateEntryRow {
 
 const CANDIDATE_LIMIT = 50
 
+/** The receivable a payout clears: Skatteverket's ROT/RUT share (1513 in the SE pack). */
+const ROT_RUT_RECEIVABLE = resolveAccountRole(PINNED_JURISDICTION, 'rot_rut_receivable')
+
 /**
  * Posted, unreversed verifikat that credit 1513, dated on or after the day
  * the begäran was created (a payout cannot precede its file), and not yet
@@ -104,7 +108,7 @@ export async function listRotRutPayoutVoucherCandidates(
   const { data: lineRows, error: lineError } = await supabase
     .from('journal_entry_lines')
     .select('journal_entry_id, journal_entries!inner(company_id, status, entry_date)')
-    .eq('account_number', '1513')
+    .eq('account_number', ROT_RUT_RECEIVABLE)
     .gt('credit_amount', 0)
     .eq('journal_entries.company_id', companyId)
     .eq('journal_entries.status', 'posted')
@@ -145,7 +149,7 @@ export async function listRotRutPayoutVoucherCandidates(
       let receivable = 0
       for (const line of entry.lines ?? []) {
         const net = Number(line.debit_amount) - Number(line.credit_amount)
-        if (line.account_number === '1513') receivable -= net
+        if (line.account_number === ROT_RUT_RECEIVABLE) receivable -= net
         else if (line.account_number.startsWith('19')) bank += net
       }
       return {

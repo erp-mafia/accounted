@@ -16,8 +16,17 @@ import { useReportData } from '@/lib/hooks/use-report-data'
 import { formatAmount, formatDate } from '@/lib/utils'
 import { formatDateISO } from '@/lib/calendar/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 
 // --- AR Ledger (Kundreskontra) ---
+
+/**
+ * The accounts the reconciliation card names, the ones generateARReconciliation
+ * sums (1510 and 1513 in the SE pack). PINNED_JURISDICTION: the active company
+ * in CompanyContext is loaded without its jurisdiction column.
+ */
+const RECEIVABLES_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'accounts_receivable')
+const ROT_RUT_RECEIVABLE_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'rot_rut_receivable')
 
 interface ARLedgerData {
   ledger: {
@@ -319,7 +328,7 @@ export default function ARLedgerView({ periodId }: { periodId: string }) {
       {reconciliation && (
         <Card>
           <CardHeader>
-            <CardTitle>Avstämning mot <AccountNumber number="1510" /></CardTitle>
+            <CardTitle>Avstämning mot <AccountNumber number={RECEIVABLES_ACCOUNT} /></CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-2 text-sm">
@@ -328,7 +337,7 @@ export default function ARLedgerView({ periodId }: { periodId: string }) {
                 <span className="tabular-nums">{formatAmount(reconciliation.ar_ledger_total)} kr</span>
               </div>
               <div className="flex justify-between">
-                <span>Kundfordringar (<AccountNumber number="1510" /> + <AccountNumber number="1513" />) saldo</span>
+                <span>Kundfordringar (<AccountNumber number={RECEIVABLES_ACCOUNT} /> + <AccountNumber number={ROT_RUT_RECEIVABLE_ACCOUNT} />) saldo</span>
                 <span className="tabular-nums">{formatAmount(reconciliation.account_1510_balance)} kr</span>
               </div>
               <div className="flex justify-between pt-2 border-t font-semibold">
@@ -356,7 +365,7 @@ export default function ARLedgerView({ periodId }: { periodId: string }) {
                   reconciliation.pre_register_ar_in_period &&
                   ledger.register_coverage?.covers_from && (
                     <p className="text-xs text-muted-foreground">
-                      Perioden innehåller verifikat med kundfordringar före {formatDate(ledger.register_coverage.covers_from)} som inte ligger i fakturaregistret (t.ex. efter en migrering): differensen kan bero på det. Kontrollera huvudboken på <AccountNumber number="1510" /> och <AccountNumber number="1513" /> innan du letar felbokning.
+                      Perioden innehåller verifikat med kundfordringar före {formatDate(ledger.register_coverage.covers_from)} som inte ligger i fakturaregistret (t.ex. efter en migrering): differensen kan bero på det. Kontrollera huvudboken på <AccountNumber number={RECEIVABLES_ACCOUNT} /> och <AccountNumber number={ROT_RUT_RECEIVABLE_ACCOUNT} /> innan du letar felbokning.
                     </p>
                   )}
               </div>
