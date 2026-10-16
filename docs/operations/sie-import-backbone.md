@@ -85,11 +85,17 @@ Use explicit staging credentials in ignored `.env.sie.*.local` files:
 ```sh
 node scripts/sie-import/test-staging.mjs src/lib/import/__tests__/sie-job.pg.test.ts tests/pg/sie-report-lease-concurrency.pg.test.ts tests/pg/sie-sandbox-cleanup.pg.test.ts
 node scripts/sie-import/test-staging.mjs tests/pg/sie-duplicate-repair.pg.test.ts tests/pg/sie-repair-race.pg.test.ts
-node --import tsx scripts/sie-import/acceptance-providers-staging.ts
-node --import tsx scripts/sie-import/acceptance-staging.ts
-node --import tsx scripts/sie-import/acceptance-manual-review.ts
+node --import tsx --conditions react-server scripts/sie-import/acceptance-providers-staging.ts
+node --import tsx --conditions react-server scripts/sie-import/acceptance-staging.ts
+node --import tsx --conditions react-server scripts/sie-import/acceptance-manual-review.ts
 node scripts/sie-import/run-next-staging.mjs build
 ```
+
+The TypeScript runners post through the engine and load lib/init (event_log,
+webhooks, extensions), which needs the react-server condition, as the Next.js
+server has. Run without `--conditions react-server` they stop before doing
+anything, with exit code 1 and that fix in the message
+(`scripts/lib/register-init-loader.ts`).
 
 Provider acceptance runs seven synthetic cases through real staging Storage,
 admission, workers and Postgres: Fortnox UTF-8/CP437 across two years, Visma
@@ -128,7 +134,7 @@ matches can enter repair; differing source-key collisions require accounting rev
 - `execute-reviewed-repair.ts`: dry run by default, never reads `.env.local`.
 
 ```sh
-node --import tsx scripts/sie-import/execute-reviewed-repair.ts --review REVIEW.json
+node --import tsx --conditions react-server scripts/sie-import/execute-reviewed-repair.ts --review REVIEW.json
 ```
 
 Execution requires separate approval of the exact digest, company, owner/admin
