@@ -78,7 +78,8 @@ export interface PaymentOrder {
   payee_account: string | null
   payee_iban: string | null
   payee_name: string
-  payee_source: 'invoice' | 'supplier'
+  /** skatteverket: a payment in to the skattekonto (no supplier invoice). */
+  payee_source: 'invoice' | 'supplier' | 'skatteverket'
   payee_check: PayeeCheck
   reference_type: 'ocr' | 'message'
   reference: string
@@ -362,6 +363,57 @@ export function preparePaymentOrders(input: {
       use_stated_payee_for: input.useStatedPayeeFor,
     }),
   })
+}
+
+/** A warning on a payment in to the skattekonto (lib/payments/orders/prepare-skattekonto). */
+export interface SkattekontoPaymentWarning {
+  code: 'late' | 'date_moved'
+  due?: string
+  from?: string
+  to?: string
+}
+
+/** The dry run of a payment in to the skattekonto: what would be paid, from where, when and with which OCR. */
+export interface SkattekontoPaymentPreview {
+  cash_account_id: string
+  debtor: { bank_name: string | null; bic: string | null }
+  amount: number
+  currency: string
+  requested_execution_date: string
+  /** The day asked for when it was no banking day the bank takes. */
+  date_moved_from: string | null
+  /** The next charge Skatteverket draws and what the skattekonto lacks for it; null when nothing is due. */
+  due: { date: string; charge: number; balance: number | null; amount: number } | null
+  payee: { type: 'bankgiro'; label: string; name: string }
+  reference: { type: 'ocr'; value: string }
+  warnings: SkattekontoPaymentWarning[]
+  /** A skattekonto draft nobody approved that this payment replaces. */
+  replaces_drafts: number
+}
+
+export interface PreparedSkattekontoPayment {
+  order: PaymentOrder
+  warnings: SkattekontoPaymentWarning[]
+  replaced_draft_ids: string[]
+}
+
+function skattekontoPaymentBody(input: { cashAccountId: string; amount: number | null; executionDate: string | null }, dryRun: boolean) {
+  return JSON.stringify({
+    cash_account_id: input.cashAccountId,
+    amount: input.amount,
+    execution_date: input.executionDate,
+    ...(dryRun ? { dry_run: true } : {}),
+  })
+}
+
+/** The dry run of a payment in to the skattekonto: every rule, nothing written. The dialog's preview. */
+export function previewSkattekontoPayment(input: { cashAccountId: string; amount: number | null; executionDate: string | null }): Promise<SkattekontoPaymentPreview> {
+  return send<SkattekontoPaymentPreview>('/api/payments/orders/skattekonto', { method: 'POST', body: skattekontoPaymentBody(input, true) })
+}
+
+/** A draft payment in to the skattekonto, to be approved and signed like a supplier payment. */
+export function prepareSkattekontoPayment(input: { cashAccountId: string; amount: number | null; executionDate: string | null }): Promise<PreparedSkattekontoPayment> {
+  return send<PreparedSkattekontoPayment>('/api/payments/orders/skattekonto', { method: 'POST', body: skattekontoPaymentBody(input, false) })
 }
 
 export function approvePaymentOrders(input: { orderIds: string[]; confirmedPayeeInvoiceIds: string[] }): Promise<{ approved: string[] }> {

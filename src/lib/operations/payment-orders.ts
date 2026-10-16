@@ -58,10 +58,13 @@ const STATUS = z
 const Payee = z.object({
   type: z.enum(['bankgiro', 'plusgiro', 'bank_account', 'iban']),
   label: z.string().describe('Display form, e.g. "BG 5050-1055", "3300 1234567" or the IBAN.'),
-  name: z.string().describe('The payee name as the order carries it (the supplier name).'),
+  name: z.string().describe('The payee name as the order carries it (the supplier name, or Skatteverket for a skattekonto payment).'),
   source: z
-    .enum(['invoice', 'supplier'])
-    .describe('Where the account came from: the invoice (as the document states it) or the supplier card.'),
+    .enum(['invoice', 'supplier', 'skatteverket'])
+    .describe(
+      'Where the account came from: the invoice (as the document states it), the supplier card, or skatteverket ' +
+        '(a payment in to the skattekonto: bankgiro 5050-1055 with the company\'s OCR number, no supplier invoice).',
+    ),
   check: z
     .enum(['unchecked', 'known', 'new', 'changed'])
     .describe(

@@ -396,7 +396,11 @@ export interface SkattekontoPaymentDue {
   charge: number
   /** Last synced saldo; null when no balance snapshot exists. */
   balance: number | null
-  /** What has to be paid in: charge minus balance (never below 0), or the full charge when the balance is unknown. */
+  /**
+   * What has to be paid in: charge minus balance, or the full charge when the balance is unknown, less what
+   * bank payments to the skattekonto already cover (on their way, or executed after the saldo was fetched).
+   * Always above 0: nothing left to pay in is no row at all.
+   */
   amount: number
   /** Number of skattekonto rows drawn on `due`. */
   count: number

@@ -15,10 +15,10 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 import { creditorNameMatches } from '@/lib/payments/creditor-name-match'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { BankIdSigningFlow, type SigningFlowStage } from './BankIdSigningFlow'
-import { BankMark } from '@/components/banks/BankMark'
 import { RequestSigningLinkButton, RequestSigningLinkPanel } from './RequestSigningLinkDialog'
 import { BankPaymentsAllowanceLine } from './BankPaymentsAllowance'
 import { PaymentsVerificationLine } from './PaymentsVerificationLine'
+import { defaultPaymentAccount, PaymentAccountPicker, rememberPaymentAccount } from './PaymentAccountPicker'
 import { DocumentCheckLine, InvoiceDocumentButton, InvoiceDocumentSheet, PaymentBesideDocument, paymentFromPreviewLine } from './InvoiceDocumentPreview'
 import { earliestExecutionDateIso } from '@/lib/payments/bank-days'
 import {
@@ -65,25 +65,6 @@ import {
 
 /** request: Be någon annan signera; the approved orders get a signing link instead of a BankID here. */
 type Phase = 'preview' | 'confirm' | 'sign' | 'request'
-
-/** The account paid from last time, per browser: the one the person most likely wants again. */
-const ACCOUNT_MEMORY_KEY = 'accounted.bank_payments.account'
-
-function rememberedAccount(): string | null {
-  try {
-    return window.localStorage.getItem(ACCOUNT_MEMORY_KEY)
-  } catch {
-    return null
-  }
-}
-
-function rememberAccount(id: string) {
-  try {
-    window.localStorage.setItem(ACCOUNT_MEMORY_KEY, id)
-  } catch {
-    // Private windows and blocked storage: the default is the first payable account.
-  }
-}
 
 interface PayViaBankDialogProps {
   open: boolean
@@ -174,9 +155,7 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
       .then((data) => {
         if (cancelled) return
         setAvailability(data)
-        const payable = data.accounts.filter((a) => a.payable)
-        const remembered = rememberedAccount()
-        const pick = payable.find((a) => a.id === remembered) ?? payable[0]
+        const pick = defaultPaymentAccount(data.accounts.filter((a) => a.payable))
         if (pick) setAccountId(pick.id)
         if (data.available) {
           fetchBankPaymentsUsage().then(
@@ -274,7 +253,7 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
     setIntent(next)
     setBusy(true)
     try {
-      rememberAccount(accountId)
+      rememberPaymentAccount(accountId)
       const result = await preparePaymentOrders({ supplierInvoiceIds: invoiceIds, cashAccountId: accountId, executionDate: executionDate || null })
       changed.current = true
       setOrders(result.orders)
@@ -330,8 +309,6 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
         ? t('title_confirm')
         : t('title')
 
-  const accountText = account ? `${account.ledger_account} ${account.name ?? ''}`.trim() : ''
-
   /** What Bankgirot says about the payee's giro: one quiet line, or an attention line when it does not read as the supplier. */
   function registeredNameLines(order: PaymentOrder) {
     const lookup = lookups.get(order.id)
@@ -382,27 +359,7 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
               <>
                 {verificationLine}
                 <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-[13px]">
-                  <div className="flex items-center gap-2">
-                    <span className="text-muted-foreground">{t('account_from')}</span>
-                    <BankMark bankName={account?.bank_name} />
-                    {payableAccounts.length > 1 ? (
-                      <select
-                        aria-label={t('account_label')}
-                        className="h-8 rounded-lg border border-border bg-background px-2 text-[13px]"
-                        value={accountId}
-                        onChange={(e) => setAccountId(e.target.value)}
-                      >
-                        {payableAccounts.map((a) => (
-                          <option key={a.id} value={a.id}>
-                            {`${a.ledger_account} ${a.name ?? ''}`.trim()}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <span className="font-medium">{accountText}</span>
-                    )}
-                    {account?.iban && <span className="text-muted-foreground tabular-nums">{account.iban}</span>}
-                  </div>
+                  <PaymentAccountPicker accounts={payableAccounts} accountId={accountId} onChange={setAccountId} />
                   <div className="flex items-center gap-2">
                     {editingDate ? (
                       <>

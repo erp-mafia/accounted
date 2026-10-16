@@ -1,0 +1,1 @@
+[2026-10-16] The skattekonto payment due on Hem subtracts executed bank payments only when they are newer than the saldo snapshot's fetchedAt, and none without a snapshot: with no synced saldo nothing tells whether an executed payment already reached the charge shown, and counting every executed one would shrink every later charge.

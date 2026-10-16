@@ -24,7 +24,7 @@ import { formatPayeeLabel, type SupplierPayee } from '@/lib/payments/supplier-pa
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { createServiceClient } from '@/lib/supabase/server'
 import { loadAttestBlockedInvoiceIds } from '@/lib/supplier-invoices/attest-policy-read'
-import { resolveDebtor } from './debtor'
+import { loadDebtor } from './debtor'
 import { resolveOrderPayee } from './payee'
 import { loadInvoiceDocumentFacts, withInvoiceDocument } from './invoice-document'
 import { isOpenPaymentOrder } from './status'
@@ -135,21 +135,7 @@ export async function preparePaymentOrders(
     return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'execution_date', reason: 'in_the_past' } }
   }
 
-  const { data: account } = await supabase
-    .from('cash_accounts')
-    .select('id, iban, currency, name, enabled, bank_connection:bank_connections(bank_name, affiliated_aspsp_id, psu_type)')
-    .eq('id', input.cashAccountId)
-    .eq('company_id', companyId)
-    .maybeSingle()
-  if (!account) return { ok: false, code: 'PAYMENT_ORDERS_ACCOUNT_NOT_PAYABLE', details: { reason: 'not_found' } }
-  const acct = account as unknown as {
-    iban: string | null
-    currency: string
-    name: string | null
-    enabled: boolean
-    bank_connection: { bank_name: string | null; affiliated_aspsp_id: string | null; psu_type: string | null } | null
-  }
-  const debtor = resolveDebtor(acct, acct.bank_connection)
+  const debtor = await loadDebtor(supabase, companyId, input.cashAccountId)
   if (!debtor.ok) return { ok: false, code: 'PAYMENT_ORDERS_ACCOUNT_NOT_PAYABLE', details: { reason: debtor.reason } }
 
   const { data: invoiceData, error: invoiceError } = await supabase

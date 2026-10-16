@@ -299,6 +299,25 @@ describe('syncPaymentOrderStatuses', () => {
     ])
   })
 
+  it('leaves an unsigned skattekonto payment waiting beside a supplier payment whose invoice was paid another way', async () => {
+    const cancelPayment = vi.fn().mockResolvedValue({ outcome: 'cancelled', providerStatus: 'CANC' })
+    registerPaymentInitiationProvider(provider(vi.fn().mockResolvedValue({ providerStatus: 'RCVD', status: 'submitted', messages: [] }), cancelPayment))
+    db.setTable('supplier_invoices', { data: [{ id: 'inv-o1', ...PAID }] })
+    db.setTable('payment_orders', [
+      { data: [order('o1', { status: 'submitted' }), order('t1', { status: 'submitted', purpose: 'skattekonto', supplier_invoice_id: null })] },
+      { data: [{ id: 'o1' }] }, // o1 status refreshed
+      { data: { id: 'o1' } }, // o1 still waits with its payment
+      { data: [{ id: 't1' }] }, // t1 status refreshed
+    ])
+
+    const result = await run()
+
+    expect(result).toMatchObject({ cancelledForClosedInvoice: 1 })
+    expect(cancelPayment).toHaveBeenCalledTimes(1)
+    expect(cancelPayment).toHaveBeenCalledWith(expect.anything(), 'pay-o1', 'swedish-giro')
+    expect(db.findCalls('rpc:release_payment_order', 'rpc')).toEqual([[expect.objectContaining({ p_order_id: 'o1' })]])
+  })
+
   it('holds for a person a payment whose cancel the bank does not confirm, and does not ask again', async () => {
     const cancelPayment = vi.fn().mockResolvedValue({ outcome: 'not_cancelled', providerStatus: 'RCVD' })
     registerPaymentInitiationProvider(provider(vi.fn().mockResolvedValue({ providerStatus: 'RCVD', status: 'submitted', messages: [] }), cancelPayment))

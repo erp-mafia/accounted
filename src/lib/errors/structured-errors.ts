@@ -8355,6 +8355,22 @@ const PAYMENT_ORDERS: Record<string, StructuredErrorEntry> = {
     message_sv: 'Samma referens har redan använts för en annan faktura. Förbered betalningen igen.',
     message_en: 'The same reference was already used for another invoice. Prepare the payment again.',
   },
+  // Paying the skattekonto through the bank (lib/payments/orders/prepare-skattekonto.ts).
+  SKATTEKONTO_PAYMENT_ALREADY_IN_PAYMENT: {
+    httpStatus: 409,
+    message_sv: 'En betalning till Skatteverket väntar redan under Betalningar.',
+    message_en: 'A payment to Skatteverket is already waiting under Payments.',
+  },
+  SKATTEKONTO_PAYMENT_NOTHING_DUE: {
+    httpStatus: 409,
+    message_sv: 'Det finns inget att betala in till Skatteverket just nu. Ange ett belopp om du vill betala in ändå.',
+    message_en: 'Nothing needs paying in to Skatteverket right now. Enter an amount to pay in anyway.',
+  },
+  SKATTEKONTO_PAYMENT_OCR_MISSING: {
+    httpStatus: 409,
+    message_sv: 'OCR-numret till skattekontot saknas. Lägg in företagets organisationsnummer eller koppla Skatteverket så hämtas det.',
+    message_en: 'The OCR number for the tax account is missing. Add the company\'s organisation number or connect Skatteverket to fetch it.',
+  },
   PAYMENT_ORDERS_MIXED_CURRENCY: {
     httpStatus: 400,
     message_sv: 'Betalningar i olika valutor signeras var för sig.',

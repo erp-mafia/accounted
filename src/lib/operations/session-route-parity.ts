@@ -441,6 +441,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/payments/orders/approve': covered([`POST ${V}/payment-orders/approve`], 'attestation is a person\'s act: v1 only (an API key is a person\'s tool), no MCP tool'),
   'POST /api/payments/orders/unapprove': covered([`POST ${V}/payment-orders/unapprove`]),
   'POST /api/payments/orders/:id/cancel': covered([`POST ${V}/payment-orders/:id/cancel`, 'gnubok_cancel_payment_order']),
+  'POST /api/payments/orders/skattekonto': gap('P2', 'prepare a bank payment in to the skattekonto (bankgiro 5050-1055, the company OCR): the dashboard only in v1, no v1 endpoint or MCP tool yet; approving and signing it are the supplier payments\' doors'),
   'POST /api/payments/orders/:id/resolve': uiOnly('a person attests what the bank cannot tell (a payment that never reached the bank, or one paid): never an agent'),
   'POST /api/payments/signing': uiOnly(PAYMENT_SIGNING),
   'POST /api/payments/signing/:id/poll': uiOnly(PAYMENT_SIGNING),
@@ -791,4 +792,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 135
+export const GAP_CEILING = 136
