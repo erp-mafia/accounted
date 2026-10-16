@@ -20,6 +20,7 @@
  * Imports nothing that reaches lib/init (v1 routes import this module).
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import {
   API_KEY_SCOPES,
   findStageApproveConflict,
@@ -69,6 +70,15 @@ export interface ServiceAccountView {
 
 export interface ServiceAccountDetailView extends ServiceAccountView {
   keys: ServiceAccountKeyView[]
+}
+
+/** One account for an overview: its view, who sponsors it by name, and how many keys it has. */
+export interface ServiceAccountSummary extends ServiceAccountView {
+  /** The sponsor's name, else their email; null when neither is on file. */
+  sponsor_name: string | null
+  /** Keys that work (not revoked); 0 for a revoked account. */
+  live_key_count: number
+  revoked_key_count: number
 }
 
 /** A domain refusal: a structured error code (lib/errors/structured-errors.ts) and its details. */
@@ -157,7 +167,7 @@ function isAdminRole(role: string | null | undefined): boolean {
 export async function assertCanManageServiceAccounts(
   supabase: SupabaseClient,
   companyId: string,
-  caller: ServiceAccountCaller,
+  caller: Pick<ServiceAccountCaller, 'userId' | 'serviceAccount'>,
 ): Promise<ServiceAccountFailure | null> {
   if (caller.serviceAccount) {
     return failure('SERVICE_ACCOUNT_KEY_NOT_PERMITTED', { service_account_id: caller.serviceAccount.id })
@@ -252,6 +262,53 @@ export async function listServiceAccounts(
   return [...views.filter((v) => v.status !== 'revoked'), ...views.filter((v) => v.status === 'revoked')]
 }
 
+/**
+ * The company's service accounts for an overview (the MCP list tool): each
+ * account's view with its sponsor's name and its live and revoked key counts.
+ * Never a secret: keys are only counted.
+ */
+export async function summarizeServiceAccounts(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<ServiceAccountSummary[]> {
+  const accounts = await listServiceAccounts(supabase, companyId)
+  if (accounts.length === 0) return []
+  const ids = accounts.map((account) => account.id)
+  const sponsors = [...new Set(accounts.map((account) => account.sponsor_user_id))]
+  const [keys, profiles] = await Promise.all([
+    // Revoked keys accumulate for as long as the accounts are kept: paged.
+    fetchAllRows<{ id: string; service_account_id: string; revoked_at: string | null }>(({ from, to }) =>
+      supabase
+        .from('api_keys')
+        .select('id, service_account_id, revoked_at')
+        .eq('company_id', companyId)
+        .in('service_account_id', ids)
+        .order('id', { ascending: true })
+        .range(from, to),
+    ),
+    supabase.from('profiles').select('id, full_name, email').in('id', sponsors),
+  ])
+  if (profiles.error) throw profiles.error
+  const names = new Map(
+    ((profiles.data ?? []) as Array<{ id: string; full_name: string | null; email: string | null }>).map((p) => [
+      p.id,
+      p.full_name?.trim() || p.email?.trim() || null,
+    ]),
+  )
+  const live = new Map<string, number>()
+  const revoked = new Map<string, number>()
+  for (const key of keys) {
+    const counts = key.revoked_at ? revoked : live
+    counts.set(key.service_account_id, (counts.get(key.service_account_id) ?? 0) + 1)
+  }
+  return accounts.map((account) => ({
+    ...account,
+    sponsor_name: names.get(account.sponsor_user_id) ?? null,
+    live_key_count: live.get(account.id) ?? 0,
+    revoked_key_count: revoked.get(account.id) ?? 0,
+  }))
+}
+
 async function loadAccount(
   supabase: SupabaseClient,
   companyId: string,
@@ -339,11 +396,15 @@ export async function createServiceAccount(
   return { ok: true, value: view! }
 }
 
-/** Revoke an account and with it every key it has. Idempotent. */
+/**
+ * Revoke an account and with it every key it has. Idempotent. The database
+ * re-checks that `caller.userId` is an owner or admin: the v1 door, the MCP
+ * approval and an approval in the app all reach the same RPC.
+ */
 export async function revokeServiceAccount(
   supabase: SupabaseClient,
   companyId: string,
-  caller: ServiceAccountCaller,
+  caller: Pick<ServiceAccountCaller, 'userId' | 'actor'>,
   serviceAccountId: string,
 ): Promise<ServiceAccountResult<ServiceAccountView>> {
   const { data, error } = await supabase.rpc('revoke_service_account', {

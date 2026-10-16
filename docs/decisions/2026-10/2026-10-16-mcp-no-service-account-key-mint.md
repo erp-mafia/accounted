@@ -1,0 +1,1 @@
+[2026-10-16] MCP gets no tool that mints a service-account key, only list and a staged revoke: a minted secret would pass through the chat transcript and the host's logs, while keys are otherwise shown once over v1 and stored only as SHA-256.

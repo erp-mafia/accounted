@@ -33,6 +33,7 @@ vi.mock('@/lib/supabase/server', () => ({
 const keyFixture = vi.hoisted(() => ({
   apiKeyName: 'MCP-klient (OAuth)',
   client: 'claude' as string | null,
+  serviceAccount: null as { id: string; name: string } | null,
 }))
 
 vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
@@ -65,6 +66,7 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
       apiKeyId: 'key-oauth-1',
       apiKeyName: keyFixture.apiKeyName,
       mode: 'live',
+      serviceAccount: keyFixture.serviceAccount,
     })),
     createServiceClientNoCookies: vi.fn(() => supabase),
   }
@@ -81,6 +83,7 @@ vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
 })
 
 import { handleMcpRequest } from '../server'
+import { appendProcessingHistory } from '@/lib/processing-history/append'
 
 function approveRequest(): Request {
   return new Request('http://localhost:3000/api/extensions/ext/mcp-server/mcp', {
@@ -109,6 +112,7 @@ describe('MCP approval through an OAuth connector: commit actor', () => {
     eventBus.clear()
     keyFixture.apiKeyName = 'MCP-klient (OAuth)'
     keyFixture.client = 'claude'
+    keyFixture.serviceAccount = null
     commitSpy.mockResolvedValue({ status: 'committed' })
   })
 
@@ -134,5 +138,26 @@ describe('MCP approval through an OAuth connector: commit actor', () => {
     keyFixture.apiKeyName = 'Claude (Anthropic)'
     const options = await approveAndReadCommitOptions()
     expect(options.actor).toMatchObject({ type: 'api_key', label: 'Claude (Anthropic)' })
+  })
+
+  it("stamps service_account for a service account's key, on the commit and in the processing history", async () => {
+    keyFixture.apiKeyName = 'Nyckel 1'
+    keyFixture.serviceAccount = { id: 'sa-1', name: 'Nattlig synk' }
+    const options = await approveAndReadCommitOptions()
+    expect(options.actor).toMatchObject({ type: 'service_account', label: 'Nattlig synk' })
+    expect(appendProcessingHistory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: 'PendingOperationApproved',
+        actor: { type: 'service_account', id: 'key-oauth-1', label: 'Nattlig synk' },
+      }),
+    )
+  })
+
+  it('keeps api_key in the processing history for a person key', async () => {
+    keyFixture.apiKeyName = 'Integration'
+    await approveAndReadCommitOptions()
+    expect(appendProcessingHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ actor: { type: 'api_key', id: 'key-oauth-1', label: 'Integration' } }),
+    )
   })
 })

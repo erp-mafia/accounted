@@ -160,6 +160,11 @@ const RISK_TIERS = {
   deactivate_accounts: 'low',
   update_company_tax_profile: 'high',
   update_bookkeeping_lock: 'high',
+  // Revoking a service account (lib/service-accounts) revokes every key it
+  // has, at once and for good: no booking impact, but final, and an
+  // integration stops mid-run. The commit re-checks that the approver is an
+  // owner or admin (revoke_service_account, migration 20261016120000).
+  revoke_service_account: 'high',
   update_dimension: 'low',
   // Deleting is refused by the DB guard when anything is booked on the
   // dimension, but it removes the dimension and its values for good.

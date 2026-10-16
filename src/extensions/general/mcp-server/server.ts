@@ -114,7 +114,7 @@ import {
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
 import { dbError, errorCauseTag } from '@/lib/errors/db-error'
-import { getStructuredError } from '@/lib/errors/get-structured-error'
+import { errorResponseFromCode, getStructuredError } from '@/lib/errors/get-structured-error'
 import {
   badArgument,
   codedRefusal,
@@ -125,6 +125,12 @@ import {
   type FieldIssue,
 } from '@/lib/errors/refusal'
 import { creditBooksOriginalFirst, creditNoteNeedsJournalEntry, invoiceBookingMoment } from '@/lib/bookkeeping/booking-mode'
+import {
+  assertCanManageServiceAccounts,
+  getServiceAccount,
+  summarizeServiceAccounts,
+} from '@/lib/service-accounts/service'
+import { isUuid } from '@/lib/invariants/uuid'
 import {
   buildIssuePreview,
   buildMarkPaidPreview,
@@ -1921,6 +1927,40 @@ interface StageRequest extends StageOptions {
  */
 function stage({ supabase, companyId, userId, type, title, params, preview, actor, next, ...options }: StageRequest) {
   return stagePendingOperation(supabase, companyId, userId, type, title, params, preview, actor, next, options)
+}
+
+/**
+ * The processing_history actor type of a connection: a service account's key
+ * as service_account (its label is the account's name), any other key as
+ * api_key, everything else as user.
+ */
+function processingHistoryActorType(actor: ActorContext | undefined): 'user' | 'api_key' | 'service_account' {
+  if (actor?.type !== 'api_key') return 'user'
+  return actor.serviceAccountId ? 'service_account' : 'api_key'
+}
+
+/**
+ * The gate both service-account tools run first, the same one the v1 doors
+ * run (lib/service-accounts): a person's key, held by an owner or admin of
+ * the company. A service account's key never manages service accounts.
+ */
+async function assertServiceAccountManager(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  actor: ActorContext | undefined,
+): Promise<void> {
+  const refusal = await assertCanManageServiceAccounts(supabase, companyId, {
+    userId,
+    serviceAccount: actor?.serviceAccountId ? { id: actor.serviceAccountId, name: actor.label ?? '' } : null,
+  })
+  if (!refusal) return
+  throw codedRefusal(
+    refusal.code,
+    refusal.code === 'SERVICE_ACCOUNT_KEY_NOT_PERMITTED'
+      ? "A service account's key cannot manage service accounts: use a key that belongs to an owner or admin."
+      : 'Only an owner or admin of the company can manage its service accounts.',
+  )
 }
 
 /** The customer tools' wire names for the schema fields they map onto. */
@@ -4112,7 +4152,7 @@ async function commitStagedOperation(params: {
         ...(operation.batch_id ? { batch_id: operation.batch_id } : {}),
       },
       actor: {
-        type: actor?.type === 'api_key' ? 'api_key' : 'user',
+        type: processingHistoryActorType(actor),
         id: actor?.id ?? userId,
         ...(actor?.label ? { label: actor.label } : {}),
       },
@@ -24494,7 +24534,8 @@ export const tools: McpTool[] = [
         reason,
         actor: {
           userId,
-          type: actor?.type ?? 'user',
+          // A service account's key rejects as the service account, as on v1.
+          type: actor?.type === 'api_key' && actor.serviceAccountId ? 'service_account' : (actor?.type ?? 'user'),
           ...(actor?.id ? { id: actor.id } : {}),
           ...(actor?.label ? { label: actor.label } : {}),
         },
@@ -24639,7 +24680,7 @@ export const tools: McpTool[] = [
             matched_supplier_id: matchedSupplierId,
           },
           actor: {
-            type: actor?.type === 'api_key' ? 'api_key' : 'user',
+            type: processingHistoryActorType(actor),
             id: actor?.id ?? userId,
             ...(actor?.label ? { label: actor.label } : {}),
           },
@@ -25269,6 +25310,139 @@ export const tools: McpTool[] = [
       })
     },
   },
+  // ── Service accounts (lib/service-accounts) ──────────────────
+  // Read and revoke only. No tool mints a key: a secret must never pass
+  // through a chat transcript (keys are minted on v1 and shown once there).
+
+  {
+    name: 'gnubok_list_service_accounts',
+    keywords: ['tjänstekonto', 'tjänstekonton', 'integration', 'integrationer', 'api-nycklar', 'sponsor'],
+    title: 'List Service Accounts',
+    description:
+      "List the company's service accounts (integrations with a human sponsor): name, sponsor, status (active, suspended, revoked) and key counts, never a secret. Owners and admins only. Use before gnubok_revoke_service_account.",
+    inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        service_accounts: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              service_account_id: { type: 'string' },
+              name: { type: 'string', description: 'The actor every write the account makes is recorded under' },
+              status: {
+                type: 'string',
+                enum: ['active', 'suspended', 'revoked'],
+                description: 'suspended: the sponsor is no longer an owner or admin (or the company is archived), so its keys are refused until that changes',
+              },
+              sponsor_user_id: { type: 'string' },
+              sponsor_name: { type: ['string', 'null'], description: 'The sponsor: the person who answers for the account' },
+              live_key_count: { type: 'number' },
+              revoked_key_count: { type: 'number' },
+              created_at: { type: 'string' },
+              created_by_user_id: { type: 'string' },
+              revoked_at: { type: ['string', 'null'] },
+              revoked_by_user_id: { type: ['string', 'null'] },
+            },
+            required: [
+              'service_account_id', 'name', 'status', 'sponsor_user_id', 'sponsor_name',
+              'live_key_count', 'revoked_key_count', 'created_at', 'created_by_user_id', 'revoked_at', 'revoked_by_user_id',
+            ],
+          },
+        },
+        count: { type: 'number' },
+      },
+      required: ['service_accounts', 'count'],
+    },
+    annotations: ANNOTATIONS_READ_ONLY,
+    // Search-only: an administrative read most connections never need, kept
+    // out of the default catalog (tools/list budget).
+    catalogVisibility: 'search',
+    async execute(_args, companyId, userId, supabase, actor) {
+      await assertServiceAccountManager(supabase, companyId, userId, actor)
+      const accounts = await summarizeServiceAccounts(supabase, companyId)
+      const serviceAccounts = accounts.map((account) => ({
+        service_account_id: account.id,
+        name: account.name,
+        status: account.status,
+        sponsor_user_id: account.sponsor_user_id,
+        sponsor_name: account.sponsor_name,
+        live_key_count: account.live_key_count,
+        revoked_key_count: account.revoked_key_count,
+        created_at: account.created_at,
+        created_by_user_id: account.created_by,
+        revoked_at: account.revoked_at,
+        revoked_by_user_id: account.revoked_by,
+      }))
+      return { service_accounts: serviceAccounts, count: serviceAccounts.length }
+    },
+  },
+
+  {
+    name: 'gnubok_revoke_service_account',
+    keywords: ['återkalla tjänstekonto', 'tjänstekonto', 'stäng av integration', 'läckt nyckel'],
+    title: 'Revoke Service Account',
+    description:
+      'Stage revoking a service account and all its keys: final, the next call with any of them is refused. High risk: an owner or admin approves with gnubok_approve_pending_operation (confirmed=true) or in the app. Id from gnubok_list_service_accounts.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        service_account_id: { type: 'string', description: 'From gnubok_list_service_accounts' },
+        ...STAGING_ARGS_PROPERTIES,
+      },
+      required: ['service_account_id'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: ANNOTATIONS_DESTRUCTIVE_WRITE,
+    catalogVisibility: 'search',
+    async execute(args, companyId, userId, supabase, actor) {
+      const serviceAccountId = typeof args.service_account_id === 'string' ? args.service_account_id.trim() : ''
+      if (!serviceAccountId) throw badArgument('service_account_id', 'service_account_id is required')
+      await assertServiceAccountManager(supabase, companyId, userId, actor)
+
+      // A malformed id names no account, like an id of another company.
+      const account = isUuid(serviceAccountId)
+        ? await getServiceAccount(supabase, companyId, serviceAccountId)
+        : null
+      if (!account) {
+        throw codedRefusal(
+          'SERVICE_ACCOUNT_NOT_FOUND',
+          `No service account ${serviceAccountId} in this company: list them with gnubok_list_service_accounts.`,
+        )
+      }
+      if (account.status === 'revoked') {
+        throw codedRefusal(
+          'SERVICE_ACCOUNT_REVOKED',
+          `Service account "${account.name}" is already revoked (${account.revoked_at}): its keys no longer work and nothing is staged.`,
+        )
+      }
+
+      const liveKeys = account.keys.filter((key) => !key.revoked_at)
+      return stage({
+        supabase,
+        companyId,
+        userId,
+        type: 'revoke_service_account',
+        title: `Återkalla tjänstekontot ${account.name}`,
+        params: { service_account_id: account.id },
+        preview: {
+          service_account_id: account.id,
+          name: account.name,
+          status: account.status,
+          sponsor_user_id: account.sponsor_user_id,
+          live_key_count: liveKeys.length,
+          keys_to_revoke: liveKeys.map((key) => ({ api_key_id: key.id, name: key.name, key_prefix: key.key_prefix })),
+          effect:
+            'The account and every live key are revoked at once: the next call with any of them is refused. Final: to continue the integration, create a new service account and mint a key for it on the v1 API. What the account already wrote stays and keeps naming it.',
+        },
+        actor,
+        ...stagingOptions(args),
+      })
+    },
+  },
+
   ...createArkivTools({ readOnly: ANNOTATIONS_READ_ONLY, stagedWrite: ANNOTATIONS_STAGED_WRITE, stagedSchema: STAGED_OPERATION_SCHEMA, stagePendingOperation }),
   // Operations defined once in src/lib/operations: the same contract and
   // rules as their v1 endpoints (operation-tools.ts).
@@ -25873,6 +26047,13 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             'Retry-After': String(RATE_LIMIT_RETRY_AFTER_SECONDS),
           },
         })
+      }
+      // A coded refusal (a suspended service account) answers its own
+      // structured error, the same 403 envelope v1 and /api/events give: the
+      // key itself is live, so a 401 challenge would only send the client
+      // into a sign-in that cannot fix it. Everything else is the challenge.
+      if (authResult.code) {
+        return errorResponseFromCode(authResult.code, log, { reason: authResult.error })
       }
       return unauthorized()
     }

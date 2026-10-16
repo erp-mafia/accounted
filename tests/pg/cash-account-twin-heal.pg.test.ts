@@ -121,6 +121,22 @@ describe('company twin plan and atomic receipt', () => {
     await expect(heal('f'.repeat(64))).rejects.toMatchObject({ code: '23505', message: 'CASH_ACCOUNT_OPERATION_ID_CONFLICT' })
   })
 
+  // 20261016130000: the actor list follows ProcessingHistoryActorType.
+  it("records a service account's key as the receipt's actor, and still refuses a type outside the vocabulary", async () => {
+    const reviewed = await plan()
+    const serviceAccountActor = { type: 'service_account', id: randomUUID(), label: 'Nattlig synk' }
+    await client.query('SAVEPOINT unknown_actor')
+    await expect(client.query('SELECT heal_cash_account_twins($1, $2, $3, $4)',
+      [owner.companyId, reviewed.fingerprint, operationId, JSON.stringify({ type: 'robot', label: 'x' })]))
+      .rejects.toMatchObject({ code: '22023', message: 'CASH_ACCOUNT_HEAL_INVALID_INPUT' })
+    await client.query('ROLLBACK TO SAVEPOINT unknown_actor')
+    const result = (await client.query('SELECT heal_cash_account_twins($1, $2, $3, $4) AS result',
+      [owner.companyId, reviewed.fingerprint, operationId, JSON.stringify(serviceAccountActor)])).rows[0].result
+    expect(result).toMatchObject({ operationId, dryRun: false })
+    expect((await client.query('SELECT actor FROM processing_history WHERE event_id = $1', [operationId])).rows)
+      .toEqual([{ actor: serviceAccountActor }])
+  })
+
   it('verifies current bindings after the final twin disappears and excludes bank details from the receipt', async () => {
     await transaction()
     await heal((await plan()).fingerprint)

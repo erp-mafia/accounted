@@ -10,8 +10,9 @@ import {
 import { getClient, getPool, runAsServiceRole, withUserContext } from '@/tests/pg/setup'
 
 /**
- * Covers 20261016110000_journal_entry_verified_principal and
- * 20261016110100_verified_actor_disagreements.
+ * Covers 20261016110000_journal_entry_verified_principal,
+ * 20261016110100_verified_actor_disagreements and
+ * 20261016130100_verified_actor_disagreements_key_actor.
  *
  * Every commit records, beside the actor the application asserts
  * (committed_actor_type / committed_actor_label), the principal the database
@@ -468,6 +469,69 @@ describe('verified_actor_disagreements: the commits the planned refusal rules wo
     expect(later).toEqual([{ n: 0 }])
   })
 
+  // 20261016130100: a key actor is asserted only on the service-role doors
+  // (v1, MCP); a person's JWT naming one is listed as its own reason.
+  it('lists a signed-in commit asserting a key actor, and none of the same actors on the service role', async () => {
+    const s = await seedCompany()
+    const asserted = ['service_account', 'api_key', 'mcp_oauth'] as const
+    const signedIn: Record<string, string> = {}
+    const serviceRole: Record<string, string> = {}
+    for (const type of asserted) {
+      signedIn[type] = (await preparedDraft(s)).entryId
+      serviceRole[type] = (await preparedDraft(s)).entryId
+    }
+    const agentChat = await preparedDraft(s)
+
+    for (const type of asserted) {
+      await commitAsUser(s.userId, s.companyId, signedIn[type], type, `${type} label`)
+      await runAsServiceRole((client) =>
+        client.query(COMMIT_SQL, [s.companyId, serviceRole[type], 'api_key', null, type, `${type} label`]),
+      )
+    }
+    // The in-app assistant commits on the person's own session: not a key actor.
+    await commitAsUser(s.userId, s.companyId, agentChat.entryId, 'agent_chat', null)
+
+    const { rows } = await getPool().query(
+      `SELECT journal_entry_id::text, asserted_actor_type, asserted_actor_label, verified_role,
+              verified_uid::text, reason
+         FROM public.verified_actor_disagreements($1)`,
+      [s.companyId],
+    )
+    expect(rows).toEqual(
+      asserted.map((type) => ({
+        journal_entry_id: signedIn[type],
+        asserted_actor_type: type,
+        asserted_actor_label: `${type} label`,
+        verified_role: 'authenticated',
+        verified_uid: s.userId,
+        reason: 'end_user_asserted_key_actor',
+      })),
+    )
+  })
+
+  it('keeps the machine-actor rule beside the key-actor rule: one row per commit and reason', async () => {
+    const s = await seedCompany()
+    const colleagueId = await insertAuthUser()
+    await insertCompanyMember({ companyId: s.companyId, userId: colleagueId, role: 'member' })
+    const keyByColleague = await preparedDraft(s)
+    const cron = await preparedDraft(s)
+
+    // A colleague's JWT on the owner's draft, asserting an API key: both the
+    // key rule and the uid rule apply.
+    await commitAsUser(colleagueId, s.companyId, keyByColleague.entryId, 'api_key', 'Key')
+    await commitAsUser(s.userId, s.companyId, cron.entryId, 'cron', 'nightly')
+
+    const { rows } = await getPool().query(
+      `SELECT journal_entry_id::text, reason FROM public.verified_actor_disagreements($1)`,
+      [s.companyId],
+    )
+    expect(rows).toEqual([
+      { journal_entry_id: keyByColleague.entryId, reason: 'end_user_asserted_key_actor' },
+      { journal_entry_id: keyByColleague.entryId, reason: 'verified_uid_differs_from_entry_user' },
+      { journal_entry_id: cron.entryId, reason: 'end_user_asserted_machine_actor' },
+    ])
+  })
+
   it('flags an authenticated commit whose uid could not be read', async () => {
     const { companyId, entryId } = await preparedDraft()
     const client = await getClient()
@@ -495,6 +559,15 @@ describe('verified_actor_disagreements: the commits the planned refusal rules wo
     } finally {
       client.release()
     }
+  })
+
+  it('stays a read-only SECURITY INVOKER STABLE function after 20261016130100', async () => {
+    const { rows } = await getPool().query(
+      `SELECT p.prosecdef, p.provolatile, l.lanname
+         FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
+        WHERE p.oid = 'public.verified_actor_disagreements(uuid, timestamptz)'::regprocedure`,
+    )
+    expect(rows).toEqual([{ prosecdef: false, provolatile: 's', lanname: 'sql' }])
   })
 
   it('is for operators only: service_role may run it, the Data API end-user roles may not', async () => {

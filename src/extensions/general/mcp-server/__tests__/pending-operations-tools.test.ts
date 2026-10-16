@@ -459,4 +459,21 @@ describe('gnubok_reject_pending_operation', () => {
       result_data: { rejected_by: 'user-1', rejected_via: 'api_key', actor_id: 'key-1', reason: 'fel konto' },
     })
   })
+
+  it("records a service account's key as service_account, as the v1 reject does", async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: 'op-1', status: 'pending', operation_type: 'x', risk_level: 'low' }], error: null })
+    enqueue({ data: [{ id: 'op-1' }], error: null })
+
+    await rejectTool.execute({ operation_id: 'op-1' }, 'company-1', 'sponsor-1', supabase as never, {
+      type: 'api_key',
+      id: 'key-sa',
+      label: 'Nattlig synk',
+      serviceAccountId: 'sa-1',
+    })
+
+    expect(findCalls('pending_operations', 'update')[0]?.[0]).toMatchObject({
+      result_data: { rejected_by: 'sponsor-1', rejected_via: 'service_account', actor_id: 'key-sa' },
+    })
+  })
 })

@@ -33,7 +33,7 @@ export const API_KEY_SCOPES = {
   // human sponsor, and the keys it acts with. Opt-in on purpose: no key held
   // it before it existed, so no existing grant silently gained the power to
   // mint credentials. A service account's own key never uses it.
-  'service_accounts:manage': { label: 'Tjänstekonton: hantera', description: 'Skapa, lista och återkalla tjänstekonton och deras nycklar (REST /api/v1/companies/{companyId}/service-accounts); endast ägare och administratörer' },
+  'service_accounts:manage': { label: 'Tjänstekonton: hantera', description: 'Skapa, lista och återkalla tjänstekonton och deras nycklar (REST /api/v1/companies/{companyId}/service-accounts; MCP listar och stagar återkallelse, skapar aldrig nycklar); endast ägare och administratörer' },
   'operations:read':    { label: 'Operationer: läs',    description: 'Hämta status för långkörande operationer (importer, bokslut, omvärdering)' },
   'documents:read':     { label: 'Dokument: läs',       description: 'Lista och hämta dokumentbilagor' },
   'documents:write':    { label: 'Dokument: skriv',     description: 'Ladda upp och koppla dokument till verifikationer' },
@@ -225,6 +225,10 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_connect_migration:               'companies:read',
   gnubok_get_company_settings:            'companies:read',
   gnubok_update_company_settings:         'companies:write',
+  // Service accounts: the same opt-in scope as the v1 doors; a service
+  // account's own key never holds it.
+  gnubok_list_service_accounts:           'service_accounts:manage',
+  gnubok_revoke_service_account:          'service_accounts:manage',
   // Transactions
   gnubok_list_uncategorized_transactions:     'transactions:read',
   gnubok_list_cash_accounts:                  'transactions:read',

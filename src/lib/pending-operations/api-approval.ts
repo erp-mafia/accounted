@@ -140,7 +140,13 @@ export async function approvePendingOperationAsApiKey(
         channel: 'api',
         confirmed,
       },
-      actor: { type: 'api_key', id: approver.apiKeyId ?? approver.userId, ...(label ? { label } : {}) },
+      // A service account's key is named as the service account here too,
+      // as on the commit above.
+      actor: {
+        type: serviceAccount ? 'service_account' : 'api_key',
+        id: approver.apiKeyId ?? approver.userId,
+        ...(label ? { label } : {}),
+      },
       occurredAt: new Date(),
     })
   } catch (err) {

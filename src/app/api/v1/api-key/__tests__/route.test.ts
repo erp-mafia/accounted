@@ -161,6 +161,8 @@ describe('GET /api/v1/api-key: the grant', () => {
         { id: COMPANY_B, handle: companyHandle(COMPANY_B), role: 'viewer', access: 'read_only', read_only_code: 'ROLE_READ_ONLY' },
         { id: COMPANY_C, handle: companyHandle(COMPANY_C), role: 'admin', access: 'read_only', read_only_code: 'CONNECTION_READ_ONLY' },
       ],
+      // A person's key belongs to no service account.
+      service_account: null,
     })
     expect(body.meta.request_id).toMatch(/^req_/)
   })
@@ -222,6 +224,43 @@ describe('GET /api/v1/api-key: the grant', () => {
     expect(body.data.companies).toEqual([
       { id: COMPANY_A, handle: companyHandle(COMPANY_A), role: 'member', access: 'read_write', read_only_code: null },
     ])
+  })
+
+  it("names a service account's key: its account's id, name and handle, and the one company it reaches", async () => {
+    const SERVICE_ACCOUNT_ID = '5b6c1d2e-0000-4000-8000-0000000000a1'
+    mockValidate.mockResolvedValue(
+      validKey({
+        apiKeyName: 'Nyckel 1',
+        allowedCompanyIds: [COMPANY_A],
+        serviceAccount: { id: SERVICE_ACCOUNT_ID, name: 'Nattlig fakturasynk' },
+      }),
+    )
+    mockServiceClient.mockReturnValue(
+      makeSupabase({ company_members: { data: [{ company_id: COMPANY_A, role: 'owner' }], error: null } }),
+    )
+
+    const res = await GET(makeRequest(), staticRouteContext())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.service_account).toEqual({
+      id: SERVICE_ACCOUNT_ID,
+      name: 'Nattlig fakturasynk',
+      handle: toHandle('service_account', SERVICE_ACCOUNT_ID),
+    })
+    expect(body.data.service_account.handle).toBe('svc_5b6c1d2e0000400080000000000000a1')
+    expect(body.data.company_access).toBe('allowlist')
+    expect(body.data.companies.map((c: { id: string }) => c.id)).toEqual([COMPANY_A])
+  })
+
+  it("answers a suspended service account's key 403 SERVICE_ACCOUNT_SUSPENDED", async () => {
+    mockValidate.mockResolvedValue({
+      error: 'Service account suspended: its sponsor is no longer an owner or admin of the company',
+      status: 403,
+      code: 'SERVICE_ACCOUNT_SUSPENDED',
+    })
+    const res = await GET(makeRequest(), staticRouteContext())
+    expect(res.status).toBe(403)
+    expect((await res.json()).error.code).toBe('SERVICE_ACCOUNT_SUSPENDED')
   })
 
   it('returns 500 INTERNAL_ERROR when the membership read fails', async () => {

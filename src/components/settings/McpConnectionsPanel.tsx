@@ -284,6 +284,14 @@ export function McpConnectionsPanel({
                           {t('badge_test')}
                         </Badge>
                       )}
+                      {/* A service account's key acts as the account, not as
+                          the person who sponsors it: marked so it is not read
+                          as one of their own connections. */}
+                      {key.service_account && (
+                        <Badge variant="secondary" className="max-w-48 shrink truncate px-1.5 py-0 text-[11px] font-normal">
+                          {t('badge_service_account', { name: key.service_account.name })}
+                        </Badge>
+                      )}
                     </span>
                     <span className="hidden w-40 shrink-0 truncate text-xs text-muted-foreground md:block">
                       {kind === 'key' ? (

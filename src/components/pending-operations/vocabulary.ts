@@ -72,6 +72,7 @@ export const singleActionWarnings: Record<string, string> = {
   update_company_settings: 'Genom att klicka godkänn så ändras företagsinställningarna. Betalningsuppgifterna styr vart kunderna betalar kommande fakturor.',
   update_company_tax_profile: 'Genom att klicka godkänn så ändras företagets skatte- och momsuppgifter och skattedeadlines skapas om. Ändra bara det som redan gäller hos Skatteverket.',
   update_bookkeeping_lock: 'Genom att klicka godkänn så ändras låsdatumet för bokföringen. Flyttas det bakåt kan redan låsta datum ändras igen.',
+  revoke_service_account: 'Genom att klicka godkänn så återkallas tjänstekontot och alla dess nycklar: nästa anrop med någon av dem nekas. Det går inte att ångra, och bara en ägare eller administratör kan godkänna. Det som kontot redan har gjort finns kvar och visar fortfarande kontots namn.',
   send_payslips: 'Genom att klicka godkänn så får varje anställd i lönekörningen ett e-postmeddelande med en säker länk till sitt lönebesked, och länkar som skickats tidigare slutar fungera.',
   unapprove_salary_run: 'Genom att klicka godkänn så återkallas godkännandet och lönekörningen går tillbaka till granskning. En genererad men inte inskickad AGI tas bort och en redan skapad betalfil räknas inte längre som aktuell.',
   attach_salary_expense_claims: 'Genom att klicka godkänn så läggs den anställdas öppna utlägg på lönebeskedet som skattefria rader och betalas ut med lönen.',

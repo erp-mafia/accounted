@@ -713,6 +713,51 @@ describe('GET /api/settings/api-keys', () => {
     expect(listUserCompaniesForPickerMock).toHaveBeenCalledWith(expect.anything(), 'user-1', { activeCompanyId: ACTIVE })
   })
 
+  it("names a service-account key's account (company-scoped read), and null for a person's key", async () => {
+    getActiveCompanyIdMock.mockResolvedValue(ACTIVE)
+    listUserCompaniesForPickerMock.mockResolvedValue(memberships)
+    const ACCOUNT = '5b6c1d2e-0000-4000-8000-0000000000a1'
+    setupFrom({
+      listResult: {
+        data: [
+          { id: 'ak-sa', key_prefix: 'gnubok_sk_s', name: 'Nyckel 1', scopes: ['invoices:read'], revoked_at: null, created_at: '2026-10-16T10:00:00Z', user_id: 'user-1', service_account_id: ACCOUNT },
+          { id: 'ak-p', key_prefix: 'gnubok_sk_p', name: 'Min nyckel', scopes: ['reports:read'], revoked_at: null, created_at: '2026-10-15T10:00:00Z', user_id: 'user-1', service_account_id: null },
+        ],
+      },
+    })
+    const service = setupServiceFrom({
+      api_key_companies: { data: [{ api_key_id: 'ak-sa', company_id: ACTIVE, access: 'write' }] },
+      service_accounts: { data: [{ id: ACCOUNT, name: 'Nattlig synk' }] },
+    })
+
+    const res = await GET(createMockRequest('/api/settings/api-keys'), noParams)
+    const { status, body } = await parseJsonResponse<{ data: Array<Record<string, unknown>> }>(res)
+    expect(status).toBe(200)
+    expect(body.data).toEqual([
+      expect.objectContaining({ id: 'ak-sa', service_account: { id: ACCOUNT, name: 'Nattlig synk' } }),
+      expect.objectContaining({ id: 'ak-p', service_account: null }),
+    ])
+    // The raw column is folded into service_account, not returned beside it.
+    expect(body.data.every((row) => !('service_account_id' in row))).toBe(true)
+    expect(service.find('service_accounts', 'select')).toEqual(['id, name'])
+    expect(service.calls).toContainEqual({ table: 'service_accounts', method: 'eq', args: ['company_id', ACTIVE] })
+    expect(service.find('service_accounts', 'in')).toEqual(['id', [ACCOUNT]])
+  })
+
+  it('reads no service account when no key belongs to one', async () => {
+    getActiveCompanyIdMock.mockResolvedValue(ACTIVE)
+    listUserCompaniesForPickerMock.mockResolvedValue(memberships)
+    setupFrom({
+      listResult: {
+        data: [{ id: 'ak-p', key_prefix: 'gnubok_sk_p', name: 'Min nyckel', scopes: ['reports:read'], revoked_at: null, created_at: '2026-10-15T10:00:00Z', user_id: 'user-1' }],
+      },
+    })
+    const service = setupServiceFrom({ api_key_companies: { data: [] } })
+    const res = await GET(createMockRequest('/api/settings/api-keys'), noParams)
+    expect(res.status).toBe(200)
+    expect(service.calls.some((c) => c.table === 'service_accounts')).toBe(false)
+  })
+
   it('skips the allowlist query when there are no keys', async () => {
     setupFrom({ listResult: { data: [] } })
     const res = await GET(createMockRequest('/api/settings/api-keys'), noParams)
