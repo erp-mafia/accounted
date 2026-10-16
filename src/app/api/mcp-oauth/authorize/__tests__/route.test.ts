@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   getActiveCompanyId: vi.fn(),
   getBranding: vi.fn(),
   createAuthCode: vi.fn<(...args: unknown[]) => string>(() => 'test-auth-code'),
+  resolveBrandResultByHost: vi.fn(),
   // Default: a single-company user, so the consent page renders no picker and
   // every pre-existing test keeps its shape. Multi-company tests override
   // with mockResolvedValue; clearAllMocks keeps this implementation.
@@ -61,6 +62,12 @@ vi.mock('@/lib/company/context', () => ({
 
 vi.mock('@/lib/branding/service', () => ({
   getBranding: () => mocks.getBranding(),
+}))
+
+// The brands table, the registry of white-label hosts the issuer may name.
+vi.mock('@/lib/branding/resolve', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/branding/resolve')>()),
+  resolveBrandResultByHost: (...args: unknown[]) => mocks.resolveBrandResultByHost(...args),
 }))
 
 import { GET, POST } from '../route'
@@ -1579,5 +1586,39 @@ describe('RFC 9207 iss parameter on authorization responses', () => {
     const location = new URL(response.headers.get('location')!)
     expect(location.searchParams.get('error')).toBe('access_denied')
     expect(location.searchParams.get('iss')).toBe('https://app.test.example')
+  })
+
+  it('names the registered byrå domain as iss when the consent ran on it', async () => {
+    // Discovery fetched on a brand domain advertises that domain as issuer;
+    // the authorization response must carry the same value or the client's
+    // mix-up check rejects it.
+    mocks.resolveBrandResultByHost.mockResolvedValue({
+      brand: { domain: 'byra.test.example' },
+      lookupFailed: false,
+    })
+    const brandUrl = buildAuthorizeUrl(authorizeParams).replace(
+      'http://localhost',
+      'https://byra.test.example',
+    )
+
+    const success = await POST(
+      new Request(brandUrl, {
+        method: 'POST',
+        body: consentForm('mcp'),
+        headers: { host: 'byra.test.example' },
+      }),
+    )
+    expect(new URL(success.headers.get('location')!).searchParams.get('iss')).toBe(
+      'https://byra.test.example',
+    )
+
+    const deny = new FormData()
+    deny.set('consent', 'deny')
+    const denied = await POST(
+      new Request(brandUrl, { method: 'POST', body: deny, headers: { host: 'byra.test.example' } }),
+    )
+    expect(new URL(denied.headers.get('location')!).searchParams.get('iss')).toBe(
+      'https://byra.test.example',
+    )
   })
 })

@@ -86,7 +86,7 @@ export const mcpServerExtension: Extension = {
       // authorization server and nothing tenant-specific.
       handler: async (request: Request) => {
         if (isForbiddenOrigin(request)) return forbiddenOriginResponse()
-        return NextResponse.json(buildProtectedResourceMetadata(request))
+        return NextResponse.json(await buildProtectedResourceMetadata(request))
       },
     },
   ],

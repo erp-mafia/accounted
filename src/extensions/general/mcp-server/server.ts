@@ -26037,10 +26037,12 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
   // app.gnubok.se names itself, and clients refuse the mismatch ("Protected
   // resource ... does not match expected"). resolveDiscoveryBaseUrl is what
   // the metadata route itself uses, so header and document always agree, and
-  // it reflects allowlisted hosts only: a spoofed Host falls back to canonical.
+  // it reflects only hosts this deployment serves (the legacy host, local
+  // development, registered brand domains): a spoofed Host falls back to
+  // canonical.
   const resourceMetadataUrl = new URL(
     '/.well-known/oauth-protected-resource',
-    resolveDiscoveryBaseUrl(request),
+    await resolveDiscoveryBaseUrl(request),
   )
   if (toolNamespace === 'accounted') {
     resourceMetadataUrl.searchParams.set('tool_namespace', 'accounted')

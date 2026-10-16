@@ -8,5 +8,5 @@ import { buildProtectedResourceMetadata } from '@/lib/auth/protected-resource-me
  * lib/auth/protected-resource-metadata.ts for why all three exist).
  */
 export async function GET(request: Request) {
-  return NextResponse.json(buildProtectedResourceMetadata(request))
+  return NextResponse.json(await buildProtectedResourceMetadata(request))
 }
