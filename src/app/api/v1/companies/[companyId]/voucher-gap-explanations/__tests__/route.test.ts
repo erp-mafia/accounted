@@ -119,7 +119,8 @@ describe('POST .../voucher-gap-explanations', () => {
     const res = await POST(request({ ...BODY, explanation: `  ${BODY.explanation}  ` }), params)
 
     expect(res.status).toBe(201)
-    expect((await res.json()).data).toEqual(SAVED)
+    // Typed handle (lib/handles), added beside the unchanged id.
+    expect((await res.json()).data).toEqual({ ...SAVED, handle: 'vgap_cccccccccccc4ccc8ccccccccccccccc' })
     expect(mock.payloads('voucher_gap_explanations', 'insert')[0]).toMatchObject({
       company_id: COMPANY_ID,
       explanation: BODY.explanation,

@@ -1,0 +1,1 @@
+[2026-10-16] MCP typed id fields advertise one handle-or-UUID pattern per type instead of format uuid, applied once in projectToolInputSchema; company_id drops the format (135 copies): format-enforcing hosts stop refusing handles, for +142 tokens single-company and -398 multi-company.

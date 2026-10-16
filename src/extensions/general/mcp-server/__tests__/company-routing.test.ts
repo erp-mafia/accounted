@@ -60,8 +60,10 @@ describe('MCP company routing', () => {
     expect(projected).not.toBe(inputSchema)
     expect(projected.properties).toEqual({
       invoice_id: { type: 'string' },
-      company_id: expect.objectContaining({ type: 'string', format: 'uuid' }),
+      company_id: expect.objectContaining({ type: 'string' }),
     })
+    // A cmp_ handle is a company id too (handle-args.ts): no uuid format.
+    expect((projected.properties as Record<string, object>).company_id).not.toHaveProperty('format')
     expect(inputSchema.properties).not.toHaveProperty('company_id')
     expect(projected.additionalProperties).toBe(false)
   })

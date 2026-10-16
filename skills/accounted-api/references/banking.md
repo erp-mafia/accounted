@@ -2326,7 +2326,7 @@ Response `200`:
     skattekonto: { saldo_skatteverket: number | null, fetched_at: string | null, history_start: string | null, opening_difference: number | null, upcoming_count: number, upcoming_total: number, ledger_balance_before_start: number | null, before_history_count?: number, before_history_total?: number, covered?: { through_date: string, kind: "events_equal" | "ledger_agrees", event_count: number, event_total: number, journal_entry_ids: string[], entry_count: number } | null } | null,
     bank: Record<string, unknown> | null,
     manual?: { period_id: string, period_start: string, period_end: string, opening_balance: number, movement: number, closing_balance: number, specification: { provider: "ar" | "ap" | "vacation", label_sv: string, label_en: string, amount: number, unconverted_fx_count: number } | null } | null,
-    signoff?: { id: string, account_key: string, through_date: string, external_balance: number | null, ledger_balance: number | null, unexplained_difference: number | null, note: string | null, signed_by: string, signed_at: string, reopened_at: string | null, reopened_by: string | null, reopen_reason: string | null } | null
+    signoff?: { id: string, handle?: string, account_key: string, through_date: string, external_balance: number | null, ledger_balance: number | null, unexplained_difference: number | null, note: string | null, signed_by: string, signed_at: string, reopened_at: string | null, reopened_by: string | null, reopen_reason: string | null } | null
   },
   meta: {
     request_id: string,
@@ -2856,7 +2856,7 @@ Response `200`:
 ```ts
 {
   data: {
-    signoffs: { id: string, account_key: string, through_date: string, external_balance: number | null, ledger_balance: number | null, unexplained_difference: number | null, note: string | null, signed_by: string, signed_at: string, reopened_at: string | null, reopened_by: string | null, reopen_reason: string | null }[]
+    signoffs: { id: string, handle?: string, account_key: string, through_date: string, external_balance: number | null, ledger_balance: number | null, unexplained_difference: number | null, note: string | null, signed_by: string, signed_at: string, reopened_at: string | null, reopened_by: string | null, reopen_reason: string | null }[]
   },
   meta: {
     request_id: string,
@@ -2938,7 +2938,7 @@ Response `200`:
 {
   data: {
     dry_run: boolean,
-    signoff?: { id: string, account_key: string, through_date: string, external_balance: number | null, ledger_balance: number | null, unexplained_difference: number | null, note: string | null, signed_by: string, signed_at: string, reopened_at: string | null, reopened_by: string | null, reopen_reason: string | null },
+    signoff?: { id: string, handle?: string, account_key: string, through_date: string, external_balance: number | null, ledger_balance: number | null, unexplained_difference: number | null, note: string | null, signed_by: string, signed_at: string, reopened_at: string | null, reopened_by: string | null, reopen_reason: string | null },
     would_sign?: { account_key: string, through_date: string, external_balance: number | null, ledger_balance: number | null, unexplained_difference: number | null, is_reconciled: boolean, forced: boolean, previous_through_date: string | null }
   },
   meta: {
@@ -3019,7 +3019,7 @@ Response `200`:
 ```ts
 {
   data: {
-    signoff: { id: string, account_key: string, through_date: string, external_balance: number | null, ledger_balance: number | null, unexplained_difference: number | null, note: string | null, signed_by: string, signed_at: string, reopened_at: string | null, reopened_by: string | null, reopen_reason: string | null }
+    signoff: { id: string, handle?: string, account_key: string, through_date: string, external_balance: number | null, ledger_balance: number | null, unexplained_difference: number | null, note: string | null, signed_by: string, signed_at: string, reopened_at: string | null, reopened_by: string | null, reopen_reason: string | null }
   },
   meta: {
     request_id: string,

@@ -26,16 +26,9 @@ import '../load-routes'
 const HANDLE_FOLLOW_UPS: Readonly<Record<string, string>> = {
   'accounts.create': 'no prefix by design: an account is addressed by its account_number',
   'accounts.update': 'no prefix by design: an account is addressed by its account_number',
-  'audit-trail.list': 'audit log rows have no prefix yet',
-  'portfolio.overview': 'data.team is a byrå team, which has no prefix yet',
-  'reconciliation.accounts.status': 'reconciliation signoffs have no prefix yet',
-  'reconciliation.accounts.signoff.list': 'reconciliation signoffs have no prefix yet',
-  'reconciliation.accounts.signoff.create': 'reconciliation signoffs have no prefix yet',
-  'reconciliation.accounts.signoff.reopen': 'reconciliation signoffs have no prefix yet',
-  'voucher-gap-explanations.create': 'voucher gap explanations have no prefix yet',
 }
 /** HANDLE_FOLLOW_UPS may shrink, never grow past this. */
-const MAX_FOLLOW_UPS = 9
+const MAX_FOLLOW_UPS = 2
 
 /**
  * Endpoints whose `id` is not a resource UUID, so no handle can ever apply.
@@ -176,7 +169,7 @@ describe('path parameter typing', () => {
       'salary-runs/:id': 'salary_run',
       'sie/:id': null,
       'signatures/:signatureId': null,
-      'signoff/:signoffId': null,
+      'signoff/:signoffId': 'reconciliation_signoff',
       'supplier-invoices/:id': 'supplier_invoice',
       'service-accounts/:id': 'service_account',
       'supplier-payment-batches/:id': 'supplier_payment_batch',

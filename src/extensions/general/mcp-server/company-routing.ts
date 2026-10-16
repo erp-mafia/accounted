@@ -14,6 +14,7 @@ import {
 } from '@/lib/portfolio/scope'
 import type { CompanyRole } from '@/types'
 import { COMPANY_PIN_QUERY_PARAM } from './tool-namespace'
+import { handleAwareInputSchema } from './handle-args'
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -239,9 +240,16 @@ export function isSimpleCompanyMode(reachableCount: number | null): boolean {
   return reachableCount !== null && reachableCount <= 1
 }
 
+/**
+ * No `format: 'uuid'`: the dispatcher also takes a cmp_ handle here
+ * (handle-args.ts), and a host that enforces formats would refuse it. Nor
+ * the handle-or-UUID pattern the other id fields carry: this property rides
+ * on every company-scoped tool in the multi-company catalog, where the
+ * pattern would cost about 1 100 tokens. extractRequestedCompany refuses
+ * anything that is not a company id.
+ */
 const COMPANY_ID_INPUT_PROPERTY = {
   type: 'string',
-  format: 'uuid',
   description: 'Target company ID. Omit for default.',
 } as const
 
@@ -409,21 +417,24 @@ export function isTenantWriteScope(scope: ApiKeyScope | undefined): boolean {
  * or the connection is pinned to one) nothing gains it: there is nothing to
  * choose between. The dispatcher still tolerates the argument from a
  * single-company caller, and refuses a different company under a pin.
+ * Typed id fields admit their handle (handleAwareInputSchema), as the
+ * dispatcher does.
  */
 export function projectToolInputSchema(
   tool: ToolSchemaSource,
   options: { omitCompanyId?: boolean } = {}
 ): Record<string, unknown> {
-  if (options.omitCompanyId) return tool.inputSchema
-  if (!isCompanyDependentTool(tool.name) && !isOptionalCompanyTool(tool.name)) return tool.inputSchema
+  const inputSchema = handleAwareInputSchema(tool.inputSchema)
+  if (options.omitCompanyId) return inputSchema
+  if (!isCompanyDependentTool(tool.name) && !isOptionalCompanyTool(tool.name)) return inputSchema
 
   const properties =
-    tool.inputSchema.properties && typeof tool.inputSchema.properties === 'object'
-      ? (tool.inputSchema.properties as Record<string, unknown>)
+    inputSchema.properties && typeof inputSchema.properties === 'object'
+      ? (inputSchema.properties as Record<string, unknown>)
       : {}
 
   return {
-    ...tool.inputSchema,
+    ...inputSchema,
     properties: {
       ...properties,
       company_id: COMPANY_ID_INPUT_PROPERTY,

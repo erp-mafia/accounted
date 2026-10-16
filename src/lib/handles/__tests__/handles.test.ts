@@ -46,6 +46,10 @@ describe('the prefix table (a public contract)', () => {
       operation: 'op',
       service_account: 'svc',
       api_key: 'key',
+      audit_log_entry: 'aud',
+      reconciliation_signoff: 'rso',
+      voucher_gap_explanation: 'vgap',
+      team: 'team',
     })
   })
 
@@ -121,6 +125,10 @@ describe('typeForField', () => {
     ['target_cash_account_id', 'cash_account'],
     ['employee_id', 'employee'],
     ['value_id', 'dimension_value'],
+    ['team_id', 'team'],
+    ['reconciliation_signoff_id', 'reconciliation_signoff'],
+    ['voucher_gap_explanation_id', 'voucher_gap_explanation'],
+    ['audit_log_entry_id', 'audit_log_entry'],
   ])('%s holds a %s id', (field, type) => {
     expect(typeForField(field)).toBe(type)
   })
@@ -138,6 +146,8 @@ describe('typeForField', () => {
     'skattekonto_transaction_ids',
     'journal_entry_line_id',
     'invoice_item_id',
+    'signoff_id',
+    'record_id',
     'description',
     'reference',
   ])('%s is not a typed id field', (field) => {

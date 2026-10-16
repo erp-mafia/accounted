@@ -220,7 +220,8 @@ describe('GET /api/v1/portfolio/overview', () => {
     const body = await res.json()
     expect(body.meta.request_id).toMatch(/^req_/)
     expect(body.data).toEqual({
-      team: { id: TEAM_ID, name: 'Siffra' },
+      // Typed handle (lib/handles) beside the unchanged id; team_id below stays a plain UUID.
+      team: { id: TEAM_ID, handle: 'team_2a7a9e8c4c2e4a689a1a4f0f6f3f2a10', name: 'Siffra' },
       scope: { truncated: true, remaining_company_ids: [COMPANY_C], unresolved: [COMPANY_B], dormant: [] },
       summary: { companies: 1, matched: 1, unbooked_total: 11, inbox_total: 3, overdue: 1, action_needed: 0 },
       companies: [
