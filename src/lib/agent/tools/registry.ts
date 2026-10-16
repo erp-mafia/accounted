@@ -1,15 +1,18 @@
 import type { AgentTool } from './types'
 import { whenInitialized } from '@/lib/initialized'
+import { globalSingleton } from '@/lib/global-singleton'
 
 // Process-singleton registry the chat agent reads from. Extensions register a
 // tool loader at module load (lib/init.ts → extensionRegistry.register →
 // side-effect of mcp-server/index.ts calling registerAgentToolLoader). The
-// first lookup loads lib/init (lib/initialized.ts) and then runs the loaders,
-// so a route that never asks for a tool loads neither.
+// first lookup waits for lib/init (lib/initialized.ts) and then runs the
+// loaders, so a route that never asks for a tool loads no tool module.
 //
 // Why a singleton: same lifetime story as the event bus and extension
 // registry: there's exactly one chat loop per process, it must see the same
-// tool set on every invocation, and tests can reset via clear().
+// tool set on every invocation, and tests can reset via clear(). Kept on
+// globalThis (lib/global-singleton.ts): lib/init registers the loaders through
+// its own copy of this module.
 export type AgentToolLoader = () => Promise<AgentTool[]>
 
 class AgentToolRegistry {
@@ -72,7 +75,7 @@ class AgentToolRegistry {
   }
 }
 
-export const agentToolRegistry = new AgentToolRegistry()
+export const agentToolRegistry = globalSingleton('agentToolRegistry', () => new AgentToolRegistry())
 
 // Public registration entry point used by extensions: hand over a loader, not
 // the tools, so the module that defines them loads only when a tool is needed.

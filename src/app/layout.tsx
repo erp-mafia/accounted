@@ -36,8 +36,8 @@ import { CSP_NONCE_HEADER } from "@/lib/security/csp";
 // so it must run before metadata, viewport or the layout read getBranding();
 // server-render errors logged through createLogger() reach PostHog Error
 // Tracking (gated on the token). lib/server-baseline does both without
-// loading an extension; extensions load on the first event or registry read
-// (lib/initialized.ts), never on a page render that needs neither.
+// loading an extension; extensions load from instrumentation.ts at boot
+// (lib/initialized.ts), never in a page's own graph.
 import "@/lib/server-baseline";
 import "./globals.css";
 

@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { globalSingleton } from '@/lib/global-singleton'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { createLogger } from '@/lib/logger'
@@ -16,7 +17,10 @@ export interface AiMeter {
   companyId?: string | null
 }
 
-const scope = new AsyncLocalStorage<AiMeter>()
+// One scope per process, not per module copy (lib/global-singleton.ts): a
+// route opens it through its copy of this module, and extension code, which
+// lib/init loads from instrumentation.ts, reads it through another.
+const scope = globalSingleton('aiMeterScope', () => new AsyncLocalStorage<AiMeter>())
 
 /**
  * Label every model call made inside fn, for code that calls the model a few

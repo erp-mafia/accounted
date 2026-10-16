@@ -1,16 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { resetGlobalSingletons } from '@/lib/global-singleton'
 
 /**
  * registerConfiguredPeppolTransports() wires the connector transport only on
  * a self-hosted instance in connector mode (connector key, no own Qvalia
  * keys). Hosted keeps its own keys, so nothing changes there. The registry is
- * module state, so every case gets a fresh module graph.
+ * process state (lib/global-singleton.ts), so every case gets a fresh module
+ * graph and fresh process-wide state.
  */
 
 const ENV = ['GNUBOK_CONNECTOR_KEY', 'GNUBOK_CONNECT_URL', 'QVALIA_API_KEY', 'QVALIA_PARTNER_REG_NO', 'QVALIA_BASE_URL', 'PEPPOL_TRANSPORT_PROVIDER'] as const
 
 beforeEach(() => {
   vi.resetModules()
+  resetGlobalSingletons()
   for (const key of ENV) vi.stubEnv(key, '')
 })
 afterEach(() => vi.unstubAllEnvs())

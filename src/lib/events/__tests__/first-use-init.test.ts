@@ -1,18 +1,21 @@
 /**
- * lib/init loads on first use: the first event emitted, or the first read of a
- * registry it fills (lib/initialized.ts). These pin the contract that replaced
- * the module-level ensureInitialized() calls: one load however many callers
- * race for it, a failed load retried by the next caller, the handlers it wires
- * receiving the very first event, and emit() resolving only after they ran.
+ * The first event emitted, or the first read of a registry lib/init fills,
+ * waits for the registered loader of lib/init (lib/initialized.ts;
+ * instrumentation.ts registers it in the app). These pin the contract: one
+ * load however many callers race for it, a failed load retried by the next
+ * caller, the handlers it wires receiving the very first event, and emit()
+ * resolving only after they ran.
  *
  * Each test loads fresh copies of the bus, the registries and
- * lib/initialized.ts (vi.resetModules), so every test starts uninitialised;
- * lib/init itself is the hoisted mock below, whose implementation each test
- * sets.
+ * lib/initialized.ts (vi.resetModules, plus resetGlobalSingletons for the
+ * state they keep on globalThis) and registers the loader instrumentation.ts
+ * registers, so every test starts uninitialised; lib/init itself is the
+ * hoisted mock below, whose implementation each test sets.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FiscalPeriod } from '@/types'
 import type { Extension } from '@/lib/extensions/types'
+import { resetGlobalSingletons } from '@/lib/global-singleton'
 
 const init = vi.hoisted(() => ({ ensureInitialized: vi.fn() }))
 vi.mock('@/lib/init', () => init)
@@ -23,8 +26,15 @@ const lockedEvent = {
   payload: { period, userId: 'user-1', companyId: 'company-1' },
 }
 
-async function fresh() {
+async function freshProcess() {
   vi.resetModules()
+  resetGlobalSingletons()
+  const { registerInitLoader } = await import('@/lib/initialized')
+  registerInitLoader(() => import('@/lib/init').then((m) => m.ensureInitialized()))
+}
+
+async function fresh() {
+  await freshProcess()
   const { eventBus } = await import('@/lib/events/bus')
   const { extensionRegistry } = await import('@/lib/extensions/registry')
   return { eventBus, extensionRegistry }
@@ -130,7 +140,7 @@ describe('registry reads on first use', () => {
   })
 
   it('the service getters initialise before answering', async () => {
-    vi.resetModules()
+    await freshProcess()
     const email = await import('@/lib/email/service')
     const mail = await import('@/lib/mail-search/service')
     const peppol = await import('@/lib/invoices/peppol-transport')

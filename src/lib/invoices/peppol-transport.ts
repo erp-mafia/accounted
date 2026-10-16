@@ -4,6 +4,7 @@
  * HTTP response: submissions, asynchronous events, and evidence are distinct.
  */
 import { whenInitialized } from '@/lib/initialized'
+import { globalSingleton } from '@/lib/global-singleton'
 
 export type PeppolDeliveryStatus =
   | 'staged'
@@ -258,7 +259,9 @@ export interface PeppolTransport {
  */
 export const CONNECTOR_PEPPOL_PROVIDER = 'connector'
 
-const transports = new Map<string, PeppolTransport>()
+// Process-wide (lib/global-singleton.ts): lib/init registers the transports
+// through its own copy of this module, a route reads them through another.
+const transports = globalSingleton('peppolTransports', () => new Map<string, PeppolTransport>())
 
 export function registerPeppolTransport(transport: PeppolTransport): () => void {
   const provider = transport.provider.trim().toLowerCase()

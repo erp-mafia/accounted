@@ -140,16 +140,19 @@
  *      rationale in table-without-grant.mjs.
  *   15. static-init-import: a server entry point (App Router route, page,
  *      layout or other file convention, 'use server' module, or the root
- *      instrumentation/middleware/proxy file) whose static import graph
- *      reaches lib/init or the extension list it loads, or a 'use client'
- *      module that reaches lib/initialized.ts (the event bus's way in). lib/init
- *      loads on first use (from eventBus.emit() and the registry getters); a
- *      static import puts every extension back into that entry's cold start,
- *      or into the browser build. Implementation and rationale in
- *      static-init-import.mjs. No allowlist. Counted beside it,
- *      lazy-init-reach: server entries that reach lib/initialized.ts. The
- *      bundler follows its dynamic import, so each compiles lib/init and every
- *      extension; may only go down, and --update cannot raise it.
+ *      instrumentation/middleware/proxy file) whose import graph, static or
+ *      dynamic, reaches lib/init or the extension list it loads other than
+ *      through instrumentation.ts's dynamic import of lib/init, or a
+ *      'use client' module that reaches lib/initialized.ts (the event bus's
+ *      wait for the loader). instrumentation.ts registers the loader of
+ *      lib/init when the server boots; any other import of it compiles every
+ *      extension into that entry again (the bundler follows a dynamic import
+ *      too), and a client module that reaches the bus ships server state to
+ *      the browser. Implementation and rationale in static-init-import.mjs.
+ *      No allowlist. Counted beside it, lazy-init-reach: server entries whose
+ *      graph reaches lib/init following dynamic imports, each of which
+ *      compiles every extension; instrumentation.ts alone since 2026-10-16.
+ *      May only go down, and --update cannot raise it.
  *   16. limit-above-page: a PostgREST `.limit(N)` with N above 1000, or a
  *      reader's `{ limit: N }` option above 1000. max-rows
  *      answers it with 1000 rows and no error, so the written cap is a silent
@@ -1725,29 +1728,29 @@ if (newLimitsAbovePage.length) {
   )
 }
 
-// 1h. static-init-import: no allowlist. lib/init loads on first use
-// (lib/initialized.ts); a static import from an entry loads every extension
-// on that entry's cold start again, and from a client module it pulls them
-// into the browser build.
-// 1h2. lazy-init-reach: counted, may only go down. A server entry that
-// reaches lib/initialized.ts compiles lib/init and every extension (the
-// bundler follows the dynamic import), so each new one adds about 1,400
-// modules to the production build. Fifty more OOM-killed it on 2026-10-15.
+// 1h. static-init-import: no allowlist. lib/init is imported by
+// instrumentation.ts alone (a dynamic import in register()); any other import
+// of it, static or dynamic, compiles every extension into that entry again,
+// and a client module that reaches the bus ships server state to the browser.
+// 1h2. lazy-init-reach: counted, may only go down. A server entry whose graph
+// reaches lib/init, following dynamic imports, compiles lib/init and every
+// extension, about 1,400 modules each. 474 of them OOM-killed the production
+// build on 2026-10-15; since 2026-10-16 instrumentation.ts is the only one.
 const lazyInitBaseline = baseline.lazyInitReach
 if (lazyInitBaseline && current.lazyInitEntries.length > lazyInitBaseline.count) {
   failed = true
   const known = new Set(lazyInitBaseline.files ?? [])
   const added = current.lazyInitEntries.filter((o) => !known.has(o.entry))
   console.error(
-    `\n✗ lazy-init-reach: ${current.lazyInitEntries.length} server entries reach lib/initialized.ts ` +
+    `\n✗ lazy-init-reach: ${current.lazyInitEntries.length} server entries reach lib/init ` +
       `(baseline ${lazyInitBaseline.count}, +${current.lazyInitEntries.length - lazyInitBaseline.count}). ` +
       'Each one compiles lib/init and every extension into the production build:',
   )
   added.slice(0, 30).forEach(({ entry, chain }) => console.error(`    ${entry}\n      via ${chain.join(' -> ')}`))
   if (added.length > 30) console.error(`    ... and ${added.length - 30} more`)
   console.error(
-    '  → find the first module in the chain that only needs a pure helper from a module that emits\n' +
-      '    (or imports the event bus), and move that helper to a module of its own that does not.\n' +
+    '  → drop the import of lib/init from the chain: instrumentation.ts registers its loader at boot, and\n' +
+      '    eventBus.emit() and the registry getters wait for it (lib/initialized.ts).\n' +
       '  → --update cannot raise this count.',
   )
 }
@@ -1755,15 +1758,17 @@ if (lazyInitBaseline && current.lazyInitEntries.length > lazyInitBaseline.count)
 if (current.staticInitImports.length) {
   failed = true
   console.error(
-    `\n✗ static-init-import: ${current.staticInitImports.length} module(s) reach lib/init statically: a server ` +
-      'entry would load every extension on its cold start, a client module would pull them into the browser build:',
+    `\n✗ static-init-import: ${current.staticInitImports.length} module(s) reach lib/init outside instrumentation.ts, ` +
+      'or reach the event bus from the browser: a server entry would compile every extension again, a client ' +
+      'module would ship server state to the browser:',
   )
   current.staticInitImports.forEach(({ kind, entry, chain }) =>
     console.error(`    ${entry} (${kind})\n      via ${chain.join(' -> ')}`),
   )
   console.error(
-    '  → server: drop the import; eventBus.emit() and the registry getters (await extensionRegistry.get(),\n' +
-      '    await getEmailService(), ...) load lib/init on first use.\n' +
+    '  → server: drop the import, static or dynamic; instrumentation.ts loads lib/init at boot, and\n' +
+      '    eventBus.emit() and the registry getters (await extensionRegistry.get(), await getEmailService(), ...)\n' +
+      '    wait for it. Only instrumentation.ts imports it.\n' +
       '  → client: import the pure helper from a module of its own, not from a server module that emits.',
   )
 }

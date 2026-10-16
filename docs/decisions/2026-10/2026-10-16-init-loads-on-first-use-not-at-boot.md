@@ -1,0 +1,1 @@
+[2026-10-16] instrumentation.ts registers the lib/init loader but does not start it: the load stays on first use, as since 2026-10-11, so cold starts are unchanged; a background start only after its cold-start latency is measured.

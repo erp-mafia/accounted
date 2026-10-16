@@ -1,5 +1,6 @@
 import { eventBus } from '@/lib/events/bus'
 import { whenInitialized } from '@/lib/initialized'
+import { globalSingleton } from '@/lib/global-singleton'
 import type { CoreEventType } from '@/lib/events/types'
 import type { Extension, ExtensionContext } from './types'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -12,15 +13,23 @@ export type ContextFactory = (
   extensionId: string
 ) => ExtensionContext
 
-/** Lazy-loaded context factory: set during initialization */
-let contextFactory: ContextFactory | null = null
+/**
+ * The context factory, set during initialization. Process-wide like the
+ * registry itself (lib/global-singleton.ts): lib/init sets it through its own
+ * copy of this module, and the handler wrappers read it from whichever copy
+ * created the registry.
+ */
+const contextFactoryHolder = globalSingleton(
+  'extensionContextFactory',
+  (): { factory: ContextFactory | null } => ({ factory: null }),
+)
 
 /**
  * Set the context factory used to build ExtensionContext for event handlers.
  * Called once during system initialization.
  */
 export function setContextFactory(factory: ContextFactory): void {
-  contextFactory = factory
+  contextFactoryHolder.factory = factory
 }
 
 /**
@@ -28,9 +37,10 @@ export function setContextFactory(factory: ContextFactory): void {
  *
  * - register() stores extension and wires event handlers to the bus
  * - unregister() unhooks handlers and removes extension
- * - getAll(), get() for querying; async because they load the extensions on
- *   first use (lib/initialized.ts), so a read can never see the registry
- *   before lib/init has filled it
+ * - getAll(), get() for querying; async because they wait for lib/init, which
+ *   instrumentation.ts loads when the server boots (lib/initialized.ts), so a
+ *   read can never see the registry before lib/init has filled it
+ * - One registry per process, kept on globalThis (lib/global-singleton.ts)
  */
 class ExtensionRegistry {
   private extensions = new Map<string, Extension>()
@@ -58,6 +68,7 @@ class ExtensionRegistry {
         // Wrap handler to inject ExtensionContext as second argument
         const wrappedHandler = async (payload: { userId: string; companyId?: string; [key: string]: unknown }) => {
           let ctx: ExtensionContext | undefined
+          const contextFactory = contextFactoryHolder.factory
           if (contextFactory && payload.userId) {
             try {
               // Dynamic import to avoid circular deps at module load time
@@ -114,5 +125,5 @@ class ExtensionRegistry {
   }
 }
 
-/** Module-level singleton */
-export const extensionRegistry = new ExtensionRegistry()
+/** Process-wide singleton, shared by every copy of this module. */
+export const extensionRegistry = globalSingleton('extensionRegistry', () => new ExtensionRegistry())

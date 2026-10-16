@@ -5,6 +5,9 @@ import assert from 'node:assert/strict'
 import dotenv from 'dotenv'
 import pg from 'pg'
 import {createClient} from '@supabase/supabase-js'
+import {registerScriptInitLoader} from '../lib/register-init-loader'
+
+registerScriptInitLoader()
 
 async function main(){
 // Committed synthetic fixtures on the designated staging branch. Retained

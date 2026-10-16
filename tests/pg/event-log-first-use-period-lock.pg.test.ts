@@ -1,10 +1,11 @@
 /**
  * period.locked reaches event_log with no module-level init anywhere.
  *
- * Entry points no longer call ensureInitialized(): eventBus.emit() loads
- * lib/init (the event_log handler, the webhook fan-out, every extension) on
- * the first event and resolves only after the handlers ran
- * (lib/initialized.ts). The 2026-09-30 audit found period.locked missing for
+ * Entry points no longer call ensureInitialized(): eventBus.emit() waits for
+ * the registered loader of lib/init (the event_log handler, the webhook
+ * fan-out, every extension) on the first event and resolves only after the
+ * handlers ran (lib/initialized.ts; instrumentation.ts registers the loader
+ * in the app, tests/pg/setup.ts here). The 2026-09-30 audit found period.locked missing for
  * 636 of 758 locks, because the lock route never wired the bus. This drives
  * that route against real Postgres in a cold module graph with the real
  * lib/init: importing the route must not load lib/init, and the event_log row
@@ -29,7 +30,8 @@ const state = vi.hoisted(() => ({
   companyId: '',
 }))
 
-// Counts loads of the real lib/init; only lib/initialized.ts imports it.
+// Counts loads of the real lib/init; only the loader tests/pg/setup.ts
+// registers imports it.
 vi.mock('@/lib/init', async (importOriginal) => {
   state.initLoads++
   return importOriginal()

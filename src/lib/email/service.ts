@@ -6,6 +6,7 @@
  * is used: email-dependent features degrade gracefully.
  */
 import { whenInitialized } from '@/lib/initialized'
+import { globalSingleton } from '@/lib/global-singleton'
 
 export interface SendEmailOptions {
   to: string | string[]
@@ -58,14 +59,18 @@ class NoopEmailService implements EmailService {
   }
 }
 
-let emailService: EmailService = new NoopEmailService()
+// Process-wide (lib/global-singleton.ts): the email extension registers
+// through the copy of this module lib/init loads, a route reads through its own.
+const holder = globalSingleton('emailService', (): { service: EmailService } => ({
+  service: new NoopEmailService(),
+}))
 
 /** The registered service, after the extensions have loaded (lib/initialized.ts). */
 export async function getEmailService(): Promise<EmailService> {
   await whenInitialized()
-  return emailService
+  return holder.service
 }
 
 export function registerEmailService(svc: EmailService): void {
-  emailService = svc
+  holder.service = svc
 }

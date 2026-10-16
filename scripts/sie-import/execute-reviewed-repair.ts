@@ -3,6 +3,9 @@ import { readFileSync } from 'node:fs'
 import { createClient } from '@supabase/supabase-js'
 import dotenv from 'dotenv'
 import { z } from 'zod'
+import { registerScriptInitLoader } from '../lib/register-init-loader'
+
+registerScriptInitLoader()
 
 // Dry review by default. Production execution additionally requires Emil's
 // approval of this exact digest in the operator's session, per AGENTS.md.

@@ -4,6 +4,9 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import dotenv from 'dotenv'
 import pg from 'pg'
 import { createClient } from '@supabase/supabase-js'
+import { registerScriptInitLoader } from '../lib/register-init-loader'
+
+registerScriptInitLoader()
 
 // Provider responses are synthetic fixtures. Storage, admission, preparation,
 // chunk commits, finalization and replay use the actual staging services.

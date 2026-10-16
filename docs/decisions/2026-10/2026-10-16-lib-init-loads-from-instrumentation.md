@@ -1,0 +1,1 @@
+[2026-10-16] lib/init loads from instrumentation.ts register() alone (a memoised loader on globalThis, run on first use), never through the event bus: the bus's dynamic import made 474 server entries compile every extension and OOM-killed the production build.

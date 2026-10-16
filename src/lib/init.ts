@@ -11,10 +11,18 @@ import { registerConfiguredPeppolTransports } from '@/lib/invoices/transports'
 import { registerConnectPaymentsProvider } from '@/lib/payments/initiation/connect'
 import { ensureObservability } from '@/lib/analytics/ensure-observability'
 import { createLogger } from '@/lib/logger'
+import { globalSingleton } from '@/lib/global-singleton'
+// What every server entry gets before its first line (a fork's branding
+// override, the PostHog sink): extension code runs in this module's graph,
+// which instrumentation.ts loads, not in the graph of the route it serves.
+import '@/lib/server-baseline'
 
 const log = createLogger('init')
 
-let initialized = false
+// Per process, not per module copy: the bus and the registries this fills are
+// process-wide (lib/global-singleton.ts), so a second copy of this module that
+// initialised again would subscribe every handler twice.
+const initState = globalSingleton('initDone', () => ({ initialized: false }))
 
 const REQUIRED_CORE_VARS = [
   'NEXT_PUBLIC_SUPABASE_URL',
@@ -81,17 +89,18 @@ function validateEnvironment(): void {
 /**
  * Ensure the system is initialized (extensions loaded, context factory wired,
  * core event handlers registered).
- * Never imported statically by an entry point: lib/initialized.ts loads this
- * module on first use, from eventBus.emit() and from every getter of a
- * registry filled here, so a request that does neither loads no extension.
- * `npm run check:guards` (static-init-import) keeps it out of every entry's
- * static import graph. validateEnvironment() runs first, before anything
- * subscribes to the bus, so a failed first init leaves nothing behind and the
- * next caller retries cleanly.
+ * Imported by one module in the app: instrumentation.ts registers the loader
+ * that runs this (lib/initialized.ts) and starts it when the server boots.
+ * eventBus.emit() and every getter of a registry filled here wait for that
+ * load. Outside Next.js the process registers the loader itself. `npm run
+ * check:guards` (static-init-import) keeps every other import of this module,
+ * static or dynamic, out of the app. validateEnvironment() runs first, before
+ * anything subscribes to the bus, so a failed first init leaves nothing behind
+ * and the next caller retries cleanly.
  * Idempotent: safe to call multiple times.
  */
 export function ensureInitialized(): void {
-  if (initialized) return
+  if (initState.initialized) return
 
   validateEnvironment()
   setContextFactory(createExtensionContext)
@@ -116,5 +125,5 @@ export function ensureInitialized(): void {
   registerConnectPaymentsProvider()
   loadExtensions()
 
-  initialized = true
+  initState.initialized = true
 }
