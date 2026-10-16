@@ -35,3 +35,17 @@ export async function resolveInboxAddress(
     return null
   }
 }
+
+/**
+ * The inbox address with a plus-address tag: `acme-7f3k@in.example` and
+ * `lev` give `acme-7f3k+lev@in.example`. The webhook files a mail on the part
+ * before the first `+`, so the tag never changes which company it reaches; it
+ * only declares the kind (`lev` a supplier invoice, `ver` an underlag).
+ *
+ * An address without a local part is returned as is: there is nothing to tag.
+ */
+export function tagInboxAddress(address: string, tag: 'lev' | 'ver'): string {
+  const at = address.lastIndexOf('@')
+  if (at <= 0) return address
+  return `${address.slice(0, at)}+${tag}${address.slice(at)}`
+}

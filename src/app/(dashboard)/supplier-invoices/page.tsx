@@ -49,6 +49,7 @@ import type { FiscalPeriod, SupplierInvoice } from '@/types'
 import { useCompanySettings } from '@/components/settings/useSettings'
 import { fetchPaymentsAvailability, type CompanyVerification } from '@/components/payments/payments-client'
 import { PaymentsVerificationLine } from '@/components/payments/PaymentsVerificationLine'
+import { SupplierInboxAddress } from '@/components/supplier-invoices/SupplierInboxAddress'
 import { supplierInvoiceStatusDisplay } from '@/lib/supplier-invoices/status-display'
 import {
   openPaymentMarker,
@@ -521,17 +522,22 @@ export default function SupplierInvoicesPage() {
           <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
           <HelpPopover>{t('help_body')}</HelpPopover>
         </span>
-        {canWrite ? (
-          <Button size="sm" onClick={openNewInvoice}>
-            <Plus className="mr-2 h-4 w-4" />
-            {t('register_invoice')}
-          </Button>
-        ) : (
-          <Button size="sm" disabled title={t('viewer_disabled_tooltip')}>
-            <Lock className="mr-2 h-4 w-4" />
-            {t('register_invoice')}
-          </Button>
-        )}
+        {/* The two ways an invoice gets here: mailed in by the supplier,
+            or registered by hand. */}
+        <div className="flex min-w-0 items-center gap-2">
+          <SupplierInboxAddress />
+          {canWrite ? (
+            <Button size="sm" onClick={openNewInvoice}>
+              <Plus className="mr-2 h-4 w-4" />
+              {t('register_invoice')}
+            </Button>
+          ) : (
+            <Button size="sm" disabled title={t('viewer_disabled_tooltip')}>
+              <Lock className="mr-2 h-4 w-4" />
+              {t('register_invoice')}
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Toolbar: one status chip-picker (founder direction: the status
