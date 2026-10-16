@@ -34,6 +34,7 @@ import { resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/
 import { listPeppolFailedInvoiceIds } from '@/lib/invoices/peppol-failed-invoices'
 import { switchStateFor } from '@/lib/bank-feed/switch-campaign'
 import { paymentsAdmitted } from '@/lib/payments/orders/pilot'
+import { SKATTEKONTO_PAYMENT_COVER_STATUSES, skattekontoPaymentsCovering, type SkattekontoPaymentOrderCover } from '@/lib/payments/orders/skattekonto-underway'
 import { readVerificationRecord } from '@/lib/payments/orders/verification-record'
 import { deriveVerificationState, RENEWAL_DUE_STATES } from '@/lib/payments/orders/verification-state'
 import { readPaymentAccounts } from '@/lib/payments/orders/payment-accounts'
@@ -1245,8 +1246,6 @@ export async function countPaymentsVerificationDue(
 const SKATTEVERKET_EXTENSION_ID = 'skatteverket'
 const BALANCE_SNAPSHOT_KEY = 'skattekonto_balance_snapshot'
 
-/** A skattekonto payment through the bank that a person approved and the bank has not finished: from approved to accepted. */
-const SKATTEKONTO_PAYMENT_UNDERWAY_STATUSES = ['approved', 'submitted', 'awaiting_signature', 'awaiting_second_signer', 'accepted'] as const
 
 /**
  * What the company's bank payments to the skattekonto (payment_orders with
@@ -1268,17 +1267,12 @@ async function skattekontoPaymentsUnderway(
     .select('amount, status, executed_at')
     .eq('company_id', companyId)
     .eq('purpose', 'skattekonto')
-    .in('status', [...SKATTEKONTO_PAYMENT_UNDERWAY_STATUSES, 'executed'])
+    .in('status', [...SKATTEKONTO_PAYMENT_COVER_STATUSES])
   if (error) {
     logAndZero('skattekonto_payment_due', companyId, error)
     return 0
   }
-  const covering = ((data ?? []) as Array<{ amount: number | string; status: string; executed_at: string | null }>).filter(
-    (order) =>
-      order.status !== 'executed' ||
-      (fetchedAtMs !== null && order.executed_at !== null && Date.parse(order.executed_at) > fetchedAtMs),
-  )
-  return sumOre(covering.map((order) => Number(order.amount)))
+  return skattekontoPaymentsCovering((data ?? []) as SkattekontoPaymentOrderCover[], fetchedAtMs)
 }
 
 /**
