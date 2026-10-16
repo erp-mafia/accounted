@@ -1,13 +1,14 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { LINK_BASES } from '@/lib/links/link-basis'
-import { getPool, withUserContext } from './setup'
+import { LINK_BASES, resolveLinkBasis, type DoorLinkBasis } from '@/lib/links/link-basis'
+import { getPool, runAsServiceRole, withUserContext } from './setup'
 import { insertPostedJournalEntry, insertTransaction, seedCompany } from './fixtures'
 
 /**
  * Covers 20261016160000_link_basis_columns,
- * 20261016160100_transactions_link_basis_follows_link and
- * 20261016160200_validate_link_basis_checks.
+ * 20261016160100_transactions_link_basis_follows_link,
+ * 20261016160200_validate_link_basis_checks and
+ * 20261016180100_resolve_link_basis.
  *
  * Six link tables gain nullable link_basis / link_evidence. The CHECKs hold
  * the vocabulary of src/lib/links/link-basis.ts and are validated; rows
@@ -15,6 +16,12 @@ import { insertPostedJournalEntry, insertTransaction, seedCompany } from './fixt
  * current verifikat link only: it is cleared when journal_entry_id changes
  * without a new basis, and kept when the link moves between a verifikat and
  * its correction.
+ *
+ * resolve_link_basis is the SQL writers' twin of linkBasisColumns: the same
+ * answer as resolveLinkBasis without a pending operation, for every door and
+ * every actor, whether the actor is passed or read from gnubok.actor_type,
+ * and it never raises. The writers that call it are covered in
+ * link-basis-sql-writers.pg.test.ts.
  */
 
 const LINK_TABLES = [
@@ -228,5 +235,125 @@ describe('transactions: the basis follows the link it describes', () => {
       return rows[0]?.link_basis
     })
     expect(cleared).toBeNull()
+  })
+})
+
+/** The bases a door may name itself (DoorLinkBasis); the other three come from the scope. */
+const SCOPE_ONLY_BASES = ['agent_proposed_user_approved', 'agent_autonomous_within_grant', 'client_asserted']
+const DOORS = LINK_BASES.filter((b) => !SCOPE_ONLY_BASES.includes(b)) as DoorLinkBasis[]
+/** Every actor type a commit records, plus no actor, an empty one and garbage. */
+const ACTORS: Array<string | undefined> = [
+  undefined,
+  '',
+  'user',
+  'api_key',
+  'mcp_oauth',
+  'service_account',
+  'agent_chat',
+  'cron',
+  'system',
+  'garbage',
+  'API_KEY',
+  ' cron',
+]
+
+/** What linkBasisColumns(door) answers outside an approval, on this actor. */
+function tsBasis(door: DoorLinkBasis, actor: string | undefined): string {
+  return resolveLinkBasis(door, undefined, { pendingOperationId: null, actorType: actor }).link_basis
+}
+
+describe('resolve_link_basis: the SQL twin of linkBasisColumns', () => {
+  it('answers what resolveLinkBasis answers, for every door and actor, passed or read from gnubok.actor_type', async () => {
+    const client = await getPool().connect()
+    try {
+      for (const door of DOORS) {
+        for (const actor of ACTORS) {
+          const expected = tsBasis(door, actor)
+          const passed = await client.query<{ b: string | null }>(`SELECT public.resolve_link_basis($1, $2) AS b`, [door, actor ?? null])
+          expect(passed.rows[0]?.b, `${door}, p_actor_type ${JSON.stringify(actor)}`).toBe(expected)
+
+          await client.query('BEGIN')
+          try {
+            await client.query(`SELECT set_config('gnubok.actor_type', $1, true)`, [actor ?? ''])
+            const read = await client.query<{ b: string | null }>(`SELECT public.resolve_link_basis($1) AS b`, [door])
+            expect(read.rows[0]?.b, `${door}, gnubok.actor_type ${JSON.stringify(actor)}`).toBe(expected)
+          } finally {
+            await client.query('ROLLBACK')
+          }
+        }
+      }
+    } finally {
+      client.release()
+    }
+  })
+
+  it('a passed actor wins over the setting; an empty one falls back to it', async () => {
+    const client = await getPool().connect()
+    try {
+      await client.query('BEGIN')
+      await client.query(`SELECT set_config('gnubok.actor_type', 'api_key', true)`)
+      const { rows } = await client.query<{ person: string; empty: string; none: string }>(
+        `SELECT public.resolve_link_basis('user_created', 'user') AS person,
+                public.resolve_link_basis('user_created', '') AS empty,
+                public.resolve_link_basis('user_created') AS none`,
+      )
+      expect(rows[0]).toEqual({ person: 'user_created', empty: 'client_asserted', none: 'client_asserted' })
+    } finally {
+      await client.query('ROLLBACK').catch(() => {})
+      client.release()
+    }
+  })
+
+  it('never raises: NULL for a door outside the door vocabulary, the door for any setting', async () => {
+    const { rows } = await getPool().query<{ b: string | null }>(
+      `SELECT public.resolve_link_basis(d) AS b
+         FROM unnest(ARRAY[NULL, '', 'guessed', 'client_asserted', 'agent_proposed_user_approved',
+                           'agent_autonomous_within_grant', 'USER_CREATED']::text[]) AS d`,
+    )
+    expect(rows.map((r) => r.b)).toEqual([null, null, null, null, null, null, null])
+
+    const client = await getPool().connect()
+    try {
+      await client.query('BEGIN')
+      await client.query(`SELECT set_config('gnubok.actor_type', repeat('x', 5000) || E'\\n''; DROP TABLE x; --', true)`)
+      const odd = await client.query<{ b: string }>(`SELECT public.resolve_link_basis('user_confirmed') AS b`)
+      expect(odd.rows[0]?.b).toBe('user_confirmed')
+    } finally {
+      await client.query('ROLLBACK').catch(() => {})
+      client.release()
+    }
+  })
+
+  it('runs for a member and for the service role, is not callable by anon, and is a plain STABLE invoker function', async () => {
+    const owner = await seedCompany()
+    const asMember = await withUserContext(owner.userId, async (client) => {
+      const { rows } = await client.query<{ b: string }>(`SELECT public.resolve_link_basis('user_confirmed', 'mcp_oauth') AS b`)
+      return rows[0]?.b
+    })
+    expect(asMember).toBe('client_asserted')
+    const asService = await runAsServiceRole(async (client) => {
+      const { rows } = await client.query<{ b: string }>(`SELECT public.resolve_link_basis('user_created', 'cron') AS b`)
+      return rows[0]?.b
+    })
+    expect(asService).toBe('system_derived')
+
+    const { rows } = await getPool().query(
+      `SELECT has_function_privilege('anon', p.oid, 'EXECUTE') AS anon,
+              has_function_privilege('authenticated', p.oid, 'EXECUTE') AS authenticated,
+              has_function_privilege('service_role', p.oid, 'EXECUTE') AS service_role,
+              EXISTS (SELECT 1 FROM aclexplode(p.proacl) a WHERE a.grantee = 0) AS public_exec,
+              p.prosecdef AS definer, p.provolatile AS volatility, p.proconfig AS config
+         FROM pg_proc p
+        WHERE p.oid = 'public.resolve_link_basis(text, text)'::regprocedure`,
+    )
+    expect(rows[0]).toEqual({
+      anon: false,
+      authenticated: true,
+      service_role: true,
+      public_exec: false,
+      definer: false,
+      volatility: 's',
+      config: ['search_path=""'],
+    })
   })
 })
