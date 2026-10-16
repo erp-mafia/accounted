@@ -1,0 +1,1 @@
+[2026-10-16] Service accounts are managed under a new opt-in scope service_accounts:manage, not companies:write: no key held it before, so no existing grant silently gained the power to mint credentials.

@@ -1,0 +1,1 @@
+[2026-10-16] processing_history keeps its own actor vocabulary (user, system, llm, cron, api_key): a service account's rows there are api_key labelled with the account's name; widening it touches SQL checks in several functions and is a follow-up.

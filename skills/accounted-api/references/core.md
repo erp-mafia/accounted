@@ -2,7 +2,7 @@
 
 # Core endpoints
 
-Connectivity, the calling key's own grant, company discovery, which modules a company can use (capabilities), async-operation polling, and company settings. Every session starts with GET /companies to resolve the companyId that all other URLs need.
+Connectivity, the calling key's own grant, company discovery, which modules a company can use (capabilities), async-operation polling, company settings, and service accounts (an integration's own principal, with a human sponsor). Every session starts with GET /companies to resolve the companyId that all other URLs need.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -565,6 +565,479 @@ Example response `200`:
       "can_retry": false,
       "updated_at": "2026-09-26T10:00:00Z"
     }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/service-accounts`
+
+**List the company's service accounts.**
+`scope:service_accounts:manage · risk:low · idempotent`
+
+Returns every service account of the company, live ones first, then the revoked ones, each with its sponsor and status. Keys are listed per account on GET /service-accounts/{id}.
+
+**Use when:** You manage the non-human principals of a company: to find the account an integration runs as, or to check that none is suspended.
+**Do not use for:** Listing the API keys of people (not exposed over the API). Reading a key's secret: it is returned once, when the key is minted.
+
+**Pitfalls:**
+- Needs a person's key with service_accounts:manage, held by an owner or admin of the company. A service account's own key is refused (403 SERVICE_ACCOUNT_KEY_NOT_PERMITTED).
+- status suspended means the sponsor is no longer an owner or admin: the account's keys answer 403 SERVICE_ACCOUNT_SUSPENDED until the role is restored.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    service_accounts: { id: string, handle?: string, company_id: string, name: string, sponsor_user_id: string, status: "active" | "suspended" | "revoked", created_by: string, created_at: string, revoked_at: string | null, revoked_by: string | null }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "service_accounts": [
+      {
+        "id": "5b6c1d2e-0000-4000-8000-0000000000a1",
+        "company_id": "8fd5b1f4-0000-4000-8000-000000000001",
+        "name": "Nattlig fakturasynk",
+        "sponsor_user_id": "3f2a9c10-0000-4000-8000-000000000002",
+        "status": "active",
+        "created_by": "3f2a9c10-0000-4000-8000-000000000002",
+        "created_at": "2026-10-16T08:00:00Z",
+        "revoked_at": null,
+        "revoked_by": null
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/service-accounts`
+
+**Create a service account with a human sponsor.**
+`scope:service_accounts:manage · risk:medium · idempotent · reversible`
+
+Creates a service account in the company: a non-human principal for an integration or agent, with a sponsor who answers for it. The sponsor must be an owner or admin member of the company and defaults to the user of the calling key. The account has no key yet: mint one with POST /service-accounts/{id}/keys. Everything its keys write is recorded with the actor service_account (the account's name), acting for the sponsor.
+
+**Use when:** You connect an integration or agent that should act under its own name in the books rather than as the person who set it up.
+**Do not use for:** Giving a person access (invite them to the company instead). Changing the sponsor or the name: revoke the account and create a new one.
+
+**Pitfalls:**
+- A service account can never do more than its sponsor: when the sponsor stops being an owner or admin, every key of the account is refused (403 SERVICE_ACCOUNT_SUSPENDED) until the role is restored.
+- Names are unique among the company's live accounts (409 SERVICE_ACCOUNT_NAME_TAKEN); a revoked account frees its name.
+- At most 25 live service accounts per company (409 SERVICE_ACCOUNT_LIMIT).
+- Not available with a test key (403 TEST_KEY_WRITE_BLOCKED): there is no dry-run.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Request body:
+```ts
+{ name: string, sponsor_user_id?: string }
+```
+
+Example request:
+```json
+{
+  "name": "Nattlig fakturasynk"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    id: string,
+    handle?: string,
+    company_id: string,
+    name: string,
+    sponsor_user_id: string,
+    status: "active" | "suspended" | "revoked",
+    created_by: string,
+    created_at: string,
+    revoked_at: string | null,
+    revoked_by: string | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "5b6c1d2e-0000-4000-8000-0000000000a1",
+    "company_id": "8fd5b1f4-0000-4000-8000-000000000001",
+    "name": "Nattlig fakturasynk",
+    "sponsor_user_id": "3f2a9c10-0000-4000-8000-000000000002",
+    "status": "active",
+    "created_by": "3f2a9c10-0000-4000-8000-000000000002",
+    "created_at": "2026-10-16T08:00:00Z",
+    "revoked_at": null,
+    "revoked_by": null
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/service-accounts/{id}`
+
+**Show one service account with its keys.**
+`scope:service_accounts:manage · risk:low · idempotent`
+
+Returns the service account, its sponsor and status, and every key it has (live and revoked, newest first) with prefix, scopes, mode, access and last use. A key's secret is never returned after it was minted.
+
+**Use when:** You check which keys an integration's service account has before rotating or revoking one.
+**Do not use for:** Recovering a lost key: mint a new one and revoke the old one.
+
+**Pitfalls:**
+- An id that is not one of this company's service accounts answers 404 SERVICE_ACCOUNT_NOT_FOUND.
+- Needs a person's key with service_accounts:manage, held by an owner or admin of the company.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    id: string,
+    handle?: string,
+    company_id: string,
+    name: string,
+    sponsor_user_id: string,
+    status: "active" | "suspended" | "revoked",
+    created_by: string,
+    created_at: string,
+    revoked_at: string | null,
+    revoked_by: string | null,
+    keys: { id: string, name: string, key_prefix: string, scopes: string[], mode: "live" | "test", access: "read_write" | "read_only", created_at: string, last_used_at: string | null, revoked_at: string | null }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "5b6c1d2e-0000-4000-8000-0000000000a1",
+    "company_id": "8fd5b1f4-0000-4000-8000-000000000001",
+    "name": "Nattlig fakturasynk",
+    "sponsor_user_id": "3f2a9c10-0000-4000-8000-000000000002",
+    "status": "active",
+    "created_by": "3f2a9c10-0000-4000-8000-000000000002",
+    "created_at": "2026-10-16T08:00:00Z",
+    "revoked_at": null,
+    "revoked_by": null,
+    "keys": [
+      {
+        "id": "7a1e0c55-0000-4000-8000-0000000000b1",
+        "name": "Nattlig fakturasynk",
+        "key_prefix": "gnubok_sk_Xb3kQ9aZ",
+        "scopes": [
+          "invoices:read",
+          "invoices:write"
+        ],
+        "mode": "live",
+        "access": "read_write",
+        "created_at": "2026-10-16T08:01:00Z",
+        "last_used_at": null,
+        "revoked_at": null
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/service-accounts/{id}/keys`
+
+**Mint an API key for a service account; the secret is shown once.**
+`scope:service_accounts:manage · risk:high · reversible`
+
+Creates a gnubok_sk_ key that acts as the service account: it reaches only the account's company, acts with the access of the account's sponsor, and everything it writes is recorded with the actor service_account (the account's name), acting for the sponsor. The response carries the secret in key, exactly once. Its scopes must be ones the calling key holds itself; service_accounts:manage is never granted, so a service account cannot mint keys or create accounts.
+
+**Use when:** You set up the integration that runs as the service account, or rotate its key (mint the new one, switch, revoke the old one).
+**Do not use for:** A key for a person (create it in Settings > API & MCP). Recovering a lost secret: mint a new key and revoke the old one.
+
+**Pitfalls:**
+- The secret is returned exactly once. Idempotency-Key is not honoured: a repeated call mints a second key, so check GET /service-accounts/{id} and revoke any extra.
+- Each requested scope must be held by the calling key (403 SERVICE_ACCOUNT_SCOPE_NOT_HELD, details.not_held lists the rest).
+- A staging write scope together with pending_operations:approve needs acknowledge_sod: true (409 API_KEY_SOD_CONFLICT otherwise).
+- At most 5 live keys per account (409 SERVICE_ACCOUNT_KEY_LIMIT). A revoked account takes no new key (409 SERVICE_ACCOUNT_REVOKED); a suspended one neither (403 SERVICE_ACCOUNT_SUSPENDED).
+- When the sponsor stops being an owner or admin, the key is refused at every call with 403 SERVICE_ACCOUNT_SUSPENDED until the role is restored.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Request body:
+```ts
+{
+  name?: string,
+  scopes: ("transactions:read" | "transactions:write" | "customers:read" | "customers:write" | "articles:read" | "articles:write" | "invoices:read" | "invoices:write" | "suppliers:read" | "suppliers:write" | "reports:read" | "bookkeeping:write" | "payroll:read" | "payroll:write" | "companies:read" | "companies:write" | "events:read" | "webhooks:manage" | "operations:read" | "documents:read" | "documents:write" | "compliance:read" | "skatteverket:write" | "agent:read" | "agent:write" | "pending_operations:read" | "pending_operations:approve" | "reconciliation:read" | "reconciliation:write" | "reconciliation:signoff")[],
+  mode?: "live" | "test",
+  read_only?: boolean,
+  acknowledge_sod?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "scopes": [
+    "invoices:read",
+    "invoices:write"
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    id: string,
+    handle?: string,
+    name: string,
+    key_prefix: string,
+    scopes: string[],
+    mode: "live" | "test",
+    access: "read_write" | "read_only",
+    created_at: string,
+    last_used_at: string | null,
+    revoked_at: string | null,
+    service_account_id: string,
+    key: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "7a1e0c55-0000-4000-8000-0000000000b1",
+    "name": "Nattlig fakturasynk",
+    "key_prefix": "gnubok_sk_Xb3kQ9aZ",
+    "scopes": [
+      "invoices:read",
+      "invoices:write"
+    ],
+    "mode": "live",
+    "access": "read_write",
+    "created_at": "2026-10-16T08:01:00Z",
+    "last_used_at": null,
+    "revoked_at": null,
+    "service_account_id": "5b6c1d2e-0000-4000-8000-0000000000a1",
+    "key": "gnubok_sk_Xb3kQ9aZ…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/service-accounts/{id}/keys/{keyId}/revoke`
+
+**Revoke one key of a service account.**
+`scope:service_accounts:manage · risk:medium · idempotent`
+
+Revokes the key: the next request with it is refused. The account and its other keys are untouched. Revoking a revoked key answers it unchanged.
+
+**Use when:** You rotate a service account's key (after switching the integration to the new one) or a single key may have leaked.
+**Do not use for:** Stopping the whole integration at once: revoke the account (POST /service-accounts/{id}/revoke).
+
+**Pitfalls:**
+- Final: a revoked key cannot be restored. Mint a new one.
+- A key that is not one of this account's keys in this company answers 404 SERVICE_ACCOUNT_KEY_NOT_FOUND.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `keyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    id: string,
+    handle?: string,
+    name: string,
+    key_prefix: string,
+    scopes: string[],
+    mode: "live" | "test",
+    access: "read_write" | "read_only",
+    created_at: string,
+    last_used_at: string | null,
+    revoked_at: string | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "7a1e0c55-0000-4000-8000-0000000000b1",
+    "name": "Nattlig fakturasynk",
+    "key_prefix": "gnubok_sk_Xb3kQ9aZ",
+    "scopes": [
+      "invoices:read",
+      "invoices:write"
+    ],
+    "mode": "live",
+    "access": "read_write",
+    "created_at": "2026-10-16T08:01:00Z",
+    "last_used_at": null,
+    "revoked_at": "2026-11-02T09:30:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/service-accounts/{id}/revoke`
+
+**Revoke a service account and all its keys.**
+`scope:service_accounts:manage · risk:high · idempotent`
+
+Revokes the service account and, in the same transaction, every key it has: the next request with any of them is refused. The account is never deleted: it stays listed with status revoked, so the processing history keeps naming it. Revoking a revoked account answers it unchanged.
+
+**Use when:** An integration is retired, or a key may have leaked and you want everything the account can do stopped at once.
+**Do not use for:** Rotating one key: mint a new key, then revoke the old one with POST /service-accounts/{id}/keys/{keyId}/revoke.
+
+**Pitfalls:**
+- Final: a revoked account cannot get new keys or be restored. Create a new account (the name is free again).
+- Writes the account made stay as they are; they keep naming the account and its sponsor.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    id: string,
+    handle?: string,
+    company_id: string,
+    name: string,
+    sponsor_user_id: string,
+    status: "active" | "suspended" | "revoked",
+    created_by: string,
+    created_at: string,
+    revoked_at: string | null,
+    revoked_by: string | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "5b6c1d2e-0000-4000-8000-0000000000a1",
+    "company_id": "8fd5b1f4-0000-4000-8000-000000000001",
+    "name": "Nattlig fakturasynk",
+    "sponsor_user_id": "3f2a9c10-0000-4000-8000-000000000002",
+    "status": "revoked",
+    "created_by": "3f2a9c10-0000-4000-8000-000000000002",
+    "created_at": "2026-10-16T08:00:00Z",
+    "revoked_at": "2026-11-02T09:30:00Z",
+    "revoked_by": "3f2a9c10-0000-4000-8000-000000000002"
   },
   "meta": {
     "request_id": "req_…",

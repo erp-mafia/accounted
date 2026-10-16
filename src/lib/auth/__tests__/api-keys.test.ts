@@ -19,6 +19,7 @@ import {
   validateScopes,
   hasScope,
   validateApiKey,
+  apiKeyCommitActor,
   findStageApproveConflict,
   DEFAULT_SCOPES,
   DEFAULT_OAUTH_SCOPES,
@@ -301,6 +302,7 @@ describe('validateApiKey', () => {
       unattendedCommitLimit: null,
       allowedCompanyIds: null,
       readOnlyCompanyIds: null,
+      serviceAccount: null,
     })
   })
 
@@ -326,6 +328,7 @@ describe('validateApiKey', () => {
       unattendedCommitLimit: null,
       allowedCompanyIds: null,
       readOnlyCompanyIds: null,
+      serviceAccount: null,
     })
   })
 
@@ -354,6 +357,81 @@ describe('validateApiKey', () => {
       unattendedCommitLimit: null,
       allowedCompanyIds: null,
       readOnlyCompanyIds: null,
+      serviceAccount: null,
+    })
+  })
+
+  describe('service accounts', () => {
+    it('returns the service account the key belongs to', async () => {
+      setupMockRpc({
+        data: [{
+          user_id: 'sponsor-1',
+          company_id: 'company-456',
+          api_key_id: 'ak_sa',
+          api_key_name: 'Nyckel 1',
+          scopes: ['invoices:read'],
+          rate_limited: false,
+          allowed_company_ids: ['company-456'],
+          read_only_company_ids: null,
+          service_account_id: 'sa-1',
+          service_account_name: 'Nattlig fakturasynk',
+        }],
+        error: null,
+      })
+
+      const result = await validateApiKey('gnubok_sk_test-key-value')
+      expect(result).toMatchObject({
+        userId: 'sponsor-1',
+        allowedCompanyIds: ['company-456'],
+        serviceAccount: { id: 'sa-1', name: 'Nattlig fakturasynk' },
+      })
+    })
+
+    it('answers a suspended service account with its own code, not the bare 401', async () => {
+      const mockRpc = vi.fn(async (name: string) =>
+        name === 'service_account_key_refusal'
+          ? { data: 'SERVICE_ACCOUNT_SUSPENDED', error: null }
+          : { data: [], error: null },
+      )
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      mockCreateClient.mockReturnValue({ rpc: mockRpc } as any)
+
+      const result = await validateApiKey('gnubok_sk_test-key-value')
+      expect(result).toMatchObject({ status: 403, code: 'SERVICE_ACCOUNT_SUSPENDED' })
+      expect(mockRpc).toHaveBeenCalledWith('service_account_key_refusal', { p_key_hash: expect.any(String) })
+    })
+
+    it('falls back to the bare 401 when the refusal lookup fails (a DB without the function)', async () => {
+      const mockRpc = vi.fn(async (name: string) =>
+        name === 'service_account_key_refusal'
+          ? { data: null, error: { code: 'PGRST202', message: 'not found' } }
+          : { data: [], error: null },
+      )
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      mockCreateClient.mockReturnValue({ rpc: mockRpc } as any)
+
+      expect(await validateApiKey('gnubok_sk_test-key-value')).toEqual({ error: 'Invalid API key', status: 401 })
+    })
+
+    it('does not look up a refusal when the validation itself failed', async () => {
+      const mockRpc = vi.fn().mockResolvedValue({ data: null, error: { message: 'db error' } })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      mockCreateClient.mockReturnValue({ rpc: mockRpc } as any)
+
+      expect(await validateApiKey('gnubok_sk_test-key-value')).toEqual({ error: 'Invalid API key', status: 401 })
+      expect(mockRpc).toHaveBeenCalledTimes(1)
+    })
+
+    it('names the actor service_account for a service account key, api_key otherwise', () => {
+      expect(apiKeyCommitActor({ apiKeyName: 'Nyckel 1', serviceAccount: { id: 'sa-1', name: 'Synk' } })).toEqual({
+        type: 'service_account',
+        label: 'Synk',
+      })
+      expect(apiKeyCommitActor({ apiKeyName: 'Nyckel 1', serviceAccount: null })).toEqual({
+        type: 'api_key',
+        label: 'Nyckel 1',
+      })
+      expect(apiKeyCommitActor({ serviceAccount: null })).toEqual({ type: 'api_key', label: 'Unnamed API key' })
     })
   })
 

@@ -284,6 +284,10 @@ export const AUDITED_TABLES = [
   // 20261012030100): consent, activation, ending, and the rules applied when
   // invoices are handed over and collected payments and payouts are booked.
   'collection_connections',
+  // Service accounts (migration 20261016120000): a non-human principal that
+  // writes to the books through its own keys, created and revoked by an
+  // owner or admin. Their keys are api_keys rows, logged above.
+  'service_accounts',
 ] as const
 
 /**
@@ -311,7 +315,7 @@ export const GLOBAL_ACTIONS = [
  * names statically; a unit test pins it to AUDITED_TABLES / GLOBAL_ACTIONS.
  */
 export const AUDIT_ROW_FILTER =
-  'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults,mail_connections,collection_connections),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED)'
+  'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults,mail_connections,collection_connections,service_accounts),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED)'
 
 const COMMIT_METHOD_LABELS: Record<string, string> = {
   user_accept: 'Godkänd av användare',
@@ -660,6 +664,7 @@ function normaliseActorType(value: unknown): BehandlingshistorikActorType {
     case 'cron':
     case 'agent_chat':
     case 'system':
+    case 'service_account':
       return value
     default:
       return 'user'
@@ -682,6 +687,13 @@ export function formatActorLabel(actor: RawActor, userLabels: Map<string, string
     case 'agent_chat': {
       const who = userLabel ?? fallbackUser
       return who ? `Assistenten, på uppdrag av ${who}` : 'Assistenten'
+    }
+    case 'service_account': {
+      // A service account's key acts as its sponsor (the row's user_id): the
+      // label names the account, the sponsor answers for it.
+      const account = actor.actor_label ? `Tjänstekonto: ${actor.actor_label}` : 'Tjänstekonto'
+      const sponsor = userLabel ?? fallbackUser
+      return sponsor ? `${account}, på uppdrag av ${sponsor}` : account
     }
     case 'cron':
       return actor.actor_label ? `Schemalagd körning: ${actor.actor_label}` : 'Schemalagd körning'
@@ -1191,6 +1203,28 @@ function apiKeyAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | nul
 }
 
 /**
+ * A service account's lifecycle (migration 20261016120000): created, then at
+ * most once revoked; nothing else ever changes on the row. The actor is the
+ * person (and credential) who created or revoked it; the sponsor answers for
+ * every write the account makes and is named on those.
+ */
+function serviceAccountAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
+  const state = row.new_state ?? row.old_state
+  const object = str(state?.name)
+  switch (row.action) {
+    case 'INSERT':
+      return auditEvent(row, { category: 'atkomst', code: 'service_account.created', event: 'Tjänstekonto skapat', object })
+    case 'UPDATE':
+      if (!row.old_state?.revoked_at && row.new_state?.revoked_at) {
+        return auditEvent(row, { category: 'atkomst', code: 'service_account.revoked', event: 'Tjänstekonto återkallat', object })
+      }
+      return null
+    default:
+      return null
+  }
+}
+
+/**
  * A mailbox the receipt hunt reads underlag from: who connected it, with
  * which access, and when it was disconnected (and whether the provider
  * confirmed the access was withdrawn).
@@ -1477,6 +1511,8 @@ export function auditRowToEvent(
       return periodAuditEvent(row)
     case 'api_keys':
       return apiKeyAuditEvent(row)
+    case 'service_accounts':
+      return serviceAccountAuditEvent(row)
     case 'dimensions':
       return genericAuditEvent(row, {
         category: 'installningar',
@@ -2382,7 +2418,7 @@ async function fetchAuditRows(
       // Literal on purpose (not AUDIT_ROW_FILTER): the schema guard only
       // resolves string literals here. A test pins the two to each other.
       .or(
-        'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults,mail_connections,collection_connections),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED)',
+        'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults,mail_connections,collection_connections,service_accounts),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED)',
       )
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })

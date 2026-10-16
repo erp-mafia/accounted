@@ -205,6 +205,13 @@ import '@/app/api/v1/companies/[companyId]/webhooks/[id]/rotate-secret/route'
 // Endpoint ownership handshake (ADA CASA 7.1.2).
 import '@/app/api/v1/companies/[companyId]/webhooks/[id]/verify/route'
 
+// Service accounts: a non-human principal with a human sponsor, and its keys.
+import '@/app/api/v1/companies/[companyId]/service-accounts/route'
+import '@/app/api/v1/companies/[companyId]/service-accounts/[id]/route'
+import '@/app/api/v1/companies/[companyId]/service-accounts/[id]/revoke/route'
+import '@/app/api/v1/companies/[companyId]/service-accounts/[id]/keys/route'
+import '@/app/api/v1/companies/[companyId]/service-accounts/[id]/keys/[keyId]/revoke/route'
+
 // Inbox item stamp.
 import '@/app/api/v1/companies/[companyId]/inbox-items/[id]/stamp/route'
 

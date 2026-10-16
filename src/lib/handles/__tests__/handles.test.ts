@@ -44,6 +44,8 @@ describe('the prefix table (a public contract)', () => {
       webhook: 'wh',
       webhook_delivery: 'whd',
       operation: 'op',
+      service_account: 'svc',
+      api_key: 'key',
     })
   })
 

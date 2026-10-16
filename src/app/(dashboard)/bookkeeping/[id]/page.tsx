@@ -116,6 +116,10 @@ function committedByLabel(
       return actorLabel ? t('committed_by_ai', { label: actorLabel }) : t('committed_by_ai_plain')
     case 'agent_chat':
       return t('committed_by_agent_chat')
+    case 'service_account':
+      return actorLabel
+        ? t('committed_by_service_account', { label: actorLabel })
+        : t('committed_by_service_account_plain')
     case 'cron':
       return t('committed_by_cron')
     case 'system':

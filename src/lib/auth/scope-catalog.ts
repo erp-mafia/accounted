@@ -29,6 +29,11 @@ export const API_KEY_SCOPES = {
   'companies:write':    { label: 'Företag: skriv',      description: 'Skapa nya företag och uppdatera företagsinställningar (gnubok_create_company, stagade verktyg, REST POST /api/v1/companies och PATCH /api/v1/companies/{companyId}/settings)' },
   'events:read':        { label: 'Händelser: läs',      description: 'Polla händelseloggen (event_log) som webhook-fallback' },
   'webhooks:manage':    { label: 'Webhooks: hantera',   description: 'Skapa, lista, uppdatera och radera webhook-prenumerationer' },
+  // Service accounts (lib/service-accounts): a non-human principal with a
+  // human sponsor, and the keys it acts with. Opt-in on purpose: no key held
+  // it before it existed, so no existing grant silently gained the power to
+  // mint credentials. A service account's own key never uses it.
+  'service_accounts:manage': { label: 'Tjänstekonton: hantera', description: 'Skapa, lista och återkalla tjänstekonton och deras nycklar (REST /api/v1/companies/{companyId}/service-accounts); endast ägare och administratörer' },
   'operations:read':    { label: 'Operationer: läs',    description: 'Hämta status för långkörande operationer (importer, bokslut, omvärdering)' },
   'documents:read':     { label: 'Dokument: läs',       description: 'Lista och hämta dokumentbilagor' },
   'documents:write':    { label: 'Dokument: skriv',     description: 'Ladda upp och koppla dokument till verifikationer' },
@@ -184,6 +189,7 @@ export const SCOPE_GROUPS: readonly ScopeGroup[] = [
   { domain: 'compliance',         label: 'Compliance',          scopes: ['compliance:read'] },
   { domain: 'events',             label: 'Händelser',           scopes: ['events:read'] },
   { domain: 'webhooks',           label: 'Webhooks',            scopes: ['webhooks:manage'] },
+  { domain: 'service_accounts',   label: 'Tjänstekonton',       scopes: ['service_accounts:manage'] },
   { domain: 'operations',         label: 'Operationer',         scopes: ['operations:read'] },
 ]
 

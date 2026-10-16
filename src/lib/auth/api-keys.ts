@@ -153,6 +153,37 @@ export type ApiKeyMode = 'live' | 'test'
  */
 export const RATE_LIMIT_RETRY_AFTER_SECONDS = 60
 
+/**
+ * The service account a key belongs to (migration 20261016120000), as the
+ * validation read it: its id and its name, which is the actor label of every
+ * write the key makes. The key's userId is the account's sponsor.
+ */
+export interface ApiKeyServiceAccount {
+  id: string
+  name: string
+}
+
+/**
+ * A refused key whose refusal has a code of its own: a service account whose
+ * sponsor is no longer an owner or admin of its company (or whose company is
+ * archived). Every other refusal is the bare 401 or 429.
+ */
+export type ApiKeyRefusalCode = 'SERVICE_ACCOUNT_SUSPENDED'
+
+/**
+ * WHO a validated key acts as on the v1 surface: a service account's key as
+ * `service_account`, labelled with the account's name (the rows it writes
+ * carry its sponsor as user_id, the person it acts for), every other key as
+ * `api_key` labelled with its own name.
+ */
+export function apiKeyCommitActor(auth: {
+  apiKeyName?: string
+  serviceAccount: ApiKeyServiceAccount | null
+}): { type: 'service_account' | 'api_key'; label: string } {
+  if (auth.serviceAccount) return { type: 'service_account', label: auth.serviceAccount.name }
+  return { type: 'api_key', label: auth.apiKeyName ?? 'Unnamed API key' }
+}
+
 export async function validateApiKey(
   key: string
 ): Promise<
@@ -195,8 +226,15 @@ export async function validateApiKey(
        * `allowedCompanyIds`.
        */
       readOnlyCompanyIds: string[] | null
+      /**
+       * The service account the key belongs to, or null for a person's key
+       * (and for every key while the deployed DB has not run 20261016120000).
+       * A service-account key reaches exactly the account's company: the
+       * database answers allowedCompanyIds with that one company.
+       */
+      serviceAccount: ApiKeyServiceAccount | null
     }
-  | { error: string; status: number }
+  | { error: string; status: number; code?: ApiKeyRefusalCode }
 > {
   if (isRefreshToken(key)) {
     return {
@@ -217,6 +255,10 @@ export async function validateApiKey(
   })
 
   if (error || !data || data.length === 0) {
+    if (!error) {
+      const refusal = await serviceAccountRefusal(supabase, hash)
+      if (refusal) return refusal
+    }
     return { error: 'Invalid API key', status: 401 }
   }
 
@@ -269,7 +311,38 @@ export async function validateApiKey(
     unattendedCommitLimit: parseUnattendedCommitLimit(row.unattended_commit_limit),
     allowedCompanyIds,
     readOnlyCompanyIds,
+    serviceAccount: parseServiceAccount(row.service_account_id, row.service_account_name),
   }
+}
+
+/**
+ * Why the validation answered no row, when the reason is a suspended service
+ * account: its key is otherwise live, so the caller gets a structured 403
+ * instead of the 401 an unknown key gets (it can be fixed by the company, not
+ * by the integrator). One extra read, on the refusal path only. Any failure
+ * (a DB without the function answers PGRST202) falls back to the generic 401.
+ */
+async function serviceAccountRefusal(
+  supabase: SupabaseClient,
+  hash: string,
+): Promise<{ error: string; status: number; code: ApiKeyRefusalCode } | null> {
+  try {
+    const { data, error } = await supabase.rpc('service_account_key_refusal', { p_key_hash: hash })
+    if (error || data !== 'SERVICE_ACCOUNT_SUSPENDED') return null
+    return {
+      error: 'Service account suspended: its sponsor is no longer an owner or admin of the company',
+      status: 403,
+      code: 'SERVICE_ACCOUNT_SUSPENDED',
+    }
+  } catch {
+    return null
+  }
+}
+
+/** The key's service account, or null for a person's key (or a DB without the columns). */
+function parseServiceAccount(id: unknown, name: unknown): ApiKeyServiceAccount | null {
+  if (typeof id !== 'string' || id.length === 0) return null
+  return { id, name: typeof name === 'string' && name.length > 0 ? name : 'Service account' }
 }
 
 /**

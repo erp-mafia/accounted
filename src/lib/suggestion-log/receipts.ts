@@ -45,7 +45,15 @@ export const MAX_RECEIPTS_PER_SUBJECT = 100
 
 const ID_CHUNK = 200
 
-export const DECISION_ACTOR_TYPES = ['user', 'api_key', 'mcp_oauth', 'cron', 'system', 'agent_chat'] as const
+export const DECISION_ACTOR_TYPES = [
+  'user',
+  'api_key',
+  'mcp_oauth',
+  'cron',
+  'system',
+  'agent_chat',
+  'service_account',
+] as const
 export type DecisionActorType = (typeof DECISION_ACTOR_TYPES)[number]
 
 const CANDIDATE_SOURCES = ['assistant', 'rule', 'catalog', 'counterparty_template', 'recent', 'extraction'] as const

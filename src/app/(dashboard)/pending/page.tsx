@@ -181,6 +181,10 @@ function originLabel(
       return op.actor_label
         ? t('origin_mcp', { label: op.actor_label })
         : t('origin_api')
+    case 'service_account':
+      return op.actor_label
+        ? t('origin_service_account', { label: op.actor_label })
+        : t('origin_service_account_plain')
     case 'cron':
       return t('origin_cron')
     default:
@@ -720,6 +724,7 @@ export default function PendingOperationsPage() {
         return (
           op.actor_type === 'api_key' ||
           op.actor_type === 'mcp_oauth' ||
+          op.actor_type === 'service_account' ||
           op.actor_type === 'cron' ||
           op.actor_type === 'agent_chat'
         )

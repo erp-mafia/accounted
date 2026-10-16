@@ -5979,6 +5979,90 @@ const API_KEY: Record<string, StructuredErrorEntry> = {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// Service accounts (lib/service-accounts, migration 20261016120000)
+// ─────────────────────────────────────────────────────────────────
+
+const SERVICE_ACCOUNT: Record<string, StructuredErrorEntry> = {
+  // Answered at authentication for every key of the account: the key itself
+  // is live, so this is a company decision, not an integrator mistake.
+  SERVICE_ACCOUNT_SUSPENDED: {
+    httpStatus: 403,
+    message_sv:
+      'Tjänstekontot är vilande: personen som ansvarar för det är inte längre ägare eller administratör i företaget. Nyckeln fungerar igen när en ägare återställer rollen, annars behövs ett nytt tjänstekonto med en annan ansvarig.',
+    message_en:
+      'The service account is suspended: its sponsor is no longer an owner or admin of the company. Its keys work again once the sponsor is an owner or admin again; otherwise create a new service account with another sponsor.',
+    retryable: false,
+    remediation: {
+      description:
+        'Ask a company owner to restore the sponsor role, or create a new service account with a current owner or admin as sponsor and mint a key for it.',
+    },
+  },
+  SERVICE_ACCOUNT_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Tjänstekontot finns inte i det här företaget.',
+    message_en: 'No such service account in this company.',
+    retryable: false,
+  },
+  SERVICE_ACCOUNT_KEY_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Nyckeln hör inte till det här tjänstekontot.',
+    message_en: 'No such key on this service account.',
+    retryable: false,
+  },
+  SERVICE_ACCOUNT_REVOKED: {
+    httpStatus: 409,
+    message_sv: 'Tjänstekontot är återkallat och kan inte få nya nycklar.',
+    message_en: 'The service account is revoked: it cannot get new keys.',
+    retryable: false,
+  },
+  SERVICE_ACCOUNT_SPONSOR_INVALID: {
+    httpStatus: 422,
+    message_sv: 'Den ansvariga personen måste vara ägare eller administratör i företaget.',
+    message_en: 'The sponsor must be an owner or admin member of the company.',
+    retryable: false,
+  },
+  SERVICE_ACCOUNT_NAME_TAKEN: {
+    httpStatus: 409,
+    message_sv: 'Företaget har redan ett aktivt tjänstekonto med det namnet.',
+    message_en: 'The company already has a live service account with this name.',
+    retryable: false,
+  },
+  SERVICE_ACCOUNT_LIMIT: {
+    httpStatus: 409,
+    message_sv: 'Företaget har nått gränsen på 25 aktiva tjänstekonton. Återkalla ett som inte används.',
+    message_en: 'The company has reached the limit of 25 live service accounts. Revoke one that is no longer used.',
+    retryable: false,
+  },
+  SERVICE_ACCOUNT_KEY_LIMIT: {
+    httpStatus: 409,
+    message_sv: 'Tjänstekontot har redan 5 aktiva nycklar. Återkalla en innan du skapar en ny.',
+    message_en: 'The service account already has 5 live keys. Revoke one before minting another.',
+    retryable: false,
+  },
+  SERVICE_ACCOUNT_ADMIN_REQUIRED: {
+    httpStatus: 403,
+    message_sv: 'Endast ägare och administratörer kan hantera tjänstekonton.',
+    message_en: 'Only owners and admins can manage service accounts.',
+    retryable: false,
+  },
+  SERVICE_ACCOUNT_SCOPE_NOT_HELD: {
+    httpStatus: 403,
+    message_sv: 'En nyckel för ett tjänstekonto kan bara få behörigheter som den anropande nyckeln själv har.',
+    message_en: 'A service-account key can only be given scopes the calling key holds itself.',
+    retryable: false,
+    remediation: {
+      description: 'Drop the scopes listed in details.not_held, or call with a key that holds them.',
+    },
+  },
+  SERVICE_ACCOUNT_KEY_NOT_PERMITTED: {
+    httpStatus: 403,
+    message_sv: 'En tjänstekontonyckel kan inte hantera tjänstekonton. Använd en nyckel som tillhör en person.',
+    message_en: "A service account's key cannot manage service accounts. Use a key that belongs to a person.",
+    retryable: false,
+  },
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Provider connection / external HTTP codes
 // ─────────────────────────────────────────────────────────────────
 
@@ -8643,6 +8727,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...SALARY,
   ...COMPANY,
   ...API_KEY,
+  ...SERVICE_ACCOUNT,
   ...PROVIDER,
   ...SKATTEVERKET,
   ...BOLAGSVERKET,

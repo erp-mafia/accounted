@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `336`;
+exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `342`;
 
 exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-keys 1`] = `
 [
@@ -141,6 +141,8 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "GET /api/v1/companies/:companyId/salary-runs/:id/payment-files",
   "GET /api/v1/companies/:companyId/salary-runs/:id/payslips/:employeeId/pdf",
   "GET /api/v1/companies/:companyId/salary/settings",
+  "GET /api/v1/companies/:companyId/service-accounts",
+  "GET /api/v1/companies/:companyId/service-accounts/:id",
   "GET /api/v1/companies/:companyId/settings",
   "GET /api/v1/companies/:companyId/skatteverket/vat-declarations",
   "GET /api/v1/companies/:companyId/supplier-invoices",
@@ -297,6 +299,10 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/salary-runs/:id/send-payslips",
   "POST /api/v1/companies/:companyId/salary-runs/:id/unapprove",
   "POST /api/v1/companies/:companyId/salary/vacation-year-close",
+  "POST /api/v1/companies/:companyId/service-accounts",
+  "POST /api/v1/companies/:companyId/service-accounts/:id/keys",
+  "POST /api/v1/companies/:companyId/service-accounts/:id/keys/:keyId/revoke",
+  "POST /api/v1/companies/:companyId/service-accounts/:id/revoke",
   "POST /api/v1/companies/:companyId/skattekonto/sync",
   "POST /api/v1/companies/:companyId/skatteverket/agi/validate-huvuduppgift",
   "POST /api/v1/companies/:companyId/skatteverket/agi/validate-individuppgift",
@@ -355,7 +361,7 @@ exports[`v1 spec snapshot > matches the recorded module catalogue > endpoint-mod
   "ledger": 104,
   "payments": 20,
   "payroll": 52,
-  "platform": 20,
+  "platform": 26,
   "pos": 9,
   "skatteverket": 4,
   "supplier-invoices": 22,
@@ -388,6 +394,7 @@ exports[`v1 spec snapshot > matches the recorded scope catalogue > endpoint-scop
   "reconciliation:signoff",
   "reconciliation:write",
   "reports:read",
+  "service_accounts:manage",
   "suppliers:read",
   "suppliers:write",
   "transactions:read",

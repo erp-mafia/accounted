@@ -192,6 +192,12 @@ const RETAINED = new Set([
   'company_skills.created_by',
   'community_feedback.user_id', // An upvote on a shared item: one count among others, no personal content.
   'api_keys.sod_acknowledged_by',
+  // Who sponsored, created and revoked a company's service account: the
+  // behandlingshistorik names them for every write the account made. An
+  // erased sponsor is no longer a member, so the account is suspended.
+  'service_accounts.created_by',
+  'service_accounts.revoked_by',
+  'service_accounts.sponsor_user_id',
   'booking_template_hidden.hidden_by',
   'booking_template_library.created_by',
   'brand_signup_allowlist.created_by',

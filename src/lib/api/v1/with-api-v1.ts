@@ -68,6 +68,8 @@ import { truncateIp } from '@/lib/api/ip'
 import {
   type ApiKeyMode,
   type ApiKeyScope,
+  type ApiKeyServiceAccount,
+  apiKeyCommitActor,
   createServiceClientNoCookies,
   extractBearerToken,
   hasScope,
@@ -75,6 +77,7 @@ import {
   scopeKind,
   validateApiKey,
 } from '@/lib/auth/api-keys'
+import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import { withSIEExternalReport } from '@/lib/import/sie-period-read'
 import type { V1RequiredScope } from '@/lib/auth/scopes'
@@ -130,6 +133,21 @@ export interface ApiV1Context {
   apiKeyId: string | undefined
   /** API key human name. */
   apiKeyName: string | undefined
+  /**
+   * The service account the calling key belongs to (lib/service-accounts), or
+   * null for a person's key. For a service account `userId` is its sponsor:
+   * RLS-shaped reads and the company gate run as the sponsor, and the key
+   * reaches only the account's company (`allowedCompanyIds`).
+   */
+  serviceAccount: ApiKeyServiceAccount | null
+  /**
+   * WHO this request acts as in every record it writes: the commit-actor
+   * scope the handler runs in (journal_entries.committed_actor_*, audit_log),
+   * and what a staged operation or a rejection records. `service_account`
+   * labelled with the account's name for a service account's key, else
+   * `api_key` labelled with the key's name.
+   */
+  actor: CommitActor
   /** Scopes granted to the calling key. */
   scopes: ApiKeyScope[]
   /**
@@ -241,6 +259,15 @@ interface ApiV1Options {
    * test, which has nothing to ask of a read; changes no request handling.
    */
   readOnly?: boolean
+  /**
+   * The response carries a credential shown exactly once (a minted
+   * service-account key). Idempotency-Key is then neither claimed nor
+   * replayed, even when sent: a replay would need the plaintext stored in
+   * idempotency_keys for a day, while an API key is otherwise stored only as
+   * its SHA-256. A repeat mints a second key, visible and revocable. Such a
+   * write is listed in KEY_OPTIONAL_WRITES (v1-write-idempotency.test.ts).
+   */
+  secretResponse?: boolean
 }
 
 // Next.js 16 always passes `{ params: Promise<...> }` as the second arg.
@@ -711,6 +738,8 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
           userId: 'anonymous',
           apiKeyId: undefined,
           apiKeyName: undefined,
+          serviceAccount: null,
+          actor: { type: 'api_key', label: 'Anonymous' },
           scopes: [],
           allowedCompanyIds: null,
           readOnlyCompanyIds: null,
@@ -738,6 +767,8 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
               userId: auth.userId,
               apiKeyId: auth.apiKeyId,
               apiKeyName: auth.apiKeyName,
+              serviceAccount: auth.serviceAccount,
+              actor: apiKeyCommitActor(auth),
               scopes: auth.scopes,
               allowedCompanyIds: auth.allowedCompanyIds,
               readOnlyCompanyIds: auth.readOnlyCompanyIds,
@@ -764,7 +795,9 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       if ('error' in auth) {
         log.warn('api key validation failed', { status: auth.status, reason: auth.error, ...forensic })
         const rateLimited = auth.status === 429
-        const code = rateLimited ? 'RATE_LIMITED' : 'UNAUTHORIZED'
+        // A coded refusal (a suspended service account) answers its own
+        // structured error; everything else is the bare 401 or 429.
+        const code = auth.code ?? (rateLimited ? 'RATE_LIMITED' : 'UNAUTHORIZED')
         return await v1ErrorResponseFromCode(code, log, {
           requestId,
           reason: auth.error,
@@ -776,6 +809,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         userId: auth.userId,
         apiKeyId: auth.apiKeyId,
         mode: auth.mode,
+        ...(auth.serviceAccount ? { serviceAccountId: auth.serviceAccount.id } : {}),
       })
 
       // 4. Scope check. An 'authenticated' route needs the valid key above
@@ -969,7 +1003,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       //    dry run writes nothing, so it claims nothing: it only looks the
       //    key up (a finished call with another body is still key reuse).
       let workingRequest = handlerRequest
-      if (idempotencyKey && isMutation && companyId) {
+      if (idempotencyKey && isMutation && companyId && !options.secretResponse) {
         const { body, cloned } = await readBodyForHash(handlerRequest)
         workingRequest = cloned
         // The handle-free path and body: a retry that spells an id as a
@@ -1004,6 +1038,8 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         userId: auth.userId,
         apiKeyId: auth.apiKeyId,
         apiKeyName: auth.apiKeyName,
+        serviceAccount: auth.serviceAccount,
+        actor: apiKeyCommitActor(auth),
         scopes: auth.scopes,
         allowedCompanyIds: auth.allowedCompanyIds,
         readOnlyCompanyIds: auth.readOnlyCompanyIds,
@@ -1040,9 +1076,11 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       // "who did this, and when" is a legal question rather than a nicety.
       //
       // `api_key` is the honest label for this surface: a gnubok_sk_ bearer
-      // token. The OAuth/MCP surfaces set their own actor and are unaffected.
+      // token. A service account's key acts as `service_account`, labelled
+      // with the account's name (its sponsor is the user the rows carry). The
+      // OAuth/MCP surfaces set their own actor and are unaffected.
       let response: Response = await runWithActor(
-        { type: 'api_key', label: auth.apiKeyName ?? 'Unnamed API key' },
+        ctx.actor,
         () => withSIEExternalReport(supabase,companyId,operation,()=>handler(workingRequest,ctx,handlerParams)),
       )
 

@@ -74,6 +74,8 @@ export const HANDLE_RESOURCES = [
   { type: 'webhook', prefix: 'wh', label: 'webhook', segments: ['webhooks'], fields: ['webhook'] },
   { type: 'webhook_delivery', prefix: 'whd', label: 'webhook delivery', segments: ['webhook-deliveries'], fields: ['webhook_delivery'] },
   { type: 'operation', prefix: 'op', label: 'async operation', segments: ['operations'], fields: [] },
+  { type: 'service_account', prefix: 'svc', label: 'service account', segments: ['service-accounts'], fields: ['service_account'] },
+  { type: 'api_key', prefix: 'key', label: 'API key', segments: ['keys'], fields: ['api_key'] },
 ] as const satisfies readonly HandleResource[]
 
 export type HandleType = (typeof HANDLE_RESOURCES)[number]['type']

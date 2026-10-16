@@ -26,6 +26,7 @@ export type BehandlingshistorikActorType =
   | 'cron'
   | 'agent_chat'
   | 'system'
+  | 'service_account'
 
 export type BehandlingshistorikSource =
   | 'journal_entries'

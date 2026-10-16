@@ -100,6 +100,12 @@ describe('exceedsUnattendedLimit', () => {
     expect(exceedsUnattendedLimit({ ...over, actorType: 'mcp_oauth' }).exceeded).toBe(true)
   })
 
+  it("blocks a service account's key above its ceiling the same way", () => {
+    // A service account acts through its own minted keys; being labelled
+    // service_account must not lift the key's ceiling either.
+    expect(exceedsUnattendedLimit({ ...over, actorType: 'service_account' }).exceeded).toBe(true)
+  })
+
   it('never fires for a human, cron or unattributed commit', () => {
     for (const actorType of ['user', 'cron', 'agent_chat', 'system', undefined]) {
       expect(

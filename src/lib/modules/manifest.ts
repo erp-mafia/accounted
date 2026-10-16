@@ -102,12 +102,22 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     name: 'Platform',
     nameSv: 'Plattform',
     summary:
-      'Identity, API keys, company discovery and creation, async operation polling, staged operations and their approval, webhooks and health: what every other module runs on.',
+      'Identity, API keys, service accounts, company discovery and creation, async operation polling, staged operations and their approval, webhooks and health: what every other module runs on.',
     dependsOn: [],
-    libFolders: ['auth', 'webhooks'],
+    libFolders: ['auth', 'webhooks', 'service-accounts'],
     operationPrefixes: [],
     // capabilities: the per-company module report (lib/modules/capabilities.ts).
-    v1Segments: ['health', 'api-key', 'companies', 'capabilities', 'operations', 'pending-operations', 'webhooks', 'webhook-deliveries'],
+    v1Segments: [
+      'health',
+      'api-key',
+      'companies',
+      'capabilities',
+      'operations',
+      'pending-operations',
+      'webhooks',
+      'webhook-deliveries',
+      'service-accounts',
+    ],
     jurisdictions: [],
   },
   {
