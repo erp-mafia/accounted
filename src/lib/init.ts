@@ -2,6 +2,7 @@ import { loadExtensions } from '@/lib/extensions/loader'
 import { setContextFactory } from '@/lib/extensions/registry'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
 import { registerSupplierInvoiceHandler } from '@/lib/bookkeeping/handlers/supplier-invoice-handler'
+import { registerUnlearnOnReversalHandler } from '@/lib/bookkeeping/handlers/unlearn-on-reversal'
 import { registerAttestNotificationHandler } from '@/lib/supplier-invoices/attest-notify'
 import { registerEventLogHandler } from '@/lib/events/handlers/event-log-handler'
 import { registerDocumentReadHandler } from '@/lib/events/handlers/document-read-handler'
@@ -110,6 +111,8 @@ export function ensureInitialized(): void {
   // get it without this init.
   ensureObservability()
   registerSupplierInvoiceHandler()
+  // A reversed bank booking takes back the counterpart template it taught.
+  registerUnlearnOnReversalHandler()
   // The attest mail to each attester when an invoice that needs attest is registered.
   registerAttestNotificationHandler()
   registerEventLogHandler()

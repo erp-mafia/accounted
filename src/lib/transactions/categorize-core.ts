@@ -39,6 +39,7 @@ import {
   type BookingTemplate,
 } from '@/lib/bookkeeping/booking-templates'
 import { resolveSkattekontoAccount, templateTouchesSkattekonto } from '@/lib/skatteverket/skattekonto-account'
+import { isSkatteverketPayment } from '@/lib/bookkeeping/skatteverket-payment'
 import { reconcileRcBasisWithChart } from '@/lib/bookkeeping/rc-basis-reconcile'
 import { chartVatTreatmentsLoader, type ChartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
 import { applySettlementAccount, saveUserMappingRule } from '@/lib/bookkeeping/mapping-engine'
@@ -557,6 +558,18 @@ export async function buildCategorizeMapping(
     return refuse('TX_CATEGORIZE_INVALID_MAPPING', {
       debitAccount: mappingResult.debit_account,
       creditAccount: mappingResult.credit_account,
+    })
+  }
+
+  // A payment to Skatteverket moves money to the skattekonto and carries no
+  // moms (isSkatteverketPayment). This is where the moms is worked out from a
+  // treatment, so a category or account picked by mistake ("Resor": 5890 with
+  // 25 %) cannot post input VAT on one (crm#1275); the preview refuses the
+  // same. A manual multi-line booking (/transactions/[id]/book) states its
+  // lines itself and may settle 26xx with the payment, so it is not refused.
+  if (isSkatteverketPayment(transaction) && mappingResult.vat_lines.length > 0) {
+    return refuse('TX_CATEGORIZE_SKATTEVERKET_VAT', {
+      vatAccounts: mappingResult.vat_lines.map((line) => line.account_number),
     })
   }
 

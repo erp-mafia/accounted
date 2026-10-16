@@ -31,6 +31,7 @@ import { resolveSekAmount } from './currency-utils'
 import { grossVat, treatmentForRate } from '@/lib/vat/gross-split'
 import { stripBankNoise as stripBankMethodPhrases } from './booking-templates'
 import { bankSideOf, isCashLedger, settleBankLeg, type BankSide } from './bank-leg'
+import { isSkatteverketPayment } from './skatteverket-payment'
 import { createLogger } from '@/lib/logger'
 import type {
   CategorizationTemplate,
@@ -422,6 +423,11 @@ export async function findCounterpartyTemplatesBatch(
     // buildMerchantHistory in lib/transactions/category-suggestions.ts).
     const rawName = tx.merchant_name || tx.original_description || tx.description
     if (!rawName || !namesCounterparty(rawName)) continue
+
+    // A payment to Skatteverket books on the skattekonto by rule
+    // (leadWithSkattekonto in lib/transactions/propose.ts); a template
+    // learned from one, right or wrong, is never offered for it (crm#1275).
+    if (isSkatteverketPayment(tx)) continue
 
     const normalized = normalizeCounterpartyName(rawName)
     if (!normalized || normalized.length < 2) continue
@@ -1280,8 +1286,11 @@ export async function insertOrUpdateTemplate(
         .update({
           debit_account: params.debitAccount,
           credit_account: params.creditAccount,
-          vat_treatment: params.vatTreatment ?? existing.vat_treatment,
-          vat_account: params.vatAccount ?? existing.vat_account,
+          // The booking's own moms, none included: null means the corrected
+          // pair books no moms, not "unknown". Falling back to the old value
+          // kept 25 % on a pair moved from a cost to 1630 or 2440 (crm#1275).
+          vat_treatment: params.vatTreatment,
+          vat_account: params.vatAccount,
           category: params.category || existing.category,
           occurrence_count: params.occurrenceCount,
           confidence: params.confidence,
@@ -1410,6 +1419,12 @@ export async function upsertCounterpartyTemplate(
   // flip the template's accounts and poison future matches.
   if (mappingResult.direction_mismatch) return
 
+  // A payment to Skatteverket is booked on the skattekonto by rule
+  // (isSkatteverketPayment), never by habit: learned, one mistaken booking
+  // became the next proposal for every later payment (crm#1275). The matcher
+  // skips these lines too.
+  if (isSkatteverketPayment(transaction)) return
+
   // A learned pair keeps only 'reverse_charge' and replays it through
   // learnedReverseChargeLines (EU services, 25 %). A purchase that replay would
   // book with another basis, such as 4531 for a supplier outside the EU, would
@@ -1470,6 +1485,77 @@ export async function upsertCounterpartyTemplate(
     // erase a learned one.
     defaultDimensions: mappingResult.dimensions ?? null,
   }, existing)
+}
+
+export type UnlearnOutcome = 'decremented' | 'deactivated'
+
+/**
+ * Take back what a bank booking taught when its verifikat is reversed
+ * (lib/bookkeeping/handlers/unlearn-on-reversal.ts). The verifikat was the
+ * evidence for one occurrence of its pair; left in place, a booking undone
+ * two seconds later stayed a learned habit and came back as the row's
+ * proposal two days later (crm#1275).
+ *
+ * The template is found the way upsertCounterpartyTemplate found it (the same
+ * key from the same bank text), and only a template whose pair the verifikat
+ * carries is touched: a booking on other accounts never taught it. One
+ * occurrence comes off; a template left with none is switched off, the same
+ * write as "Ta bort mall". A correction cannot be rolled back (the pair it
+ * replaced is not kept): it reset the count to one, so reversing it switches
+ * the template off. A rule the person set to book on its own ('auto') is
+ * their instruction, not a habit, and is left alone.
+ */
+export async function unlearnCounterpartyTemplate(
+  supabase: SupabaseClient,
+  companyId: string,
+  transaction: Pick<Transaction, 'merchant_name' | 'original_description' | 'description'>,
+  lines: ReadonlyArray<{ account_number: string; debit_amount: number | string; credit_amount: number | string }>,
+): Promise<UnlearnOutcome | null> {
+  const rawName = transaction.merchant_name || transaction.original_description || transaction.description
+  if (!rawName || !namesCounterparty(rawName)) return null
+  const normalized = normalizeCounterpartyName(rawName)
+  if (!normalized || normalized.length < 2) return null
+
+  const template = await findTemplateByKey(supabase, companyId, normalized)
+  if (!template || !template.is_active || template.mode === 'auto') return null
+  if (!verifikatCarriesPair(template, lines)) return null
+
+  const remaining = (Number(template.occurrence_count) || 0) - 1
+  const outcome: UnlearnOutcome = remaining >= 1 ? 'decremented' : 'deactivated'
+  const { error } = outcome === 'decremented'
+    ? await supabase
+      .from('categorization_templates')
+      .update({ occurrence_count: remaining, confidence: calculateConfidence(remaining) })
+      .eq('id', template.id)
+      .eq('company_id', companyId)
+    : await supabase
+      .from('categorization_templates')
+      .update({ is_active: false })
+      .eq('id', template.id)
+      .eq('company_id', companyId)
+  if (error) {
+    log.error('counterparty template unlearn failed', { companyId, templateId: template.id, error: error.message })
+    return null
+  }
+  return outcome
+}
+
+/**
+ * Whether a verifikat books the template's pair the way a booking that
+ * taught it would: the business leg on its side (the bank leg may sit on any
+ * of the company's ledgers, as samePairButBankLedger allows). A pair of
+ * unknown direction must appear as stored.
+ */
+function verifikatCarriesPair(
+  template: Pick<CategorizationTemplate, 'debit_account' | 'credit_account'>,
+  lines: ReadonlyArray<{ account_number: string; debit_amount: number | string; credit_amount: number | string }>,
+): boolean {
+  const debits = (account: string) => lines.some((l) => l.account_number === account && Number(l.debit_amount) > 0)
+  const credits = (account: string) => lines.some((l) => l.account_number === account && Number(l.credit_amount) > 0)
+  const direction = legacyTemplateDirection(template.debit_account, template.credit_account)
+  if (direction === 'expense') return debits(template.debit_account)
+  if (direction === 'income') return credits(template.credit_account)
+  return debits(template.debit_account) && credits(template.credit_account)
 }
 
 /**
