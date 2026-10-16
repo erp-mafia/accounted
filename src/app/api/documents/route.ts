@@ -4,6 +4,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponse, errorResponseFromCode, isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 import type { DocumentUploadSource } from '@/types'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 /**
  * POST /api/documents: upload a document to the WORM archive.
@@ -68,6 +69,8 @@ export const POST = withRouteContext(
         upload_source: uploadSource,
         journal_entry_id: journalEntryId || undefined,
         journal_entry_line_id: journalEntryLineId || undefined,
+        // The person uploaded it onto the verifikat they named.
+        linkBasis: linkBasisColumns('user_confirmed'),
         // The response is the stored row and nothing else; extraction is
         // read later through /api/documents/:id/extraction-status, which
         // reports 'running' until the handler stamps the row. Awaiting the

@@ -230,7 +230,10 @@ describe('matchPairs', () => {
     })
 
     // A pair the caller named takes the row's underlag onto the verifikat (crm#1101).
-    expect(manualLinkMock).toHaveBeenCalledWith(supabase, COMPANY, R1, E1, USER, '1931', { anchorUnderlag: true })
+    expect(manualLinkMock).toHaveBeenCalledWith(supabase, COMPANY, R1, E1, USER, '1931', {
+      anchorUnderlag: true,
+      linkBasis: { basis: 'user_confirmed' },
+    })
     expect(result?.applied).toHaveLength(1)
   })
 
@@ -251,8 +254,15 @@ describe('matchPairs', () => {
       { external_id: R1, journal_entry_id: E1 },
       { external_id: R2, journal_entry_id: E2 },
     ])
-    expect(manualLinkMock).toHaveBeenNthCalledWith(1, supabase, COMPANY, R1, E1, USER, '1930', { anchorUnderlag: true })
-    expect(manualLinkMock).toHaveBeenNthCalledWith(2, supabase, COMPANY, R2, E2, USER, '1930', { anchorUnderlag: false })
+    expect(manualLinkMock).toHaveBeenNthCalledWith(1, supabase, COMPANY, R1, E1, USER, '1930', {
+      anchorUnderlag: true,
+      linkBasis: { basis: 'user_confirmed' },
+    })
+    // A proposal applied in bulk: the matcher chose it, its score is the evidence.
+    expect(manualLinkMock).toHaveBeenNthCalledWith(2, supabase, COMPANY, R2, E2, USER, '1930', {
+      anchorUnderlag: false,
+      linkBasis: { basis: 'rule_amount_date', evidence: { rule_id: 'reconciliation_proposal', score: 0.95 } },
+    })
   })
 
   it('splits ONE bank transaction over SEVERAL verifikat through linkTransactionToVouchers (1:N, #1553)', async () => {

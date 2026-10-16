@@ -62,6 +62,7 @@ import type {
   InvoiceItem,
 } from '@/types'
 import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 export const POST = withRouteContext(
   'invoice.send',
@@ -622,6 +623,8 @@ export const POST = withRouteContext(
           companyId!,
           result.documentId,
           issuedJournalEntryId,
+          // The delivered PDF of this invoice on the invoice's own verifikat.
+          linkBasisColumns('system_derived'),
         )
       } catch (err) {
         opLog.error('failed to link archived invoice PDF to journal entry', err as Error)

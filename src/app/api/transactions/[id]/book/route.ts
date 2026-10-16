@@ -20,6 +20,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { formatCurrency } from '@/lib/utils'
 import type { Transaction } from '@/types'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'transaction.book',
@@ -261,6 +262,8 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         is_ignored: false,
         category: 'uncategorized',
         ...(repointCashAccountId ? { cash_account_id: repointCashAccountId } : {}),
+        // The person booked this verifikat from the bank line.
+        ...linkBasisColumns('user_created'),
       })
       .eq('id', id)
       .eq('company_id', companyId)

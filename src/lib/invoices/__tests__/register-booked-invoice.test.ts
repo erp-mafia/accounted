@@ -564,6 +564,9 @@ describe('registerBookedInvoice', () => {
       // Payment provenance (20261012030300): not from the collections provider.
       source: null,
       external_ref: null,
+      // Carried over from the old system's kundreskontra (src/lib/links/link-basis.ts).
+      link_basis: 'import_carried_over',
+      link_evidence: null,
     })
     const writes = calls.filter((call) => ['insert', 'update', 'upsert', 'delete'].includes(call.method))
     expect(writes.map((call) => `${call.method} ${call.table}`)).toEqual(['insert invoices', 'insert invoice_payments'])
@@ -598,6 +601,7 @@ describe('registerBookedInvoice', () => {
       paymentDate: '2026-05-15',
       newPaidAmount: 12500,
       journalEntryId: 'payment-voucher',
+      linkBasis: { basis: 'user_confirmed' },
     })
     const paidLater = later.findCall('invoice_payments', 'insert')?.[0] as { amount: number; payment_date: string }
 

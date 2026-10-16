@@ -194,6 +194,8 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
       'company-1',
       'doc-1',
       'je-100',
+      // Booked from the document inside an approval of a staged operation.
+      expect.objectContaining({ link_basis: 'agent_proposed_user_approved' }),
     )
     // The registration is recorded against the model's reading of the underlag.
     expect(vi.mocked(recordInboxDecision)).toHaveBeenCalledWith(

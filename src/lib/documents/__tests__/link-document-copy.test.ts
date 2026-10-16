@@ -92,6 +92,7 @@ describe('linkDocumentCopyToVoucher', () => {
     expect(meta).toEqual({
       upload_source: 'api',
       journal_entry_id: JE,
+      linkBasis: { link_basis: 'user_confirmed', link_evidence: null },
       idempotency_key: `document-copy:${DOC}:${JE}`,
       extractionOwner: 'none',
     })

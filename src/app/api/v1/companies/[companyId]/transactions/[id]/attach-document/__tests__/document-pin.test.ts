@@ -237,7 +237,12 @@ describe('POST /transactions/:id/attach-document', () => {
       journal_entry_id: JE_ID,
     })
     const docUpdate = client.calls.find((c) => c.table === 'document_attachments' && c.method === 'update')
-    expect(docUpdate?.args[0]).toEqual({ journal_entry_id: JE_ID })
+    expect(docUpdate?.args[0]).toEqual({
+      journal_entry_id: JE_ID,
+      // An API key pinned it: client_asserted, the pin as evidence.
+      link_basis: 'client_asserted',
+      link_evidence: { rule_id: 'bank_row_document_pin' },
+    })
     const txUpdate = client.calls.find((c) => c.table === 'transactions' && c.method === 'update')
     expect(txUpdate?.args[0]).toEqual({ document_id: DOC_ID })
   })

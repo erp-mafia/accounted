@@ -200,7 +200,12 @@ describe('POST /documents/:id/link', () => {
       id: DOC_ID, handle: toHandle('document', DOC_ID), journal_entry_id: JE_ID, journal_entry_line_id: null, file_name: 'kvitto.pdf', copy_of_document_id: null,
     })
     expect(client.calls).toContainEqual(
-      expect.objectContaining({ table: 'document_attachments', method: 'update', args: [{ journal_entry_id: JE_ID, journal_entry_line_id: null }] }),
+      expect.objectContaining({
+        table: 'document_attachments',
+        method: 'update',
+        // An API key named the pair and the write committed directly.
+        args: [{ journal_entry_id: JE_ID, journal_entry_line_id: null, link_basis: 'client_asserted', link_evidence: null }],
+      }),
     )
     const inboxEq = client.calls.filter((c) => c.table === 'invoice_inbox_items' && c.method === 'eq').map((c) => c.args)
     expect(inboxEq).toContainEqual(['document_id', DOC_ID])

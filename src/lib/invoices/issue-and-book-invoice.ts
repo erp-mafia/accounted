@@ -26,6 +26,7 @@ import type {
   Invoice,
   InvoiceItem,
 } from '@/types'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 export interface IssuePartialFailure {
   step: string
@@ -140,6 +141,8 @@ export async function archiveIssuedInvoicePdf(args: {
       {
         upload_source: 'system',
         journal_entry_id: journalEntryId ?? undefined,
+        // The invoice's own PDF on the invoice's own verifikat.
+        linkBasis: linkBasisColumns('system_derived'),
       },
     )
     return null

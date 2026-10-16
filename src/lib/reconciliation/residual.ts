@@ -6,6 +6,7 @@ import { createLogger } from '@/lib/logger'
 import { matchPairs, unmatchLink, type AppliedLink, type SkippedPair } from './actions'
 import { parseAccountKey } from './schemas'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 const log = createLogger('reconciliation/residual')
 
@@ -309,6 +310,8 @@ export async function bookResidualAndLink(
     journal_entry_id: residualEntry.id,
     allocated_amount: residual,
     role: 'other',
+    // The residual verifikat was booked from this selection in the same act.
+    ...linkBasisColumns('user_created'),
   })
   if (linkError) {
     log.error('residual verifikat booked but the junction link failed', linkError, {

@@ -83,6 +83,7 @@ import { createLogger } from '@/lib/logger'
 import { ORE_TOLERANCE, roundOre } from '@/lib/money'
 import { ACCOUNT_RUTA } from '@/lib/reports/vat-declaration'
 import type { SupplierInvoice, VatTreatment } from '@/types'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 const log = createLogger('register-booked-supplier-invoice')
 
@@ -799,6 +800,8 @@ export async function registerBookedSupplierInvoice(
       exchange_rate_difference: 0,
       journal_entry_id: null,
       notes: `Betalt före registreringen enligt leverantörsreskontran per ${plan.paidAsOf}`,
+      // The old system's leverantörsreskontra says it was paid; no pair was chosen here.
+      ...linkBasisColumns('import_carried_over'),
     })
     if (paymentError) {
       await undoRegistration(supabase, companyId, supplierInvoiceId)

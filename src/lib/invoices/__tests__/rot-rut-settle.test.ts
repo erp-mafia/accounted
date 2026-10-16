@@ -243,6 +243,8 @@ describe('settleRotRutPayoutRequest', () => {
       potential_supplier_invoice_id: null,
       potential_rot_rut_payout_request_id: null,
       reconciliation_method: null,
+      link_basis: 'user_confirmed',
+      link_evidence: null,
     })
     // Optimistic lock: only a free row absorbs the link.
     expect(findCall('transactions', 'is')).toEqual(['journal_entry_id', null])

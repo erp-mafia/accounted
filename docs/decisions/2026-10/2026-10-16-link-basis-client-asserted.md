@@ -1,0 +1,1 @@
+[2026-10-16] Added client_asserted to the planned vocabulary: a v1 or MCP direct write has no person approving the pair in Accounted, and calling it user_confirmed would hide exactly the agent-asserted links the evidence exists for.

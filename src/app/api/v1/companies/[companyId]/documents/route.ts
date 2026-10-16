@@ -49,6 +49,7 @@ import type { DocumentUploadSource } from '@/types'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { v1OperationHandler } from '@/lib/operations/v1'
 import { documentsList } from '@/lib/operations/documents'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 const DocumentUploaded = z.object({
   id: z.string().uuid(),
@@ -274,6 +275,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           upload_source: uploadSource,
           journal_entry_id: journalEntryId,
           journal_entry_line_id: journalEntryLineId,
+          // The caller named the verifikat; on an API key the request scope
+          // records client_asserted.
+          linkBasis: linkBasisColumns('user_confirmed'),
           // No v1 read exposes extraction fields, so nothing a client can
           // observe depends on the subscribers having finished. Awaiting
           // them held the 201 for the length of a model call.

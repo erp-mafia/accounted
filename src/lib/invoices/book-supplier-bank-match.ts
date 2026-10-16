@@ -38,6 +38,7 @@ import { eventBus } from '@/lib/events/bus'
 import type { CreateJournalEntryLineInput, SupplierInvoice, Transaction } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
+import { linkBasisColumns, linkBasisColumnsFor, type LinkBasisInput } from '@/lib/links/stamp'
 
 /**
  * The transactions row as the doors read it (`select('*')`): the fields the
@@ -68,6 +69,12 @@ export interface BookSupplierBankMatchArgs {
     /** Merged into the log row's new_state next to the ledger figures. */
     newState?: Record<string, unknown>
   }
+  /**
+   * Why the bank line, the payment row and the verifikat are linked
+   * (link_basis on each): user_confirmed for a person's match, the matching
+   * rule for the debit of a signed payment order.
+   */
+  linkBasis: LinkBasisInput
 }
 
 export type BookSupplierBankMatchResult =
@@ -267,6 +274,7 @@ export async function bookSupplierBankMatch(
       currency: invoice.currency,
       journal_entry_id: journalEntryId,
       transaction_id: transactionId,
+      ...linkBasisColumnsFor(args.linkBasis),
     })
 
   if (paymentInsertError) {
@@ -301,6 +309,7 @@ export async function bookSupplierBankMatch(
       potential_supplier_invoice_id: null,
       journal_entry_id: journalEntryId,
       is_business: true,
+      ...linkBasisColumnsFor(args.linkBasis),
     })
     .eq('id', transactionId)
 
@@ -318,7 +327,11 @@ export async function bookSupplierBankMatch(
   if (transaction.document_id) {
     const { error: docLinkError } = await supabase
       .from('document_attachments')
-      .update({ journal_entry_id: journalEntryId })
+      .update({
+        journal_entry_id: journalEntryId,
+        // Follows from the row's pinned document and the match, not chosen as a pair.
+        ...linkBasisColumns('system_derived', { rule_id: 'bank_row_document_pin' }),
+      })
       .eq('id', transaction.document_id)
       .eq('company_id', companyId)
       .is('journal_entry_id', null)

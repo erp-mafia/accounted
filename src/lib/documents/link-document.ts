@@ -56,6 +56,7 @@ import { isPeriodLocked } from '@/lib/documents/underlag-import'
 import type { DocumentLinkHolder } from '@/lib/documents/link-holder'
 import { stampInboxItemsForLinkedDocument } from '@/lib/transactions/inbox-underlag'
 import type { DocumentAttachment, DocumentUploadSource } from '@/types'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 export interface LinkDocumentInput {
   document_id: string
@@ -295,6 +296,9 @@ export async function linkDocumentToVoucher(
     companyId,
     input.document_id,
     input.journal_entry_id,
+    // The caller named this verifikat for this document; the request scope
+    // says whether a person approved it or a client asserted it.
+    linkBasisColumns('user_confirmed'),
     input.journal_entry_line_id ?? undefined,
   )
   // Best effort: the link is committed and is the legally relevant write.
@@ -395,6 +399,8 @@ export async function linkDocumentCopyToVoucher(
     {
       upload_source: source.upload_source ?? 'api',
       journal_entry_id: input.journal_entry_id,
+      // A copy onto the verifikat the caller named.
+      linkBasis: linkBasisColumns('user_confirmed'),
       ...(input.journal_entry_line_id ? { journal_entry_line_id: input.journal_entry_line_id } : {}),
       idempotency_key: `document-copy:${source.id}:${input.journal_entry_id}`,
       extractionOwner: 'none',

@@ -34,6 +34,7 @@ import { physicalAccountKey, reenableIfUnused, resolveDefaultCashAccount, sameCa
 import type { Transaction, RawTransaction, IngestResult, IngestOptions, IngestSkipReason, IngestSkippedRow, SupplierInvoice, Currency, ExchangeRate } from '@/types'
 import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
 import { roundOre } from '@/lib/money'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 /**
  * Sentinel for a (date, öre) bucket whose incoming rows carry more than one
@@ -1847,6 +1848,11 @@ export async function ingestTransactions(
               .update({
                 journal_entry_id: journalEntry.id,
                 is_business: !mappingResult.default_private,
+                // Booked on arrival by a confident mapping rule: nobody chose it.
+                ...linkBasisColumns('system_derived', {
+                  ...(mappingResult.rule?.id ? { rule_id: mappingResult.rule.id } : {}),
+                  score: mappingResult.confidence,
+                }),
               })
               .eq('id', newTransaction.id)
 

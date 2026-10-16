@@ -30,6 +30,7 @@ import { roundOre } from '@/lib/money'
 import { eventBus } from '@/lib/events/bus'
 import type { CreateJournalEntryLineInput, Currency, Invoice, Transaction } from '@/types'
 import { MATCHABLE_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 /**
  * POST /api/transactions/[id]/match-invoice
@@ -695,6 +696,8 @@ export const POST = withRouteContext(
             mime_type: invoiceDoc.mime_type,
             sha256_hash: invoiceDoc.sha256_hash,
             journal_entry_id: journalEntryId,
+            // The invoice's own PDF follows it onto its payment verifikat.
+            ...linkBasisColumns('system_derived', { rule_id: 'invoice_document_on_payment' }),
           })
           if (attachErr) {
             txLog.warn('failed to attach invoice PDF to payment journal entry', {
@@ -777,6 +780,8 @@ export const POST = withRouteContext(
       exchangeRate: fx.required ? fx.rate : invoice.exchange_rate,
       notes: paymentNotes,
       source: 'bank',
+      // The caller named this bank line for this invoice.
+      linkBasis: { basis: 'user_confirmed' },
     })
 
     if (!recorded.ok) {
@@ -817,6 +822,8 @@ export const POST = withRouteContext(
         // non-reconciliation-linked row, and a literal payload keeps the
         // phantom-column scanner able to verify the column set.
         reconciliation_method: null,
+        // The person matched this bank line to this invoice.
+        ...linkBasisColumns('user_confirmed'),
       })
       .eq('id', transactionId)
 

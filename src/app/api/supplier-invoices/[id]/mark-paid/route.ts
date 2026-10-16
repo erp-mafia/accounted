@@ -26,6 +26,7 @@ import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { findSignedBankPayment, signedBankPaymentDetails } from '@/lib/payments/orders/signed-payment'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 export const POST = withRouteContext(
   'supplier_invoice.mark_paid',
@@ -335,6 +336,8 @@ export const POST = withRouteContext(
         exchange_rate_difference: exchangeRateDifference || 0,
         journal_entry_id: journalEntryId,
         notes: body.notes || null,
+        // The person marked it paid: the payment voucher was created from that statement.
+        ...linkBasisColumns('user_created'),
       })
 
     if (paymentError) {

@@ -742,6 +742,8 @@ describe('registerBookedSupplierInvoice', () => {
       exchange_rate_difference: 0,
       journal_entry_id: null,
       notes: 'Betalt före registreringen enligt leverantörsreskontran per 2026-03-31',
+      link_basis: 'import_carried_over',
+      link_evidence: null,
     })
     expect(writesOf(calls)).toEqual([
       'insert supplier_invoices',

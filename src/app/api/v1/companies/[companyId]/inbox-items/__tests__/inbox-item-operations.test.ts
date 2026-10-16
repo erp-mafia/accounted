@@ -560,7 +560,12 @@ describe('POST /inbox-items/:id/convert', () => {
       expect.objectContaining({ table: 'invoice_inbox_items', method: 'update', args: [{ created_supplier_invoice_id: INVOICE_ID }] }),
     )
     expect(client.calls).toContainEqual(
-      expect.objectContaining({ table: 'document_attachments', method: 'update', args: [{ journal_entry_id: JE_ID }] }),
+      expect.objectContaining({
+        table: 'document_attachments',
+        method: 'update',
+        // Booked from the document by an API key: nobody approved it in Accounted.
+        args: [{ journal_entry_id: JE_ID, link_basis: 'client_asserted', link_evidence: null }],
+      }),
     )
   })
 

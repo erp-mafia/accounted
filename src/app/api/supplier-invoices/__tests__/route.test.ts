@@ -490,6 +490,7 @@ describe('POST /api/supplier-invoices', () => {
       'company-1',
       DOCUMENT_UUID,
       'je-document',
+      { link_basis: 'user_created', link_evidence: null },
     )
   })
 

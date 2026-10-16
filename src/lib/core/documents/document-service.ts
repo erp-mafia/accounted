@@ -17,6 +17,7 @@ import { eventBus } from '@/lib/events'
 import type { CoreEvent, DocumentExtractionOwner } from '@/lib/events/types'
 import { createLogger } from '@/lib/logger'
 import type { DocumentAttachment, DocumentUploadSource } from '@/types'
+import type { LinkBasisColumns } from '@/lib/links/link-basis'
 
 const log = createLogger('document-service')
 
@@ -925,6 +926,13 @@ export async function uploadDocument(
     journal_entry_id?: string
     journal_entry_line_id?: string
     /**
+     * Why the document is the underlag of `journal_entry_id`
+     * (document_attachments.link_basis), resolved by the caller
+     * (linkBasisColumns). Give it whenever journal_entry_id is given; ignored
+     * without one.
+     */
+    linkBasis?: LinkBasisColumns
+    /**
      * Makes the row id deterministic for (company, key, content). Internal
      * callers only: no public upload path accepts it. The provider underlag
      * import recognises its own files by `upload_source: 'api'` together with
@@ -1042,6 +1050,10 @@ export async function uploadDocument(
       digitization_date: new Date().toISOString(),
       journal_entry_id: metadata.journal_entry_id || null,
       journal_entry_line_id: metadata.journal_entry_line_id || null,
+      // Only a linked upload sets the columns: undefined keys are dropped from the
+      // payload, so an unlinked one writes exactly what it wrote before.
+      link_basis: metadata.journal_entry_id && metadata.linkBasis ? metadata.linkBasis.link_basis : undefined,
+      link_evidence: metadata.journal_entry_id && metadata.linkBasis ? metadata.linkBasis.link_evidence : undefined,
     })
     .select()
     .single()
@@ -1210,13 +1222,23 @@ export async function createNewVersion(
 }
 
 /**
- * Link an existing document to a journal entry
+ * Link an existing document to a journal entry.
+ *
+ * `linkBasis` is why the document is this verifikat's underlag
+ * (document_attachments.link_basis, src/lib/links/link-basis.ts): a person
+ * attaching it to an existing verifikat (user_confirmed), booking the
+ * verifikat from it (user_created), or the system attaching a record's own
+ * document (system_derived). The caller resolves it against its request
+ * (linkBasisColumns in src/lib/links/stamp.ts: the kernel cannot read the
+ * approval scope). Required, so a new door cannot anchor an underlag without
+ * saying why; the link itself is permanent (BFL 5 kap 6 §).
  */
 export async function linkToJournalEntry(
   supabase: SupabaseClient,
   companyId: string,
   documentId: string,
   journalEntryId: string,
+  linkBasis: LinkBasisColumns,
   journalEntryLineId?: string
 ): Promise<DocumentAttachment> {
   // The document is company-filtered below, but the journal entry id arrives
@@ -1256,6 +1278,8 @@ export async function linkToJournalEntry(
     .update({
       journal_entry_id: journalEntryId,
       journal_entry_line_id: journalEntryLineId || null,
+      link_basis: linkBasis.link_basis,
+      link_evidence: linkBasis.link_evidence,
     })
     .eq('id', documentId)
     .eq('company_id', companyId)

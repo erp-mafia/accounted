@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { ORE_TOLERANCE, roundOre } from '@/lib/money'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 const log = createLogger('reconciliation/ledger-settlement')
 
@@ -83,7 +84,9 @@ export async function insertLedgerSettlement(
     entries: Array<{ journal_entry_id: string; amount: number }>
   },
 ): Promise<{ ok: true } | { ok: false; duplicate: boolean; message: string }> {
-  // One statement, so the settlement lands whole or not at all.
+  // One statement, so the settlement lands whole or not at all. A settlement
+  // is always named verifikat by verifikat (no matcher proposes one); the
+  // request scope says whether a person or an approved agent named it.
   const { error } = await supabase.from(LEDGER_SETTLEMENT_TABLE).insert(
     input.entries.map((e) => ({
       company_id: companyId,
@@ -92,6 +95,7 @@ export async function insertLedgerSettlement(
       journal_entry_id: e.journal_entry_id,
       amount: e.amount,
       settled_by: input.settled_by,
+      ...linkBasisColumns('user_confirmed'),
     })),
   )
   if (!error) return { ok: true }

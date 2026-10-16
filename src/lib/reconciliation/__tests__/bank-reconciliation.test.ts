@@ -53,6 +53,9 @@ import { ID_READ_CHUNK, MAX_BANK_ROW_SPLIT } from '../limits'
 import { createQueuedMockSupabase, makeTransaction } from '@/tests/helpers'
 import { eventBus } from '@/lib/events/bus'
 
+/** The basis a person's own link records (src/lib/links/link-basis.ts). */
+const MANUAL = { linkBasis: { basis: 'user_confirmed' as const } }
+
 vi.mock('@/lib/supabase/server')
 
 // ============================================================
@@ -956,7 +959,7 @@ describe('manualLink', () => {
     // Transaction query returns null
     enqueue({ data: null, error: { message: 'Not found' } })
 
-    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1')
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
 
     expect(result.success).toBe(false)
     expect(result.error).toBe('Transaktionen kunde inte hittas.')
@@ -971,7 +974,7 @@ describe('manualLink', () => {
     enqueue({ data: tx })
     enqueue({ data: { status: 'posted' } }) // hasLiveJournalEntryLink: prior link is live
 
-    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1')
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
 
     expect(result.success).toBe(false)
     expect(result.error).toBe('Transaktionen är redan kopplad till en verifikation.')
@@ -982,7 +985,7 @@ describe('manualLink', () => {
     const { supabase, enqueue } = createQueueMockSupabase()
     enqueue({ data: makeTransaction({ id: 'tx-1', journal_entry_id: null, is_ignored: true }) })
 
-    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
 
     expect(result).toEqual({
       success: false,
@@ -999,19 +1002,19 @@ describe('manualLink', () => {
     let m = createQueueMockSupabase()
     m.enqueue({ data: tx })
     m.enqueue({ data: null, error: { code: 'PGRST116', message: 'no rows' } })
-    let result = await manualLink(m.supabase as never, 'company-1', 'tx-1', 'je-typo', 'user-1', '1930')
+    let result = await manualLink(m.supabase as never, 'company-1', 'tx-1', 'je-typo', 'user-1', '1930', MANUAL)
     expect(result).toMatchObject({ success: false, code: 'ENTRY_NOT_FOUND', error: 'Verifikationen kunde inte hittas.' })
 
     m = createQueueMockSupabase()
     m.enqueue({ data: tx })
     m.enqueue({ data: { id: 'je-1', status: 'reversed' } })
-    result = await manualLink(m.supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+    result = await manualLink(m.supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
     expect(result).toMatchObject({ success: false, code: 'ENTRY_REVERSED', error: 'Verifikationen är makulerad och kan inte kopplas.' })
 
     m = createQueueMockSupabase()
     m.enqueue({ data: tx })
     m.enqueue({ data: { id: 'je-1', status: 'draft' } })
-    result = await manualLink(m.supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+    result = await manualLink(m.supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
     expect(result).toMatchObject({ success: false, code: 'ENTRY_NOT_POSTED', error: 'Verifikationen är inte bokförd ännu.' })
   })
 
@@ -1028,7 +1031,7 @@ describe('manualLink', () => {
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] }) // line on 1930
     enqueue({ data: [{ id: 'tx-1' }] }) // UPDATE .eq(stale id) → 1 row overwritten
 
-    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
 
     expect(result.success).toBe(true)
   })
@@ -1044,7 +1047,7 @@ describe('manualLink', () => {
     // No line on the selected account
     enqueue({ data: [] })
 
-    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
 
     expect(result.success).toBe(false)
     expect(result.error).toBe('Verifikationen saknar rad på 1930')
@@ -1066,7 +1069,7 @@ describe('manualLink', () => {
     // Cross-check: this cash account maps to 1931, but we're reconciling 1930
     enqueue({ data: { ledger_account: '1931' } })
 
-    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
 
     expect(result.success).toBe(false)
     expect(result.error).toBe('Transaktionen hör till 1931, inte 1930')
@@ -1086,7 +1089,7 @@ describe('manualLink', () => {
     // Update succeeds: .select('id') returns the updated row
     enqueue({ data: [{ id: 'tx-1' }] })
 
-    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
 
     expect(result.success).toBe(true)
   })
@@ -1102,6 +1105,7 @@ describe('manualLink', () => {
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', {
       anchorUnderlag: true,
+      linkBasis: { basis: 'user_confirmed' },
     })
 
     expect(result.success).toBe(true)
@@ -1120,7 +1124,7 @@ describe('manualLink', () => {
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
     enqueue({ data: [{ id: 'tx-1' }] })
 
-    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
 
     expect(result.success).toBe(true)
     expect(propagateUnderlag).not.toHaveBeenCalled()
@@ -1136,6 +1140,7 @@ describe('manualLink', () => {
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', {
       anchorUnderlag: true,
+      linkBasis: { basis: 'user_confirmed' },
     })
 
     expect(result.code).toBe('LINK_RACE')
@@ -1150,7 +1155,7 @@ describe('manualLink', () => {
     }
     enqueue({ data: tx })
 
-    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
 
     expect(result.success).toBe(false)
     expect(result.error).toBe('Transaktionen är redan kopplad till en verifikation.')
@@ -1170,7 +1175,7 @@ describe('manualLink', () => {
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
     enqueue({ data: [{ id: 'tx-1' }] })
 
-    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
 
     expect(result.success).toBe(true)
   })
@@ -1186,7 +1191,7 @@ describe('manualLink', () => {
     // another session linked the transaction between our read and this write.
     enqueue({ data: [] })
 
-    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
 
     expect(result.success).toBe(false)
     expect(result.error).toBe('Transaktionen är redan kopplad till en verifikation.')
@@ -1202,7 +1207,7 @@ describe('manualLink', () => {
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
     enqueue({ data: null, error: { code: 'PT409', message: 'BANK_ANCHOR_SETTLEMENT_CHANGED' } })
 
-    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
 
     expect(result.success).toBe(false)
     expect(result.code).toBe('BANK_ANCHOR_REFUSED')
@@ -1218,7 +1223,7 @@ describe('manualLink', () => {
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
     enqueue({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } })
 
-    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
 
     expect(result).toEqual({
       success: false,
@@ -1246,7 +1251,7 @@ describe('manualLink', () => {
     // Update succeeds: .select('id') returns the updated row
     enqueue({ data: [{ id: 'tx-1' }] })
 
-    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
 
     expect(result.success).toBe(true)
   })
@@ -1281,7 +1286,7 @@ describe('manualLink', () => {
     enqueue({ data: [{ debit_amount: 217.04, credit_amount: 0, account_number: '1940' }] })
     enqueue({ data: [{ id: 'tx-1' }] })
 
-    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1931')
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1931', MANUAL)
 
     expect(result.success).toBe(true)
     // The same locked UPDATE that stamps the link moves the row to the live
@@ -1311,7 +1316,7 @@ describe('manualLink', () => {
     enqueue({ data: [{ debit_amount: 217.04, credit_amount: 0, account_number: '1931' }] })
     enqueue({ data: [{ id: 'tx-1' }] })
 
-    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1931')
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1931', MANUAL)
 
     expect(result.success).toBe(true)
     expect(updatePayloads()[0]).not.toHaveProperty('cash_account_id')
@@ -1341,7 +1346,7 @@ describe('manualLink', () => {
     enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
     enqueue({ data: [] }) // no line on 1931 (the voucher only has a 1932 leg)
 
-    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1931')
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1931', MANUAL)
 
     expect(result.success).toBe(false)
     expect(result.error).toBe('Verifikationen saknar rad på 1931')
@@ -1380,7 +1385,7 @@ describe('manualLink', () => {
     })
     enqueue({ data: [{ debit_amount: 0, credit_amount: 1000, account_number: '1931' }] })
 
-    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1940')
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1940', MANUAL)
 
     expect(result.success).toBe(false)
     expect(result.error).toBe(
@@ -1409,7 +1414,7 @@ describe('manualLink', () => {
     enqueue({ data: [{ id: 'conn-expired', status: 'expired' }] })
     enqueue({ data: [{ debit_amount: 0, credit_amount: 1000, account_number: '1931' }] })
 
-    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
 
     expect(result.success).toBe(false)
     expect(result.error).toContain('bokförd på 1931')
@@ -1449,7 +1454,7 @@ describe('manualLink', () => {
     })
     enqueue({ data: [{ id: 'tx-1' }] })
 
-    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
 
     expect(result.success).toBe(true)
     expect(updatePayloads()).toEqual([
@@ -1478,7 +1483,7 @@ describe('manualLink', () => {
     enqueue({ data: [{ debit_amount: 0, credit_amount: 1000, account_number: '1931' }] })
     enqueue({ data: [{ id: 'tx-1' }] })
 
-    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
 
     expect(result.success).toBe(true)
     expect(updatePayloads()).toEqual([
@@ -1506,7 +1511,7 @@ describe('manualLink', () => {
     enqueue({ data: [{ debit_amount: 217.04, credit_amount: 0, account_number: '1940' }] })
     enqueue({ data: [{ id: 'tx-1' }] })
 
-    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1931')
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1931', MANUAL)
 
     expect(result.success).toBe(true)
     expect(updatePayloads()).toEqual([
@@ -1535,7 +1540,7 @@ describe('manualLink', () => {
     enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
     enqueue({ data: [] }) // no line on 1931 OR 1940
 
-    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1931')
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1931', MANUAL)
 
     expect(result.success).toBe(false)
     expect(result.error).toBe('Verifikationen saknar rad på 1931 eller 1940')
@@ -1556,7 +1561,7 @@ describe('manualLink', () => {
     // Update succeeds: note there is NO existing-link lookup in the sequence.
     enqueue({ data: [{ id: 'tx-2' }] })
 
-    const result = await manualLink(supabase as never, 'company-1', 'tx-2', 'je-1', 'user-1', '1930')
+    const result = await manualLink(supabase as never, 'company-1', 'tx-2', 'je-1', 'user-1', '1930', MANUAL)
 
     expect(result.success).toBe(true)
   })
@@ -1652,8 +1657,9 @@ describe('linkTransactionToVouchers', () => {
     const inserts = findCalls('transaction_voucher_links', 'insert')
     expect(inserts).toHaveLength(1)
     expect(inserts[0][0]).toEqual([
-      { user_id: 'user-1', company_id: 'company-1', transaction_id: 'tx-1', journal_entry_id: E1, allocated_amount: -500, role: 'bank_line' },
-      { user_id: 'user-1', company_id: 'company-1', transaction_id: 'tx-1', journal_entry_id: E2, allocated_amount: -300, role: 'bank_line' },
+      // A split is named slice by slice: user_confirmed on every slice.
+      { user_id: 'user-1', company_id: 'company-1', transaction_id: 'tx-1', journal_entry_id: E1, allocated_amount: -500, role: 'bank_line', link_basis: 'user_confirmed', link_evidence: null },
+      { user_id: 'user-1', company_id: 'company-1', transaction_id: 'tx-1', journal_entry_id: E2, allocated_amount: -300, role: 'bank_line', link_basis: 'user_confirmed', link_evidence: null },
     ])
     // Behandlingshistorik row with every slice.
     const [logRow] = findCalls('payment_match_log', 'insert')[0] as [Record<string, unknown>]

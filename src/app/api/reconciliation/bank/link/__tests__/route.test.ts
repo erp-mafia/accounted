@@ -132,7 +132,7 @@ describe('POST /api/reconciliation/bank/link', () => {
       JE_ID,
       'user-1',
       '1930',
-      { anchorUnderlag: true },
+      { anchorUnderlag: true, linkBasis: { basis: 'user_confirmed' } },
     )
   })
 

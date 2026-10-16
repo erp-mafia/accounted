@@ -55,6 +55,7 @@ import { roundOre } from '@/lib/money'
 import { eventBus } from '@/lib/events/bus'
 import type { Currency, EntityType, Invoice, Transaction } from '@/types'
 import { MATCHABLE_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 const MatchInvoiceResponse = z.object({
   success: z.boolean(),
@@ -671,6 +672,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
               mime_type: invoiceDoc.mime_type,
               sha256_hash: invoiceDoc.sha256_hash,
               journal_entry_id: journalEntryId,
+              // The invoice's own PDF follows it onto its payment verifikat.
+              ...linkBasisColumns('system_derived', { rule_id: 'invoice_document_on_payment' }),
             })
           if (attachErr) {
             txLog.warn('failed to attach invoice PDF to payment JE', {
@@ -738,6 +741,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       exchangeRate: fx.required ? fx.rate : invoice.exchange_rate,
       notes: paymentNotes,
       source: 'bank',
+      // The caller named this bank line for this invoice.
+      linkBasis: { basis: 'user_confirmed' },
     })
     if (!recorded.ok) {
       if (recorded.code === '23505') {
@@ -775,6 +780,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       // detach, see the priorReconciliationLink block above). Unconditional:
       // null is already the value on every non-reconciliation-linked row.
       reconciliation_method: null,
+      // The caller named this bank line for this invoice.
+      ...linkBasisColumns('user_confirmed'),
     }
     if (existingTxCategory) txUpdate.category = existingTxCategory
 

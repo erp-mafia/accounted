@@ -19,6 +19,7 @@ describe('recordInvoicePaymentRow', () => {
     // Öresavrundning: 1 235 kr received against a 1 234.75 remaining; the
     // 0.25 sits on 3740 and is not part of the receivable.
     const result = await recordInvoicePaymentRow(supabase as unknown as SupabaseClient, {
+      linkBasis: { basis: 'user_created' },
       userId: 'user-1',
       companyId: 'company-1',
       invoice: { id: 'inv-1', currency: 'SEK', exchange_rate: null, paid_amount: 500 },
@@ -41,6 +42,8 @@ describe('recordInvoicePaymentRow', () => {
       notes: null,
       source: null,
       external_ref: null,
+      link_basis: 'user_created',
+      link_evidence: null,
     })
   })
 
@@ -52,6 +55,7 @@ describe('recordInvoicePaymentRow', () => {
     // planInvoicePayment advances paid_amount to 1 999.60 and 3740 carries the
     // 0.40. 1999.6 - 1000 is not exact in IEEE 754; roundOre makes it 999.60.
     await recordInvoicePaymentRow(supabase as unknown as SupabaseClient, {
+      linkBasis: { basis: 'user_created' },
       userId: 'user-1',
       companyId: 'company-1',
       invoice: { id: 'inv-1', currency: 'SEK', exchange_rate: null, paid_amount: 1000 },
@@ -68,6 +72,7 @@ describe('recordInvoicePaymentRow', () => {
     enqueue({ data: { id: 'ip-3' } })
 
     await recordInvoicePaymentRow(supabase as unknown as SupabaseClient, {
+      linkBasis: { basis: 'user_created' },
       userId: 'user-1',
       companyId: 'company-1',
       invoice: { id: 'inv-1' },
@@ -94,6 +99,7 @@ describe('recordInvoicePaymentRow', () => {
     // the booking rate, and the öre-rounded applied amount. Its provenance is
     // the bank, so a case invoice reports it to the collections provider.
     const result = await recordInvoicePaymentRow(supabase as unknown as SupabaseClient, {
+      linkBasis: { basis: 'user_confirmed', evidence: { rule_id: 'auto_reference', score: 0.9 } },
       userId: 'user-1',
       companyId: 'company-1',
       invoice: { id: 'inv-1', currency: 'USD', exchange_rate: 9.3, paid_amount: 0 },
@@ -121,6 +127,9 @@ describe('recordInvoicePaymentRow', () => {
       notes: 'Manuell kurs 10,45',
       source: 'bank',
       external_ref: 'bank-ref-1',
+      // Why the payment is linked: the door's basis and what it saw.
+      link_basis: 'user_confirmed',
+      link_evidence: { rule_id: 'auto_reference', score: 0.9 },
     })
   })
 
@@ -131,6 +140,7 @@ describe('recordInvoicePaymentRow', () => {
     // The link-to-existing-voucher flow records no rate for a SEK bank line
     // even when the invoice carries a booking rate.
     await recordInvoicePaymentRow(supabase as unknown as SupabaseClient, {
+      linkBasis: { basis: 'user_created' },
       userId: 'user-1',
       companyId: 'company-1',
       invoice: { id: 'inv-1', currency: 'SEK', exchange_rate: 9.3, paid_amount: 0 },
@@ -151,6 +161,7 @@ describe('recordInvoicePaymentRow', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: null, error: { message: 'duplicate key value', code: '23505' } })
     const result = await recordInvoicePaymentRow(supabase as unknown as SupabaseClient, {
+      linkBasis: { basis: 'user_created' },
       userId: 'user-1',
       companyId: 'company-1',
       invoice: { id: 'inv-1' },
@@ -165,6 +176,7 @@ describe('recordInvoicePaymentRow', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: null, error: { message: 'rls' } })
     const result = await recordInvoicePaymentRow(supabase as unknown as SupabaseClient, {
+      linkBasis: { basis: 'user_created' },
       userId: 'user-1',
       companyId: 'company-1',
       invoice: { id: 'inv-1' },

@@ -258,7 +258,7 @@ describe('registerExpenseClaim', () => {
     })
 
     expect(result.ok).toBe(true)
-    expect(linkToJournalEntryMock).toHaveBeenCalledWith(sb, COMPANY, 'doc-1', 'je-1')
+    expect(linkToJournalEntryMock).toHaveBeenCalledWith(sb, COMPANY, 'doc-1', 'je-1', { link_basis: 'user_created', link_evidence: null })
     expect(findCalls('invoice_inbox_items', 'update')).toEqual([[{ created_journal_entry_id: 'je-1' }]])
     expect(findCalls('invoice_inbox_items', 'is')).toEqual([
       ['created_journal_entry_id', null],

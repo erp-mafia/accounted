@@ -64,6 +64,7 @@ import type { Currency, EntityType, SupplierInvoice, SupplierInvoiceItem } from 
 import { loadEntryLines, recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
 import { passed, warned, type DecisionCheck } from '@/lib/suggestion-log/checks'
 import { resultAccounts } from '@/lib/suggestion-log/inbox-classify'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 export type CreateSupplierInvoiceInput = z.infer<typeof CreateSupplierInvoiceSchema>
 
@@ -787,6 +788,8 @@ export async function createSupplierInvoice(
         exchange_rate_difference: 0,
         journal_entry_id: claim.journal_entry_id,
         notes: `Utlägg, betalat privat av ${claim.claimant_name}`,
+        // Registered as paid privately in the same act that booked the claim.
+        ...linkBasisColumns('user_created'),
       })
     }
     if (inboxItem) {
@@ -887,7 +890,8 @@ export async function createSupplierInvoice(
   const primaryJournalEntryId = paymentJournalEntryId || registrationJournalEntryId
   if (documentId && primaryJournalEntryId && !paidPrivately) {
     try {
-      await linkToJournalEntry(supabase, companyId, documentId, primaryJournalEntryId)
+      // The verifikat was booked from this document.
+      await linkToJournalEntry(supabase, companyId, documentId, primaryJournalEntryId, linkBasisColumns('user_created'))
     } catch (err) {
       log.warn('supplier invoice document could not be linked to journal entry', {
         documentId,

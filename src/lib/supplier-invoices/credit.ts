@@ -62,6 +62,7 @@ import {
 } from './credit-note'
 import { compareCreditToInvoice, creditAmount, creditNoteFromReading } from './credit-target'
 import { rejectSupersededInboxConversions } from '@/lib/pending-operations/supersede'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -577,7 +578,11 @@ export async function creditSupplierInvoice(
   if (documentId && journalEntryId) {
     const { error: docLinkError } = await supabase
       .from('document_attachments')
-      .update({ journal_entry_id: journalEntryId })
+      .update({
+        journal_entry_id: journalEntryId,
+        // The credit verifikat was booked from this document.
+        ...linkBasisColumns('user_created'),
+      })
       .eq('id', documentId)
       .eq('company_id', companyId)
       .is('journal_entry_id', null)

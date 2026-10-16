@@ -323,6 +323,9 @@ export async function linkTransactionToJournalEntry(
       potential_supplier_invoice_id: null,
       potential_rot_rut_payout_request_id: null,
     },
+    // The caller named this verifikat for this row (the duplicate dialog, v1,
+    // the MCP tool); the request scope says whether a person approved it.
+    linkBasis: { basis: 'user_confirmed' },
   })
   if (!written.ok && !written.race) {
     const { error } = written
@@ -426,6 +429,8 @@ export async function linkTransactionToJournalEntry(
       exchangeRate: paymentExchangeRate,
       notes: 'Kopplad till befintlig verifikation (ingen ny bokföring skapad)',
       source: 'link',
+      // The caller named the verifikat and the invoice it settles.
+      linkBasis: { basis: 'user_confirmed' },
     })
 
     if (!recorded.ok && recorded.code !== '23505') {

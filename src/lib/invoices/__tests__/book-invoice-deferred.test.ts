@@ -97,6 +97,7 @@ describe('bookInvoiceDeferred', () => {
       'company-1',
       'document-1',
       'je-1',
+      { link_basis: 'system_derived', link_evidence: null },
     )
     expect(mockCreateSchedules).toHaveBeenCalled()
   })

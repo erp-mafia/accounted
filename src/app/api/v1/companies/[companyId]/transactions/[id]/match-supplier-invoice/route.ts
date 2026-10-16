@@ -32,6 +32,7 @@ import { eventBus } from '@/lib/events/bus'
 import { emitSupplierInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import type { SupplierInvoice, Transaction } from '@/types'
 import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 const MatchSIResponse = z.object({
   success: z.boolean(),
@@ -401,6 +402,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         currency: invoice.currency,
         journal_entry_id: journalEntryId,
         transaction_id: txId,
+        // The caller named this bank line for this supplier invoice.
+        ...linkBasisColumns('user_confirmed'),
       })
     if (paymentInsertErr) {
       if (paymentInsertErr.code === '23505') {
@@ -442,6 +445,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         // non-reconciliation-linked row, and a literal payload keeps the
         // phantom-column scanner able to verify the column set.
         reconciliation_method: null,
+        ...linkBasisColumns('user_confirmed'),
       })
       .eq('id', txId)
       .eq('company_id', ctx.companyId!)
@@ -472,7 +476,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     if (transaction.document_id) {
       const { error: docLinkErr } = await ctx.supabase
         .from('document_attachments')
-        .update({ journal_entry_id: journalEntryId })
+        .update({
+          journal_entry_id: journalEntryId,
+          // Follows from the row's pinned document and the match, not chosen as a pair.
+          ...linkBasisColumns('system_derived', { rule_id: 'bank_row_document_pin' }),
+        })
         .eq('id', transaction.document_id)
         .eq('company_id', ctx.companyId!)
         .is('journal_entry_id', null)

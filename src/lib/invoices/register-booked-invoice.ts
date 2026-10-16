@@ -726,6 +726,8 @@ export async function registerBookedInvoice(
       newPaidAmount: plan.paidAmount,
       journalEntryId: null,
       notes: `Betalt före registreringen enligt kundreskontran per ${plan.paidAsOf}`,
+      // The old system's kundreskontra says it was paid; no pair was chosen here.
+      linkBasis: { basis: 'import_carried_over' },
     })
     if (!recorded.ok) {
       // Inserted a moment ago and referenced by nothing yet: undo it, so a

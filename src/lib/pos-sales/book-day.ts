@@ -11,6 +11,7 @@ import { posDayReportFilename, renderPosDayReport } from './day-report-pdf'
 import { buildPosDayEntry, evaluatePosDay, posDayDescription } from './evaluate'
 import { resolvePosSalesSettings } from './settings'
 import { normalizeDaySummary, type PosConnectionRow, type PosSalesDayRow } from './types'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 /**
  * Book one point-of-sale day as its daily takings voucher (source_type
@@ -104,7 +105,8 @@ async function archiveDayReport(
         buffer: new Uint8Array(pdf).buffer as ArrayBuffer,
         type: 'application/pdf',
       },
-      { upload_source: 'system', journal_entry_id: args.entryId, extractionOwner: 'none' },
+      // The day's own report on the day's own verifikat.
+      { upload_source: 'system', journal_entry_id: args.entryId, linkBasis: linkBasisColumns('system_derived'), extractionOwner: 'none' },
     )
     return document.id
   } catch (err) {

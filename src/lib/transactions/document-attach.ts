@@ -39,6 +39,7 @@ import {
   completeInboxItemsForBookedTransaction,
   resolveVoucherLinkedEntryIds,
 } from '@/lib/transactions/inbox-underlag'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -214,7 +215,12 @@ export async function attachDocumentToTransaction(
   if (journalEntryId && docJournalEntryId !== journalEntryId) {
     const { error: linkErr } = await supabase
       .from('document_attachments')
-      .update({ journal_entry_id: journalEntryId })
+      .update({
+        journal_entry_id: journalEntryId,
+        // The caller pinned this document to the bank row its verifikat books;
+        // the request scope says who.
+        ...linkBasisColumns('user_confirmed', { rule_id: 'bank_row_document_pin' }),
+      })
       .eq('id', documentId)
       .eq('company_id', companyId)
     if (linkErr) {

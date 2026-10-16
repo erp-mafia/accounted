@@ -194,7 +194,7 @@ Example response `200`:
 **Retrieve a single verifikation by id.**
 `scope:reports:read · risk:low · idempotent`
 
-Returns the full journal entry including all lines, dimensions, the storno chain (reverses_id, reversed_by_id, correction_of_id), and decision_receipts: who decided the booking (person, API key or agent), the suggestions on offer, which one was booked, its recorded confidence, and the rules, approval policy, inputs hash and guards it was decided under.
+Returns the full journal entry including all lines, dimensions, the storno chain (reverses_id, reversed_by_id, correction_of_id), decision_receipts: who decided the booking (person, API key or agent), the suggestions on offer, which one was booked, its recorded confidence, and the rules, approval policy, inputs hash and guards it was decided under, and links: the bank rows, underlag and payments linked to it, each with the basis it was linked on.
 
 **Use when:** You need the full verifikation for audit / reconciliation, or to display the line-by-line breakdown.
 **Do not use for:** Listing entries (use the list endpoint with filters).
@@ -205,6 +205,7 @@ Returns the full journal entry including all lines, dimensions, the storno chain
 - decision_receipts holds at most 100 receipts: a samlingsverifikat carries one per bank line. It is null (unknown) when the receipts could not be read; an empty list means none were recorded. rule_version, policy_version, input_hash, checks and confidence_band are recorded at decision time from 2026-10-16 and null on earlier decisions; they are never derived when read.
 - confidence.basis 'model_reported' is the reading model's own score for an underlag, not evidence; only 'backing' comes from deterministic evidence.
 - checks lists only the guards that ran: an absent guard did not apply, it did not pass. A warn result is an override (force, allow_duplicate, confirm_no_match) or a guard that could not run; its detail says which.
+- links holds at most 100 links of each kind. A link basis null means not recorded (links before 2026-10-16, or a writer that does not record one yet), never a guess. client_asserted means an API or MCP client named the pair and nobody approved it in Accounted; agent_proposed_user_approved means a person approved what an agent staged.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -232,7 +233,8 @@ Response `200`:
     lines: { id: string, account_number: string, debit_amount: number, credit_amount: number, line_description: string | null, currency: string | null, amount_in_currency: number | null, exchange_rate: number | null, tax_code: string | null, dimensions: Record<string, string>, cost_center: string | null, project: string | null, sort_order: number }[],
     created_at: string,
     updated_at: string,
-    decision_receipts: { receipt_id: string, subject_kind: "bank_line" | "inbox_item" | "operation", decided_at: string, outcome: "accepted" | "changed" | "manual" | "dismissed", decided_by: { actor_type: "user" | "api_key" | "mcp_oauth" | "cron" | "system" | "agent_chat" | "service_account", user_id: string | null, label: string | null, commit_method: string | null }, proposed_by: { pending_operation_id: string, operation_type: string, actor_type: string, actor_id: string | null, label: string | null, risk_level: string | null, model: string | null, prompt_hash: string | null, staged_at: string, approved_at: string | null } | null, candidates: { source: "assistant" | "rule" | "catalog" | "counterparty_template" | "recent" | "extraction" | "pending_operation", source_id: string, rank: number, accounts: string[], vat_treatment: string | null, confidence: number | null, model: string | null, prompt_sha256: string | null, matches_final: boolean, contested: boolean, agreement: number | null, from_candidate: boolean | null, reasoning_sha256: string | null }[], chosen: { source: "assistant" | "rule" | "catalog" | "counterparty_template" | "recent" | "extraction" | "pending_operation", source_id: string, rank: number, accounts: string[], vat_treatment: string | null, confidence: number | null, model: string | null, prompt_sha256: string | null, matches_final: boolean, contested: boolean, agreement: number | null, from_candidate: boolean | null, reasoning_sha256: string | null } | null, booked: { journal_entry_id: string | null, voucher: string | null, entry_status: string | null, account: string | null, vat_treatment: string | null, supplier_invoice_id: string | null, changed_fields: string[] } | null, evidence: { transaction_id: string | null, inbox_item_id: string | null, document_ids: string[] }, confidence: { value: number | null, basis: "backing" | "model_reported" | null }, rule_version: string | null, policy_version: string | null, input_hash: string | null, checks: { id: string, result: "pass" | "warn" | "fail", detail: string | null }[] | null, confidence_band: "direct" | "review" | null }[] | null
+    decision_receipts: { receipt_id: string, subject_kind: "bank_line" | "inbox_item" | "operation", decided_at: string, outcome: "accepted" | "changed" | "manual" | "dismissed", decided_by: { actor_type: "user" | "api_key" | "mcp_oauth" | "cron" | "system" | "agent_chat" | "service_account", user_id: string | null, label: string | null, commit_method: string | null }, proposed_by: { pending_operation_id: string, operation_type: string, actor_type: string, actor_id: string | null, label: string | null, risk_level: string | null, model: string | null, prompt_hash: string | null, staged_at: string, approved_at: string | null } | null, candidates: { source: "assistant" | "rule" | "catalog" | "counterparty_template" | "recent" | "extraction" | "pending_operation", source_id: string, rank: number, accounts: string[], vat_treatment: string | null, confidence: number | null, model: string | null, prompt_sha256: string | null, matches_final: boolean, contested: boolean, agreement: number | null, from_candidate: boolean | null, reasoning_sha256: string | null }[], chosen: { source: "assistant" | "rule" | "catalog" | "counterparty_template" | "recent" | "extraction" | "pending_operation", source_id: string, rank: number, accounts: string[], vat_treatment: string | null, confidence: number | null, model: string | null, prompt_sha256: string | null, matches_final: boolean, contested: boolean, agreement: number | null, from_candidate: boolean | null, reasoning_sha256: string | null } | null, booked: { journal_entry_id: string | null, voucher: string | null, entry_status: string | null, account: string | null, vat_treatment: string | null, supplier_invoice_id: string | null, changed_fields: string[] } | null, evidence: { transaction_id: string | null, inbox_item_id: string | null, document_ids: string[] }, confidence: { value: number | null, basis: "backing" | "model_reported" | null }, rule_version: string | null, policy_version: string | null, input_hash: string | null, checks: { id: string, result: "pass" | "warn" | "fail", detail: string | null }[] | null, confidence_band: "direct" | "review" | null }[] | null,
+    links: { kind: "bank_transaction" | "document" | "invoice_payment" | "supplier_invoice_payment" | "ledger_settlement", transaction_id: string | null, via: "pointer" | "voucher_link" | null, document_id: string | null, invoice_id: string | null, invoice_payment_id: string | null, supplier_invoice_id: string | null, supplier_invoice_payment_id: string | null, settlement_id: string | null, basis: "user_confirmed" | "user_created" | "rule_ocr_reference" | "rule_amount_date" | "rule_counterparty" | "agent_proposed_user_approved" | "agent_autonomous_within_grant" | "client_asserted" | "import_carried_over" | "system_derived" | null, evidence: { rule_id?: string, reference?: string, score?: number, receipt_id?: string, pending_operation_id?: string, source_system?: string } | null }[] | null
   },
   meta: {
     request_id: string,
@@ -376,6 +378,36 @@ Example response `200`:
           }
         ],
         "confidence_band": "direct"
+      }
+    ],
+    "links": [
+      {
+        "kind": "bank_transaction",
+        "transaction_id": "7b3a…",
+        "via": "pointer",
+        "document_id": null,
+        "invoice_id": null,
+        "invoice_payment_id": null,
+        "supplier_invoice_id": null,
+        "supplier_invoice_payment_id": null,
+        "settlement_id": null,
+        "basis": "user_created",
+        "evidence": null
+      },
+      {
+        "kind": "document",
+        "transaction_id": null,
+        "via": null,
+        "document_id": "9d2e…",
+        "invoice_id": null,
+        "invoice_payment_id": null,
+        "supplier_invoice_id": null,
+        "supplier_invoice_payment_id": null,
+        "settlement_id": null,
+        "basis": "system_derived",
+        "evidence": {
+          "rule_id": "bank_row_document_pin"
+        }
       }
     ]
   },

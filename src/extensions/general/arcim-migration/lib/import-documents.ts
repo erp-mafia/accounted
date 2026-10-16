@@ -112,6 +112,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { supportsUnderlagImport } from '@/lib/providers/underlag-import'
 import { isPeriodLocked } from '@/lib/documents/underlag-import'
 import { createLogger } from '@/lib/logger'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 const log = createLogger('extensions/arcim-migration/import-documents')
 
@@ -774,6 +775,8 @@ export async function importProviderDocuments(
         {
           upload_source: 'api',
           journal_entry_id: journalEntryId,
+          // The old system attached this file to the verifikat migrated here.
+          linkBasis: linkBasisColumns('import_carried_over', { source_system: 'provider_migration' }),
           idempotency_key: journalEntryId,
           // Already booked: the verifikat is the booking. No model pass.
           extractionOwner: 'none',
