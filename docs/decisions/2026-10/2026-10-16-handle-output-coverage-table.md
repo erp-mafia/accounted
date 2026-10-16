@@ -1,0 +1,1 @@
+[2026-10-16] Output handles come from one table keyed by operation id (lib/api/v1/handles.ts) that withApiV1 stamps and the spec publishes: no per-route edits, and a ratchet test makes a new endpoint answering a bare id declare one.

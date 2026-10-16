@@ -112,6 +112,8 @@ describe('GET /api/v1/companies', () => {
     expect(body.data).toEqual([
       {
         id: '8fd5b1f4-0000-4000-8000-000000000001',
+        // Typed handle (lib/handles), added beside the unchanged id.
+        handle: 'cmp_8fd5b1f4000040008000000000000001',
         name: 'Acme AB',
         org_number: '556677-8899',
         entity_type: 'aktiebolag',

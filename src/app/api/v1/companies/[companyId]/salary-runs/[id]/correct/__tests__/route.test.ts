@@ -44,6 +44,7 @@ vi.mock('@/lib/salary/correct-run', () => ({
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST as correct } from '../route'
 import { createTableMockSupabase } from '@/tests/helpers'
+import { toHandle } from '@/lib/handles'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -248,6 +249,7 @@ describe('POST /salary-runs/:id/correct', () => {
       original_status: 'corrected',
       correction_run: {
         id: CORRECTION_ID,
+        handle: toHandle('salary_run', CORRECTION_ID),
         period_year: 2026,
         period_month: 5,
         payment_date: '2026-05-25',

@@ -17,6 +17,7 @@
 import {
   listEndpoints,
   queryParameters,
+  responseJsonSchema,
   zodToJsonSchema,
   NoBodyResponse,
   type EndpointDefinition,
@@ -171,7 +172,7 @@ function fieldRows(schema: JsonSchema, prefix = ''): FieldRow[] {
 function responseRows(ep: EndpointDefinition): FieldRow[] {
   if (ep.response.success === NoBodyResponse) return []
   if (ep.response.contentType && ep.response.contentType !== 'application/json') return []
-  const data = zodToJsonSchema(ep.response.success).properties?.data
+  const data = responseJsonSchema(ep).properties?.data
   if (!data) return []
   if (data.type === 'array' && data.items?.properties) return fieldRows(data.items, '[].')
   const props = Object.entries(data.properties ?? {})

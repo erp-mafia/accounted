@@ -1,0 +1,1 @@
+[2026-10-16] Only a resource object gains handle, beside its own id field; foreign keys such as journal_entry_id keep their plain UUID with no sibling field: one additive rule, no field explosion, nothing existing changes.

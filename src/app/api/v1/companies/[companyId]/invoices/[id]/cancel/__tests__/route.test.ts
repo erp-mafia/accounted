@@ -29,6 +29,7 @@ import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-key
 import { eventBus } from '@/lib/events'
 import { POST as cancelDocument } from '../route'
 import { createTableMockSupabase } from '@/tests/helpers'
+import { toHandle } from '@/lib/handles'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -164,6 +165,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/cancel', () => {
     const body = await res.json()
     expect(body.data).toEqual({
       id: QUOTE_ID,
+      handle: toHandle('invoice', QUOTE_ID),
       invoice_number: 'OF-007',
       document_type: documentType,
       status: 'cancelled',

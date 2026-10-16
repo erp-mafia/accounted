@@ -58,6 +58,7 @@ vi.mock('@/lib/invoices/issue-and-book-invoice', () => ({
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST as bookRoute } from '../route'
 import { POST as bulkBookRoute } from '../../../bulk-book/route'
+import { toHandle } from '@/lib/handles'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -391,7 +392,7 @@ describe('POST /api/v1/companies/:companyId/invoices/bulk-book', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.results).toEqual([
-      { id: INV_ID, status: 'booked', journal_entry_id: JE_ID },
+      { id: INV_ID, handle: toHandle('invoice', INV_ID), status: 'booked', journal_entry_id: JE_ID },
       // defer_invoice_booking: the draft is refused, never issued.
       expect.objectContaining({ id: INV_2, status: 'failed', error_code: 'INVOICE_BOOK_DEFERRED_DRAFT' }),
       expect.objectContaining({ id: unknown, status: 'failed', error_code: 'INVOICE_NOT_FOUND' }),

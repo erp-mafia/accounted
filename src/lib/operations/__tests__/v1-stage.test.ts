@@ -234,6 +234,8 @@ describe('v1 stage mode', () => {
     const { data } = await res.json()
     expect(data).toMatchObject({
       pending_operation_id: STAGED_ID,
+      // The typed handle (lib/handles) beside the unchanged id, as on GET /pending-operations.
+      handle: 'pop_33333333333343338333333333333333',
       operation_type: 'create_supplier',
       title: 'Skapa Acme',
       status: 'pending',
@@ -352,5 +354,10 @@ describe('v1 stage mode', () => {
     expect(direct['x-stage-supported']).toBeUndefined()
     expect(Object.keys(direct.responses as object)).not.toContain('202')
     expect(spec.components.schemas).toHaveProperty('StagedPendingOperation')
+    const stagedView = spec.components.schemas.StagedPendingOperation as {
+      properties: { data: { properties: Record<string, { pattern?: string }> } }
+    }
+    expect(Object.keys(stagedView.properties.data.properties).slice(0, 2)).toEqual(['pending_operation_id', 'handle'])
+    expect(stagedView.properties.data.properties.handle?.pattern).toBe('^pop_[0-9a-f]{32}$')
   })
 })

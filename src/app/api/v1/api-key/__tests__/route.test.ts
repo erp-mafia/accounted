@@ -29,6 +29,7 @@ vi.mock('@supabase/supabase-js', async () => {
 
 import { OAUTH_MCP_KEY_NAME, validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { GET } from '../route'
+import { toHandle } from '@/lib/handles'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -37,6 +38,7 @@ const USER_ID = '930abb54-c5ef-4ae0-b274-30fb16e9a295'
 const COMPANY_A = '8fd5b1f4-0000-4000-8000-00000000000a'
 const COMPANY_B = '8fd5b1f4-0000-4000-8000-00000000000b'
 const COMPANY_C = '8fd5b1f4-0000-4000-8000-00000000000c'
+const companyHandle = (id: string) => toHandle('company', id)
 
 type TableCall = { table: string; method: string; args: unknown[] }
 
@@ -153,10 +155,11 @@ describe('GET /api/v1/api-key: the grant', () => {
       mode: 'live',
       scopes: ['companies:read', 'documents:write'],
       company_access: 'allowlist',
+      // Each company carries its typed handle (lib/handles) beside the unchanged id.
       companies: [
-        { id: COMPANY_A, role: 'owner', access: 'read_write', read_only_code: null },
-        { id: COMPANY_B, role: 'viewer', access: 'read_only', read_only_code: 'ROLE_READ_ONLY' },
-        { id: COMPANY_C, role: 'admin', access: 'read_only', read_only_code: 'CONNECTION_READ_ONLY' },
+        { id: COMPANY_A, handle: companyHandle(COMPANY_A), role: 'owner', access: 'read_write', read_only_code: null },
+        { id: COMPANY_B, handle: companyHandle(COMPANY_B), role: 'viewer', access: 'read_only', read_only_code: 'ROLE_READ_ONLY' },
+        { id: COMPANY_C, handle: companyHandle(COMPANY_C), role: 'admin', access: 'read_only', read_only_code: 'CONNECTION_READ_ONLY' },
       ],
     })
     expect(body.meta.request_id).toMatch(/^req_/)
@@ -217,7 +220,7 @@ describe('GET /api/v1/api-key: the grant', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.companies).toEqual([
-      { id: COMPANY_A, role: 'member', access: 'read_write', read_only_code: null },
+      { id: COMPANY_A, handle: companyHandle(COMPANY_A), role: 'member', access: 'read_write', read_only_code: null },
     ])
   })
 

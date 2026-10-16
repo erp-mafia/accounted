@@ -73,6 +73,7 @@ import { POST as linkJe } from '../[id]/link-journal-entry/route'
 import { POST as matchBatch } from '../[id]/match-batch/route'
 import { POST as bulkBook } from '../bulk-book/route'
 import { isIdempotencyClaim, routeRpcCalls } from '@/tests/helpers'
+import { toHandle } from '@/lib/handles'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -358,7 +359,7 @@ describe('PATCH /transactions/:id (transactions.update)', () => {
     mockServiceClient.mockReturnValue(client)
     const res = await patch({ description: 'Lunch', account_number: '1931' })
     expect(res.status).toBe(200)
-    expect((await res.json()).data).toEqual({ id: TX_ID, description: 'Lunch', title_edited_at: '2026-06-01T10:00:00Z', cash_account_id: CA_ID })
+    expect((await res.json()).data).toEqual({ id: TX_ID, handle: toHandle('transaction', TX_ID), description: 'Lunch', title_edited_at: '2026-06-01T10:00:00Z', cash_account_id: CA_ID })
     const update = client.calls.find((c) => c.table === 'transactions' && c.method === 'update')
     expect(update?.args[0]).toMatchObject({ description: 'Lunch', cash_account_id: CA_ID })
     expect(client.calls).toContainEqual({ table: 'transactions', method: 'is', args: ['supplier_invoice_id', null] })

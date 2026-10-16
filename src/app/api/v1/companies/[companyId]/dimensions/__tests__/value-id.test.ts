@@ -25,6 +25,7 @@ vi.mock('@supabase/supabase-js', async () => {
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { PATCH as patchValue, DELETE as deleteValue } from '../[id]/values/[valueId]/route'
 import { createTableMockSupabase } from '@/tests/helpers'
+import { toHandle } from '@/lib/handles'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -260,7 +261,7 @@ describe('DELETE /api/v1/companies/:companyId/dimensions/:id/values/:valueId', (
 
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body.data).toEqual({ deleted: true, id: VALUE_ID })
+    expect(body.data).toEqual({ deleted: true, id: VALUE_ID, handle: toHandle('dimension_value', VALUE_ID) })
   })
 
   it('returns 409 DIMENSION_VALUE_REFERENCED with an archive hint when the retention trigger blocks', async () => {

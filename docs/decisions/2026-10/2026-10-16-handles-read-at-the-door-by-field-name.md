@@ -1,0 +1,1 @@
+[2026-10-16] Handles are read once per surface (withApiV1, the MCP dispatcher) by path segment and field name, not per Zod schema: one place covers every hand-written and generated route and tool, and a request without handles passes through as the same object.

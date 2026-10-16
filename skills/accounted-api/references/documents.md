@@ -37,7 +37,7 @@ Response `200`:
 ```ts
 {
   data: {
-    documents: { document_id: string, file_name: string, mime_type: string | null, file_size_bytes: number | null, sha256_hash: string, version: number, is_current_version: boolean, upload_source: string | null, linked: boolean, journal_entry_id: string | null, journal_entry_line_id: string | null, created_at: string }[],
+    documents: { document_id: string, handle?: string, file_name: string, mime_type: string | null, file_size_bytes: number | null, sha256_hash: string, version: number, is_current_version: boolean, upload_source: string | null, linked: boolean, journal_entry_id: string | null, journal_entry_line_id: string | null, created_at: string }[],
     next_cursor: string | null
   },
   meta: {
@@ -119,6 +119,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     file_name: string,
     mime_type: string | null,
     file_size_bytes: number,
@@ -188,6 +189,7 @@ Response `200`:
 {
   data: {
     document_id: string,
+    handle?: string,
     file_name: string,
     mime_type: string | null,
     file_size_bytes: number | null,
@@ -329,6 +331,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     file_name: string,
     mime_type: string | null,
     sha256_hash: string,
@@ -410,6 +413,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     journal_entry_id: string,
     journal_entry_line_id: string | null,
     file_name: string,
@@ -473,7 +477,7 @@ Response `200`:
 ```ts
 {
   data: {
-    inbox_items: { inbox_item_id: string, status: string, source: string, created_at: string, document_id: string | null, kind_hint: string | null, vendor_name: string | null, amount: number | null, currency: string | null, invoice_date: string | null, processed: boolean, matched_supplier_id: string | null, matched_transaction_id: string | null, matched_transaction_journal_entry_id: string | null, created_supplier_invoice_id: string | null, created_journal_entry_id: string | null, underlag_status: "anchored" | "unlinked" | "unlinked_locked" | "anchored_elsewhere" | "unknown" | null, email_from: string | null, email_subject: string | null, email_received_at: string | null, error_message: string | null }[],
+    inbox_items: { inbox_item_id: string, handle?: string, status: string, source: string, created_at: string, document_id: string | null, kind_hint: string | null, vendor_name: string | null, amount: number | null, currency: string | null, invoice_date: string | null, processed: boolean, matched_supplier_id: string | null, matched_transaction_id: string | null, matched_transaction_journal_entry_id: string | null, created_supplier_invoice_id: string | null, created_journal_entry_id: string | null, underlag_status: "anchored" | "unlinked" | "unlinked_locked" | "anchored_elsewhere" | "unknown" | null, email_from: string | null, email_subject: string | null, email_received_at: string | null, error_message: string | null }[],
     next_cursor: string | null
   },
   meta: {
@@ -553,6 +557,7 @@ Response `200`:
 {
   data: {
     inbox_item_id: string,
+    handle?: string,
     status: string,
     source: string,
     created_at: string,
@@ -704,7 +709,7 @@ Example request:
 Response `200`:
 ```ts
 {
-  data: { inbox_item_id: string, extracted_data: Record<string, unknown> },
+  data: { inbox_item_id: string, handle?: string, extracted_data: Record<string, unknown> },
   meta: {
     request_id: string,
     api_version: string,
@@ -1066,7 +1071,7 @@ Example request:
 Response `200`:
 ```ts
 {
-  data: { id: string, created_journal_entry_id: string },
+  data: { id: string, handle?: string, created_journal_entry_id: string },
   meta: {
     request_id: string,
     api_version: string,

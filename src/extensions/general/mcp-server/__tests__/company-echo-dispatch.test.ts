@@ -195,3 +195,60 @@ describe('company echo and operation routing at the dispatcher', () => {
     ])
   })
 })
+
+describe('typed handles in tool arguments (handle-args.ts)', () => {
+  const hex = (uuid: string) => uuid.replace(/-/g, '')
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+    mocks.membershipLookups.length = 0
+    mocks.memberships = {
+      [DEFAULT_COMPANY_ID]: { role: 'owner', name: 'Default AB' },
+      [OTHER_COMPANY_ID]: { role: 'admin', name: 'Other AB' },
+    }
+    mocks.operationRow = null
+    mocks.pendingRows = []
+  })
+
+  it('reads a cmp_ handle as the company it names', async () => {
+    const result = await parse(
+      await handleMcpRequest(toolCall('gnubok_list_pending_operations', { company_id: `cmp_${hex(OTHER_COMPANY_ID)}` }))
+    )
+    expect(result.isError).toBe(false)
+    expect(mocks.membershipLookups).toEqual([OTHER_COMPANY_ID])
+    expect(result.text.company).toEqual({ company_id: OTHER_COMPANY_ID, name: 'Other AB', is_default: false })
+  })
+
+  it('approves by a pop_ handle exactly as by the plain operation_id', async () => {
+    mocks.operationRow = {
+      id: OPERATION_ID,
+      company_id: OTHER_COMPANY_ID,
+      operation_type: 'ignore_transaction',
+      risk_level: 'low',
+      status: 'pending',
+    }
+    mocks.commit.mockResolvedValue({ status: 'committed', data: {} })
+
+    const result = await parse(
+      await handleMcpRequest(toolCall('gnubok_approve_pending_operation', { operation_id: `pop_${hex(OPERATION_ID)}` }))
+    )
+
+    expect(result.isError).toBe(false)
+    expect(mocks.membershipLookups).toEqual([OTHER_COMPANY_ID])
+    expect(mocks.commit).toHaveBeenCalledWith(expect.anything(), 'user-1', OTHER_COMPANY_ID, mocks.operationRow, expect.anything())
+  })
+
+  it('refuses a handle of another type with HANDLE_TYPE_MISMATCH before anything runs', async () => {
+    const result = await parse(
+      await handleMcpRequest(toolCall('gnubok_approve_pending_operation', { operation_id: `inv_${hex(OPERATION_ID)}` }))
+    )
+    expect(result.isError).toBe(true)
+    const error = result.text.error as { code: string; message_en: string; retryable: boolean }
+    expect(error.code).toBe('HANDLE_TYPE_MISMATCH')
+    expect(error.retryable).toBe(false)
+    expect(error.message_en).toContain('operation_id takes a pending operation id (a pop_ handle or a plain UUID)')
+    expect(mocks.membershipLookups).toEqual([])
+    expect(mocks.commit).not.toHaveBeenCalled()
+  })
+})

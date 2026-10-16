@@ -459,7 +459,7 @@ Response `200`:
 ```ts
 {
   data: {
-    cash_accounts: { cash_account_id: string, ledger_account: string, name: string | null, currency: string, iban: string | null, is_primary: boolean, enabled: boolean, source: "enable_banking" | "open_payments" | "manual" | "sie_import", balance: number | null, available_balance: number | null, balance_updated_at: string | null }[]
+    cash_accounts: { cash_account_id: string, handle?: string, ledger_account: string, name: string | null, currency: string, iban: string | null, is_primary: boolean, enabled: boolean, source: "enable_banking" | "open_payments" | "manual" | "sie_import", balance: number | null, available_balance: number | null, balance_updated_at: string | null }[]
   },
   meta: {
     request_id: string,
@@ -564,6 +564,7 @@ Response `200`:
 {
   data: {
     cash_account_id: string,
+    handle?: string,
     ledger_account: string,
     name: string | null,
     currency: string,
@@ -682,6 +683,7 @@ Response `200`:
 {
   data: {
     cash_account_id: string,
+    handle?: string,
     ledger_account: string,
     name: string | null,
     currency: string,
@@ -770,6 +772,7 @@ Response `200`:
 {
   data: {
     cash_account_id: string,
+    handle?: string,
     ledger_account: string,
     name: string | null,
     currency: string,
@@ -3258,7 +3261,7 @@ Cursor-paginated transaction list ordered by created_at DESC, id ASC (newest-imp
 Response `200`:
 ```ts
 {
-  data: { id: string, date: string, description: string | null, amount: number, currency: string, reference: string | null, merchant_name: string | null, journal_entry_id: string | null, invoice_id: string | null, supplier_invoice_id: string | null, is_business: boolean | null, category: string | null, import_source: string | null, cash_account_id: string | null, created_at: string }[],
+  data: { id: string, handle?: string, date: string, description: string | null, amount: number, currency: string, reference: string | null, merchant_name: string | null, journal_entry_id: string | null, invoice_id: string | null, supplier_invoice_id: string | null, is_business: boolean | null, category: string | null, import_source: string | null, cash_account_id: string | null, created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -3322,6 +3325,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     date: string,
     description: string | null,
     amount: number,
@@ -3422,6 +3426,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     description: string | null,
     title_edited_at: string | null,
     cash_account_id: string | null

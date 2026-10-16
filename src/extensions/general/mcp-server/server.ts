@@ -324,6 +324,7 @@ import {
   type CompanyEcho,
   type McpCompanyScope,
 } from './company-routing'
+import { normalizeToolArgHandles } from './handle-args'
 import {
   assertStageableInBatch,
   batchHighRiskRefusal,
@@ -26466,7 +26467,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       let companySelection: 'default' | 'explicit' | 'operation' | 'scope' | 'none' = 'none'
       const companyRoutingStartedAt = Date.now()
       try {
-        const extracted = extractRequestedCompany(rawToolArgs)
+        // Typed handles (handle-args.ts): an inv_/je_/cmp_... id an agent got
+        // from the REST API becomes the plain UUID before the company is
+        // resolved or the tool runs; a handle of the wrong type is refused.
+        const extracted = extractRequestedCompany(normalizeToolArgHandles(rawToolArgs))
         // An agent that double-escapes åäö sends a literal "\u00f6"; decode
         // it here, once for every tool, before it can be stored as verifikat
         // text that only a logged rättelse can change (unicode-escape-guard.ts).
@@ -26600,13 +26604,14 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           success: false,
           isError: true,
           errorCode: structured.error.code,
-          // Argument problems are not access problems. Exactly two things in
-          // this try raise VALIDATION_ERROR (the unknown-parameter guard and a
-          // malformed company_id) and neither is a permissions failure. Both
-          // used to log as company_access_denied, which is how 604 rejected
-          // calls read as a tenancy bug for a week.
+          // Argument problems are not access problems. Exactly three things in
+          // this try refuse an argument (the unknown-parameter guard and a
+          // malformed company_id with VALIDATION_ERROR, a wrong-type handle
+          // with HANDLE_TYPE_MISMATCH) and none is a permissions failure. The
+          // first two used to log as company_access_denied, which is how 604
+          // rejected calls read as a tenancy bug for a week.
           errorKind:
-            structured.error.code === 'VALIDATION_ERROR'
+            structured.error.code === 'VALIDATION_ERROR' || structured.error.code === 'HANDLE_TYPE_MISMATCH'
               ? 'invalid_arguments'
               : 'company_access_denied',
           errorMessage: structured.error.message_sv,

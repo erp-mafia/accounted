@@ -34,7 +34,7 @@ Response `200`:
 ```ts
 {
   data: {
-    expense_claims: { expense_claim_id: string, employee_id: string | null, claimant_name: string, description: string, expense_date: string, amount_sek: number, vat_sek: number, currency: string, amount_in_currency: number | null, exchange_rate: number | null, expense_account: string, liability_account: string, document_id: string | null, status: "registered" | "paid", journal_entry_id: string | null, payout_batch_id: string | null, created_at: string }[],
+    expense_claims: { expense_claim_id: string, handle?: string, employee_id: string | null, claimant_name: string, description: string, expense_date: string, amount_sek: number, vat_sek: number, currency: string, amount_in_currency: number | null, exchange_rate: number | null, expense_account: string, liability_account: string, document_id: string | null, status: "registered" | "paid", journal_entry_id: string | null, payout_batch_id: string | null, created_at: string }[],
     next_cursor: string | null
   },
   meta: {
@@ -146,6 +146,7 @@ Response `200`:
 {
   data: {
     expense_claim_id: string,
+    handle?: string,
     employee_id: string | null,
     claimant_name: string,
     description: string,
@@ -229,6 +230,7 @@ Response `200`:
 {
   data: {
     expense_claim_id: string,
+    handle?: string,
     employee_id: string | null,
     claimant_name: string,
     description: string,
@@ -450,7 +452,7 @@ Response `200`:
 ```ts
 {
   data: {
-    payment_orders: { payment_order_id: string, supplier_invoice_id: string | null, payment_order_batch_id: string | null, status: "draft" | "approved" | "submitted" | "awaiting_signature" | "awaiting_second_signer" | "accepted" | "executed" | "rejected" | "cancelled" | "failed", amount: number, currency: string, requested_execution_date: string, cash_account_id: string, payee: { type: "bankgiro" | "plusgiro" | "bank_account" | "iban", label: string, name: string, source: "invoice" | "supplier", check: "unchecked" | "known" | "new" | "changed" }, reference: { type: "ocr" | "message", value: string }, end_to_end_id: string, provider_status: string | null, provider_error_code: string | null, outcome_unknown: boolean, approved_at: string | null, submitted_at: string | null, signed_at: string | null, executed_at: string | null, cancelled_at: string | null, matched_at: string | null, created_at: string, updated_at: string, supplier_invoice: { supplier_invoice_number: string | null, due_date: string | null, supplier_name: string | null } | null }[],
+    payment_orders: { payment_order_id: string, handle?: string, supplier_invoice_id: string | null, payment_order_batch_id: string | null, status: "draft" | "approved" | "submitted" | "awaiting_signature" | "awaiting_second_signer" | "accepted" | "executed" | "rejected" | "cancelled" | "failed", amount: number, currency: string, requested_execution_date: string, cash_account_id: string, payee: { type: "bankgiro" | "plusgiro" | "bank_account" | "iban", label: string, name: string, source: "invoice" | "supplier", check: "unchecked" | "known" | "new" | "changed" }, reference: { type: "ocr" | "message", value: string }, end_to_end_id: string, provider_status: string | null, provider_error_code: string | null, outcome_unknown: boolean, approved_at: string | null, submitted_at: string | null, signed_at: string | null, executed_at: string | null, cancelled_at: string | null, matched_at: string | null, created_at: string, updated_at: string, supplier_invoice: { supplier_invoice_number: string | null, due_date: string | null, supplier_name: string | null } | null }[],
     next_cursor: string | null
   },
   meta: {
@@ -568,7 +570,7 @@ Response `200`:
 ```ts
 {
   data: {
-    payment_orders: { payment_order_id: string, supplier_invoice_id: string | null, payment_order_batch_id: string | null, status: "draft" | "approved" | "submitted" | "awaiting_signature" | "awaiting_second_signer" | "accepted" | "executed" | "rejected" | "cancelled" | "failed", amount: number, currency: string, requested_execution_date: string, cash_account_id: string, payee: { type: "bankgiro" | "plusgiro" | "bank_account" | "iban", label: string, name: string, source: "invoice" | "supplier", check: "unchecked" | "known" | "new" | "changed" }, reference: { type: "ocr" | "message", value: string }, end_to_end_id: string, provider_status: string | null, provider_error_code: string | null, outcome_unknown: boolean, approved_at: string | null, submitted_at: string | null, signed_at: string | null, executed_at: string | null, cancelled_at: string | null, matched_at: string | null, created_at: string, updated_at: string, supplier_invoice: { supplier_invoice_number: string | null, due_date: string | null, supplier_name: string | null } | null }[],
+    payment_orders: { payment_order_id: string, handle?: string, supplier_invoice_id: string | null, payment_order_batch_id: string | null, status: "draft" | "approved" | "submitted" | "awaiting_signature" | "awaiting_second_signer" | "accepted" | "executed" | "rejected" | "cancelled" | "failed", amount: number, currency: string, requested_execution_date: string, cash_account_id: string, payee: { type: "bankgiro" | "plusgiro" | "bank_account" | "iban", label: string, name: string, source: "invoice" | "supplier", check: "unchecked" | "known" | "new" | "changed" }, reference: { type: "ocr" | "message", value: string }, end_to_end_id: string, provider_status: string | null, provider_error_code: string | null, outcome_unknown: boolean, approved_at: string | null, submitted_at: string | null, signed_at: string | null, executed_at: string | null, cancelled_at: string | null, matched_at: string | null, created_at: string, updated_at: string, supplier_invoice: { supplier_invoice_number: string | null, due_date: string | null, supplier_name: string | null } | null }[],
     skipped: { supplier_invoice_id: string, reason: "not_payable" | "nothing_remaining" | "credit_note" | "foreign_currency" | "payee_missing" | "payee_invalid" | "reference_missing" | "attest_required" | "payee_unconfirmed" | "payee_rejected" | "not_found" | "in_bank_payment" | "in_payment_file" | "already_in_payment" }[],
     warnings: { supplier_invoice_id: string, code: "unattested" | "ocr_invalid" | "payee_changed" | "payee_new" | "date_moved", alternative_payee?: string | null, from?: string, to?: string }[],
     next: { approve: string, sign_in_app: string }
@@ -664,6 +666,7 @@ Response `200`:
 {
   data: {
     payment_order_id: string,
+    handle?: string,
     supplier_invoice_id: string | null,
     payment_order_batch_id: string | null,
     status: "draft" | "approved" | "submitted" | "awaiting_signature" | "awaiting_second_signer" | "accepted" | "executed" | "rejected" | "cancelled" | "failed",
@@ -1512,7 +1515,7 @@ Cursor-paginated supplier-invoice list ordered by created_at DESC, id ASC (newes
 Response `200`:
 ```ts
 {
-  data: { id: string, supplier_id: string, supplier_name: string, arrival_number: number, supplier_invoice_number: string | null, invoice_date: string, due_date: string, status: "registered" | "approved" | "paid" | "partially_paid" | "overdue" | "disputed" | "credited" | "reversed", currency: string, subtotal: number, vat_amount: number, total: number, paid_amount: number, remaining_amount: number, is_credit_note: boolean, paid_at: string | null, approved_at: string | null, bank_entered_at: string | null, created_at: string }[],
+  data: { id: string, handle?: string, supplier_id: string, supplier_name: string, arrival_number: number, supplier_invoice_number: string | null, invoice_date: string, due_date: string, status: "registered" | "approved" | "paid" | "partially_paid" | "overdue" | "disputed" | "credited" | "reversed", currency: string, subtotal: number, vat_amount: number, total: number, paid_amount: number, remaining_amount: number, is_credit_note: boolean, paid_at: string | null, approved_at: string | null, bank_entered_at: string | null, created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -1643,6 +1646,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     supplier_id: string,
     arrival_number: number,
     supplier_invoice_number: string,
@@ -1717,6 +1721,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     supplier_id: string,
     arrival_number: number,
     supplier_invoice_number: string | null,
@@ -1826,6 +1831,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     supplier_id: string,
     arrival_number: number,
     supplier_invoice_number: string | null,
@@ -1963,6 +1969,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     status: "approved" | "overdue" | "registered",
     arrival_number: number,
     supplier_invoice_number: string | null,
@@ -2179,7 +2186,7 @@ Response `200`:
 ```ts
 {
   data: {
-    supplier_invoice: { id: string, arrival_number: number | null, supplier_invoice_number: string | null, status: string, invoice_date: string, due_date: string | null, currency: string, total: number, registration_journal_entry_id: string | null },
+    supplier_invoice: { id: string, handle?: string, arrival_number: number | null, supplier_invoice_number: string | null, status: string, invoice_date: string, due_date: string | null, currency: string, total: number, registration_journal_entry_id: string | null },
     journal_entry_id: string
   },
   meta: {
@@ -2432,6 +2439,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     status: "paid" | "partially_paid",
     total: number,
     paid_amount: number,
@@ -2793,7 +2801,7 @@ Response `200`:
 ```ts
 {
   data: {
-    supplier_payment_batches: { supplier_payment_batch_id: string, format: "pain001", status: "created" | "cancelled", currency: string, total_amount: number, item_count: number, settled_count: number, msg_id: string, file_generated_at: string | null, download_count: number, created_at: string, cancelled_at: string | null, supplier_invoice_ids: string[] }[],
+    supplier_payment_batches: { supplier_payment_batch_id: string, handle?: string, format: "pain001", status: "created" | "cancelled", currency: string, total_amount: number, item_count: number, settled_count: number, msg_id: string, file_generated_at: string | null, download_count: number, created_at: string, cancelled_at: string | null, supplier_invoice_ids: string[] }[],
     next_cursor: string | null
   },
   meta: {
@@ -2898,6 +2906,7 @@ Response `200`:
 {
   data: {
     supplier_payment_batch_id: string,
+    handle?: string,
     msg_id: string,
     format: "pain001",
     status: "created",
@@ -2968,6 +2977,7 @@ Response `200`:
 {
   data: {
     supplier_payment_batch_id: string,
+    handle?: string,
     format: "pain001",
     status: "created" | "cancelled",
     currency: string,
@@ -3311,7 +3321,7 @@ Returns active suppliers in created-first order. Pass ?include_archived=true to 
 Response `200`:
 ```ts
 {
-  data: { id: string, name: string, supplier_type: "swedish_business" | "eu_business" | "non_eu_business", email: string | null, org_number: string | null, vat_number: string | null, default_payment_terms: number, default_currency: string, party_id?: string | null, archived_at: string | null, created_at: string }[],
+  data: { id: string, handle?: string, name: string, supplier_type: "swedish_business" | "eu_business" | "non_eu_business", email: string | null, org_number: string | null, vat_number: string | null, default_payment_terms: number, default_currency: string, party_id?: string | null, archived_at: string | null, created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -3420,6 +3430,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     name: string,
     supplier_type: string,
     email: string | null,
@@ -3525,6 +3536,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     name: string,
     supplier_type: string,
     email: string | null,
@@ -3658,6 +3670,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     name: string,
     supplier_type: string,
     email: string | null,

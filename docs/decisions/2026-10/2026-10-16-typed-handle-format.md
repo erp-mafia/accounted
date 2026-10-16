@@ -1,0 +1,1 @@
+[2026-10-16] Typed handles are <prefix>_<uuid as 32 lowercase hex>, derived, never stored: reversible to the UUID with no column, index or migration. A prefix is a permanent public contract (never renamed or reused) because agents keep stored ids for years.

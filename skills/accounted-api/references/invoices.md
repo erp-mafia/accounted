@@ -43,7 +43,7 @@ Cursor-paginated invoice list ordered by created_at DESC, id ASC (newest-registe
 Response `200`:
 ```ts
 {
-  data: { id: string, invoice_number: string | null, customer_id: string, customer_name: string, invoice_date: string, due_date: string, status: "draft" | "sent" | "paid" | "partially_paid" | "overdue" | "cancelled" | "credited", document_type: "invoice" | "proforma" | "delivery_note" | "quote", valid_until: string | null, quote_status: "open" | "accepted" | "declined" | "expired" | null, currency: string, subtotal: number, vat_amount: number, total: number, remaining_amount: number, paid_at: string | null, created_at: string }[],
+  data: { id: string, handle?: string, invoice_number: string | null, customer_id: string, customer_name: string, invoice_date: string, due_date: string, status: "draft" | "sent" | "paid" | "partially_paid" | "overdue" | "cancelled" | "credited", document_type: "invoice" | "proforma" | "delivery_note" | "quote", valid_until: string | null, quote_status: "open" | "accepted" | "declined" | "expired" | null, currency: string, subtotal: number, vat_amount: number, total: number, remaining_amount: number, paid_at: string | null, created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -180,6 +180,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     invoice_number: string | null,
     customer_id: string,
     invoice_date: string,
@@ -257,6 +258,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     invoice_number: string | null,
     customer_id: string,
     invoice_date: string,
@@ -368,6 +370,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     invoice_number: string | null,
     customer_id: string,
     invoice_date: string,
@@ -496,7 +499,7 @@ Response `200`:
 ```ts
 {
   data: {
-    invoice: { id: string, invoice_number: string | null, status: string, invoice_date: string, due_date: string | null, currency: string, total: number, journal_entry_id: string | null },
+    invoice: { id: string, handle?: string, invoice_number: string | null, status: string, invoice_date: string, due_date: string | null, currency: string, total: number, journal_entry_id: string | null },
     journal_entry_id: string
   },
   meta: {
@@ -565,6 +568,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     invoice_number: string | null,
     document_type: "quote" | "proforma",
     status: "cancelled",
@@ -643,6 +647,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     invoice_number: string,
     credited_invoice_id: string,
     status: "sent",
@@ -730,6 +735,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     invoice_number: string,
     status: "paid" | "partially_paid",
     total: number,
@@ -800,6 +806,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     invoice_number: string,
     status: "sent",
     total: number,
@@ -1081,6 +1088,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     invoice_number: string | null,
     document_type: "quote",
     status: string,
@@ -1180,6 +1188,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     invoice_number: string,
     status: "sent",
     total: number,
@@ -1365,7 +1374,7 @@ Response `200`:
 ```ts
 {
   data: {
-    results: { id: string, status: "booked" | "failed", journal_entry_id?: string | null, error_code?: string, error?: string }[],
+    results: { id: string, handle?: string, status: "booked" | "failed", journal_entry_id?: string | null, error_code?: string, error?: string }[],
     summary: { total: number, booked: number, failed: number }
   },
   meta: {

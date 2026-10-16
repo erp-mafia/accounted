@@ -33,7 +33,7 @@ Returns salary runs in created-first order with their lifecycle status (draft|re
 Response `200`:
 ```ts
 {
-  data: { id: string, period_year: number, period_month: number, payment_date: string, deviation_period_start: string | null, deviation_period_end: string | null, status: "draft" | "review" | "approved" | "paid" | "booked" | "corrected", voucher_series: string, total_gross: number, total_tax: number, total_net: number, total_avgifter: number, total_employer_cost: number, agi_generated_at: string | null, agi_submitted_at: string | null, approved_at: string | null, paid_at: string | null, booked_at: string | null, created_at: string }[],
+  data: { id: string, handle?: string, period_year: number, period_month: number, payment_date: string, deviation_period_start: string | null, deviation_period_end: string | null, status: "draft" | "review" | "approved" | "paid" | "booked" | "corrected", voucher_series: string, total_gross: number, total_tax: number, total_net: number, total_avgifter: number, total_employer_cost: number, agi_generated_at: string | null, agi_submitted_at: string | null, approved_at: string | null, paid_at: string | null, booked_at: string | null, created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -127,6 +127,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     period_year: number,
     period_month: number,
     payment_date: string,
@@ -207,6 +208,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     period_year: number,
     period_month: number,
     payment_date: string,
@@ -310,6 +312,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     period_year: number,
     period_month: number,
     payment_date: string,
@@ -416,6 +419,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     status: "approved",
     approved_at: string,
     approved_by: string | null,
@@ -485,6 +489,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     status: "booked",
     booked_at: string,
     booked_by: string | null,
@@ -567,6 +572,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     status: "review",
     period_year: number,
     period_month: number,
@@ -647,7 +653,7 @@ Response `200`:
   data: {
     original_run_id: string,
     original_status: "corrected",
-    correction_run: { id: string, period_year: number, period_month: number, payment_date: string, status: "draft", is_correction: true, corrects_run_id: string, deviation_period_start: string | null, deviation_period_end: string | null },
+    correction_run: { id: string, handle?: string, period_year: number, period_month: number, payment_date: string, status: "draft", is_correction: true, corrects_run_id: string, deviation_period_start: string | null, deviation_period_end: string | null },
     reversed_entry_ids: string[]
   },
   meta: {
@@ -1470,7 +1476,7 @@ Advances a salary run from `approved` to `paid` and stamps `paid_at`. This is th
 Response `200`:
 ```ts
 {
-  data: { id: string, status: "paid", paid_at: string },
+  data: { id: string, handle?: string, status: "paid", paid_at: string },
   meta: {
     request_id: string,
     api_version: string,

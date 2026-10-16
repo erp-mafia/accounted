@@ -22,6 +22,7 @@ import type { V1RequiredScope } from '@/lib/auth/scopes'
 import { PendingOperationView } from '@/lib/pending-operations/view'
 import { MODULES, type ModuleId } from '@/lib/modules/manifest'
 import { getModule, moduleForV1Path } from '@/lib/modules/resolve'
+import { handleDeclarationFor, STAGED_PENDING_OPERATION_HANDLES, withHandleSchema } from './handles'
 import { API_V1_VERSION } from './version'
 
 /**
@@ -322,6 +323,7 @@ export interface JsonSchema {
   enum?: unknown[]
   const?: unknown
   format?: string
+  pattern?: string
   description?: string
   additionalProperties?: boolean | JsonSchema
   anyOf?: JsonSchema[]
@@ -473,6 +475,16 @@ function convertZod(schema: ZodTypeAny): JsonSchema {
   }
 }
 
+/**
+ * The JSON Schema of an endpoint's success body as clients receive it: the
+ * registered Zod schema plus the `handle` property the response layer stamps
+ * on the endpoints in V1_HANDLE_COVERAGE (./handles.ts). The spec and the
+ * docs builder both read this, so neither can publish a body without it.
+ */
+export function responseJsonSchema(def: Pick<EndpointDefinition, 'operation' | 'response'>): JsonSchema {
+  return withHandleSchema(zodToJsonSchema(def.response.success), handleDeclarationFor(def.operation))
+}
+
 // ──────────────────────────────────────────────────────────────────
 // OpenAPI 3.1 spec generation
 // ──────────────────────────────────────────────────────────────────
@@ -572,7 +584,7 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
       ? { [def.response.contentType]: { schema: { type: 'string', format: 'binary' } } }
       : {
           'application/json': {
-            schema: zodToJsonSchema(def.response.success),
+            schema: responseJsonSchema(def),
             example: def.example.response,
           },
         }
@@ -702,7 +714,10 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
     servers: [{ url: serverUrl }],
     components: {
       schemas: {
-        [STAGED_SCHEMA_NAME]: zodToJsonSchema(dataEnvelope(PendingOperationView)),
+        [STAGED_SCHEMA_NAME]: withHandleSchema(
+          zodToJsonSchema(dataEnvelope(PendingOperationView)),
+          STAGED_PENDING_OPERATION_HANDLES,
+        ),
       },
       securitySchemes: {
         [SCHEME_NAME]: {

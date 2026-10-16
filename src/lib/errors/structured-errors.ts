@@ -72,6 +72,19 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
     message_sv: 'Förfrågan innehåller ogiltiga uppgifter.',
     message_en: 'Validation error.',
   },
+  // A typed handle (lib/handles: je_..., inv_...) sent in a field or path
+  // parameter that takes another kind of record. Refused at the door, before
+  // any lookup, so a mixed-up id never reaches a query as the wrong row.
+  HANDLE_TYPE_MISMATCH: {
+    httpStatus: 400,
+    message_sv: 'Id:t hör till fel sorts post för det här fältet. Skicka id:t för rätt post, eller dess vanliga UUID.',
+    message_en:
+      'A typed handle names a different kind of record than the field or path parameter takes (e.g. an inv_ invoice handle where a je_ journal entry id belongs).',
+    remediation: {
+      description:
+        'details.issues names each field, the prefix it takes (expected_prefix, null for a plain UUID only) and the prefix sent. Send the id of the record the field names: its handle with that prefix, or the plain UUID.',
+    },
+  },
   UNAUTHORIZED: {
     httpStatus: 401,
     message_sv: 'Din session har gått ut. Logga in igen.',

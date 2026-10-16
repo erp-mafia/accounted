@@ -42,6 +42,7 @@ import { GET as getBatch } from '../[id]/route'
 import { GET as downloadFile } from '../[id]/file/route'
 import { POST as cancelBatch } from '../[id]/cancel/route'
 import { routeRpcCalls, isIdempotencyClaim } from '@/tests/helpers'
+import { toHandle } from '@/lib/handles'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -357,6 +358,7 @@ describe('POST /supplier-payment-batches', () => {
     const body = await res.json()
     expect(body.data).toEqual({
       supplier_payment_batch_id: BATCH_ID,
+      handle: toHandle('supplier_payment_batch', BATCH_ID),
       msg_id: 'ACCOUNTED-5566778899-BB1111111',
       format: 'pain001',
       status: 'created',
