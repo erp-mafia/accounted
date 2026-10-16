@@ -13055,6 +13055,8 @@
     "disconnect": "Disconnect",
     "op_active": "Active",
     "op_active_until": "Active until {date}",
+    "op_choose_accounts": "Choose accounts to start syncing",
+    "choose_accounts": "Choose accounts",
     "op_renew_by": "Renew by {date}",
     "op_expired": "The connection has expired",
     "sync_failed": "Fetching from the bank failed",

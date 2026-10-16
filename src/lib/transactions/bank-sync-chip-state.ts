@@ -22,6 +22,8 @@ export interface ConnectionRow {
   status: string | null
   last_synced_at: string | null
   consent_expires?: string | null
+  /** Who reads it ('enable_banking' | 'open_payments'): where its account choice is finished. */
+  aggregator?: string | null
 }
 
 export const STALE_THRESHOLD_MS = 36 * 60 * 60 * 1000
@@ -33,7 +35,7 @@ export type ChipState =
   | { kind: 'none' }
   | { kind: 'paused' }
   | { kind: 'attention'; count: number }
-  | { kind: 'selection'; connectionId: string; count: number }
+  | { kind: 'selection'; connectionId: string; aggregator: string | null; count: number }
   | { kind: 'expiring'; daysLeft: number; count: number }
   | { kind: 'stale'; mostRecent: string }
   | { kind: 'healthy'; mostRecent: string | null }
@@ -88,6 +90,7 @@ export function getChipState(
     return {
       kind: 'selection',
       connectionId: awaitingSelection[0].id,
+      aggregator: awaitingSelection[0].aggregator ?? null,
       count: awaitingSelection.length,
     }
   }

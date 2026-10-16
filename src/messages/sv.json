@@ -13055,6 +13055,8 @@
     "disconnect": "Koppla bort",
     "op_active": "Aktiv",
     "op_active_until": "Aktiv till {date}",
+    "op_choose_accounts": "Välj konton för att börja synka",
+    "choose_accounts": "Välj konton",
     "op_renew_by": "Förnya senast {date}",
     "op_expired": "Kopplingen har gått ut",
     "sync_failed": "Hämtningen från banken misslyckades",

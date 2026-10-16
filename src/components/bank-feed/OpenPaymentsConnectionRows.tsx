@@ -46,7 +46,11 @@ interface OpenPaymentsConnectionRowProps {
  * One Open Payments connection as a flat hairline row: the bank, where it
  * stands (muted when fine, the one ochre sentence when its last sync failed
  * or it needs a renewal inside 14 days), and the two actions, Förnya and
- * Koppla bort.
+ * Koppla bort. A row signed at the bank whose accounts were never chosen
+ * (the person left the account step, often after the BankID app on a phone)
+ * reads nothing until they are: it says so and offers Välj konton, which
+ * reopens the flow on that connection at the account choice, instead of
+ * Förnya.
  */
 export function OpenPaymentsConnectionRow({ connection, flow, onChanged, canRenew = true }: OpenPaymentsConnectionRowProps) {
   const t = useTranslations('settings_connections')
@@ -58,8 +62,11 @@ export function OpenPaymentsConnectionRow({ connection, flow, onChanged, canRene
   const [confirmOpen, setConfirmOpen] = useState(false)
 
   const consent = consentState(connection.consent_expires, now)
+  const awaitingAccounts = connection.status === 'pending_selection' && consent.kind !== 'expired'
   const syncFailed = connection.status === 'error' && consent.kind !== 'expired'
-  const stateText = syncFailed
+  const stateText = awaitingAccounts
+    ? t('op_choose_accounts')
+    : syncFailed
     ? t('sync_failed')
     : consent.kind === 'active'
       ? t('op_active_until', { date: formatDateLong(consent.until) })
@@ -68,7 +75,7 @@ export function OpenPaymentsConnectionRow({ connection, flow, onChanged, canRene
         : consent.kind === 'expired'
           ? t('op_expired')
           : t('op_active')
-  const attention = syncFailed || consent.kind === 'renew_by' || consent.kind === 'expired'
+  const attention = awaitingAccounts || syncFailed || consent.kind === 'renew_by' || consent.kind === 'expired'
   const bankName = connection.bank_name ?? ''
 
   async function disconnect() {
@@ -97,7 +104,12 @@ export function OpenPaymentsConnectionRow({ connection, flow, onChanged, canRene
         <SettingsRowNote className={cn(attention ? 'text-attn' : 'text-foreground')}>{stateText}</SettingsRowNote>
         {canWrite && (
           <SettingsRowEnd>
-            {canRenew && (
+            {canRenew && awaitingAccounts && (
+              <Button size="sm" onClick={() => flow.open('resume', { connectionId: connection.id })}>
+                {t('choose_accounts')}
+              </Button>
+            )}
+            {canRenew && !awaitingAccounts && (
               <Button variant="outline" size="sm" onClick={() => flow.open('renew', { bank: { bic: '', name: bankName }, replaceConnectionId: connection.id })}>
                 {t('renew')}
               </Button>

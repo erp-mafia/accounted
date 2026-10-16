@@ -59,10 +59,9 @@ import { createServiceClient } from '@/lib/supabase/server'
 import type { TriggerSyncResult } from '@/lib/bank-sync/trigger-sync-contract'
 import { BANK_FEED_NOT_FOUND, BankFeedError, BankFeedRefusedError, ConsentOverError, getBankFeedConnect, type BankFeedConnect } from './connect'
 import { openBankFeedDoor } from './door'
-import { consentFailureText } from './failure-text'
+import { consentFailureText, OPEN_BANKING_FAILURE_TEXTS } from './failure-text'
 import { runOpenPaymentsSync } from './feed'
 import { accountContextOf, buildBankFeedParty, psuTypeOf, UNATTENDED_SIGNER, type BankFeedSignerInput, type PsuType } from './party'
-import { PSU_AUTHORISER_ID_MISSING } from './psu-authoriser'
 import { BANK_CONNECT_SIGNATORY_TARGET, bankConnectReturnUrl, type BankConnectReturnTarget } from './return-url'
 import { viaCanonicalOrigin } from '@/lib/connect/return-bounce'
 import { getCanonicalAppOrigin } from '@/lib/domains/trusted-app-origin'
@@ -226,22 +225,29 @@ type Failure = Extract<OperationOutcome<never>, { ok: false }>
 /** Connect's refusal when the company already holds its one bank connection (or an attempt in progress). */
 const CONNECTOR_QUOTA_EXCEEDED = 'CONNECTOR_QUOTA_EXCEEDED'
 
-function providerFailure(error: unknown): Failure {
+function providerFailure(error: unknown, log?: Pick<OperationContext['log'], 'warn'>): Failure {
   if (error instanceof ConsentOverError) return { ok: false, code: 'BANK_CONSENT_OVER', details: { provider_code: error.providerCode } }
   if (error instanceof BankFeedError) {
     if (error.code === BANK_FEED_NOT_FOUND) return { ok: false, code: 'BANK_CONSENT_CHANGED', details: { provider_code: error.providerCode } }
     // One bank connection per company: another connection, or an attempt
     // still in progress, holds the place. Not the bank's refusal.
     if (error.code === CONNECTOR_QUOTA_EXCEEDED) return { ok: false, code: 'BANK_CONNECTION_IN_PROGRESS' }
+    // The bank's own code reaches the log: the response names it only in
+    // details, and the route logs the generic refusal.
+    log?.warn('bank provider refused', { code: error.code, provider_code: error.providerCode, status: error.status, retryable: error.retryable })
+    // A code the provider has a sentence for is that sentence on screen
+    // (Nordea Corporate Netbank's missing logon id, Handelsbanken's missing
+    // third-party access, a mismatched agreement, ...): most are fixed by the
+    // person at the bank, which the generic refusal never tells them.
+    const known = error.providerCode ? OPEN_BANKING_FAILURE_TEXTS[error.providerCode.trim().toUpperCase()] : undefined
     return {
       ok: false,
       code: error.retryable ? 'BANK_PROVIDER_UNAVAILABLE' : 'BANK_PROVIDER_REFUSED',
       details: { provider_code: error.providerCode ?? error.code, ...(error.providerCode ? { provider_text: consentFailureText(error.providerCode).sv } : {}) },
-      // Nordea Corporate Netbank's missing logon id is fixed on the very
-      // screen that started: the bank's sentence, not the generic refusal.
-      ...(error.providerCode === PSU_AUTHORISER_ID_MISSING ? { messageSv: consentFailureText(error.providerCode).sv } : {}),
+      ...(known ? { messageSv: known.sv } : {}),
     }
   }
+  log?.warn('bank provider failed unexpectedly', { error: error instanceof Error ? error.message : String(error) })
   return { ok: false, code: 'BANK_PROVIDER_REFUSED', details: { provider_code: 'UNEXPECTED_ERROR' } }
 }
 
@@ -432,7 +438,7 @@ export async function listBankFeedBanks(ctx: OperationContext): Promise<Operatio
     const banks = await door.connect.banks(ctx.companyId)
     return { ok: true, data: { banks: banks.map((b) => ({ bic: b.bic, name: b.name, logo_url: b.logoUrl, decoupled: b.decoupled, redirect: b.redirect })) } }
   } catch (error) {
-    return providerFailure(error)
+    return providerFailure(error, ctx.log)
   }
 }
 
@@ -466,7 +472,7 @@ export async function getBankFeedBankDetails(ctx: OperationContext, bic: string)
     return { ok: true, data: bankDetailsView(await door.connect.getBankDetails(ctx.companyId, bic)) }
   } catch (error) {
     if (error instanceof BankFeedRefusedError && error.code === BANK_FEED_NOT_FOUND) return { ok: false, code: 'BANK_CONSENT_UNKNOWN_BANK' }
-    return providerFailure(error)
+    return providerFailure(error, ctx.log)
   }
 }
 
@@ -559,7 +565,7 @@ async function startSigning(
         : {}),
     })
   } catch (error) {
-    return providerFailure(error)
+    return providerFailure(error, ctx.log)
   }
   // The bank imposed its own page on a start made for our screen: without a
   // return URL there is no way back, so the attempt is over.
@@ -628,7 +634,7 @@ export async function startBankFeedConsent(ctx: OperationContext, input: StartIn
     bank = await connect.getBankDetails(ctx.companyId, bic)
   } catch (error) {
     if (error instanceof BankFeedRefusedError && error.code === BANK_FEED_NOT_FOUND) return { ok: false, code: 'BANK_CONSENT_UNKNOWN_BANK' }
-    return providerFailure(error)
+    return providerFailure(error, ctx.log)
   }
   // The sparbank behind a shared BIC: the connection is named after it, not
   // after Swedbank, so the rows and the title say which bank it is. A renewal
@@ -697,7 +703,7 @@ export async function startBankFeedConsent(ctx: OperationContext, input: StartIn
     created = await connect.createConsent(ctx.companyId, { party: party.party, validUntil: validUntilRequested(now) })
   } catch (error) {
     ctx.log.warn('bank consent did not start', { code: error instanceof BankFeedError ? error.code : undefined })
-    return providerFailure(error)
+    return providerFailure(error, ctx.log)
   }
 
   const attempt: ConsentAttempt = {
@@ -786,7 +792,7 @@ export async function restartBankFeedConsent(
           : {}),
       })
     } catch (error) {
-      return providerFailure(error)
+      return providerFailure(error, ctx.log)
     }
     // A new consent, created with this party's PSU-ID and signed from the
     // start: it replaces the kept number, and nobody co-signs it yet.
@@ -882,7 +888,7 @@ export async function pollBankFeedConsent(
   try {
     progress = await connect.pollConsentSigning(ctx.companyId, { party: signingParty, consentId: row.session_id, providerAuthorisationId: row.authorization_id, method })
   } catch (error) {
-    return providerFailure(error)
+    return providerFailure(error, ctx.log)
   }
 
   const state = progress.state
@@ -907,7 +913,7 @@ export async function pollBankFeedConsent(
   try {
     accounts = await connect.accounts(ctx.companyId, { party: party.party, consentId: row.session_id, withBalance: !listingOnly })
   } catch (error) {
-    return providerFailure(error)
+    return providerFailure(error, ctx.log)
   }
   const observedAt = new Date().toISOString()
   const expires = progress.validUntil ? consentExpiresAt(progress.validUntil) : row.consent_expires
@@ -1193,7 +1199,7 @@ export async function selectBankFeedAccounts(
     try {
       created = await connect.createConsent(ctx.companyId, { party: party.party, validUntil: validUntilRequested(now), accounts: ibans.map((iban) => ({ iban })) })
     } catch (error) {
-      return providerFailure(error)
+      return providerFailure(error, ctx.log)
     }
     await rememberConsentPsu(ctx, row.id, party)
     const attempt: ConsentAttempt = {

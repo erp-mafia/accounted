@@ -21,6 +21,8 @@ export interface BankConn {
   status: string
   provider: string
   last_synced_at: string | null
+  /** 'enable_banking' | 'open_payments': which routes sync, renew and finish it. */
+  aggregator?: string | null
 }
 
 export interface BankSyncState {

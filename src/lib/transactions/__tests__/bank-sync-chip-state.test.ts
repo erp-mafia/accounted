@@ -102,7 +102,7 @@ describe('getChipState', () => {
       [row({ id: 'waiting', status: 'pending_selection', last_synced_at: null })],
       { now: NOW },
     )
-    expect(state).toEqual({ kind: 'selection', connectionId: 'waiting', count: 1 })
+    expect(state).toEqual({ kind: 'selection', connectionId: 'waiting', aggregator: null, count: 1 })
   })
 
   it('ignores revoked rows next to the waiting one (a superseded earlier attempt)', () => {
@@ -113,7 +113,7 @@ describe('getChipState', () => {
       ],
       { now: NOW },
     )
-    expect(state).toEqual({ kind: 'selection', connectionId: 'waiting', count: 1 })
+    expect(state).toEqual({ kind: 'selection', connectionId: 'waiting', aggregator: null, count: 1 })
   })
 
   it('keeps a dead connection ahead of a waiting one: only BankID fixes that', () => {
@@ -122,6 +122,14 @@ describe('getChipState', () => {
       { now: NOW },
     )
     expect(state).toEqual({ kind: 'attention', count: 1 })
+  })
+
+  it('carries the waiting row\'s aggregator, so the chip links an Open Payments row to Koppla banken', () => {
+    const state = getChipState(
+      [row({ id: 'op', status: 'pending_selection', last_synced_at: null, aggregator: 'open_payments' })],
+      { now: NOW },
+    )
+    expect(state).toEqual({ kind: 'selection', connectionId: 'op', aggregator: 'open_payments', count: 1 })
   })
 
   it('does not ask for account selection on a consent that already lapsed', () => {

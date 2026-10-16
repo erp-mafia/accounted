@@ -881,4 +881,27 @@ describe('startBankFeedConsent at Nordea Corporate Netbank', () => {
       messageSv: sentence,
     })
   })
+
+  it('says any refusal the provider has a sentence for in its words, logs the bank\'s code, and keeps the generic refusal for a code it does not know', async () => {
+    const refusing = (providerCode: string) => fakeConnect({
+      bank: vi.fn().mockResolvedValue(NORDEA),
+      startConsentSigning: vi.fn().mockRejectedValue(new BankFeedRefusedError('refused', { code: 'CONNECTOR_AIS_REFUSED', status: 422, providerCode })),
+    })
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() }
+    mocks.door.mockResolvedValue({ ok: true, connect: refusing('PSU_OPEN_BANKING_RIGHTS_MISSING') })
+    const first = stub(answers())
+    const known = await startBankFeedConsent({ ...ctx, supabase: first.supabase, log: log as never }, { bic: 'NDEASESS', method: 'qr', signer, now: NOW })
+    expect(known).toMatchObject({
+      ok: false,
+      code: 'BANK_PROVIDER_REFUSED',
+      messageSv: 'Behörighet saknas för att utföra förfrågningar i Open Banking. Lägg till tredjepartstjänster (API/Open Banking) i internetbanken.',
+    })
+    expect(log.warn).toHaveBeenCalledWith('bank provider refused', expect.objectContaining({ code: 'CONNECTOR_AIS_REFUSED', provider_code: 'PSU_OPEN_BANKING_RIGHTS_MISSING', status: 422 }))
+
+    mocks.door.mockResolvedValue({ ok: true, connect: refusing('SOMETHING_NEW') })
+    const second = stub(answers())
+    const unknown = await startBankFeedConsent({ ...ctx, supabase: second.supabase }, { bic: 'NDEASESS', method: 'qr', signer, now: NOW })
+    expect(unknown).toMatchObject({ ok: false, code: 'BANK_PROVIDER_REFUSED', details: { provider_code: 'SOMETHING_NEW' } })
+    expect(unknown).not.toHaveProperty('messageSv')
+  })
 })
