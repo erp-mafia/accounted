@@ -268,6 +268,20 @@ export async function hasCapability(
 export interface CapabilityAxes {
   entitled: ReadonlySet<CapabilityKey>
   disabled: ReadonlySet<CapabilityKey>
+  /**
+   * Of the extra `configKeys` (readCapabilityAxes options), the ones a
+   * company_capability_config row turns off: read in the same config query,
+   * never looked up as grants. Empty when none were asked for.
+   */
+  disabledConfigKeys: ReadonlySet<string>
+}
+
+export interface CapabilityAxesOptions {
+  /**
+   * Config keys that are not capability keys, read on the enablement axis
+   * only: the package switches (lib/modules/packages.ts) share the table.
+   */
+  configKeys?: readonly string[]
 }
 
 /**
@@ -283,10 +297,14 @@ export async function readCapabilityAxes(
   supabase: SupabaseClient,
   companyId: string,
   keys: readonly CapabilityKey[],
+  options: CapabilityAxesOptions = {},
 ): Promise<CapabilityAxes> {
   if (!isUuid(companyId)) throw new Error('readCapabilityAxes: companyId is not a uuid')
   const unique = [...new Set(keys)]
-  if (unique.length === 0) return { entitled: new Set(), disabled: new Set() }
+  const configOnly = [...new Set(options.configKeys ?? [])].filter((key) => !(unique as string[]).includes(key))
+  if (unique.length === 0 && configOnly.length === 0) {
+    return { entitled: new Set(), disabled: new Set(), disabledConfigKeys: new Set() }
+  }
   const queried = unique.filter((key) => !isBypassedFor(key))
 
   const [grants, configs] = await Promise.all([
@@ -298,7 +316,7 @@ export async function readCapabilityAxes(
       .select('capability_key')
       .eq('company_id', companyId)
       .eq('enabled', false)
-      .in('capability_key', unique as string[]),
+      .in('capability_key', [...unique, ...configOnly]),
   ])
   if (grants.error) {
     const message = (grants.error as { message?: string }).message ?? String(grants.error)
@@ -311,10 +329,13 @@ export async function readCapabilityAxes(
   for (const row of grants.data ?? []) {
     if (grantIsActive(row.expires_at, now)) entitled.add(row.capability_key as CapabilityKey)
   }
+  const configOnlySet = new Set(configOnly)
+  const disabledKeys = ((configs.data ?? []) as Array<{ capability_key: string }>).map((row) => row.capability_key)
   const disabled = new Set<CapabilityKey>(
-    ((configs.data ?? []) as Array<{ capability_key: string }>).map((row) => row.capability_key as CapabilityKey),
+    disabledKeys.filter((key) => !configOnlySet.has(key)).map((key) => key as CapabilityKey),
   )
-  return { entitled, disabled }
+  const disabledConfigKeys = new Set(disabledKeys.filter((key) => configOnlySet.has(key)))
+  return { entitled, disabled, disabledConfigKeys }
 }
 
 /** Bilingual paywall copy, shared by every transport (HTTP route, MCP tool, commit executor). */
@@ -459,6 +480,19 @@ export interface CompanyEntitlements {
   multiUser: MultiUserAccess
   /** Null unless the company is covered by something other than the trial. */
   coverage: EntitlementCoverage | null
+  /**
+   * The paid capabilities the company is entitled to before the enablement
+   * axis applies: `capabilities` plus the ones company_capability_config
+   * turns off. The capabilities resolver (lib/modules/capabilities.ts) needs
+   * the two apart to say why a module is unavailable.
+   */
+  entitledCapabilities: CapabilityKey[]
+  /**
+   * Every company_capability_config key with enabled = false, as read:
+   * capability keys and package switches (lib/modules/packages.ts) alike.
+   * Empty when the paywall is bypassed, which reads no config.
+   */
+  disabledConfigKeys: string[]
 }
 
 /** company_subscriptions.status values that count as a live subscription. */
@@ -559,6 +593,8 @@ export async function getCompanyEntitlements(
       trialExpiredAt: null,
       multiUser: { state: 'entitled', graceEndsAt: null },
       coverage: null,
+      entitledCapabilities: [...PAID_CAPABILITIES],
+      disabledConfigKeys: [],
     }
   }
   // Fail-closed: never interpolate a non-UUID.
@@ -570,6 +606,8 @@ export async function getCompanyEntitlements(
       trialExpiredAt: null,
       multiUser: { state: 'frozen', graceEndsAt: null },
       coverage: null,
+      entitledCapabilities: [],
+      disabledConfigKeys: [],
     }
   }
   // Self-hosted: every local capability is held outright; only the connector
@@ -664,6 +702,9 @@ export async function getCompanyEntitlements(
     }
   }
 
+  const disabledConfigKeys = (configs ?? []).map((c) => (c as { capability_key: string }).capability_key)
+  const entitledCapabilities = PAID_CAPABILITIES.filter((k) => entitled.has(k))
+
   if (selfHosted) {
     // No trial on a self-host: 'paid' while a connector grant is active,
     // 'none' otherwise (never the hosted trial copy). Explicit disables still
@@ -679,6 +720,8 @@ export async function getCompanyEntitlements(
       // multi_user is a local capability: a self-host is never seat-gated.
       multiUser: { state: 'entitled', graceEndsAt: null },
       coverage: null,
+      entitledCapabilities,
+      disabledConfigKeys,
     }
   }
   // Paying/comped companies are not "on trial" even if the seeded trial rows
@@ -721,7 +764,16 @@ export async function getCompanyEntitlements(
   }
 
   if (entitled.size === 0) {
-    return { capabilities: [], trialEndsAt: null, entitlementState, trialExpiredAt, multiUser, coverage }
+    return {
+      capabilities: [],
+      trialEndsAt: null,
+      entitlementState,
+      trialExpiredAt,
+      multiUser,
+      coverage,
+      entitledCapabilities,
+      disabledConfigKeys,
+    }
   }
 
   // Subtract any explicitly-disabled (enablement axis). multi_user is exempt
@@ -739,5 +791,7 @@ export async function getCompanyEntitlements(
     trialExpiredAt,
     multiUser,
     coverage,
+    entitledCapabilities,
+    disabledConfigKeys,
   }
 }

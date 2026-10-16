@@ -1,11 +1,13 @@
 # Modules
 
 A module is a named building block of Accounted that the API, AI agents and,
-later, a company's own module choice can address as a unit. `manifest.ts`
-declares every module; nothing else does. Today the manifest describes the
-code and changes no behaviour: no route, gate or query reads it to decide
-what a user may do. The capabilities report (below) reads it to describe
-each module's state for one company, and gates nothing either.
+later, a company's own package choice can address as a unit. `manifest.ts`
+declares every module; nothing else does. Modules group into packages
+(`packages.ts`), the level a person recognises and switches. The resolved
+capabilities object (below) says, per package and per module, what one
+company can use; the menu, MCP's tools/list and the agent briefing read it.
+Today every company resolves to everything it could already use, so nothing
+any reader shows has changed.
 
 ## What resolves from the manifest
 
@@ -26,20 +28,64 @@ each module's state for one company, and gates nothing either.
 `resolve.ts` holds the lookups: `moduleForOperationId`, `moduleForV1Path`,
 `moduleForLibPath`, `getModule`, `modulesInDependencyOrder`.
 
-## Capabilities: which modules one company can use
+## Packages
 
-`capabilities.ts` reports, per company, every module's `status` (`active`,
-`needs_plan`, `off`, `unsupported`), the `reasons` behind it in precedence
-order (`unsupported_country`, `unsupported_legal_form`, `needs_plan`,
-`disabled_by_company`, `dependency_unavailable`) and a `resolution`
-sentence. It reads only gates that already exist: the plan grants and
-`company_capability_config` (through `readCapabilityAxes`), the payroll
-offer rule, and `companies.jurisdiction`. Kernels are always active; only a
-module that is absent for the company (country unsupported, turned off)
-makes its dependents unavailable. It is served by
-`GET /api/v1/companies/{companyId}/capabilities` and, for the modules that
-are not active, by the MCP agent briefing. The per-company module switch
-comes later; when it does, it becomes one more reason here.
+`packages.ts` groups the modules into the packages of the Profiles and
+Suggestions design (2026-10-16): Bokföring (always on: ledger, transactions,
+vat, year-end, skatteverket, deadlines, import, parties), Bank (bank-feed),
+Kundfakturor (invoicing, collections), Leverantörsfakturor och betalningar
+(supplier-invoices, payments), Kvitton och underlag (inbox), Utlägg
+(expenses), Lön (payroll), Inventarier (assets) and Kassa och webbshop (pos,
+webshop). `platform`, `agent` and `byra` belong to no package. Every module
+is in exactly one package or in `NON_PACKAGE_MODULES`
+(`__tests__/packages.test.ts`). Ids are internal until the API publishes
+packages. A company's choice for a package is the
+`company_capability_config` key `package:<id>` (absent: the profile decides;
+`enabled = false`: off).
+
+## Capabilities: what one company can use
+
+`capabilities.ts` resolves one object per company:
+
+    capabilities = country pack ∩ plan entitlements ∩ (profile defaults ⊕ company choices) ⊕ open obligations
+
+- `packages[]`: each package's `availability` (`on`, `off`, `winding_down`,
+  `not_in_plan`, `not_in_country`) and `reasons` (`unsupported_country`,
+  `turned_off_by_company`, `off_in_profile`, `open_obligations`,
+  `needs_plan`). A package is in the country when any module in it is (a
+  kernel always is), outside the plan only when every module in it needs a
+  capability the plan lacks, and Bokföring is never off.
+- `modules[]`: each module's `package`, its `availability` (the package's,
+  narrowed by the module's own gates; a switch outranks the plan), and the
+  published report: `status` (`active`, `needs_plan`, `off`, `unsupported`),
+  `reasons` (`unsupported_country`, `unsupported_legal_form`, `needs_plan`,
+  `disabled_by_company`, `dependency_unavailable`) and `resolution`.
+- `profile`: `standard` ("Standard (allt på)", every package on), implicit
+  for every company until profiles are stored.
+
+Inputs that exist today: `companies.jurisdiction`, the plan grants and
+`company_capability_config` (through `readCapabilityAxes`, or
+`getCompanyEntitlements` where the dashboard already reads it; capability
+keys and package switches in one config query), and the payroll offer rule.
+Kernels are always on. A capability key turned off, or a country the module
+does not cover, makes dependents unavailable; a package switch and a plan or
+legal-form gate do not. `winding_down` is reserved: nothing can be switched
+off yet, so obligations are not loaded (`openObligations` is the input).
+
+Readers:
+
+- `capabilitySurface()` is what a menu or tool list reads: `hidden` (modules
+  whose package is off or not in the country, or that are not in the country
+  themselves) and `notForLegalForm`. The menu (`lib/navigation/nav-gates.ts`)
+  hides both; MCP's tools/list hides `hidden` on a single-company connection
+  (`extensions/general/mcp-server/tool-modules.ts` places every tool in a
+  module). A package outside the plan stays visible: the paywall answers at
+  the door, as before.
+- `capabilityDigest()` is the briefing's list of modules that are not
+  active; `publishedCapabilities()` is what
+  `GET /api/v1/companies/{companyId}/capabilities` serves, unchanged.
+- Every main navigation item declares its module
+  (`components/dashboard/__tests__/nav-modules.test.ts`).
 
 ## The rules
 

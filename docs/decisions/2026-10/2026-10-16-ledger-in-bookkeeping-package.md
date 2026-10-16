@@ -1,0 +1,1 @@
+[2026-10-16] The ledger kernel sits in the always-on Bokföring package; platform, agent and byra are in no package: the design table lists ledger under Bokföring while its prose calls kernels non-packages, and an always-on package changes nothing while keeping verifikat and konton under Bokföring.

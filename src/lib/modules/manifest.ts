@@ -6,9 +6,11 @@
  * that needs to know "which module is this?" resolves from this list
  * (./resolve.ts): the operation registry (by operation id prefix), the v1
  * REST surface and its OpenAPI tags (by path), and the boundary ratchet
- * (by src/lib folder), and the per-company capabilities report
- * (./capabilities.ts). Nothing here changes behaviour: no route, gate or
- * query reads it to decide what a user may do.
+ * (by src/lib folder), and the per-company capabilities (./capabilities.ts),
+ * which group the modules into packages (./packages.ts). The menu and MCP's
+ * tools/list read those capabilities to hide a package a company does not
+ * have; none can be switched off yet, so nothing they show has changed. No
+ * route or tool call is refused by it.
  *
  * Two kinds:
  *   - kernel: always present. The ledger and the platform it runs on. A

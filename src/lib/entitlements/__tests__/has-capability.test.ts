@@ -465,6 +465,26 @@ describe('readCapabilityAxes', () => {
     ).rejects.toThrow(/capability config: down/)
   })
 
+  it('reads extra config-only keys in the same config query, never as grants, and reports them apart', async () => {
+    const calls: RecordedCall[] = []
+    const supabase = makeRecordingSupabase(
+      {
+        capability_grants: { data: [{ capability_key: 'ai', expires_at: null, source: 'stripe', team_id: null }] },
+        company_capability_config: { data: [{ capability_key: 'package:payroll' }, { capability_key: 'bank_sync' }] },
+      },
+      calls,
+    )
+    const axes = await readCapabilityAxes(supabase, COMPANY, KEYS, { configKeys: ['package:payroll', 'package:bank'] })
+    expect(grantRpcParams(calls)).toEqual([{ p_company_id: COMPANY, p_capability_keys: KEYS, p_connector_only: false }])
+    expect(calls).toContainEqual({
+      table: 'company_capability_config',
+      method: 'in',
+      args: ['capability_key', [...KEYS, 'package:payroll', 'package:bank']],
+    })
+    expect([...axes.disabled]).toEqual(['bank_sync'])
+    expect([...axes.disabledConfigKeys]).toEqual(['package:payroll'])
+  })
+
   it('refuses a company id that is not a uuid and answers an empty key list without a query', async () => {
     await expect(readCapabilityAxes(makeSupabase({}), 'not-a-uuid', KEYS)).rejects.toThrow(/uuid/)
     const calls: RecordedCall[] = []
@@ -476,6 +496,42 @@ describe('readCapabilityAxes', () => {
 
 describe('getCompanyEntitlements', () => {
   const companyId = '11111111-1111-4111-8111-111111111111'
+
+  it('keeps entitlement before enablement and every turned-off config key, for the capabilities resolver', async () => {
+    const supabase = makeSupabase({
+      capability_grants: {
+        data: [
+          { capability_key: CAPABILITY.ai, expires_at: null, source: 'stripe', team_id: null },
+          { capability_key: CAPABILITY.bank_sync, expires_at: null, source: 'stripe', team_id: null },
+        ],
+      },
+      company_capability_config: {
+        data: [
+          { capability_key: 'bank_sync', enabled: false },
+          { capability_key: 'package:assets', enabled: false },
+        ],
+      },
+      company_subscriptions: { data: { status: 'active' } },
+    })
+    const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.capabilities).toEqual([CAPABILITY.ai])
+    expect(result.entitledCapabilities).toEqual([CAPABILITY.ai, CAPABILITY.bank_sync])
+    expect(result.disabledConfigKeys).toEqual(['bank_sync', 'package:assets'])
+  })
+
+  it('reports no turned-off config keys when nothing is entitled, and every paid key under the paywall bypass', async () => {
+    const none = await getCompanyEntitlements(
+      makeSupabase({ capability_grants: { data: [] }, company_capability_config: { data: [{ capability_key: 'package:payroll', enabled: false }] } }),
+      companyId,
+    )
+    expect(none.entitledCapabilities).toEqual([])
+    expect(none.disabledConfigKeys).toEqual(['package:payroll'])
+
+    vi.stubEnv('DISABLE_PAYWALL', 'true')
+    const bypassed = await getCompanyEntitlements(makeSupabase({}), companyId)
+    expect(bypassed.entitledCapabilities).toEqual([...PAID_CAPABILITIES])
+    expect(bypassed.disabledConfigKeys).toEqual([])
+  })
 
   it('reports the trial expiry while the trial is the only source of access', async () => {
     const expiry = iso(10 * 24 * 3600 * 1000)

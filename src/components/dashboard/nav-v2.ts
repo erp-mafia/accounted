@@ -1,6 +1,7 @@
 import type { LucideIcon } from 'lucide-react'
 import { Archive, ArrowLeftRight, BarChart3, BookOpen, CheckSquare, FileCheck, HandCoins, Landmark, Percent, ReceiptText, Sparkles, Wallet, Workflow } from 'lucide-react'
 import { EXTENSION_REQUIRED_CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
+import type { ModuleId } from '@/lib/modules/manifest'
 import type { EntityType } from '@/types'
 
 /**
@@ -10,7 +11,16 @@ import type { EntityType } from '@/types'
  */
 export interface NavGateFlags {
   href: string
-  employerOnly?: boolean
+  /**
+   * The module (lib/modules/manifest.ts) the surface belongs to. The menu
+   * hides it when the resolved capabilities (lib/modules/capabilities.ts)
+   * say the module's package is switched off or not in the company's
+   * country, or the module is not offered for the legal form (payroll for
+   * an enskild firma that does not pay salaries, #782). Required: a menu
+   * item without a module is a feature no package can switch
+   * (__tests__/nav-modules.test.ts).
+   */
+  module: ModuleId
   requiresDimensions?: boolean
   requiresSalesOrders?: boolean
   // Offerter: company_settings.quotes_enabled (UI-visibility gate only; the
@@ -52,78 +62,85 @@ export interface NavV2Item extends NavGateFlags {
 export const NAV_V2_TOP: NavV2Item[] = [
   {
     href: '/',
+    module: 'platform',
     labelKey: 'v2_todo',
     icon: CheckSquare,
-    sub: [{ href: '/pending', labelKey: 'v2_proposals' }],
+    sub: [{ href: '/pending', module: 'platform', labelKey: 'v2_proposals' }],
   },
   {
     href: '/chat',
+    module: 'agent',
     labelKey: 'assistant',
     icon: Sparkles,
-    sub: [{ href: '/agent-knowledge', labelKey: 'agent_knowledge' }],
+    sub: [{ href: '/agent-knowledge', module: 'agent', labelKey: 'agent_knowledge' }],
   },
-  { href: '/skills', labelKey: 'skills', icon: Workflow, newBadge: true, requiresAgents: true },
+  { href: '/skills', module: 'agent', labelKey: 'skills', icon: Workflow, newBadge: true, requiresAgents: true },
 ]
 
 export const NAV_V2_COMPANY: NavV2Item[] = [
   {
     href: '/accounts',
+    module: 'ledger',
     labelKey: 'v2_accounts',
     icon: Landmark,
     // Each account opens from the overview's rows; sub-items per account
     // kind pointed at a settings dialog and at the skattekonto page.
     sub: [
-      { href: '/accounts', labelKey: 'v2_accounts_overview' },
-      { href: '/reconciliation', labelKey: 'reconciliation' },
+      { href: '/accounts', module: 'ledger', labelKey: 'v2_accounts_overview' },
+      { href: '/reconciliation', module: 'transactions', labelKey: 'reconciliation' },
     ],
   },
   {
     href: '/transactions',
+    module: 'transactions',
     labelKey: 'transactions',
     icon: ArrowLeftRight,
     // Regler stays off the nav until there is a rules engine worth a page
     // (founder call 2026-09-07); the route exists for the ones who need it.
     sub: [
-      { href: '/parties', labelKey: 'v2_parties' },
+      { href: '/parties', module: 'parties', labelKey: 'v2_parties' },
     ],
   },
   {
     href: '/invoices',
+    module: 'invoicing',
     labelKey: 'v2_invoicing',
     icon: ReceiptText,
     sub: [
       // A quote is not an invoice (founder direction 2026-09-12): its own row
       // above Kundfakturor, shown while quotes are switched on in settings.
-      { href: '/quotes', labelKey: 'quotes', requiresQuotes: true },
+      { href: '/quotes', module: 'invoicing', labelKey: 'quotes', requiresQuotes: true },
       // Återkommande opens from Ny faktura; it is a way to make invoices, not a place.
-      { href: '/invoices', labelKey: 'invoices' },
-      { href: '/sales-orders', labelKey: 'sales_orders', requiresSalesOrders: true },
-      { href: '/orders', labelKey: 'webshop_orders', requiresWebshop: true, betaBadge: true },
+      { href: '/invoices', module: 'invoicing', labelKey: 'invoices' },
+      { href: '/sales-orders', module: 'invoicing', labelKey: 'sales_orders', requiresSalesOrders: true },
+      { href: '/orders', module: 'webshop', labelKey: 'webshop_orders', requiresWebshop: true, betaBadge: true },
       // Kassarapporter: the POS days (kassasystem via Accounted Connect), shown once a venue is connected.
-      { href: '/kassa', labelKey: 'pos_sales', requiresPosSales: true, betaBadge: true },
-      { href: '/customers', labelKey: 'customers' },
-      { href: '/articles', labelKey: 'articles' },
+      { href: '/kassa', module: 'pos', labelKey: 'pos_sales', requiresPosSales: true, betaBadge: true },
+      { href: '/customers', module: 'invoicing', labelKey: 'customers' },
+      { href: '/articles', module: 'invoicing', labelKey: 'articles' },
     ],
   },
   {
     // Inköp lands on the invoice list: the flow-strip landing that sat here
     // said less than the list itself (founder call 2026-09-09).
     href: '/supplier-invoices',
+    module: 'supplier-invoices',
     labelKey: 'v2_purchases',
     icon: Wallet,
     sub: [
-      { href: '/supplier-invoices', labelKey: 'supplier_invoices' },
+      { href: '/supplier-invoices', module: 'supplier-invoices', labelKey: 'supplier_invoices' },
       {
         href: '/e/general/invoice-inbox',
+        module: 'inbox',
         labelKey: 'invoice_inbox',
         requiredCapability: EXTENSION_REQUIRED_CAPABILITY['general/invoice-inbox'],
       },
-      { href: '/expenses', labelKey: 'expenses', requiresExpenses: true },
-      { href: '/mileage', labelKey: 'mileage', requiresMileage: true },
+      { href: '/expenses', module: 'expenses', labelKey: 'expenses', requiresExpenses: true },
+      { href: '/mileage', module: 'expenses', labelKey: 'mileage', requiresMileage: true },
       // Betalningar took over Betalfiler (connections plan, milestone 1): bank
       // payments by where they stand, and the payment files behind a link.
-      { href: '/payments', labelKey: 'v2_payments' },
-      { href: '/suppliers', labelKey: 'suppliers' },
+      { href: '/payments', module: 'payments', labelKey: 'v2_payments' },
+      { href: '/suppliers', module: 'supplier-invoices', labelKey: 'suppliers' },
     ],
   },
   {
@@ -131,65 +148,70 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     // the queue for what must become a verifikat, Arkiv the place that grows
     // (plan of record, decision 4).
     href: '/arkiv',
+    module: 'inbox',
     labelKey: 'arkiv',
     icon: Archive,
     requiresArkiv: true,
     sub: [
-      { href: '/arkiv', labelKey: 'arkiv_all' },
-      { href: '/arkiv/historik', labelKey: 'arkiv_history' },
+      { href: '/arkiv', module: 'inbox', labelKey: 'arkiv_all' },
+      { href: '/arkiv/historik', module: 'inbox', labelKey: 'arkiv_history' },
     ],
   },
   {
     href: '/bookkeeping',
+    module: 'ledger',
     labelKey: 'bookkeeping',
     icon: BookOpen,
     sub: [
-      { href: '/bookkeeping', labelKey: 'v2_vouchers' },
-      { href: '/chart-of-accounts', labelKey: 'chart_of_accounts' },
-      { href: '/bookkeeping/periodiseringar', labelKey: 'periodiseringar' },
-      { href: '/assets', labelKey: 'assets' },
-      { href: '/dimensions', labelKey: 'dimensions', requiresDimensions: true },
-      { href: '/import', labelKey: 'import' },
+      { href: '/bookkeeping', module: 'ledger', labelKey: 'v2_vouchers' },
+      { href: '/chart-of-accounts', module: 'ledger', labelKey: 'chart_of_accounts' },
+      { href: '/bookkeeping/periodiseringar', module: 'ledger', labelKey: 'periodiseringar' },
+      { href: '/assets', module: 'assets', labelKey: 'assets' },
+      { href: '/dimensions', module: 'ledger', labelKey: 'dimensions', requiresDimensions: true },
+      { href: '/import', module: 'import', labelKey: 'import' },
     ],
   },
   {
     href: '/salary',
+    module: 'payroll',
     labelKey: 'salary',
     icon: HandCoins,
-    employerOnly: true,
     sub: [
-      { href: '/salary', labelKey: 'v2_salary_runs' },
-      { href: '/salary/employees', labelKey: 'employees' },
+      { href: '/salary', module: 'payroll', labelKey: 'v2_salary_runs' },
+      { href: '/salary/employees', module: 'payroll', labelKey: 'employees' },
     ],
   },
   {
     href: '/reports/vat-declaration',
+    module: 'vat',
     labelKey: 'v2_tax',
     icon: Percent,
     sub: [
-      { href: '/reports/vat-declaration', labelKey: 'vat_declaration' },
-      { href: '/deadlines', labelKey: 'deadlines' },
+      { href: '/reports/vat-declaration', module: 'vat', labelKey: 'vat_declaration' },
+      { href: '/deadlines', module: 'deadlines', labelKey: 'deadlines' },
     ],
   },
   {
     href: '/reports',
+    module: 'ledger',
     labelKey: 'reports',
     icon: BarChart3,
     sub: [
-      { href: '/reports', labelKey: 'reports' },
-      { href: '/kpi', labelKey: 'kpi' },
+      { href: '/reports', module: 'ledger', labelKey: 'reports' },
+      { href: '/kpi', module: 'ledger', labelKey: 'kpi' },
     ],
   },
   {
     href: '/bookkeeping/year-end',
+    module: 'year-end',
     labelKey: 'v2_closing',
     icon: FileCheck,
     sub: [
-      { href: '/bookkeeping/year-end', labelKey: 'year_end' },
-      { href: '/bookkeeping/year-end/arsredovisning', labelKey: 'annual_report', entityOnly: ['aktiebolag', 'ekonomisk_forening'] },
-      { href: '/reports/ink2-declaration', labelKey: 'income_declaration', entityOnly: ['aktiebolag', 'ekonomisk_forening'] },
-      { href: '/reports/ne-declaration', labelKey: 'income_declaration', entityOnly: 'enskild_firma' },
-      { href: '/reports/ink3-declaration', labelKey: 'income_declaration', entityOnly: ['ideell_forening'] },
+      { href: '/bookkeeping/year-end', module: 'year-end', labelKey: 'year_end' },
+      { href: '/bookkeeping/year-end/arsredovisning', module: 'year-end', labelKey: 'annual_report', entityOnly: ['aktiebolag', 'ekonomisk_forening'] },
+      { href: '/reports/ink2-declaration', module: 'ledger', labelKey: 'income_declaration', entityOnly: ['aktiebolag', 'ekonomisk_forening'] },
+      { href: '/reports/ne-declaration', module: 'ledger', labelKey: 'income_declaration', entityOnly: 'enskild_firma' },
+      { href: '/reports/ink3-declaration', module: 'ledger', labelKey: 'income_declaration', entityOnly: ['ideell_forening'] },
     ],
   },
 ]

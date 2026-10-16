@@ -84,7 +84,7 @@ describe('renderUiGrounding: the menu', () => {
     const out = renderUiGrounding({
       ctx: gateContext({
         entityType: 'enskild_firma',
-        isEmployer: false,
+        surface: { hidden: [], notForLegalForm: ['payroll'] },
         arkivEnabled: false,
         agentsEnabled: false,
         capabilities: [],
@@ -167,7 +167,8 @@ describe('loadNavGateContext', () => {
     )
     expect(ctx).toMatchObject({
       entityType: 'enskild_firma',
-      isEmployer: true,
+      // pays_salaries: true, so payroll is offered.
+      surface: { hidden: [], notForLegalForm: [] },
       dimensionsEnabled: true,
       salesOrdersEnabled: false,
       quotesEnabled: true,
@@ -186,7 +187,7 @@ describe('loadNavGateContext', () => {
       'company-1',
     )
     expect(fromCompanies?.entityType).toBe('aktiebolag')
-    expect(fromCompanies?.isEmployer).toBe(true)
+    expect(fromCompanies?.surface).toEqual({ hidden: [], notForLegalForm: [] })
 
     const unknown = await loadNavGateContext(supabaseReturning({ company_settings: null, companies: null }), 'company-1')
     expect(unknown).toBeNull()

@@ -9,46 +9,14 @@ import { Button } from '@/components/ui/button'
 import {
   LayoutDashboard,
   Home,
-  Receipt,
-  ReceiptText,
-  FileText,
-  Users,
   ArrowLeftRight,
-  BookOpen,
-  ListTree,
-  BarChart3,
   Settings,
   LogOut,
-  Upload,
-  Inbox,
   Menu,
   X,
   HelpCircle,
-  Wallet,
-  TrendingUp,
-  ClipboardCheck,
-  HandCoins,
-  Package,
-  Tag,
-  Tags,
   Sparkles,
-  Percent,
-  Landmark,
-  Scale,
-  CalendarClock,
-  CalendarRange,
-  FileCheck,
-  FileSpreadsheet,
-  ScrollText,
-  Briefcase,
   ArrowLeft,
-  Workflow,
-  FolderArchive,
-  ShoppingCart,
-  Store,
-  Car,
-  ClipboardList,
-  Truck,
 } from 'lucide-react'
 import { getBranding } from '@/lib/branding/service'
 import { BrandHomeLink } from '@/components/branding/BrandHomeLink'
@@ -65,13 +33,13 @@ import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
 import { useWorklistBadges } from '@/lib/hooks/use-worklist-badges'
-import { EXTENSION_REQUIRED_CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
 import type { EntityType } from '@/types'
-import { offersPayroll } from '@/lib/company/offers-payroll'
+import type { CapabilitySurface } from '@/lib/modules/capabilities'
 import { gateNavTree, passesNavGates, type NavGateContext } from '@/lib/navigation/nav-gates'
 import { SidebarV2 } from './SidebarV2'
 import { scrubAuthCookies } from '@/lib/auth/browser-session-cookies'
 import { NAV_V2_COMPANY, NAV_V2_TOP, claimedRowActive, type NavGateFlags, type NavV2Item } from './nav-v2'
+import { cockpitNavItems, navItems, type GroupKey, type NavItem, type NavLabelKey } from './nav-phone'
 import { useNavRowClaim } from './nav-row-claim'
 
 void _ENABLED_EXTENSION_IDS
@@ -85,13 +53,15 @@ interface ExtensionNavItem {
 interface DashboardNavProps {
   companyName: string
   entityType: EntityType
-  // Whether the company has registered as an employer (company_settings.
-  // pays_salaries). Drives visibility of the payroll (Personal) section for
-  // non-aktiebolag, notably an enskild firma that hires staff. See #782.
-  paysSalaries?: boolean
+  // The company's resolved capabilities as the menu reads them
+  // (capabilitySurface in lib/modules/capabilities.ts, resolved by the
+  // layout): a module whose package is off or not in the country hides, and
+  // so does a module the legal form does not offer, such as payroll for an
+  // enskild firma that has not flagged pays_salaries (#782).
+  capabilitySurface: CapabilitySurface
   // Whether the dimensions register (company_settings.dimensions_enabled) is
   // switched on. Drives visibility of the Kostnadsställen & projekt row:
-  // same mechanism as paysSalaries: fetched by the dashboard layout.
+  // fetched by the dashboard layout.
   dimensionsEnabled?: boolean
   // Whether kundorder (company_settings.sales_orders_enabled) is switched on.
   // Drives visibility of the Kundorder row: same mechanism as
@@ -103,7 +73,7 @@ interface DashboardNavProps {
   quotesEnabled?: boolean
   // Whether the company has a webshop hooked up (active WooCommerce/Shopify
   // connection, or existing webshop_orders rows). Drives visibility of the
-  // Order row: same mechanism as paysSalaries, fetched by the layout.
+  // Order row: same mechanism as dimensionsEnabled, fetched by the layout.
   hasWebshop?: boolean
   // Whether the Körjournal row shows: the company_settings.mileage_enabled
   // toggle OR existing mileage_trips rows (trips created via API/MCP must
@@ -128,197 +98,6 @@ interface DashboardNavProps {
   userEmail?: string | null
 }
 
-type NavLabelKey =
-  | 'dashboard'
-  | 'home'
-  | 'assistant'
-  | 'agent_knowledge'
-  | 'kpi'
-  | 'invoice_inbox'
-  | 'arkiv'
-  | 'arkiv_all'
-  | 'arkiv_history'
-  | 'invoices'
-  | 'quotes'
-  | 'sales_orders'
-  | 'webshop_orders'
-  | 'pos_sales'
-  | 'customers'
-  | 'articles'
-  | 'supplier_invoices'
-  | 'suppliers'
-  | 'review'
-  | 'transactions'
-  | 'reconciliation'
-  | 'bookkeeping'
-  | 'chart_of_accounts'
-  | 'dimensions'
-  | 'assets'
-  | 'reports'
-  | 'import'
-  | 'salary'
-  | 'expenses'
-  | 'mileage'
-  | 'employees'
-  | 'vat_declaration'
-  | 'skattekonto'
-  | 'deadlines'
-  | 'periodiseringar'
-  | 'year_end'
-  | 'bokslutsbilagor'
-  | 'annual_report'
-  | 'income_declaration'
-  | 'help'
-  | 'settings'
-  | 'account_settings'
-  | 'clients'
-  | 'automations'
-  | 'back_to_clients'
-
-// Two navigations over the same routes. Desktop: SidebarV2, the section
-// tree in nav-v2.ts (sub-items under the active section, user block at the
-// bottom). Phone: the bottom bar plus the menu sheet, built from `navItems`:
-//   top section          : flat, no header: Hem, Assistent.
-//   four groups          : static headers (Arbeta, Analys, Data,
-//                          Skatt & bokslut).
-// Help + Settings are NOT in `navItems`; they live in the user menu and in
-// the sheet's Mitt konto rows.
-// Pending (Granskning) stays visible at all times: the badge carries the count.
-type GroupKey = 'top' | 'arbeta' | 'analys' | 'data' | 'skatt'
-
-interface NavItem {
-  href: string
-  labelKey: NavLabelKey
-  icon: typeof LayoutDashboard
-  group: GroupKey
-  // Payroll surfaces: visible only to employers: every aktiebolag (unchanged
-  // behaviour) plus any company that has registered as an employer via
-  // company_settings.pays_salaries (e.g. an enskild firma with staff). #782
-  employerOnly?: boolean
-  // Dimension surfaces: visible only when the company has opted in via
-  // company_settings.dimensions_enabled (UI-visibility gate only; the pages
-  // and APIs work regardless, dimensions plan §2).
-  requiresDimensions?: boolean
-  // Kundorder surfaces: visible only when the company has opted in via
-  // company_settings.sales_orders_enabled (UI-visibility gate only; the
-  // pages and APIs work regardless).
-  requiresSalesOrders?: boolean
-  // Offerter: visible while company_settings.quotes_enabled is on (UI
-  // visibility only; /quotes and the APIs work regardless).
-  requiresQuotes?: boolean
-  // Webshop surfaces: visible only when the company has an active
-  // WooCommerce/Shopify connection or already-imported order rows.
-  // UI-visibility gate only; the page and APIs work regardless.
-  requiresWebshop?: boolean
-  // Kassarapporter: visible only when the company has a POS connection, live
-  // or ended (the days stay reachable). UI-visibility gate only.
-  requiresPosSales?: boolean
-  // Körjournal surfaces: visible only when the company has opted in via the
-  // bookkeeping settings toggle (company_settings.mileage_enabled) or already
-  // has trips. UI-visibility gate only; the page and APIs work regardless.
-  requiresMileage?: boolean
-  // Utlägg row: visible only when the company already has expense claims
-  // (same "data stays reachable" gate as Körjournal). UI-visibility only.
-  requiresExpenses?: boolean
-  // Paywall surfaces: hidden unless the active company holds this paid
-  // capability. Cosmetic only, the page and API gates are the real
-  // enforcement; this just keeps the sidebar honest for non-payers.
-  requiredCapability?: CapabilityKey
-  // Statutory surfaces that only exist for one company form (INK2 vs
-  // NE-bilaga, årsredovisning): hidden for the other entity type.
-  entityOnly?: EntityType | readonly EntityType[]
-  // Byrå cockpit surfaces (WL-14): visible only to byrå team members
-  // (teams.kind = 'byra'). The /clients page + API enforce server-side.
-  byraOnly?: boolean
-  hidden?: boolean
-  comingSoon?: boolean
-  devBadge?: boolean
-  betaBadge?: boolean
-}
-
-// The phone menu's destinations in concept ordering; the desktop sidebar
-// applies the same gates to nav-v2.ts.
-const navItems: NavItem[] = [
-  // Top section: flat list, always visible, no header. (Flöden joins here
-  // when the flow engine exists.)
-  { href: '/', labelKey: 'home', icon: Home, group: 'top' },
-  // Byrå cockpit (WL-14): the client list, byrå team members only.
-  { href: '/clients', labelKey: 'clients', icon: Briefcase, group: 'top', byraOnly: true },
-  { href: '/chat', labelKey: 'assistant', icon: Sparkles, group: 'top' },
-  // Arbeta: everything the user produces, bookkeeping funnel first
-  // (Bokföring · Underlag · Transaktioner · Granskning), then the
-  // transactional flows. employerOnly: aktiebolag or pays_salaries. #782
-  { href: '/bookkeeping', labelKey: 'bookkeeping', icon: BookOpen, group: 'arbeta' },
-  { href: '/e/general/invoice-inbox', labelKey: 'invoice_inbox', icon: Inbox, group: 'arbeta', requiredCapability: EXTENSION_REQUIRED_CAPABILITY['general/invoice-inbox'] },
-  { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight, group: 'arbeta' },
-  { href: '/reconciliation', labelKey: 'reconciliation', icon: Scale, group: 'arbeta' },
-  { href: '/pending', labelKey: 'review', icon: ClipboardCheck, group: 'arbeta' },
-  // Kundorder: opt-in via the bookkeeping settings toggle (UI gate only).
-  { href: '/sales-orders', labelKey: 'sales_orders', icon: ClipboardList, group: 'arbeta', requiresSalesOrders: true },
-  // Offerter: a quote is not an invoice, so its own row above Kundfakturor.
-  { href: '/quotes', labelKey: 'quotes', icon: FileText, group: 'arbeta', requiresQuotes: true },
-  { href: '/invoices', labelKey: 'invoices', icon: ReceiptText, group: 'arbeta' },
-  // Webshop orders: visible only for companies that actually have a webshop
-  // hooked up (active WooCommerce/Shopify connection or existing order rows).
-  // Deliberately NOT capability-gated: a company whose entitlement lapsed
-  // must still reach its already-imported orders (accounting underlag).
-  { href: '/orders', labelKey: 'webshop_orders', icon: ShoppingCart, group: 'arbeta', requiresWebshop: true, betaBadge: true },
-  // Kassarapporter: the POS days, visible once a venue is connected.
-  { href: '/kassa', labelKey: 'pos_sales', icon: Store, group: 'arbeta', requiresPosSales: true, betaBadge: true },
-  { href: '/supplier-invoices', labelKey: 'supplier_invoices', icon: Wallet, group: 'arbeta' },
-  // Utlägg: out-of-pocket purchases and their reimbursement batches. Hidden
-  // until a claim exists: a receipt paid privately is registered from the
-  // Underlag pane, and the person to pay out surfaces in Att göra. The
-  // /expenses route previously redirected to supplier invoices; the nav key
-  // has existed in the nav namespace since then.
-  { href: '/expenses', labelKey: 'expenses', icon: Receipt, group: 'arbeta', requiresExpenses: true },
-  { href: '/salary', labelKey: 'salary', icon: HandCoins, group: 'arbeta', employerOnly: true },
-  // Körjournal: hidden by default (most companies have no car); shows when
-  // the settings toggle is on or trips already exist (hybrid gate, same
-  // "data stays reachable" reasoning as the Order row above).
-  { href: '/mileage', labelKey: 'mileage', icon: Car, group: 'arbeta', requiresMileage: true },
-  // Analys: read the numbers.
-  { href: '/kpi', labelKey: 'kpi', icon: TrendingUp, group: 'analys' },
-  { href: '/reports', labelKey: 'reports', icon: BarChart3, group: 'analys' },
-  // Data: the registers (master data) + Importera/exportera as its own
-  // row. Anställda is a register (you edit an employee rarely, you run
-  // payroll monthly), so it lives here while Löner stays in Arbeta.
-  { href: '/customers', labelKey: 'customers', icon: Users, group: 'data' },
-  { href: '/suppliers', labelKey: 'suppliers', icon: Truck, group: 'data' },
-  { href: '/articles', labelKey: 'articles', icon: Tag, group: 'data' },
-  { href: '/salary/employees', labelKey: 'employees', icon: Users, group: 'data', employerOnly: true },
-  { href: '/assets', labelKey: 'assets', icon: Package, group: 'data' },
-  { href: '/chart-of-accounts', labelKey: 'chart_of_accounts', icon: ListTree, group: 'data' },
-  { href: '/dimensions', labelKey: 'dimensions', icon: Tags, group: 'data', requiresDimensions: true },
-  { href: '/import', labelKey: 'import', icon: Upload, group: 'data' },
-  // Skatt & bokslut: everything submitted to the state; the year-end chain
-  // (periodiseringar → årsbokslut → årsredovisning → inkomstdeklaration)
-  // lives in workflow order; the last two are
-  // entity-gated because the surface only exists for one company form.
-  { href: '/reports/vat-declaration', labelKey: 'vat_declaration', icon: Percent, group: 'skatt' },
-  { href: '/skattekonto', labelKey: 'skattekonto', icon: Landmark, group: 'skatt' },
-  { href: '/deadlines', labelKey: 'deadlines', icon: CalendarClock, group: 'skatt' },
-  { href: '/bookkeeping/periodiseringar', labelKey: 'periodiseringar', icon: CalendarRange, group: 'skatt' },
-  { href: '/bookkeeping/year-end', labelKey: 'year_end', icon: FileCheck, group: 'skatt' },
-  { href: '/reports/bokslutsbilagor', labelKey: 'bokslutsbilagor', icon: FolderArchive, group: 'skatt' },
-  { href: '/bookkeeping/year-end/arsredovisning', labelKey: 'annual_report', icon: ScrollText, group: 'skatt', entityOnly: ['aktiebolag', 'ekonomisk_forening'] },
-  { href: '/reports/ink2-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', entityOnly: ['aktiebolag', 'ekonomisk_forening'] },
-  { href: '/reports/ne-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', entityOnly: 'enskild_firma' },
-  { href: '/reports/ink3-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', entityOnly: ['ideell_forening'] },
-]
-
-// Byrå cockpit sidebar (lean mode): while a byrå team member is on a
-// cockpit route (client overview + the /byra pages) the sidebar shows only
-// these four byrå-scope entries instead of the full company nav. Entering a
-// company (performCompanySwitch from the client list) is a hard navigation
-// to a company route, which swaps the full list back in.
-const cockpitNavItems: NavItem[] = [
-  { href: '/byra', labelKey: 'home', icon: Home, group: 'top' },
-  { href: '/clients', labelKey: 'clients', icon: Briefcase, group: 'top' },
-  { href: '/byra/automations', labelKey: 'automations', icon: Workflow, group: 'top' },
-  { href: '/byra/kpi', labelKey: 'kpi', icon: TrendingUp, group: 'top' },
-]
-
 // Cockpit routes are byrå-scope, not company-scope: they decide which
 // sidebar variant renders and stay enabled without an active company.
 const COCKPIT_PATHS = ['/byra', '/clients']
@@ -340,7 +119,7 @@ const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
   skatt: 'group_tax',
 }
 
-export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, hasPosSales = false, arkivEnabled = false, agentsEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
+export default function DashboardNav({ companyName: _companyName, entityType, capabilitySurface, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, hasPosSales = false, arkivEnabled = false, agentsEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
   const pathname = usePathname()
   const navRowClaim = useNavRowClaim(pathname)
   const router = useRouter()
@@ -571,10 +350,11 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   // count when there are pending ops, but the link is always present.
   const gateContext: NavGateContext = {
     entityType,
-    // Payroll shows by default for every juridisk person; a form whose org
-    // number is the owner's personnummer opts in through pays_salaries. The
-    // rule is shared with the MCP capabilities resource. #782
-    isEmployer: offersPayroll(entityType, paysSalaries),
+    // The resolved capabilities: payroll shows for every juridisk person and
+    // for a form whose org number is the owner's personnummer once it opts in
+    // through pays_salaries, by the rule the MCP capabilities report shares.
+    // #782
+    surface: capabilitySurface,
     dimensionsEnabled,
     salesOrdersEnabled,
     quotesEnabled,
@@ -612,7 +392,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   // Nav tree: the same gates applied to sections and their sub-items.
   // In cockpit mode the lean cockpit list is the whole sidebar.
   const v2Top: NavV2Item[] = cockpitMode
-    ? cockpitNavItems.filter(passesGates).map(({ href, labelKey, icon }) => ({ href, labelKey, icon }))
+    ? cockpitNavItems.filter(passesGates).map(({ href, module, labelKey, icon }) => ({ href, module, labelKey, icon }))
     : gateNavTree(NAV_V2_TOP, gateContext)
   const v2Company = cockpitMode ? [] : gateNavTree(NAV_V2_COMPANY, gateContext)
   // Att göra carries the whole queue (unbooked rows + staged operations);

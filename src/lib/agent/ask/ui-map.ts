@@ -1,7 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { NAV_V2_COMPANY, NAV_V2_TOP, type NavV2Item } from '@/components/dashboard/nav-v2'
 import { gateNavTree, type NavGateContext } from '@/lib/navigation/nav-gates'
-import { offersPayroll } from '@/lib/company/offers-payroll'
 import {
   SETTINGS_GROUP_ORDER,
   SETTINGS_SECTION_PARENT,
@@ -11,6 +10,11 @@ import {
 } from '@/lib/navigation/settings-sections'
 import { getDashboardNavFlags } from '@/lib/dashboard/nav-flags'
 import { getCompanyEntitlements } from '@/lib/entitlements/has-capability'
+import {
+  capabilityInputsFromEntitlements,
+  capabilitySurface,
+  resolveCapabilities,
+} from '@/lib/modules/capabilities'
 import { isArkivSectionEnabled } from '@/lib/arkiv/flag'
 import { isAgentsPageEnabled } from '@/lib/agent-skills/flag'
 import { getBranding } from '@/lib/branding/service'
@@ -76,7 +80,7 @@ export async function loadNavGateContext(
       .select('entity_type, pays_salaries, dimensions_enabled, sales_orders_enabled, quotes_enabled, mileage_enabled')
       .eq('company_id', companyId)
       .maybeSingle(),
-    supabase.from('companies').select('entity_type').eq('id', companyId).maybeSingle(),
+    supabase.from('companies').select('entity_type, jurisdiction, ledger_currency').eq('id', companyId).maybeSingle(),
     getDashboardNavFlags(supabase, companyId),
     getCompanyEntitlements(supabase, companyId),
   ])
@@ -88,16 +92,34 @@ export async function loadNavGateContext(
     quotes_enabled?: boolean | null
     mileage_enabled?: boolean | null
   } | null
-  const company = companyRes.data as { entity_type?: string | null } | null
+  const company = companyRes.data as {
+    entity_type?: string | null
+    jurisdiction?: string | null
+    ledger_currency?: string | null
+  } | null
 
   // Same resolution as the layout: company_settings first, companies second.
   const entityType = settings?.entity_type ?? company?.entity_type
   if (!isEntityType(entityType)) return null
   const paysSalaries = settings?.pays_salaries ?? false
 
+  // The resolved capabilities, from the reads above: the same function the
+  // dashboard layout hands the sidebar its surface with.
+  const capabilities = resolveCapabilities(
+    capabilityInputsFromEntitlements(
+      {
+        jurisdiction: company?.jurisdiction,
+        ledgerCurrency: company?.ledger_currency,
+        entityType,
+        paysSalaries,
+      },
+      entitlements,
+    ),
+  )
+
   return {
     entityType,
-    isEmployer: offersPayroll(entityType, paysSalaries),
+    surface: capabilitySurface(capabilities),
     dimensionsEnabled: settings?.dimensions_enabled ?? false,
     salesOrdersEnabled: settings?.sales_orders_enabled ?? false,
     quotesEnabled: settings?.quotes_enabled ?? true,

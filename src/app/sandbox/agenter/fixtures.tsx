@@ -254,7 +254,15 @@ export function SandboxShell({ children }: { children: ReactNode }) {
       <AgentSheetProvider>
         {/* The dashboard's own frame (app/(dashboard)/layout.tsx): the real sidebar and the rounded panel, so the demo reads as the page will in the app. */}
         <div className="min-h-dvh bg-frame md:flex md:flex-col">
-          <DashboardNav companyName={state.firm ? 'Exempelfirman' : 'Exempelbolaget AB'} entityType={state.firm ? 'enskild_firma' : 'aktiebolag'} agentsEnabled userName="Demo, inget sparas" />
+          <DashboardNav
+            companyName={state.firm ? 'Exempelfirman' : 'Exempelbolaget AB'}
+            entityType={state.firm ? 'enskild_firma' : 'aktiebolag'}
+            // The demo company's resolved capabilities (lib/modules/capabilities.ts):
+            // every package on; the enskild firma does not pay salaries, so no payroll.
+            capabilitySurface={{ hidden: [], notForLegalForm: state.firm ? ['payroll'] : [] }}
+            agentsEnabled
+            userName="Demo, inget sparas"
+          />
           <main id="main-content" className={MAIN_PANEL_CLASS} role="main">
             <div className="px-4 pb-8 pt-4 md:px-6">
               {children}

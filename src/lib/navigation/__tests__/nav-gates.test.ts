@@ -8,7 +8,7 @@ import { gateNavTree, passesNavGates, type NavGateContext } from '../nav-gates'
 function ctx(overrides: Partial<NavGateContext> = {}): NavGateContext {
   return {
     entityType: 'aktiebolag',
-    isEmployer: true,
+    surface: { hidden: [], notForLegalForm: [] },
     dimensionsEnabled: true,
     salesOrdersEnabled: true,
     quotesEnabled: true,
@@ -24,11 +24,12 @@ function ctx(overrides: Partial<NavGateContext> = {}): NavGateContext {
   }
 }
 
-const item = (flags: Partial<NavGateFlags>): NavGateFlags => ({ href: '/x', ...flags })
+const item = (flags: Partial<NavGateFlags>): NavGateFlags => ({ href: '/x', module: 'ledger', ...flags })
 
 describe('passesNavGates', () => {
   const cases: Array<[string, NavGateFlags, Partial<NavGateContext>]> = [
-    ['employerOnly', item({ employerOnly: true }), { isEmployer: false }],
+    ['module hidden by its package or country', item({ module: 'payroll' }), { surface: { hidden: ['payroll'], notForLegalForm: [] } }],
+    ['module not offered for the legal form', item({ module: 'payroll' }), { surface: { hidden: [], notForLegalForm: ['payroll'] } }],
     ['requiresDimensions', item({ requiresDimensions: true }), { dimensionsEnabled: false }],
     ['requiresSalesOrders', item({ requiresSalesOrders: true }), { salesOrdersEnabled: false }],
     ['requiresQuotes', item({ requiresQuotes: true }), { quotesEnabled: false }],
@@ -68,11 +69,22 @@ describe('gateNavTree', () => {
   it('gates sections and their sub-items alike', () => {
     const tree = gateNavTree(
       [
-        { href: '/a', labelKey: 'a', sub: [{ href: '/a/1', labelKey: 'a1' }, { href: '/a/2', labelKey: 'a2', requiresQuotes: true }] },
-        { href: '/b', labelKey: 'b', employerOnly: true },
+        {
+          href: '/a',
+          module: 'invoicing',
+          labelKey: 'a',
+          sub: [
+            { href: '/a/1', module: 'invoicing', labelKey: 'a1' },
+            { href: '/a/2', module: 'invoicing', labelKey: 'a2', requiresQuotes: true },
+            { href: '/a/3', module: 'pos', labelKey: 'a3' },
+          ],
+        },
+        { href: '/b', module: 'payroll', labelKey: 'b' },
       ],
-      ctx({ quotesEnabled: false, isEmployer: false }),
+      ctx({ quotesEnabled: false, surface: { hidden: ['pos'], notForLegalForm: ['payroll'] } }),
     )
-    expect(tree).toEqual([{ href: '/a', labelKey: 'a', sub: [{ href: '/a/1', labelKey: 'a1' }] }])
+    expect(tree).toEqual([
+      { href: '/a', module: 'invoicing', labelKey: 'a', sub: [{ href: '/a/1', module: 'invoicing', labelKey: 'a1' }] },
+    ])
   })
 })

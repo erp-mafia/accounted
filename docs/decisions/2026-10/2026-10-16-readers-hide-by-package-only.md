@@ -1,0 +1,1 @@
+[2026-10-16] The menu and tools/list hide only by package (off or not in the country), never by plan or capability key: those gates answer at the door today with an upsell or capability_blocked, so hiding on them would change what existing companies see.

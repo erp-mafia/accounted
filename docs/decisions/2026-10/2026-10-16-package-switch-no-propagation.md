@@ -1,0 +1,1 @@
+[2026-10-16] A package switch does not make dependents in other packages unavailable: manifest dependencies are code dependencies, so Utlägg without Lön and payments without Bank keep working, as the legal-form and plan gates already behave.

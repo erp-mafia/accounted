@@ -1,0 +1,263 @@
+/**
+ * Which module (lib/modules/manifest.ts) each MCP tool belongs to, so
+ * tools/list can read the resolved capabilities (lib/modules/capabilities.ts)
+ * and leave out the tools of a module whose package the company does not
+ * have, as the menu leaves out its pages.
+ *
+ * A generated tool takes the module of its operation (the id prefix, as v1
+ * and OpenAPI do). A hand-written tool is listed below under its module.
+ * __tests__/tool-modules.test.ts makes every tool in the registry resolve to
+ * exactly one module, so a new tool is placed before it ships: the design's
+ * guard that every menu item, route and tool declares its module.
+ */
+import type { ModuleId } from '@/lib/modules/manifest'
+import { moduleForOperationId } from '@/lib/modules/resolve'
+import { ALL_OPERATIONS } from '@/lib/operations/registry'
+
+export const HAND_WRITTEN_TOOL_MODULES: Readonly<Partial<Record<ModuleId, readonly string[]>>> = {
+  platform: [
+    'gnubok_approve_pending_operation',
+    'gnubok_reject_pending_operation',
+    'gnubok_list_pending_operations',
+    'gnubok_get_task',
+    'gnubok_call_tool',
+    'gnubok_stage_tool',
+    'gnubok_search_tools',
+    'gnubok_feedback',
+    'gnubok_list_companies',
+    'gnubok_create_company',
+    'gnubok_list_service_accounts',
+    'gnubok_revoke_service_account',
+  ],
+  ledger: [
+    'gnubok_create_voucher',
+    'gnubok_correct_entry',
+    'gnubok_reverse_journal_entry',
+    'gnubok_query_journal',
+    'gnubok_get_general_ledger',
+    'gnubok_get_trial_balance',
+    'gnubok_get_balance_sheet',
+    'gnubok_get_income_statement',
+    'gnubok_get_kpi_report',
+    'gnubok_list_accounts',
+    'gnubok_list_fiscal_periods',
+    'gnubok_lock_period',
+    'gnubok_close_period',
+    'gnubok_explain_voucher_gap',
+    'gnubok_list_voucher_gaps',
+    'gnubok_set_opening_balances',
+    'gnubok_audit_package',
+    'gnubok_export_sie',
+    'gnubok_list_dimensions',
+    'gnubok_list_dimension_values',
+    'gnubok_create_dimension_value',
+    'gnubok_get_dimension_pnl',
+    'gnubok_tag_journal_lines',
+    'gnubok_list_cash_accounts',
+    'gnubok_link_document_to_voucher',
+    'gnubok_link_documents_to_vouchers',
+    'gnubok_list_verifikat_without_documents',
+    'gnubok_get_document_content',
+    'gnubok_list_accrual_schedules',
+    'gnubok_run_currency_revaluation',
+  ],
+  transactions: [
+    'gnubok_list_uncategorized_transactions',
+    'gnubok_categorize_transaction',
+    'gnubok_uncategorize_transaction',
+    'gnubok_ignore_transaction',
+    'gnubok_create_transactions',
+    'gnubok_suggest_categories',
+    'gnubok_receipt_matcher',
+    'gnubok_match_transaction_to_invoice',
+    'gnubok_auto_match_period',
+    'gnubok_list_transactions_without_documents',
+    'gnubok_reconcile_match',
+    'gnubok_reconcile_unmatch',
+    'gnubok_reconcile_signoff',
+    'gnubok_reconcile_residual',
+    'gnubok_list_reconciliation_items',
+    'gnubok_get_reconciliation_status',
+    'gnubok_get_counterparty_templates',
+  ],
+  'bank-feed': ['gnubok_connect_bank', 'gnubok_sync_bank'],
+  invoicing: [
+    'gnubok_list_invoices',
+    'gnubok_get_invoice',
+    'gnubok_get_invoice_deliveries',
+    'gnubok_create_invoice',
+    'gnubok_update_invoice',
+    'gnubok_delete_draft_invoice',
+    'gnubok_send_invoice',
+    'gnubok_mark_invoice_as_paid',
+    'gnubok_mark_invoice_as_sent',
+    'gnubok_credit_invoice',
+    'gnubok_convert_invoice',
+    'gnubok_set_quote_status',
+    'gnubok_register_booked_invoice',
+    'gnubok_link_invoice_to_voucher',
+    'gnubok_find_voucher_candidates_for_invoice',
+    'gnubok_get_ar_ledger',
+    'gnubok_list_customers',
+    'gnubok_get_customer',
+    'gnubok_create_customer',
+    'gnubok_update_customer',
+    'gnubok_list_articles',
+    'gnubok_create_article',
+    'gnubok_update_article',
+    'gnubok_list_sales_orders',
+    'gnubok_get_sales_order',
+    'gnubok_create_sales_order',
+    'gnubok_transition_sales_order',
+    'gnubok_register_sales_order_delivery',
+    'gnubok_create_invoice_from_sales_order',
+    'gnubok_list_recurring_schedules',
+    'gnubok_create_recurring_schedule',
+    'gnubok_update_recurring_schedule',
+    'gnubok_generate_rot_rut_file',
+    'gnubok_import_rot_rut_beslut',
+    'gnubok_list_rot_rut_payout_requests',
+    'gnubok_settle_rot_rut_payout',
+    'gnubok_link_rot_rut_payout_voucher',
+  ],
+  'supplier-invoices': [
+    'gnubok_list_supplier_invoices',
+    'gnubok_approve_supplier_invoice',
+    'gnubok_credit_supplier_invoice',
+    'gnubok_register_booked_supplier_invoice',
+    'gnubok_link_supplier_invoice_to_voucher',
+    'gnubok_find_voucher_candidates_for_supplier_invoice',
+    'gnubok_create_supplier_invoice_from_inbox',
+    'gnubok_get_supplier_ledger',
+    'gnubok_list_suppliers',
+    'gnubok_get_supplier',
+    'gnubok_create_supplier',
+  ],
+  payroll: [
+    'gnubok_list_employees',
+    'gnubok_get_employee',
+    'gnubok_create_employee',
+    'gnubok_update_employee',
+    'gnubok_set_employee_opening_balances',
+    'gnubok_create_salary_run',
+    'gnubok_get_salary_run',
+    'gnubok_update_salary_run',
+    'gnubok_calculate_salary_run',
+    'gnubok_set_run_salary',
+    'gnubok_update_payslip_line',
+    'gnubok_book_salary_run',
+    'gnubok_get_payslip',
+    'gnubok_get_salary_journal',
+    'gnubok_register_absence',
+    'gnubok_list_absence',
+    'gnubok_delete_absence',
+    'gnubok_get_vacation_balance',
+    'gnubok_close_vacation_year',
+    'gnubok_generate_agi',
+  ],
+  expenses: ['gnubok_log_mileage_trip', 'gnubok_list_mileage_trips', 'gnubok_book_mileage_period'],
+  vat: [
+    'gnubok_get_vat_report',
+    'gnubok_vat_review_widget',
+    'gnubok_vat_close_check',
+    'gnubok_vat_declaration_validate',
+    'gnubok_vat_declaration_status',
+  ],
+  assets: [
+    'gnubok_create_asset',
+    'gnubok_update_asset',
+    'gnubok_get_asset',
+    'gnubok_list_assets',
+    'gnubok_dispose_asset',
+    'gnubok_propose_annual_depreciation',
+    'gnubok_post_annual_depreciation',
+  ],
+  'year-end': [
+    'gnubok_run_year_end',
+    'gnubok_year_end_readiness',
+    'gnubok_propose_accruals',
+    'gnubok_propose_dispositioner',
+    'gnubok_preview_arsredovisning',
+    'gnubok_validate_arsredovisning',
+    'gnubok_list_arsredovisning_versions',
+    'gnubok_get_arsredovisning_filing_status',
+    'gnubok_preview_ef_declaration',
+    'gnubok_post_kontantmetod_cutoff',
+  ],
+  inbox: [
+    'gnubok_list_inbox_items',
+    'gnubok_get_inbox_item',
+    'gnubok_set_inbox_extracted_data',
+    'gnubok_bulk_book_inbox_items',
+    'gnubok_create_document_upload',
+    'gnubok_complete_document_upload',
+    'gnubok_upload_document',
+    'gnubok_list_unmatched_documents',
+    'gnubok_receipt_hunt_worklist',
+    'gnubok_ask_document',
+    'gnubok_list_records',
+    'gnubok_search_records',
+    'gnubok_read_document',
+    'gnubok_get_source',
+    'gnubok_get_record',
+    'gnubok_get_record_links',
+    'gnubok_get_neighbourhood',
+    'gnubok_propose_fact',
+    'gnubok_get_fact_history',
+    'gnubok_resolve_missing',
+  ],
+  skatteverket: [
+    'gnubok_connect_skatteverket',
+    'gnubok_vat_declaration_submit',
+    'gnubok_agi_submit',
+    'gnubok_agi_status',
+    'gnubok_book_skattekonto_row',
+    'gnubok_book_skattekonto_rows',
+  ],
+  import: [
+    'gnubok_sie_preflight',
+    'gnubok_import_sie',
+    'gnubok_sie_import_status',
+    'gnubok_create_sie_upload',
+    'gnubok_connect_migration',
+  ],
+  parties: ['gnubok_lookup_company', 'gnubok_get_party'],
+  agent: [
+    'gnubok_get_agent_briefing',
+    'gnubok_list_skills',
+    'gnubok_load_skill',
+    'gnubok_create_skill',
+    'gnubok_remember_fact',
+    'gnubok_forget_fact',
+  ],
+  byra: [
+    'gnubok_client_overview',
+    'gnubok_portfolio_readiness',
+    'gnubok_run_across_companies',
+    'gnubok_stage_across_companies',
+  ],
+}
+
+const HAND_WRITTEN = new Map<string, ModuleId>(
+  (Object.entries(HAND_WRITTEN_TOOL_MODULES) as Array<[ModuleId, readonly string[]]>).flatMap(([owner, names]) =>
+    names.map((name) => [name, owner] as const),
+  ),
+)
+
+/** Generated tools by name, from every operation with an MCP binding (dark ones included). */
+const GENERATED = new Map<string, ModuleId>(
+  ALL_OPERATIONS.flatMap((op) => {
+    const owner = op.mcp ? moduleForOperationId(op.id) : undefined
+    return op.mcp && owner ? [[op.mcp.name, owner] as const] : []
+  }),
+)
+
+/** The module of a tool by its canonical gnubok_* name; undefined for a name no list or operation claims. */
+export function moduleForTool(name: string): ModuleId | undefined {
+  return GENERATED.get(name) ?? HAND_WRITTEN.get(name)
+}
+
+/** Whether the module map places this name both as a generated and a hand-written tool (a test keeps it false). */
+export function isClaimedTwice(name: string): boolean {
+  return GENERATED.has(name) && HAND_WRITTEN.has(name)
+}
