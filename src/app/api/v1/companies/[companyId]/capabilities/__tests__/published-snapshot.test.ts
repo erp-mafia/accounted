@@ -6,6 +6,11 @@
  * and kept byte-identical since: the packages step adds to the resolved
  * object the app and MCP read, not to what v1 publishes. A diff here is a
  * change to a published response.
+ *
+ * The profiles step adds one field, `profile`. It is taken out before the
+ * snapshot and pinned exactly beside it, so the snapshot file stays byte
+ * for byte what it was: every other field of the response is unchanged, and
+ * a company without a stored profile publishes the implicit Standard.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -58,6 +63,14 @@ describe('GET /api/v1/companies/:companyId/capabilities for each representative 
     )
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body.data).toMatchSnapshot()
+    const { profile, ...unchanged } = body.data
+    expect(unchanged).toMatchSnapshot()
+    expect(profile).toEqual({
+      id: 'standard',
+      version: 1,
+      name: 'Standard (everything on)',
+      name_sv: 'Standard (allt på)',
+      source: 'implicit',
+    })
   })
 })

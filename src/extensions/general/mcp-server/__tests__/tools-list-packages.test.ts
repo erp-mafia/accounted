@@ -1,10 +1,10 @@
 /**
  * tools/list reads the resolved capabilities (lib/modules/capabilities.ts):
  * a tool whose module's package the company does not have is not listed, as
- * its page is not in the menu. No company can switch a package off yet, so
- * these cases stage the future row (company_capability_config
- * `package:payroll`, enabled = false) to show the reader is wired; every
- * company today lists exactly what it did (capabilities-snapshot.test.ts).
+ * its page is not in the menu: switched off by the company's own row
+ * (company_capability_config `package:payroll`, enabled = false, nothing
+ * writes it yet) or left off by a stored profile. A company without either
+ * lists exactly what it did (capabilities-snapshot.test.ts).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { eventBus } from '@/lib/events/bus'
@@ -46,11 +46,23 @@ const PAYROLL_LISTED = tools.filter(
   (t) => moduleForTool(t.name) === 'payroll' && isListedFor(t, { anonymous: false, simpleCompanyMode: true, keyScopes: ALL_SCOPES }),
 ).map((t) => t.name)
 
-function connect(opts: { switchedOff?: string[]; reach?: 'one' | 'two'; failCapabilities?: boolean }) {
+function connect(opts: {
+  switchedOff?: string[]
+  reach?: 'one' | 'two'
+  failCapabilities?: boolean
+  profile?: { profile_id: string; profile_version: number }
+}) {
   const tables: Record<string, unknown> = representativeCompanyTables({
     ...COMPANY,
     disabledConfigKeys: (opts.switchedOff ?? []).map((id) => `package:${id}`),
   })
+  if (opts.profile) {
+    // The stored profile answers its own read; every other companies read gets the row.
+    const row = (tables.companies as { data: unknown }).data
+    const profile = opts.profile
+    tables.companies = (chainCalls: Array<{ method: string; args: unknown[] }>) =>
+      chainCalls.some((c) => c.method === 'select' && String(c.args[0]).includes('profile_id')) ? { data: profile } : { data: row }
+  }
   if (opts.failCapabilities) tables.companies = { data: null, error: { message: 'statement timeout' } }
   mocks.supabase = createTableMockSupabase(tables as never).supabase
   mocks.validateApiKey.mockResolvedValue({
@@ -98,6 +110,14 @@ describe('tools/list reads the resolved capabilities', () => {
     // Everything else stays, the briefing included.
     expect(names).toContain('gnubok_get_agent_briefing')
     expect(names).toContain('gnubok_list_invoices')
+  })
+
+  it('leaves out the tools of the packages a stored profile starts with off', async () => {
+    connect({ profile: { profile_id: 'limited-company-no-employees', profile_version: 1 } })
+    const names = await listed()
+    expect(names.filter((n) => PAYROLL_LISTED.includes(n))).toEqual([])
+    expect(names).toContain('gnubok_list_invoices')
+    expect(names).toContain('gnubok_list_supplier_invoices')
   })
 
   it('lists every package on a connection that reaches several companies', async () => {
@@ -153,6 +173,25 @@ describe('the briefing reads the same package view', () => {
     )) as { recommended_tools: Array<{ workflow: string; tools: Array<{ name: string; callable: boolean; note?: string }> }> }
     return result.recommended_tools.find((w) => w.workflow === 'payroll_month')!.tools
   }
+
+  it('names the stored profile and the packages it leaves off', async () => {
+    connect({ profile: { profile_id: 'limited-company-no-employees', profile_version: 1 } })
+    const result = (await briefing().execute(
+      { __keyScopes: ALL_SCOPES, __simpleCompanyMode: true },
+      COMPANY.id,
+      'user-1',
+      mocks.supabase as never,
+      { type: 'api_key', label: 'Packages key' },
+    )) as { capabilities_profile?: unknown }
+    expect(result.capabilities_profile).toEqual({
+      id: 'limited-company-no-employees',
+      version: 1,
+      name: 'Limited company without employees',
+      name_sv: 'Aktiebolag utan anställda',
+      source: 'stored',
+      packages_off: ['payroll', 'assets', 'pos-and-webshop'],
+    })
+  })
 
   it('stops calling a payroll tool listed once Lön is switched off', async () => {
     const on = await payrollLoadout([])

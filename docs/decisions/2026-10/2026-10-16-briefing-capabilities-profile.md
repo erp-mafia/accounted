@@ -1,0 +1,1 @@
+[2026-10-16] The briefing names the profile under capabilities_profile, with the packages that are off: profile_summary already means the company brain, and an agent whose tools/list lacks payroll needs the reason, not only the profile id.

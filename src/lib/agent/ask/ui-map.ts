@@ -13,6 +13,7 @@ import { getCompanyEntitlements } from '@/lib/entitlements/has-capability'
 import {
   capabilityInputsFromEntitlements,
   capabilitySurface,
+  readStoredProfile,
   resolveCapabilities,
 } from '@/lib/modules/capabilities'
 import { isArkivSectionEnabled } from '@/lib/arkiv/flag'
@@ -74,7 +75,7 @@ export async function loadNavGateContext(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<NavGateContext | null> {
-  const [settingsRes, companyRes, navFlags, entitlements] = await Promise.all([
+  const [settingsRes, companyRes, navFlags, entitlements, storedProfile] = await Promise.all([
     supabase
       .from('company_settings')
       .select('entity_type, pays_salaries, dimensions_enabled, sales_orders_enabled, quotes_enabled, mileage_enabled')
@@ -83,6 +84,7 @@ export async function loadNavGateContext(
     supabase.from('companies').select('entity_type, jurisdiction, ledger_currency').eq('id', companyId).maybeSingle(),
     getDashboardNavFlags(supabase, companyId),
     getCompanyEntitlements(supabase, companyId),
+    readStoredProfile(supabase, companyId),
   ])
   const settings = settingsRes.data as {
     entity_type?: string | null
@@ -112,6 +114,8 @@ export async function loadNavGateContext(
         ledgerCurrency: company?.ledger_currency,
         entityType,
         paysSalaries,
+        profileId: storedProfile?.id,
+        profileVersion: storedProfile?.version,
       },
       entitlements,
     ),

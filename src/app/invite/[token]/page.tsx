@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -69,6 +69,12 @@ interface InviteInfo {
   email: string
   expired: boolean
   alreadyHasAccount: boolean
+  /**
+   * The profile the client's byrå prepared for the company (Profiles and
+   * Suggestions): set only when a member of the company's byrå sent the
+   * invitation and picked one. The client makes no choice here.
+   */
+  preparedProfile?: { id: string; name: string; name_sv: string } | null
 }
 
 export default function InvitePage() {
@@ -76,6 +82,7 @@ export default function InvitePage() {
   const router = useRouter()
   const { toast } = useToast()
   const t = useTranslations('invite')
+  const locale = useLocale()
   const token = params.token as string
 
   const [isLoading, setIsLoading] = useState(true)
@@ -196,6 +203,15 @@ export default function InvitePage() {
     }
   }
 
+  // "Din byrå har förberett: <profil>", the same muted line in every card
+  // that names the company.
+  const prepared = invite?.preparedProfile
+  const preparedLine = prepared ? (
+    <p className="text-sm text-muted-foreground mt-1">
+      {t('prepared_profile', { profile: locale === 'en' ? prepared.name : prepared.name_sv })}
+    </p>
+  ) : null
+
   if (isLoading) {
     return (
       <div className="min-h-dvh flex flex-col bg-background" aria-busy="true">
@@ -285,6 +301,7 @@ export default function InvitePage() {
                           strong: (chunks) => <strong>{chunks}</strong>,
                         })}
                       </p>
+                      {preparedLine}
                     </div>
                   </div>
                 </Card>
@@ -322,6 +339,7 @@ export default function InvitePage() {
                       <p className="text-sm text-muted-foreground mt-1">
                         {t('signout_then_login')}
                       </p>
+                      {preparedLine}
                     </div>
                   </div>
                 </Card>
@@ -350,6 +368,7 @@ export default function InvitePage() {
                           strong: (chunks) => <strong>{chunks}</strong>,
                         })}
                       </p>
+                      {preparedLine}
                     </div>
                   </div>
                 </Card>
@@ -371,6 +390,7 @@ export default function InvitePage() {
                       <p className="text-sm text-muted-foreground mt-0.5">
                         {t('invited_to_company')}
                       </p>
+                      {preparedLine}
                     </div>
                   </div>
                 </Card>

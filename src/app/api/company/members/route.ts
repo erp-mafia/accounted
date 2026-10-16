@@ -2,6 +2,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getMultiUserState } from '@/lib/entitlements/multi-user'
+import { readClientProfileChoice } from '@/lib/company/client-profile'
 
 /**
  * GET /api/company/members
@@ -64,9 +65,15 @@ export const GET = withRouteContext('company_members.list', async (_request, ctx
   // Multi-user seat gate: when the company is frozen (no multi_user grant
   // active or in grace), the invite POST answers 403, so the UI swaps the
   // invite form for the paid-plan upsell instead of a dead form.
-  const multiUserAccess = canInvite
-    ? await getMultiUserState(serviceClient, companyId)
-    : null
+  // The byrå's profile choice (Profiles and Suggestions): present only when
+  // the company is a client on the caller's byrå team. The invite form then
+  // requires a profile for the client; everyone else's form is unchanged.
+  const [multiUserAccess, profileChoice] = canInvite
+    ? await Promise.all([
+        getMultiUserState(serviceClient, companyId),
+        readClientProfileChoice(serviceClient, companyId, user.id),
+      ])
+    : [null, null]
 
   return NextResponse.json({
     data: {
@@ -82,6 +89,7 @@ export const GET = withRouteContext('company_members.list', async (_request, ctx
       invitations: invitations || [],
       canInvite,
       inviteRequiresUpgrade: multiUserAccess?.state === 'frozen',
+      profileChoice,
     },
   })
 })

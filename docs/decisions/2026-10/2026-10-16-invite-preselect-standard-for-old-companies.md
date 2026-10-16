@@ -1,0 +1,1 @@
+[2026-10-16] The invite form preselects the stored profile, else the one derived from the legal form at creation, else Standard: a company from before profiles has no derived value, so its byrå sees Standard, what it has today, and narrows it only by a deliberate pick.

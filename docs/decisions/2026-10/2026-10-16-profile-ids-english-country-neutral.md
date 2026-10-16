@@ -1,0 +1,1 @@
+[2026-10-16] Profile ids are English kebab-case and country-neutral (sole-trader, limited-company-no-employees, retail, association, standard) with the Swedish name beside each: like package ids, a profile is one id across countries and the country pack decides which of its packages exist.

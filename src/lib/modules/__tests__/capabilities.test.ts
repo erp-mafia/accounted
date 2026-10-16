@@ -246,7 +246,7 @@ const COMPANY_ID = '11111111-1111-4111-8111-111111111111'
 const ACTIVE_GRANTS = MODULE_KEYS.map((key) => ({ capability_key: key, expires_at: null, source: 'stripe', team_id: null }))
 
 describe('loadCompanyCapabilities', () => {
-  it('reads the company, its settings, the grants and the config once each, and resolves them', async () => {
+  it('reads the company, its profile, its settings, the grants and the config, and resolves them', async () => {
     const { supabase, calls } = mockSupabase(
       {
         companies: { data: { jurisdiction: 'SE', ledger_currency: 'SEK', entity_type: 'aktiebolag' } },
@@ -256,8 +256,10 @@ describe('loadCompanyCapabilities', () => {
       { data: ACTIVE_GRANTS.filter((g) => g.capability_key !== 'collections') },
     )
     const result = await loadCompanyCapabilities(supabase, COMPANY_ID)
+    // companies twice: the company row as before, and the profile in a read
+    // of its own that resolves to Standard when it fails.
     expect(calls().sort()).toEqual(
-      ['companies', 'company_capability_config', 'company_settings', 'rpc:company_capability_grant_rows'].sort(),
+      ['companies', 'companies', 'company_capability_config', 'company_settings', 'rpc:company_capability_grant_rows'].sort(),
     )
     expect(result).not.toBeNull()
     expect(capabilityDigest(result!)).toEqual([
@@ -346,7 +348,13 @@ function packageOf(result: ReturnType<typeof resolveCapabilities>, id: PackageId
 describe('resolveCapabilities: packages', () => {
   it('gives every company the implicit Standard profile with every package on when it can use them all', () => {
     const result = resolveCapabilities(inputs())
-    expect(result.profile).toEqual({ id: 'standard', source: 'implicit' })
+    expect(result.profile).toEqual({
+      id: 'standard',
+      version: 1,
+      name: 'Standard (everything on)',
+      name_sv: 'Standard (allt på)',
+      source: 'implicit',
+    })
     expect(result.packages.map((p) => p.id)).toEqual(PACKAGES.map((p) => p.id))
     for (const p of result.packages) expect(p, p.id).toMatchObject({ availability: 'on', reasons: [] })
     for (const m of result.modules) expect(m.availability, m.id).toBe('on')
@@ -528,10 +536,11 @@ describe('capabilityInputsFromEntitlements', () => {
 })
 
 describe('publishedCapabilities', () => {
-  it('publishes the module report field for field, without packages, profile or availability', () => {
+  it('publishes the module report field for field and the profile beside it, without packages or availability', () => {
     const result = resolveCapabilities(inputs({ entityType: 'enskild_firma', paysSalaries: false }))
     const published = publishedCapabilities(result)
-    expect(Object.keys(published)).toEqual(['jurisdiction', 'ledger_currency', 'modules'])
+    expect(Object.keys(published)).toEqual(['jurisdiction', 'ledger_currency', 'profile', 'modules'])
+    expect(published.profile).toEqual(result.profile)
     expect(published.modules).toHaveLength(MODULES.length)
     for (const m of published.modules) {
       expect(Object.keys(m)).toEqual(['id', 'kind', 'name', 'name_sv', 'summary', 'depends_on', 'status', 'reasons', 'resolution'])
@@ -540,5 +549,129 @@ describe('publishedCapabilities', () => {
       status: 'unsupported',
       reasons: ['unsupported_legal_form'],
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Profiles: the profile's package defaults beneath the company's choices
+// ---------------------------------------------------------------------------
+
+describe('resolveCapabilities: the profile as an input', () => {
+  it('resolves no stored profile exactly as before profiles existed', () => {
+    const before = resolveCapabilities(inputs())
+    for (const profile of [undefined, null, { id: null, version: null }]) {
+      expect(resolveCapabilities(inputs({ profile }))).toEqual(before)
+    }
+    const ef = inputs({ entityType: 'enskild_firma', paysSalaries: false, disabled: new Set([CAPABILITY.ai]) })
+    expect(resolveCapabilities({ ...ef, profile: null })).toEqual(resolveCapabilities(ef))
+  })
+
+  it('turns off each package the stored profile leaves off, and nothing else', () => {
+    const result = resolveCapabilities(inputs({ profile: { id: 'sole-trader', version: 1 } }))
+    expect(result.profile).toEqual({
+      id: 'sole-trader',
+      version: 1,
+      name: 'Sole trader',
+      name_sv: 'Enskild firma',
+      source: 'stored',
+    })
+    const off = result.packages.filter((p) => p.availability !== 'on').map((p) => p.id)
+    expect(off).toEqual(['supplier-invoices-and-payments', 'expenses', 'payroll', 'assets', 'pos-and-webshop'])
+    for (const id of off) expect(packageOf(result, id).reasons).toEqual(['off_in_profile'])
+    expect(packageOf(result, 'bookkeeping').availability).toBe('on')
+    // The modules follow their package; the published status keeps what the gates say.
+    expect(moduleOf(result, 'payroll')).toMatchObject({ availability: 'off', status: 'active' })
+    expect([...capabilitySurface(result).hidden].sort()).toEqual(
+      ['assets', 'expenses', 'payments', 'payroll', 'pos', 'supplier-invoices', 'webshop'],
+    )
+  })
+
+  it('lets a company choice win over the profile, both ways', () => {
+    const result = resolveCapabilities(
+      inputs({
+        profile: { id: 'limited-company-no-employees', version: 1 },
+        packageChoices: { payroll: true, bank: false },
+      }),
+    )
+    expect(packageOf(result, 'payroll')).toMatchObject({ availability: 'on', reasons: [] })
+    expect(packageOf(result, 'bank')).toMatchObject({ availability: 'off', reasons: ['turned_off_by_company'] })
+    expect(packageOf(result, 'assets')).toMatchObject({ availability: 'off', reasons: ['off_in_profile'] })
+  })
+
+  it('keeps the country gate first: a profile never makes a package exist', () => {
+    const result = resolveCapabilities(inputs({ jurisdiction: 'NO', profile: { id: 'standard', version: 1 } }))
+    expect(packageOf(result, 'payroll').availability).toBe('not_in_country')
+  })
+
+  it('reads a profile id or version it does not know as the implicit Standard', () => {
+    const before = resolveCapabilities(inputs())
+    const unknown = resolveCapabilities(inputs({ profile: { id: 'sole-trader', version: 42 } }))
+    expect(unknown.profile.source).toBe('implicit')
+    expect(unknown.packages).toEqual(before.packages)
+  })
+})
+
+describe('capabilityInputsFromEntitlements: profile and package switches turned on', () => {
+  it('passes the stored profile and both kinds of package switch through', () => {
+    const built = capabilityInputsFromEntitlements(
+      { jurisdiction: 'SE', entityType: 'aktiebolag', paysSalaries: null, profileId: 'retail', profileVersion: 1 },
+      {
+        capabilities: [],
+        disabledConfigKeys: ['package:bank', 'ai'],
+        enabledConfigKeys: ['package:payroll', 'package:nope', 'bank_sync'],
+      },
+    )
+    expect(built.profile).toEqual({ id: 'retail', version: 1 })
+    expect(built.packageChoices).toEqual({ bank: false, payroll: true })
+  })
+
+  it('reads a key turned both off and on as off', () => {
+    const built = capabilityInputsFromEntitlements(
+      { jurisdiction: 'SE', entityType: 'aktiebolag', paysSalaries: null },
+      { capabilities: [], disabledConfigKeys: ['package:payroll'], enabledConfigKeys: ['package:payroll'] },
+    )
+    expect(built.packageChoices).toEqual({ payroll: false })
+    expect(built.profile).toEqual({ id: null, version: null })
+  })
+})
+
+describe('loadCompanyCapabilities: the stored profile', () => {
+  const companyRow = { jurisdiction: 'SE', ledger_currency: 'SEK', entity_type: 'aktiebolag' }
+  const selects = (chainCalls: { method: string; args: unknown[] }[]) =>
+    chainCalls.filter((c) => c.method === 'select').map((c) => String(c.args[0]))
+
+  it('applies the profile the company stored, and a package switched on over it', async () => {
+    const mock = createTableMockSupabase({
+      companies: (chainCalls) =>
+        selects(chainCalls).some((s) => s.includes('profile_id'))
+          ? { data: { profile_id: 'limited-company-no-employees', profile_version: 1 } }
+          : { data: companyRow },
+      company_settings: { data: { entity_type: 'aktiebolag', pays_salaries: null } },
+      company_capability_config: { data: [{ capability_key: 'package:payroll', enabled: true }] },
+      'rpc:company_capability_grant_rows': { data: ACTIVE_GRANTS },
+    })
+    const result = await loadCompanyCapabilities(mock.supabase as unknown as SupabaseClient, COMPANY_ID)
+    expect(result!.profile).toMatchObject({ id: 'limited-company-no-employees', source: 'stored' })
+    expect(packageOf(result!, 'payroll').availability).toBe('on')
+    expect(packageOf(result!, 'assets')).toMatchObject({ availability: 'off', reasons: ['off_in_profile'] })
+    // The company row read never carries the profile columns.
+    const companySelects = mock.findCalls('companies', 'select').map((args) => String(args[0]))
+    expect(companySelects).toContain('jurisdiction, ledger_currency, entity_type')
+    expect(companySelects).toContain('profile_id, profile_version')
+  })
+
+  it('resolves Standard when the profile read fails, as on a database without the columns yet', async () => {
+    const mock = createTableMockSupabase({
+      companies: (chainCalls) =>
+        selects(chainCalls).some((s) => s.includes('profile_id'))
+          ? { data: null, error: { message: 'column companies.profile_id does not exist' } as never }
+          : { data: companyRow },
+      company_settings: { data: { entity_type: 'aktiebolag', pays_salaries: null } },
+      company_capability_config: { data: [] },
+      'rpc:company_capability_grant_rows': { data: ACTIVE_GRANTS },
+    })
+    const result = await loadCompanyCapabilities(mock.supabase as unknown as SupabaseClient, COMPANY_ID)
+    expect(result!.profile).toMatchObject({ id: 'standard', source: 'implicit' })
+    for (const p of result!.packages) expect(p.availability, p.id).toBe('on')
   })
 })

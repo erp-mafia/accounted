@@ -11,13 +11,16 @@ import { useCompany } from '@/contexts/CompanyContext'
 import {
   SettingsGroup,
   SettingsInput,
+  SettingsRow,
   SettingsRowNote,
   SettingsSelect,
 } from '@/components/settings/SettingsRows'
-import { parseCompanyMembersPayload } from '@/components/settings/members-payload'
+import { parseCompanyMembersPayload, type MembersProfileChoice } from '@/components/settings/members-payload'
+import { PACKAGES } from '@/lib/modules/packages'
+import { PROFILES, isProfileId, latestProfile, packagesOffIn, type ProfileId } from '@/lib/modules/profiles'
 import { isInviteExpired } from '@/components/settings/invite-expiry'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { formatDateLong } from '@/lib/utils'
+import { cn, formatDateLong } from '@/lib/utils'
 import { Plus, RefreshCw, Trash2, Mail } from 'lucide-react'
 
 interface CompanyMemberItem {
@@ -57,7 +60,8 @@ interface ShareableInvite {
 
 export function CompanyMembersSection() {
   const t = useTranslations('settings_company')
-  const errorLocale = useLocale() as ErrorLocale
+  const locale = useLocale()
+  const errorLocale = locale as ErrorLocale
   const { toast } = useToast()
   const { company } = useCompany()
 
@@ -67,6 +71,18 @@ export function CompanyMembersSection() {
     member: t('members_role_member'),
     viewer: t('members_role_viewer'),
   }
+  const profileName = (id: ProfileId) => {
+    const profile = latestProfile(id)
+    return locale === 'en' ? profile.name : profile.nameSv
+  }
+  // One muted sentence under the pick: what the client will not see at first.
+  const profileOffNote = (id: ProfileId) => {
+    const off = packagesOffIn(latestProfile(id))
+    if (off.length === 0) return t('members_invite_profile_all_on')
+    const names = PACKAGES.filter((p) => off.includes(p.id)).map((p) => (locale === 'en' ? p.name : p.nameSv))
+    return t('members_invite_profile_off', { packages: names.join(', ') })
+  }
+
   // null = the roster is not known: still loading, or the read failed
   // (loadError). A failed read must never render an apparently member-less
   // company: a consultant looking at an empty list re-invites people who are
@@ -90,6 +106,12 @@ export function CompanyMembersSection() {
   // own 403 stays the real enforcement.
   const [inviteRequiresUpgrade, setInviteRequiresUpgrade] = useState(false)
   const [shareInvite, setShareInvite] = useState<ShareableInvite | null>(null)
+  // The byrå's profile pick for a client company (Profiles and Suggestions):
+  // null for every other company, whose invite form is unchanged. The pick
+  // starts at what the server preselects (the stored profile, else the one
+  // derived from the legal form, else Standard) and travels with the invite.
+  const [profileChoice, setProfileChoice] = useState<MembersProfileChoice | null>(null)
+  const [inviteProfile, setInviteProfile] = useState<ProfileId | null>(null)
 
   const fetchMembers = useCallback(async () => {
     setLoadError(null)
@@ -127,6 +149,8 @@ export function CompanyMembersSection() {
       setInvitations(parsed.invitations)
       setCanInvite(parsed.canInvite)
       setInviteRequiresUpgrade(parsed.inviteRequiresUpgrade)
+      setProfileChoice(parsed.profileChoice)
+      setInviteProfile(parsed.profileChoice?.preselected ?? null)
     } catch {
       setMembers(null)
       setInvitations(null)
@@ -149,7 +173,11 @@ export function CompanyMembersSection() {
       const res = await fetch('/api/company/members/invite', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, role: inviteRole }),
+        body: JSON.stringify({
+          email,
+          role: inviteRole,
+          ...(profileChoice && inviteProfile ? { profile_id: inviteProfile } : {}),
+        }),
       })
       const data = await res.json()
 
@@ -457,33 +485,62 @@ export function CompanyMembersSection() {
 
       {/* Inline invite: the list's own last row instead of a separate card. */}
       {canInvite && !inviteRequiresUpgrade && (
-        <form onSubmit={handleInvite} className="flex flex-col gap-3 px-1 pt-3 sm:flex-row sm:items-center">
-          <label htmlFor="company-invite-email" className="sr-only">
-            {t('members_invite_email_label')}
-          </label>
-          <SettingsInput
-            id="company-invite-email"
-            type="email"
-            placeholder={t('members_invite_email_placeholder')}
-            value={inviteEmail}
-            onChange={(e) => setInviteEmail(e.target.value)}
-            disabled={isSending}
-            required
-            className="border-border sm:flex-1"
-          />
-          <SettingsSelect
-            value={inviteRole}
-            onChange={(e) => setInviteRole(e.target.value)}
-            aria-label={t('members_role_label')}
-          >
-            <option value="viewer">{t('members_role_viewer')}</option>
-            <option value="member">{t('members_role_member')}</option>
-            <option value="admin">{t('members_role_admin')}</option>
-          </SettingsSelect>
-          <Button type="submit" size="sm" disabled={!inviteEmail.trim()} loading={isSending}>
-            {!isSending && <Plus className="mr-2 h-4 w-4" />}
-            {t('members_invite_button')}
-          </Button>
+        <form onSubmit={handleInvite} className="px-1 pt-3">
+          {/* The byrå's client: the profile is part of the invitation, picked
+              here and shown to the client when the invitation opens. */}
+          {profileChoice && inviteProfile && (
+            <SettingsRow
+              label={t('members_invite_profile_label')}
+              htmlFor="company-invite-profile"
+              help={t('members_invite_profile_help')}
+            >
+              {/* The full control column for the pick, the note on the line below. */}
+              <SettingsSelect
+                id="company-invite-profile"
+                wrapperClassName="basis-full"
+                value={inviteProfile}
+                onChange={(e) => {
+                  if (isProfileId(e.target.value)) setInviteProfile(e.target.value)
+                }}
+                disabled={isSending}
+              >
+                {PROFILES.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {profileName(p.id)}
+                  </option>
+                ))}
+              </SettingsSelect>
+              <SettingsRowNote>{profileOffNote(inviteProfile)}</SettingsRowNote>
+            </SettingsRow>
+          )}
+          <div className={cn('flex flex-col gap-3 sm:flex-row sm:items-center', profileChoice && 'pt-3')}>
+            <label htmlFor="company-invite-email" className="sr-only">
+              {t('members_invite_email_label')}
+            </label>
+            <SettingsInput
+              id="company-invite-email"
+              type="email"
+              placeholder={t('members_invite_email_placeholder')}
+              value={inviteEmail}
+              onChange={(e) => setInviteEmail(e.target.value)}
+              disabled={isSending}
+              required
+              className="border-border sm:flex-1"
+            />
+            <SettingsSelect
+              value={inviteRole}
+              onChange={(e) => setInviteRole(e.target.value)}
+              aria-label={t('members_role_label')}
+            >
+              <option value="viewer">{t('members_role_viewer')}</option>
+              <option value="member">{t('members_role_member')}</option>
+              <option value="admin">{t('members_role_admin')}</option>
+            </SettingsSelect>
+            <Button type="submit" size="sm" disabled={!inviteEmail.trim()} loading={isSending}>
+              {!isSending && <Plus className="mr-2 h-4 w-4" />}
+              {t('members_invite_button')}
+            </Button>
+          </div>
         </form>
       )}
 

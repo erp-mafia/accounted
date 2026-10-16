@@ -5,7 +5,11 @@ import { regenerateTaxDeadlinesForUser, toDeadlineSettings } from '@/lib/tax/dea
 import type { CompanySettingsForDeadlines } from '@/lib/tax/deadline-config'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
 import type { EntityType } from '@/types'
+import { signupProfileColumns } from '@/lib/modules/signup-profile'
+import { createLogger } from '@/lib/logger'
 import { registeredOfficeFromRegistry } from './registered-office'
+
+const log = createLogger('company.create')
 
 /**
  * The one company-creation sequence, shared by the web wizard (Server
@@ -36,6 +40,14 @@ export interface CreateCompanyInput {
   settings: Record<string, unknown>
   fiscalPeriod: { startDate: string; endDate: string; name: string }
   ticLookup?: CompanyLookupResult | null
+  /**
+   * Whether the profile derived from the legal form also becomes the
+   * company's profile (companies.profile_id). The derived profile is always
+   * recorded as a suggestion; only public signup with PROFILES_APPLY_ON_SIGNUP
+   * on applies it (lib/modules/signup-profile.ts). Default false: the company
+   * keeps Standard (allt på).
+   */
+  applyDerivedProfile?: boolean
 }
 
 /**
@@ -245,6 +257,30 @@ export async function createCompanyCore(
   } catch (deadlineError) {
     await rollback('tax deadline generation failed', deadlineError)
     return { error: COMPANY_CREATION_ERRORS.deadlines_failed }
+  }
+
+  // 6. The profile derived from the legal form (Profiles and Suggestions):
+  // recorded as a suggestion, and the company's profile only when the caller
+  // applies it. Best-effort and last: the company is complete without it,
+  // and a failed write leaves Standard (every package on), which hides
+  // nothing.
+  const profileColumns = signupProfileColumns(input.entityType, input.applyDerivedProfile === true)
+  if (profileColumns) {
+    try {
+      const { error: profileError } = await supabase
+        .from('companies')
+        .update({
+          suggested_profile_id: profileColumns.suggested_profile_id,
+          suggested_profile_version: profileColumns.suggested_profile_version,
+          // NULL, Standard, unless the caller applies the derived profile.
+          profile_id: profileColumns.profile_id ?? null,
+          profile_version: profileColumns.profile_version ?? null,
+        })
+        .eq('id', newCompanyId)
+      if (profileError) log.warn('profile suggestion not recorded', { error: String((profileError as { message?: string }).message ?? profileError) })
+    } catch (profileErr) {
+      log.warn('profile suggestion not recorded', { error: profileErr instanceof Error ? profileErr.message : String(profileErr) })
+    }
   }
 
   const savedOffice = settingsToSave.registered_office

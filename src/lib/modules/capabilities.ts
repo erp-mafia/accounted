@@ -10,13 +10,13 @@
  * GET /api/v1/companies/{companyId}/capabilities (publishedCapabilities, the
  * module report v1 has always served).
  *
- * The inputs are the ones that exist today: the company's jurisdiction, the
- * plan grants and company_capability_config (capability keys, and package
- * switches under `package:<id>`), the payroll offer rule. Profiles do not
- * exist yet, so every company has the implicit "Standard (allt på)" profile,
- * every package on: what a company can use today resolves to on, and nothing
- * any reader shows changes. Read-only: nothing here writes, and nothing yet
- * switches a package.
+ * The inputs: the company's jurisdiction, the plan grants and
+ * company_capability_config (capability keys, and package switches under
+ * `package:<id>`), the payroll offer rule, and the company's profile
+ * (companies.profile_id and profile_version, ./profiles.ts). A company
+ * without a stored profile, which is every company that existed before
+ * profiles, has "Standard (allt på)", every package on, so what it can use
+ * resolves exactly as before. Read-only: nothing here writes.
  *
  * Two vocabularies, one object:
  *   - `availability` (packages and modules): on, off, winding_down,
@@ -46,6 +46,13 @@ import {
   type PackageDefinition,
   type PackageId,
 } from './packages'
+import {
+  resolveStoredProfile,
+  type ProfileDefinition,
+  type ProfileId,
+  type StoredProfile,
+  type SwitchablePackageId,
+} from './profiles'
 import { getModule, modulesInDependencyOrder } from './resolve'
 
 export const CAPABILITY_STATUSES = ['active', 'off', 'needs_plan', 'unsupported'] as const
@@ -72,9 +79,10 @@ export type CapabilityReason = (typeof CAPABILITY_REASONS)[number]
  *     a module that is turned off.
  *   - winding_down: switched off while obligations are still open (a salary
  *     payment in flight, an open invoice): no new work starts, the open work
- *     stays reachable until it is settled. Reserved: nothing can be switched
- *     off yet, so nothing winds down; the step that lets a package be turned
- *     off loads the obligations (CapabilityInputs.openObligations).
+ *     stays reachable until it is settled. Reserved: only a profile can
+ *     leave a package off yet, picked when a company starts out, so the
+ *     obligations are not loaded; the step that lets a package be turned off
+ *     later loads them (CapabilityInputs.openObligations).
  *   - not_in_plan: the paid plan does not include it.
  *   - not_in_country: the company's country does not have it.
  */
@@ -92,22 +100,21 @@ export const PACKAGE_REASONS = [
 export type PackageReason = (typeof PACKAGE_REASONS)[number]
 
 /**
- * The profile every company has until profiles exist: "Standard (allt på)",
- * every package on, so nothing disappears for anyone. The profiles step
- * gives each company a stored profile id and version; this is the default
- * existing companies and self-hosts keep.
+ * The company's profile as the resolver applied it: the stored one, or
+ * "Standard (allt på)" (every package on) when none is stored, which is what
+ * every company that existed before profiles has.
  */
-export const IMPLICIT_PROFILE = Object.freeze({
-  id: 'standard',
-  nameSv: 'Standard (allt på)',
-  /** The switchable packages this profile starts with off. */
-  packagesOff: Object.freeze([] as PackageId[]),
-})
-
 export interface ProfileRef {
-  id: string
-  /** implicit: no profile is stored for the company; the default applies. */
-  source: 'implicit'
+  id: ProfileId
+  /** The version whose package defaults applied. */
+  version: number
+  name: string
+  name_sv: string
+  /**
+   * stored: companies.profile_id. implicit: none is stored (or the stored id
+   * or version is one this code does not know), so Standard applies.
+   */
+  source: 'stored' | 'implicit'
 }
 
 type OwnReason = Exclude<CapabilityReason, 'dependency_unavailable'>
@@ -188,16 +195,22 @@ export interface CapabilityInputs {
   /** A self-host fixes a missing paid capability with a connector key, not a plan. */
   selfHosted: boolean
   /**
+   * companies.profile_id and profile_version: the profile whose package
+   * defaults apply where the company made no choice. Absent or NULL is
+   * "Standard (allt på)", every package on.
+   */
+  profile?: StoredProfile | null
+  /**
    * The company's own package switches (company_capability_config,
    * `package:<id>`): false turns a package off, true on, absent leaves it to
-   * the profile. Only switch-offs are read today, which is all an
-   * every-package-on profile can be changed by.
+   * the profile. A choice always wins over the profile.
    */
   packageChoices?: Partial<Record<PackageId, boolean>>
   /**
    * Packages with open obligations: a switched-off package among them is
-   * winding_down instead of off. Not loaded yet (nothing can be switched off
-   * yet); the step that lets a package be turned off loads it.
+   * winding_down instead of off. Not loaded yet (only a profile picked at the
+   * start leaves a package off); the step that lets a package be turned off
+   * later loads it.
    */
   openObligations?: ReadonlySet<PackageId>
 }
@@ -279,17 +292,23 @@ function resolutionFor(
 /**
  * One package's availability. A package exists in the country when any of
  * its modules does (a kernel always does); it is switched on by the
- * company's choice, else by the profile (Bokföring always); it is in the
- * plan unless every module in it needs a capability the plan lacks.
+ * company's choice, else by the profile's default (Bokföring always); it is
+ * in the plan unless every module in it needs a capability the plan lacks.
  */
-function resolvePackage(pkg: PackageDefinition, input: CapabilityInputs): PackageCapability {
+function resolvePackage(
+  pkg: PackageDefinition,
+  input: CapabilityInputs,
+  profile: ProfileDefinition,
+): PackageCapability {
   const reasons: PackageReason[] = []
   const mods = pkg.modules.map((id) => getModule(id))
   if (!mods.some((m) => m.kind === 'kernel' || inCountry(m, input.jurisdiction))) reasons.push('unsupported_country')
   if (pkg.switchable) {
     const choice = input.packageChoices?.[pkg.id]
     if (choice === false) reasons.push('turned_off_by_company')
-    else if (choice === undefined && IMPLICIT_PROFILE.packagesOff.includes(pkg.id)) reasons.push('off_in_profile')
+    else if (choice === undefined && profile.packages[pkg.id as SwitchablePackageId] === 'off') {
+      reasons.push('off_in_profile')
+    }
     const off = reasons.includes('turned_off_by_company') || reasons.includes('off_in_profile')
     if (off && input.openObligations?.has(pkg.id)) reasons.push('open_obligations')
   }
@@ -336,7 +355,8 @@ function moduleAvailability(
 
 /** Every package's and module's availability for one company, from inputs already loaded. Pure. */
 export function resolveCapabilities(input: CapabilityInputs): CompanyCapabilities {
-  const packages = PACKAGES.map((p) => resolvePackage(p, input))
+  const profile = resolveStoredProfile(input.profile)
+  const packages = PACKAGES.map((p) => resolvePackage(p, input, profile.definition))
   const packageById = new Map(packages.map((p) => [p.id, p]))
   const absence = new Map<ModuleId, Absence | null>()
   const byId = new Map<ModuleId, ModuleCapability>()
@@ -392,7 +412,13 @@ export function resolveCapabilities(input: CapabilityInputs): CompanyCapabilitie
   return {
     jurisdiction: input.jurisdiction,
     ledger_currency: input.ledgerCurrency,
-    profile: { id: IMPLICIT_PROFILE.id, source: 'implicit' },
+    profile: {
+      id: profile.definition.id,
+      version: profile.definition.version,
+      name: profile.definition.name,
+      name_sv: profile.definition.nameSv,
+      source: profile.source,
+    },
     packages,
     modules: MODULES.map((m) => byId.get(m.id)!),
   }
@@ -414,21 +440,29 @@ export function capabilityDigest(
 /** One module as GET /api/v1/companies/{companyId}/capabilities publishes it. */
 export type PublishedModuleCapability = Omit<ModuleCapability, 'package' | 'availability'>
 
+/** The company's profile as v1 publishes it. */
+export type PublishedProfile = ProfileRef
+
 export interface PublishedCapabilities {
   jurisdiction: string | null
   ledger_currency: string | null
+  /** Added with profiles: the profile behind which packages the company's menus and tool list show. */
+  profile: PublishedProfile
   modules: PublishedModuleCapability[]
 }
 
 /**
  * The report v1 publishes: the module statuses, reasons and resolutions it
- * has always served, field for field. Packages, profiles and availability
- * stay internal until the API publishes them.
+ * has always served, field for field, plus the company's profile (an
+ * additive field). Packages and availability stay internal: a module in a
+ * package the profile leaves off is hidden from menus and tools/list but
+ * still works when called, so its status stays what its gates say.
  */
 export function publishedCapabilities(capabilities: CompanyCapabilities): PublishedCapabilities {
   return {
     jurisdiction: capabilities.jurisdiction,
     ledger_currency: capabilities.ledger_currency,
+    profile: { ...capabilities.profile },
     modules: capabilities.modules.map((m) => ({
       id: m.id,
       kind: m.kind,
@@ -454,7 +488,7 @@ export interface CapabilitySurface {
    * country. The menu and MCP's tools/list both hide these. A winding_down
    * package stays (its open work must be reachable), and so does a package
    * outside the plan (the paywall answers at the door with how to get it).
-   * Empty for every company today.
+   * Empty for every company without a stored profile or a package switch.
    */
   hidden: ModuleId[]
   /**
@@ -487,9 +521,20 @@ const MODULE_CAPABILITY_KEYS: readonly CapabilityKey[] = [
 
 const CAPABILITY_KEY_VALUES = new Set<string>(Object.values(CAPABILITY))
 
-/** Package choices from the company_capability_config keys that are turned off. */
-function packageChoicesFrom(disabledConfigKeys: Iterable<string>): Partial<Record<PackageId, boolean>> {
+/**
+ * Package choices from the company_capability_config keys: a package key
+ * turned off is false, one turned on is true (it wins over a profile that
+ * leaves the package off). Any other key is ignored here.
+ */
+function packageChoicesFrom(
+  disabledConfigKeys: Iterable<string>,
+  enabledConfigKeys: Iterable<string> = [],
+): Partial<Record<PackageId, boolean>> {
   const choices: Partial<Record<PackageId, boolean>> = {}
+  for (const key of enabledConfigKeys) {
+    const id = packageForConfigKey(key)
+    if (id) choices[id] = true
+  }
   for (const key of disabledConfigKeys) {
     const id = packageForConfigKey(key)
     if (id) choices[id] = false
@@ -511,11 +556,16 @@ export function capabilityInputsFromEntitlements(
     ledgerCurrency?: string | null
     entityType: unknown
     paysSalaries: boolean | null | undefined
+    /** companies.profile_id; absent or null is Standard. */
+    profileId?: string | null
+    /** companies.profile_version. */
+    profileVersion?: number | null
   },
   entitlements: {
     capabilities: readonly string[]
     entitledCapabilities?: readonly string[]
     disabledConfigKeys?: readonly string[]
+    enabledConfigKeys?: readonly string[]
   },
 ): CapabilityInputs {
   const entitled = entitlements.entitledCapabilities ?? entitlements.capabilities
@@ -528,7 +578,8 @@ export function capabilityInputsFromEntitlements(
     entitled: new Set(entitled.filter((k) => CAPABILITY_KEY_VALUES.has(k)) as CapabilityKey[]),
     disabled: new Set(disabledConfigKeys.filter((k) => CAPABILITY_KEY_VALUES.has(k)) as CapabilityKey[]),
     selfHosted: isSelfHosted(),
-    packageChoices: packageChoicesFrom(disabledConfigKeys),
+    profile: { id: company.profileId ?? null, version: company.profileVersion ?? null },
+    packageChoices: packageChoicesFrom(disabledConfigKeys, entitlements.enabledConfigKeys ?? []),
   }
 }
 
@@ -549,9 +600,34 @@ export function capabilitySurfaceWithoutCompany(entityType: unknown): Capability
 }
 
 /**
- * Load one company's inputs and resolve them: the company row, its settings
- * row, the grants and the capability config (capability keys and package
- * switches in one query), all in one parallel wave. Null when the company
+ * A company's stored profile (companies.profile_id and profile_version), in
+ * a read of its own beside the company row. Null when none is stored and
+ * when the read fails: a failed read, or a deploy that reaches a database
+ * without the columns yet, then resolves to Standard (every package on)
+ * instead of failing the menu or the report. A reader never hides on a
+ * guess. The company row reads stay as they were, so the columns are never
+ * on a path that a missing column would break.
+ */
+export async function readStoredProfile(supabase: SupabaseClient, companyId: string): Promise<StoredProfile | null> {
+  try {
+    const { data, error } = await supabase
+      .from('companies')
+      .select('profile_id, profile_version')
+      .eq('id', companyId)
+      .maybeSingle()
+    if (error || !data) return null
+    const row = data as { profile_id?: string | null; profile_version?: number | null }
+    return row.profile_id ? { id: row.profile_id, version: row.profile_version ?? null } : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Load one company's inputs and resolve them: the company row, its stored
+ * profile, its settings row, the grants and the capability config
+ * (capability keys and package switches in one query), all in one parallel
+ * wave. Null when the company
  * row does not exist. A failed read throws: the report would otherwise state
  * a reason that is not true.
  */
@@ -559,10 +635,11 @@ export async function loadCompanyCapabilities(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<CompanyCapabilities | null> {
-  const [companyRes, settingsRes, axes] = await Promise.all([
+  const [companyRes, settingsRes, axes, profile] = await Promise.all([
     supabase.from('companies').select('jurisdiction, ledger_currency, entity_type').eq('id', companyId).maybeSingle(),
     supabase.from('company_settings').select('entity_type, pays_salaries').eq('company_id', companyId).maybeSingle(),
     readCapabilityAxes(supabase, companyId, MODULE_CAPABILITY_KEYS, { configKeys: PACKAGE_CONFIG_KEYS }),
+    readStoredProfile(supabase, companyId),
   ])
   if (companyRes.error) throw new Error(`Failed to load company: ${companyRes.error.message}`)
   if (settingsRes.error) throw new Error(`Failed to load company settings: ${settingsRes.error.message}`)
@@ -579,6 +656,7 @@ export async function loadCompanyCapabilities(
     entitled: axes.entitled,
     disabled: axes.disabled,
     selfHosted: isSelfHosted(),
-    packageChoices: packageChoicesFrom(axes.disabledConfigKeys),
+    profile,
+    packageChoices: packageChoicesFrom(axes.disabledConfigKeys, axes.enabledConfigKeys),
   })
 }

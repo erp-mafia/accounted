@@ -9,10 +9,17 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { getMultiUserState } from '@/lib/entitlements/multi-user'
 import { sendCompanyInviteMail } from '@/lib/email/send-company-invite'
 import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
+import { readClientProfileChoice, storeClientProfile } from '@/lib/company/client-profile'
+import { PROFILE_IDS } from '@/lib/modules/profiles'
 
 const InviteSchema = z.object({
   email: z.string().trim().toLowerCase().pipe(z.string().email('Ogiltig e-postadress.')),
   role: z.enum(['admin', 'member', 'viewer']).default('viewer'),
+  /**
+   * The client's profile (lib/modules/profiles.ts): required when the caller
+   * is the byrå of this client company, refused from anyone else.
+   */
+  profile_id: z.enum(PROFILE_IDS).optional(),
 })
 
 /**
@@ -32,6 +39,11 @@ function maskEmail(email: string): string {
  * POST /api/company/members/invite
  * Invite a user to the current company (e.g., a client as viewer).
  * Only company owners and admins can invite.
+ *
+ * On a byrå's client company, the byrå's people must also pick the client's
+ * profile (profile_id): it is stored on the company before the invitation,
+ * so the client sees it on /invite/[token]. Anyone else sending profile_id
+ * is refused; their invite is unchanged otherwise.
  *
  * The accept link (inviteUrl) is ALWAYS returned in the response, whether or
  * not the invitation email went out, so the inviter can share it directly.
@@ -82,7 +94,17 @@ export const POST = withRouteContext(
       operation: 'company_members.invite',
     })
     if (!validation.success) return validation.response
-    const { email, role } = validation.data
+    const { email, role, profile_id: profileId } = validation.data
+
+    // Profiles and Suggestions: a byrå inviting into its client company picks
+    // the client's profile; nobody else may set one through an invite.
+    const profileChoice = await readClientProfileChoice(serviceClient, companyId, user.id)
+    if (profileChoice && !profileId) {
+      return NextResponse.json({ error: 'Välj vilken profil kunden ska starta med.' }, { status: 400 })
+    }
+    if (!profileChoice && profileId) {
+      return NextResponse.json({ error: 'Bara kundens byrå kan välja profil.' }, { status: 403 })
+    }
 
     // Check if email is already a member of this company
     const { data: existingMembers } = await serviceClient
@@ -189,6 +211,16 @@ export const POST = withRouteContext(
         } else {
           userProvisioned = true
         }
+      }
+    }
+
+    // The byrå's profile pick, stored before the invitation exists so the
+    // invite page shows what the byrå prepared. Unchanged picks write nothing.
+    if (profileChoice && profileId && profileId !== profileChoice.current) {
+      const { error: profileError } = await storeClientProfile(serviceClient, companyId, profileId)
+      if (profileError) {
+        log.error('client profile write failed', new Error(String((profileError as { message?: string }).message ?? profileError)))
+        return NextResponse.json({ error: 'Kunde inte spara kundens profil.' }, { status: 500 })
       }
     }
 

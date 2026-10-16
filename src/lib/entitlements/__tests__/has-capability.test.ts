@@ -428,7 +428,7 @@ describe('readCapabilityAxes', () => {
     expect([...axes.disabled]).toEqual(['ai'])
   })
 
-  it('reads every key in one grant RPC and one config query narrowed to disabled rows of those keys', async () => {
+  it('reads every key in one grant RPC and one config query of those keys, on and off', async () => {
     const calls: RecordedCall[] = []
     const supabase = makeRecordingSupabase({ capability_grants: { data: [] }, company_capability_config: { data: [] } }, calls)
     await readCapabilityAxes(supabase, COMPANY, [...KEYS, CAPABILITY.ai])
@@ -437,8 +437,27 @@ describe('readCapabilityAxes', () => {
     ])
     const config = calls.filter((c) => c.table === 'company_capability_config')
     expect(config).toContainEqual({ table: 'company_capability_config', method: 'eq', args: ['company_id', COMPANY] })
-    expect(config).toContainEqual({ table: 'company_capability_config', method: 'eq', args: ['enabled', false] })
+    expect(config).toContainEqual({ table: 'company_capability_config', method: 'select', args: ['capability_key, enabled'] })
     expect(config).toContainEqual({ table: 'company_capability_config', method: 'in', args: ['capability_key', KEYS] })
+    expect(config.filter((c) => c.method === 'eq' && c.args[0] === 'enabled')).toEqual([])
+  })
+
+  it('counts a row as turned off unless it says enabled = true, and reports a config-only key turned on apart', async () => {
+    const supabase = makeSupabase({
+      capability_grants: { data: [] },
+      company_capability_config: {
+        data: [
+          { capability_key: 'ai', enabled: true },
+          { capability_key: 'bank_sync', enabled: false },
+          { capability_key: 'package:payroll', enabled: true },
+          { capability_key: 'package:bank', enabled: false },
+        ],
+      },
+    })
+    const axes = await readCapabilityAxes(supabase, COMPANY, KEYS, { configKeys: ['package:payroll', 'package:bank'] })
+    expect([...axes.disabled]).toEqual(['bank_sync'])
+    expect([...axes.disabledConfigKeys]).toEqual(['package:bank'])
+    expect([...axes.enabledConfigKeys]).toEqual(['package:payroll'])
   })
 
   it('on a self-host holds local keys outright and asks only for connector grants of connector keys', async () => {
@@ -517,6 +536,30 @@ describe('getCompanyEntitlements', () => {
     expect(result.capabilities).toEqual([CAPABILITY.ai])
     expect(result.entitledCapabilities).toEqual([CAPABILITY.ai, CAPABILITY.bank_sync])
     expect(result.disabledConfigKeys).toEqual(['bank_sync', 'package:assets'])
+    expect(result.enabledConfigKeys).toEqual([])
+  })
+
+  it('reads every config row, subtracts only the ones turned off, and reports the ones turned on apart', async () => {
+    const supabase = makeSupabase({
+      capability_grants: {
+        data: [
+          { capability_key: CAPABILITY.ai, expires_at: null, source: 'stripe', team_id: null },
+          { capability_key: CAPABILITY.bank_sync, expires_at: null, source: 'stripe', team_id: null },
+        ],
+      },
+      company_capability_config: {
+        data: [
+          { capability_key: 'ai', enabled: true },
+          { capability_key: 'bank_sync', enabled: false },
+          { capability_key: 'package:payroll', enabled: true },
+        ],
+      },
+      company_subscriptions: { data: { status: 'active' } },
+    })
+    const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.capabilities).toEqual([CAPABILITY.ai])
+    expect(result.disabledConfigKeys).toEqual(['bank_sync'])
+    expect(result.enabledConfigKeys).toEqual(['ai', 'package:payroll'])
   })
 
   it('reports no turned-off config keys when nothing is entitled, and every paid key under the paywall bypass', async () => {
