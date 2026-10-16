@@ -13,7 +13,9 @@
  * Any valid key may call it, whatever its scopes (its endpoint declares scope 'authenticated'):
  * a key missing a scope must still be able to learn which one it misses.
  * It returns company ids and roles only, never names or org numbers, which
- * stay behind companies:read on GET /api/v1/companies. Echoing a grant to
+ * stay behind companies:read on GET /api/v1/companies. The one name it
+ * returns is the key's own service account's (id, name, handle; null for a
+ * person's key): the actor its writes are recorded under. Echoing a grant to
  * its own holder is fine; logging it is not, so nothing here logs the
  * scopes.
  */
@@ -23,6 +25,8 @@ import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { companyWriteRefusal, withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { handlePattern, toHandle } from '@/lib/handles'
+import type { ApiKeyServiceAccount } from '@/lib/auth/api-keys'
 
 const ROLES = ['owner', 'admin', 'member', 'viewer'] as const
 
@@ -33,12 +37,31 @@ const KeyCompany = z.object({
   read_only_code: z.enum(['ROLE_READ_ONLY', 'CONNECTION_READ_ONLY']).nullable(),
 })
 
+const KeyServiceAccount = z.object({
+  id: z.string().uuid(),
+  name: z.string().describe('The account\'s name: the actor every write made with this key is recorded under.'),
+  handle: z
+    .string()
+    .regex(new RegExp(handlePattern('service_account')))
+    .describe('Typed handle of this service account: svc_ plus its id as 32 lowercase hex. Accepted wherever the id is.'),
+})
+
 const ApiKeyGrant = z.object({
   mode: z.enum(['live', 'test']),
   scopes: z.array(z.string()),
   company_access: z.enum(['all_memberships', 'allowlist']),
   companies: z.array(KeyCompany),
+  service_account: KeyServiceAccount.nullable().describe(
+    'The service account the key belongs to, or null for a key that belongs to a person. A service account\'s key acts for its sponsor and reaches only the account\'s company.',
+  ),
 })
+
+/** The calling key's service account as the response names it, or null for a person's key. */
+function serviceAccountView(account: ApiKeyServiceAccount | null | undefined) {
+  if (!account) return null
+  // The id comes from service_accounts.id, a uuid column, so it always has a handle.
+  return { id: account.id, name: account.name, handle: toHandle('service_account', account.id)! }
+}
 
 registerEndpoint({
   operation: 'api-key.get',
@@ -53,7 +76,8 @@ registerEndpoint({
     '(`CONNECTION_READ_ONLY`): the same codes a refused write answers with. Any valid key may call this, whatever its ' +
     'scopes, and it works the same for keys issued through MCP OAuth. A key can write to company X with scope S when ' +
     '`scopes` contains S, X is in `companies` with `access` `read_write`, and `mode` is `live` or the endpoint supports ' +
-    'dry-run. For document uploads: `documents:write`, `read_write`, and `mode` `live`.',
+    'dry-run. For document uploads: `documents:write`, `read_write`, and `mode` `live`. `service_account` names the ' +
+    'service account the key belongs to (`id`, `name`, `handle`), or is null for a key that belongs to a person.',
   useWhen:
     'You connect a customer key and want to check, before the first real call, that it carries the scopes you need and can write to the company you will use, so the customer can fix the key while still on your connect screen.',
   doNotUseFor:
@@ -64,6 +88,7 @@ registerEndpoint({
     'With `company_access` `all_memberships`, companies the user joins later become reachable too; an `allowlist` key never reaches a company outside its list, including one it creates with POST /companies.',
     'A non-owner membership in a company whose multi-user plan has lapsed is refused on every call (403 with reason `multi_user_frozen`); this response does not show that state.',
     'Archived companies are not listed, the same as GET /api/v1/companies.',
+    'A service account\'s key reaches only the account\'s company, and every write it makes is recorded under the account\'s name. When the sponsor stops being an owner or admin, the key is refused with 403 SERVICE_ACCOUNT_SUSPENDED, here too.',
   ],
   example: {
     response: {
@@ -85,6 +110,7 @@ registerEndpoint({
             read_only_code: 'CONNECTION_READ_ONLY',
           },
         ],
+        service_account: null,
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
@@ -96,7 +122,7 @@ registerEndpoint({
   dryRunSupported: false,
   response: {
     success: dataEnvelope(ApiKeyGrant),
-    errorCodes: ['UNAUTHORIZED', 'RATE_LIMITED', 'INTERNAL_ERROR'],
+    errorCodes: ['UNAUTHORIZED', 'SERVICE_ACCOUNT_SUSPENDED', 'RATE_LIMITED', 'INTERNAL_ERROR'],
   },
 })
 
@@ -132,6 +158,7 @@ export const GET = withApiV1('api-key.get', async (_request, ctx) => {
       scopes: ctx.scopes,
       company_access: ctx.allowedCompanyIds ? ('allowlist' as const) : ('all_memberships' as const),
       companies,
+      service_account: serviceAccountView(ctx.serviceAccount),
     },
     { requestId: ctx.requestId },
   )

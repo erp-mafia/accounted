@@ -295,7 +295,14 @@ export type ReconciliationMethod = 'auto_exact' | 'auto_date_range' | 'auto_refe
 
 // Processing history (behandlingshistorik): event-driven audit trail per BFNAR 2013:2 kap 8
 
-export type ProcessingHistoryActorType = 'user' | 'system' | 'llm' | 'cron' | 'api_key'
+/**
+ * Who an event in processing_history names (the actor JSONB's `type`).
+ * 'service_account': a service account's key (lib/service-accounts), with the
+ * key's id and the account's name as the label, where a person's key records
+ * 'api_key'. Kept in step with heal_cash_account_twins, the one SQL function
+ * that checks the list (migration 20261016130000).
+ */
+export type ProcessingHistoryActorType = 'user' | 'system' | 'llm' | 'cron' | 'api_key' | 'service_account'
 
 export interface ProcessingHistoryActor {
   type: ProcessingHistoryActorType

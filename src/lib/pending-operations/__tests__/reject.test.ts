@@ -101,6 +101,27 @@ describe('rejectPendingOperations', () => {
     )
   })
 
+  it("records a service account's key as service_account in the history row, named after the account", async () => {
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: [{ id: 'op-1', status: 'pending', operation_type: 'x', risk_level: 'low' }] },
+      { data: [{ id: 'op-1' }], error: null },
+    ])
+
+    await rejectPendingOperations(supabase as never, {
+      companyId: 'company-1',
+      ids: ['op-1'],
+      actor: { userId: 'sponsor-1', type: 'service_account', id: 'key-sa', label: 'Nattlig synk' },
+      channel: 'api',
+    })
+
+    const update = findCalls('pending_operations', 'update')[0]?.[0] as Record<string, unknown>
+    expect(update.result_data).toEqual({ rejected_by: 'sponsor-1', rejected_via: 'service_account', actor_id: 'key-sa' })
+    expect(mockAppend).toHaveBeenCalledWith(
+      expect.objectContaining({ actor: { type: 'service_account', id: 'key-sa', label: 'Nattlig synk' } }),
+    )
+  })
+
   it('reports missing, already-resolved and lost-race rows without writing over them', async () => {
     const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
     enqueueMany([

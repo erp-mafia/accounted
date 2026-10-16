@@ -27,7 +27,7 @@ const log = createLogger('pending-operations/reject')
 export interface RejectActor {
   /** The authenticated user the rejection is recorded under. */
   userId: string
-  /** 'user' for a person in the app; the MCP actor type otherwise (api_key, mcp_oauth, ...). */
+  /** 'user' for a person in the app; the key's actor type otherwise (api_key, service_account, ...). */
   type: string
   /** The API key or OAuth client id, when the decision came through one. */
   id?: string
@@ -129,7 +129,10 @@ export async function rejectPendingOperations(
             has_reason: reason !== undefined,
           },
           actor: {
-            type: actor.type === 'api_key' ? 'api_key' : 'user',
+            // A key records its own kind: a service account's key as
+            // service_account (labelled with the account's name), a person's
+            // key as api_key; everything else is a person.
+            type: actor.type === 'api_key' || actor.type === 'service_account' ? actor.type : 'user',
             id: actor.id ?? actor.userId,
             ...(actor.label ? { label: actor.label } : {}),
           },

@@ -6,8 +6,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const commitMock = vi.hoisted(() => vi.fn())
+const appendMock = vi.hoisted(() => vi.fn())
 vi.mock('../commit', () => ({ commitPendingOperation: commitMock }))
-vi.mock('@/lib/processing-history/append', () => ({ appendProcessingHistory: vi.fn().mockResolvedValue(undefined) }))
+vi.mock('@/lib/processing-history/append', () => ({ appendProcessingHistory: appendMock }))
 
 import { OAUTH_MCP_KEY_NAME } from '@/lib/auth/api-keys'
 import { approvePendingOperationAsApiKey } from '../api-approval'
@@ -54,7 +55,12 @@ async function approveAs(approver: Parameters<typeof approvePendingOperationAsAp
 beforeEach(() => {
   commitMock.mockReset()
   commitMock.mockResolvedValue({ status: 'committed', data: {} })
+  appendMock.mockReset()
+  appendMock.mockResolvedValue('event-1')
 })
+
+/** The actor of the PendingOperationApproved processing_history row. */
+const historyActor = () => (appendMock.mock.calls[0]![0] as { actor: Record<string, unknown> }).actor
 
 describe('approvePendingOperationAsApiKey commit actor', () => {
   it('records a person key as api_key with its name', async () => {
@@ -63,6 +69,7 @@ describe('approvePendingOperationAsApiKey commit actor', () => {
       commitMethod: 'api_key',
       actor: { type: 'api_key', label: 'Integration', unattendedCommitLimit: 500 },
     })
+    expect(historyActor()).toEqual({ type: 'api_key', id: 'k1', label: 'Integration' })
   })
 
   it('records an OAuth connection as mcp_oauth', async () => {
@@ -84,5 +91,7 @@ describe('approvePendingOperationAsApiKey commit actor', () => {
     })
     // The commit runs as the sponsor: the user the rows carry.
     expect(commitMock.mock.calls[0]![1]).toBe('sponsor-1')
+    // The processing history names the service account too, not api_key.
+    expect(historyActor()).toEqual({ type: 'service_account', id: 'k-sa', label: 'Nattlig synk' })
   })
 })

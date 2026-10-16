@@ -290,4 +290,21 @@ describe('MCP lazy authentication', () => {
     const response = await handleMcpRequest(rpc('tools/list', undefined, { token: 'gnubok_sk_bad' }))
     expect(response.status).toBe(401)
   })
+
+  it("answers a suspended service account's key with the structured 403 v1 gives, not the 401 challenge", async () => {
+    mocks.validateApiKey.mockResolvedValueOnce({
+      error: 'Service account suspended: its sponsor is no longer an owner or admin of the company',
+      status: 403,
+      code: 'SERVICE_ACCOUNT_SUSPENDED',
+    })
+    const response = await handleMcpRequest(
+      rpc('tools/call', { name: 'gnubok_list_companies', arguments: {} }, { token: 'gnubok_sk_suspended' })
+    )
+    expect(response.status).toBe(403)
+    // No sign-in challenge: signing in again cannot lift a suspension.
+    expect(response.headers.get('WWW-Authenticate')).toBeNull()
+    const body = await response.json()
+    expect(body.error).toMatchObject({ code: 'SERVICE_ACCOUNT_SUSPENDED', message: expect.any(String), message_en: expect.any(String) })
+    expect(body.error.message_en).toContain('suspended')
+  })
 })

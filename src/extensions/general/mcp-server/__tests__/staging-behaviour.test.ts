@@ -613,6 +613,16 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   gnubok_book_invoice: { rows: DEFERRED_BOOKING_ROWS },
   gnubok_bulk_book_invoices: { rows: DEFERRED_BOOKING_ROWS },
   gnubok_book_supplier_invoice: { rows: DEFERRED_BOOKING_ROWS },
+  // Revoke a service account: the caller owns the company and sponsors a live
+  // account with one live key; the preview reads them and writes nothing.
+  gnubok_revoke_service_account: {
+    rows: {
+      company_members: { user_id: USER_ID, role: 'owner' },
+      companies: { archived_at: null },
+      service_accounts: { name: 'Nattlig synk', sponsor_user_id: USER_ID, created_by: USER_ID, created_at: '2026-10-16T08:00:00Z', revoked_at: null, revoked_by: null },
+      api_keys: { name: 'Nattlig synk', key_prefix: 'gnubok_sk_Xb3k', scopes: ['invoices:read'], mode: 'live', revoked_at: null, service_account_id: SOME_UUID },
+    },
+  },
   // Makulera a quote (accounted#20): a sent quote; the preview reads it and writes nothing.
   gnubok_cancel_quote_or_proforma: {
     rows: { invoices: { document_type: 'quote', status: 'sent', quote_status: 'open', invoice_number: 'OF-007' } },

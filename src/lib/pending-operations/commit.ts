@@ -67,7 +67,9 @@ import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { foldSellerVatIntoCost, sellerVatIsCost } from '@/lib/bookkeeping/vat-registration'
 import { isReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
-import type { CommitActor } from '@/lib/bookkeeping/actor-context'
+import { getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
+import { createServiceClient } from '@/lib/supabase/server'
+import { revokeServiceAccount } from '@/lib/service-accounts/service'
 import { runInOperationCommit } from './commit-scope'
 import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
 import {
@@ -1249,6 +1251,62 @@ function invalidStagedParams(err: unknown): ExecutorResult {
     return { error: `Invalid ${issue?.path?.join('.') ?? 'params'}: ${issue?.message ?? 'validation failed'}`, status: 400 }
   }
   throw err
+}
+
+const RevokeServiceAccountParamsSchema = z.object({ service_account_id: z.string().uuid() })
+
+/**
+ * revoke_service_account (gnubok_revoke_service_account): revoke one of the
+ * company's service accounts, and with it every key it has (migration
+ * 20261016120000). revoke_service_account is the authority: it re-checks
+ * that the approver is an owner or admin, and it is executable by
+ * service_role only, so the call goes through the service client on every
+ * path, an approval in the app included (a session client cannot call it).
+ * `userId` is the approver each commit path verified. A service account's
+ * own key never manages service accounts, so its approval is handed back
+ * (403, the op stays pending) for a person to give.
+ */
+async function commitRevokeServiceAccount(
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const parsed = RevokeServiceAccountParamsSchema.safeParse(params)
+  if (!parsed.success) return invalidStagedParams(parsed.error)
+  const actor = getActor()
+  if (actor?.type === 'service_account') {
+    const entry = getErrorEntry('SERVICE_ACCOUNT_KEY_NOT_PERMITTED')
+    return {
+      error: entry?.message_sv ?? 'SERVICE_ACCOUNT_KEY_NOT_PERMITTED',
+      errorCode: 'SERVICE_ACCOUNT_KEY_NOT_PERMITTED',
+      status: entry?.httpStatus ?? 403,
+    }
+  }
+  const result = await revokeServiceAccount(
+    createServiceClient(),
+    companyId,
+    { userId, actor: { type: actor?.type ?? 'user', ...(actor?.label ? { label: actor.label } : {}) } },
+    parsed.data.service_account_id,
+  )
+  if (!result.ok) {
+    const entry = getErrorEntry(result.code)
+    return {
+      error: entry?.message_sv ?? result.code,
+      errorCode: result.code,
+      status: entry?.httpStatus ?? 400,
+      ...(result.details ? { data: result.details } : {}),
+    }
+  }
+  const account = result.value
+  return {
+    data: {
+      service_account_id: account.id,
+      name: account.name,
+      status: account.status,
+      revoked_at: account.revoked_at,
+      revoked_by: account.revoked_by,
+    },
+  }
 }
 
 /**
@@ -6918,6 +6976,9 @@ async function commitPendingOperationInner(
         break
       case 'delete_draft_invoice':
         result = await commitDeleteDraftInvoice(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'revoke_service_account':
+        result = await commitRevokeServiceAccount(userId, companyId, pendingOp.params)
         break
       case 'import_sie':
         result = await commitImportSie(supabase, userId, companyId, pendingOp.params)
