@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 
 export interface ReconciliationResult {
   supplier_ledger_total: number
@@ -95,7 +96,7 @@ export async function generateReconciliation(
         .eq('company_id', companyId)
         .eq('fiscal_period_id', periodId)
         .in('status', ['posted', 'reversed']),
-    filterLines: (q: EntryLinesQuery) => q.eq('account_number', '2440'),
+    filterLines: (q: EntryLinesQuery) => q.eq('account_number', resolveAccountRole(PINNED_JURISDICTION, 'accounts_payable')),
     attachEntriesAs: null,
   })
 

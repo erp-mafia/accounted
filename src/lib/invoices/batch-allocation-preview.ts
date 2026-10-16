@@ -1,5 +1,6 @@
 import { roundOre } from '@/lib/money'
 import { FX_GAIN_ACCOUNT, FX_LOSS_ACCOUNT } from '@/lib/bookkeeping/ore-rounding'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 
 /**
  * The verifikat `match_batch_allocate` will post, computed from the same
@@ -84,9 +85,9 @@ export interface BatchAllocationPreview {
   fx: 'none' | 'included' | 'computed_at_commit'
 }
 
-const AR_ACCOUNT = '1510'
-const AP_ACCOUNT = '2440'
-const ORE_ROUNDING_ACCOUNT = '3740'
+const AR_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'accounts_receivable')
+const AP_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'accounts_payable')
+const ORE_ROUNDING_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'rounding')
 
 /** `ORDER BY COALESCE(invoice_id, supplier_invoice_id, '')`: plain text order. */
 function allocationSortKey(a: BatchAllocationPreviewAllocation): string {

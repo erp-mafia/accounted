@@ -11,6 +11,7 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
+import { DEFAULT_SETTLEMENT_ACCOUNT } from '@/lib/reconciliation/cash-account-scope'
 
 // Mirrors ReconciliationStatus from lib/reconciliation/bank-reconciliation.ts:
 // the handler passes that object straight through. This schema previously
@@ -146,14 +147,14 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     })
     if (!parsed.success) return v1ValidationError(ctx, parsed.error)
 
-    const accountNumber = parsed.data.account_number ?? '1930'
+    const accountNumber = parsed.data.account_number ?? DEFAULT_SETTLEMENT_ACCOUNT
     const { data: cashAccount } = await ctx.supabase
       .from('cash_accounts')
       .select('id, currency, is_primary')
       .eq('company_id', ctx.companyId!)
       .eq('ledger_account', accountNumber)
       .maybeSingle()
-    if (!cashAccount && accountNumber !== '1930') {
+    if (!cashAccount && accountNumber !== DEFAULT_SETTLEMENT_ACCOUNT) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
         details: {

@@ -1,0 +1,1 @@
+[2026-10-16] resolveAccountRole(company, role) throws a typed AccountRoleError for an unknown jurisdiction, an unknown role or a role the pack omits, never a Swedish default: a non-SE company booked on a BAS number would misbook silently, while a refusal fails before anything posts.

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
@@ -108,9 +109,13 @@ export interface SpecificationProvider {
   label_en: string
 }
 
+/** The control accounts the two reskontra tie-outs specify (BAS 1510 and 2440 in the SE pack). */
+const RECEIVABLES_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'accounts_receivable')
+const PAYABLES_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'accounts_payable')
+
 export const SPECIFICATION_PROVIDERS: Record<string, SpecificationProvider> = {
-  '1510': { key: 'ar', label_sv: 'Kundreskontra, öppna fakturor', label_en: 'Customer ledger, open invoices' },
-  '2440': { key: 'ap', label_sv: 'Leverantörsreskontra, öppna fakturor', label_en: 'Supplier ledger, open invoices' },
+  [RECEIVABLES_ACCOUNT]: { key: 'ar', label_sv: 'Kundreskontra, öppna fakturor', label_en: 'Customer ledger, open invoices' },
+  [PAYABLES_ACCOUNT]: { key: 'ap', label_sv: 'Leverantörsreskontra, öppna fakturor', label_en: 'Supplier ledger, open invoices' },
   '2920': { key: 'vacation', label_sv: 'Semesterlöneskuld enligt lönekörningar', label_en: 'Vacation liability per payroll runs' },
   '2940': {
     key: 'vacation',
@@ -137,21 +142,21 @@ export async function loadSpecificationAmounts(
   const wants = (n: string) => !onlyAccounts || onlyAccounts.has(n)
   const tasks: Array<Promise<void>> = []
 
-  if (wants('1510')) {
+  if (wants(RECEIVABLES_ACCOUNT)) {
     tasks.push(
       generateARReconciliation(supabase, companyId, snapshot.period.id)
         .then((r) => {
-          out.set('1510', { amount: roundOre(r.ar_ledger_total), unconverted_fx_count: r.unconverted_fx_count })
+          out.set(RECEIVABLES_ACCOUNT, { amount: roundOre(r.ar_ledger_total), unconverted_fx_count: r.unconverted_fx_count })
         })
         .catch((err) => log.warn('AR specification failed', { companyId, error: String(err) })),
     )
   }
-  if (wants('2440')) {
+  if (wants(PAYABLES_ACCOUNT)) {
     tasks.push(
       generateSupplierReconciliation(supabase, companyId, snapshot.period.id)
         .then((r) => {
           // Liabilities carry credit balances: negative in ledger sign.
-          out.set('2440', { amount: roundOre(-r.supplier_ledger_total), unconverted_fx_count: r.unconverted_fx_count })
+          out.set(PAYABLES_ACCOUNT, { amount: roundOre(-r.supplier_ledger_total), unconverted_fx_count: r.unconverted_fx_count })
         })
         .catch((err) => log.warn('AP specification failed', { companyId, error: String(err) })),
     )

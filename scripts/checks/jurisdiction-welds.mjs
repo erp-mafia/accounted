@@ -53,6 +53,10 @@ export const SE_PACK_TERRITORY = [
   // The BAS chart, its SRU mapping, and the generated account-number list.
   'lib/bookkeeping/bas-data/',
   'lib/bookkeeping/bas-account-numbers.ts',
+  // The SE pack's BAS account per account role. Only se-bas.ts: the registry
+  // and resolver beside it (account-roles/index.ts, roles.ts) are the
+  // jurisdiction-agnostic seam and stay BAS-free.
+  'lib/bookkeeping/account-roles/se-bas.ts',
   // The SE legal-form profiles: equity, settlement and closing accounts per
   // form. Only the se-* profiles: the registry beside them (forms/index.ts,
   // forms/types.ts) is the jurisdiction-agnostic seam and stays BAS-free.

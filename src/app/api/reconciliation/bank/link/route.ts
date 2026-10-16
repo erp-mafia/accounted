@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { linkTransactionToVouchers, manualLink } from '@/lib/reconciliation/bank-reconciliation'
+import { DEFAULT_SETTLEMENT_ACCOUNT } from '@/lib/reconciliation/cash-account-scope'
 import { validateBody } from '@/lib/api/validate'
 import { BankLinkSchema } from '@/lib/api/schemas'
 
@@ -16,7 +17,7 @@ export const POST = withRouteContext(
     // verifikat (Matcha mot verifikat, the duplicate guard's match), so the
     // row's underlag goes onto it (crm#1101).
     const result = journal_entry_id
-      ? await manualLink(supabase, companyId, transaction_id, journal_entry_id, user.id, account_number ?? '1930', {
+      ? await manualLink(supabase, companyId, transaction_id, journal_entry_id, user.id, account_number ?? DEFAULT_SETTLEMENT_ACCOUNT, {
           anchorUnderlag: true,
         })
       : await linkTransactionToVouchers(
@@ -25,7 +26,7 @@ export const POST = withRouteContext(
           transaction_id,
           allocations ?? [],
           user.id,
-          account_number ?? '1930',
+          account_number ?? DEFAULT_SETTLEMENT_ACCOUNT,
         )
 
     if (!result.success) {

@@ -1,0 +1,1 @@
+[2026-10-16] Account roles live in lib/bookkeeping/account-roles (ledger kernel, BAS-free seam) with the SE BAS accounts in se-bas.ts on SE_PACK_TERRITORY, mirroring lib/company/forms; not under bas-data/, which client-server-only keeps out of client bundles.

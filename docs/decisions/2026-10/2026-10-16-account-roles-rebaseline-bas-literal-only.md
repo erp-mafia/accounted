@@ -1,0 +1,1 @@
+[2026-10-16] Account roles slice 1 lowers only the bas-account-literal baseline (1542 to 1502) instead of a full --update: the naive-ore-round, hand-rolled-invariant and dialog-overflow falls already on main belong to their own campaigns, and locking them here could fail open merge requests.

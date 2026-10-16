@@ -22,6 +22,7 @@ import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { resolveLedgerSettlements } from './ledger-settlement-store'
 import { findOpeningBalanceFloor, sumAccountBalance } from './gl-balance'
 import { ID_READ_CHUNK, MAX_BANK_ROW_SPLIT } from './limits'
+import { DEFAULT_SETTLEMENT_ACCOUNT } from './cash-account-scope'
 
 const log = createLogger('reconciliation.bank')
 
@@ -577,7 +578,7 @@ export async function runReconciliation(
     dateFrom,
     dateTo,
     dryRun = false,
-    accountNumber = '1930',
+    accountNumber = DEFAULT_SETTLEMENT_ACCOUNT,
     currency = 'SEK',
     cashAccountId,
     includeUnassigned = true,
@@ -807,7 +808,7 @@ export async function getReconciliationStatus(
   companyId: string,
   dateFrom?: string,
   dateTo?: string,
-  bankAccount = '1930',
+  bankAccount = DEFAULT_SETTLEMENT_ACCOUNT,
   currency: string = 'SEK',
   cashAccountId?: string,
   includeUnassigned: boolean = true,
@@ -1564,7 +1565,7 @@ export async function manualLink(
   transactionId: string,
   journalEntryId: string,
   userId: string,
-  accountNumber: string = '1930',
+  accountNumber: string = DEFAULT_SETTLEMENT_ACCOUNT,
   options: { anchorUnderlag?: boolean } = {},
 ): Promise<{ success: boolean; error?: string; code?: BankLinkRefusalCode }> {
   // Every check is the bank link core's (lib/transactions/bank-link.ts), the
@@ -1680,7 +1681,7 @@ export async function linkTransactionToVouchers(
   transactionId: string,
   allocations: VoucherAllocationInput[],
   userId: string,
-  accountNumber: string = '1930',
+  accountNumber: string = DEFAULT_SETTLEMENT_ACCOUNT,
   options: { dryRun?: boolean } = {},
 ): Promise<LinkTransactionToVouchersResult> {
   const journalEntryIds = allocations.map((a) => a.journal_entry_id)
@@ -2195,7 +2196,7 @@ export async function autoReconcileTransactionForLinkedVoucher(
   }
   // Companies created before cash_accounts seeding reconcile against 1930/SEK.
   if (cashByAccount.size === 0) {
-    cashByAccount.set('1930', { id: null, currency: 'SEK', isPrimary: true })
+    cashByAccount.set(DEFAULT_SETTLEMENT_ACCOUNT, { id: null, currency: 'SEK', isPrimary: true })
   }
 
   const cashLines = (lines as Array<LedgerLineAmount & { account_number: string }>).filter((l) =>
@@ -2310,7 +2311,7 @@ export async function autoReconcileTransactionForLinkedVoucher(
 export async function fetchUnlinkedGLLines(
   supabase: SupabaseClient,
   companyId: string,
-  accountNumber: string = '1930',
+  accountNumber: string = DEFAULT_SETTLEMENT_ACCOUNT,
   dateFrom?: string,
   dateTo?: string,
 ): Promise<UnlinkedGLLine[]> {
@@ -2702,7 +2703,7 @@ export interface GLLineForMatching extends UnlinkedGLLine {
 export async function fetchGLLinesForMatching(
   supabase: SupabaseClient,
   companyId: string,
-  accountNumber: string = '1930',
+  accountNumber: string = DEFAULT_SETTLEMENT_ACCOUNT,
   dateFrom?: string,
   dateTo?: string,
   includeMatched: boolean = false,

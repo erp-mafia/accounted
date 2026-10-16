@@ -1,0 +1,1 @@
+[2026-10-16] Account roles slice 1 moves 40 read-side and preview sites (reconciliation, reports, previews, MCP suggestion) and edits no posting file; the VAT settlement constants the skattekonto booking reads keep their value, pinned by its tests and a new constant pin test.
