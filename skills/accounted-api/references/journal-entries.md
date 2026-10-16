@@ -1563,6 +1563,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     fiscal_period_id: string,
     voucher_series: string,
     gap_start: number,

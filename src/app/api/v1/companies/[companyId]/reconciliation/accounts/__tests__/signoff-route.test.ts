@@ -186,4 +186,26 @@ describe('v1 reconciliation sign-off', () => {
     const already = await reopenPOST(req(`${BASE}/skattekonto/signoff/${SIGNOFF_ID}/reopen`, { method: 'POST' }), params({ accountKey: 'skattekonto', signoffId: SIGNOFF_ID }))
     expect(already.status).toBe(409)
   })
+
+  it('takes an rso_ handle as the sign-off id and answers handle beside every sign-off id', async () => {
+    const RSO = 'rso_77777777777747778777777777777777'
+    authOk(['reconciliation:read', 'reconciliation:signoff'])
+
+    const reopened = await reopenPOST(req(`${BASE}/skattekonto/signoff/${RSO}/reopen`, { method: 'POST' }), params({ accountKey: 'skattekonto', signoffId: RSO }))
+    expect(reopened.status).toBe(200)
+    expect(reopenMock).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, 'user-1', 'skattekonto', SIGNOFF_ID, { reason: null })
+    expect((await reopened.json()).data.signoff).toMatchObject({ id: SIGNOFF_ID, handle: RSO })
+
+    const history = await listGET(req(`${BASE}/skattekonto/signoff`), params({ accountKey: 'skattekonto' }))
+    expect((await history.json()).data.signoffs[0]).toMatchObject({ id: SIGNOFF_ID, handle: RSO })
+
+    const signed = await signPOST(req(`${BASE}/skattekonto/signoff`, { method: 'POST', body: { through_date: '2026-07-31' } }), params({ accountKey: 'skattekonto' }))
+    expect((await signed.json()).data.signoff).toMatchObject({ id: SIGNOFF_ID, handle: RSO })
+
+    // Another type's handle where the sign-off id goes is refused at the door.
+    const JE = 'je_77777777777747778777777777777777'
+    const wrong = await reopenPOST(req(`${BASE}/skattekonto/signoff/${JE}/reopen`, { method: 'POST' }), params({ accountKey: 'skattekonto', signoffId: JE }))
+    expect(wrong.status).toBe(400)
+    expect((await wrong.json()).error.code).toBe('HANDLE_TYPE_MISMATCH')
+  })
 })

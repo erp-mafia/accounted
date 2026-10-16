@@ -40,7 +40,7 @@ Response `200`:
 ```ts
 {
   data: {
-    team: { id: string, name: string } | null,
+    team: { id: string, handle?: string, name: string } | null,
     scope: { truncated: boolean, remaining_company_ids: string[], unresolved: string[], dormant: string[] },
     summary: { companies: number, matched: number, unbooked_total: number, inbox_total: number, overdue: number, action_needed: number },
     companies: { company_id: string, name: string, org_number: string | null, entity_type: string | null, role: "owner" | "admin" | "member" | "viewer", team_id: string | null, unbooked_count: number, inbox_count: number, next_deadline: { title: string, due_date: string, tax_deadline_type: string | null, urgency: "overdue" | "action_needed" | "upcoming" } | null, last_booked_date: string | null, deadlines: { title: string, due_date: string, tax_deadline_type: string | null, urgency: "overdue" | "action_needed" | "upcoming" }[] }[]

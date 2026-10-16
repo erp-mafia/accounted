@@ -687,6 +687,8 @@ describe('GET /audit-trail', () => {
     const body = await res.json()
     expect(body.data.entries).toHaveLength(1)
     expect(body.data.entries[0].id).toBe(ID1)
+    // Typed handle (lib/handles) beside the unchanged id.
+    expect(body.data.entries[0].handle).toBe('aud_11111111111141118111111111111111')
     expect(body.data.next_cursor).toEqual(expect.any(String))
     const audit = client.calls.filter((c) => c.table === 'audit_log')
     expect(audit).toContainEqual({ table: 'audit_log', method: 'eq', args: ['company_id', COMPANY_ID] })

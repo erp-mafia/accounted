@@ -1,0 +1,1 @@
+[2026-10-16] New permanent prefixes aud audit log entry, rso reconciliation sign-off, vgap voucher gap explanation, team team; the sign-off field base is reconciliation_signoff, as a bare signoff_id does not say which sign-off: only accounts (keyed by account_number) remain handle follow-ups.

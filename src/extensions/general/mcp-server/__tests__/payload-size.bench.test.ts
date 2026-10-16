@@ -3,7 +3,7 @@ import { tools, deriveToolMeta, isDefaultCatalogTool } from '../server'
 import { isMultiCompanyOnlyTool, projectToolInputSchema } from '../company-routing'
 
 // Ceiling for the catalog a single-company key is served (see the second case).
-const SIMPLE_CATALOG_CEILING = 61_100
+const SIMPLE_CATALOG_CEILING = 61_300
 import { projectToolReferences } from '../tool-namespace'
 
 // Mirror the real tools/list serializer, including the derived staging _meta
@@ -723,6 +723,14 @@ describe('tools/list payload size guard', () => {
     //     (withRetryKey, retry-key.ts), +192. Safety, not convenience: the
     //     stateless MCP revision recovers a broken call by resending it.
     //     Measured 66 087 (single-company 61 078).
+    //   * Typed id fields admit their handle (2026-10-16, handle-args.ts):
+    //     the id fields that declared format uuid advertise one pattern per
+    //     type instead, ^(fp_[0-9a-f]{32}|[-0-9a-fA-F]{36})$, so a host that
+    //     enforces formats lets a handle through; company_id, on every
+    //     company-scoped tool, drops its format rather than carry the
+    //     pattern 135 times. With the team_ prefix, gnubok_create_company's
+    //     team_id is a typed id field too. Measured 65 693 (was 66 083).
+    //     Ceiling unchanged.
     expect(approxTokens).toBeLessThan(66_100)
   })
 
@@ -787,6 +795,14 @@ describe('tools/list payload size guard', () => {
     // case above): measured 60 886. Ceiling unchanged.
     // 60 900 to 61 100 on 2026-10-15, idempotency_key on the six direct
     // writes (see the case above): measured 61 078.
+    // 61 100 to 61 300 on 2026-10-16, typed id fields admitting their handle
+    // (see the case above): the default-catalog id fields that declared
+    // format uuid (team_id on gnubok_create_company included) carry the
+    // handle-or-UUID pattern, +150, and this catalog has no company_id to
+    // pay for it. Dropping the format with no pattern would measure about
+    // 61 006 but tell an agent nothing about the id's shape (the ten
+    // fiscal-period tools traded a "UUID of" note for that format).
+    // Measured 61 224.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

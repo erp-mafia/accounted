@@ -42,9 +42,10 @@ supplier invoice, `cus` customer, `sup` supplier, `txn` bank transaction,
 `srun` salary run, `art` article, `ast` fixed asset, `dim` dimension, `dimv`
 dimension value, `inbx` inbox item, `exp` expense claim, `cash` cash account,
 `pmt` payment order, `spb` supplier payment batch, `wh` webhook, `whd`
-webhook delivery, `op` async operation, `svc` service account, `key` API key.
-Sub-resources without a prefix
-(salary lines, benefits, reconciliation signoffs) take the plain UUID only.
+webhook delivery, `op` async operation, `svc` service account, `key` API key,
+`aud` audit log entry, `rso` reconciliation sign-off, `vgap` voucher gap
+explanation, `team` team (byrå or personal). Sub-resources without a prefix
+(salary lines, benefits) take the plain UUID only.
 MCP tools accept handles in their id arguments too and still answer plain
 UUIDs.
 

@@ -37,7 +37,7 @@ Response `200`:
 ```ts
 {
   data: {
-    entries: { id: string, action: string, table_name: string | null, record_id: string | null, user_id: string | null, actor_type: string | null, actor_label: string | null, description: string | null, old_state: Record<string, unknown> | null, new_state: Record<string, unknown> | null, changed_fields?: string[], created_at: string }[],
+    entries: { id: string, handle?: string, action: string, table_name: string | null, record_id: string | null, user_id: string | null, actor_type: string | null, actor_label: string | null, description: string | null, old_state: Record<string, unknown> | null, new_state: Record<string, unknown> | null, changed_fields?: string[], created_at: string }[],
     next_cursor: string | null,
     snapshots_included: boolean
   },

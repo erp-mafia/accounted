@@ -71,6 +71,7 @@ const EXP: HandleDeclaration = { type: 'expense_claim', idField: 'expense_claim_
 const CASH: HandleDeclaration = { type: 'cash_account', idField: 'cash_account_id' }
 const PMT: HandleDeclaration = { type: 'payment_order', idField: 'payment_order_id' }
 const SPB: HandleDeclaration = { type: 'supplier_payment_batch', idField: 'supplier_payment_batch_id' }
+const RSO: HandleDeclaration = { type: 'reconciliation_signoff', at: 'signoff' }
 
 /** The staged-write 202 (a pending operation), for lib/operations/v1.ts. */
 export const STAGED_PENDING_OPERATION_HANDLES: HandleDeclaration = POP
@@ -222,6 +223,15 @@ export const V1_HANDLE_COVERAGE: Readonly<Record<string, HandleDeclaration>> = O
 
   // Async operations
   'operations.get': { type: 'operation', idField: 'operation_id' },
+
+  // Audit log, reconciliation sign-offs, voucher gaps, byrå teams
+  'audit-trail.list': { type: 'audit_log_entry', at: 'entries' },
+  'reconciliation.accounts.status': RSO,
+  'reconciliation.accounts.signoff.list': { type: 'reconciliation_signoff', at: 'signoffs' },
+  'reconciliation.accounts.signoff.create': RSO,
+  'reconciliation.accounts.signoff.reopen': RSO,
+  'voucher-gap-explanations.create': { type: 'voucher_gap_explanation' },
+  'portfolio.overview': { type: 'team', at: 'team' },
 })
 
 export function handleDeclarationFor(operation: string): HandleDeclaration | undefined {

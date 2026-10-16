@@ -15,12 +15,12 @@
  * THIS TABLE IS A PUBLIC CONTRACT. Agents and integrations store handles for
  * years (BFL keeps the records seven), so a prefix is never renamed, never
  * reused for another type and never removed. Add a type with a new prefix;
- * leave every existing row as it is (pinned by __tests__/registry.test.ts).
+ * leave every existing row as it is (pinned by __tests__/handles.test.ts).
  *
  * Plain UUIDs stay valid everywhere a handle is: the format is additive.
- * Resources without a row here (sub-resources such as salary lines, employee
- * benefits, reconciliation signoffs) are addressed by plain UUID only; giving
- * one a prefix later is additive too.
+ * Resources without a row here (sub-resources such as salary lines and
+ * employee benefits) are addressed by plain UUID only; giving one a prefix
+ * later is additive too.
  *
  * Kept free of imports beyond the UUID shape: the v1 wrapper and the MCP
  * dispatcher load it on every request.
@@ -76,6 +76,13 @@ export const HANDLE_RESOURCES = [
   { type: 'operation', prefix: 'op', label: 'async operation', segments: ['operations'], fields: [] },
   { type: 'service_account', prefix: 'svc', label: 'service account', segments: ['service-accounts'], fields: ['service_account'] },
   { type: 'api_key', prefix: 'key', label: 'API key', segments: ['keys'], fields: ['api_key'] },
+  // A row of the trigger-written audit log (GET /audit-trail).
+  { type: 'audit_log_entry', prefix: 'aud', label: 'audit log entry', segments: [], fields: ['audit_log_entry'] },
+  // An "avstämt t.o.m." sign-off on a reconcilable account. A bare
+  // `signoff_id` stays untyped: the name alone does not say which sign-off.
+  { type: 'reconciliation_signoff', prefix: 'rso', label: 'reconciliation sign-off', segments: ['signoff'], fields: ['reconciliation_signoff'] },
+  { type: 'voucher_gap_explanation', prefix: 'vgap', label: 'voucher gap explanation', segments: [], fields: ['voucher_gap_explanation'] },
+  { type: 'team', prefix: 'team', label: 'team', segments: [], fields: ['team'] },
 ] as const satisfies readonly HandleResource[]
 
 export type HandleType = (typeof HANDLE_RESOURCES)[number]['type']
