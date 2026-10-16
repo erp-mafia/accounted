@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { resolveInboxAddress } from '../inbox-address'
+import { resolveInboxAddress, tagInboxAddress } from '../inbox-address'
 
 describe('resolveInboxAddress', () => {
   beforeEach(() => {
@@ -44,5 +44,17 @@ describe('resolveInboxAddress', () => {
 
     const throwing = { from: vi.fn(() => { throw new Error('network') }) }
     expect(await resolveInboxAddress(throwing as never, 'company-1')).toBeNull()
+  })
+})
+
+describe('tagInboxAddress', () => {
+  it('puts the tag between the local part and the domain', () => {
+    expect(tagInboxAddress('acme-7f3k@in.example.test', 'lev')).toBe('acme-7f3k+lev@in.example.test')
+    expect(tagInboxAddress('acme-7f3k@in.example.test', 'ver')).toBe('acme-7f3k+ver@in.example.test')
+  })
+
+  it('returns an address without a local part unchanged', () => {
+    expect(tagInboxAddress('not-an-address', 'lev')).toBe('not-an-address')
+    expect(tagInboxAddress('@in.example.test', 'lev')).toBe('@in.example.test')
   })
 })
