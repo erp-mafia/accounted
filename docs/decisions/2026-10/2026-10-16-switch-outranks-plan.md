@@ -1,0 +1,1 @@
+[2026-10-16] A package switched off reads off even when it is also outside the plan (availability order: country, switch, plan): a switched-off package then hides instead of advertising an upgrade; the published module status keeps its old order, needs_plan first.

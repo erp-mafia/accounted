@@ -1,0 +1,1 @@
+[2026-10-16] tools/list filters by packages only on a single-company connection: one list serves every company a multi-company key reaches, so it shows every package, and the call-time gates still answer per company.

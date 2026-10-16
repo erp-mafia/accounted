@@ -213,7 +213,9 @@ import { generateMonthlyBreakdown } from '@/lib/reports/monthly-breakdown'
 import { uiWidgets, findUiWidget, WIDGET_MIME_TYPE } from './widgets'
 import { dataResources, findResource, parseResourceQuery } from './resources'
 import { buildLedgerContext } from '@/lib/agent-context/ledger-context'
-import { capabilityDigest, loadCompanyCapabilities } from '@/lib/modules/capabilities'
+import { capabilityDigest, capabilitySurface, loadCompanyCapabilities } from '@/lib/modules/capabilities'
+import type { ModuleId } from '@/lib/modules/manifest'
+import { moduleForTool } from './tool-modules'
 import { prompts, findPrompt } from './prompts'
 import { findSkill, loadAllSkills, toSummary, SKILL_MIME_TYPE, SKILL_URI_PREFIX, skillUri, skillSlugFromUri } from './skills'
 import { loadSkillProvenance, skillBodyHash, oauthActorLabel } from '@/lib/agent-skills/provenance'
@@ -4334,6 +4336,9 @@ export const tools: McpTool[] = [
         anonymous: args.__anonymous === true,
         simpleCompanyMode,
         keyScopes: callerScopes as ApiKeyScope[],
+        ...(Array.isArray(args.__hiddenModules)
+          ? { hiddenModules: new Set(args.__hiddenModules as ModuleId[]) }
+          : {}),
       }
 
       let candidates = tools.filter((t) => {
@@ -6603,17 +6608,18 @@ export const tools: McpTool[] = [
         }
       })()
 
-      // The modules this company cannot use right now (lib/modules/
-      // capabilities.ts), so the agent stops calling their tools: only the
-      // ones that are not active, as id, status and reasons, and an empty
-      // list when every module is active. Undeclared in outputSchema on
-      // purpose (tools/list budget, like inbox). Best-effort: a failed read
-      // omits the key, never the briefing. Resolutions and the full list:
-      // GET /api/v1/companies/{companyId}/capabilities.
-      const safeCapabilityDigest = (async () => {
+      // The resolved capabilities (lib/modules/capabilities.ts), read once
+      // for two things: the digest of the modules this company cannot use
+      // right now, so the agent stops calling their tools (only the ones that
+      // are not active, as id, status and reasons, and an empty list when
+      // every module is active), and the packages recommended_tools is judged
+      // against, as tools/list is. The digest is undeclared in outputSchema
+      // on purpose (tools/list budget, like inbox). Best-effort: a failed
+      // read omits the key, never the briefing. Resolutions and the full
+      // list: GET /api/v1/companies/{companyId}/capabilities.
+      const safeCapabilities = (async () => {
         try {
-          const capabilities = await loadCompanyCapabilities(supabase, companyId)
-          return capabilities ? capabilityDigest(capabilities) : null
+          return await loadCompanyCapabilities(supabase, companyId)
         } catch {
           return null
         }
@@ -6836,7 +6842,14 @@ export const tools: McpTool[] = [
       const skvConnection = await safeSkvConnection
       const arkivDigest = await safeArkivDigest
       const inboxAddress = await inboxAddressRead
-      const capabilityDigestRows = await safeCapabilityDigest
+      const capabilities = await safeCapabilities
+      const capabilityDigestRows = capabilities ? capabilityDigest(capabilities) : null
+      // The same view of the packages tools/list takes for a single-company
+      // connection, so recommended_tools never calls a tool listed that the
+      // list leaves out.
+      if (capabilities && viewer.simpleCompanyMode) {
+        viewer.hiddenModules = new Set(capabilitySurface(capabilities).hidden)
+      }
 
       return {
         company,
@@ -25507,6 +25520,14 @@ export interface CatalogViewer {
   anonymous: boolean
   simpleCompanyMode: boolean
   keyScopes: ApiKeyScope[]
+  /**
+   * Modules the company does not have, by the resolved capabilities
+   * (capabilitySurface in lib/modules/capabilities.ts): their package is
+   * switched off or not in the company's country. Their tools are not
+   * listed, as their pages are not in the menu. Only for a single-company
+   * connection; empty for every company today.
+   */
+  hiddenModules?: ReadonlySet<ModuleId>
 }
 
 /**
@@ -25524,6 +25545,12 @@ export function isListedFor(t: McpTool, viewer: CatalogViewer): boolean {
   // One company (or none): the company switch and the cross-company tools
   // have nothing to work on.
   if (viewer.simpleCompanyMode && isMultiCompanyOnlyTool(t.name)) return false
+  // The resolved capabilities: a tool of a module whose package the company
+  // does not have is left out, as the menu leaves out its pages.
+  if (viewer.hiddenModules && viewer.hiddenModules.size > 0) {
+    const owner = moduleForTool(t.name)
+    if (owner && viewer.hiddenModules.has(owner)) return false
+  }
   // Not connected yet: the whole default catalog is listed so the agent can
   // pick the right tool; calling a protected one is what produces the 401
   // challenge that starts the connect (and signup) flow.
@@ -26216,12 +26243,41 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
     return simpleCompanyModeMemo
   }
 
+  // ── Capabilities ──
+  // The resolved capabilities (lib/modules/capabilities.ts) of the company a
+  // single-company connection works on: tools/list leaves out the tools of a
+  // module whose package the company does not have, as the menu leaves out
+  // its pages (none, for every company today). One batched read, at most
+  // once per request and only where a list is built. A multi-company
+  // connection lists every package (its list serves every company it
+  // reaches), and so does an anonymous one. A failed read hides nothing: the
+  // gates at the call still answer.
+  let hiddenModulesMemo: Promise<ReadonlySet<ModuleId>> | null = null
+  const resolveHiddenModules = (): Promise<ReadonlySet<ModuleId>> => {
+    if (!hiddenModulesMemo) {
+      hiddenModulesMemo = (async (): Promise<ReadonlySet<ModuleId>> => {
+        if (isAnonymous || !companyId || !(await resolveSimpleCompanyMode())) return new Set()
+        try {
+          const capabilities = await loadCompanyCapabilities(supabase, companyId)
+          return new Set(capabilities ? capabilitySurface(capabilities).hidden : [])
+        } catch (err) {
+          log.warn('capabilities read failed: tools/list hides no package', {
+            error: err instanceof Error ? err.message : String(err),
+          })
+          return new Set()
+        }
+      })()
+    }
+    return hiddenModulesMemo
+  }
+
   // What tools/list shows this caller (isListedFor). Read at call time:
   // keyScopes is filled in by authentication above.
   const catalogViewer = async (): Promise<CatalogViewer> => ({
     anonymous: isAnonymous,
     simpleCompanyMode: await resolveSimpleCompanyMode(),
     keyScopes,
+    hiddenModules: await resolveHiddenModules(),
   })
 
   // ── Stateless core (spec 2026-07-28) ──
@@ -27119,6 +27175,13 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           if (await resolveSimpleCompanyMode()) {
             (toolArgs as Record<string, unknown>).__simpleCompanyMode = true
           }
+        }
+        // Search reads tools/list's view of the company's packages too, so a
+        // hit is never called listed when the list leaves it out. The briefing
+        // resolves the same capabilities itself, for its digest.
+        if (toolName === 'gnubok_search_tools') {
+          const hidden = await resolveHiddenModules()
+          if (hidden.size > 0) (toolArgs as Record<string, unknown>).__hiddenModules = [...hidden]
         }
         // The company block is for keys that reach several companies; the
         // lookup runs alongside the tool and is cached per user.

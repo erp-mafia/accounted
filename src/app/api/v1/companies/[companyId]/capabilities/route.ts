@@ -16,6 +16,7 @@ import {
   CAPABILITY_REASONS,
   CAPABILITY_STATUSES,
   loadCompanyCapabilities,
+  publishedCapabilities,
 } from '@/lib/modules/capabilities'
 
 const ModuleCapability = z.object({
@@ -117,7 +118,8 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>('capabi
     if (!capabilities) {
       return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, { requestId: ctx.requestId })
     }
-    return ok(capabilities, { requestId: ctx.requestId })
+    // The module report v1 has always served; packages stay internal for now.
+    return ok(publishedCapabilities(capabilities), { requestId: ctx.requestId })
   } catch (err) {
     ctx.log.error('capabilities.get failed', err as Error)
     return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })

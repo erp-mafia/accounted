@@ -27,6 +27,12 @@ import { ReferenceDataSeed } from '@/components/providers/ReferenceDataSeed'
 import { AllMessagesProvider } from '@/components/providers/AllMessagesProvider'
 import OnboardingBackdrop from '@/components/onboarding/OnboardingBackdrop'
 import { getCompanyEntitlements } from '@/lib/entitlements/has-capability'
+import {
+  capabilityInputsFromEntitlements,
+  capabilitySurface,
+  capabilitySurfaceWithoutCompany,
+  resolveCapabilities,
+} from '@/lib/modules/capabilities'
 import { getAiStatus } from '@/lib/ai'
 import { getDashboardNavFlags } from '@/lib/dashboard/nav-flags'
 import { getBranding } from '@/lib/branding/service'
@@ -119,7 +125,7 @@ export default async function DashboardLayout({
     // server-rendered so both are right on first paint, plus the
     // hide-assistant-FAB preference (Inställningar → Assistenten).
     supabase.from('user_preferences').select('ui_state, hide_assistant_fab').eq('user_id', user.id).maybeSingle(),
-    supabase.from('company_members').select('company_id, role, companies:company_id(id, name, org_number, entity_type, accounting_framework, created_by, team_id, archived_at, created_at, updated_at)').eq('user_id', user.id),
+    supabase.from('company_members').select('company_id, role, companies:company_id(id, name, org_number, entity_type, accounting_framework, jurisdiction, ledger_currency, created_by, team_id, archived_at, created_at, updated_at)').eq('user_id', user.id),
   ])
 
   const pathname = headerStore.get('x-pathname') ?? ''
@@ -231,6 +237,7 @@ export default async function DashboardLayout({
             <DashboardNav
               companyName={getBranding().appName.toLowerCase()}
               entityType="enskild_firma"
+              capabilitySurface={capabilitySurfaceWithoutCompany('enskild_firma')}
               isSandbox={false}
               extensionNavItems={getExtensionNavItems()}
             />
@@ -395,6 +402,7 @@ export default async function DashboardLayout({
             <DashboardNav
               companyName={getBranding().appName.toLowerCase()}
               entityType="enskild_firma"
+              capabilitySurface={capabilitySurfaceWithoutCompany('enskild_firma')}
               isSandbox={false}
               extensionNavItems={getExtensionNavItems()}
             />
@@ -441,6 +449,21 @@ export default async function DashboardLayout({
     entity_type: entityType,
     pays_salaries: paysSalaries,
   }
+  // The resolved capabilities the menu reads (lib/modules/capabilities.ts),
+  // from the company row and the entitlements read above: no read of its own.
+  const navCapabilitySurface = capabilitySurface(
+    resolveCapabilities(
+      capabilityInputsFromEntitlements(
+        {
+          jurisdiction: companyRow.jurisdiction,
+          ledgerCurrency: companyRow.ledger_currency,
+          entityType,
+          paysSalaries,
+        },
+        entitlements,
+      ),
+    ),
+  )
 
   const isSandbox = settings?.is_sandbox === true
 
@@ -586,7 +609,7 @@ export default async function DashboardLayout({
           <DashboardNav
             companyName={settings?.company_name || 'Min verksamhet'}
             entityType={entityType}
-            paysSalaries={paysSalaries}
+            capabilitySurface={navCapabilitySurface}
             dimensionsEnabled={dimensionsEnabled}
             salesOrdersEnabled={salesOrdersEnabled}
             quotesEnabled={quotesEnabled}

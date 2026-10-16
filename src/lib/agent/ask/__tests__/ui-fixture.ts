@@ -23,7 +23,7 @@ export const SV_LABELS: UiLabels = {
 export function gateContext(overrides: Partial<NavGateContext> = {}): NavGateContext {
   return {
     entityType: 'aktiebolag',
-    isEmployer: true,
+    surface: { hidden: [], notForLegalForm: [] },
     dimensionsEnabled: true,
     salesOrdersEnabled: true,
     quotesEnabled: true,

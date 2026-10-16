@@ -1,4 +1,6 @@
 import type { NavGateFlags, NavV2Item } from '@/components/dashboard/nav-v2'
+import type { CapabilitySurface } from '@/lib/modules/capabilities'
+import type { ModuleId } from '@/lib/modules/manifest'
 import type { EntityType } from '@/types'
 
 /**
@@ -6,13 +8,20 @@ import type { EntityType } from '@/types'
  *
  * The sidebar (DashboardNav) builds it from the layout's props and the client
  * context; the assistant's UI map (lib/agent/ask/ui-map.ts) builds it on the
- * server from the same columns. Both then run passesNavGates, so the map the
- * assistant is given hides a surface for exactly the reason the sidebar does.
+ * server from the same columns. Both resolve the capabilities surface with
+ * the same function (capabilityInputsFromEntitlements) and then run
+ * passesNavGates, so the map the assistant is given hides a surface for
+ * exactly the reason the sidebar does.
  */
 export interface NavGateContext {
   entityType: EntityType
-  /** offersPayroll (lib/company/offers-payroll.ts) for this company. */
-  isEmployer: boolean
+  /**
+   * The company's resolved capabilities as a surface reads them
+   * (capabilitySurface in lib/modules/capabilities.ts): which modules are
+   * hidden by their package or country, and which the legal form does not
+   * offer. The same object MCP's tools/list and the agent briefing read.
+   */
+  surface: CapabilitySurface
   dimensionsEnabled: boolean
   salesOrdersEnabled: boolean
   quotesEnabled: boolean
@@ -32,13 +41,20 @@ function entityGateAllows(gate: EntityType | readonly EntityType[], entityType: 
   return Array.isArray(gate) ? gate.includes(entityType) : gate === entityType
 }
 
+/** Whether the menu shows a surface of this module, by the resolved capabilities. */
+export function menuShowsModule(surface: CapabilitySurface, moduleId: ModuleId): boolean {
+  return !surface.hidden.includes(moduleId) && !surface.notForLegalForm.includes(moduleId)
+}
+
 /** One gate for every navigation: a surface hides for the same reason everywhere. */
 export function passesNavGates(item: NavGateFlags, ctx: NavGateContext): boolean {
   if (item.hidden) return false
   if (ctx.hiddenNavHrefs.has(item.href)) return false
-  // Payroll (employerOnly) is hidden until the company is an employer by
-  // form or has flagged pays_salaries. #782
-  if (item.employerOnly && !ctx.isEmployer) return false
+  // The resolved capabilities: a module whose package is switched off or not
+  // in the company's country is hidden, as its tools are in MCP's
+  // tools/list; so is a module the legal form does not offer (payroll until
+  // the company is an employer by form or has flagged pays_salaries, #782).
+  if (!menuShowsModule(ctx.surface, item.module)) return false
   // Dimension surfaces are hidden until the company opts in via the
   // bookkeeping settings toggle (company_settings.dimensions_enabled).
   if (item.requiresDimensions && !ctx.dimensionsEnabled) return false

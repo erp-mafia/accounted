@@ -8,14 +8,22 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
 import {
+  AVAILABILITY_STATUSES,
   CAPABILITY_REASONS,
+  PACKAGE_REASONS,
   capabilityDigest,
+  capabilityInputsFromEntitlements,
+  capabilitySurface,
+  capabilitySurfaceWithoutCompany,
   loadCompanyCapabilities,
+  publishedCapabilities,
   resolveCapabilities,
   type CapabilityInputs,
   type ModuleCapability,
+  type PackageCapability,
 } from '../capabilities'
 import { MODULES } from '../manifest'
+import { PACKAGES, PACKAGE_CONFIG_KEYS, packageForModule, type PackageId } from '../packages'
 import { createTableMockSupabase } from '@/tests/helpers'
 
 const MODULE_KEYS: CapabilityKey[] = [CAPABILITY.ai, CAPABILITY.bank_sync, CAPABILITY.skatteverket, CAPABILITY.collections]
@@ -63,6 +71,8 @@ describe('resolveCapabilities', () => {
         status: 'active',
         reasons: [],
         resolution: null,
+        package: packageForModule(def.id),
+        availability: 'on',
       })
     }
   })
@@ -299,5 +309,236 @@ describe('loadCompanyCapabilities', () => {
     expect(notActive).not.toContain('agent')
     expect(notActive).toEqual(expect.arrayContaining(['bank-feed', 'skatteverket', 'collections']))
     expect(result!.modules.find((m) => m.id === 'bank-feed')!.resolution).toMatch(/GNUBOK_CONNECTOR_KEY/)
+  })
+})
+
+describe('loadCompanyCapabilities: package switches', () => {
+  it('reads the package switches in the same config query as the capability keys', async () => {
+    const mock = createTableMockSupabase({
+      companies: { data: { jurisdiction: 'SE', ledger_currency: 'SEK', entity_type: 'aktiebolag' } },
+      company_settings: { data: { entity_type: 'aktiebolag', pays_salaries: null } },
+      company_capability_config: { data: [{ capability_key: 'package:payroll' }, { capability_key: 'bank_sync' }] },
+      'rpc:company_capability_grant_rows': { data: ACTIVE_GRANTS },
+    })
+    const result = await loadCompanyCapabilities(mock.supabase as unknown as SupabaseClient, COMPANY_ID)
+    const inCalls = mock.findCalls('company_capability_config', 'in')
+    expect(inCalls).toHaveLength(1)
+    expect(inCalls[0][0]).toBe('capability_key')
+    expect([...(inCalls[0][1] as string[])].sort()).toEqual([...MODULE_KEYS, ...PACKAGE_CONFIG_KEYS].sort())
+    expect(mock.tables().filter((t) => t === 'company_capability_config')).toHaveLength(1)
+    expect(packageOf(result!, 'payroll')).toMatchObject({ availability: 'off', reasons: ['turned_off_by_company'] })
+    // The capability key still reads on its own axis, never as a package.
+    expect(moduleOf(result!, 'bank-feed')).toMatchObject({ status: 'off', availability: 'off' })
+    expect(packageOf(result!, 'bank').availability).toBe('on')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Packages and availability
+// ---------------------------------------------------------------------------
+
+function packageOf(result: ReturnType<typeof resolveCapabilities>, id: PackageId): PackageCapability {
+  const found = result.packages.find((p) => p.id === id)
+  if (!found) throw new Error(`no package ${id}`)
+  return found
+}
+
+describe('resolveCapabilities: packages', () => {
+  it('gives every company the implicit Standard profile with every package on when it can use them all', () => {
+    const result = resolveCapabilities(inputs())
+    expect(result.profile).toEqual({ id: 'standard', source: 'implicit' })
+    expect(result.packages.map((p) => p.id)).toEqual(PACKAGES.map((p) => p.id))
+    for (const p of result.packages) expect(p, p.id).toMatchObject({ availability: 'on', reasons: [] })
+    for (const m of result.modules) expect(m.availability, m.id).toBe('on')
+  })
+
+  it('reports each package with its Swedish name, its modules and whether it can be switched', () => {
+    const result = resolveCapabilities(inputs())
+    expect(packageOf(result, 'bookkeeping')).toMatchObject({ name_sv: 'Bokföring', switchable: false })
+    expect(packageOf(result, 'pos-and-webshop')).toMatchObject({
+      name: 'Point of sale and webshop',
+      name_sv: 'Kassa och webbshop',
+      switchable: true,
+      modules: ['pos', 'webshop'],
+    })
+    expect(moduleOf(result, 'collections').package).toBe('customer-invoices')
+    expect(moduleOf(result, 'agent').package).toBeNull()
+  })
+
+  it('turns a package off on the company choice, and with it every module in it, but not a dependent in another package', () => {
+    const result = resolveCapabilities(inputs({ packageChoices: { payroll: false } }))
+    expect(packageOf(result, 'payroll')).toMatchObject({ availability: 'off', reasons: ['turned_off_by_company'] })
+    expect(moduleOf(result, 'payroll')).toMatchObject({ availability: 'off', status: 'active' })
+    // Utlägg needs payroll's code, not the Lön package switched on.
+    expect(moduleOf(result, 'expenses').availability).toBe('on')
+  })
+
+  it('keeps Bokföring on whatever the company chose', () => {
+    const result = resolveCapabilities(inputs({ packageChoices: { bookkeeping: false } }))
+    expect(packageOf(result, 'bookkeeping')).toMatchObject({ availability: 'on', reasons: [] })
+    expect(moduleOf(result, 'vat').availability).toBe('on')
+  })
+
+  it('winds a switched-off package down while it has open obligations', () => {
+    const result = resolveCapabilities(
+      inputs({ packageChoices: { payroll: false }, openObligations: new Set<PackageId>(['payroll']) }),
+    )
+    expect(packageOf(result, 'payroll')).toMatchObject({
+      availability: 'winding_down',
+      reasons: ['turned_off_by_company', 'open_obligations'],
+    })
+    expect(moduleOf(result, 'payroll').availability).toBe('winding_down')
+    // Obligations alone change nothing for a package that is on.
+    const on = resolveCapabilities(inputs({ openObligations: new Set<PackageId>(['payroll']) }))
+    expect(packageOf(on, 'payroll')).toMatchObject({ availability: 'on', reasons: [] })
+  })
+
+  it('reports a package as outside the plan only when every module in it needs a capability the plan lacks', () => {
+    const result = resolveCapabilities(inputs({ entitled: allBut(CAPABILITY.bank_sync, CAPABILITY.collections) }))
+    expect(packageOf(result, 'bank')).toMatchObject({ availability: 'not_in_plan', reasons: ['needs_plan'] })
+    expect(moduleOf(result, 'bank-feed').availability).toBe('not_in_plan')
+    // Kundfakturor has free invoicing: on, with collections alone outside the plan.
+    expect(packageOf(result, 'customer-invoices').availability).toBe('on')
+    expect(moduleOf(result, 'collections').availability).toBe('not_in_plan')
+    expect(moduleOf(result, 'invoicing').availability).toBe('on')
+  })
+
+  it('ranks a switch over the plan: a package the company turned off reads off, not upgrade', () => {
+    const result = resolveCapabilities(inputs({ entitled: allBut(CAPABILITY.bank_sync), packageChoices: { bank: false } }))
+    expect(packageOf(result, 'bank')).toMatchObject({ availability: 'off', reasons: ['turned_off_by_company', 'needs_plan'] })
+    expect(moduleOf(result, 'bank-feed').availability).toBe('off')
+  })
+
+  it('reports country-bound packages and modules as not_in_country, and never the kernel or the country-neutral modules', () => {
+    const result = resolveCapabilities(inputs({ jurisdiction: 'NO' }))
+    for (const p of result.packages) {
+      if (p.id === 'bookkeeping') expect(p.availability, p.id).toBe('on')
+      else expect(p, p.id).toMatchObject({ availability: 'not_in_country', reasons: ['unsupported_country'] })
+    }
+    expect(moduleOf(result, 'vat').availability).toBe('not_in_country')
+    for (const id of ['platform', 'ledger', 'byra']) expect(moduleOf(result, id).availability, id).toBe('on')
+  })
+
+  it('maps the module gates onto availability: legal form, company switch and a turned-off dependency are off', () => {
+    const ef = resolveCapabilities(inputs({ entityType: 'enskild_firma', paysSalaries: false }))
+    expect(moduleOf(ef, 'payroll')).toMatchObject({ status: 'unsupported', availability: 'off' })
+    expect(packageOf(ef, 'payroll').availability).toBe('on')
+
+    const disabled = resolveCapabilities(inputs({ disabled: new Set([CAPABILITY.bank_sync]) }))
+    expect(moduleOf(disabled, 'bank-feed').availability).toBe('off')
+    expect(moduleOf(disabled, 'payments').availability).toBe('off')
+    expect(packageOf(disabled, 'bank').availability).toBe('on')
+  })
+
+  it('applies no country gate when the jurisdiction is not known', () => {
+    const result = resolveCapabilities(inputs({ jurisdiction: null }))
+    for (const m of result.modules) expect(m.availability, m.id).toBe('on')
+    expect(result.jurisdiction).toBeNull()
+  })
+
+  it('only ever uses the declared statuses and reasons', () => {
+    const worst = [
+      inputs({ jurisdiction: 'NO', entitled: new Set(), disabled: new Set(MODULE_KEYS), entityType: null }),
+      inputs({
+        entitled: new Set(),
+        packageChoices: Object.fromEntries(PACKAGES.map((p) => [p.id, false])),
+        openObligations: new Set<PackageId>(['payroll']),
+      }),
+    ]
+    for (const input of worst) {
+      const result = resolveCapabilities(input)
+      for (const p of result.packages) {
+        expect(AVAILABILITY_STATUSES, p.id).toContain(p.availability)
+        for (const r of p.reasons) expect(PACKAGE_REASONS, p.id).toContain(r)
+        if (p.availability === 'on') expect(p.reasons, p.id).toEqual([])
+        else expect(p.reasons.length, p.id).toBeGreaterThan(0)
+      }
+      for (const m of result.modules) expect(AVAILABILITY_STATUSES, m.id).toContain(m.availability)
+    }
+  })
+})
+
+describe('capabilitySurface', () => {
+  it('hides nothing and gates nothing for a company that can use everything', () => {
+    expect(capabilitySurface(resolveCapabilities(inputs()))).toEqual({ hidden: [], notForLegalForm: [] })
+  })
+
+  it('names payroll as not offered for an enskild firma that does not pay salaries, and hides nothing', () => {
+    const surface = capabilitySurface(resolveCapabilities(inputs({ entityType: 'enskild_firma', paysSalaries: false })))
+    expect(surface).toEqual({ hidden: [], notForLegalForm: ['payroll'] })
+  })
+
+  it('hides nothing for missing plan capabilities or turned-off capability keys: those gates answer at the door', () => {
+    const surface = capabilitySurface(
+      resolveCapabilities(inputs({ entitled: new Set(), disabled: new Set(MODULE_KEYS) })),
+    )
+    expect(surface.hidden).toEqual([])
+  })
+
+  it('hides every module of a switched-off package, keeps a winding-down one, and hides what the country lacks', () => {
+    expect(capabilitySurface(resolveCapabilities(inputs({ packageChoices: { 'pos-and-webshop': false } }))).hidden).toEqual([
+      'pos',
+      'webshop',
+    ])
+    const winding = resolveCapabilities(
+      inputs({ packageChoices: { payroll: false }, openObligations: new Set<PackageId>(['payroll']) }),
+    )
+    expect(capabilitySurface(winding).hidden).toEqual([])
+    const abroad = capabilitySurface(resolveCapabilities(inputs({ jurisdiction: 'NO' })))
+    expect(abroad.hidden).not.toContain('ledger')
+    expect(abroad.hidden).not.toContain('platform')
+    expect(abroad.hidden).toContain('vat')
+  })
+
+  it('without an active company, gates payroll on the placeholder legal form and hides nothing', () => {
+    expect(capabilitySurfaceWithoutCompany('enskild_firma')).toEqual({ hidden: [], notForLegalForm: ['payroll'] })
+    expect(capabilitySurfaceWithoutCompany('aktiebolag')).toEqual({ hidden: [], notForLegalForm: [] })
+  })
+})
+
+describe('capabilityInputsFromEntitlements', () => {
+  it('builds the same inputs the loader reads, from getCompanyEntitlements and the company rows', () => {
+    const built = capabilityInputsFromEntitlements(
+      { jurisdiction: 'SE', ledgerCurrency: 'SEK', entityType: 'aktiebolag', paysSalaries: null },
+      {
+        capabilities: ['skatteverket', 'email_send'],
+        entitledCapabilities: ['skatteverket', 'email_send', 'bank_sync'],
+        disabledConfigKeys: ['bank_sync', 'package:assets', 'package:nope', 'something_else'],
+      },
+    )
+    expect(built).toMatchObject({ jurisdiction: 'SE', ledgerCurrency: 'SEK', entityType: 'aktiebolag', paysSalaries: null })
+    expect([...built.entitled].sort()).toEqual(['bank_sync', 'email_send', 'skatteverket'])
+    expect([...built.disabled]).toEqual(['bank_sync'])
+    expect(built.packageChoices).toEqual({ assets: false })
+    const result = resolveCapabilities(built)
+    expect(moduleOf(result, 'bank-feed')).toMatchObject({ status: 'off', reasons: ['disabled_by_company'] })
+    expect(packageOf(result, 'assets').availability).toBe('off')
+  })
+
+  it('reads an older entitlements answer (capabilities only) as entitled with nothing turned off', () => {
+    const built = capabilityInputsFromEntitlements(
+      { jurisdiction: undefined, entityType: 'aktiebolag', paysSalaries: undefined },
+      { capabilities: ['ai'] },
+    )
+    expect(built.jurisdiction).toBeNull()
+    expect([...built.entitled]).toEqual(['ai'])
+    expect(built.disabled.size).toBe(0)
+    expect(built.packageChoices).toEqual({})
+  })
+})
+
+describe('publishedCapabilities', () => {
+  it('publishes the module report field for field, without packages, profile or availability', () => {
+    const result = resolveCapabilities(inputs({ entityType: 'enskild_firma', paysSalaries: false }))
+    const published = publishedCapabilities(result)
+    expect(Object.keys(published)).toEqual(['jurisdiction', 'ledger_currency', 'modules'])
+    expect(published.modules).toHaveLength(MODULES.length)
+    for (const m of published.modules) {
+      expect(Object.keys(m)).toEqual(['id', 'kind', 'name', 'name_sv', 'summary', 'depends_on', 'status', 'reasons', 'resolution'])
+    }
+    expect(published.modules.find((m) => m.id === 'payroll')).toMatchObject({
+      status: 'unsupported',
+      reasons: ['unsupported_legal_form'],
+    })
   })
 })
