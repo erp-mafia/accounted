@@ -1,0 +1,1 @@
+[2026-10-16] Inte nu and Visa aldrig ride the existing reject doors: a trigger reads the rejection reason Visa aldrig (or never) as a permanent decline and any other rejection or the expiry as a 30-day snooze, so chat and Att göra need no new tool or endpoint.

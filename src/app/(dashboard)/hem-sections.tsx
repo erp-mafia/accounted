@@ -19,6 +19,7 @@ import {
 } from '@/lib/worklist'
 import { listResumeItems } from '@/lib/worklist/resume'
 import { listMissingUnderlagSample } from '@/lib/worklist/missing-underlag'
+import { listOpenSuggestions } from '@/lib/suggestions/list'
 import { getCompanyNotices } from '@/lib/notices'
 import { expiringBankConnectionsFrom } from '@/lib/notices/categories'
 import { vatDeadlineLine } from '@/lib/onboarding/checklist'
@@ -254,6 +255,9 @@ export async function HemPanesSection({
   // And for supplier invoices with bank details nobody approved: one row per
   // invoice, the count is the list's length.
   const supplierPayeeChangesPromise = listSupplierPayeeChangesDue(supabase, companyId)
+  // And the open suggestions: one Förslag card each (at most three); the
+  // count is the list's length.
+  const openSuggestionsPromise = listOpenSuggestions(supabase, companyId)
   const [
     worklist,
     suggestedMatches,
@@ -263,6 +267,7 @@ export async function HemPanesSection({
     bankSwitches,
     paymentsVerification,
     supplierPayeeChanges,
+    openSuggestions,
     resumeItems,
     bankConnectionsRes,
     postedEntries,
@@ -279,6 +284,7 @@ export async function HemPanesSection({
         bankSwitchDue: bankSwitchPromise,
         paymentsVerificationDue: paymentsVerificationPromise,
         supplierPayeeChangesDue: supplierPayeeChangesPromise,
+        openSuggestions: openSuggestionsPromise,
       }),
       suggestedMatchesPromise,
       expensePayoutsPromise,
@@ -287,6 +293,7 @@ export async function HemPanesSection({
       bankSwitchPromise,
       paymentsVerificationPromise,
       supplierPayeeChangesPromise,
+      openSuggestionsPromise,
       // In-progress work for the Fortsätt pane: pure draft-state derivation.
       listResumeItems(supabase, companyId, now),
       supabase.from('bank_connections').select('id, status, consent_expires, bank_name, last_sie_sweep').eq('company_id', companyId).eq('status', 'active'),
@@ -328,6 +335,7 @@ export async function HemPanesSection({
           bankSwitches={bankSwitches}
           paymentsVerification={paymentsVerification}
           supplierPayeeChanges={supplierPayeeChanges}
+          suggestions={openSuggestions}
           expiringBankConnections={expiringBankConnections}
           emptyLedger={emptyLedger}
           hasActiveBankConnection={hasActiveBankConnection}

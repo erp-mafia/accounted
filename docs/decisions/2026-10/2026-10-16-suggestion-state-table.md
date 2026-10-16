@@ -1,0 +1,1 @@
+[2026-10-16] Suggestion state lives in company_suggestions, one row per company and key beside the pending operation: a unique key plus an advisory lock make staging atomic without a partial unique index on the hot pending_operations table.

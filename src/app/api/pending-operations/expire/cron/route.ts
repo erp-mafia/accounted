@@ -3,17 +3,22 @@ import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { recoverStuckCommittingOperations } from '@/lib/pending-operations/recover-stuck-committing'
+import { runScheduledSuggestions } from '@/lib/suggestions/sweep'
 
 /**
  * GET /api/pending-operations/expire/cron, daily 02:30 UTC.
  *
- * Two sweeps per run:
+ * Three sweeps per run:
  *
  * 1. Expiry: auto-rejects staged operations that have sat at status='pending'
  *    for more than 30 days.
  * 2. Recovery (#843): drives rows stuck in status='committing' beyond the
  *    safe threshold to a terminal status; see
  *    lib/pending-operations/recover-stuck-committing.ts for the semantics.
+ * 3. Scheduled suggestions (lib/suggestions/sweep.ts): the detectors that run
+ *    on a schedule instead of an event stage their proposals. Today only
+ *    "Dölj <paket>?", which stays dark until SUGGESTIONS_HIDE_UNUSED is set:
+ *    with it unset this step reads nothing.
  *
  * AI agents stage operations for human review; when the chat
  * session is abandoned the proposal would otherwise linger in the worklist
@@ -81,5 +86,15 @@ export const GET = withCronContext('cron.pending_operations_expire', async (_req
     recovery = { error: 'recovery_sweep_failed' }
   }
 
-  return NextResponse.json({ success: true, expired, cutoff: cutoff.toISOString(), recovery })
+  // Scheduled suggestions, isolated like the recovery sweep: a failure here
+  // never masks the two passes above.
+  let suggestions: Record<string, unknown>
+  try {
+    suggestions = { ...(await runScheduledSuggestions(supabase, ctx.log)) }
+  } catch (err) {
+    ctx.log.error('scheduled suggestions sweep failed', err as Error)
+    suggestions = { error: 'suggestions_sweep_failed' }
+  }
+
+  return NextResponse.json({ success: true, expired, cutoff: cutoff.toISOString(), recovery, suggestions })
 })

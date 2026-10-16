@@ -662,6 +662,8 @@ export async function countPendingOperations(
     .eq('status', 'pending')
     // The daily collections batch has its own row (collection_batch_ready).
     .neq('operation_type', COLLECTIONS_BATCH_TYPE)
+    // A suggestion (staged by the system, lib/suggestions) has its own row too.
+    .neq('actor_type', 'system')
   if (error) return logAndZero('pending_operations', companyId, error)
   return count ?? 0
 }

@@ -24,6 +24,10 @@ vi.mock('@/lib/pending-operations/recover-stuck-committing', () => ({
   })),
 }))
 
+vi.mock('@/lib/suggestions/sweep', () => ({
+  runScheduledSuggestions: vi.fn(async () => ({ ran: false, companies: 0, staged: 0, skipped_full: 0, stopped_early: false })),
+}))
+
 interface FilterCall {
   method: string
   args: unknown[]
@@ -133,7 +137,23 @@ describe('GET /api/pending-operations/expire/cron', () => {
       expired: 0,
       cutoff: expect.any(String),
       recovery: { scanned: 0, committed: 0, rejected: 0, skipped: 0 },
+      suggestions: { ran: false, companies: 0, staged: 0, skipped_full: 0, stopped_early: false },
     })
+  })
+
+  it('runs the scheduled suggestions with the service client, and survives their failure', async () => {
+    const { runScheduledSuggestions } = await import('@/lib/suggestions/sweep')
+    updateResults = [{ data: [], error: null }]
+    await GET(createCronRequest('/api/pending-operations/expire/cron'))
+    expect(vi.mocked(runScheduledSuggestions)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(runScheduledSuggestions).mock.calls[0][0]).toBe(vi.mocked(createServiceClient).mock.results[0].value)
+
+    updateResults = [{ data: [], error: null }]
+    vi.mocked(runScheduledSuggestions).mockRejectedValueOnce(new Error('boom'))
+    const response = await GET(createCronRequest('/api/pending-operations/expire/cron'))
+    const json = await response.json()
+    expect(json.success).toBe(true)
+    expect(json.suggestions).toEqual({ error: 'suggestions_sweep_failed' })
   })
 
   it('invokes the stuck-committing recovery sweep with the service client', async () => {

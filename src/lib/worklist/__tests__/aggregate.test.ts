@@ -34,6 +34,10 @@ vi.mock('../categories', () => ({
   countSupplierPayeeChangesDue: vi.fn().mockResolvedValue(0),
 }))
 
+vi.mock('@/lib/suggestions/list', () => ({
+  listOpenSuggestions: vi.fn().mockResolvedValue([]),
+}))
+
 import { getWorklistCounts } from '../aggregate'
 
 const supabase = {} as SupabaseClient
@@ -66,6 +70,7 @@ describe('getWorklistCounts', () => {
       overdue_invoice: 5,
       deadline_action: 1,
       pending_operations: 2,
+      suggestion: 0,
       reconciliation_due: 1,
       expense_payout: 2,
       skattekonto_payment_due: 1,
@@ -82,6 +87,19 @@ describe('getWorklistCounts', () => {
       payments_verification_renewal: 0,
       supplier_payee_change: 0,
     })
+  })
+
+  it('counts the open suggestions into the total, and takes the count from a caller-supplied list', async () => {
+    const { listOpenSuggestions } = await import('@/lib/suggestions/list')
+    vi.mocked(listOpenSuggestions).mockResolvedValueOnce([{ suggestion_id: 's1' }, { suggestion_id: 's2' }] as never[])
+    const first = await getWorklistCounts(supabase, 'company-1')
+    expect(first.counts.suggestion).toBe(2)
+    expect(first.total).toBe(33)
+    expect(listOpenSuggestions).toHaveBeenCalledWith(supabase, 'company-1')
+    vi.mocked(listOpenSuggestions).mockClear()
+    const second = await getWorklistCounts(supabase, 'company-1', { openSuggestions: Promise.resolve([{ suggestion_id: 's1' }] as never[]) })
+    expect(second.counts.suggestion).toBe(1)
+    expect(listOpenSuggestions).not.toHaveBeenCalled()
   })
 
   it('counts the bank connections still to switch into the total, and takes the count from a caller-supplied list', async () => {

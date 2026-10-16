@@ -15,6 +15,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { CreateEmployeeSchema, UpdateEmployeeSchema } from '@/lib/api/schemas'
 import { encryptPersonnummer } from '@/lib/salary/personnummer'
+import { eventBus } from '@/lib/events'
 
 vi.mock('@/lib/company/context', () => ({
   getCompanyEntityType: vi.fn().mockResolvedValue('aktiebolag'),
@@ -211,6 +212,31 @@ describe('createEmployee', () => {
     const [inserted] = mock.findCall('employees', 'insert') as [Record<string, unknown>]
     expect(inserted).not.toHaveProperty('is_active')
     expect(inserted).toMatchObject({ company_id: COMPANY_ID, first_name: 'Anna', monthly_salary: 35000 })
+  })
+
+  it('announces the new employee with ids only (employee.created), never on a dry run or a refusal', async () => {
+    const emit = vi.spyOn(eventBus, 'emit')
+    const input = {
+      first_name: 'Anna',
+      last_name: 'Andersson',
+      employment_start: '2024-01-15',
+      personnummer_encrypted: ENCRYPTED_PNR,
+      personnummer_last4: '0000',
+    }
+
+    await createEmployee(supabase, { companyId: COMPANY_ID, userId: USER_ID, input, dryRun: true })
+    mock.enqueue({ error: { code: '23505', message: 'duplicate', constraint: 'employees_personnummer_key' } })
+    await createEmployee(supabase, { companyId: COMPANY_ID, userId: USER_ID, input })
+    expect(emit).not.toHaveBeenCalled()
+
+    mock.enqueue({ data: summaryRow(true) })
+    await createEmployee(supabase, { companyId: COMPANY_ID, userId: USER_ID, input })
+    expect(emit).toHaveBeenCalledTimes(1)
+    expect(emit).toHaveBeenCalledWith({
+      type: 'employee.created',
+      payload: { employeeId: EMPLOYEE_ID, userId: USER_ID, companyId: COMPANY_ID },
+    })
+    emit.mockRestore()
   })
 })
 

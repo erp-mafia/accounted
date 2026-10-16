@@ -22,6 +22,8 @@ import type { MissingUnderlagSample } from '@/lib/worklist/missing-underlag'
 import { NO_AI_CONNECTION, type AiConnection } from '@/lib/onboarding/ai-clients'
 import { AiTaskAction } from './AiTaskAction'
 import { KopplingarChips } from './KopplingarChips'
+import { SuggestionCards } from './SuggestionCards'
+import type { OpenSuggestion } from '@/lib/suggestions/types'
 import { BATCH_REVIEW_HREF } from '@/lib/collections/batch-dialog'
 import {
   ArrowLeftRight,
@@ -105,6 +107,12 @@ interface AttGoraSectionProps {
    * each is held until it is decided.
    */
   supplierPayeeChanges?: SupplierPayeeChangeDue[]
+  /**
+   * Open suggestions (lib/worklist suggestion; lib/suggestions/list.ts): at
+   * most three Förslag cards, ranked, each answered with Ja, Inte nu or Visa
+   * aldrig. The customer's agent finds the same three in its briefing.
+   */
+  suggestions?: OpenSuggestion[]
   expiringBankConnections?: ExpiringBankConnection[]
   /**
    * True while the setup checklist is open and the company has zero posted
@@ -216,6 +224,7 @@ export default function AttGoraSection({
   bankSwitches = [],
   paymentsVerification = null,
   supplierPayeeChanges = [],
+  suggestions = [],
   expiringBankConnections = [],
   emptyLedger = false,
   hasActiveBankConnection = true,
@@ -244,6 +253,7 @@ export default function AttGoraSection({
   const [leavingIds, setLeavingIds] = useState<Set<string>>(new Set())
   const [confirmingId, setConfirmingId] = useState<string | null>(null)
   const [payeeChanges, setPayeeChanges] = useState(supplierPayeeChanges)
+  const [openSuggestions, setOpenSuggestions] = useState(suggestions)
   const [reviewingPayeeId, setReviewingPayeeId] = useState<string | null>(null)
   // A confirmed match books a journal entry, so the server-derived
   // emptyLedger flag goes stale the moment one succeeds in this session.
@@ -259,6 +269,7 @@ export default function AttGoraSection({
     setOverdueInvoices(worklist.overdueInvoices ?? null)
     setMatches(suggestedMatches)
     setPayeeChanges(supplierPayeeChanges)
+    setOpenSuggestions(suggestions)
     setPostedSinceLoad(false)
   }
 
@@ -391,6 +402,7 @@ export default function AttGoraSection({
     !bokforRows &&
     !betalaRows &&
     !granskaRows &&
+    openSuggestions.length === 0 &&
     !bevakaRows &&
     urgentSwitches.length === 0 &&
     verificationExpired === null &&
@@ -810,6 +822,19 @@ export default function AttGoraSection({
                       />
                     )}
                   </div>
+                </div>
+              )}
+
+              {openSuggestions.length > 0 && (
+                <div>
+                  <BandHeader>{t('band_suggestions')}</BandHeader>
+                  <SuggestionCards
+                    suggestions={openSuggestions}
+                    onResolved={(answered) => {
+                      setOpenSuggestions((prev) => prev.filter((s) => s.suggestion_id !== answered.suggestion_id))
+                      void refetchCounts()
+                    }}
+                  />
                 </div>
               )}
 

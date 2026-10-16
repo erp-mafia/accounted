@@ -1,0 +1,1 @@
+[2026-10-16] The Förslag card shows the suggestion's own Swedish title and reason in both locales, as every staged operation's title is shown, and translates only the chrome: one record rendered in Att göra and in the agent briefing.

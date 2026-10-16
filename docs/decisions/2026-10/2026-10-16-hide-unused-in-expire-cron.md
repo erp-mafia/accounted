@@ -1,0 +1,1 @@
+[2026-10-16] hide-unused runs as a third step of the daily pending-operations cron (a weekday bucket per company, at most one staging per company per run) instead of a new cron route and crontab entry: it stays dark behind SUGGESTIONS_HIDE_UNUSED.

@@ -99,10 +99,23 @@ export const WORKLIST_CATEGORIES = [
   'deadline_action',
   /**
    * Agent-staged operations awaiting review ("Granskning").
-   * Pending:  pending_operations.status = 'pending'.
+   * Pending:  pending_operations.status = 'pending', staged by anyone but the
+   *           system (a suggestion has its own row, below).
    * Done:     committed or rejected.
    */
   'pending_operations',
+  /**
+   * Suggestions: package switches the system proposed (lib/suggestions),
+   * one Förslag card each with Ja, Inte nu and Visa aldrig, at most three
+   * at a time, ranked (lib/suggestions/list.ts listOpenSuggestions; the
+   * agent briefing shows the same three).
+   * Pending:  a company_suggestions row in state 'open' whose
+   *           pending_operations row (actor 'system') is still 'pending'.
+   * Done:     approved (accepted), "Inte nu" or any other rejection (snoozed
+   *           30 days), "Visa aldrig" (declined for good), or expired.
+   * Counts what is shown: a fourth open suggestion waits for a free place.
+   */
+  'suggestion',
   /**
    * Accounts not signed off through the end of the previous month
    * ("N konton att stämma av"), only for companies that have adopted the

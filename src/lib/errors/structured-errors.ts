@@ -6063,6 +6063,41 @@ const SERVICE_ACCOUNT: Record<string, StructuredErrorEntry> = {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// Package switches (enable_package, disable_package; lib/suggestions)
+// ─────────────────────────────────────────────────────────────────
+
+const PACKAGE: Record<string, StructuredErrorEntry> = {
+  PACKAGE_NOT_SWITCHABLE: {
+    httpStatus: 400,
+    message_sv: 'Den här delen av Accounted går inte att slå på eller stänga av.',
+    message_en: 'This package cannot be switched on or off.',
+    retryable: false,
+  },
+  PACKAGE_SWITCH_ADMIN_REQUIRED: {
+    httpStatus: 403,
+    message_sv: 'Endast ägare och administratörer kan slå på eller stänga av delar av Accounted.',
+    message_en: 'Only owners and admins can switch packages on or off.',
+    retryable: false,
+  },
+  PACKAGE_SWITCH_NEEDS_PERSON: {
+    httpStatus: 403,
+    message_sv: 'En person i företaget behöver godkänna det här, inte ett tjänstekonto.',
+    message_en: 'A person in the company has to approve this, not a service account.',
+    retryable: false,
+  },
+  PACKAGE_HAS_OPEN_OBLIGATIONS: {
+    httpStatus: 409,
+    message_sv: 'Paketet kan inte stängas av medan något är öppet där.',
+    message_en: 'The package cannot be switched off while something is still open in it.',
+    retryable: false,
+    thrown_message_sv: true,
+    remediation: {
+      description: 'Settle what details.obligations names (pay the invoices, book the runs, end the connections), then switch the package off again.',
+    },
+  },
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Provider connection / external HTTP codes
 // ─────────────────────────────────────────────────────────────────
 
@@ -8744,6 +8779,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...COMPANY,
   ...API_KEY,
   ...SERVICE_ACCOUNT,
+  ...PACKAGE,
   ...PROVIDER,
   ...SKATTEVERKET,
   ...BOLAGSVERKET,

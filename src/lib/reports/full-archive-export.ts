@@ -1413,6 +1413,8 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   chat_messages: 'AI assistant state, not räkenskapsinformation',
   chat_sessions: 'AI assistant state, not räkenskapsinformation',
   company_capability_config: 'entitlement state',
+  company_suggestions:
+    'which suggestions are open, snoozed or declined; the proposals and decisions are pending_operations rows and every package switch an audit_log row',
   company_inbound_domains: 'inbound-mail infrastructure',
   company_inboxes: 'inbound-mail infrastructure',
   company_sending_domains: 'outbound-mail infrastructure (sender domain verification state)',

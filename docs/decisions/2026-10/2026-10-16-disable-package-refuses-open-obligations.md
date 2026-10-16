@@ -1,0 +1,1 @@
+[2026-10-16] disable_package refuses while package_open_obligations names anything, counted conservatively (an active employee, an asset in the register, a live connection), because winding down is not built; the same set gates the hide-unused detector.

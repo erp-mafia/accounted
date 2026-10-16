@@ -4,6 +4,7 @@ import type { AuditLogEntry } from '@/types'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchAppReleases, type AppReleaseRow } from '@/lib/reports/app-releases'
 import { SOURCE_TYPE_LABELS_SV } from '@/lib/reports/systemdokumentation'
+import { getPackage, packageForConfigKey } from '@/lib/modules/packages'
 import {
   buildDecisionReceipts,
   fetchDecisionRowsInWindow,
@@ -289,6 +290,11 @@ export const AUDITED_TABLES = [
   // writes to the books through its own keys, created and revoked by an
   // owner or admin. Their keys are api_keys rows, logged above.
   'service_accounts',
+  // A company's package choices (migration 20261016200400): which parts of
+  // Accounted are switched on, by whom and why (an approved suggestion or the
+  // company's own choice). Only the package keys render; the rows are written
+  // by set_company_package_choice, which logs every change here.
+  'company_capability_config',
 ] as const
 
 /**
@@ -316,7 +322,7 @@ export const GLOBAL_ACTIONS = [
  * names statically; a unit test pins it to AUDITED_TABLES / GLOBAL_ACTIONS.
  */
 export const AUDIT_ROW_FILTER =
-  'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults,mail_connections,collection_connections,service_accounts),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED)'
+  'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults,mail_connections,collection_connections,service_accounts,company_capability_config),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED)'
 
 const COMMIT_METHOD_LABELS: Record<string, string> = {
   user_accept: 'Godkänd av användare',
@@ -1226,6 +1232,31 @@ function serviceAccountAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEve
 }
 
 /**
+ * A package switched on or off (set_company_package_choice, migration
+ * 20261016200400): what changes how the system handles the company's work is
+ * a dated processing-rule change (BFNAR 2013:2 p. 9.16). The approver is the
+ * actor; the detail says whether an approved suggestion or the company itself
+ * asked for it. A capability key row is entitlement state and renders nothing.
+ */
+function packageChoiceAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
+  if (row.action !== 'INSERT' && row.action !== 'UPDATE') return null
+  const key = str(row.new_state?.capability_key)
+  const packageId = key ? packageForConfigKey(key) : null
+  if (!packageId) return null
+  const enabled = row.new_state?.enabled === true
+  const source = str(row.new_state?.source)
+  const details =
+    source === 'suggestion' ? ['Källa: godkänt förslag'] : source === 'company' ? ['Källa: företagets eget val'] : []
+  return auditEvent(row, {
+    category: 'installningar',
+    code: enabled ? 'package.switched_on' : 'package.switched_off',
+    event: enabled ? 'Paket påslaget' : 'Paket avstängt',
+    object: getPackage(packageId).nameSv,
+    details,
+  })
+}
+
+/**
  * A mailbox the receipt hunt reads underlag from: who connected it, with
  * which access, and when it was disconnected (and whether the provider
  * confirmed the access was withdrawn).
@@ -1514,6 +1545,8 @@ export function auditRowToEvent(
       return apiKeyAuditEvent(row)
     case 'service_accounts':
       return serviceAccountAuditEvent(row)
+    case 'company_capability_config':
+      return packageChoiceAuditEvent(row)
     case 'dimensions':
       return genericAuditEvent(row, {
         category: 'installningar',
@@ -2435,7 +2468,7 @@ async function fetchAuditRows(
       // Literal on purpose (not AUDIT_ROW_FILTER): the schema guard only
       // resolves string literals here. A test pins the two to each other.
       .or(
-        'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults,mail_connections,collection_connections,service_accounts),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED)',
+        'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults,mail_connections,collection_connections,service_accounts,company_capability_config),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED)',
       )
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })

@@ -78,9 +78,47 @@ Standard on failure. How a company gets one:
   `/invite/[token]` (`lib/company/client-profile.ts`).
 - **Existing companies**: Standard, unless their byrå picks a profile.
 
-Nothing writes a profile through the API or MCP yet; that arrives with
-suggestions. `GET /api/v1/companies/{companyId}/capabilities` and the
-briefing (`capabilities_profile`) name it.
+Nothing writes a profile through the API or MCP yet. `GET
+/api/v1/companies/{companyId}/capabilities` and the briefing
+(`capabilities_profile`) name it.
+
+## Suggestions: package switches a person approves
+
+Step 3 of the design (`src/lib/suggestions`). A company's package choice is
+written only by the staged operations `enable_package` and `disable_package`,
+through `set_company_package_choice` (migration `20261016200400`): an owner
+or admin approves, the row records the source (`suggestion` or `company`),
+the approver, the credential and the operation, switching off is refused
+while `package_open_obligations` names anything ("winding down" is not built
+yet), and every change is an `audit_log` row that behandlingshistorik shows
+as a dated settings line.
+
+A detector is an event type (or a schedule), a condition and a proposed
+operation with a plain Swedish title and reason (`types.ts`), the shape a
+user flow's trigger shares. It only proposes: `stage_company_suggestion`
+(migration `20261016200600`) stages one pending operation as the system
+(actor `system`, label "Accounted") per company and key while it is open.
+The answer comes through the doors every staged operation has (Att göra,
+/pending, v1, MCP), and a trigger on `pending_operations` keeps
+`company_suggestions` in step: approved is accepted, a rejection with the
+reason "Visa aldrig" declines for good, any other rejection or the expiry
+snoozes the key for 30 days. At most three open suggestions are shown,
+ranked, as Förslag cards in Att göra and as `suggestions` in the agent
+briefing.
+
+- `first-employee`: `employee.created` while Lön is off: "Slå på Lön?".
+- `sales-channel-connected`: `pos.connected` or a webshop connection while
+  Kassa och webbshop is off: "Slå på Kassa och webbshop?".
+- `hide-unused`: daily, behind `SUGGESTIONS_HIDE_UNUSED` (off): a package
+  unused for six months with nothing open: "Dölj <paket>?". Jakob turns it
+  on.
+
+A package is off only where a profile or the company left it off, so the
+event detectors reach byrå-profiled companies only: a Standard company sees
+nothing new. The event detectors run on the event bus beside the event_log
+and webhook handlers (lib/init); staging logs and skips when the database
+does not have the operation types yet, so an early deploy never breaks the
+write that emitted.
 
 ## Capabilities: what one company can use
 

@@ -6,6 +6,7 @@ import { todayIsoStockholm, addDaysIso } from '@/lib/dates/iso'
 import { isSaneDateString } from '@/lib/invariants'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
+import { eventBus } from '@/lib/events'
 import {
   PosConnectError,
   connectPosVenue as connectVenueAtConnect,
@@ -189,7 +190,19 @@ export async function connectPosVenue(
     }
     return { ok: false, code: error?.code === '23505' ? 'POS_ALREADY_CONNECTED' : 'POS_CONNECT_FAILED' }
   }
-  return { ok: true, created: true, data: { connection: view(data as unknown as PosConnectionRow) } }
+  const row = data as unknown as PosConnectionRow
+  // The session route and the operation (v1, MCP) both connect here, so the
+  // event names every new connection once. The bus never throws at the
+  // emitter; the guard covers the emit call.
+  try {
+    await eventBus.emit({
+      type: 'pos.connected',
+      payload: { connectionId: row.id, provider: row.provider, userId: ctx.userId, companyId: ctx.companyId },
+    })
+  } catch {
+    // The connection exists; an event that could not be sent changes nothing for it.
+  }
+  return { ok: true, created: true, data: { connection: view(row) } }
 }
 
 /** The handle Connect gave, read with the service role: members never read it. */

@@ -77,7 +77,7 @@ export const PendingOperationView = z.object({
     .describe('The outcome once resolved: the committed ids, or why it was not done. null while pending.'),
   rejection_category: z.string().nullable(),
   rejection_reason: z.string().nullable(),
-  actor_type: z.string().describe('Who staged it: api_key, mcp_oauth, service_account, user, agent_chat or cron.'),
+  actor_type: z.string().describe('Who staged it: api_key, mcp_oauth, service_account, user, agent_chat, cron, or system (a suggestion).'),
   actor_id: z.string().nullable(),
   actor_label: z.string().nullable(),
   batch_id: z.string().uuid().nullable(),

@@ -7,6 +7,7 @@ import { registerEventLogHandler } from '@/lib/events/handlers/event-log-handler
 import { registerDocumentReadHandler } from '@/lib/events/handlers/document-read-handler'
 import { registerAgentFeedbackRelayHandler } from '@/lib/events/handlers/agent-feedback-relay-handler'
 import { registerWebhookHandler } from '@/lib/webhooks/handler'
+import { registerSuggestionDetectorHandler } from '@/lib/suggestions/handler'
 import { registerConfiguredPeppolTransports } from '@/lib/invoices/transports'
 import { registerConnectPaymentsProvider } from '@/lib/payments/initiation/connect'
 import { ensureObservability } from '@/lib/analytics/ensure-observability'
@@ -115,6 +116,10 @@ export function ensureInitialized(): void {
   registerDocumentReadHandler()
   registerAgentFeedbackRelayHandler()
   registerWebhookHandler()
+  // Suggestion detectors (lib/suggestions): the events that can call for a
+  // package switch (an employee registered, a till or webshop connected)
+  // stage it for a person to approve. Never an automatic change.
+  registerSuggestionDetectorHandler()
   // Peppol Access Point adapters are registered from the environment here;
   // every reader goes through the async getters, which load this init first.
   registerConfiguredPeppolTransports()
