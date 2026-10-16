@@ -8,7 +8,9 @@ import {
 import { loadCounterLegTopology, type CounterLegTopology } from '@/lib/cash-accounts/service'
 import { isCashLedger } from '@/lib/bookkeeping/bank-leg'
 import { loadReads, readIsFresh, assistantSuggestionFromRead, mergeAssistantSuggestion, type AssistantRead } from '@/lib/agent/categorize/read'
-import { reverseChargeBoxesOf, slateAccount, type BookingProposal } from '@/lib/bookkeeping/proposal'
+import { proposalFromTemplate, reverseChargeBoxesOf, slateAccount, type BookingProposal } from '@/lib/bookkeeping/proposal'
+import { getTemplateById } from '@/lib/bookkeeping/booking-templates'
+import { isSkatteverketPayment } from '@/lib/bookkeeping/skatteverket-payment'
 import { COUNTERPART_SEEN_FOR_DIRECT } from './direct-booking'
 import type { Transaction, EntityType, CategorizationTemplate, MappingRule } from '@/types'
 
@@ -26,6 +28,8 @@ import type { Transaction, EntityType, CategorizationTemplate, MappingRule } fro
  * contested, which takes it off the row (contestCounterpart below). A
  * proposal the read puts in another reverse-charge box keeps its place and
  * carries the read's box, which sends it to a review (disputeReverseChargeBox).
+ * A payment to Skatteverket is the exception to all of it: it leads with the
+ * skattekonto, and no learned counterpart is offered for it (leadWithSkattekonto).
  */
 /**
  * The rules behind a bank line's suggestions, recorded with every decision
@@ -34,7 +38,7 @@ import type { Transaction, EntityType, CategorizationTemplate, MappingRule } fro
  * same row changes on purpose: a source added or dropped, the order, the
  * contest or box-dispute rules.
  */
-export const BANK_PROPOSAL_RULES_REVISION = 'bank-proposals.1'
+export const BANK_PROPOSAL_RULES_REVISION = 'bank-proposals.2'
 
 export interface Proposed {
   proposals: Record<string, BookingProposal[]>
@@ -185,7 +189,40 @@ export async function proposeForTransactions(
     }
   }
 
+  for (const tx of transactions) {
+    proposals[tx.id] = leadWithSkattekonto(proposals[tx.id] ?? [], tx)
+  }
+
   return { proposals, assistant_reads }
+}
+
+/** The catalog template that books a bank line on the skattekonto (Insättning skattekonto, 1630). */
+const SKATTEKONTO_DEPOSIT_TEMPLATE_ID = 'financial_tax_account'
+
+/**
+ * A payment to Skatteverket (isSkatteverketPayment) leads with the booking on
+ * the skattekonto, whatever the keywords, a learned counterpart or the
+ * assistant ranked first: the bank line only ever touches the skattekonto
+ * account, and the taxes it pays are booked from the skattekontoutdrag
+ * (swedish-daily-bookkeeping, references/skattekonto-and-owner.md §1.1).
+ * Before, the catalog ranked 2510 above 1630 and any learned template above
+ * both, so one mistaken booking (5890 with 25 % moms) became the row's
+ * proposal (crm#1275).
+ *
+ * A rule of the company's own that books there keeps the lead, with its
+ * auto-booking; otherwise the catalog template does, which always goes to a
+ * review. The other proposals stay below it for the picker. The template
+ * names 1630; the booking puts it on the company's skattekonto account (2012
+ * for an enskild firma that runs it there), as buildCategorizeMapping does
+ * for every template on 1630.
+ */
+export function leadWithSkattekonto(list: BookingProposal[], tx: Transaction): BookingProposal[] {
+  if (!isSkatteverketPayment(tx)) return list
+  const own = list.find((p) => p.source === 'rule' && p.template_id === SKATTEKONTO_DEPOSIT_TEMPLATE_ID)
+  const template = getTemplateById(SKATTEKONTO_DEPOSIT_TEMPLATE_ID)
+  const lead = own ?? (template ? proposalFromTemplate(template, 'catalog', template.auto_match_confidence) : undefined)
+  if (!lead) return list
+  return [lead, ...list.filter((p) => p !== lead && p.template_id !== SKATTEKONTO_DEPOSIT_TEMPLATE_ID)]
 }
 
 /**

@@ -769,6 +769,17 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
       resource: 'Accounted://chart-of-accounts',
     },
   },
+  TX_CATEGORIZE_SKATTEVERKET_VAT: {
+    httpStatus: 400,
+    message_sv:
+      'En betalning till Skatteverket har ingen moms. Bokför den som Insättning skattekonto och bokför skatterna den betalar från skattekontot.',
+    message_en:
+      'A payment to Skatteverket carries no VAT. Book it as a deposit to the tax account and book the taxes it pays from the tax account.',
+    remediation: {
+      description:
+        'Book the bank line on the skattekonto account (template financial_tax_account) with no vat_treatment. The liabilities it pays (2510, 2650, 2710, 2731) are cleared from the skattekonto rows, not from the bank line.',
+    },
+  },
   TX_CATEGORIZE_INVALID_MAPPING: {
     httpStatus: 400,
     message_sv: 'Konteringen saknar debet- eller kreditkonto.',

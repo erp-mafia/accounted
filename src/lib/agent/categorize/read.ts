@@ -159,7 +159,11 @@ export function assistantSuggestionFromRead(
     account,
     label,
     category,
-    vat_treatment: read.vat_treatment,
+    // The read's moms is already resolved (selectAccount takes it from the
+    // candidate, the template or the category): null there means the account
+    // books none. Passed on as null, accountProposal took the category's
+    // default and offered 1630 with 25 % moms (crm#1275).
+    vat_treatment: read.vat_treatment ?? 'exempt',
     reverse_charge_kind: read.reverse_charge_kind,
     amount: tx.amount,
     confidence: read.confidence,

@@ -88,6 +88,22 @@ describe('assistantSuggestionFromRead', () => {
     expect(s).toMatchObject({ debit_account: '1930', credit_account: '3001', booking: { kind: 'account', account: '3001', category: 'income_services' } })
     expect(s!.name_sv).not.toBe('3001')
   })
+  // crm#1275: the read chose the skattekonto candidate, which books no moms;
+  // the suggestion took the category default and offered 1630 with 25 %.
+  it('keeps a read with no moms free of moms, on a balance-sheet account too', () => {
+    const skattekonto = read({
+      account: '1630',
+      vat_treatment: null,
+      reverse_charge: false,
+      candidates: [{ account: '1630', label: 'Insättning skattekonto', vatTreatment: null, source: 'pattern', confidence: 0.09 }],
+    })
+    const s = assistantSuggestionFromRead(skattekonto, { id: 'tx-1', amount: -12225 }, 'aktiebolag')!
+    expect(s.booking).toMatchObject({ kind: 'account', account: '1630', vat_treatment: 'exempt' })
+    expect(previewedPurchase(s, -12225).map((l) => [l.side, l.account, l.amount])).toEqual([
+      ['debet', '1630', 12225],
+      ['kredit', '1930', 12225],
+    ])
+  })
   it('previews a purchase read as bought abroad as cost against the bank, with no moms line', () => {
     const abroad = read({ account: '5890', category: 'expense_travel', vat_treatment: 'exempt', reverse_charge: false, candidates: [] })
     const s = assistantSuggestionFromRead(abroad, { id: 'tx-1', amount: -473.63 }, 'aktiebolag')!
