@@ -11,6 +11,9 @@
  * - A spent daily budget (CONNECTOR_BANK_RATE_LIMITED) HOLDS it until the
  *   service's Retry-After, else RATE_LIMIT_COOLDOWN_MS: the bank allows four
  *   unattended reads a day, and a retry next hour only spends a refused call.
+ *   That hold, and a failed unattended read's, guard the unattended budget
+ *   only: a person at the screen reads outside it and takes the hold over
+ *   (takeOverBankFeedHold), which is put back when that read fails.
  * - The bank's short throttle (CONNECTOR_BANK_THROTTLED, Retry-After of about
  *   45 s) holds it for that long, never past an ordinary claim: the next cron
  *   window or the next Synka nu may read again, and rateLimitHoldUntil keeps
@@ -27,13 +30,18 @@ export const THROTTLE_COOLDOWN_MS = 60 * 1000
 /** The cron syncs an Open Payments connection at most this often: two of the consent's four unattended reads a day. */
 export const SYNC_DUE_AFTER_MS = 11 * 60 * 60 * 1000
 /**
- * How long a failed unattended read keeps the cron away. The bank counts
- * every attempt against the consent's four reads a day, so retrying in every
- * cron window spent a whole day's reads inside one night-time maintenance
- * hour and the connection never synced (Länsförsäkringar, 2026-10-15: four
- * timeouts between 00:00 and 01:00, the day's budget gone).
+ * How long a failed unattended read keeps the cron away: a quarter of a day,
+ * so a connection whose reads keep failing makes at most four attempts in 24
+ * hours, the consent's whole budget, and they fall at different times of
+ * day. The bank counts every attempt, a timeout included, and Länsförsäkringar
+ * counts over a rolling 24 hours: retrying every cron window spent a whole
+ * day's reads inside one night (2026-10-15, four timeouts between 00:00 and
+ * 01:00), and a two-hour hold still spent the next day's before morning
+ * (2026-10-16, Swedish time: the quota refusal at 00:00, timeouts at 02:00,
+ * 04:10 and 06:20, then the budget refusal at 08:30 and a twelve-hour
+ * cooldown).
  */
-export const UNATTENDED_FAILURE_HOLD_MS = 2 * 60 * 60 * 1000
+export const UNATTENDED_FAILURE_HOLD_MS = 6 * 60 * 60 * 1000
 
 /** Atomically claim the lease for an Open Payments connection. True when this caller won it. */
 export async function claimBankFeedLease(
@@ -48,6 +56,30 @@ export async function claimBankFeedLease(
     .eq('id', connectionId)
     .eq('aggregator', OPEN_PAYMENTS_AGGREGATOR)
     .lte('sync_lease_until', new Date(now).toISOString())
+    .select('id')
+  if (error) throw error
+  return (data ?? []).length > 0
+}
+
+/**
+ * Take over a hold for a read that does not spend the budget the hold guards:
+ * a person at the screen, whose read the bank and Connect do not count. Only
+ * while the lease still carries the very value read (`heldUntil`), so a
+ * concurrent claim or a newer hold wins. True when this caller took it.
+ */
+export async function takeOverBankFeedHold(
+  supabase: SupabaseClient,
+  connectionId: string,
+  heldUntil: string,
+  now: number,
+  durationMs: number = SYNC_COOLDOWN_MS,
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('bank_connections')
+    .update({ sync_lease_until: new Date(now + durationMs).toISOString() })
+    .eq('id', connectionId)
+    .eq('aggregator', OPEN_PAYMENTS_AGGREGATOR)
+    .eq('sync_lease_until', heldUntil)
     .select('id')
   if (error) throw error
   return (data ?? []).length > 0

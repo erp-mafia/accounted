@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   persistRoute: vi.fn(),
   claimLease: vi.fn(),
   holdLease: vi.fn(),
+  takeOverHold: vi.fn(),
   party: vi.fn(),
   emit: vi.fn(),
 }))
@@ -26,6 +27,7 @@ vi.mock('../lease', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lease')>()),
   claimBankFeedLease: (...a: unknown[]) => mocks.claimLease(...a),
   holdBankFeedLease: (...a: unknown[]) => mocks.holdLease(...a),
+  takeOverBankFeedHold: (...a: unknown[]) => mocks.takeOverHold(...a),
 }))
 vi.mock('../party', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../party')>()),
@@ -91,6 +93,7 @@ beforeEach(() => {
   mocks.persistRoute.mockResolvedValue(undefined)
   mocks.claimLease.mockResolvedValue(true)
   mocks.holdLease.mockResolvedValue(undefined)
+  mocks.takeOverHold.mockResolvedValue(true)
   mocks.party.mockResolvedValue({ ok: true, party: { orgNumber: '5595386219', accountContext: 'corporate', bic: 'SWEDSESS', personalNumber: null, psuIpAddress: null, psuUserAgent: null, affiliatedAspspId: null } })
   mocks.emit.mockResolvedValue(undefined)
 })
@@ -315,6 +318,40 @@ describe('runOpenPaymentsSync', () => {
     expect(mocks.syncAccount).not.toHaveBeenCalled()
   })
 
+  it('lets a person at the screen read through a budget or failure hold, puts the hold back when that read fails, and keeps an agent away', async () => {
+    const person = { trigger: 'manual', signer: { personalNumber: null, ipAddress: '203.0.113.1', userAgent: 'UA' } }
+    const heldUntil = new Date(NOW + 10 * 60 * 60_000).toISOString()
+    const held = () => stub({
+      bank_connections: [{ data: row({ sync_lease_until: heldUntil }), error: null }],
+      company_members: [{ data: { role: 'owner' }, error: null }],
+      sie_imports: [{ data: null, error: null }],
+      transactions: [{ data: [], error: null }],
+    })
+
+    const ok = held()
+    expect(await run(ok.supabase, person)).toMatchObject({ ok: true })
+    expect(mocks.takeOverHold).toHaveBeenCalledWith(ok.supabase, 'conn-1', heldUntil, NOW)
+    expect(mocks.claimLease).not.toHaveBeenCalled()
+    expect(mocks.holdLease).not.toHaveBeenCalled()
+
+    mocks.syncAccount.mockRejectedValueOnce(new ProviderUnavailableError('timeout', { code: 'CONNECTOR_AIS_PROVIDER_FAILED', status: 502 }))
+    const failed = held()
+    expect(await run(failed.supabase, person)).toMatchObject({ ok: false, code: 'BANK_SYNC_FAILED' })
+    expect(mocks.holdLease).toHaveBeenCalledWith(failed.supabase, 'conn-1', new Date(heldUntil).getTime())
+
+    // A concurrent claim or a newer hold changed the lease: the take-over loses, nothing is read.
+    mocks.syncAccount.mockClear()
+    mocks.takeOverHold.mockResolvedValueOnce(false)
+    const raced = held()
+    expect(await run(raced.supabase, person)).toMatchObject({ ok: false, code: 'BANK_SYNC_COOLDOWN' })
+    expect(mocks.syncAccount).not.toHaveBeenCalled()
+
+    // No person present (an agent, the cron): the hold stands.
+    const agent = held()
+    expect(await run(agent.supabase, { trigger: 'agent' })).toMatchObject({ ok: false, code: 'BANK_RATE_LIMITED' })
+    expect(mocks.syncAccount).not.toHaveBeenCalled()
+  })
+
   it('skips the membership check for the cron and refuses a stranger otherwise', async () => {
     const cron = stub({ bank_connections: [{ data: row(), error: null }], sie_imports: [{ data: null, error: null }], transactions: [{ data: [], error: null }] })
     expect(await run(cron.supabase, { trigger: 'cron', unattended: true })).toMatchObject({ ok: true })
@@ -381,17 +418,17 @@ describe('runOpenPaymentsSync', () => {
     expect(mocks.persistFailure).toHaveBeenCalledWith(boom.supabase, expect.objectContaining({ status: 'error', message: SYNC_FAILED_MESSAGE }))
   })
 
-  it('holds a failed unattended read for two hours so a bank\'s night window cannot spend the day\'s four reads, and never holds a person\'s Synka nu', async () => {
+  it('holds a failed unattended read for six hours, so a failing connection makes at most four attempts a day and never holds a person\'s Synka nu', async () => {
     mocks.syncAccount.mockRejectedValueOnce(new ProviderUnavailableError('timeout', { code: 'CONNECTOR_AIS_PROVIDER_FAILED', status: 502 }))
     const night = stub({ bank_connections: [{ data: row(), error: null }], company_members: [{ data: { role: 'owner' }, error: null }], sie_imports: [{ data: null, error: null }] })
     expect(await run(night.supabase, { trigger: 'cron', unattended: true })).toMatchObject({ ok: false, code: 'BANK_SYNC_FAILED' })
-    expect(mocks.holdLease).toHaveBeenCalledWith(night.supabase, 'conn-1', NOW + 2 * 60 * 60 * 1000)
+    expect(mocks.holdLease).toHaveBeenCalledWith(night.supabase, 'conn-1', NOW + 6 * 60 * 60 * 1000)
 
     mocks.holdLease.mockClear()
     mocks.syncAccount.mockRejectedValueOnce(new Error('refused'))
     const refused = stub({ bank_connections: [{ data: row(), error: null }], company_members: [{ data: { role: 'owner' }, error: null }], sie_imports: [{ data: null, error: null }] })
     await run(refused.supabase, { trigger: 'cron', unattended: true })
-    expect(mocks.holdLease).toHaveBeenCalledWith(refused.supabase, 'conn-1', NOW + 2 * 60 * 60 * 1000)
+    expect(mocks.holdLease).toHaveBeenCalledWith(refused.supabase, 'conn-1', NOW + 6 * 60 * 60 * 1000)
 
     mocks.holdLease.mockClear()
     mocks.syncAccount.mockRejectedValueOnce(new ProviderUnavailableError('timeout', { code: 'CONNECTOR_AIS_PROVIDER_FAILED', status: 502 }))

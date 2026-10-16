@@ -36,7 +36,7 @@ import { SYNC_COOLDOWN_MS, type TriggerSyncInput, type TriggerSyncResult } from 
 import { eventBus } from '@/lib/events/bus'
 import type { Transaction } from '@/types'
 import { BankFeedError, BankThrottledError, ConsentOverError, ProviderUnavailableError, RateLimitedError, getBankFeedConnect, type BankFeedConnect } from './connect'
-import { claimBankFeedLease, holdBankFeedLease, rateLimitCooldownMs, rateLimitHoldUntil, throttleCooldownMs, UNATTENDED_FAILURE_HOLD_MS } from './lease'
+import { claimBankFeedLease, holdBankFeedLease, rateLimitCooldownMs, rateLimitHoldUntil, takeOverBankFeedHold, throttleCooldownMs, UNATTENDED_FAILURE_HOLD_MS } from './lease'
 import { buildBankFeedParty, UNATTENDED_SIGNER, type BankFeedSignerInput } from './party'
 import { syncOpenPaymentsAccount, type BankFeedAccount, type BankFeedIngestFn } from './sync'
 
@@ -266,9 +266,16 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
     rawInsertOnly = (membership as { role?: string }).role === 'viewer'
   }
 
-  // A lease held for hours is a spent daily budget: say so, do not spend another read.
+  // A lease held for hours is a spent daily budget or a failed unattended
+  // read: say so, do not spend another read. A person at the screen (their IP
+  // address forwarded) reads outside that budget, since Connect does not count
+  // the read and the bank lifts its four-a-day limit (Open Payments support,
+  // 2026-10-14), so the hold does not keep them away; a sync in progress
+  // still does.
   const rateLimitedUntil = rateLimitHoldUntil(connection, now)
-  if (rateLimitedUntil !== null) {
+  const personPresent = !input.unattended && Boolean(input.signer?.ipAddress?.trim())
+  const passHold = personPresent && rateLimitedUntil !== null && Boolean(connection.sync_lease_until)
+  if (rateLimitedUntil !== null && !passHold) {
     return {
       ok: false, code: 'BANK_RATE_LIMITED', connection_id: connectionId, status: connection.status,
       next_allowed_at: new Date(rateLimitedUntil).toISOString(), retry_after_seconds: Math.max(1, Math.ceil((rateLimitedUntil - now) / 1000)),
@@ -284,8 +291,11 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
   const lastSynced = connection.last_synced_at ? new Date(connection.last_synced_at).getTime() : null
   if (!initial && lastSynced !== null && now - lastSynced < SYNC_COOLDOWN_MS) return cooldown(lastSynced + SYNC_COOLDOWN_MS)
   const heldLease = connection.sync_lease_until ? new Date(connection.sync_lease_until).getTime() : null
-  if (heldLease !== null && heldLease > now) return cooldown(heldLease)
-  if (!(await claimBankFeedLease(supabase, connectionId, now))) {
+  if (heldLease !== null && heldLease > now && !passHold) return cooldown(heldLease)
+  const claimed = passHold
+    ? await takeOverBankFeedHold(supabase, connectionId, connection.sync_lease_until as string, now)
+    : await claimBankFeedLease(supabase, connectionId, now)
+  if (!claimed) {
     log.info('open payments sync: lease held by a concurrent caller', { connectionId })
     return cooldown(now + SYNC_COOLDOWN_MS)
   }
@@ -452,6 +462,9 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
     }
     const failure = classify(error)
     let status = connection.status
+    // A person's read that took a hold over and failed puts the hold back:
+    // the unattended budget it guards is still spent or still failing.
+    if (passHold && rateLimitedUntil !== null) await holdBankFeedLease(supabase, connectionId, rateLimitedUntil).catch(() => {})
     if (failure.errorClass === 'rate_limited') {
       const cooldownMs = rateLimitCooldownMs((error as RateLimitedError).retryAfterSeconds)
       const until = now + cooldownMs
