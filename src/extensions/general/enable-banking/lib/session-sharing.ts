@@ -355,7 +355,11 @@ export interface CrossCompanyAccountContext {
  *
  * Runs on the callback's SERVICE-ROLE client, so nothing is RLS-scoped:
  * every query below filters on the user's own rows explicitly
- * (bank_connections.user_id, cash_accounts.company_id via company_members).
+ * (bank_connections.user_id, cash_accounts.company_id via company_members),
+ * and "the user's companies" is the set RLS would give: memberships in
+ * companies that are not archived, as user_company_ids() and
+ * attach_shared_bank_session define it. An archived company books nothing,
+ * so it claims nothing (crm#1241).
  *
  * Returns null when any lookup failed. The caller must fail closed (treat
  * every unrecognized account as not-safe-to-pre-check): an empty result is
@@ -412,7 +416,34 @@ export async function fetchCrossCompanyAccountContext(
     return null
   }
 
+  // The user's live companies: archived ones are filtered out in PostgREST,
+  // the same set user_company_ids() gives RLS. cash_accounts is read for
+  // these below, and a connection row counts only when its company is one.
+  const { data: membershipRows, error: membershipError } = await serviceSupabase
+    .from('company_members')
+    .select('company_id, companies!inner(archived_at)')
+    .eq('user_id', userId)
+    .is('companies.archived_at', null)
+
+  if (membershipError) {
+    log.error('cross-company claim lookup failed (company_members)', {
+      activeCompanyId,
+      error: membershipError.message,
+    })
+    return null
+  }
+
+  const memberCompanyIds = [
+    ...new Set(
+      ((membershipRows ?? []) as Array<{ company_id: string }>).map(r => r.company_id),
+    ),
+  ]
+  const liveCompanyIds = new Set(memberCompanyIds)
+
   for (const row of connectionRows) {
+    // An archived company's row (or one in a company the user has left) is
+    // neither a claim nor a remembered deselection.
+    if (!liveCompanyIds.has(row.company_id)) continue
     for (const account of row.accounts_data ?? []) {
       const iban = normalizeIban(account.iban)
       if (!iban) continue
@@ -428,28 +459,9 @@ export async function fetchCrossCompanyAccountContext(
 
   // cash_accounts catches standing state the connection rows no longer carry
   // (older connects, CSV-era rows promoted onto a feed, a row a supersede is
-  // about to demote). ALL of the user's companies are read: sibling rows
+  // about to demote). ALL of the user's live companies are read: sibling rows
   // become claims, the active company's rows become its own standing set.
   // Scoped via memberships, since the service client sees everything.
-  const { data: membershipRows, error: membershipError } = await serviceSupabase
-    .from('company_members')
-    .select('company_id')
-    .eq('user_id', userId)
-
-  if (membershipError) {
-    log.error('cross-company claim lookup failed (company_members)', {
-      activeCompanyId,
-      error: membershipError.message,
-    })
-    return null
-  }
-
-  const memberCompanyIds = [
-    ...new Set(
-      ((membershipRows ?? []) as Array<{ company_id: string }>).map(r => r.company_id),
-    ),
-  ]
-
   if (memberCompanyIds.length > 0) {
     let cashRows: Array<{ company_id: string; iban: string | null }>
     try {

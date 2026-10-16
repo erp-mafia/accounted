@@ -302,6 +302,48 @@ describe('fetchCrossCompanyAccountContext', () => {
     expect(cashChain.in).toHaveBeenCalledWith('company_id', ['company-1', 'company-2'])
   })
 
+  it('ignores archived companies, like user_company_ids() does', async () => {
+    // A migration restart archives the old company and opens a new one for
+    // the same org number. The old company's bank was disconnected, but its
+    // cash accounts stay enabled; if they still claimed, the new company's
+    // picker would offer nothing (crm#1241). The membership read is filtered
+    // on archived_at in PostgREST, so the archived company never arrives,
+    // and its connection rows must not claim or deselect on their own.
+    const { supabase, chainsByTable } = makeSupabase({
+      company_members: { data: [{ company_id: 'company-1' }] },
+      bank_connections: {
+        data: [
+          {
+            id: 'conn-archived',
+            company_id: 'company-archived',
+            status: 'expired',
+            accounts_data: [
+              { uid: 'a1', iban: 'SE11', currency: 'SEK', enabled: true },
+              { uid: 'a2', iban: 'SE22', currency: 'SEK', enabled: false },
+            ],
+          },
+        ],
+      },
+      cash_accounts: { data: [] },
+      companies: { data: [] },
+    })
+
+    const context = await fetchCrossCompanyAccountContext(
+      supabase,
+      'user-1',
+      'company-1',
+      'conn-active',
+    )
+
+    expect(context!.claims.size).toBe(0)
+    expect(context!.deselectedIbans.size).toBe(0)
+
+    const membershipChain = chainsByTable.get('company_members')![0]
+    expect(membershipChain.select).toHaveBeenCalledWith('company_id, companies!inner(archived_at)')
+    expect(membershipChain.is).toHaveBeenCalledWith('companies.archived_at', null)
+    expect(chainsByTable.get('cash_accounts')![0].in).toHaveBeenCalledWith('company_id', ['company-1'])
+  })
+
   it('returns null when a lookup fails, so the caller can fail closed', async () => {
     const { supabase } = makeSupabase({
       bank_connections: { data: null, error: { message: 'boom' } },
