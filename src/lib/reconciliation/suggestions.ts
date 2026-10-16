@@ -192,6 +192,19 @@ export async function confirmJournalEntrySuggestions(
       tx.potential_journal_entry_id,
       userId,
       accountNumber,
+      {
+        // A person confirmed the matcher's suggestion: the matcher and its
+        // score are the evidence, the confirmation is the basis.
+        linkBasis: {
+          basis: 'user_confirmed',
+          evidence: {
+            ...(tx.potential_match_method ? { rule_id: tx.potential_match_method } : {}),
+            ...(tx.potential_match_confidence !== null && tx.potential_match_confidence !== undefined
+              ? { score: Number(tx.potential_match_confidence) }
+              : {}),
+          },
+        },
+      },
     )
     if (!linkResult.success) {
       result.skipped.push({

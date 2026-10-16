@@ -205,6 +205,7 @@ describe('POST /items/:id/book-direct', () => {
       'company-1',
       'doc-1',
       'je-1',
+      { link_basis: 'user_created', link_evidence: null },
     )
   })
 
@@ -914,7 +915,7 @@ describe('POST /items/:id/book-direct', () => {
       ['2614', 0, 287.5],
       ['2893', 0, 1150],
     ])
-    expect(linkToJournalEntryMock).toHaveBeenCalledWith(expect.anything(), 'company-1', 'doc-1', 'je-1')
+    expect(linkToJournalEntryMock).toHaveBeenCalledWith(expect.anything(), 'company-1', 'doc-1', 'je-1', { link_basis: 'user_created', link_evidence: null })
   })
 
   it('books kronor typed by hand against 1930, with no bank row', async () => {

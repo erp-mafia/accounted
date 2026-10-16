@@ -41,6 +41,7 @@ import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { claimInboxItemForEntry } from '@/lib/documents/inbox-item-claim'
 import { createLogger } from '@/lib/logger'
 import { chunk } from '@/lib/utils'
+import { linkBasisColumnsFor, type LinkBasisInput } from '@/lib/links/stamp'
 
 const log = createLogger('transactions/inbox-underlag')
 
@@ -278,7 +279,8 @@ async function resolveLockedJournalEntryIds(
  * no-op (a same-value rewrite would trip the period-lock trigger), a document
  * anchored to ANOTHER verifikat is never stolen, and a failed link is
  * reported so the caller can withhold any consumed-stamp. Returns true when
- * the document ends up referencing the verifikat.
+ * the document ends up referencing the verifikat. `linkBasis` is why it does
+ * (document_attachments.link_basis).
  */
 async function anchorDocumentToJournalEntry(
   supabase: SupabaseClient,
@@ -286,6 +288,7 @@ async function anchorDocumentToJournalEntry(
   documentId: string,
   journalEntryId: string,
   logContext: Record<string, unknown>,
+  linkBasis: LinkBasisInput,
 ): Promise<boolean> {
   const { data: doc } = await supabase
     .from('document_attachments')
@@ -306,7 +309,7 @@ async function anchorDocumentToJournalEntry(
     return false
   }
   try {
-    await linkToJournalEntry(supabase, companyId, documentId, journalEntryId)
+    await linkToJournalEntry(supabase, companyId, documentId, journalEntryId, linkBasisColumnsFor(linkBasis))
     return true
   } catch (err) {
     log.error('Failed to link document to journal entry', {
@@ -453,6 +456,10 @@ export async function propagateUnderlagForBookedTransaction(
       const anchored = await anchorDocumentToJournalEntry(supabase, companyId, pinnedDocumentId, journalEntryId, {
         transaction_id: txId,
         source: 'transaction_pin',
+      }, {
+        // Follows from the document pinned to the bank row and the row's booking.
+        basis: 'system_derived',
+        evidence: { rule_id: 'bank_row_document_pin' },
       })
       if (anchored) {
         await stampInboxItemsForLinkedDocument(supabase, companyId, pinnedDocumentId, journalEntryId, {
@@ -489,6 +496,8 @@ export async function propagateUnderlagForBookedTransaction(
           inbox.document_id,
           journalEntryId,
           { inbox_item_id: inbox.id, source: 'inbox_match' },
+          // Follows from the inbox item matched to the bank row and the row's booking.
+          { basis: 'system_derived', evidence: { rule_id: 'inbox_item_bank_row_match' } },
         )
       }
       if (!underlagSettled) continue

@@ -773,7 +773,13 @@ describe('POST /api/transactions/[id]/book', () => {
 
     expect(status).toBe(200)
     expect(findCalls('document_attachments', 'update')).toContainEqual([
-      { journal_entry_id: 'je-new', journal_entry_line_id: null },
+      {
+        journal_entry_id: 'je-new',
+        journal_entry_line_id: null,
+        // The pinned document follows the bank row onto its verifikat.
+        link_basis: 'system_derived',
+        link_evidence: { rule_id: 'bank_row_document_pin' },
+      },
     ])
   })
 

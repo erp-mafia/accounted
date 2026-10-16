@@ -76,6 +76,7 @@ import { loadEntryLines, recordInboxDecision, snapshotInboxExtraction } from '@/
 import { passed, warned } from '@/lib/suggestion-log/checks'
 import { resultAccounts } from '@/lib/suggestion-log/inbox-classify'
 import type { InboxChannelContext, InvoiceInboxItem, SupplierInvoice, SupplierInvoiceItem } from '@/types'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 export type ConvertInboxItemInput = z.infer<typeof CreateSupplierInvoiceSchema>
 
@@ -458,7 +459,11 @@ export async function convertInboxItemToSupplierInvoice(
         if (item.document_id) {
           await supabase
             .from('document_attachments')
-            .update({ journal_entry_id: journalEntry.id })
+            .update({
+              journal_entry_id: journalEntry.id,
+              // The registration verifikat was booked from this document.
+              ...linkBasisColumns('user_created'),
+            })
             .eq('id', item.document_id)
             .eq('company_id', companyId)
         }

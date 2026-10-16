@@ -35,6 +35,7 @@ import {
 import { settleLedgerEntries, undoLedgerSettlement, type LedgerSettlement } from './ledger-settlement'
 import { parseAccountKey } from './schemas'
 import { DEFAULT_SETTLEMENT_ACCOUNT } from './cash-account-scope'
+import { linkBasisForReconciliationMethod, type LinkEvidence } from '@/lib/links/link-basis'
 
 const log = createLogger('reconciliation/actions')
 
@@ -407,12 +408,34 @@ function rowSkip(
   return null
 }
 
+/**
+ * Why a bank pair is linked: a pair the caller named is their choice (the
+ * request scope says whether a person, an approved agent or a client named
+ * it); a proposal applied in bulk was chosen by the matcher, whose method and
+ * score are the evidence.
+ */
+function bankPairLinkBasis(
+  named: boolean,
+  proposal: { method: string | null; confidence: number | null } | undefined,
+): { basis: 'user_confirmed' | ReturnType<typeof linkBasisForReconciliationMethod>; evidence?: LinkEvidence } {
+  if (named || !proposal) return { basis: 'user_confirmed' }
+  return {
+    basis: linkBasisForReconciliationMethod(proposal.method),
+    evidence: {
+      rule_id: proposal.method ?? 'reconciliation_proposal',
+      ...(proposal.confidence !== null ? { score: proposal.confidence } : {}),
+    },
+  }
+}
+
 async function proposalsAsPairs(
   supabase: SupabaseClient,
   companyId: string,
   accountKey: string,
   threshold: number,
   skattekontoAccount: SkattekontoLedgerAccount | null,
+  /** Filled per bank transaction with the matcher's method and score, for the link basis. */
+  bankProposalOut?: Map<string, { method: string | null; confidence: number | null }>,
 ): Promise<ReconciliationPair[]> {
   const parsed = parseAccountKey(accountKey)
   if (!parsed) return []
@@ -435,11 +458,16 @@ async function proposalsAsPairs(
   }
   if (parsed.kind === 'bank') {
     // Paged: past 1,000 open proposals the rest were silently left out.
-    const data = await fetchAllRows<{ id: string; potential_journal_entry_id: string; potential_match_confidence: number | string | null }>(
+    const data = await fetchAllRows<{
+      id: string
+      potential_journal_entry_id: string
+      potential_match_method: string | null
+      potential_match_confidence: number | string | null
+    }>(
       ({ from, to }) =>
         supabase
           .from('transactions')
-          .select('id, potential_journal_entry_id, potential_match_confidence')
+          .select('id, potential_journal_entry_id, potential_match_method, potential_match_confidence')
           .eq('company_id', companyId)
           .eq('cash_account_id', parsed.cashAccountId)
           .is('journal_entry_id', null)
@@ -449,9 +477,14 @@ async function proposalsAsPairs(
           .order('id')
           .range(from, to),
     )
-    return data
-      .filter((r) => Number(r.potential_match_confidence ?? 0) >= threshold)
-      .map((r) => ({ external_ids: [r.id], journal_entry_ids: [r.potential_journal_entry_id] }))
+    const kept = data.filter((r) => Number(r.potential_match_confidence ?? 0) >= threshold)
+    for (const r of kept) {
+      bankProposalOut?.set(r.id, {
+        method: r.potential_match_method,
+        confidence: r.potential_match_confidence === null ? null : Number(r.potential_match_confidence),
+      })
+    }
+    return kept.map((r) => ({ external_ids: [r.id], journal_entry_ids: [r.potential_journal_entry_id] }))
   }
   return []
 }
@@ -496,9 +529,12 @@ export async function matchPairs(
   // applies in bulk: only a named bank pair takes the row's underlag onto
   // the verifikat (manualLink anchorUnderlag).
   const namedPairs = new Set(pairs)
+  // The matcher's method and score per proposed bank row: a proposal applied
+  // in bulk records the matcher as its link basis, not a person's choice.
+  const bankProposals = new Map<string, { method: string | null; confidence: number | null }>()
   if (input.use_proposals) {
     pairs.push(
-      ...(await proposalsAsPairs(supabase, companyId, accountKey, input.confidence_threshold ?? 0, skattekontoAccount)),
+      ...(await proposalsAsPairs(supabase, companyId, accountKey, input.confidence_threshold ?? 0, skattekontoAccount, bankProposals)),
     )
   }
 
@@ -762,6 +798,7 @@ export async function matchPairs(
         for (const externalId of externalIds) {
           const r = await manualLink(supabase, companyId, externalId, journalEntryId, userId, account, {
             anchorUnderlag: namedPairs.has(pair),
+            linkBasis: bankPairLinkBasis(namedPairs.has(pair), bankProposals.get(externalId)),
           })
           if (!r.success) {
             skipped.push({

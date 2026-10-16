@@ -21,6 +21,10 @@ const TX2 = 'tx-2'
 const JE1 = 'je-1'
 const JE2 = 'je-2'
 
+
+/** A document pinned to the bank row follows the row onto its verifikat. */
+const PIN_BASIS = { link_basis: 'system_derived', link_evidence: { rule_id: 'bank_row_document_pin' } }
+
 describe('resolveBookedJournalEntryIds', () => {
   beforeEach(() => vi.clearAllMocks())
 
@@ -89,7 +93,10 @@ describe('propagateUnderlagForBookedTransaction', () => {
       JE1,
     )
 
-    expect(linkToJournalEntry).toHaveBeenCalledWith(expect.anything(), COMPANY, 'doc-1', JE1)
+    expect(linkToJournalEntry).toHaveBeenCalledWith(expect.anything(), COMPANY, 'doc-1', JE1, {
+      link_basis: 'system_derived',
+      link_evidence: { rule_id: 'inbox_item_bank_row_match' },
+    })
     const stamps = findCalls('invoice_inbox_items', 'update')
     expect(stamps).toContainEqual([{ created_journal_entry_id: JE1 }])
   })
@@ -227,7 +234,7 @@ describe('propagateUnderlagForBookedTransaction', () => {
       JE1,
     )
 
-    expect(linkToJournalEntry).toHaveBeenCalledWith(expect.anything(), COMPANY, 'doc-pin', JE1)
+    expect(linkToJournalEntry).toHaveBeenCalledWith(expect.anything(), COMPANY, 'doc-pin', JE1, PIN_BASIS)
     expect(findCalls('invoice_inbox_items', 'update')).toEqual([[{ created_journal_entry_id: JE1 }]])
   })
 
@@ -407,7 +414,7 @@ describe('completeInboxItemsForBookedTransaction', () => {
       { directJournalEntryId: null },
     )
     expect(result).toBe(JE2)
-    expect(linkToJournalEntry).toHaveBeenCalledWith(expect.anything(), COMPANY, 'doc-pin', JE2)
+    expect(linkToJournalEntry).toHaveBeenCalledWith(expect.anything(), COMPANY, 'doc-pin', JE2, PIN_BASIS)
     expect(findCalls('invoice_inbox_items', 'update')).toEqual([[{ created_journal_entry_id: JE2 }]])
   })
 })

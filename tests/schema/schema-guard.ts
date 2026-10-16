@@ -958,6 +958,24 @@ interface ChainCall {
   node: ts.CallExpression
 }
 
+/**
+ * Helpers whose return value is a fixed set of columns, keyed by the called
+ * function's name: a payload that spreads such a call (`...linkBasisColumns(...)`)
+ * is as checkable as one that names the columns, so the columns are asserted
+ * against the table instead of counting as an unresolvable spread.
+ */
+const SPREAD_COLUMN_HELPERS: Record<string, readonly string[]> = {
+  // src/lib/links: the link basis a writer stamps on the link it creates.
+  linkBasisColumns: ['link_basis', 'link_evidence'],
+  linkBasisColumnsFor: ['link_basis', 'link_evidence'],
+  scopeFreeLinkBasisColumns: ['link_basis', 'link_evidence'],
+}
+
+function spreadHelperColumns(expr: ts.Expression): readonly string[] | null {
+  if (!ts.isCallExpression(expr) || !ts.isIdentifier(expr.expression)) return null
+  return SPREAD_COLUMN_HELPERS[expr.expression.text] ?? null
+}
+
 function literalText(node: ts.Expression | undefined): string | null {
   if (!node) return null
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text
@@ -1590,6 +1608,11 @@ function processChain(
         }
         for (const prop of payload.properties) {
           if (ts.isSpreadAssignment(prop)) {
+            const helperColumns = spreadHelperColumns(prop.expression)
+            if (helperColumns && table) {
+              for (const column of helperColumns) push(table, column, kind, node, `${method} ...${column}`)
+              continue
+            }
             result.unresolved.push({
               reason: 'spread-payload',
               detail: `${method} ${prop.getText().slice(0, 40)}`,

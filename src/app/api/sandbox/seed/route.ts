@@ -574,6 +574,8 @@ export async function POST(request: Request) {
       newPaidAmount: 18750,
       journalEntryId: je2.id,
       source: 'manual',
+      // Demo data: the seed made both sides.
+      linkBasis: { basis: 'system_derived' },
     })
     if (!paymentRow.ok) throw new Error(`Sandbox invoice payment row failed: ${paymentRow.error}`)
 
@@ -628,6 +630,8 @@ export async function POST(request: Request) {
           is_business: true,
           invoice_id: invoiceMap['F-2026001'],
           journal_entry_id: je2.id,
+          // Demo data: the seed made both sides.
+          link_basis: 'system_derived',
           merchant_name: 'Björk & Partner AB',
         },
         // Private transaction

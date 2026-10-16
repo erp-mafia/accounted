@@ -21,6 +21,7 @@ import {
 } from '@/lib/cash-accounts/service'
 import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
 import { createLogger } from '@/lib/logger'
+import { linkBasisColumnsFor, type LinkBasisInput } from '@/lib/links/stamp'
 
 const log = createLogger('transactions/bank-link')
 
@@ -373,7 +374,8 @@ export type BankLinkWrite =
  * row, or the exact stale 'reversed'-entry id being detached. Locking on the
  * known value lets the stale-pointer overwrite through while a concurrent
  * re-link becomes a no-op (0 rows, `race`). `fields` are the door's own
- * columns (the reconciliation method, the invoice pointer and cleared hints).
+ * columns (the reconciliation method, the invoice pointer and cleared hints);
+ * `linkBasis` is why the door links the pair (src/lib/links/link-basis.ts).
  */
 export async function writeBankLink(
   supabase: SupabaseClient,
@@ -383,6 +385,8 @@ export async function writeBankLink(
     journalEntryId: string
     prepared: Extract<PreparedBankLink, { ok: true }>
     fields?: Record<string, unknown>
+    /** Why the row is linked to this verifikat (transactions.link_basis); the door's own basis. */
+    linkBasis: LinkBasisInput
   },
 ): Promise<BankLinkWrite> {
   const { transactionId, journalEntryId, prepared } = params
@@ -392,6 +396,7 @@ export async function writeBankLink(
       journal_entry_id: journalEntryId,
       is_business: true,
       ...(params.fields ?? {}),
+      ...linkBasisColumnsFor(params.linkBasis),
       ...(prepared.repointCashAccountId ? { cash_account_id: prepared.repointCashAccountId } : {}),
     })
     .eq('id', transactionId)

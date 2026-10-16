@@ -17,7 +17,7 @@ describe('linkToJournalEntry: line check', () => {
     enqueue({ data: null }) // no such line on it
 
     await expect(
-      linkToJournalEntry(supabase as unknown as SupabaseClient, 'company-1', 'doc-1', 'je-1', 'line-of-another-entry'),
+      linkToJournalEntry(supabase as unknown as SupabaseClient, 'company-1', 'doc-1', 'je-1', { link_basis: 'user_confirmed', link_evidence: null }, 'line-of-another-entry'),
     ).rejects.toThrow(/journal entry line not found/)
     expect(findCalls('journal_entry_lines', 'eq')).toEqual([
       ['id', 'line-of-another-entry'],
@@ -32,10 +32,12 @@ describe('linkToJournalEntry: line check', () => {
     enqueue({ data: { id: 'line-1' } })
     enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-1', journal_entry_line_id: 'line-1' } })
 
-    const linked = await linkToJournalEntry(supabase as unknown as SupabaseClient, 'company-1', 'doc-1', 'je-1', 'line-1')
+    const linked = await linkToJournalEntry(supabase as unknown as SupabaseClient, 'company-1', 'doc-1', 'je-1', { link_basis: 'user_confirmed', link_evidence: null }, 'line-1')
 
     expect(linked).toMatchObject({ journal_entry_line_id: 'line-1' })
-    expect(findCall('document_attachments', 'update')).toEqual([{ journal_entry_id: 'je-1', journal_entry_line_id: 'line-1' }])
+    expect(findCall('document_attachments', 'update')).toEqual([
+      { journal_entry_id: 'je-1', journal_entry_line_id: 'line-1', link_basis: 'user_confirmed', link_evidence: null },
+    ])
   })
 
   it('needs no line lookup without a line', async () => {
@@ -43,8 +45,28 @@ describe('linkToJournalEntry: line check', () => {
     enqueue({ data: { id: 'je-1' } })
     enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-1', journal_entry_line_id: null } })
 
-    await linkToJournalEntry(supabase as unknown as SupabaseClient, 'company-1', 'doc-1', 'je-1')
+    await linkToJournalEntry(supabase as unknown as SupabaseClient, 'company-1', 'doc-1', 'je-1', { link_basis: 'system_derived', link_evidence: null })
 
     expect(findCalls('journal_entry_lines', 'select')).toHaveLength(0)
+  })
+
+  it('records why the document is the underlag (link basis)', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'je-1' } })
+    enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-1', journal_entry_line_id: null } })
+
+    await linkToJournalEntry(supabase as unknown as SupabaseClient, 'company-1', 'doc-1', 'je-1', {
+      link_basis: 'system_derived',
+      link_evidence: { rule_id: 'invoice_document_anchor' },
+    })
+
+    expect(findCall('document_attachments', 'update')).toEqual([
+      {
+        journal_entry_id: 'je-1',
+        journal_entry_line_id: null,
+        link_basis: 'system_derived',
+        link_evidence: { rule_id: 'invoice_document_anchor' },
+      },
+    ])
   })
 })

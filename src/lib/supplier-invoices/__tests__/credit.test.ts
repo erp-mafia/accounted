@@ -357,7 +357,11 @@ describe('creditSupplierInvoice: a credit note from the inbox', () => {
     const row = findCall('supplier_invoices', 'insert')?.[0] as Record<string, unknown>
     expect(row).toMatchObject({ supplier_invoice_number: 'K-778', invoice_date: '2026-09-18', document_id: DOC_ID })
     // The document becomes the credit verifikat's underlag.
-    expect(findCall('document_attachments', 'update')?.[0]).toEqual({ journal_entry_id: 'je-credit' })
+    expect(findCall('document_attachments', 'update')?.[0]).toEqual({
+      journal_entry_id: 'je-credit',
+      link_basis: 'user_created',
+      link_evidence: null,
+    })
     expect(findCall('invoice_inbox_items', 'update')?.[0]).toEqual({ created_supplier_invoice_id: 'credit-1' })
     expect(cancelSchedulesMock).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', { supplierInvoiceId: ORIGINAL_ID }, { reversalDate: '2026-09-18' })
     if (outcome.ok && !outcome.dryRun) {

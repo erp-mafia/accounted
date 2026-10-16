@@ -1,0 +1,1 @@
+[2026-10-16] Arkiv document_links keeps its proven/guessed basis and gets no link_basis: it ties documents to parties, agreements and assets outside the books, a different question from why a ledger link exists.

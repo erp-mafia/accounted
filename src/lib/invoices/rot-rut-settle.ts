@@ -38,6 +38,7 @@ import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-
 import { roundOre } from '@/lib/money'
 import { getPayoutOreRounding } from '@/lib/invoices/rot-rut-receivable'
 import { createLogger } from '@/lib/logger'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 const log = createLogger('invoices/rot-rut-settle')
 
@@ -188,6 +189,8 @@ async function linkTransactionToSettlement(
       // match-invoice): a literal null keeps the phantom-column scanner
       // able to verify the column set.
       reconciliation_method: null,
+      // The caller named this bank row as the payout; the request scope says who.
+      ...linkBasisColumns('user_confirmed'),
     })
     .eq('id', params.transactionId)
     .eq('company_id', companyId)

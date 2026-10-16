@@ -80,6 +80,7 @@ export const POST = withRouteContext(
       log: txLog,
       customLines,
       match: { action: 'matched', method: 'manual_confirm', confidence: 1.0 },
+      linkBasis: { basis: 'user_confirmed' },
     })
     if (!outcome.ok) {
       if (outcome.error !== undefined) return errorResponse(outcome.error, txLog, { requestId })

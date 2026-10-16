@@ -210,6 +210,7 @@ describe('importProviderDocuments', () => {
     expect(metadata).toEqual({
       upload_source: 'api',
       journal_entry_id: 'je-1',
+      linkBasis: { link_basis: 'import_carried_over', link_evidence: { source_system: 'provider_migration' } },
       idempotency_key: 'je-1',
       extractionOwner: 'none',
     })
@@ -425,6 +426,7 @@ describe('importProviderDocuments', () => {
     expect(metadata).toEqual({
       upload_source: 'api',
       journal_entry_id: 'je-1',
+      linkBasis: { link_basis: 'import_carried_over', link_evidence: { source_system: 'provider_migration' } },
       idempotency_key: 'je-1',
       extractionOwner: 'none',
     })

@@ -174,6 +174,8 @@ describe('POST /api/v1/companies/:companyId/documents', () => {
       upload_source: 'file_upload',
       journal_entry_id: JE_ID,
       journal_entry_line_id: undefined,
+      // An API key named the verifikat: nobody approved it in Accounted.
+      linkBasis: { link_basis: 'client_asserted', link_evidence: null },
       deferUploadedEvent: true,
       // Linked on arrival: the verifikat is the booking, no model pass.
       extractionOwner: 'none',

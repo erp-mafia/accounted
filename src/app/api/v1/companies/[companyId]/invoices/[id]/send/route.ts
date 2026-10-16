@@ -103,6 +103,7 @@ import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/in
 import { InvoiceEmailOverrideShape } from '@/lib/api/schemas'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import type { CompanySettings, Customer, EntityType, Invoice, InvoiceItem } from '@/types'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 const InvoiceSendBody = z.object({
   additional_cc: z.array(z.string().trim().pipe(z.email().max(254)))
@@ -792,6 +793,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           ctx.companyId!,
           result.documentId,
           journalEntryId,
+          // The delivered PDF of this invoice on the invoice's own verifikat.
+          linkBasisColumns('system_derived'),
         )
       } catch (err) {
         ctx.log.error('invoices.send: archived PDF journal link failed', err as Error, {

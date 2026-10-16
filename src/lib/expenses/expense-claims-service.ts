@@ -43,6 +43,7 @@ import { createLogger } from '@/lib/logger'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { mergeDimensionBags } from '@/lib/bookkeeping/dimension-resolver'
 import { expenseClaimReverseChargeLines, type ExpenseClaimReverseCharge } from '@/lib/expenses/expense-claim-vat'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 const log = createLogger('expenses/claims')
 
@@ -537,7 +538,8 @@ export async function registerExpenseClaim(
         .maybeSingle()
       const anchoredTo = (doc?.journal_entry_id as string | null) ?? null
       if (doc && anchoredTo === null) {
-        await linkToJournalEntry(supabase, companyId, input.document_id, journalEntryId)
+        // The claim's verifikat was booked from this receipt.
+        await linkToJournalEntry(supabase, companyId, input.document_id, journalEntryId, linkBasisColumns('user_created'))
       } else if (doc && anchoredTo !== journalEntryId) {
         // Anchored to another verifikat (typically a stornoed booking that
         // this claim replaces). BFL 5 kap 6 § forbids re-pointing an anchored
@@ -556,6 +558,7 @@ export async function registerExpenseClaim(
             uploaded_by: doc.uploaded_by,
             upload_source: doc.upload_source,
             journal_entry_id: journalEntryId,
+            ...linkBasisColumns('user_created'),
           })
           .select('id')
           .single()

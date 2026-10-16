@@ -51,6 +51,7 @@ import { emitSupplierInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 const SI_PAID_RESPONSE_COLUMNS =
   'id, supplier_id, arrival_number, supplier_invoice_number, status, currency, total, paid_amount, remaining_amount, paid_at, payment_journal_entry_id'
@@ -641,6 +642,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         exchange_rate_difference: exchangeRateDifference ?? 0,
         journal_entry_id: journalEntryId,
         notes: bodyNotes ?? null,
+        // Created from the caller's statement that it is paid; on an API key
+        // the request scope records client_asserted.
+        ...linkBasisColumns('user_created'),
       })
     if (paymentErr) {
       ctx.log.warn('supplier_invoice_payments insert failed (non-blocking)', paymentErr, {

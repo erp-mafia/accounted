@@ -664,6 +664,8 @@ describe('commitPendingOperation: create_voucher', () => {
       'company-1',
       'doc-1',
       'je-inbox',
+      // Booked from the document inside an approval of a staged operation.
+      expect.objectContaining({ link_basis: 'agent_proposed_user_approved' }),
     )
   })
 

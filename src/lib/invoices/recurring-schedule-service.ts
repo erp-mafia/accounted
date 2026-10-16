@@ -82,6 +82,7 @@ import type {
   RecurringInvoiceSchedule,
   RecurringInvoiceScheduleItem,
 } from '@/types'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 const log = createLogger('invoices/recurring-schedule-service')
 
@@ -830,7 +831,8 @@ async function sendInvoiceFromSchedule(
 
   if (journalEntryId) {
     try {
-      await linkToJournalEntry(supabase, companyId, result.documentId, journalEntryId)
+      // The generated PDF of this invoice on the invoice's own verifikat.
+      await linkToJournalEntry(supabase, companyId, result.documentId, journalEntryId, linkBasisColumns('system_derived'))
     } catch (err) {
       log.error('failed to link recurring invoice PDF to journal entry', err as Error, {
         invoiceId: invoice.id,

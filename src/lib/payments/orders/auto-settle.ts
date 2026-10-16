@@ -192,6 +192,12 @@ export async function settleOrderWithDebit(
         confidence,
         newState: { payment_order_id: order.id, confidence, matched_by: basis },
       },
+      // The debit of an order the owner already signed, paired by the debit
+      // matcher: nobody chose this bank row for the invoice.
+      linkBasis: {
+        basis: basis === 'end_to_end_id' ? 'rule_ocr_reference' : basis === 'payee' ? 'rule_counterparty' : 'rule_amount_date',
+        evidence: { rule_id: `${PAYMENT_ORDER_MATCH_METHOD}:${basis}`, score: confidence },
+      },
     })
     if (!booked.ok) {
       return { ok: false, reason: 'booking_failed', code: booked.code, details: booked.details }

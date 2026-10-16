@@ -287,6 +287,7 @@ import type {
 } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { MATCHABLE_INVOICE_STATUSES, isMatchableInvoiceStatus } from '@/lib/invoices/matchable-statuses'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 const log = createLogger('pending-operations/commit')
 
@@ -2873,7 +2874,7 @@ async function commitSendInvoice(
 
   if (isRealInvoice && journalEntryId) {
     try {
-      await linkToJournalEntry(supabase, companyId, result.documentId, journalEntryId)
+      await linkToJournalEntry(supabase, companyId, result.documentId, journalEntryId, linkBasisColumns('system_derived'))
     } catch { /* non-blocking */ }
   }
 
@@ -3330,6 +3331,8 @@ async function commitMatchTransactionInvoice(
     transactionId,
     exchangeRate: fx.required ? fx.rate : invoice.exchange_rate,
     source: 'bank',
+    // The staged pair; the approval scope makes it agent_proposed_user_approved.
+    linkBasis: { basis: 'user_confirmed' },
   })
   if (!recorded.ok) {
     log.error('match_transaction_invoice: invoice_payments insert failed', undefined, {
@@ -3369,6 +3372,8 @@ async function commitMatchTransactionInvoice(
       journal_entry_id: journalEntryId,
       is_business: true,
       category: 'income_services',
+      // The staged pair; inside this approval it records agent_proposed_user_approved.
+      ...linkBasisColumns('user_confirmed'),
     })
     .eq('id', transactionId)
 
@@ -4671,7 +4676,7 @@ async function commitCreateSupplierInvoiceFromInbox(
         // continue so the supplier invoice stays usable.
         if (documentId) {
           try {
-            await linkToJournalEntry(supabase, companyId, documentId, journalEntry.id)
+            await linkToJournalEntry(supabase, companyId, documentId, journalEntry.id, linkBasisColumns('user_created'))
           } catch (linkErr) {
             log.warn('Failed to link inbox document to registration JE', {
               documentId,
@@ -5354,7 +5359,7 @@ async function commitCreateVoucher(
     const documentId = params.document_id as string | undefined
     if (inboxItemId && documentId) {
       try {
-        await linkToJournalEntry(supabase, companyId, documentId, entry.id)
+        await linkToJournalEntry(supabase, companyId, documentId, entry.id, linkBasisColumns('user_created'))
       } catch (linkDocErr) {
         log.warn('Failed to attach inbox document to new voucher', {
           documentId,

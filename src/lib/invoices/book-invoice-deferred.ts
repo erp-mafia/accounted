@@ -6,6 +6,7 @@ import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-en
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import type { Logger } from '@/lib/logger'
 import type { Customer, EntityType, Invoice, InvoiceItem } from '@/types'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 // Statuses where the revenue entry can still be created afterwards. Paid
 // invoices are excluded: their payment flow has already booked the full
@@ -139,6 +140,8 @@ export async function bookInvoiceDeferred(opts: {
         companyId,
         deliveryDocumentId,
         journalEntry.id,
+        // The delivered PDF of this invoice on the invoice's own verifikat.
+        linkBasisColumns('system_derived'),
       )
     } catch (err) {
       log.error('failed to link delivered invoice PDF on deferred booking', err as Error, {

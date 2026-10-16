@@ -96,6 +96,7 @@ import { recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-l
 import { bookedTotals } from '@/lib/suggestion-log/inbox-classify'
 import { finalFromLines, linesOf, recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
 import { passed, type DecisionCheck } from '@/lib/suggestion-log/checks'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 const MAX_ATTACHMENTS_PER_EMAIL = 20
 // Received-mail panel window (#2181): 30 days covers "the mail I sent last
@@ -2072,6 +2073,8 @@ export const invoiceInboxExtension: Extension = {
               journal_entry_id: journalEntry.id,
               is_business: true,
               category: 'uncategorized',
+              // The verifikat was booked for this bank row from the document.
+              ...linkBasisColumns('user_created'),
             })
             .eq('id', transaction.id)
             .eq('company_id', ctx.companyId)
@@ -2135,7 +2138,9 @@ export const invoiceInboxExtension: Extension = {
               ctx.supabase,
               ctx.companyId,
               item.document_id,
-              journalEntry.id
+              journalEntry.id,
+              // The verifikat was booked from this document.
+              linkBasisColumns('user_created')
             )
           } catch (err) {
             console.error('[invoice-inbox/book-direct] Document link failed:', err)

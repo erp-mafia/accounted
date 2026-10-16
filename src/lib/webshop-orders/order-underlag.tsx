@@ -6,6 +6,7 @@ import { fallbackVatBreakdown } from '@/lib/webshop-orders/booking-lines'
 import type { Logger } from '@/lib/logger'
 import type { WebshopOrder } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 /**
  * Orderunderlag for a booked webshop order (issue #1881).
@@ -519,6 +520,8 @@ export async function archiveWebshopOrderUnderlag(args: {
       {
         upload_source: 'system',
         journal_entry_id: journalEntryId,
+        // The order's own underlag on the order's own verifikat.
+        linkBasis: linkBasisColumns('system_derived'),
         // Self-generated from structured data: nothing to extract.
         extractionOwner: 'none',
       },

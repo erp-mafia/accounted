@@ -17,6 +17,7 @@ import {
 } from '@/lib/invoices/invoice-payment-row'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
+import type { LinkBasisInput } from '@/lib/links/stamp'
 import type { CreateJournalEntryInput, Customer, EntityType, Invoice } from '@/types'
 import { MATCHABLE_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
 
@@ -107,6 +108,20 @@ export type SettleInvoicePaymentResult =
   | { ok: false; code: 'INVOICE_PAID_RACE' }
   | { ok: false; code: 'BOOKKEEPING_ERROR'; error: unknown }
   | { ok: false; code: 'UPDATE_FAILED'; error: unknown }
+
+/**
+ * Why a settled payment is linked to its invoice. "Markera som betald"
+ * creates the payment voucher from a person's statement that the invoice is
+ * paid; a payment sync (Stripe) or the collections provider's settlement
+ * creates it without anyone choosing the pair, and names its reference.
+ */
+function settlementLinkBasis(paymentSource: InvoicePaymentSource | undefined, externalRef: string | null | undefined): LinkBasisInput {
+  const reference = externalRef ? { reference: externalRef.slice(0, 200) } : {}
+  if (paymentSource === 'stripe' || paymentSource === 'collections') {
+    return { basis: 'system_derived', evidence: { source_system: paymentSource, ...reference } }
+  }
+  return { basis: 'user_created', ...(externalRef ? { evidence: reference } : {}) }
+}
 
 export async function settleInvoicePayment(
   supabase: SupabaseClient,
@@ -307,6 +322,7 @@ export async function settleInvoicePayment(
       journalEntryId,
       source: paymentSource ?? null,
       externalRef: externalRef ?? null,
+      linkBasis: settlementLinkBasis(paymentSource, externalRef),
     })
     if (!recorded.ok) {
       if (journalEntryId) {

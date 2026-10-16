@@ -1,0 +1,1 @@
+[2026-10-16] A writer names its own basis and the request scope adds who approved it: inside a pending-operation approval a person-shaped basis becomes agent_proposed_user_approved, on a machine credential client_asserted; rules stay rules. One rule instead of actor logic per door.

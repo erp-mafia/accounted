@@ -91,6 +91,7 @@ import type {
   VatTreatment,
 } from '@/types'
 import type { ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 const log = createLogger('transactions/categorize-core')
 
@@ -884,7 +885,15 @@ export async function categorizeTransaction(
   // replaced only if nobody changed it meanwhile.
   const updateQuery = supabase
     .from('transactions')
-    .update({ is_business: isBusiness, category: finalCategory, is_ignored: false, journal_entry_id: bookedEntry.id })
+    .update({
+      is_business: isBusiness,
+      category: finalCategory,
+      is_ignored: false,
+      journal_entry_id: bookedEntry.id,
+      // The verifikat was booked from this bank line. The request scope says
+      // who: a person, an approval of an agent's proposal, or a client.
+      ...linkBasisColumns('user_created'),
+    })
     .eq('id', txId)
     .eq('company_id', companyId)
   const guardedUpdate = transaction.journal_entry_id

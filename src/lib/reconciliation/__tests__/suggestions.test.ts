@@ -77,6 +77,12 @@ function matchingLegs() {
   return [{ debit_amount: 0, credit_amount: 1000, currency: null, amount_in_currency: null }]
 }
 
+
+/** A person confirmed the matcher's suggestion: its method and score are the evidence. */
+const CONFIRMED = {
+  linkBasis: { basis: 'user_confirmed', evidence: { rule_id: 'auto_date_range', score: 0.85 } },
+}
+
 describe('confirmJournalEntrySuggestions', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -96,7 +102,7 @@ describe('confirmJournalEntrySuggestions', () => {
 
     expect(result.confirmed).toEqual([TX_1])
     expect(result.skipped).toEqual([])
-    expect(manualLinkMock).toHaveBeenCalledWith(supabase, 'company-1', TX_1, JE_1, 'user-1', '1932')
+    expect(manualLinkMock).toHaveBeenCalledWith(supabase, 'company-1', TX_1, JE_1, 'user-1', '1932', CONFIRMED)
     expect(logMatchEventMock).toHaveBeenCalledWith(
       supabase,
       'user-1',
@@ -188,7 +194,7 @@ describe('confirmJournalEntrySuggestions', () => {
 
     await confirmJournalEntrySuggestions(supabase as never, 'company-1', 'user-1', [TX_1])
 
-    expect(manualLinkMock).toHaveBeenCalledWith(supabase, 'company-1', TX_1, JE_1, 'user-1', '1920')
+    expect(manualLinkMock).toHaveBeenCalledWith(supabase, 'company-1', TX_1, JE_1, 'user-1', '1920', CONFIRMED)
   })
 
   it('falls back to 1930 when no primary cash account exists', async () => {
@@ -200,7 +206,7 @@ describe('confirmJournalEntrySuggestions', () => {
 
     await confirmJournalEntrySuggestions(supabase as never, 'company-1', 'user-1', [TX_1])
 
-    expect(manualLinkMock).toHaveBeenCalledWith(supabase, 'company-1', TX_1, JE_1, 'user-1', '1930')
+    expect(manualLinkMock).toHaveBeenCalledWith(supabase, 'company-1', TX_1, JE_1, 'user-1', '1930', CONFIRMED)
   })
 
   it('skips with amount_mismatch when the voucher bank leg no longer agrees with the transaction', async () => {

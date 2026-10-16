@@ -507,6 +507,9 @@ describe('settleInvoicePayment', () => {
         notes: null,
         source: null,
         external_ref: null,
+        // "Markera som betald": the payment voucher was created from the person's statement.
+        link_basis: 'user_created',
+        link_evidence: null,
       })
       expect(findCalls('invoice_payments', 'delete')).toHaveLength(0)
     })
@@ -522,7 +525,13 @@ describe('settleInvoicePayment', () => {
         paymentSource: 'stripe',
         externalRef: 'evt_123',
       })
-      expect(findCalls('invoice_payments', 'insert')[0][0]).toMatchObject({ source: 'stripe', external_ref: 'evt_123' })
+      expect(findCalls('invoice_payments', 'insert')[0][0]).toMatchObject({
+        source: 'stripe',
+        external_ref: 'evt_123',
+        // A payment sync pairs nothing by choice: system_derived, with its reference.
+        link_basis: 'system_derived',
+        link_evidence: { source_system: 'stripe', reference: 'evt_123' },
+      })
     })
 
     it('stores a partial in invoice currency, not the SEK line total', async () => {

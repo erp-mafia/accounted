@@ -2,8 +2,10 @@
  * GET /api/v1/companies/{companyId}/journal-entries/{id}
  *
  * Returns the full verifikation including lines, source links
- * (reverses_id, reversed_by_id, correction_of_id), dimensions, and the
- * decision receipts recorded for it (src/lib/suggestion-log/receipts.ts).
+ * (reverses_id, reversed_by_id, correction_of_id), dimensions, the
+ * decision receipts recorded for it (src/lib/suggestion-log/receipts.ts),
+ * and what is linked to it with each link's recorded basis
+ * (src/lib/links/voucher-links.ts).
  *
  * PATCH edits a DRAFT in place (operation journal-entries.update-draft,
  * contract and rules in src/lib/operations/journal-entries.ts).
@@ -18,6 +20,7 @@ import { cancelDraftJournalEntry } from '@/lib/core/bookkeeping/journal-entry-ed
 import { v1OperationHandler, v1OutcomeResponse } from '@/lib/operations/v1'
 import { journalEntriesUpdateDraft } from '@/lib/operations/journal-entries'
 import { DecisionReceiptSchema, MAX_RECEIPTS_PER_SUBJECT, getDecisionReceipts } from '@/lib/suggestion-log/receipts'
+import { MAX_VOUCHER_LINKS_PER_KIND, VoucherLinkSchema, getVoucherLinks } from '@/lib/links/voucher-links'
 
 // `dimensions` is the line's whole SIE tag bag; cost_center/project only
 // mirror keys '1'/'6', so a read without the bag hid dims 2, 7-9 and 20+.
@@ -70,6 +73,12 @@ const JournalEntryRead = JournalEntryDetail.extend({
     .describe(
       'How the verifikation was decided, newest first: one receipt per recorded decision (bank line, underlag, or an approved staged operation) that booked it. Empty for a voucher no recorded decision produced (hand-made, imported, or booked before decisions were logged). Null when the receipts could not be read this time: unknown, not "none"; retry the read.',
     ),
+  links: z
+    .array(VoucherLinkSchema)
+    .nullable()
+    .describe(
+      'What is linked to the verifikation (bank rows, underlag, invoice and supplier payments, ledger settlements), each with why: basis and evidence as recorded when the link was made, null on links made before 2026-10-16. Null when the links could not be read this time; retry the read.',
+    ),
 })
 
 registerEndpoint({
@@ -78,7 +87,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/journal-entries/:id',
   summary: 'Retrieve a single verifikation by id.',
   description:
-    'Returns the full journal entry including all lines, dimensions, the storno chain (reverses_id, reversed_by_id, correction_of_id), and decision_receipts: who decided the booking (person, API key or agent), the suggestions on offer, which one was booked, its recorded confidence, and the rules, approval policy, inputs hash and guards it was decided under.',
+    'Returns the full journal entry including all lines, dimensions, the storno chain (reverses_id, reversed_by_id, correction_of_id), decision_receipts: who decided the booking (person, API key or agent), the suggestions on offer, which one was booked, its recorded confidence, and the rules, approval policy, inputs hash and guards it was decided under, and links: the bank rows, underlag and payments linked to it, each with the basis it was linked on.',
   useWhen:
     'You need the full verifikation for audit / reconciliation, or to display the line-by-line breakdown.',
   doNotUseFor:
@@ -89,6 +98,7 @@ registerEndpoint({
     `decision_receipts holds at most ${MAX_RECEIPTS_PER_SUBJECT} receipts: a samlingsverifikat carries one per bank line. It is null (unknown) when the receipts could not be read; an empty list means none were recorded. rule_version, policy_version, input_hash, checks and confidence_band are recorded at decision time from 2026-10-16 and null on earlier decisions; they are never derived when read.`,
     "confidence.basis 'model_reported' is the reading model's own score for an underlag, not evidence; only 'backing' comes from deterministic evidence.",
     'checks lists only the guards that ran: an absent guard did not apply, it did not pass. A warn result is an override (force, allow_duplicate, confirm_no_match) or a guard that could not run; its detail says which.',
+    `links holds at most ${MAX_VOUCHER_LINKS_PER_KIND} links of each kind. A link basis null means not recorded (links before 2026-10-16, or a writer that does not record one yet), never a guess. client_asserted means an API or MCP client named the pair and nobody approved it in Accounted; agent_proposed_user_approved means a person approved what an agent staged.`,
   ],
   example: {
     response: {
@@ -129,6 +139,10 @@ registerEndpoint({
             ],
             confidence_band: 'direct',
           },
+        ],
+        links: [
+          { kind: 'bank_transaction', transaction_id: '7b3a…', via: 'pointer', document_id: null, invoice_id: null, invoice_payment_id: null, supplier_invoice_id: null, supplier_invoice_payment_id: null, settlement_id: null, basis: 'user_created', evidence: null },
+          { kind: 'document', transaction_id: null, via: null, document_id: '9d2e…', invoice_id: null, invoice_payment_id: null, supplier_invoice_id: null, supplier_invoice_payment_id: null, settlement_id: null, basis: 'system_derived', evidence: { rule_id: 'bank_row_document_pin' } },
         ],
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
@@ -175,7 +189,15 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
       ctx.log.error('journal-entries.get decision receipts failed', err as Error)
       receipts = null
     }
-    return ok({ ...data, decision_receipts: receipts }, { requestId: ctx.requestId })
+    // Same contract for the links: a failed read answers null (unknown).
+    let links: Awaited<ReturnType<typeof getVoucherLinks>> | null
+    try {
+      links = await getVoucherLinks(ctx.supabase, ctx.companyId!, idParse.data)
+    } catch (err) {
+      ctx.log.error('journal-entries.get links failed', err as Error)
+      links = null
+    }
+    return ok({ ...data, decision_receipts: receipts, links }, { requestId: ctx.requestId })
   },
 )
 

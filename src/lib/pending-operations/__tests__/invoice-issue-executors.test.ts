@@ -158,7 +158,7 @@ describe('commitPendingOperation: send_invoice issues before it emails', () => {
       mocks.sendTrackedInvoiceEmail.mock.invocationCallOrder[0],
     )
     expect(findCalls('invoices', 'update')).toEqual([[{ status: 'sent' }], [{ journal_entry_id: 'je-1' }]])
-    expect(mocks.linkToJournalEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'document-1', 'je-1')
+    expect(mocks.linkToJournalEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'document-1', 'je-1', { link_basis: 'system_derived', link_evidence: null })
   })
 
   it('a refused verifikat emails nothing: the invoice is back in draft and the engine reason returned', async () => {

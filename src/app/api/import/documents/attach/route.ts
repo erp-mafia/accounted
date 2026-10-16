@@ -6,6 +6,7 @@ import { planPermitsAttach } from '@/lib/documents/underlag-import'
 import { uploadedFileBaseName } from '@/lib/documents/upload-file-name'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode, isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 const AttachFieldsSchema = z.object({
   journal_entry_id: z.string().uuid(),
@@ -189,6 +190,11 @@ export const POST = withRouteContext(
         {
           upload_source: 'file_upload',
           journal_entry_id: journalEntryId,
+          // The old system's file name points at the migrated verifikat; a
+          // file the person placed by hand (override) is their confirmation.
+          linkBasis: override
+            ? linkBasisColumns('user_confirmed')
+            : linkBasisColumns('import_carried_over', { rule_id: 'underlag_filename_reference', reference: fileName.slice(0, 200) }),
           // The file lands on a posted verifikat by construction, so the
           // booking is already known and a model pass per file buys nothing.
           // Run inline through document.uploaded (the bus awaits its

@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
+import { linkBasisColumnsFor, type LinkBasisInput } from '@/lib/links/stamp'
 
 const log = createLogger('invoice-payment-row')
 
@@ -65,6 +66,14 @@ export interface RecordInvoicePaymentRowParams {
   source?: InvoicePaymentSource | null
   /** The payment's reference in the system it came from (the provider's payment reference for 'collections'). */
   externalRef?: string | null
+  /**
+   * Why this payment is linked to the invoice (invoice_payments.link_basis,
+   * src/lib/links/link-basis.ts): the door's own basis and what it saw. The
+   * request scope turns it into agent_proposed_user_approved inside an
+   * approval and client_asserted on a machine credential. Required, so a new
+   * settlement path cannot write a link without saying why.
+   */
+  linkBasis: LinkBasisInput
 }
 
 /** invoice_payments.source (migration 20261012030300_invoice_payment_provenance.sql). */
@@ -103,6 +112,7 @@ export async function recordInvoicePaymentRow(
     notes,
     source,
     externalRef,
+    linkBasis,
   } = params
   const amount = appliedPaymentAmount(invoice, newPaidAmount)
 
@@ -121,6 +131,7 @@ export async function recordInvoicePaymentRow(
       notes: notes ?? null,
       source: source ?? null,
       external_ref: externalRef ?? null,
+      ...linkBasisColumnsFor(linkBasis),
     })
     .select('id')
     .single()

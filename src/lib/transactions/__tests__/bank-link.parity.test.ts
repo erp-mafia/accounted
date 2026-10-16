@@ -16,6 +16,9 @@ import { eventBus } from '@/lib/events/bus'
 import { manualLink } from '@/lib/reconciliation/bank-reconciliation'
 import { linkTransactionToJournalEntry } from '../link-journal-entry'
 
+/** The basis a person's own link records (src/lib/links/link-basis.ts). */
+const MANUAL = { linkBasis: { basis: 'user_confirmed' as const } }
+
 vi.mock('@/lib/invoices/match-log', () => ({ logMatchEvent: vi.fn() }))
 vi.mock('@/lib/transactions/inbox-underlag', () => ({ propagateUnderlagForBookedTransaction: vi.fn() }))
 
@@ -119,7 +122,7 @@ describe('bank link parity: manualLink and linkTransactionToJournalEntry', () =>
 
   it.each(CASES)('$name', async (c) => {
     const reconciliation = mockFor(c)
-    const manual = await manualLink(reconciliation.supabase as never, COMPANY, TX, JE, USER, '1930')
+    const manual = await manualLink(reconciliation.supabase as never, COMPANY, TX, JE, USER, '1930', MANUAL)
 
     const linkDoor = mockFor(c)
     const linked = await linkTransactionToJournalEntry(linkDoor.supabase as never, USER, COMPANY, {
@@ -180,7 +183,7 @@ describe('bank link parity: manualLink and linkTransactionToJournalEntry', () =>
       })
 
     const reconciliation = tables()
-    expect(await manualLink(reconciliation.supabase as never, COMPANY, TX, JE, USER, '1931')).toEqual({ success: true })
+    expect(await manualLink(reconciliation.supabase as never, COMPANY, TX, JE, USER, '1931', MANUAL)).toEqual({ success: true })
     const linkDoor = tables()
     expect(
       (await linkTransactionToJournalEntry(linkDoor.supabase as never, USER, COMPANY, { transactionId: TX, journalEntryId: JE })).ok,

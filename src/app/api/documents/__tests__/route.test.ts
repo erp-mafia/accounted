@@ -154,6 +154,7 @@ describe('POST /api/documents', () => {
       upload_source: 'file_upload',
       journal_entry_id: JE_ID,
       journal_entry_line_id: undefined,
+      linkBasis: { link_basis: 'user_confirmed', link_evidence: null },
       deferUploadedEvent: true,
     })
   })

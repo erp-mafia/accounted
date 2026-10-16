@@ -1098,7 +1098,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices: behaviour shared 
 
     expect(res.status).toBe(201)
     expect(siInsert()!.document_id).toBe(DOCUMENT_ID)
-    expect(mockLinkToJournalEntry).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, DOCUMENT_ID, 'je-reg-1')
+    expect(mockLinkToJournalEntry).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, DOCUMENT_ID, 'je-reg-1', { link_basis: 'client_asserted', link_evidence: null })
   })
 
   it('refuses a document already linked to a verifikat with 400 SI_CREATE_INVALID_INPUT', async () => {

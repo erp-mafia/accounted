@@ -17,6 +17,7 @@ import { listRecords, LIST_LIMIT_DEFAULT, LIST_LIMIT_MAX, originalsOf, typesFor 
 import { NOT_STRUCTURED_MIME_FILTER } from '@/lib/documents/read/types'
 import { getDecisionReceipts, toCompactDecision } from '@/lib/suggestion-log/receipts'
 import { createLogger } from '@/lib/logger'
+import { getVoucherLinks, toCompactLinks } from '@/lib/links/voucher-links'
 
 const receiptLog = createLogger('mcp-get-record')
 
@@ -369,6 +370,15 @@ async function journalEntryRecord(supabase: SupabaseClient, companyId: string, j
     decisionUnavailable = true
     receiptLog.warn('decision receipt lookup failed', { journalEntryId, error: err instanceof Error ? err.message : String(err) })
   }
+  // What is linked to the verifikat and why (link basis, recorded when each
+  // link was made). Same contract as the decision: a failed lookup says so
+  // with links_unavailable instead of failing the read or passing for none.
+  let links: ReturnType<typeof toCompactLinks> | null = null
+  try {
+    links = toCompactLinks(await getVoucherLinks(supabase, companyId, journalEntryId))
+  } catch (err) {
+    receiptLog.warn('voucher link lookup failed', { journalEntryId, error: err instanceof Error ? err.message : String(err) })
+  }
   return {
     journal_entry_id: e.id,
     voucher: `${e.voucher_series ?? ''}${e.voucher_number ?? ''}`,
@@ -377,6 +387,7 @@ async function journalEntryRecord(supabase: SupabaseClient, companyId: string, j
     documents,
     ...(decision ? { decision } : {}),
     ...(decisionUnavailable ? { decision_unavailable: true } : {}),
+    ...(links ? { links } : { links_unavailable: true }),
   }
 }
 

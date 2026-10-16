@@ -23,6 +23,8 @@ import { resolveLedgerSettlements } from './ledger-settlement-store'
 import { findOpeningBalanceFloor, sumAccountBalance } from './gl-balance'
 import { ID_READ_CHUNK, MAX_BANK_ROW_SPLIT } from './limits'
 import { DEFAULT_SETTLEMENT_ACCOUNT } from './cash-account-scope'
+import { linkBasisForReconciliationMethod, type LinkEvidence } from '@/lib/links/link-basis'
+import { linkBasisColumns, type LinkBasisInput } from '@/lib/links/stamp'
 
 const log = createLogger('reconciliation.bank')
 
@@ -695,12 +697,23 @@ export async function runReconciliation(
       // the read above and this write, the update matches zero rows instead of
       // silently re-pointing an existing link. Same pattern as
       // lib/transactions/link-journal-entry.ts.
+      // The matcher chose the pair, unless the caller reviewed a dry run and
+      // ticked it (applyOnly): then a person confirmed it and the matcher is
+      // the evidence.
+      const evidence: LinkEvidence = {
+        rule_id: match.method,
+        score: match.confidence,
+        ...(match.method === 'auto_reference' && match.transaction.reference
+          ? { reference: String(match.transaction.reference).slice(0, 200) }
+          : {}),
+      }
       const { data: updatedRows, error } = await supabase
         .from('transactions')
         .update({
           journal_entry_id: match.glLine.journal_entry_id,
           reconciliation_method: match.method,
           is_business: true,
+          ...linkBasisColumns(applyOnly ? 'user_confirmed' : linkBasisForReconciliationMethod(match.method), evidence),
         })
         .eq('id', match.transaction.id)
         .eq('company_id', companyId)
@@ -1565,8 +1578,17 @@ export async function manualLink(
   transactionId: string,
   journalEntryId: string,
   userId: string,
-  accountNumber: string = DEFAULT_SETTLEMENT_ACCOUNT,
-  options: { anchorUnderlag?: boolean } = {},
+  accountNumber: string,
+  options: {
+    anchorUnderlag?: boolean
+    /**
+     * Why the row is linked to this verifikat (transactions.link_basis):
+     * user_confirmed for a pair a person or agent named or a suggestion a
+     * person confirmed (its method and score as evidence), a rule basis for
+     * the auto-link after an invoice is linked to its voucher.
+     */
+    linkBasis: LinkBasisInput
+  },
 ): Promise<{ success: boolean; error?: string; code?: BankLinkRefusalCode }> {
   // Every check is the bank link core's (lib/transactions/bank-link.ts), the
   // same one linkTransactionToJournalEntry runs: pointer and junction guards,
@@ -1585,6 +1607,7 @@ export async function manualLink(
     journalEntryId,
     prepared,
     fields: { reconciliation_method: 'manual' as ReconciliationMethod },
+    linkBasis: options.linkBasis,
   })
   if (!written.ok) {
     if (written.race) return refused('LINK_RACE', 'Transaktionen är redan kopplad till en verifikation.')
@@ -1932,6 +1955,9 @@ export async function linkTransactionToVouchers(
     return refused('LINK_RACE', 'Transaktionen är redan kopplad till en verifikation.')
   }
 
+  // A split is always named slice by slice (the reconciliation page, the
+  // account-keyed pairs); no matcher proposes one. The request scope says
+  // whether a person or a client named it.
   const { error: insertError } = await supabase.from('transaction_voucher_links').insert(
     resolved.map((a) => ({
       user_id: userId,
@@ -1940,6 +1966,7 @@ export async function linkTransactionToVouchers(
       journal_entry_id: a.journal_entry_id,
       allocated_amount: a.amount,
       role: 'bank_line',
+      ...linkBasisColumns('user_confirmed'),
     })),
   )
   if (insertError) {
@@ -2259,6 +2286,11 @@ export async function autoReconcileTransactionForLinkedVoucher(
     journalEntryId,
     userId,
     accountNumber,
+    {
+      // Nobody chose this row: it is the only unbooked one on the account with
+      // the voucher's bank amount, in that direction, within the window.
+      linkBasis: { basis: 'rule_amount_date', evidence: { rule_id: 'linked_voucher_single_amount_match' } },
+    },
   )
   if (!linkResult.success) return null
 

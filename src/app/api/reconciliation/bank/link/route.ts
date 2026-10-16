@@ -19,6 +19,7 @@ export const POST = withRouteContext(
     const result = journal_entry_id
       ? await manualLink(supabase, companyId, transaction_id, journal_entry_id, user.id, account_number ?? DEFAULT_SETTLEMENT_ACCOUNT, {
           anchorUnderlag: true,
+          linkBasis: { basis: 'user_confirmed' },
         })
       : await linkTransactionToVouchers(
           supabase,
