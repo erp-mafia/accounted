@@ -4,19 +4,7 @@ import { evaluateMappingRules } from '@/lib/bookkeeping/mapping-engine'
 import { chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { upsertCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
-import {
-  bestInvoiceMatch,
-  CONFIDENCE as INVOICE_MATCH_CONFIDENCE,
-  loadInvoiceMatchPool,
-  type InvoiceMatchPool,
-} from '@/lib/invoices/invoice-matching'
-import { findSupplierInvoiceMatch } from '@/lib/invoices/supplier-invoice-matching'
-import {
-  findRotRutPayoutMatch,
-  type RotRutPayoutRequestCandidate,
-} from '@/lib/invoices/rot-rut-payout-matching'
-import { loadOpenRotRutPayoutRequests } from '@/lib/invoices/rot-rut-payout-candidates'
-import { findRotRutPayoutSetMatch } from '@/lib/invoices/rot-rut-payout-set-matching'
+import { loadInvoiceMatchPool, type InvoiceMatchPool } from '@/lib/invoices/invoice-matching'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -26,10 +14,8 @@ import { classifyTransactionMethod } from '@/lib/transactions/transaction-method
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { applyTransactionSplit } from '@/lib/transactions/parts-apply'
 import { createLogger } from '@/lib/logger'
-import { findOrderForDebit, type OrderDebit } from '@/lib/payments/orders/debit-match'
-import { loadOpenPaymentOrders, PAYMENT_ORDER_MATCH_METHOD, settleOrderWithDebit } from '@/lib/payments/orders/auto-settle'
-import type { PaymentOrderRow } from '@/lib/payments/orders/types'
-import { scheduleCollectionSweep } from '@/lib/collections/sweep-hook'
+import { INGEST_MATCHERS } from '@/lib/composition/ingest-matchers'
+import { createIngestClaims, startIngestMatchers, type IngestBatch } from '@/lib/transactions/ingest-matcher'
 import { physicalAccountKey, reenableIfUnused, resolveDefaultCashAccount, sameCashAccount } from '@/lib/cash-accounts/service'
 import type { Transaction, RawTransaction, IngestResult, IngestOptions, IngestSkipReason, IngestSkippedRow, SupplierInvoice, Currency, ExchangeRate } from '@/types'
 import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
@@ -945,34 +931,14 @@ function isExternalIdConflict(error: { code?: string | null; message?: string | 
 }
 
 /**
- * The inserted row as findOrderForDebit reads it. The stored row wins (its
- * description is the display title, the original is kept beside it); the raw
- * row fills what a store path did not return.
- */
-function debitForOrderMatch(stored: Transaction, raw: RawTransaction): OrderDebit {
-  return {
-    amount: stored.amount ?? raw.amount,
-    currency: stored.currency ?? raw.currency,
-    date: stored.date ?? raw.date,
-    value_date: stored.value_date ?? raw.value_date ?? null,
-    cash_account_id: stored.cash_account_id ?? null,
-    description: stored.original_description ?? stored.description ?? raw.description,
-    reference: stored.reference ?? raw.reference ?? null,
-    counterparty_iban: stored.counterparty_iban ?? raw.counterparty_iban ?? null,
-    counterparty_account: stored.counterparty_account ?? raw.counterparty_account ?? null,
-    end_to_end_id: stored.end_to_end_id ?? raw.end_to_end_id ?? null,
-  }
-}
-
-/**
  * Generic transaction ingestion pipeline.
  *
  * Handles:
  * 1. Deduplication via external_id. An Open Payments row that dedupes here
  *    against a stored row and arrives richer (the bank's daily enrichment)
  *    UPDATES the stored row's enrichable fields (enrichmentPatch) and, when
- *    the row is still open and a matching key changed, gets the suggestion
- *    passes 3 to 3b again. Counted in `enriched_updated`.
+ *    the row is still open and a matching key changed, gets the matchers
+ *    that take a re-read again. Counted in `enriched_updated`.
  * 1b. Content-based dedup (date+amount+description prefix) against already-booked
  *     transactions: catches cross-source duplicates, e.g. PSD2 row gets booked
  *     before the user later re-imports the same period via CSV.
@@ -982,11 +948,12 @@ function debitForOrderMatch(stored: Transaction, raw: RawTransaction): OrderDebi
  *     Steps 1 to 1c are one decision (decideIngestRow), shared with the
  *     read-only previews, and every skipped row is named in the result
  *     (`skipped`, `duplicates_by_reason`): never only counted.
- * 2. Insert into transactions table
- * 3. OCR/reference-based invoice matching (highest confidence)
- * 4. Amount+customer fallback invoice matching
- * 5. Mapping rule evaluation for auto-categorization
- * 6. Auto-journal-entry creation for high-confidence matches
+ * 2. Insert into transactions table, then the Bankgirot split of the row
+ * 3. The suggestion passes: the ingest matchers in their order (customer
+ *    invoice, payment order debit, supplier invoice heuristics, ROT/RUT
+ *    payout and payout set; lib/composition/ingest-matchers.ts)
+ * 4. Mapping rule evaluation for auto-categorization
+ * 5. Auto-journal-entry creation for high-confidence matches
  *
  * Used by both bank file import and Enable Banking PSD2 sync.
  */
@@ -1043,6 +1010,18 @@ export async function ingestTransactions(
 
   const log = createLogger('transactions.ingest', { companyId })
 
+  // What each suggestion pass did in this batch: the baseline a per-company
+  // package switch is measured against. Counts only, never ids or amounts.
+  // `explained`: the pass settled or hinted the row and the passes after it
+  // were skipped; `hinted`: a weak hint, the next passes still ran; `failed`:
+  // the pass threw and the batch went on.
+  const passHits: Record<string, { explained: number; hinted: number; failed: number }> = {}
+  const tallyPass = (pass: string, outcome: 'explained' | 'hinted' | 'failed') => {
+    const hits = (passHits[pass] ??= { explained: 0, hinted: 0, failed: 0 })
+    hits[outcome]++
+  }
+  let rereadPasses = 0
+
   // Pre-fetch existing transactions for content-based dedup (date+amount+
   // description prefix, plus the cross-channel mirror below). Booked rows catch
   // cross-source duplicates after they've been booked; unbooked import-feed rows
@@ -1056,21 +1035,45 @@ export async function ingestTransactions(
   const submittedExternalIds = rawTransactions.map((raw) => raw.external_id)
   rawTransactions = rekeyIncomingExternalIds(rawTransactions, existingMaps, options?.stableExternalIds)
 
-  // When rawInsertOnly is set (viewer imports), skip pre-fetching supplier
-  // invoices and exchange rates: they are not used.
-  let unpaidSupplierInvoices: SupplierInvoice[] = []
-  let openRotRutPayoutRequests: RotRutPayoutRequestCandidate[] = []
-  // The company's open bank payment orders (payment_orders): a debit in this
-  // batch may be the one that settles one of them (step 3a).
-  let openPaymentOrders: PaymentOrderRow[] = []
+  // What the split and the suggestion passes (the ingest matchers,
+  // lib/composition/ingest-matchers.ts) share for this batch: what each row
+  // claimed, so no two rows are offered the same invoice, order or begäran,
+  // and the open invoice pools.
+  const claims = createIngestClaims()
+  // Open customer invoices for income matching: read once for the batch, on
+  // the first income row (an all-expense batch never reads them), instead of
+  // once per row. Nothing in this loop changes an invoice or its payments, so
+  // every row scores against what it would have read itself. A failed read is
+  // not kept: the next income row tries again, as each row used to.
+  let invoiceMatchPool: InvoiceMatchPool | null = null
+  const batch: IngestBatch = {
+    supabase,
+    companyId,
+    userId,
+    options: options ?? {},
+    log,
+    result,
+    claims,
+    pools: {
+      customerInvoices: async () => (invoiceMatchPool ??= await loadInvoiceMatchPool(supabase, companyId)),
+      supplierInvoices: [],
+    },
+    logMatch(transactionId, action, opts) {
+      return logMatchEvent(supabase, userId, transactionId, action, opts)
+    },
+  }
+  const matchers = startIngestMatchers(INGEST_MATCHERS, batch, tallyPass)
+
   // Keyed by `${currency}|${date}` so each non-SEK transaction gets the
   // rate that was valid on its own transaction date, not the import date.
   const exchangeRatesByDate = new Map<string, ExchangeRate>()
 
+  // When rawInsertOnly is set (viewer imports), skip pre-fetching supplier
+  // invoices, the matchers' reads and exchange rates: they are not used.
   if (!options?.rawInsertOnly) {
   // Pre-fetch unpaid supplier invoices for expense matching (non-critical)
   try {
-    unpaidSupplierInvoices = await fetchAllRows<SupplierInvoice>(({ from, to }) =>
+    batch.pools.supplierInvoices = await fetchAllRows<SupplierInvoice>(({ from, to }) =>
       supabase
         .from('supplier_invoices')
         .select('*, supplier:suppliers(*)')
@@ -1083,16 +1086,10 @@ export async function ingestTransactions(
   } catch {
     // Non-critical: supplier invoice matching will be skipped
   }
-  // Pre-fetch open ROT/RUT payout requests for income matching (non-critical).
-  // Skatteverket's payout is the one income row a paid ROT/RUT invoice can no
-  // longer explain (remaining_amount is net of the deduction), so the begäran
-  // is the candidate. Small table: a company has a handful of open requests.
-  openRotRutPayoutRequests = await loadOpenRotRutPayoutRequests(supabase, companyId)
-  // Bank payments Accounted initiated (payment_orders) come back as their own
-  // debit: with the order's end-to-end id when the bank echoes it (Open
-  // Payments does, Swedbank does not), otherwise as the order's amount from
-  // its account on its execution day. Read once per batch; never throws.
-  openPaymentOrders = await loadOpenPaymentOrders(supabase, companyId)
+  // What each matcher reads once per batch: the open bank payment orders a
+  // debit may settle, the open ROT/RUT begäran Skatteverket's payout may
+  // answer. Never throws.
+  await matchers.prepare()
   }
 
   // Pre-fetch exchange rates for each unique (currency, date) pair in the
@@ -1187,19 +1184,8 @@ export async function ingestTransactions(
     stableExternalIds: options?.stableExternalIds,
   })
 
-  // Track already-matched invoice IDs within this ingestion batch
-  // to prevent suggesting the same invoice for multiple transactions
-  const matchedInvoiceIds = new Set<string>()
-  // Open customer invoices for income matching: read once for the batch, on
-  // the first income row (an all-expense batch never reads them), instead of
-  // once per row. Nothing in this loop changes an invoice or its payments, so
-  // every row scores against what it would have read itself. A failed read is
-  // not kept: the next income row tries again, as each row used to.
-  let invoiceMatchPool: InvoiceMatchPool | null = null
   /** Inserted inbound rows, for the collections payment-candidate sweep. */
   const inboundIds: string[] = []
-  const matchedSupplierInvoiceIds = new Set<string>()
-  const matchedRotRutRequestIds = new Set<string>()
   // The company's momskoder for auto-categorized reverse-charge rows: read
   // once for the whole ingestion, and only if such a row is booked.
   const loadChart = chartVatTreatmentsLoader(supabase, companyId)
@@ -1224,173 +1210,6 @@ export async function ingestTransactions(
   }
 
   /**
-   * The suggestion passes a stored row gets: the customer invoice match (3),
-   * the debit of a bank payment order (3a) and the supplier invoice heuristics
-   * (3b), in that order. True when the row is explained (booked or hinted), so
-   * the caller skips the mapping engine, as before.
-   *
-   * `reread`: an Open Payments re-read whose reference, end-to-end id or
-   * counterparty changed. The same passes run on the stored row; a hint the
-   * row already carries stands unless a stronger one results (a reference
-   * match for a customer invoice, a high-confidence unambiguous supplier
-   * match), and a payment order's debit is booked exactly as a new row's.
-   */
-  const suggestForRow = async (tx: Transaction, raw: RawTransaction, reread: boolean): Promise<boolean> => {
-    // 3. For income transactions, try invoice matching
-    if (tx.amount > 0) {
-      try {
-        // OCR/reference matching is part of the scoring (matchInvoiceCandidates)
-        invoiceMatchPool ??= await loadInvoiceMatchPool(supabase, companyId)
-        const bestMatch = bestInvoiceMatch(tx, invoiceMatchPool, 0.50)
-
-        if (bestMatch && !matchedInvoiceIds.has(bestMatch.invoice.id)) {
-          const existingHint = tx.potential_invoice_id ?? null
-          if (reread && existingHint && (existingHint === bestMatch.invoice.id || bestMatch.confidence < INVOICE_MATCH_CONFIDENCE.OCR_REFERENCE_MATCH)) {
-            // The hint stands: the re-read brought nothing stronger.
-            return true
-          }
-          await supabase
-            .from('transactions')
-            .update({ potential_invoice_id: bestMatch.invoice.id })
-            .eq('id', tx.id)
-
-          await logMatchEvent(supabase, userId, tx.id, 'auto_suggested', {
-            invoiceId: bestMatch.invoice.id,
-            matchConfidence: bestMatch.confidence,
-            matchMethod: bestMatch.matchReason,
-          })
-
-          matchedInvoiceIds.add(bestMatch.invoice.id)
-          result.auto_matched_invoices++
-          // Skip mapping engine: transaction has an invoice match.
-          // Auto-categorization would create an orphaned journal entry
-          // that conflicts with the eventual invoice payment entry.
-          return true
-        }
-      } catch {
-        // Non-critical: continue processing
-      }
-    }
-
-    // 3a. The debit of a bank payment Accounted initiated (findOrderForDebit:
-    // the order's end-to-end id, or a unique amount, account and date match).
-    // The owner approved and BankID-signed exactly this payment, so the bank's
-    // matching debit is the confirmation: the supplier payment is booked here,
-    // as the user who approved the order, and the payment row settles the
-    // order (settleOrderWithDebit). When the booking is refused (a locked
-    // period, an invoice no longer open, amounts apart) the row keeps the
-    // suggestion a person confirms, as before. Goes before the heuristics:
-    // it is the strongest evidence there is.
-    if (tx.amount < 0 && openPaymentOrders.length > 0) {
-      try {
-        const match = findOrderForDebit(debitForOrderMatch(tx, raw), openPaymentOrders)
-        const invoiceId = match?.order.supplier_invoice_id
-        if (match && invoiceId && !matchedSupplierInvoiceIds.has(invoiceId)) {
-          const order = match.order
-          // One debit per order per batch, booked or suggested.
-          openPaymentOrders = openPaymentOrders.filter((o) => o.id !== order.id)
-          const settled = await settleOrderWithDebit(supabase, {
-            order,
-            transaction: tx,
-            confidence: match.confidence,
-            basis: match.basis,
-            log,
-          })
-          if (settled.ok) {
-            matchedSupplierInvoiceIds.add(invoiceId)
-            unpaidSupplierInvoices = unpaidSupplierInvoices.filter(inv => inv.id !== invoiceId)
-            result.auto_matched_invoices++
-            return true
-          }
-          if (reread && tx.potential_supplier_invoice_id === invoiceId) {
-            // The row already points at this invoice: nothing new to say.
-            matchedSupplierInvoiceIds.add(invoiceId)
-            return true
-          }
-          const { error: hintError } = await supabase
-            .from('transactions')
-            .update({ potential_supplier_invoice_id: invoiceId })
-            .eq('id', tx.id)
-          if (!hintError) {
-            await logMatchEvent(supabase, userId, tx.id, 'auto_suggested', {
-              supplierInvoiceId: invoiceId,
-              matchConfidence: match.confidence,
-              matchMethod: PAYMENT_ORDER_MATCH_METHOD,
-              newState: {
-                payment_order_id: order.id,
-                matched_by: match.basis,
-                auto_settle_refused: settled.reason,
-                ...(settled.code ? { code: settled.code } : {}),
-              },
-            })
-            matchedSupplierInvoiceIds.add(invoiceId)
-            unpaidSupplierInvoices = unpaidSupplierInvoices.filter(inv => inv.id !== invoiceId)
-            result.auto_matched_invoices++
-            return true
-          }
-        }
-      } catch {
-        // Non-critical: the heuristics below still run
-      }
-    }
-
-    // 3b. For expense transactions, try supplier invoice matching
-    if (tx.amount < 0 && unpaidSupplierInvoices.length > 0) {
-      try {
-        const match = findSupplierInvoiceMatch(tx, unpaidSupplierInvoices)
-
-        if (match && !matchedSupplierInvoiceIds.has(match.supplierInvoice.id)) {
-          const strong = match.confidence >= 0.85 && !match.ambiguous
-          const existingHint = tx.potential_supplier_invoice_id ?? null
-          if (reread && existingHint && (existingHint === match.supplierInvoice.id || !strong)) {
-            // The hint stands. A strong match for the invoice it names still
-            // drains the pool, as a new row's would.
-            if (!strong) return false
-            unpaidSupplierInvoices = unpaidSupplierInvoices.filter(inv => inv.id !== match.supplierInvoice.id)
-            matchedSupplierInvoiceIds.add(match.supplierInvoice.id)
-            return true
-          }
-          // ALWAYS a suggestion (potential_supplier_invoice_id), never a hard
-          // link. supplier_invoice_id is reserved for completed matches: the
-          // match route books the payment voucher when it sets it. A sync-time
-          // hard link booked nothing, left the invoice open, and then BLOCKED
-          // the match route (MATCH_SI_TX_ALREADY_LINKED), stranding the
-          // transaction with no path to a payment voucher.
-          await supabase
-            .from('transactions')
-            .update({ potential_supplier_invoice_id: match.supplierInvoice.id })
-            .eq('id', tx.id)
-
-          await logMatchEvent(supabase, userId, tx.id, 'auto_suggested', {
-            supplierInvoiceId: match.supplierInvoice.id,
-            matchConfidence: match.confidence,
-            matchMethod: match.matchMethod,
-          })
-
-          if (strong) {
-            // High-confidence unambiguous hit: drain the pool so the next
-            // transaction can't claim the same invoice, and skip the mapping
-            // engine: auto-categorization would create an orphaned journal
-            // entry that conflicts with the eventual payment booking.
-            unpaidSupplierInvoices = unpaidSupplierInvoices.filter(
-              inv => inv.id !== match.supplierInvoice.id
-            )
-            matchedSupplierInvoiceIds.add(match.supplierInvoice.id)
-
-            result.auto_matched_invoices++
-            return true
-          }
-          // Lower confidence (0.70-0.85) or ambiguous: tentative, do NOT
-          // drain the pool.
-        }
-      } catch {
-        // Non-critical: continue processing
-      }
-    }
-    return false
-  }
-
-  /**
    * The Bankgirot split of an Open Payments row (raw.parts), applied through
    * applyTransactionSplit (lib/transactions/parts-apply.ts, shared with the
    * BG Max import): store the parts
@@ -1410,7 +1229,7 @@ export async function ingestTransactions(
     try {
       const open =
         !options?.rawInsertOnly && !tx.journal_entry_id && !tx.invoice_id && !tx.supplier_invoice_id && !tx.is_ignored
-      if (open && tx.amount > 0) invoiceMatchPool ??= await loadInvoiceMatchPool(supabase, companyId)
+      const customerPool = open && tx.amount > 0 ? await batch.pools.customerInvoices() : null
       const { suggestions, complete } = await applyTransactionSplit(supabase, {
         companyId,
         userId,
@@ -1418,9 +1237,9 @@ export async function ingestTransactions(
         parts,
         pools: open
           ? {
-              customerInvoices: tx.amount > 0 ? invoiceMatchPool?.invoices ?? [] : [],
-              supplierInvoices: tx.amount < 0 ? unpaidSupplierInvoices : [],
-              excludeInvoiceIds: tx.amount > 0 ? matchedInvoiceIds : matchedSupplierInvoiceIds,
+              customerInvoices: tx.amount > 0 ? customerPool?.invoices ?? [] : [],
+              supplierInvoices: tx.amount < 0 ? batch.pools.supplierInvoices : [],
+              excludeInvoiceIds: claims.ids(tx.amount > 0 ? 'customer_invoice' : 'supplier_invoice'),
             }
           : null,
       })
@@ -1429,15 +1248,17 @@ export async function ingestTransactions(
       // The split claims its invoices for the batch: no other row's single
       // hint may name them, and a supplier invoice leaves the heuristics' pool.
       for (const s of suggestions) {
-        if (s.suggested_invoice_id) matchedInvoiceIds.add(s.suggested_invoice_id)
+        if (s.suggested_invoice_id) claims.add('customer_invoice', s.suggested_invoice_id)
         if (s.suggested_supplier_invoice_id) {
-          matchedSupplierInvoiceIds.add(s.suggested_supplier_invoice_id)
-          unpaidSupplierInvoices = unpaidSupplierInvoices.filter((inv) => inv.id !== s.suggested_supplier_invoice_id)
+          claims.add('supplier_invoice', s.suggested_supplier_invoice_id)
+          batch.pools.supplierInvoices = batch.pools.supplierInvoices.filter((inv) => inv.id !== s.suggested_supplier_invoice_id)
         }
       }
       result.auto_matched_invoices++
+      tallyPass('bankgiro-split', 'explained')
       return true
     } catch (error) {
+      tallyPass('bankgiro-split', 'failed')
       log.warn('bank transaction parts not stored; the row keeps no split', {
         transactionId: tx.id,
         parts: parts.length,
@@ -1451,9 +1272,9 @@ export async function ingestTransactions(
    * An Open Payments re-read of a stored row (Layer 1): write what the bank
    * added (enrichmentPatch), count it, store the split it carries
    * (storePartsForRow), and give a still-open row whose matching keys
-   * changed the suggestion passes a new row gets. Everything here is best
-   * effort: a failure leaves the row as it was and never fails the batch,
-   * whose other rows are unrelated to it.
+   * changed the matchers that take a re-read (IngestMatcher.onReread).
+   * Everything here is best effort: a failure leaves the row as it was and
+   * never fails the batch, whose other rows are unrelated to it.
    */
   const enrichStoredRow = async (stored: Transaction, raw: RawTransaction): Promise<void> => {
     try {
@@ -1490,7 +1311,8 @@ export async function ingestTransactions(
       // split explained the row already.
       if (options?.rawInsertOnly || completeSplit) return
       if (merged.journal_entry_id || merged.invoice_id || merged.supplier_invoice_id || merged.is_ignored) return
-      await suggestForRow(merged, raw, true)
+      rereadPasses++
+      await matchers.match({ tx: merged, raw, reread: true })
     } catch (error) {
       log.warn('enrichment on re-read failed; the batch continues', {
         transactionId: stored.id,
@@ -1751,70 +1573,12 @@ export async function ingestTransactions(
     // the user without any explicit action. Reconciliation is now a manual
     // operation (BankReconciliationView / runReconciliation / manualLink).
 
-    // 3, 3a, 3b: the customer invoice match, the payment order's debit, the
-    // supplier invoice heuristics (suggestForRow; shared with the re-read).
-    if (await suggestForRow(newTransaction as Transaction, raw, false)) continue
-
-    // 3c. For income transactions with no invoice hint, try ROT/RUT payout
-    // matching: Skatteverket's lump sum for an open begäran. Always a
-    // suggestion (potential_rot_rut_payout_request_id), never a hard link:
-    // the match route books the 19xx/1513 voucher when it confirms.
-    if (newTransaction.amount > 0 && openRotRutPayoutRequests.length > 0) {
-      try {
-        const match = findRotRutPayoutMatch(newTransaction as Transaction, openRotRutPayoutRequests)
-        if (match && !matchedRotRutRequestIds.has(match.request.id)) {
-          // supabase-js resolves a failed update with { error }: a hint that
-          // never persisted must not drain the pool or count as a match.
-          const { error: hintError } = await supabase
-            .from('transactions')
-            .update({ potential_rot_rut_payout_request_id: match.request.id })
-            .eq('id', newTransaction.id)
-          if (hintError) throw hintError
-
-          await logMatchEvent(supabase, userId, newTransaction.id, 'auto_suggested', {
-            matchConfidence: match.confidence,
-            matchMethod: match.matchMethod,
-            newState: { rot_rut_payout_request_id: match.request.id },
-          })
-
-          // One payout per begäran: drain the pool so a second row of the same
-          // amount can't claim it, and skip the mapping engine (an
-          // auto-categorised 19xx/3xxx voucher would collide with the 1513
-          // clearing the match books).
-          matchedRotRutRequestIds.add(match.request.id)
-          openRotRutPayoutRequests = openRotRutPayoutRequests.filter(
-            (req) => req.id !== match.request.id,
-          )
-          result.auto_matched_invoices++
-          continue
-        }
-
-        // 3d. No single begäran equals the row: Skatteverket bundles the
-        // beslut it pays that day into one transfer, so try the exact
-        // covering set (#2239). A set has no hint column (the inbox and the
-        // worklist recompute it from the open pool), but the row must still
-        // skip the mapping engine and drain the pool exactly like a 1:1 hint.
-        if (!match) {
-          const set = findRotRutPayoutSetMatch(newTransaction as Transaction, openRotRutPayoutRequests)
-          if (set && set.requests.length > 1) {
-            const requestIds = set.requests.map((req) => req.id)
-            await logMatchEvent(supabase, userId, newTransaction.id, 'auto_suggested', {
-              matchConfidence: set.confidence,
-              matchMethod: set.matchMethod,
-              newState: { rot_rut_payout_request_ids: requestIds },
-            })
-            for (const id of requestIds) matchedRotRutRequestIds.add(id)
-            openRotRutPayoutRequests = openRotRutPayoutRequests.filter(
-              (req) => !requestIds.includes(req.id),
-            )
-            result.auto_matched_invoices++
-            continue
-          }
-        }
-      } catch {
-        // Non-critical: continue processing
-      }
-    }
+    // 3. The suggestion passes: the ingest matchers in their order (the
+    // customer invoice match, the payment order's debit, the supplier
+    // invoice heuristics, the ROT/RUT payout and payout set;
+    // lib/composition/ingest-matchers.ts). A row one of them explains skips
+    // the mapping engine.
+    if (await matchers.match({ tx: newTransaction as Transaction, raw, reread: false })) continue
 
     // 4. Evaluate mapping rules for auto-categorization
     // Production-disabled: auto-booking only runs in local dev (and tests).
@@ -1879,17 +1643,29 @@ export async function ingestTransactions(
             }
 
             result.auto_categorized++
+            tallyPass('mapping-rule', 'explained')
           }
         }
       } catch {
         // Non-critical: continue processing
+        tallyPass('mapping-rule', 'failed')
       }
     }
   }
 
-  // Inbound rows may pay an invoice the collections provider is pursuing:
-  // check them right after this request answers (pauses the case if so).
-  scheduleCollectionSweep(companyId, inboundIds)
+  // One line per batch that reached the passes (never a raw insert).
+  if (!options?.rawInsertOnly && (result.imported > 0 || rereadPasses > 0 || Object.keys(passHits).length > 0)) {
+    log.info('ingest suggestion passes', {
+      rows: rawTransactions.length,
+      imported: result.imported,
+      rereads: rereadPasses,
+      passes: passHits,
+    })
+  }
+
+  // After the last row: the matchers' finish (the collections sweep of the
+  // inbound rows, right after this request answers), for every batch.
+  matchers.finish(inboundIds)
 
   return result
 }
