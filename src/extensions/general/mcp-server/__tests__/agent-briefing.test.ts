@@ -501,6 +501,26 @@ describe('gnubok_get_agent_briefing tool', () => {
   })
 })
 
+// Defined measures (lib/measures): the briefing says they exist and how to
+// reach them, never a value (a value in the briefing would be stale by the
+// time the agent quotes it).
+describe('measures pointer', () => {
+  it('names gnubok_get_measure and every measure id, with no figures', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_get_agent_briefing')!
+    const supabase = mockSupabase({ profile: null })
+    const result = (await tool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      measures: { tool: string; how: string }
+    }
+    expect(result.measures.tool).toBe('gnubok_get_measure')
+    expect(tools.some((t) => t.name === result.measures.tool)).toBe(true)
+    for (const id of ['vat_payable', 'accounts_receivable', 'bank_balance', 'unpaid_supplier_invoices']) {
+      expect(result.measures.how).toContain(id)
+    }
+    expect(result.measures.how).toContain('gnubok_explain_measure')
+    expect(result.measures.how).not.toMatch(/\d{3}/)
+  })
+})
+
 // crm#1174: an agent asked to route a card provider's receipts into Accounted
 // looked in the briefing and the inbox list for the company's inbox address,
 // found neither, and told the user there was none. The address existed.

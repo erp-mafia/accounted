@@ -112,11 +112,16 @@ export function withoutSettledCreditNotes<T extends { status?: string | null; to
  * date: invoices dated on or before it (including ones fully paid since) with
  * outstanding amounts recomputed from the payment history (#1020). Without an
  * `asOfDate`, or with today/future, the live open-invoice state is used as-is.
+ *
+ * A failed read answers an empty ledger, which the screens show as "nothing
+ * open". `strict` makes it throw instead: a caller that hands the total on as
+ * a defined figure (lib/measures) must not report a failed read as zero.
  */
 export async function generateARLedger(
   supabase: SupabaseClient,
   companyId: string,
-  asOfDate?: string
+  asOfDate?: string,
+  options?: { strict?: boolean }
 ): Promise<ARLedgerReport> {
   const refDate = asOfDate ? new Date(asOfDate) : new Date()
   // Backdated reconstruction only kicks in for genuinely historical dates:
@@ -170,7 +175,8 @@ export async function generateARLedger(
     if (isHistorical) {
       payments = await fetchPaymentsAsOf(supabase, 'invoice_payments', 'invoice_id', companyId, asOfDate!)
     }
-  } catch {
+  } catch (err) {
+    if (options?.strict) throw err
     return {
       entries: [],
       total_outstanding: 0,

@@ -1,0 +1,1 @@
+[2026-10-16] accounts_receivable is the booked balance of the accounts_receivable role account and unpaid_customer_invoices the reskontra total: the KPI tile labelled Kundfordringar shows the reskontra, so the two figures are named apart, not merged into one.

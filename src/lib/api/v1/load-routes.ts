@@ -172,6 +172,10 @@ import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/correct/route'
 // audit-trail, periodisk-sammanstallning, ne-bilaga and ink2 followed in the
 // operation registry's wave 3 (see its import block).
 import '@/app/api/v1/companies/[companyId]/reports/trial-balance/route'
+// Defined measures (lib/measures, operations measures.*): figures equal to their report, explained.
+import '@/app/api/v1/companies/[companyId]/measures/route'
+import '@/app/api/v1/companies/[companyId]/measures/[measureId]/route'
+import '@/app/api/v1/companies/[companyId]/measures/[measureId]/explain/route'
 import '@/app/api/v1/companies/[companyId]/reports/balance-sheet/route'
 import '@/app/api/v1/companies/[companyId]/reports/balance-sheet/pdf/route'
 import '@/app/api/v1/companies/[companyId]/reports/income-statement/route'

@@ -1,0 +1,1 @@
+[2026-10-16] generateARLedger and generateSupplierLedger take an opt-in strict flag the measures set: by default a failed read answers an empty ledger, which a defined figure must never pass on as zero; the screens keep their behaviour.

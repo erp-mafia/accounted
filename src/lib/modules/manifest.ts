@@ -156,6 +156,9 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
       'bankgiro',
       // The booking template catalogue (packs/*.yaml) behind bookkeeping templates.
       'packs',
+      // Defined measures: figures read off the statutory reports and their
+      // registers, each equal to its report (lib/measures).
+      'measures',
     ],
     operationPrefixes: [
       'journal-entries',
@@ -169,6 +172,7 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
       'documents',
       'settings',
       'cash-accounts',
+      'measures',
     ],
     v1Segments: [
       'journal-entries',
@@ -182,6 +186,7 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
       'settings',
       'compliance',
       'cash-accounts',
+      'measures',
     ],
     jurisdictions: SE,
   },

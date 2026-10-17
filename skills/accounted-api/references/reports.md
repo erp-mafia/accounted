@@ -2,7 +2,7 @@
 
 # Reports endpoints
 
-Read-only statutory and management reports: trial balance, balance sheet, income statement, general ledger, VAT declaration, AR/AP ledgers, salary journal, and SIE export. Only income-statement, general-ledger, monthly-breakdown and kpi take the dim_no + dim_code filter; every other report answers a dimension filter with 400 VALIDATION_ERROR, never an unfiltered report. Any other query parameter a report does not list is not applied and is named in the X-Ignored-Query-Params response header.
+Read-only statutory and management reports: trial balance, balance sheet, income statement, general ledger, VAT declaration, AR/AP ledgers, salary journal, and SIE export. Only income-statement, general-ledger, monthly-breakdown and kpi take the dim_no + dim_code filter; every other report answers a dimension filter with 400 VALIDATION_ERROR, never an unfiltered report. Any other query parameter a report does not list is not applied and is named in the X-Ignored-Query-Params response header. Defined measures (GET /measures/{id}) answer one figure equal to its report (moms att betala, kundfordringar, banksaldo, resultat ...) with its definition, caveats and an explain call down to every journal line; they refuse unknown parameters.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -74,6 +74,303 @@ Example response `200`:
       }
     ],
     "next_cursor": "eyJ0cyI6…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/measures`
+
+**The defined measures: id, name, precise definition, parameters and the report each equals.**
+`scope:reports:read · risk:low · idempotent`
+
+Lists every defined measure (moms att betala, kundfordringar, leverantörsskulder, banksaldo, likvida medel, resultat hittills i år, omsättning, kostnader, obetalda kund- och leverantörsfakturor) with its Swedish and English name, a precise definition, the dimension it is measured over (period, as_of or vat_period), the parameters it takes and the report it equals. Static: no company data is read.
+
+**Use when:** Before GET /measures/{id}, to pick the measure that answers a question and see which parameters it takes.
+**Do not use for:** The values themselves (GET /measures/{id}).
+
+**Pitfalls:**
+- Measure ids are stable; new measures may be added, so treat an unknown id in this list as valid.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    measures: { measure_id: string, name_sv: string, name_en: string, definition: string, definition_sv: string, unit: "SEK", dimension: "period" | "as_of" | "vat_period", parameters: string[], equals: { report: string, figure: string, v1_path: string, mcp_tool: string } }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "measures": [
+      {
+        "measure_id": "accounts_receivable",
+        "name_sv": "Kundfordringar",
+        "name_en": "Accounts receivable",
+        "definition": "Booked balance (debit minus credit) of the receivables control account ...",
+        "definition_sv": "Bokfört saldo (debet minus kredit) på kundfordringskontot ...",
+        "unit": "SEK",
+        "dimension": "as_of",
+        "parameters": [
+          "as_of_date"
+        ],
+        "equals": {
+          "report": "Balansräkning",
+          "figure": "...",
+          "v1_path": "/reports/balance-sheet",
+          "mcp_tool": "gnubok_get_balance_sheet"
+        }
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/measures/{measureId}`
+
+**One defined measure: the value, its definition, what it covers, caveats and an explain handle.**
+`scope:reports:read · risk:low · idempotent`
+
+Answers one defined figure, computed by the report a person sees (equals names the report and figure; the value is always that figure), with its definition, the date it holds at, the range it covers, caveats that qualify it and the report trust signals (data_status). explain is the call that lists what this exact figure adds. A figure that cannot be computed answers a MEASURE_* error with a Swedish message: a missing momsperiod, no fiscal period for the date, a parameter the measure does not take, an account role the company's country has no account for, or a report that could not be read. Never a zero in place of an answer.
+
+**Use when:** An agent or dashboard needs one figure (moms att betala, kundfordringar, banksaldo, resultat ...) defined once and equal to the report, instead of rebuilding it from reports or journal lines.
+**Do not use for:** The full report (GET /reports/...), or a figure that is not in the list (GET /measures).
+
+**Pitfalls:**
+- Period measures take period_id/from_date/to_date, balance and register measures as_of_date, vat_payable period_type/year/period. Any other parameter is refused with MEASURE_PARAMETER_NOT_ACCEPTED, never ignored.
+- vat_payable has no default period: without period_type, year and period it answers MEASURE_PERIOD_REQUIRED.
+- accounts_receivable is the booked balance; unpaid_customer_invoices is the invoice register. They differ when invoices exist only as journal entries (a caveat says so).
+- Read caveats and data_status before presenting a figure as final.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `measureId` | path | `string` | yes |  |
+| `period_id` | query | `string` | no | Period measures: the fiscal period (default: the one containing today). vat_payable: yearly only, a broken räkenskapsår. |
+| `from_date` | query | `string` | no | Period measures: range start inside the fiscal period. |
+| `to_date` | query | `string` | no | Period measures: range end inside the fiscal period. |
+| `as_of_date` | query | `string` | no | Balance and register measures: the balance date (default today). |
+| `period_type` | query | `"monthly" \| "quarterly" \| "yearly"` | no | vat_payable: the momsperiod length. |
+| `year` | query | `number` | no | vat_payable: year of the momsperiod. |
+| `period` | query | `number` | no | vat_payable: 1-12 monthly, 1-4 quarterly, 1 yearly. |
+
+Response `200`:
+```ts
+{
+  data: {
+    measure_id: string,
+    name_sv: string,
+    name_en: string,
+    definition: string,
+    unit: "SEK",
+    value: number,
+    count: number | null,
+    as_of: string,
+    period: { start: string, end: string, fiscal_period_id: string | null },
+    vat_period: { period_type: string, year: number, period: number } | null,
+    equals: { report: string, figure: string, v1_path: string, mcp_tool: string },
+    caveats: { code: string, message_sv: string, message_en: string }[],
+    data_status?: unknown,
+    explain: { tool: "gnubok_explain_measure", arguments: Record<string, unknown>, v1_path: string }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "measure_id": "vat_payable",
+    "name_sv": "Moms att betala eller få tillbaka",
+    "name_en": "VAT payable or refundable",
+    "definition": "Ruta 49 of the momsdeklaration (SKV 4700) for one momsperiod: ...",
+    "unit": "SEK",
+    "value": 18750,
+    "count": null,
+    "as_of": "2026-09-30",
+    "period": {
+      "start": "2026-07-01",
+      "end": "2026-09-30",
+      "fiscal_period_id": "7c2b…"
+    },
+    "vat_period": {
+      "period_type": "quarterly",
+      "year": 2026,
+      "period": 3
+    },
+    "equals": {
+      "report": "Momsdeklaration (SKV 4700)",
+      "figure": "rutor.ruta49, same period_type/year/period",
+      "v1_path": "/reports/vat-declaration",
+      "mcp_tool": "gnubok_get_vat_report"
+    },
+    "caveats": [],
+    "data_status": null,
+    "explain": {
+      "tool": "gnubok_explain_measure",
+      "arguments": {
+        "measure_id": "vat_payable",
+        "period_type": "quarterly",
+        "year": 2026,
+        "period": 3
+      },
+      "v1_path": "/api/v1/companies/9f1e…/measures/vat_payable/explain?period_type=quarterly&year=2026&period=3"
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/measures/{measureId}/explain`
+
+**What a defined measure adds: contributors and the journal lines or invoices behind it, paged.**
+`scope:reports:read · risk:low · idempotent`
+
+Explains one measure value: the same value as GET /measures/{id}, the complete list of what it adds (accounts with their amount and opening balance, the ruta of each VAT account, or the customers and suppliers of an invoice measure) and, paged, the journal lines or open invoices behind them, each with its typed handle (je_, inv_, sinv_). reconciles says whether contributors add up to the value and each to its drill-down; reconciliation_note names any gap. Send the explain.arguments a GET /measures/{id} answered to explain that exact figure.
+
+**Use when:** An agent must show why a figure is what it is, or find the vouchers or invoices behind it.
+**Do not use for:** The value alone (GET /measures/{id} is lighter).
+
+**Pitfalls:**
+- drilldown is paged: limit (1-500, default 50) and offset; next_offset is null on the last page.
+- Takes the same parameters as GET /measures/{id}; a default (today, the current fiscal year) is resolved again on every call, so pass the explain handle's pinned arguments.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `measureId` | path | `string` | yes |  |
+| `period_id` | query | `string` | no | Period measures: the fiscal period (default: the one containing today). vat_payable: yearly only, a broken räkenskapsår. |
+| `from_date` | query | `string` | no | Period measures: range start inside the fiscal period. |
+| `to_date` | query | `string` | no | Period measures: range end inside the fiscal period. |
+| `as_of_date` | query | `string` | no | Balance and register measures: the balance date (default today). |
+| `period_type` | query | `"monthly" \| "quarterly" \| "yearly"` | no | vat_payable: the momsperiod length. |
+| `year` | query | `number` | no | vat_payable: year of the momsperiod. |
+| `period` | query | `number` | no | vat_payable: 1-12 monthly, 1-4 quarterly, 1 yearly. |
+| `limit` | query | `number` | no | Drill-down page size, 1-500 (default 50). |
+| `offset` | query | `number` | no | Drill-down rows to skip (next_offset of the previous page). |
+
+Response `200`:
+```ts
+{
+  data: {
+    measure_id: string,
+    name_sv: string,
+    unit: "SEK",
+    value: number,
+    count: number | null,
+    as_of: string,
+    period: { start: string, end: string, fiscal_period_id: string | null },
+    equals: { report: string, figure: string, v1_path: string, mcp_tool: string },
+    contributors: { kind: "account" | "customer" | "supplier", account_number?: string, customer_id?: string, supplier_id?: string, handle?: string, name: string, amount: number, ruta?: string, role?: string, cash_account_id?: string, opening_balance?: number }[],
+    drilldown: { kind: "journal_lines" | "invoices" | "supplier_invoices", items: { journal_entry_id?: string, invoice_id?: string, supplier_invoice_id?: string, handle: string | null }[], total: number, offset: number, next_offset: number | null },
+    reconciles: boolean,
+    reconciliation_note: string | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "measure_id": "accounts_receivable",
+    "name_sv": "Kundfordringar",
+    "unit": "SEK",
+    "value": 45000,
+    "count": null,
+    "as_of": "2026-10-16",
+    "period": {
+      "start": "2026-01-01",
+      "end": "2026-10-16",
+      "fiscal_period_id": "7c2b…"
+    },
+    "equals": {
+      "report": "Balansräkning",
+      "figure": "...",
+      "v1_path": "/reports/balance-sheet",
+      "mcp_tool": "gnubok_get_balance_sheet"
+    },
+    "contributors": [
+      {
+        "kind": "account",
+        "account_number": "1510",
+        "name": "Kundfordringar",
+        "amount": 45000,
+        "opening_balance": 12000,
+        "role": "accounts_receivable"
+      }
+    ],
+    "drilldown": {
+      "kind": "journal_lines",
+      "items": [
+        {
+          "journal_entry_id": "0e9c41d2-…",
+          "handle": "je_0e9c41d2…",
+          "voucher_series": "A",
+          "voucher_number": 12,
+          "date": "2026-03-02",
+          "account_number": "1510",
+          "description": "Faktura 1004",
+          "debit": 33000,
+          "credit": 0
+        }
+      ],
+      "total": 1,
+      "offset": 0,
+      "next_offset": null
+    },
+    "reconciles": true,
+    "reconciliation_note": null
   },
   "meta": {
     "request_id": "req_…",

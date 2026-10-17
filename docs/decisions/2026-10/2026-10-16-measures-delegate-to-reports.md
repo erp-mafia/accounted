@@ -1,0 +1,1 @@
+[2026-10-16] Each measure takes its value from the report generator a person sees and only picks its figure; parity tests run both on one in-memory ledger: a second formula is how two screens came to disagree, which a defined measure exists to rule out.

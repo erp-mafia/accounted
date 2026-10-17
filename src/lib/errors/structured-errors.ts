@@ -3151,6 +3151,73 @@ const REPORT: Record<string, StructuredErrorEntry> = {
   },
 }
 
+// Defined measures (lib/measures): a measure that cannot be computed refuses
+// with one of these and a Swedish sentence naming what is missing, never a
+// zero. The runtime sentence travels as the thrown message.
+const MEASURE: Record<string, StructuredErrorEntry> = {
+  MEASURE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Måttet finns inte.',
+    message_en: 'No measure with this id. details.valid lists the measure ids.',
+    remediation: {
+      description: 'List the measures (GET /measures, gnubok_list_measures) and send one of their measure_id values.',
+      tool: 'gnubok_list_measures',
+    },
+    retryable: false,
+    thrown_message_sv: true,
+  },
+  MEASURE_PARAMETER_NOT_ACCEPTED: {
+    httpStatus: 400,
+    message_sv: 'Måttet tar inte den parametern.',
+    message_en:
+      'The measure does not take a parameter that was sent: details.refused names it and details.accepted lists what the measure takes. It is refused rather than ignored, so the answer is never another figure than the one asked for.',
+    retryable: false,
+    thrown_message_sv: true,
+  },
+  MEASURE_PERIOD_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Måttet gäller en momsperiod: ange period_type, year och period.',
+    message_en: 'The measure is defined per momsperiod and has no default: send period_type, year and period.',
+    retryable: false,
+    thrown_message_sv: true,
+  },
+  MEASURE_PERIOD_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Inget räkenskapsår i bokföringen omfattar perioden.',
+    message_en:
+      'No fiscal period in the books covers the date, or the period_id is not one of the company\'s. Nothing was computed.',
+    remediation: {
+      description: 'List the fiscal periods (gnubok_list_fiscal_periods, GET /fiscal-periods) and send a date inside one, or its period_id.',
+      tool: 'gnubok_list_fiscal_periods',
+    },
+    retryable: false,
+    thrown_message_sv: true,
+  },
+  MEASURE_RANGE_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Datumen eller perioden är ogiltiga för måttet.',
+    message_en: 'A date or period is malformed, outside its fiscal period, or out of order.',
+    retryable: false,
+    thrown_message_sv: true,
+  },
+  MEASURE_ACCOUNT_ROLE_UNAVAILABLE: {
+    httpStatus: 422,
+    message_sv: 'Måttet kan inte beräknas för bolagets land: kontoplanen saknar ett konto för rollen.',
+    message_en:
+      'The company\'s jurisdiction pack has no account for an account role the measure needs (lib/bookkeeping/account-roles). Refused rather than read off another country\'s chart.',
+    retryable: false,
+    thrown_message_sv: true,
+  },
+  MEASURE_SOURCE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Måttet kunde inte beräknas: underlaget gick inte att läsa. Inget värde har räknats fram.',
+    message_en:
+      'The report the measure equals could not be read, so no value was computed. Not a zero: details.report names the report.',
+    retryable: false,
+    thrown_message_sv: true,
+  },
+}
+
 const VAT_REPORT: Record<string, StructuredErrorEntry> = {
   VAT_REPORT_MISSING_PARAMS: {
     httpStatus: 400,
@@ -8755,6 +8822,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...YEAR_END,
   ...FX,
   ...REPORT,
+  ...MEASURE,
   ...VAT_REPORT,
   ...VAT_FILING,
   ...PS_REPORT,

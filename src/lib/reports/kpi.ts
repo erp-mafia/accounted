@@ -30,15 +30,22 @@ export function calculateGrossMargin(incomeStatement: IncomeStatementReport): nu
  * `cashPosition` account override), mirroring calculateVatLiability.
  */
 export function calculateCashPosition(rows: TrialBalanceRow[], accounts?: string[]): number {
-  const cashRows =
-    accounts && accounts.length > 0
-      ? rows.filter((r) => accounts.includes(r.account_number))
-      : rows.filter((r) => r.account_number.startsWith('19'))
-  const total = cashRows.reduce(
+  const total = cashPositionRows(rows, accounts).reduce(
     (sum, r) => sum + (r.closing_debit - r.closing_credit),
     0
   )
   return Math.round(total * 100) / 100
+}
+
+/**
+ * The trial balance rows the cash position sums: the `accounts` override when
+ * set, else every 19xx account. Exported so a breakdown of the figure (the
+ * liquid_funds measure, lib/measures) lists exactly the rows the figure adds.
+ */
+export function cashPositionRows(rows: TrialBalanceRow[], accounts?: string[]): TrialBalanceRow[] {
+  return accounts && accounts.length > 0
+    ? rows.filter((r) => accounts.includes(r.account_number))
+    : rows.filter((r) => r.account_number.startsWith('19'))
 }
 
 /**
