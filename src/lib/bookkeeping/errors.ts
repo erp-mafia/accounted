@@ -531,6 +531,10 @@ export type BookkeepingOperation =
   | 'fetch_currency_payables'
   | 'check_existing_revaluation'
   | 'resolve_settlement_account'
+  // Posting port (lib/posting), strict mode only: the business event or its
+  // link to the draft could not be written, so nothing was posted.
+  | 'record_business_event'
+  | 'link_business_event'
 
 export class BookkeepingDatabaseError extends Error {
   readonly code: typeof BOOKKEEPING_DATABASE_ERROR | ReturnType<typeof conflictCode>

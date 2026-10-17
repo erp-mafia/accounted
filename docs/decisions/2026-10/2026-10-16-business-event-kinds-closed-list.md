@@ -1,0 +1,1 @@
+[2026-10-16] Business event kind is a closed, add-only list in code (29 kinds derived from journal_entries.source_type, se. for Sweden-only acts); the database checks only the shape, so a new kind needs a decision record, not a migration.

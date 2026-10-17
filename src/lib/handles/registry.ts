@@ -83,6 +83,9 @@ export const HANDLE_RESOURCES = [
   { type: 'reconciliation_signoff', prefix: 'rso', label: 'reconciliation sign-off', segments: ['signoff'], fields: ['reconciliation_signoff'] },
   { type: 'voucher_gap_explanation', prefix: 'vgap', label: 'voucher gap explanation', segments: [], fields: ['voucher_gap_explanation'] },
   { type: 'team', prefix: 'team', label: 'team', segments: [], fields: ['team'] },
+  // What a posting meant in business terms (posting port, business_events).
+  // No v1 route reads one yet; the field base types business_event_id.
+  { type: 'business_event', prefix: 'bev', label: 'business event', segments: [], fields: ['business_event'] },
 ] as const satisfies readonly HandleResource[]
 
 export type HandleType = (typeof HANDLE_RESOURCES)[number]['type']

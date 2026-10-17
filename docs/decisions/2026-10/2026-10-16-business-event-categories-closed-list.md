@@ -1,0 +1,1 @@
+[2026-10-16] Business event category keys are a closed, add-only list in code, seeded from the transaction categories and booking template families (one key where both name the same thing), se. for Sweden-only keys: neutral keys agents read without BAS.

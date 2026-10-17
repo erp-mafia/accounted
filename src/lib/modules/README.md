@@ -275,3 +275,20 @@ written together or not at all. Only the HTTP hop to PostgREST is replaced
 lists every seam. The receipt half: the staged and approved posting answers a
 decision receipt on `GET /journal-entries/{id}`, which commitPendingOperation
 records after the commit (`src/lib/suggestion-log/operation.ts`).
+
+## Phase 2: the posting port (step 1, shadow foundation)
+
+Every new posting is to record what happened in business terms (a
+`business_events` row: kind, category, subject, party type and id, amounts,
+evidence, the rule version that produced the lines) linked to the verifikat it
+produced (`business_event_entries`). `src/lib/posting` (ledger kernel) holds
+the port, its only adapter (the ledger, which hands the producer's
+`CreateJournalEntryInput` to the engine unchanged), the closed lists of kinds
+and category keys, and `projectBusinessEvent` for history, which is never
+backfilled. The switch is `POSTING_EVENTS`: `off` (default) changes nothing,
+`shadow` records and never blocks, `strict` stops a posting before a voucher
+number is drawn when its event cannot be written, and waits for step 2. The
+pilot producer is bank-line booking (`createTransactionJournalEntry`).
+`tests/pg/posting-parity.pg.test.ts` proves booking output against a fixture
+taken from main before the port existed; each block that moves onto the port
+in step 2 extends it.

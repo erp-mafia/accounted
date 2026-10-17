@@ -1,0 +1,1 @@
+[2026-10-16] business_event_entries accepts a link only to a draft verifikat of the event's company (trigger): history is never touched or backfilled, and the link always lands before commit_journal_entry draws the number.

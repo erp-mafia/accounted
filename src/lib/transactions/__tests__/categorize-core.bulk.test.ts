@@ -337,7 +337,8 @@ describe('bulkBookMatchedInboxItems: booking', () => {
       expect.objectContaining({ id: 'tx-1', cash_account_id: 'cash-1' }),
       expect.objectContaining({ debit_account: '5420', credit_account: '1931' }),
       undefined,
-      { rubricVersion: undefined },
+      // The posting port pilot adds the business event context beside it.
+      expect.objectContaining({ rubricVersion: undefined }),
     )
   })
 
@@ -380,7 +381,8 @@ describe('bulkBookMatchedInboxItems: booking', () => {
       expect.objectContaining({ id: 'tx-1' }),
       expect.objectContaining({ dimensions: { '6': 'P001' } }),
       undefined,
-      { rubricVersion: undefined },
+      // The posting port pilot adds the business event context beside it.
+      expect.objectContaining({ rubricVersion: undefined }),
     )
   })
 
@@ -479,7 +481,8 @@ describe('bulkBookMatchedInboxItems: WhatsApp channel-context notes threading', 
       expect.objectContaining({ id: 'tx-1' }),
       expect.anything(),
       RENDERED,
-      { rubricVersion: undefined },
+      // The posting port pilot adds the business event context beside it.
+      expect.objectContaining({ rubricVersion: undefined }),
     )
   })
 
@@ -499,7 +502,8 @@ describe('bulkBookMatchedInboxItems: WhatsApp channel-context notes threading', 
       expect.objectContaining({ id: 'tx-1' }),
       expect.anything(),
       `Gemensam batchanteckning · ${RENDERED}`,
-      { rubricVersion: undefined },
+      // The posting port pilot adds the business event context beside it.
+      expect.objectContaining({ rubricVersion: undefined }),
     )
   })
 
@@ -543,7 +547,8 @@ describe('bulkBookMatchedInboxItems: WhatsApp channel-context notes threading', 
       expect.objectContaining({ id: 'tx-1' }),
       expect.anything(),
       'Gemensam batchanteckning',
-      { rubricVersion: undefined },
+      // The posting port pilot adds the business event context beside it.
+      expect.objectContaining({ rubricVersion: undefined }),
     )
     const passedNotes = mockCreateJE.mock.calls[0][5] as string | undefined
     expect(passedNotes).not.toContain('sjukbesök')
@@ -580,7 +585,8 @@ describe('bulkBookMatchedInboxItems: WhatsApp channel-context notes threading', 
       expect.objectContaining({ id: 'tx-1' }),
       expect.anything(),
       RENDERED,
-      { rubricVersion: undefined },
+      // The posting port pilot adds the business event context beside it.
+      expect.objectContaining({ rubricVersion: undefined }),
     )
   })
 
@@ -608,7 +614,8 @@ describe('bulkBookMatchedInboxItems: WhatsApp channel-context notes threading', 
       expect.objectContaining({ id: 'tx-1' }),
       expect.anything(),
       'Bara batchanteckningen',
-      { rubricVersion: undefined },
+      // The posting port pilot adds the business event context beside it.
+      expect.objectContaining({ rubricVersion: undefined }),
     )
   })
 })

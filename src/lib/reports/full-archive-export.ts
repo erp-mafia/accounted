@@ -1298,6 +1298,11 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // lines and the old description/date, i.e. the preserved side of every
   // in-verifikat rättelse — räkenskapsinformation, not an operation log.
   { name: 'journal_entry_rattelse_log', file: 'journal_entry_rattelse_log.json', orderBy: 'created_at' },
+  // Posting port (src/lib/posting): what each posting meant in business
+  // terms, the rule version that produced its lines, and which verifikat it
+  // produced. Append-only and kept with the verifikat it explains.
+  { name: 'business_events', file: 'business_events.json', orderBy: 'created_at' },
+  { name: 'business_event_entries', file: 'business_event_entries.json', orderBy: 'created_at' },
   // Reconciliation sign-offs ("avstämt t.o.m."): who attested which account
   // through which date with the numbers as they stood, plus reopen stamps.
   // Part of the avstämningsdokumentation an auditor asks for; kept.

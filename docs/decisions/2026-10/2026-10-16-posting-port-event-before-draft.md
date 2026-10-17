@@ -1,0 +1,1 @@
+[2026-10-16] The port writes the event before the engine drafts and the engine writes only the link, as the brief specified; an engine refusal can leave an event with no posted verifikat, which reads as not posted. Lines the engine's pure checks refuse get no event.

@@ -45,6 +45,7 @@ import { selectReversalHooks, type ReversalHookContext } from '@/lib/bookkeeping
 import { REVERSAL_HOOKS } from '@/lib/composition/reversal-hooks'
 import { defaultCommitMethod, getActor } from '@/lib/bookkeeping/actor-context'
 import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
+import { linkBusinessEventToDraft, type BusinessEventLink } from '@/lib/bookkeeping/business-event-link'
 import type {
   AssetDisposalType,
   AssetJamkningDirection,
@@ -353,6 +354,53 @@ export interface CreateEntryOptions {
    * first posting.
    */
   replayDimensions?: boolean
+  /**
+   * Posting port (src/lib/posting): the business event this verifikat comes
+   * from, already recorded by the port. Its link is written right after the
+   * draft header and before commit_journal_entry draws a voucher number, so
+   * a failed link costs no number. Absent (every caller outside the port,
+   * and every posting while POSTING_EVENTS is off), nothing is written and
+   * the draft is exactly what it was.
+   */
+  businessEvent?: BusinessEventLink
+}
+
+/**
+ * Link the draft to its business event (createDraftEntry, reverseEntry). A
+ * refusal under strict mode cancels the draft, which has no number yet, and
+ * stops the posting; shadow mode and a missing table were already answered
+ * as a success by the writer.
+ */
+async function linkDraftToBusinessEvent(
+  supabase: SupabaseClient,
+  companyId: string,
+  draftId: string,
+  link: BusinessEventLink,
+): Promise<void> {
+  const linked = await linkBusinessEventToDraft(supabase, companyId, draftId, link)
+  if (linked.ok) return
+  log.error('business event link refused (strict); draft cancelled before a voucher number was drawn', new Error(linked.message), {
+    operation: 'link_business_event',
+    companyId,
+    entityType: 'journal_entry',
+    entityId: draftId,
+    businessEventId: link.id,
+    pgCode: linked.code,
+  })
+  const { error: cancelError } = await supabase
+    .from('journal_entries')
+    .update({ status: 'cancelled' })
+    .eq('id', draftId)
+  if (cancelError) {
+    log.error('orphan draft cleanup failed (phantom draft remains)', cancelError, {
+      operation: 'link_business_event.cleanup',
+      companyId,
+      entityType: 'journal_entry',
+      entityId: draftId,
+      pgCode: (cancelError as { code?: string }).code,
+    })
+  }
+  throw new BookkeepingDatabaseError('link_business_event', linked.message, linked.code)
 }
 
 /**
@@ -483,6 +531,12 @@ export async function createDraftEntry(
       pgHint: (entryError as { hint?: string } | null)?.hint,
     })
     throw new BookkeepingDatabaseError('create_draft_entry', entryError?.message, entryError?.code)
+  }
+
+  // Posting port: the business event's link, right after the header and
+  // before any voucher number is drawn. Skipped entirely without the option.
+  if (options.businessEvent) {
+    await linkDraftToBusinessEvent(supabase, companyId, entry.id, options.businessEvent)
   }
 
   // Insert journal entry lines with dimensions
@@ -1837,6 +1891,12 @@ export async function reverseEntry(
      * CorrectionChainTooDeepError unless set (see storno-service correctEntry).
      */
     allowDeepChain?: boolean
+    /**
+     * Posting port: the business event the storno answers, linked right
+     * after the reversal's draft header and before its voucher number is
+     * drawn (see CreateEntryOptions.businessEvent). Absent, nothing changes.
+     */
+    businessEvent?: BusinessEventLink
   }
 ): Promise<JournalEntry> {
 
@@ -1959,6 +2019,12 @@ export async function reverseEntry(
   }
   if (!reversalEntry) {
     throw new BookkeepingDatabaseError('create_reversal_entry', undefined)
+  }
+
+  // Posting port: link before the lines and before the number, as in
+  // createDraftEntry. Skipped entirely without the option.
+  if (options?.businessEvent) {
+    await linkDraftToBusinessEvent(supabase, companyId, reversalEntry.id, options.businessEvent)
   }
 
   // Insert reversal lines with dimensions
