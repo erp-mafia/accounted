@@ -142,7 +142,7 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'reports.md',
     title: 'Reports',
-    members: ['reports', 'audit-trail', 'vat', 'measures'],
+    members: ['reports', 'audit-trail', 'vat', 'measures', 'unexplained'],
     blurb:
       'Read-only statutory and management reports: trial balance, balance sheet, income statement, ' +
       'general ledger, VAT declaration, AR/AP ledgers, salary journal, and SIE export. Only ' +
@@ -151,7 +151,10 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
       'report. Any other query parameter a report does not list is not applied and is named in the ' +
       'X-Ignored-Query-Params response header. Defined measures (GET /measures/{id}) answer one figure ' +
       'equal to its report (moms att betala, kundfordringar, banksaldo, resultat ...) with its definition, ' +
-      'caveats and an explain call down to every journal line; they refuse unknown parameters.',
+      'caveats and an explain call down to every journal line; they refuse unknown parameters. The ' +
+      'unexplained queue (GET /unexplained) runs the checks of differences that should be zero (reskontra ' +
+      'against the ledger, bank and skattekonto against the outside balance, declared moms not settled, ' +
+      'overdue unbooked bank rows) and explains each down to the records behind it.',
   },
   {
     file: 'assets.md',

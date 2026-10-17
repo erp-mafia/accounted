@@ -161,6 +161,7 @@ describe('path parameter typing', () => {
       'lines/:lineId': null,
       'links/:linkId': null,
       'measures/:measureId': null,
+      'unexplained/:checkId': null,
       'operations/:id': 'operation',
       'packages/:packageId': null,
       'payment-orders/:id': 'payment_order',

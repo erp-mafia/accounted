@@ -2,7 +2,7 @@
 
 # Reports endpoints
 
-Read-only statutory and management reports: trial balance, balance sheet, income statement, general ledger, VAT declaration, AR/AP ledgers, salary journal, and SIE export. Only income-statement, general-ledger, monthly-breakdown and kpi take the dim_no + dim_code filter; every other report answers a dimension filter with 400 VALIDATION_ERROR, never an unfiltered report. Any other query parameter a report does not list is not applied and is named in the X-Ignored-Query-Params response header. Defined measures (GET /measures/{id}) answer one figure equal to its report (moms att betala, kundfordringar, banksaldo, resultat ...) with its definition, caveats and an explain call down to every journal line; they refuse unknown parameters.
+Read-only statutory and management reports: trial balance, balance sheet, income statement, general ledger, VAT declaration, AR/AP ledgers, salary journal, and SIE export. Only income-statement, general-ledger, monthly-breakdown and kpi take the dim_no + dim_code filter; every other report answers a dimension filter with 400 VALIDATION_ERROR, never an unfiltered report. Any other query parameter a report does not list is not applied and is named in the X-Ignored-Query-Params response header. Defined measures (GET /measures/{id}) answer one figure equal to its report (moms att betala, kundfordringar, banksaldo, resultat ...) with its definition, caveats and an explain call down to every journal line; they refuse unknown parameters. The unexplained queue (GET /unexplained) runs the checks of differences that should be zero (reskontra against the ledger, bank and skattekonto against the outside balance, declared moms not settled, overdue unbooked bank rows) and explains each down to the records behind it.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -2589,6 +2589,363 @@ Example response `200`:
     "existing_entries": [],
     "booking_status": "none",
     "fingerprint": "3f9a…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/unexplained`
+
+**The unexplained queue: every expected-zero check run for the company, differences first.**
+`scope:reports:read · risk:low · idempotent`
+
+Runs every check of a difference that should be zero and lists one row per result: kundreskontra against booked receivables, leverantörsreskontra against booked payables, each bank account's booked balance against the balance the bank reported, the skattekonto account against Skatteverket's saldo, declared momsperioder whose VAT accounts were never moved to the settlement account, and bank transactions still unbooked past the BFNAR 2013:2 booking deadline. Each row has its status (ok, unexplained, cannot_check with a typed reason), the signed difference, the date it holds at, one Swedish sentence, what fixes it, and the explain call that names the items behind it. Both figures of every check come from the report a person sees. Read-only.
+
+**Use when:** At the start of a session or before a close: what in the books does not add up, and what to do about it.
+**Do not use for:** A single figure (GET /measures/{id}) or the full reconciliation of one account (GET /reconciliation/accounts/{accountKey}).
+
+**Pitfalls:**
+- cannot_check is not ok: the check could not run (refusal_code says why: kontantmetoden, no bank balance, not connected to Skatteverket, ...).
+- Live: every check reads today's state. The bank and skattekonto rows compare on the date the outside balance was fetched (as_of).
+- difference is in unit: SEK, or a count for unbooked_bank_lines_overdue.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    as_of: string,
+    counts: { unexplained: number, cannot_check: number, ok: number },
+    items: { check_id: string, name_sv: string, status: "ok" | "unexplained" | "cannot_check", subject: { kind: "company" | "bank_account" | "vat_period", cash_account_id?: string, handle?: string | null, account_number?: string, name?: string, period_type?: string, year?: number, period?: number, start?: string, end?: string, label?: string }, difference: number | null, unit: "SEK" | "count", as_of: string, summary_sv: string, refusal_code: string | null, next: { tool: string, arguments?: Record<string, unknown>, screen: string } | null, explain: { tool: "gnubok_explain_unexplained", arguments: Record<string, unknown>, v1_path: string } }[],
+    truncated: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "as_of": "2026-10-16",
+    "counts": {
+      "unexplained": 1,
+      "cannot_check": 2,
+      "ok": 4
+    },
+    "items": [
+      {
+        "check_id": "receivables_vs_ledger",
+        "name_sv": "Kundreskontran mot bokförda kundfordringar",
+        "status": "unexplained",
+        "subject": {
+          "kind": "company"
+        },
+        "difference": 3000,
+        "unit": "SEK",
+        "as_of": "2026-10-16",
+        "summary_sv": "Kundreskontran visar 15 500,00 kr men de bokförda kundfordringarna är 12 500,00 kr: differens 3 000,00 kr.",
+        "refusal_code": null,
+        "next": {
+          "tool": "gnubok_link_invoice_to_voucher",
+          "screen": "/reports/kundreskontra"
+        },
+        "explain": {
+          "tool": "gnubok_explain_unexplained",
+          "arguments": {
+            "check_id": "receivables_vs_ledger"
+          },
+          "v1_path": "/api/v1/companies/9f1e…/unexplained/receivables_vs_ledger/explain"
+        }
+      }
+    ],
+    "truncated": 0
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/unexplained/{checkId}`
+
+**One expected-zero check: its definition and basis, the figures it compares, and every result.**
+`scope:reports:read · risk:low · idempotent`
+
+Runs one check and answers its definition (which figure minus which, read how), the rule it rests on, the tolerance, the reports the two figures come from, the action that fixes a difference, and one result per subject (the company, each bank account, each declared momsperiod) with both figures, the difference, a Swedish sentence, any refusal and the explain call.
+
+**Use when:** An agent must say exactly what a queue row compares, or show both figures with where a person reads them.
+**Do not use for:** The items behind a difference (GET /unexplained/{checkId}/explain).
+
+**Pitfalls:**
+- An unknown check_id answers 404 UNEXPLAINED_CHECK_NOT_FOUND with the valid ids in details.valid.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `checkId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    check_id: string,
+    name_sv: string,
+    name_en: string,
+    definition: string,
+    definition_sv: string,
+    basis: string,
+    unit: "SEK" | "count",
+    tolerance: number,
+    subject_kind: "company" | "bank_account" | "vat_period",
+    compares: { report: string, v1_path: string | null, mcp_tool: string, screen: string | null }[],
+    next_action: { message_sv: string, tool: string, arguments?: Record<string, unknown>, screen: string },
+    status: "ok" | "unexplained" | "cannot_check",
+    results: { status: "ok" | "unexplained" | "cannot_check", subject: { kind: "company" | "bank_account" | "vat_period", cash_account_id?: string, handle?: string | null, account_number?: string, name?: string, period_type?: string, year?: number, period?: number, start?: string, end?: string, label?: string }, difference: number | null, as_of: string, summary_sv: string, sides: { key: string, label_sv: string, label_en: string, amount: number | null, source: { report: string, v1_path: string | null, mcp_tool: string, screen: string | null } }[], refusal: { code: string, message_sv: string, message_en: string, retryable?: boolean, details?: Record<string, unknown> } | null, facts: Record<string, unknown> | null, next_action: { message_sv: string, tool: string, arguments?: Record<string, unknown>, screen: string } | null, explain: { tool: "gnubok_explain_unexplained", arguments: Record<string, unknown>, v1_path: string } }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "check_id": "receivables_vs_ledger",
+    "name_sv": "Kundreskontran mot bokförda kundfordringar",
+    "name_en": "Customer ledger against booked receivables",
+    "definition": "Open customer invoices in the invoice register now ... minus the booked balance of the receivables accounts ...",
+    "definition_sv": "Öppna kundfakturor i fakturaregistret just nu ... minus bokfört saldo på kundfordringskontona ...",
+    "basis": "Every balance sheet account is reconciled against its underlag ...",
+    "unit": "SEK",
+    "tolerance": 0.005,
+    "subject_kind": "company",
+    "compares": [
+      {
+        "report": "Kundreskontra (öppna kundfakturor)",
+        "v1_path": "/reports/ar-ledger",
+        "mcp_tool": "gnubok_get_ar_ledger",
+        "screen": "/reports/kundreskontra"
+      },
+      {
+        "report": "Huvudbok, kundfordringskontona",
+        "v1_path": "/reports/general-ledger",
+        "mcp_tool": "gnubok_get_general_ledger",
+        "screen": "/reports/huvudbok"
+      }
+    ],
+    "next_action": {
+      "message_sv": "Öppna förklaringen ...",
+      "tool": "gnubok_link_invoice_to_voucher",
+      "screen": "/reports/kundreskontra"
+    },
+    "status": "unexplained",
+    "results": [
+      {
+        "status": "unexplained",
+        "subject": {
+          "kind": "company"
+        },
+        "difference": 3000,
+        "as_of": "2026-10-16",
+        "summary_sv": "Kundreskontran visar 15 500,00 kr men de bokförda kundfordringarna är 12 500,00 kr: differens 3 000,00 kr.",
+        "sides": [
+          {
+            "key": "register",
+            "label_sv": "Öppna kundfakturor i reskontran",
+            "label_en": "Open customer invoices in the register",
+            "amount": 15500,
+            "source": {
+              "report": "Kundreskontra (öppna kundfakturor)",
+              "v1_path": "/reports/ar-ledger",
+              "mcp_tool": "gnubok_get_ar_ledger",
+              "screen": "/reports/kundreskontra"
+            }
+          },
+          {
+            "key": "ledger",
+            "label_sv": "Bokförda kundfordringar",
+            "label_en": "Booked receivables",
+            "amount": 12500,
+            "source": {
+              "report": "Huvudbok, kundfordringskontona",
+              "v1_path": "/reports/general-ledger",
+              "mcp_tool": "gnubok_get_general_ledger",
+              "screen": "/reports/huvudbok"
+            }
+          }
+        ],
+        "refusal": null,
+        "facts": {
+          "fiscal_period_id": "7c2b…"
+        },
+        "next_action": {
+          "message_sv": "Öppna förklaringen ...",
+          "tool": "gnubok_link_invoice_to_voucher",
+          "screen": "/reports/kundreskontra"
+        },
+        "explain": {
+          "tool": "gnubok_explain_unexplained",
+          "arguments": {
+            "check_id": "receivables_vs_ledger"
+          },
+          "v1_path": "/api/v1/companies/9f1e…/unexplained/receivables_vs_ledger/explain"
+        }
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/unexplained/{checkId}/explain`
+
+**What a difference in the queue consists of: its parts and the items behind them, with typed handles.**
+`scope:reports:read · risk:low · idempotent`
+
+Explains one result of a check: the same difference as the queue, broken into parts (open invoices without a verifikat and verifikat on the control account without an invoice; unbooked bank transactions; Skatteverket events missing from the books and verifikat Skatteverket does not know; the VAT accounts not yet cleared; the overdue bank rows) and, paged, the items behind each part with their typed handles (inv_, sinv_, je_, txn_). residual is what the items do not name and note says what it usually is. For a check with several results (bank accounts, momsperioder), send the subject: cash_account_id, or period_type, year and period, as the explain handle of the row gives them.
+
+**Use when:** An agent must show why a queue row is not zero, or find the records to fix.
+**Do not use for:** The queue itself (GET /unexplained).
+
+**Pitfalls:**
+- items is paged: limit (1-200, default 25) and offset; next_offset is null on the last page.
+- A check with several results and no subject answers 400 UNEXPLAINED_SUBJECT_REQUIRED with the subjects in details.subjects.
+- cash_account_id on a company-wide check answers 400 UNEXPLAINED_PARAMETER_NOT_ACCEPTED.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `checkId` | path | `string` | yes |  |
+| `cash_account_id` | query | `string` | no | bank_balance_vs_bank: the bank account (cash account id or cash_ handle). |
+| `period_type` | query | `"monthly" \| "quarterly" \| "yearly"` | no | vat_declared_not_settled: the momsperiod length. |
+| `year` | query | `number` | no | vat_declared_not_settled: year of the momsperiod. |
+| `period` | query | `number` | no | vat_declared_not_settled: 1-12 monthly, 1-4 quarterly, 1 yearly. |
+| `limit` | query | `number` | no | Item page size, 1-200 (default 25). |
+| `offset` | query | `number` | no | Items to skip (next_offset of the previous page). |
+
+Response `200`:
+```ts
+{
+  data: {
+    check_id: string,
+    name_sv: string,
+    status: "ok" | "unexplained" | "cannot_check",
+    subject: { kind: "company" | "bank_account" | "vat_period", cash_account_id?: string, handle?: string | null, account_number?: string, name?: string, period_type?: string, year?: number, period?: number, start?: string, end?: string, label?: string },
+    difference: number | null,
+    unit: "SEK" | "count",
+    as_of: string,
+    summary_sv: string,
+    sides: { key: string, label_sv: string, label_en: string, amount: number | null, source: { report: string, v1_path: string | null, mcp_tool: string, screen: string | null } }[],
+    refusal: { code: string, message_sv: string, message_en: string, retryable?: boolean, details?: Record<string, unknown> } | null,
+    parts: { key: string, label_sv: string, label_en: string, amount: number, count: number }[],
+    residual: number | null,
+    reconciles: boolean,
+    note: string | null,
+    items: { list: { part: string, item_type: "invoice" | "supplier_invoice" | "journal_line" | "transaction" | "skattekonto_transaction" | "vat_account", invoice_id?: string, supplier_invoice_id?: string, journal_entry_id?: string, transaction_id?: string, skattekonto_transaction_id?: string, account_number?: string, handle: string | null, date: string | null, label: string, amount: number, currency?: string, record_amount?: number, days_past_deadline?: number }[], total: number, offset: number, next_offset: number | null },
+    next_action: { message_sv: string, tool: string, arguments?: Record<string, unknown>, screen: string } | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "check_id": "receivables_vs_ledger",
+    "name_sv": "Kundreskontran mot bokförda kundfordringar",
+    "status": "unexplained",
+    "subject": {
+      "kind": "company"
+    },
+    "difference": 3000,
+    "unit": "SEK",
+    "as_of": "2026-10-16",
+    "summary_sv": "Kundreskontran visar 15 500,00 kr men de bokförda kundfordringarna är 12 500,00 kr: differens 3 000,00 kr.",
+    "sides": [],
+    "refusal": null,
+    "parts": [
+      {
+        "key": "register_without_voucher",
+        "label_sv": "Öppna kundfakturor utan verifikat",
+        "label_en": "Open customer invoices without a verifikat",
+        "amount": 3000,
+        "count": 1
+      },
+      {
+        "key": "ledger_without_invoice",
+        "label_sv": "Verifikat på kundfordringskontona utan faktura i reskontran",
+        "label_en": "Vouchers on the receivables accounts without an invoice in the register",
+        "amount": 0,
+        "count": 0
+      }
+    ],
+    "residual": 0,
+    "reconciles": true,
+    "note": null,
+    "items": {
+      "list": [
+        {
+          "part": "register_without_voucher",
+          "item_type": "invoice",
+          "invoice_id": "a1b2…",
+          "handle": "inv_a1b2…",
+          "date": "2026-10-01",
+          "label": "Faktura 1002, Beta HB",
+          "amount": 3000,
+          "currency": "SEK"
+        }
+      ],
+      "total": 1,
+      "offset": 0,
+      "next_offset": null
+    },
+    "next_action": {
+      "message_sv": "Öppna förklaringen ...",
+      "tool": "gnubok_link_invoice_to_voucher",
+      "screen": "/reports/kundreskontra"
+    }
   },
   "meta": {
     "request_id": "req_…",

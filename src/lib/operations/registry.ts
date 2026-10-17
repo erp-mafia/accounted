@@ -215,6 +215,7 @@ import {
 } from './arsredovisning'
 import { reportsForenklatArsbokslut } from './forenklat-arsbokslut'
 import { MEASURE_OPERATIONS } from './measures'
+import { UNEXPLAINED_OPERATIONS } from './unexplained'
 import {
   skattekontoSync,
   skatteverketAgiValidateHuvuduppgift,
@@ -435,6 +436,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   reportsForenklatArsbokslut,
   // measures: defined figures equal to their report, explained down to every line (lib/measures)
   ...MEASURE_OPERATIONS,
+  // unexplained: expected-zero checks with explain handles (lib/unexplained)
+  ...UNEXPLAINED_OPERATIONS,
   // skatteverket-helpers
   skatteverketAgiValidateHuvuduppgift,
   skatteverketAgiValidateIndividuppgift,

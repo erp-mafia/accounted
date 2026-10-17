@@ -1,0 +1,1 @@
+[2026-10-16] No suspense or clearing account check: no account role names a suspense account, and the clearing accounts companies use (payment providers in the cash register) legitimately carry funds awaiting payout.

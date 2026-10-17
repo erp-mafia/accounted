@@ -1,0 +1,1 @@
+[2026-10-16] A check that cannot run answers cannot_check with a typed reason inside the data, never an error and never ok; doors refuse only an unknown check or subject, so one failing source does not hide the rest of the queue.

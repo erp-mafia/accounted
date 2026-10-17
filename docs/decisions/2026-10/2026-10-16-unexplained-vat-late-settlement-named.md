@@ -1,0 +1,1 @@
+[2026-10-16] A declared period without a momsredovisning inside it stays unexplained, but a settlement-shaped verifikat dated up to 90 days after it is named as a possible late one: the proposal only looks inside the period, and booking again would settle it twice.

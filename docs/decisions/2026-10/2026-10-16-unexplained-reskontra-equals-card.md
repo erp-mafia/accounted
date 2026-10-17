@@ -1,0 +1,1 @@
+[2026-10-16] The reskontra checks equal the kundreskontra/leverantörsreskontra reconciliation card (open register now vs the fiscal year's booked balance, 1513 included), not KPI tile minus a balance sheet row: one difference on every screen, ROT/RUT shares no gap.

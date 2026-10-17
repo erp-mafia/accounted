@@ -1,0 +1,1 @@
+[2026-10-16] Overdue unbooked bank rows use BFNAR 2013:2 p. 3.6 (50 days after the month) as cut-off: the system cannot tell who qualifies for p. 3.7-3.9, so the definition names the longer limits instead of claiming a breach.
