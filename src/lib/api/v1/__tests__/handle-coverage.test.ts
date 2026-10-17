@@ -162,6 +162,7 @@ describe('path parameter typing', () => {
       'links/:linkId': null,
       'measures/:measureId': null,
       'operations/:id': 'operation',
+      'packages/:packageId': null,
       'payment-orders/:id': 'payment_order',
       'payslips/:employeeId': 'employee',
       'pending-operations/:id': 'pending_operation',

@@ -100,6 +100,8 @@ import {
   IdempotencyKeyInProgressError,
   IdempotencyKeyReuseError,
 } from '@/lib/api/idempotency'
+import { startPackageForV1Endpoint } from '@/lib/modules/package-doors'
+import { packageStartRefusal } from '@/lib/modules/package-gate'
 import { createLogger, type Logger } from '@/lib/logger'
 import { isPreviewToken, MALFORMED_PREVIEW_TOKEN_MESSAGE, PREVIEW_TOKEN_HEADER } from '@/lib/operations/preview-token'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from './errors'
@@ -991,6 +993,27 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
             issues: [{ field: IDEMPOTENCY_HEADER, message: 'Idempotency-Key header is required for write requests.' }],
           },
         })
+      }
+
+      // 6b. Package start gate. A write that starts new work in a package
+      //     (lib/modules/package-doors.ts: a new invoice, salary run, expense
+      //     claim, till connection, ...) refuses while the company has that
+      //     package switched off or winding down; settling what is open never
+      //     does. Before the idempotency claim, so a refusal holds no key.
+      if (isMutation && companyId && endpoint) {
+        const startPackage = startPackageForV1Endpoint(endpoint)
+        if (startPackage) {
+          const refusal = await packageStartRefusal(supabase, companyId, startPackage)
+          if (refusal) {
+            userLog.info('package start refused', { packageId: refusal.packageId })
+            return await v1ErrorResponseFromCode(refusal.code, userLog, {
+              requestId,
+              details: refusal.details,
+              messageSv: refusal.messageSv,
+              messageEn: refusal.messageEn,
+            })
+          }
+        }
       }
 
       // 7. Dry-run resolution. Test keys force it on regardless of the flag.

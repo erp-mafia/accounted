@@ -168,9 +168,10 @@ const RISK_TIERS = {
   // Package switches (Profiles and Suggestions, step 3; lib/suggestions):
   // a company's choice to show or hide a package such as Lön. No booking
   // impact and no external side-effect, and either switch is undone by the
-  // other. Switching off is refused while the package has open obligations
-  // (set_company_package_choice, migration 20261016200400), and the commit
-  // re-checks that the approver is an owner or admin.
+  // other. Switching off closes the package's start doors only: what is
+  // still open keeps it winding down until settled (migration
+  // 20261016230000), and the commit re-checks that the approver is an owner
+  // or admin.
   enable_package: 'low',
   disable_package: 'low',
   update_dimension: 'low',

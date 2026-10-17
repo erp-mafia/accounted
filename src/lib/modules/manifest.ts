@@ -9,8 +9,9 @@
  * (by src/lib folder), and the per-company capabilities (./capabilities.ts),
  * which group the modules into packages (./packages.ts). The menu and MCP's
  * tools/list read those capabilities to hide a package a company does not
- * have; none can be switched off yet, so nothing they show has changed. No
- * route or tool call is refused by it.
+ * have, and the start doors of a package that is switched off refuse
+ * (./package-doors.ts); a company without a profile or a switch has every
+ * package on, so nothing it sees or calls has changed.
  *
  * Two kinds:
  *   - kernel: always present. The ledger and the platform it runs on. A
@@ -107,13 +108,15 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
       'Identity, API keys, service accounts, company discovery and creation, async operation polling, staged operations and their approval, webhooks and health: what every other module runs on.',
     dependsOn: [],
     libFolders: ['auth', 'webhooks', 'service-accounts'],
-    operationPrefixes: [],
+    // packages: a company's package switches and their status (lib/operations/packages.ts).
+    operationPrefixes: ['packages'],
     // capabilities: the per-company module report (lib/modules/capabilities.ts).
     v1Segments: [
       'health',
       'api-key',
       'companies',
       'capabilities',
+      'packages',
       'operations',
       'pending-operations',
       'webhooks',

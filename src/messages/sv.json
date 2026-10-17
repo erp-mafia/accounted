@@ -434,6 +434,7 @@
     "group_sales": "Försäljning",
     "group_tools": "AI och kopplingar",
     "security": "Säkerhet",
+    "anpassa": "Anpassa",
     "members": "Medlemmar",
     "fiscal_years": "Räkenskapsår",
     "sending": "Utskick",
@@ -452,6 +453,7 @@
     "keywords_team": "Medlemmar, Roller, Bjud in",
     "keywords_brand": "Logotyp, Varumärke, Appnamn, Domän",
     "keywords_company": "Företagsnamn, Organisationsnummer, Adress, Telefon, Webbplats, Aktiekapital, Logotyp, Bolagsverket, Arkivera företaget, Börja om",
+    "keywords_anpassa": "Paket, Slå på, Stäng av, Lön, Kundfakturor, Kassa, Webbshop, Inventarier, Utlägg, Avveckla",
     "keywords_members": "Bjud in, Roller, Inbjudan, Behörighet",
     "keywords_billing": "Plan, Pris, Provperiod, Kvitton, Betalkort, Säg upp, Stripe",
     "keywords_bookkeeping": "Regelverk, K2, K3, Bokföringsmetod, Faktureringsmetoden, Kontantmetoden, Bokföring av fakturor, Standardserie, Verifikationsserier, Periodlåsning, Periodiseringar, Dimensioner, Kostnadsställen, Projekt, Körjournal, Kundorder, Kontoplan",
@@ -1009,6 +1011,7 @@
     "preview_field": {
       "package": "Paket",
       "change": "Ändring",
+      "open_obligations": "Fortsätter tills det är klart",
       "date_range": "{from} t.o.m. {to}",
       "current_supplier_account": "Konto på leverantörskortet",
       "invoice_account": "Konto på fakturan",
@@ -14542,5 +14545,93 @@
     "invoice_unnumbered": "utan nummer",
     "more": "Visa {count} till",
     "pointer": "Flyttat från Visma? Hämta fakturornas ROT- och RUT-avdrag under <link>Importera</link>."
+  },
+  "settings_anpassa": {
+    "title": "Anpassa",
+    "intro": "Välj vilka delar av Accounted företaget använder. Det du stänger av försvinner ur menyn och ur agentens verktyg. Inget raderas: det som redan finns ligger kvar, och det som fortfarande är öppet fungerar tills det är klart. Du kan slå på allt igen här.",
+    "profile_label": "Utgångsläge",
+    "profile_help": "Profilen företaget startade med bestämmer vilka paket som är på från början. Det du väljer här gäller framför profilen.",
+    "always_on_group": "Alltid på",
+    "packages_group": "Paket",
+    "packages_help_admin": "Ett paket som stängs av medan något är öppet avvecklas: det syns kvar tills det öppna är klart, men inget nytt kan startas där.",
+    "packages_help_member": "Bara ägare och administratörer kan slå på och stänga av paket.",
+    "always_on": "Alltid på",
+    "winding_down_badge": "Avvecklas",
+    "not_in_plan_badge": "Ingår inte i abonnemanget",
+    "not_in_country_badge": "Finns inte i ditt land",
+    "winding_down_note": "Kvar att avsluta: {obligations}",
+    "switch_aria": "Slå på eller stäng av {name}",
+    "blocked_PACKAGE_NOT_IN_PLAN": "Ingår inte i abonnemanget. Uppgradera under Abonnemang för att slå på det.",
+    "blocked_PACKAGE_NOT_IN_COUNTRY": "Finns inte för företag i ditt land.",
+    "blocked_PACKAGE_NOT_FOR_LEGAL_FORM": "Ange under Skatt att företaget betalar ut lön för att slå på Lön.",
+    "off_dialog_title": "Stäng av {name}?",
+    "off_dialog_loading": "Kontrollerar vad som är öppet i {name} …",
+    "off_dialog_clean": "{name} försvinner ur menyn och ur agentens verktyg. Inget raderas, och du kan slå på det igen här.",
+    "off_dialog_winding": "Inget nytt kan startas i {name}. Det här är fortfarande öppet och fortsätter fungera tills det är klart, sedan försvinner {name} ur menyn:",
+    "off_dialog_after": "Inget raderas, och du kan slå på {name} igen här.",
+    "off_dialog_confirm": "Stäng av {name}",
+    "switched_on": "{name} är påslaget",
+    "switched_off": "{name} är avstängt",
+    "winding_down_toast": "{name} avvecklas",
+    "winding_down_toast_description": "Det som är öppet fungerar tills det är klart, sedan försvinner {name} ur menyn.",
+    "switch_failed": "Det gick inte att ändra {name}",
+    "waiting_for_admin": "Förslaget väntar i Att göra på att en ägare eller administratör godkänner det.",
+    "obligations": {
+      "active_bank_connection": "en aktiv bankkoppling",
+      "unpaid_customer_invoices": "obetalda kundfakturor",
+      "active_recurring_invoices": "aktiva återkommande fakturor",
+      "open_collection_cases": "öppna inkassoärenden",
+      "unpaid_supplier_invoices": "obetalda leverantörsfakturor",
+      "payments_in_flight": "betalningar som är på väg",
+      "unhandled_documents": "underlag som inte är hanterade",
+      "unpaid_expense_claims": "utlägg som inte är utbetalda",
+      "unbooked_mileage": "resor i körjournalen som inte är bokförda",
+      "open_salary_runs": "lönekörningar som inte är betalda och bokförda",
+      "unfiled_agi": "arbetsgivardeklarationer som inte är inlämnade",
+      "unmatched_salary_payments": "löneutbetalningar som inte är matchade mot banken",
+      "active_assets": "inventarier som fortfarande skrivs av",
+      "active_pos_connection": "ett kopplat kassasystem",
+      "unbooked_pos_days": "kassadagar som inte är bokförda",
+      "active_webshop_connection": "en kopplad webbshop",
+      "unbooked_webshop_orders": "webbshopsordrar som inte är bokförda"
+    },
+    "packages": {
+      "bookkeeping": {
+        "name": "Bokföring",
+        "description": "Verifikat, kontoplan, banktransaktioner, moms, bokslut och rapporter."
+      },
+      "bank": {
+        "name": "Bank",
+        "description": "Bankkopplingen som läser in kontohändelserna automatiskt."
+      },
+      "customer-invoices": {
+        "name": "Kundfakturor",
+        "description": "Fakturor, offerter, kundorder, återkommande fakturor, e-faktura och inkasso."
+      },
+      "supplier-invoices-and-payments": {
+        "name": "Leverantörsfakturor och betalningar",
+        "description": "Leverantörsfakturor, attest och betalningar från banken."
+      },
+      "receipts-and-documents": {
+        "name": "Kvitton och underlag",
+        "description": "Inkorgen för kvitton och underlag, och kvittojakten i mejlen."
+      },
+      "expenses": {
+        "name": "Utlägg",
+        "description": "Utlägg och körjournal, utbetalt direkt eller med lönen."
+      },
+      "payroll": {
+        "name": "Lön",
+        "description": "Lönekörningar, lönebesked, arbetsgivardeklaration och betalfil."
+      },
+      "assets": {
+        "name": "Inventarier",
+        "description": "Anläggningsregistret med avskrivningar och avyttringar."
+      },
+      "pos-and-webshop": {
+        "name": "Kassa och webbshop",
+        "description": "Kassasystem och webbshoppar, försäljningen bokförd per dag."
+      }
+    }
   }
 }

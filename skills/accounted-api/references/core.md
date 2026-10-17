@@ -2,7 +2,7 @@
 
 # Core endpoints
 
-Connectivity, the calling key's own grant, company discovery, which modules a company can use (capabilities), async-operation polling, company settings, and service accounts (an integration's own principal, with a human sponsor). Every session starts with GET /companies to resolve the companyId that all other URLs need.
+Connectivity, the calling key's own grant, company discovery, which modules a company can use (capabilities), its packages with their status and the staged switch (packages), async-operation polling, company settings, and service accounts (an integration's own principal, with a human sponsor). Every session starts with GET /companies to resolve the companyId that all other URLs need.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -350,6 +350,219 @@ Example response `200`:
   },
   "meta": {
     "request_id": "req_...",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/packages`
+
+**List the company packages with their status and what keeps a switched-off one winding down.**
+`scope:companies:read · risk:low · idempotent`
+
+Every package (Bokföring, Bank, Kundfakturor, Leverantörsfakturor och betalningar, Kvitton och underlag, Utlägg, Lön, Inventarier, Kassa och webbshop) with its availability: on, off, winding_down, not_in_plan or not_in_country. A package switched off while something is still open in it (an unbooked salary run, an unfiled AGI, an unpaid invoice) is winding_down: its pages and tools stay, no new work starts in it (start doors answer PACKAGE_OFF), and open_obligations names what keeps it there. Also the profile the company started from.
+
+**Use when:** A call answered PACKAGE_OFF, or before proposing to switch a package on or off.
+**Do not use for:** The module report and resolutions (GET /capabilities).
+
+**Pitfalls:**
+- A package outside the plan stays visible; its paid features answer at the call.
+- open_obligations is read only for packages that are switched off.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    profile: { profile_id: string, name_sv: string, source: "stored" | "implicit" },
+    packages: { package_id: string, name: string, name_sv: string, switchable: boolean, availability: "on" | "off" | "winding_down" | "not_in_plan" | "not_in_country", reasons: string[], open_obligations: { code: "active_bank_connection" | "unpaid_customer_invoices" | "active_recurring_invoices" | "open_collection_cases" | "unpaid_supplier_invoices" | "payments_in_flight" | "unhandled_documents" | "unpaid_expense_claims" | "unbooked_mileage" | "open_salary_runs" | "unfiled_agi" | "unmatched_salary_payments" | "active_assets" | "active_pos_connection" | "unbooked_pos_days" | "active_webshop_connection" | "unbooked_webshop_orders", label_sv: string, label_en: string }[], modules: { module_id: string, name_sv: string }[] }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "profile": {
+      "profile_id": "standard",
+      "name_sv": "Standard (allt på)",
+      "source": "implicit"
+    },
+    "packages": [
+      {
+        "package_id": "payroll",
+        "name": "Payroll",
+        "name_sv": "Lön",
+        "switchable": true,
+        "availability": "winding_down",
+        "reasons": [
+          "turned_off_by_company",
+          "open_obligations"
+        ],
+        "open_obligations": [
+          {
+            "code": "unfiled_agi",
+            "label_sv": "arbetsgivardeklarationer som inte är inlämnade",
+            "label_en": "employer declarations (AGI) not yet filed"
+          }
+        ],
+        "modules": [
+          {
+            "module_id": "payroll",
+            "name_sv": "Lön"
+          }
+        ]
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/packages/{packageId}/disable`
+
+**Stage switching a package off, for an owner or admin to approve.**
+`scope:companies:write · risk:low · idempotent · dry-run · reversible`
+
+Proposes switching a package off (disable_package): its start doors close (no new invoice, salary run, asset, ...), while everything still open in it keeps working. With obligations open the package winds down: it stays visible until they are settled, then disappears. The preview names those obligations. Never refused for what is open. Send it with ?stage=true.
+
+**Use when:** The user no longer uses a package (another payroll provider, no more till) and wants it out of the menu.
+**Do not use for:** Pausing one recurring invoice or disconnecting one connection: use their own endpoints.
+
+**Pitfalls:**
+- Only ?stage=true: a direct call answers PACKAGE_SWITCH_STAGE_ONLY.
+- Nothing is deleted; switching the package on again brings everything back.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `packageId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
+
+Response `200`:
+```ts
+{
+  data: {
+    package_id: string,
+    package_name: string,
+    enabled: boolean,
+    changed: boolean,
+    winding_down: boolean,
+    open_obligations: string[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "package_id": "payroll",
+    "package_name": "Lön",
+    "enabled": false,
+    "changed": true,
+    "winding_down": true,
+    "open_obligations": [
+      "unfiled_agi"
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/packages/{packageId}/enable`
+
+**Stage switching a package on, for an owner or admin to approve.**
+`scope:companies:write · risk:low · idempotent · dry-run · reversible`
+
+Proposes switching a package on (enable_package). Nothing changes until an owner or admin approves it, in Accounted or through the approve endpoint; the approval writes the choice with who decided and a dated line in behandlingshistorik. Refused when the plan, the country or the legal form does not offer the package. Send it with ?stage=true.
+
+**Use when:** A call answered PACKAGE_OFF and the user wants to start that work, or the user asks to switch a package on.
+**Do not use for:** Switching a package off (POST /packages/{packageId}/disable).
+
+**Pitfalls:**
+- Only ?stage=true: a direct call answers PACKAGE_SWITCH_STAGE_ONLY.
+- A service account's key cannot approve it: a person approves.
+- PACKAGE_NOT_FOR_LEGAL_FORM for Lön in an enskild firma that has not said it pays salaries.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `packageId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
+
+Response `200`:
+```ts
+{
+  data: {
+    package_id: string,
+    package_name: string,
+    enabled: boolean,
+    changed: boolean,
+    winding_down: boolean,
+    open_obligations: string[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "package_id": "payroll",
+    "package_name": "Lön",
+    "enabled": true,
+    "changed": true,
+    "winding_down": false,
+    "open_obligations": []
+  },
+  "meta": {
+    "request_id": "req_…",
     "api_version": "2026-05-12"
   }
 }

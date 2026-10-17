@@ -88,10 +88,10 @@ Step 3 of the design (`src/lib/suggestions`). A company's package choice is
 written only by the staged operations `enable_package` and `disable_package`,
 through `set_company_package_choice` (migration `20261016200400`): an owner
 or admin approves, the row records the source (`suggestion` or `company`),
-the approver, the credential and the operation, switching off is refused
-while `package_open_obligations` names anything ("winding down" is not built
-yet), and every change is an `audit_log` row that behandlingshistorik shows
-as a dated settings line.
+the approver, the credential and the operation, switching off is never
+refused for what is still open (the package winds down, below; migration
+`20261016230000`), and every change is an `audit_log` row that
+behandlingshistorik shows as a dated settings line.
 
 A detector is an event type (or a schedule), a condition and a proposed
 operation with a plain Swedish title and reason (`types.ts`), the shape a
@@ -148,9 +148,11 @@ Inputs: `companies.jurisdiction`, the stored profile, the plan grants and
 keys and package switches in one config query), and the payroll offer rule.
 Kernels are always on. A capability key turned off, or a country the module
 does not cover, makes dependents unavailable; a package switch and a plan or
-legal-form gate do not. `winding_down` is reserved: only a profile picked
-when a company starts out leaves a package off yet, so obligations are not
-loaded (`openObligations` is the input).
+legal-form gate do not. A package that is switched off (by the company or its
+profile) with open obligations is `winding_down` (`open_obligations` names
+them); `loadCompanyCapabilities` and the dashboard layout probe them only for
+the packages that are switched off, so a company with every package on reads
+nothing more.
 
 Readers:
 
@@ -167,6 +169,49 @@ Readers:
   unchanged, plus `profile`.
 - Every main navigation item declares its module
   (`components/dashboard/__tests__/nav-modules.test.ts`).
+
+## Winding down and the start doors
+
+"Off" closes the doors that start new work and keeps the obligations
+running (the founder's rule). Three pieces:
+
+- `obligations.ts`: one small read-only probe per obligation, per switchable
+  package: Bank (a live connection), Kundfakturor (unpaid invoices, active
+  recurring invoices, open collection cases), Leverantörsfakturor och
+  betalningar (unpaid supplier invoices, payments on their way), Kvitton och
+  underlag (unhandled underlag, the Att göra predicate), Utlägg (claims not
+  paid out, trips not booked), Lön (runs not paid and booked, an AGI not filed
+  for a recent payout month, a booked payout not matched to the bank),
+  Inventarier (assets with depreciation left to post) and Kassa och webbshop
+  (live till or webshop connections, unbooked days and orders). A failed read
+  counts as open. While any is open a switched-off package is `winding_down`:
+  the menu, tools/list and the assistant's UI map keep it, and the briefing
+  lists it under `capabilities_profile.packages_winding_down`. Once settled it
+  is `off` and disappears.
+- `package-doors.ts`: every write door of every switchable package (dashboard
+  and extension routes, v1 endpoints, operations, hand-written MCP tools and
+  the pending types they stage) classified once as `start` or `continue`. A
+  start creates a new root record (an invoice, quote, order, recurring
+  schedule, supplier invoice, salary run, expense claim, trip, asset, or a
+  bank, till, webshop or mail connection); registers, settling, correcting
+  and reading are not starts. `__tests__/package-doors.test.ts` and the MCP
+  server's own test fail on an unclassified door, a stale entry, a start no
+  gate reaches, or a continue door a start pattern would catch.
+- `package-gate.ts`: what the doors ask before a start. `withRouteContext`,
+  the extension dispatcher, `withApiV1`, the MCP dispatch and
+  `commitPendingOperation` (an approval staged before the switch) refuse a
+  start of a package that is off or winding down with `PACKAGE_OFF`, in
+  Swedish, naming the package and "Slå på <paket> under Anpassa". Two small
+  reads, only on a start door; a failed read lets the start through.
+  Unit tests model every package on (`tests/unit/setup.ts`).
+
+The switch itself: Inställningar, Företag, Anpassa (`/settings/anpassa`), and
+`packages.list`, `packages.enable` and `packages.disable` over v1
+(`/api/v1/companies/{companyId}/packages`) and MCP (`gnubok_list_packages`,
+`gnubok_enable_package`, `gnubok_disable_package`, search-only). A switch is
+always staged (`enable_package`, `disable_package`) and approved by an owner
+or admin; switching on refuses only for plan, country or legal form, and
+switching off previews what stays open.
 
 ## The rules
 

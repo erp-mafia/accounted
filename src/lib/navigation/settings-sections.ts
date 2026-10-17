@@ -78,6 +78,9 @@ export function visibleSettingsSections(scope: SettingsSectionScope): SettingsSe
     // nothing (the section would be read-only noise for them).
     section('brand', '/settings/brand', 'account', byraScope && (byraRole === 'owner' || byraRole === 'admin')),
     section('company', '/settings/company', 'company', hasCompany),
+    // Anpassa: the company's packages (Lön, Kundfakturor, ...) with their
+    // status and switch (Profiles and Suggestions, winding down and Anpassa).
+    section('anpassa', '/settings/anpassa', 'company', hasCompany),
     section('members', '/settings/members', 'company', hasCompany),
     section('billing', '/settings/billing', 'company', !byraScope),
     section('bookkeeping', '/settings/bookkeeping', 'accounting', hasCompany),

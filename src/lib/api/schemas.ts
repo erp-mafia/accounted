@@ -5595,3 +5595,14 @@ export const PartyAliasActionSchema = z
   })
   .refine((v) => v.action !== 'rename' || !!v.name, { message: 'name is required for rename', path: ['name'] })
 
+
+/**
+ * POST /api/packages/:packageId (the Anpassa page): switch a package on or
+ * off. dry_run answers what the switch means (for switching off: what keeps
+ * the package winding down) and stages nothing; otherwise the switch is
+ * staged and the page approves it through /api/pending-operations/:id/commit.
+ */
+export const PackageSwitchBodySchema = z.object({
+  enabled: z.boolean(),
+  dry_run: z.boolean().optional(),
+})

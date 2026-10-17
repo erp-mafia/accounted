@@ -1,0 +1,1 @@
+[2026-10-16] Registers (customers, suppliers, articles, employees) and inbox uploads are not start doors: Utlägg needs employees without Lön and uploads carry the underlag BFL requires. A start creates a new invoice, quote, order, run, claim, trip, asset or connection.

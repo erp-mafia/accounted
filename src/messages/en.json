@@ -434,6 +434,7 @@
     "group_sales": "Sales",
     "group_tools": "AI and connections",
     "security": "Security",
+    "anpassa": "Customize",
     "members": "Members",
     "fiscal_years": "Fiscal years",
     "sending": "Sending",
@@ -452,6 +453,7 @@
     "keywords_team": "Members, Roles, Invite",
     "keywords_brand": "Logo, Brand, App name, Domain",
     "keywords_company": "Company name, Organisation number, Address, Phone, Website, Share capital, Logo, Bolagsverket, Archive company, Start over",
+    "keywords_anpassa": "Packages, Switch on, Switch off, Payroll, Invoices, Point of sale, Webshop, Fixed assets, Expenses, Wind down",
     "keywords_members": "Invite, Roles, Invitation, Access",
     "keywords_billing": "Plan, Price, Trial, Receipts, Card, Cancel, Stripe",
     "keywords_bookkeeping": "Framework, K2, K3, Accounting method, Accrual, Cash method, Invoice booking, Default series, Voucher series, Period locking, Accruals, Dimensions, Cost centres, Projects, Mileage log, Sales orders, Chart of accounts",
@@ -1009,6 +1011,7 @@
     "preview_field": {
       "package": "Package",
       "change": "Change",
+      "open_obligations": "Keeps running until settled",
       "date_range": "{from} through {to}",
       "current_supplier_account": "Account on the supplier card",
       "invoice_account": "Account on the invoice",
@@ -14542,5 +14545,93 @@
     "invoice_unnumbered": "no number",
     "more": "Show {count} more",
     "pointer": "Moved from Visma? Fetch the invoices' ROT and RUT deductions under <link>Import</link>."
+  },
+  "settings_anpassa": {
+    "title": "Customize",
+    "intro": "Choose which parts of Accounted the company uses. What you switch off leaves the menu and the agent's tools. Nothing is deleted: what exists stays, and anything still open keeps working until it is done. You can switch everything back on here.",
+    "profile_label": "Starting point",
+    "profile_help": "The profile the company started with decides which packages are on from the start. What you choose here takes precedence over the profile.",
+    "always_on_group": "Always on",
+    "packages_group": "Packages",
+    "packages_help_admin": "A package switched off while something is open winds down: it stays visible until the open work is done, but nothing new can start in it.",
+    "packages_help_member": "Only owners and admins can switch packages on and off.",
+    "always_on": "Always on",
+    "winding_down_badge": "Winding down",
+    "not_in_plan_badge": "Not in your plan",
+    "not_in_country_badge": "Not offered in your country",
+    "winding_down_note": "Left to finish: {obligations}",
+    "switch_aria": "Switch {name} on or off",
+    "blocked_PACKAGE_NOT_IN_PLAN": "Not included in your plan. Upgrade under Billing to switch it on.",
+    "blocked_PACKAGE_NOT_IN_COUNTRY": "Not offered for companies in your country.",
+    "blocked_PACKAGE_NOT_FOR_LEGAL_FORM": "Set under Tax that the company pays salaries to switch on Payroll.",
+    "off_dialog_title": "Switch off {name}?",
+    "off_dialog_loading": "Checking what is open in {name} …",
+    "off_dialog_clean": "{name} leaves the menu and the agent's tools. Nothing is deleted, and you can switch it back on here.",
+    "off_dialog_winding": "Nothing new can start in {name}. This is still open and keeps working until it is done, then {name} leaves the menu:",
+    "off_dialog_after": "Nothing is deleted, and you can switch {name} back on here.",
+    "off_dialog_confirm": "Switch off {name}",
+    "switched_on": "{name} is switched on",
+    "switched_off": "{name} is switched off",
+    "winding_down_toast": "{name} is winding down",
+    "winding_down_toast_description": "What is open keeps working until it is done, then {name} leaves the menu.",
+    "switch_failed": "Could not change {name}",
+    "waiting_for_admin": "The proposal waits in To do for an owner or admin to approve it.",
+    "obligations": {
+      "active_bank_connection": "an active bank connection",
+      "unpaid_customer_invoices": "unpaid customer invoices",
+      "active_recurring_invoices": "active recurring invoices",
+      "open_collection_cases": "open collection cases",
+      "unpaid_supplier_invoices": "unpaid supplier invoices",
+      "payments_in_flight": "payments on their way",
+      "unhandled_documents": "documents not yet handled",
+      "unpaid_expense_claims": "expense claims not yet paid out",
+      "unbooked_mileage": "mileage trips not yet booked",
+      "open_salary_runs": "salary runs not yet paid and booked",
+      "unfiled_agi": "employer declarations (AGI) not yet filed",
+      "unmatched_salary_payments": "salary payouts not yet matched to the bank",
+      "active_assets": "fixed assets still being depreciated",
+      "active_pos_connection": "a connected point-of-sale system",
+      "unbooked_pos_days": "point-of-sale days not yet booked",
+      "active_webshop_connection": "a connected webshop",
+      "unbooked_webshop_orders": "webshop orders not yet booked"
+    },
+    "packages": {
+      "bookkeeping": {
+        "name": "Bookkeeping",
+        "description": "Vouchers, chart of accounts, bank transactions, VAT, year-end and reports."
+      },
+      "bank": {
+        "name": "Bank",
+        "description": "The bank connection that reads account activity in automatically."
+      },
+      "customer-invoices": {
+        "name": "Customer invoices",
+        "description": "Invoices, quotes, sales orders, recurring invoices, e-invoicing and collections."
+      },
+      "supplier-invoices-and-payments": {
+        "name": "Supplier invoices and payments",
+        "description": "Supplier invoices, attest and payments from the bank."
+      },
+      "receipts-and-documents": {
+        "name": "Receipts and documents",
+        "description": "The inbox for receipts and documents, and the receipt hunt in your email."
+      },
+      "expenses": {
+        "name": "Expenses",
+        "description": "Expense claims and mileage, paid out directly or with the salary."
+      },
+      "payroll": {
+        "name": "Payroll",
+        "description": "Salary runs, payslips, employer declarations and payment files."
+      },
+      "assets": {
+        "name": "Fixed assets",
+        "description": "The fixed asset register with depreciation and disposals."
+      },
+      "pos-and-webshop": {
+        "name": "Point of sale and webshop",
+        "description": "Tills and webshops, sales booked per day."
+      }
+    }
   }
 }

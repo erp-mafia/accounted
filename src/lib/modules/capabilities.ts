@@ -46,13 +46,15 @@ import {
   type PackageDefinition,
   type PackageId,
 } from './packages'
+import { readStoredProfile } from './stored-profile'
 import {
+  packageSwitchedOff,
   resolveStoredProfile,
   type ProfileDefinition,
   type ProfileId,
   type StoredProfile,
-  type SwitchablePackageId,
 } from './profiles'
+import { loadOpenObligations } from './obligations'
 import { getModule, modulesInDependencyOrder } from './resolve'
 
 export const CAPABILITY_STATUSES = ['active', 'off', 'needs_plan', 'unsupported'] as const
@@ -78,11 +80,9 @@ export type CapabilityReason = (typeof CAPABILITY_REASONS)[number]
  *     not offered for the legal form, turned off by the company, or needing
  *     a module that is turned off.
  *   - winding_down: switched off while obligations are still open (a salary
- *     payment in flight, an open invoice): no new work starts, the open work
- *     stays reachable until it is settled. Reserved: only a profile can
- *     leave a package off yet, picked when a company starts out, so the
- *     obligations are not loaded; the step that lets a package be turned off
- *     later loads them (CapabilityInputs.openObligations).
+ *     run not booked, an open invoice; ./obligations.ts): no new work
+ *     starts (./package-doors.ts refuses the start doors), the open work
+ *     stays reachable until it is settled, then the package is off.
  *   - not_in_plan: the paid plan does not include it.
  *   - not_in_country: the company's country does not have it.
  */
@@ -160,6 +160,13 @@ export interface PackageCapability {
   availability: AvailabilityStatus
   /** Every reason that applies, in PACKAGE_REASONS order; empty when on. */
   reasons: PackageReason[]
+  /**
+   * The open obligations (./obligations.ts) that keep a switched-off package
+   * winding down, in PACKAGE_OBLIGATIONS order. Probed only for a package
+   * that is switched off; empty for every other package and whenever the
+   * obligations were not loaded.
+   */
+  open_obligations: string[]
 }
 
 export interface CompanyCapabilities {
@@ -207,12 +214,12 @@ export interface CapabilityInputs {
    */
   packageChoices?: Partial<Record<PackageId, boolean>>
   /**
-   * Packages with open obligations: a switched-off package among them is
-   * winding_down instead of off. Not loaded yet (only a profile picked at the
-   * start leaves a package off); the step that lets a package be turned off
-   * later loads it.
+   * The open obligations per package (./obligations.ts, loadOpenObligations):
+   * a switched-off package with any is winding_down instead of off. Loaded
+   * only for the packages that are switched off; absent means not loaded,
+   * and a package without an entry is off.
    */
-  openObligations?: ReadonlySet<PackageId>
+  openObligations?: Partial<Record<PackageId, readonly string[]>>
 }
 
 /**
@@ -303,14 +310,12 @@ function resolvePackage(
   const reasons: PackageReason[] = []
   const mods = pkg.modules.map((id) => getModule(id))
   if (!mods.some((m) => m.kind === 'kernel' || inCountry(m, input.jurisdiction))) reasons.push('unsupported_country')
-  if (pkg.switchable) {
-    const choice = input.packageChoices?.[pkg.id]
-    if (choice === false) reasons.push('turned_off_by_company')
-    else if (choice === undefined && profile.packages[pkg.id as SwitchablePackageId] === 'off') {
-      reasons.push('off_in_profile')
-    }
-    const off = reasons.includes('turned_off_by_company') || reasons.includes('off_in_profile')
-    if (off && input.openObligations?.has(pkg.id)) reasons.push('open_obligations')
+  let openObligations: string[] = []
+  const switchedOff = packageSwitchedOff(pkg, profile, input.packageChoices?.[pkg.id])
+  if (switchedOff) {
+    reasons.push(switchedOff)
+    openObligations = [...(input.openObligations?.[pkg.id] ?? [])]
+    if (openObligations.length > 0) reasons.push('open_obligations')
   }
   if (mods.every((m) => m.capability !== undefined && !input.entitled.has(m.capability))) reasons.push('needs_plan')
 
@@ -328,7 +333,15 @@ function resolvePackage(
     modules: [...pkg.modules],
     availability,
     reasons,
+    open_obligations: openObligations,
   }
+}
+
+/** The packages that are switched off (by the company or its profile), winding down or not. */
+export function switchedOffPackageIds(capabilities: CompanyCapabilities): PackageId[] {
+  return capabilities.packages
+    .filter((p) => p.reasons.includes('turned_off_by_company') || p.reasons.includes('off_in_profile'))
+    .map((p) => p.id)
 }
 
 /**
@@ -599,41 +612,39 @@ export function capabilitySurfaceWithoutCompany(entityType: unknown): Capability
   )
 }
 
-/**
- * A company's stored profile (companies.profile_id and profile_version), in
- * a read of its own beside the company row. Null when none is stored and
- * when the read fails: a failed read, or a deploy that reaches a database
- * without the columns yet, then resolves to Standard (every package on)
- * instead of failing the menu or the report. A reader never hides on a
- * guess. The company row reads stay as they were, so the columns are never
- * on a path that a missing column would break.
- */
-export async function readStoredProfile(supabase: SupabaseClient, companyId: string): Promise<StoredProfile | null> {
-  try {
-    const { data, error } = await supabase
-      .from('companies')
-      .select('profile_id, profile_version')
-      .eq('id', companyId)
-      .maybeSingle()
-    if (error || !data) return null
-    const row = data as { profile_id?: string | null; profile_version?: number | null }
-    return row.profile_id ? { id: row.profile_id, version: row.profile_version ?? null } : null
-  } catch {
-    return null
-  }
+export { readStoredProfile } from './stored-profile'
+
+export interface LoadCapabilitiesOptions {
+  /**
+   * Probe the open obligations of the packages that are switched off, so a
+   * package with open work resolves to winding_down instead of off (default
+   * true). A second wave of small reads that runs only when a package is
+   * switched off: a company with every package on reads nothing more.
+   */
+  obligations?: boolean
+  /**
+   * Where the obligations come from, for a caller that shares one probe per
+   * request between readers (the dashboard's request cache). Defaults to
+   * loadOpenObligations on the same client.
+   */
+  loadObligations?: ObligationsLoader
 }
+
+/** Loads the open obligations of the given packages. */
+export type ObligationsLoader = (packageIds: PackageId[]) => Promise<Partial<Record<PackageId, readonly string[]>>>
 
 /**
  * Load one company's inputs and resolve them: the company row, its stored
  * profile, its settings row, the grants and the capability config
  * (capability keys and package switches in one query), all in one parallel
- * wave. Null when the company
- * row does not exist. A failed read throws: the report would otherwise state
- * a reason that is not true.
+ * wave, then the open obligations of any package that is switched off.
+ * Null when the company row does not exist. A failed read throws: the
+ * report would otherwise state a reason that is not true.
  */
 export async function loadCompanyCapabilities(
   supabase: SupabaseClient,
   companyId: string,
+  options: LoadCapabilitiesOptions = {},
 ): Promise<CompanyCapabilities | null> {
   const [companyRes, settingsRes, axes, profile] = await Promise.all([
     supabase.from('companies').select('jurisdiction, ledger_currency, entity_type').eq('id', companyId).maybeSingle(),
@@ -647,7 +658,7 @@ export async function loadCompanyCapabilities(
   if (!company) return null
   const settings = settingsRes.data as { entity_type: string | null; pays_salaries: boolean | null } | null
 
-  return resolveCapabilities({
+  const inputs: CapabilityInputs = {
     jurisdiction: company.jurisdiction,
     ledgerCurrency: company.ledger_currency,
     // Same resolution as the dashboard layout: settings first, the canonical row when missing.
@@ -658,5 +669,27 @@ export async function loadCompanyCapabilities(
     selfHosted: isSelfHosted(),
     profile,
     packageChoices: packageChoicesFrom(axes.disabledConfigKeys, axes.enabledConfigKeys),
-  })
+  }
+  const resolved = resolveCapabilities(inputs)
+  return options.obligations === false
+    ? resolved
+    : withOpenObligations(supabase, companyId, inputs, resolved, options.loadObligations)
+}
+
+/**
+ * Resolve again with the open obligations of the packages `resolved` has
+ * switched off, so those with open work read winding_down. Returns
+ * `resolved` itself, without a read, when no package is switched off.
+ */
+export async function withOpenObligations(
+  supabase: SupabaseClient,
+  companyId: string,
+  inputs: CapabilityInputs,
+  resolved: CompanyCapabilities,
+  loadObligations?: ObligationsLoader,
+): Promise<CompanyCapabilities> {
+  const off = switchedOffPackageIds(resolved)
+  if (off.length === 0) return resolved
+  const openObligations = loadObligations ? await loadObligations(off) : await loadOpenObligations(supabase, companyId, off)
+  return resolveCapabilities({ ...inputs, openObligations })
 }

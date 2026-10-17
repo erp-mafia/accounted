@@ -42,6 +42,8 @@ describe('switchCompanyPackage', () => {
         changed: true,
         capability_config_id: 'cfg-1',
         decided_at: '2026-10-16T10:00:00Z',
+        winding_down: false,
+        open_obligations: [],
       },
     })
     expect(mock.findCall('rpc:set_company_package_choice', 'rpc')).toEqual([
@@ -64,7 +66,24 @@ describe('switchCompanyPackage', () => {
     expect((mock.findCall('rpc:set_company_package_choice', 'rpc')?.[0] as Record<string, unknown>).p_source).toBe('company')
   })
 
-  it('refuses with the obligations named, in Swedish', async () => {
+  it('switches off with obligations still open and answers that the package winds down', async () => {
+    const mock = createTableMockSupabase({
+      'rpc:set_company_package_choice': { data: { ok: true, unchanged: false, capability_config_id: 'cfg-2' } },
+      salary_runs: { data: [{ id: 'run-1' }] },
+    })
+    const result = await switchCompanyPackage(mock.supabase as never, {
+      companyId: COMPANY,
+      userId: USER,
+      pendingOperationId: OP,
+      enabled: false,
+      params: { package_id: 'payroll', source: 'company' },
+      actor: { type: 'user' },
+    })
+    expect(result).toMatchObject({ ok: true, data: { enabled: false, changed: true, winding_down: true } })
+    expect(result.ok && result.data.open_obligations).toContain('open_salary_runs')
+  })
+
+  it('refuses with the obligations named, in Swedish, when the database still refuses (before the migration)', async () => {
     const { result } = run(
       { data: { ok: false, code: 'PACKAGE_HAS_OPEN_OBLIGATIONS', obligations: ['active_employees', 'open_salary_runs'] } },
       { enabled: false },

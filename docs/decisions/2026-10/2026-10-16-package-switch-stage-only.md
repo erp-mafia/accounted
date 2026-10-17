@@ -1,0 +1,1 @@
+[2026-10-16] packages.enable and packages.disable are stage-only over v1 and MCP (PACKAGE_SWITCH_STAGE_ONLY on a direct call): an agent proposes a switch, an owner or admin approves it, as the design says.

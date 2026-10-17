@@ -7,8 +7,8 @@ import { insertAuthUser, insertCompanyMember, seedCompany } from './fixtures'
  * A company's package choice and who decided it (migration 20261016200400):
  * set_company_package_choice writes the company_capability_config row
  * `package:<id>` with source, approver and credential, refuses a member who
- * is not an owner or admin, refuses to switch a package off while
- * package_open_obligations names anything, writes the audit_log row
+ * is not an owner or admin, switches a package off whatever is still open
+ * in it (it winds down: 20261016230000), writes the audit_log row
  * behandlingshistorik reads, and writes nothing for a choice equal to the
  * stored one. package_usage answers every switchable package in one call.
  */
@@ -145,20 +145,18 @@ describe('set_company_package_choice', () => {
     expect(await setChoice({ companyId, packageId: 'expenses', enabled: true, decidedBy: adminId })).toMatchObject({ ok: true })
   })
 
-  it('refuses to switch a package off while it has open obligations, and switches it off once they are settled', async () => {
+  it('switches a package off while something is still open in it (it winds down), and back on', async () => {
     const employeeId = randomUUID()
     await getPool().query(
       `INSERT INTO public.employees (id, company_id, user_id, first_name, last_name, personnummer, personnummer_last4, employment_start)
        VALUES ($1, $2, $3, 'Anna', 'Andersson', 'sealed', '1234', '2026-01-01')`,
       [employeeId, companyId, ownerId],
     )
-    const refused = await setChoice({ companyId, packageId: 'payroll', enabled: false, decidedBy: ownerId })
-    expect(refused).toEqual({ ok: false, code: 'PACKAGE_HAS_OPEN_OBLIGATIONS', obligations: ['active_employees'] })
-    expect(await choiceRow(companyId, 'payroll')).toBeNull()
-
-    await getPool().query(`UPDATE public.employees SET is_active = false WHERE id = $1`, [employeeId])
+    // An active employee is something package_open_obligations names; it no
+    // longer stops the switch.
     const off = await setChoice({ companyId, packageId: 'payroll', enabled: false, decidedBy: ownerId, source: 'company' })
     expect(off).toMatchObject({ ok: true, enabled: false })
+    expect(off.code).toBeUndefined()
     expect(await choiceRow(companyId, 'payroll')).toMatchObject({ enabled: false, source: 'company' })
 
     const on = await setChoice({ companyId, packageId: 'payroll', enabled: true, decidedBy: ownerId })

@@ -10,6 +10,7 @@ describe('visibleSettingsSections', () => {
       'account',
       'security',
       'company',
+      'anpassa',
       'members',
       'billing',
       'bookkeeping',

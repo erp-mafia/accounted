@@ -51,11 +51,14 @@ function connect(opts: {
   reach?: 'one' | 'two'
   failCapabilities?: boolean
   profile?: { profile_id: string; profile_version: number }
+  /** A salary run not yet paid and booked: Lön's obligation probe finds it. */
+  openSalaryRun?: boolean
 }) {
   const tables: Record<string, unknown> = representativeCompanyTables({
     ...COMPANY,
     disabledConfigKeys: (opts.switchedOff ?? []).map((id) => `package:${id}`),
   })
+  if (opts.openSalaryRun) tables.salary_runs = { data: [{ id: 'run-1' }] }
   if (opts.profile) {
     // The stored profile answers its own read; every other companies read gets the row.
     const row = (tables.companies as { data: unknown }).data
@@ -118,6 +121,11 @@ describe('tools/list reads the resolved capabilities', () => {
     expect(names.filter((n) => PAYROLL_LISTED.includes(n))).toEqual([])
     expect(names).toContain('gnubok_list_invoices')
     expect(names).toContain('gnubok_list_supplier_invoices')
+  })
+
+  it('keeps listing the tools of a package that winds down: its open work must be reachable', async () => {
+    connect({ switchedOff: ['payroll'], openSalaryRun: true })
+    expect(await listed()).toEqual(expect.arrayContaining(PAYROLL_LISTED))
   })
 
   it('lists every package on a connection that reaches several companies', async () => {
@@ -191,6 +199,30 @@ describe('the briefing reads the same package view', () => {
       source: 'stored',
       packages_off: ['payroll', 'assets', 'pos-and-webshop'],
     })
+  })
+
+  it('names a package that winds down with what keeps it visible, and nothing for a company where none does', async () => {
+    const run = async () =>
+      (await briefing().execute(
+        { __keyScopes: ALL_SCOPES, __simpleCompanyMode: true },
+        COMPANY.id,
+        'user-1',
+        mocks.supabase as never,
+        { type: 'api_key', label: 'Packages key' },
+      )) as { capabilities_profile?: Record<string, unknown> }
+    connect({ switchedOff: ['payroll'], openSalaryRun: true })
+    const winding = (await run()).capabilities_profile!
+    expect(winding.packages_off).toEqual([])
+    expect(winding.packages_winding_down).toEqual([
+      expect.objectContaining({
+        package_id: 'payroll',
+        name_sv: 'Lön',
+        open_obligations: expect.arrayContaining(['open_salary_runs']),
+      }),
+    ])
+
+    connect({})
+    expect((await run()).capabilities_profile).not.toHaveProperty('packages_winding_down')
   })
 
   it('stops calling a payroll tool listed once Lön is switched off', async () => {

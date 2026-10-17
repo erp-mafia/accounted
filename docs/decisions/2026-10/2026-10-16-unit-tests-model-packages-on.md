@@ -1,0 +1,1 @@
+[2026-10-16] tests/unit/setup.ts stubs the package start gate's read as every package on, like lib/init: existing route tests with queued Supabase mocks stay as they are; the real read is tested with vi.importActual and against real Postgres.

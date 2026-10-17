@@ -13,6 +13,9 @@ import { requiredCapabilityForExtensionId } from '@/lib/extensions/sectors'
 import { createLogger } from '@/lib/logger'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import type { ApiRouteDefinition } from '@/lib/extensions/types'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { startPackageForKey } from '@/lib/modules/package-doors'
+import { packageStartRefusal } from '@/lib/modules/package-gate'
 
 const dispatcherLog = createLogger('extension-dispatcher')
 
@@ -302,6 +305,26 @@ async function handleRequest(
     if (blocked) {
       log.info('extension call blocked: capability required', { capability: requiredCapability })
       return decorateResponse(blocked, requestId)
+    }
+  }
+
+  // A route that starts new work in a package (a new webshop, till, bank or
+  // mail connection; lib/modules/package-doors.ts) refuses while the company
+  // has that package switched off or winding down, as withRouteContext does.
+  const startPackage = startPackageForKey(`${method} /api/extensions/ext/${extensionId}${route.path}`)
+  if (startPackage) {
+    const refusal = await packageStartRefusal(supabase, companyId, startPackage)
+    if (refusal) {
+      log.info('extension call blocked: package off', { packageId: refusal.packageId })
+      return decorateResponse(
+        errorResponseFromCode(refusal.code, log, {
+          requestId,
+          messageSv: refusal.messageSv,
+          messageEn: refusal.messageEn,
+          details: refusal.details,
+        }),
+        requestId,
+      )
     }
   }
 

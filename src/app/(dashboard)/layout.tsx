@@ -33,6 +33,7 @@ import {
   capabilitySurfaceWithoutCompany,
   readStoredProfile,
   resolveCapabilities,
+  switchedOffPackageIds,
 } from '@/lib/modules/capabilities'
 import { getAiStatus } from '@/lib/ai'
 import { getDashboardNavFlags } from '@/lib/dashboard/nav-flags'
@@ -58,6 +59,7 @@ import {
   getDashboardTeamMemberships,
   getDashboardUserProfile,
   getResolvedDashboardAgentProfile,
+  getDashboardOpenObligations,
 } from './request-context'
 
 /**
@@ -456,21 +458,29 @@ export default async function DashboardLayout({
   }
   // The resolved capabilities the menu reads (lib/modules/capabilities.ts),
   // from the company row and the entitlements read above: no read of its own.
-  const navCapabilitySurface = capabilitySurface(
-    resolveCapabilities(
-      capabilityInputsFromEntitlements(
-        {
-          jurisdiction: companyRow.jurisdiction,
-          ledgerCurrency: companyRow.ledger_currency,
-          entityType,
-          paysSalaries,
-          profileId: storedProfile?.id,
-          profileVersion: storedProfile?.version,
-        },
-        entitlements,
-      ),
-    ),
+  // A package switched off with obligations still open winds down and keeps
+  // its menu row: the probes run only when a package is switched off, so a
+  // company with every package on reads nothing more.
+  const navInputs = capabilityInputsFromEntitlements(
+    {
+      jurisdiction: companyRow.jurisdiction,
+      ledgerCurrency: companyRow.ledger_currency,
+      entityType,
+      paysSalaries,
+      profileId: storedProfile?.id,
+      profileVersion: storedProfile?.version,
+    },
+    entitlements,
   )
+  let navCapabilities = resolveCapabilities(navInputs)
+  const switchedOff = switchedOffPackageIds(navCapabilities)
+  if (switchedOff.length > 0) {
+    navCapabilities = resolveCapabilities({
+      ...navInputs,
+      openObligations: await getDashboardOpenObligations(switchedOff.join(',')),
+    })
+  }
+  const navCapabilitySurface = capabilitySurface(navCapabilities)
 
   const isSandbox = settings?.is_sandbox === true
 

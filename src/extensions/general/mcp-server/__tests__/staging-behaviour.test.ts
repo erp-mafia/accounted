@@ -623,6 +623,23 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
       api_keys: { name: 'Nattlig synk', key_prefix: 'gnubok_sk_Xb3k', scopes: ['invoices:read'], mode: 'live', revoked_at: null, service_account_id: SOME_UUID },
     },
   },
+  // Package switches (lib/operations/packages.ts): a Swedish aktiebolag; the
+  // preview reads the capabilities (switching off also probes what is still
+  // open) and writes nothing.
+  gnubok_enable_package: {
+    args: { package_id: 'assets' },
+    rows: {
+      companies: { jurisdiction: 'SE', ledger_currency: 'SEK', entity_type: 'aktiebolag' },
+      company_settings: { entity_type: 'aktiebolag', pays_salaries: true },
+    },
+  },
+  gnubok_disable_package: {
+    args: { package_id: 'assets' },
+    rows: {
+      companies: { jurisdiction: 'SE', ledger_currency: 'SEK', entity_type: 'aktiebolag' },
+      company_settings: { entity_type: 'aktiebolag', pays_salaries: true },
+    },
+  },
   // Makulera a quote (accounted#20): a sent quote; the preview reads it and writes nothing.
   gnubok_cancel_quote_or_proforma: {
     rows: { invoices: { document_type: 'quote', status: 'sent', quote_status: 'open', invoice_number: 'OF-007' } },
