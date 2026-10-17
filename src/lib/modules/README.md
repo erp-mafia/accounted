@@ -372,3 +372,19 @@ event linked to every storno, and the semesterårsavslut's adjustment
 Payroll has no SQL posting function, so nothing waits on an event id; their
 proof is `tests/pg/posting-parity-payroll.pg.test.ts` and the producers'
 `*.engine-input.test.ts`.
+
+Step 2d moves supplier invoice registration, booking and crediting. The two
+generators every door shares post through `postJournalEntry`:
+`createSupplierInvoiceRegistrationEntry` (the registration, the deferred
+Bokför step, the inbox conversion and its staged approval) records
+`purchase.registered`, one per invoice through its idempotency key, and
+`createSupplierCreditNoteEntry` records `purchase.credited` with the credit
+note as subject; each door hands down its link basis and inbox item. The
+stornos the doors make of their own verifikat (a registration whose invoice
+link failed, a credit taken back after a failed link or a lost race, and
+Ångra kreditering) go through `reverseJournalEntry` as `ledger.storno`.
+`link_supplier_invoice_to_voucher` waits for an event id, like the other SQL
+posting functions, and the supplier payments (mark-paid, bank match, voucher
+matching) and the inbox book-direct follow in their own merge request; their
+proof is `tests/pg/posting-parity-supplier-invoices.pg.test.ts` and the
+producers' `*.engine-input.test.ts`.

@@ -447,6 +447,9 @@ export async function convertInboxItemToSupplierInvoice(
         items as SupplierInvoiceItem[],
         supplier.supplier_type,
         supplier.name,
+        // The posting port's event, while POSTING_EVENTS is on: registered
+        // from this inbox item by the person (or the approved operation).
+        () => ({ linkBasis: linkBasisColumns('user_created'), inboxItemId }),
       )
       if (journalEntry) {
         registrationJournalEntryId = journalEntry.id

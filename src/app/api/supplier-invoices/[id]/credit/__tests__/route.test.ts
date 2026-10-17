@@ -191,6 +191,7 @@ describe('POST /api/supplier-invoices/[id]/credit', () => {
       'swedish_business',
       'Leverantör AB',
       1250, // the original's payable, which the reversal must match
+      expect.any(Function), // what the door saw, read by the posting port only while POSTING_EVENTS is on
     )
   })
 

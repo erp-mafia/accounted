@@ -290,6 +290,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/book', () => {
       expect.any(Array),
       'swedish_business',
       'Leverantören AB',
+      expect.any(Function), // what the door saw, read by the posting port only while POSTING_EVENTS is on
     )
     expect(client.calls).toContainEqual({ table: 'supplier_invoices', method: 'is', args: ['registration_journal_entry_id', null] })
     expect(anchorMock).toHaveBeenCalledWith(client, COMPANY_ID, SI_ID)

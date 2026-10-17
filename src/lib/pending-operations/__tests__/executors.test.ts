@@ -1210,6 +1210,7 @@ describe('commitPendingOperation: credit_supplier_invoice', () => {
       'swedish_business',
       'Office Depot AB',
       original.total, // the original's payable, which the reversal must match
+      expect.any(Function), // what the door saw, read by the posting port only while POSTING_EVENTS is on
     )
   })
 

@@ -1,0 +1,398 @@
+[
+  {
+    "name": "registration: domestic at 25 % with an underlag and invoice dimensions",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-01",
+          "description": "Leverantörsfaktura F-2000, Kontorsbolaget AB (ankomstnr 40)",
+          "source_type": "supplier_invoice_registered",
+          "source_id": "00000000-0000-4000-8000-000000000001",
+          "lines": [
+            {
+              "account_number": "5410",
+              "debit_amount": 1000,
+              "credit_amount": 0,
+              "line_description": "Leverantörsfaktura F-2000, Kontorsbolaget AB (ankomstnr 40)",
+              "dimensions": {
+                "6": "P100"
+              }
+            },
+            {
+              "account_number": "6110",
+              "debit_amount": 200,
+              "credit_amount": 0,
+              "line_description": "Leverantörsfaktura F-2000, Kontorsbolaget AB (ankomstnr 40)",
+              "dimensions": {
+                "6": "P100"
+              }
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 300,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25% Leverantörsfaktura F-2000, Kontorsbolaget AB (ankomstnr 40)",
+              "dimensions": {
+                "6": "P100"
+              }
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Leverantörsfaktura F-2000, Kontorsbolaget AB (ankomstnr 40)",
+              "dimensions": {
+                "6": "P100"
+              }
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-0"
+    }
+  },
+  {
+    "name": "registration: mixed rates 25 % and 12 %",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-01",
+          "description": "Leverantörsfaktura F-2001, Konferensgården AB (ankomstnr 41)",
+          "source_type": "supplier_invoice_registered",
+          "source_id": "00000000-0000-4000-8000-000000000002",
+          "lines": [
+            {
+              "account_number": "5810",
+              "debit_amount": 1000,
+              "credit_amount": 0,
+              "line_description": "Leverantörsfaktura F-2001, Konferensgården AB (ankomstnr 41)"
+            },
+            {
+              "account_number": "5831",
+              "debit_amount": 300,
+              "credit_amount": 0,
+              "line_description": "Leverantörsfaktura F-2001, Konferensgården AB (ankomstnr 41)"
+            },
+            {
+              "account_number": "6110",
+              "debit_amount": 200,
+              "credit_amount": 0,
+              "line_description": "Leverantörsfaktura F-2001, Konferensgården AB (ankomstnr 41)"
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 250,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25% Leverantörsfaktura F-2001, Konferensgården AB (ankomstnr 41)"
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 36,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 12% Leverantörsfaktura F-2001, Konferensgården AB (ankomstnr 41)"
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 1786,
+              "line_description": "Leverantörsfaktura F-2001, Konferensgården AB (ankomstnr 41)"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-1"
+    }
+  },
+  {
+    "name": "registration: EU supplier in EUR under reverse charge",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-01",
+          "description": "Leverantörsfaktura F-2002, Hosting GmbH (ankomstnr 42)",
+          "source_type": "supplier_invoice_registered",
+          "source_id": "00000000-0000-4000-8000-000000000003",
+          "lines": [
+            {
+              "account_number": "6540",
+              "debit_amount": 1725,
+              "credit_amount": 0,
+              "line_description": "Leverantörsfaktura F-2002, Hosting GmbH (ankomstnr 42)"
+            },
+            {
+              "account_number": "6550",
+              "debit_amount": 575,
+              "credit_amount": 0,
+              "line_description": "Leverantörsfaktura F-2002, Hosting GmbH (ankomstnr 42)"
+            },
+            {
+              "account_number": "2645",
+              "debit_amount": 575,
+              "credit_amount": 0,
+              "line_description": "Fiktiv ingående moms 25% (omvänd skattskyldighet)"
+            },
+            {
+              "account_number": "2614",
+              "debit_amount": 0,
+              "credit_amount": 575,
+              "line_description": "Fiktiv utgående moms 25% (omvänd skattskyldighet)"
+            },
+            {
+              "account_number": "4535",
+              "debit_amount": 2300,
+              "credit_amount": 0,
+              "line_description": "Inköp tjänster annat EU-land 25% (basbelopp omvänd skattskyldighet)"
+            },
+            {
+              "account_number": "4598",
+              "debit_amount": 0,
+              "credit_amount": 2300,
+              "line_description": "Motkonto beräknad omvänd moms 25%"
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 2300,
+              "line_description": "Leverantörsfaktura F-2002, Hosting GmbH (ankomstnr 42)",
+              "currency": "EUR",
+              "amount_in_currency": 200,
+              "exchange_rate": 11.5
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-2"
+    }
+  },
+  {
+    "name": "registration: särskild löneskatt on a pension premium",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-01",
+          "description": "Leverantörsfaktura F-2003, Pensionsbolaget AB (ankomstnr 43)",
+          "source_type": "supplier_invoice_registered",
+          "source_id": "00000000-0000-4000-8000-000000000004",
+          "lines": [
+            {
+              "account_number": "7412",
+              "debit_amount": 5000,
+              "credit_amount": 0,
+              "line_description": "Leverantörsfaktura F-2003, Pensionsbolaget AB (ankomstnr 43)"
+            },
+            {
+              "account_number": "7533",
+              "debit_amount": 1213,
+              "credit_amount": 0,
+              "line_description": "Särskild löneskatt på pensionskostnader (24,26 %)"
+            },
+            {
+              "account_number": "2514",
+              "debit_amount": 0,
+              "credit_amount": 1213,
+              "line_description": "Särskild löneskatt på pensionskostnader (24,26 %)"
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 5000,
+              "line_description": "Leverantörsfaktura F-2003, Pensionsbolaget AB (ankomstnr 43)"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-3"
+    }
+  },
+  {
+    "name": "registration: a förutbetald kostnad on 1790 for a periodisering",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-01",
+          "description": "Leverantörsfaktura F-2004 (ankomstnr 44)",
+          "source_type": "supplier_invoice_registered",
+          "source_id": "00000000-0000-4000-8000-000000000005",
+          "lines": [
+            {
+              "account_number": "1790",
+              "debit_amount": 12000,
+              "credit_amount": 0,
+              "line_description": "Leverantörsfaktura F-2004 (ankomstnr 44)"
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 3000,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25% Leverantörsfaktura F-2004 (ankomstnr 44)"
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 15000,
+              "line_description": "Leverantörsfaktura F-2004 (ankomstnr 44)"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-4"
+    }
+  },
+  {
+    "name": "registration: no open fiscal period, nothing posted",
+    "calls": [],
+    "outcome": null
+  },
+  {
+    "name": "credit note: domestic, held to the original payable",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-20",
+          "description": "Kreditfaktura leverantör KF-2006, Kontorsbolaget AB (ankomstnr 46)",
+          "source_type": "supplier_credit_note",
+          "source_id": "00000000-0000-4000-8000-000000000007",
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Kreditfaktura leverantör KF-2006, Kontorsbolaget AB (ankomstnr 46)"
+            },
+            {
+              "account_number": "5410",
+              "debit_amount": 0,
+              "credit_amount": 1000,
+              "line_description": "Kreditfaktura leverantör KF-2006, Kontorsbolaget AB (ankomstnr 46)"
+            },
+            {
+              "account_number": "6110",
+              "debit_amount": 0,
+              "credit_amount": 200,
+              "line_description": "Kreditfaktura leverantör KF-2006, Kontorsbolaget AB (ankomstnr 46)"
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 0,
+              "credit_amount": 300,
+              "line_description": "Ingående moms 25% Kreditfaktura leverantör KF-2006, Kontorsbolaget AB (ankomstnr 46)"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-6"
+    }
+  },
+  {
+    "name": "credit note: EU supplier in EUR under reverse charge",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-22",
+          "description": "Kreditfaktura leverantör KF-EU-7, Hosting GmbH (ankomstnr 47)",
+          "source_type": "supplier_credit_note",
+          "source_id": "00000000-0000-4000-8000-000000000008",
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 2300,
+              "credit_amount": 0,
+              "line_description": "Kreditfaktura leverantör KF-EU-7, Hosting GmbH (ankomstnr 47)"
+            },
+            {
+              "account_number": "6540",
+              "debit_amount": 0,
+              "credit_amount": 1725,
+              "line_description": "Kreditfaktura leverantör KF-EU-7, Hosting GmbH (ankomstnr 47)"
+            },
+            {
+              "account_number": "6550",
+              "debit_amount": 0,
+              "credit_amount": 575,
+              "line_description": "Kreditfaktura leverantör KF-EU-7, Hosting GmbH (ankomstnr 47)"
+            },
+            {
+              "account_number": "2645",
+              "debit_amount": 0,
+              "credit_amount": 575,
+              "line_description": "Fiktiv ingående moms 25% (omvänd skattskyldighet)"
+            },
+            {
+              "account_number": "2614",
+              "debit_amount": 575,
+              "credit_amount": 0,
+              "line_description": "Fiktiv utgående moms 25% (omvänd skattskyldighet)"
+            },
+            {
+              "account_number": "4535",
+              "debit_amount": 0,
+              "credit_amount": 2300,
+              "line_description": "Inköp tjänster annat EU-land 25% (basbelopp omvänd skattskyldighet)"
+            },
+            {
+              "account_number": "4598",
+              "debit_amount": 2300,
+              "credit_amount": 0,
+              "line_description": "Motkonto beräknad omvänd moms 25%"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-7"
+    }
+  },
+  {
+    "name": "credit note: no open fiscal period, nothing posted",
+    "calls": [],
+    "outcome": null
+  }
+]

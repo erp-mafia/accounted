@@ -1,0 +1,1 @@
+[2026-10-17] purchase.registered carries an idempotency key per invoice: the deferred Bokför step can be retried on the same invoice after a refusal, and its verifikat then links to the event the first attempt recorded, one event per registration.
