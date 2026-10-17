@@ -1,4 +1,5 @@
 import { commitEntry, createDraftEntry, createJournalEntry, reverseEntry } from '@/lib/bookkeeping/engine'
+import { createJournalEntries } from '@/lib/bookkeeping/journal-entry-batch'
 import type { PostingAdapter } from './types'
 
 /**
@@ -22,6 +23,12 @@ export const ledgerAdapter: PostingAdapter = {
     return engineOptions === undefined
       ? createJournalEntry(supabase, companyId, userId, input, commitMethod, rubricVersion)
       : createJournalEntry(supabase, companyId, userId, input, commitMethod, rubricVersion, engineOptions)
+  },
+
+  createJournalEntries({ supabase, companyId, userId, inputs, businessEvent }) {
+    return businessEvent
+      ? createJournalEntries(supabase, companyId, userId, inputs, { businessEvent })
+      : createJournalEntries(supabase, companyId, userId, inputs)
   },
 
   createDraftEntry({ supabase, companyId, userId, input, options, businessEvent }) {

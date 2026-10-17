@@ -45,6 +45,7 @@ export type {
   CommitJournalEntryRequest,
   DraftJournalEntryRequest,
   PostJournalEntryRequest,
+  PostJournalEntrySetRequest,
   PostingAdapter,
   PostingPort,
   ReverseJournalEntryRequest,

@@ -32,6 +32,9 @@ import type { BusinessEventDraft, PostingAdapter, PostingPort } from './types'
  *   2. the engine inserts the draft header, then the link
  *      (business_event_entries), then the lines;
  *   3. commit_journal_entry draws the voucher number and posts.
+ * A set of verifikat that is one business act (postJournalEntrySet: a
+ * salary run) records ONE event in 1 and links it to every draft of the set
+ * in 2, all before the first number is drawn in 3.
  * A failure in 1 or 2 therefore never costs a number. Under shadow it is
  * logged and the posting goes ahead without the event (or without its link);
  * under strict it stops the posting (BookkeepingDatabaseError). With
@@ -117,6 +120,21 @@ export function createPostingPort(deps: PostingPortDeps = {}): PostingPort {
           ? await recordFor(mode, supabase, companyId, event, 'produced')
           : undefined
       return adapter.createJournalEntry({ supabase, companyId, userId, input, commitMethod, rubricVersion, options, businessEvent })
+    },
+
+    async postJournalEntrySet(request): Promise<JournalEntry[]> {
+      const { supabase, companyId, userId, event, inputs } = request
+      const mode = modeOf()
+      // One event for the whole set, recorded before the first draft; the
+      // set's drafts each carry its link, all written before the first
+      // voucher number is drawn. An empty set (every voucher adopted from an
+      // earlier attempt) posts nothing and records nothing; a set with lines
+      // the engine refuses on its pure checks gets no event, as one posting.
+      const businessEvent =
+        mode !== 'off' && inputs.length > 0 && inputs.every((input) => linesPassEngineChecks(input.lines))
+          ? await recordFor(mode, supabase, companyId, event, 'produced')
+          : undefined
+      return adapter.createJournalEntries({ supabase, companyId, userId, inputs, businessEvent })
     },
 
     async draftJournalEntry(request): Promise<JournalEntry> {

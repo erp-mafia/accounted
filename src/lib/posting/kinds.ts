@@ -49,6 +49,7 @@ export const BUSINESS_EVENT_KINDS = [
   'asset.depreciated',
   'asset.disposed',
   'se.tax_account.booked',
+  'payroll.vacation_liability_adjusted',
 ] as const
 
 export type BusinessEventKind = (typeof BUSINESS_EVENT_KINDS)[number]
@@ -61,13 +62,17 @@ export type BusinessEventKind = (typeof BUSINESS_EVENT_KINDS)[number]
  * avskrivning is booked as 'year_end' and an asset disposal as 'system'
  * (lib/bokslut/assets); a skattekonto row booked from the Skatteverket feed
  * is 'system' too (the skatteverket extension). Their history projects as
- * year_end.closing and ledger.system.
+ * year_end.closing and ledger.system. The semesterårsavslut's adjustment of
+ * the semesterlöneskuld (lib/salary/semesterberedning.ts) is booked as
+ * 'salary_payment' although no salary is paid; its history projects as
+ * payroll.salary_paid.
  */
 export const KINDS_WITHOUT_SOURCE_TYPE: readonly BusinessEventKind[] = [
   'expense.mileage_allowance',
   'asset.depreciated',
   'asset.disposed',
   'se.tax_account.booked',
+  'payroll.vacation_liability_adjusted',
 ]
 
 /** The shape business_events_kind_check enforces. */

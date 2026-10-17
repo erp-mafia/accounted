@@ -1,0 +1,1 @@
+[2026-10-17] A salary run records the existing kind payroll.salary_paid (its source type salary_payment maps there), not a new payroll.run as the 2c brief named it: the list is add-only and already names the act, which history projects every run voucher to.

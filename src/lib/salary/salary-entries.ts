@@ -1,5 +1,4 @@
 import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
-import { createJournalEntries } from '@/lib/bookkeeping/journal-entry-batch'
 import { resolvePrimaryBankAccount } from '@/lib/bookkeeping/settlement-account'
 import { activateAccounts } from '@/lib/bookkeeping/chart-of-accounts-service'
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
@@ -17,7 +16,13 @@ import {
 } from '@/lib/bookkeeping/dimension-rules'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { createLogger } from '@/lib/logger'
+import type { LinkBasisColumns } from '@/lib/links/link-basis'
+import { linkBasisColumns } from '@/lib/links/stamp'
 import { roundOre } from '@/lib/money'
+import { categoryForTemplateGroup } from '@/lib/posting/categories'
+import { mappingVersion } from '@/lib/posting/mapping-version'
+import { postingPort } from '@/lib/posting/port'
+import type { BusinessEventDraft } from '@/lib/posting/types'
 import { creditNatural, debitNatural } from '@/lib/bookkeeping/line-side'
 import {
   SALARY_ACCOUNTS,
@@ -305,6 +310,43 @@ export class SalaryRunPartiallyBookedError extends Error {
 }
 
 /**
+ * The business event of a salary run (kind payroll.salary_paid), for the
+ * posting port: ONE event for the run's 1 to 4 verifikat, recorded while
+ * POSTING_EVENTS is shadow or strict and never built while it is off. Pure.
+ *
+ * Dated the payment date, the date every verifikat of the run carries; the
+ * subject is the run. A run of one employee names that employee as party
+ * (type and id only); a run of several names none, as no single employee is
+ * the counterparty. The amount is the run's bruttolön (salary_runs.total_gross)
+ * in SEK, the figure the run is known by; arbetsgivaravgifter,
+ * semesteravsättning and pension stay in the lines. Nothing per employee goes
+ * into the evidence. The idempotency key is the run's own, so a booking
+ * resumed after an interruption links the vouchers it posts to the event the
+ * first attempt recorded: a run has one event however many attempts posted
+ * its vouchers.
+ */
+export function salaryRunBusinessEvent(run: SalaryRunData, linkBasis: LinkBasisColumns): BusinessEventDraft {
+  const amount = Math.abs(run.total_gross)
+  const only = run.employees.length === 1 ? run.employees[0] : null
+  return {
+    kind: 'payroll.salary_paid',
+    category: categoryForTemplateGroup('personnel'),
+    occurredOn: run.payment_date,
+    subject: { type: 'salary_run', id: run.id },
+    party: only ? { type: 'employee', id: only.employee_id } : null,
+    // A run's amounts are in the ledger currency.
+    currency: 'SEK',
+    amount,
+    amountSek: amount,
+    evidence: { link_basis: linkBasis.link_basis, link_evidence: linkBasis.link_evidence ?? undefined },
+    pendingOperationId: linkBasis.link_evidence?.pending_operation_id ?? null,
+    mappingVersion: mappingVersion('salaryRun'),
+    jurisdiction: 'SE',
+    idempotencyKey: `payroll.salary_paid:salary_run:${run.id}`,
+  }
+}
+
+/**
  * Create all journal entries for a salary run: 1-4 vouchers
  *   1. Salary: gross salary expenses, tax withholding, net payment
  *   2. Avgifter (if the run has any): employer contributions expense + liability
@@ -316,6 +358,10 @@ export class SalaryRunPartiallyBookedError extends Error {
  * The set is posted through createJournalEntries(): every voucher passes the
  * engine's checks (required dimension rules, registry, accounts, balance)
  * before the first one is numbered, so a refusal on any voucher posts none.
+ * It goes through the posting port (postJournalEntrySet), which hands the
+ * set to createJournalEntries unchanged; while POSTING_EVENTS is shadow or
+ * strict it first records the run's one event (salaryRunBusinessEvent) and
+ * every draft of the set is linked to it before the first number is drawn.
  *
  * Retry-safe: a posting that stopped partway (a transient error after voucher
  * 1 committed) leaves the run unbooked with vouchers in the ledger. The next
@@ -388,7 +434,14 @@ export async function createSalaryRunEntries(
       lines: voucher.lines,
     }
   })
-  const created = await createJournalEntries(supabase, companyId, userId, inputs)
+  const created = await postingPort.postJournalEntrySet({
+    supabase,
+    companyId,
+    userId,
+    // Built only while the port is on: off, the set is posted with the call it always was.
+    event: () => salaryRunBusinessEvent(run, linkBasisColumns('user_created')),
+    inputs,
+  })
 
   const bySlot = new Map<SalaryVoucherSlot, JournalEntry>(adopted)
   pending.forEach((voucher, index) => bySlot.set(voucher.slot, created[index]))

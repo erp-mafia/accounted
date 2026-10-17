@@ -9,7 +9,11 @@
  * original run's journal entries are cancelled with storno reversals through
  * `reverseEntry()` (the bookkeeping engine assigns the reversal voucher
  * numbers atomically) and a fresh draft run for the same period replaces it.
- * Both the original and the correction stay visible in the journal.
+ * Both the original and the correction stay visible in the journal. The
+ * stornos go through the posting port (reverseJournalEntry): while
+ * POSTING_EVENTS is shadow or strict, the run's correction is one business
+ * event (salaryRunCorrectionBusinessEvent) linked to every storno before its
+ * voucher number is drawn.
  *
  * Order of operations (identical to the dashboard route it replaces):
  *
@@ -66,8 +70,12 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { CannotReverseNonPostedError, EntryAlreadyReversedError } from '@/lib/bookkeeping/errors'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import type { LinkBasisColumns } from '@/lib/links/link-basis'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { postingPort } from '@/lib/posting/port'
+import type { BusinessEventDraft } from '@/lib/posting/types'
 import { isCachedDefaultAccount } from '@/lib/salary/account-mapping'
 import { revokeLinksForRun } from '@/lib/salary/payslips/links'
 import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
@@ -214,6 +222,34 @@ export interface CorrectSalaryRunArgs {
 
 /** Postgres unique_violation. */
 const UNIQUE_VIOLATION = '23505'
+
+/**
+ * The business event of a salary run's correction (kind ledger.storno, role
+ * reversal), for the posting port: ONE event for the stornos of every
+ * verifikat of the run, recorded while POSTING_EVENTS is shadow or strict and
+ * never built while it is off. Pure. The subject is the corrected run; the
+ * act is dated the day the correction is made, as the removal of an utlägg
+ * is. No party, no amount and no rule version: a storno mirrors the run's own
+ * lines, the run names its employees, and the correction run booked later
+ * records its own payroll.salary_paid event. Each storno call passes the same
+ * idempotency key, so the first records the event and every later storno of
+ * the run, in this call or in a retry, is linked to that same event.
+ */
+export function salaryRunCorrectionBusinessEvent(
+  runId: string,
+  occurredOn: string,
+  linkBasis: LinkBasisColumns,
+): BusinessEventDraft {
+  return {
+    kind: 'ledger.storno',
+    occurredOn,
+    subject: { type: 'salary_run', id: runId },
+    evidence: { link_basis: linkBasis.link_basis, link_evidence: linkBasis.link_evidence ?? undefined },
+    pendingOperationId: linkBasis.link_evidence?.pending_operation_id ?? null,
+    jurisdiction: 'SE',
+    idempotencyKey: `ledger.storno:salary_run:${runId}`,
+  }
+}
 
 function entryIdsOf(run: CorrectableSalaryRunRow): string[] {
   return [
@@ -437,9 +473,18 @@ export async function correctSalaryRun(
   const warnings: string[] = []
   const stampedAt = new Date().toISOString()
   if (!resume) {
+  const correctedOn = todayIsoStockholm()
   for (const [index, entryId] of entryIds.entries()) {
     try {
-      await reverseEntry(supabase, companyId, userId, entryId)
+      await postingPort.reverseJournalEntry({
+        supabase,
+        companyId,
+        userId,
+        entryId,
+        // Built only while the port is on: off, reverseEntry gets the call it always did.
+        event: () => salaryRunCorrectionBusinessEvent(runId, correctedOn, linkBasisColumns('user_created')),
+        role: 'reversal',
+      })
     } catch (err) {
       // Already reversed: by a concurrent call (EntryAlreadyReversedError) or
       // by an earlier attempt of this verb that failed further down the loop

@@ -11,8 +11,12 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
   commitEntry: vi.fn(async () => ({ id: 'je-3' })),
   reverseEntry: vi.fn(async () => ({ id: 'je-2' })),
 }))
+vi.mock('@/lib/bookkeeping/journal-entry-batch', () => ({
+  createJournalEntries: vi.fn(async () => [{ id: 'je-4' }, { id: 'je-5' }]),
+}))
 
 const { commitEntry, createDraftEntry, createJournalEntry, reverseEntry } = await import('@/lib/bookkeeping/engine')
+const { createJournalEntries } = await import('@/lib/bookkeeping/journal-entry-batch')
 const { ledgerAdapter } = await import('../ledger-adapter')
 
 const INPUT = { description: 'x', lines: [] } as unknown as CreateJournalEntryInput
@@ -49,6 +53,17 @@ describe('ledger adapter', () => {
     expect(call[3]).toBe(INPUT)
     await ledgerAdapter.createDraftEntry({ supabase: 'sb' as never, companyId: 'c', userId: 'u', input: INPUT, businessEvent: LINK })
     expect(vi.mocked(createDraftEntry).mock.calls[1]).toEqual(['sb', 'c', 'u', INPUT, { businessEvent: LINK }])
+  })
+
+  it('posts a set with exactly the producer\'s four arguments when there is nothing to add, the link as the fifth', async () => {
+    const inputs = [INPUT, INPUT]
+    await ledgerAdapter.createJournalEntries({ supabase: 'sb' as never, companyId: 'c', userId: 'u', inputs })
+    const call = vi.mocked(createJournalEntries).mock.calls[0]!
+    expect(call).toHaveLength(4)
+    expect(call).toEqual(['sb', 'c', 'u', inputs])
+    expect(call[3]).toBe(inputs)
+    await ledgerAdapter.createJournalEntries({ supabase: 'sb' as never, companyId: 'c', userId: 'u', inputs, businessEvent: LINK })
+    expect(vi.mocked(createJournalEntries).mock.calls[1]).toEqual(['sb', 'c', 'u', inputs, { businessEvent: LINK }])
   })
 
   it('commits with only the arguments the producer passed', async () => {

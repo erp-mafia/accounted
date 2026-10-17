@@ -1,0 +1,966 @@
+[
+  {
+    "name": "two vouchers: one tjänsteman, lön and arbetsgivaravgifter",
+    "calls": [
+      [
+        "createDraftEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-06-25",
+          "description": "Lön 2026-06",
+          "source_type": "salary_payment",
+          "source_id": "00000000-0000-4000-8000-000000000001",
+          "voucher_series": "L",
+          "lines": [
+            {
+              "account_number": "7210",
+              "debit_amount": 30000,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Löner tjänstemän"
+            },
+            {
+              "account_number": "2710",
+              "debit_amount": 0,
+              "credit_amount": 7000,
+              "line_description": "Lön 2026-06: Personalskatt"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 23000,
+              "line_description": "Lön 2026-06: Nettolön"
+            }
+          ]
+        }
+      ],
+      [
+        "createDraftEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-06-25",
+          "description": "Lön 2026-06: Arbetsgivaravgifter",
+          "source_type": "salary_payment",
+          "source_id": "00000000-0000-4000-8000-000000000001",
+          "voucher_series": "L",
+          "lines": [
+            {
+              "account_number": "7510",
+              "debit_amount": 9426,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Arbetsgivaravgifter"
+            },
+            {
+              "account_number": "2731",
+              "debit_amount": 0,
+              "credit_amount": 9426,
+              "line_description": "Lön 2026-06: Arbetsgivaravgifter"
+            }
+          ]
+        }
+      ],
+      [
+        "commitEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-1"
+      ],
+      [
+        "commitEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-2"
+      ]
+    ],
+    "outcome": {
+      "salaryEntry": "je-1",
+      "avgifterEntry": "je-2",
+      "vacationEntry": null,
+      "pensionEntry": null
+    }
+  },
+  {
+    "name": "four vouchers: an arbetare with a project bag and a tjänsteman with löneväxling",
+    "calls": [
+      [
+        "createDraftEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-06-25",
+          "description": "Lön 2026-06",
+          "source_type": "salary_payment",
+          "source_id": "00000000-0000-4000-8000-000000000002",
+          "voucher_series": "L",
+          "lines": [
+            {
+              "account_number": "7010",
+              "debit_amount": 32000,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Löner kollektivanställda",
+              "dimensions": {
+                "6": "P100"
+              }
+            },
+            {
+              "account_number": "7210",
+              "debit_amount": 44000,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Löner tjänstemän",
+              "dimensions": {
+                "1": "KS01"
+              }
+            },
+            {
+              "account_number": "2794",
+              "debit_amount": 0,
+              "credit_amount": 450,
+              "line_description": "Lön 2026-06: Fackföreningsavgifter"
+            },
+            {
+              "account_number": "2710",
+              "debit_amount": 0,
+              "credit_amount": 18600,
+              "line_description": "Lön 2026-06: Personalskatt"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 56950,
+              "line_description": "Lön 2026-06: Nettolön"
+            }
+          ]
+        }
+      ],
+      [
+        "createDraftEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-06-25",
+          "description": "Lön 2026-06: Arbetsgivaravgifter",
+          "source_type": "salary_payment",
+          "source_id": "00000000-0000-4000-8000-000000000002",
+          "voucher_series": "L",
+          "lines": [
+            {
+              "account_number": "7510",
+              "debit_amount": 10054.4,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Arbetsgivaravgifter",
+              "dimensions": {
+                "6": "P100"
+              }
+            },
+            {
+              "account_number": "7510",
+              "debit_amount": 13824.8,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Arbetsgivaravgifter",
+              "dimensions": {
+                "1": "KS01"
+              }
+            },
+            {
+              "account_number": "2731",
+              "debit_amount": 0,
+              "credit_amount": 23879,
+              "line_description": "Lön 2026-06: Arbetsgivaravgifter"
+            },
+            {
+              "account_number": "3740",
+              "debit_amount": 0,
+              "credit_amount": 0.2,
+              "line_description": "Lön 2026-06: Öres- och kronutjämning"
+            }
+          ]
+        }
+      ],
+      [
+        "createDraftEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-06-25",
+          "description": "Lön 2026-06: Semesteravsättning",
+          "source_type": "salary_payment",
+          "source_id": "00000000-0000-4000-8000-000000000002",
+          "voucher_series": "L",
+          "lines": [
+            {
+              "account_number": "7090",
+              "debit_amount": 3840,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Semesteravsättning",
+              "dimensions": {
+                "6": "P100"
+              }
+            },
+            {
+              "account_number": "7290",
+              "debit_amount": 4800,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Semesteravsättning",
+              "dimensions": {
+                "1": "KS01"
+              }
+            },
+            {
+              "account_number": "2920",
+              "debit_amount": 0,
+              "credit_amount": 8640,
+              "line_description": "Lön 2026-06: Semesteravsättning"
+            },
+            {
+              "account_number": "7519",
+              "debit_amount": 1206.53,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Sociala avgifter på semester",
+              "dimensions": {
+                "6": "P100"
+              }
+            },
+            {
+              "account_number": "7519",
+              "debit_amount": 1508.16,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Sociala avgifter på semester",
+              "dimensions": {
+                "1": "KS01"
+              }
+            },
+            {
+              "account_number": "2940",
+              "debit_amount": 0,
+              "credit_amount": 2714.69,
+              "line_description": "Lön 2026-06: Sociala avgifter på semester"
+            }
+          ]
+        }
+      ],
+      [
+        "createDraftEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-06-25",
+          "description": "Lön 2026-06: Pensionsavsättning",
+          "source_type": "salary_payment",
+          "source_id": "00000000-0000-4000-8000-000000000002",
+          "voucher_series": "L",
+          "lines": [
+            {
+              "account_number": "7410",
+              "debit_amount": 3174,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Pensionsförsäkringspremier",
+              "dimensions": {
+                "1": "KS01"
+              }
+            },
+            {
+              "account_number": "2740",
+              "debit_amount": 0,
+              "credit_amount": 3174,
+              "line_description": "Lön 2026-06: Pensionsförsäkringspremier"
+            },
+            {
+              "account_number": "7533",
+              "debit_amount": 770.01,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Särskild löneskatt 24,26%",
+              "dimensions": {
+                "1": "KS01"
+              }
+            },
+            {
+              "account_number": "2514",
+              "debit_amount": 0,
+              "credit_amount": 770.01,
+              "line_description": "Lön 2026-06: Särskild löneskatt 24,26%"
+            }
+          ]
+        }
+      ],
+      [
+        "commitEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-1"
+      ],
+      [
+        "commitEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-2"
+      ],
+      [
+        "commitEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-3"
+      ],
+      [
+        "commitEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-4"
+      ]
+    ],
+    "outcome": {
+      "salaryEntry": "je-1",
+      "avgifterEntry": "je-2",
+      "vacationEntry": "je-3",
+      "pensionEntry": "je-4"
+    }
+  },
+  {
+    "name": "one voucher: an F-skatt payee, no avgifter",
+    "calls": [
+      [
+        "createDraftEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-06-25",
+          "description": "Lön 2026-06",
+          "source_type": "salary_payment",
+          "source_id": "00000000-0000-4000-8000-000000000003",
+          "voucher_series": "L",
+          "lines": [
+            {
+              "account_number": "7210",
+              "debit_amount": 30000,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Löner tjänstemän"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 30000,
+              "line_description": "Lön 2026-06: Nettolön"
+            }
+          ]
+        }
+      ],
+      [
+        "commitEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-1"
+      ]
+    ],
+    "outcome": {
+      "salaryEntry": "je-1",
+      "avgifterEntry": null,
+      "vacationEntry": null,
+      "pensionEntry": null
+    }
+  },
+  {
+    "name": "a resumed booking: the salary voucher an interrupted attempt posted is adopted, the rest are posted",
+    "calls": [
+      [
+        "createDraftEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-06-25",
+          "description": "Lön 2026-06: Arbetsgivaravgifter",
+          "source_type": "salary_payment",
+          "source_id": "00000000-0000-4000-8000-000000000004",
+          "voucher_series": "L",
+          "lines": [
+            {
+              "account_number": "7510",
+              "debit_amount": 10054.4,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Arbetsgivaravgifter",
+              "dimensions": {
+                "6": "P100"
+              }
+            },
+            {
+              "account_number": "7510",
+              "debit_amount": 13824.8,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Arbetsgivaravgifter",
+              "dimensions": {
+                "1": "KS01"
+              }
+            },
+            {
+              "account_number": "2731",
+              "debit_amount": 0,
+              "credit_amount": 23879,
+              "line_description": "Lön 2026-06: Arbetsgivaravgifter"
+            },
+            {
+              "account_number": "3740",
+              "debit_amount": 0,
+              "credit_amount": 0.2,
+              "line_description": "Lön 2026-06: Öres- och kronutjämning"
+            }
+          ]
+        }
+      ],
+      [
+        "createDraftEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-06-25",
+          "description": "Lön 2026-06: Semesteravsättning",
+          "source_type": "salary_payment",
+          "source_id": "00000000-0000-4000-8000-000000000004",
+          "voucher_series": "L",
+          "lines": [
+            {
+              "account_number": "7090",
+              "debit_amount": 3840,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Semesteravsättning",
+              "dimensions": {
+                "6": "P100"
+              }
+            },
+            {
+              "account_number": "7290",
+              "debit_amount": 4800,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Semesteravsättning",
+              "dimensions": {
+                "1": "KS01"
+              }
+            },
+            {
+              "account_number": "2920",
+              "debit_amount": 0,
+              "credit_amount": 8640,
+              "line_description": "Lön 2026-06: Semesteravsättning"
+            },
+            {
+              "account_number": "7519",
+              "debit_amount": 1206.53,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Sociala avgifter på semester",
+              "dimensions": {
+                "6": "P100"
+              }
+            },
+            {
+              "account_number": "7519",
+              "debit_amount": 1508.16,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Sociala avgifter på semester",
+              "dimensions": {
+                "1": "KS01"
+              }
+            },
+            {
+              "account_number": "2940",
+              "debit_amount": 0,
+              "credit_amount": 2714.69,
+              "line_description": "Lön 2026-06: Sociala avgifter på semester"
+            }
+          ]
+        }
+      ],
+      [
+        "createDraftEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-06-25",
+          "description": "Lön 2026-06: Pensionsavsättning",
+          "source_type": "salary_payment",
+          "source_id": "00000000-0000-4000-8000-000000000004",
+          "voucher_series": "L",
+          "lines": [
+            {
+              "account_number": "7410",
+              "debit_amount": 3174,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Pensionsförsäkringspremier",
+              "dimensions": {
+                "1": "KS01"
+              }
+            },
+            {
+              "account_number": "2740",
+              "debit_amount": 0,
+              "credit_amount": 3174,
+              "line_description": "Lön 2026-06: Pensionsförsäkringspremier"
+            },
+            {
+              "account_number": "7533",
+              "debit_amount": 770.01,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Särskild löneskatt 24,26%",
+              "dimensions": {
+                "1": "KS01"
+              }
+            },
+            {
+              "account_number": "2514",
+              "debit_amount": 0,
+              "credit_amount": 770.01,
+              "line_description": "Lön 2026-06: Särskild löneskatt 24,26%"
+            }
+          ]
+        }
+      ],
+      [
+        "commitEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-1"
+      ],
+      [
+        "commitEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-2"
+      ],
+      [
+        "commitEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-3"
+      ]
+    ],
+    "outcome": {
+      "salaryEntry": "je-posted-1",
+      "avgifterEntry": "je-1",
+      "vacationEntry": "je-2",
+      "pensionEntry": "je-3"
+    }
+  },
+  {
+    "name": "a draft refused on voucher 2: voucher 1 is cancelled and nothing is committed",
+    "calls": [
+      [
+        "createDraftEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-06-25",
+          "description": "Lön 2026-06",
+          "source_type": "salary_payment",
+          "source_id": "00000000-0000-4000-8000-000000000005",
+          "voucher_series": "L",
+          "lines": [
+            {
+              "account_number": "7010",
+              "debit_amount": 32000,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Löner kollektivanställda",
+              "dimensions": {
+                "6": "P100"
+              }
+            },
+            {
+              "account_number": "7210",
+              "debit_amount": 44000,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Löner tjänstemän",
+              "dimensions": {
+                "1": "KS01"
+              }
+            },
+            {
+              "account_number": "2794",
+              "debit_amount": 0,
+              "credit_amount": 450,
+              "line_description": "Lön 2026-06: Fackföreningsavgifter"
+            },
+            {
+              "account_number": "2710",
+              "debit_amount": 0,
+              "credit_amount": 18600,
+              "line_description": "Lön 2026-06: Personalskatt"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 56950,
+              "line_description": "Lön 2026-06: Nettolön"
+            }
+          ]
+        }
+      ],
+      [
+        "createDraftEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-06-25",
+          "description": "Lön 2026-06: Arbetsgivaravgifter",
+          "source_type": "salary_payment",
+          "source_id": "00000000-0000-4000-8000-000000000005",
+          "voucher_series": "L",
+          "lines": [
+            {
+              "account_number": "7510",
+              "debit_amount": 10054.4,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Arbetsgivaravgifter",
+              "dimensions": {
+                "6": "P100"
+              }
+            },
+            {
+              "account_number": "7510",
+              "debit_amount": 13824.8,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Arbetsgivaravgifter",
+              "dimensions": {
+                "1": "KS01"
+              }
+            },
+            {
+              "account_number": "2731",
+              "debit_amount": 0,
+              "credit_amount": 23879,
+              "line_description": "Lön 2026-06: Arbetsgivaravgifter"
+            },
+            {
+              "account_number": "3740",
+              "debit_amount": 0,
+              "credit_amount": 0.2,
+              "line_description": "Lön 2026-06: Öres- och kronutjämning"
+            }
+          ]
+        }
+      ],
+      [
+        "cancelDraftEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-1"
+      ]
+    ],
+    "outcome": {
+      "error": "draft refused: Lön 2026-06: Arbetsgivaravgifter"
+    }
+  },
+  {
+    "name": "a commit failure on voucher 2: voucher 1 stays posted, the drafts from voucher 2 on are cancelled",
+    "calls": [
+      [
+        "createDraftEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-06-25",
+          "description": "Lön 2026-06",
+          "source_type": "salary_payment",
+          "source_id": "00000000-0000-4000-8000-000000000006",
+          "voucher_series": "L",
+          "lines": [
+            {
+              "account_number": "7010",
+              "debit_amount": 32000,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Löner kollektivanställda",
+              "dimensions": {
+                "6": "P100"
+              }
+            },
+            {
+              "account_number": "7210",
+              "debit_amount": 44000,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Löner tjänstemän",
+              "dimensions": {
+                "1": "KS01"
+              }
+            },
+            {
+              "account_number": "2794",
+              "debit_amount": 0,
+              "credit_amount": 450,
+              "line_description": "Lön 2026-06: Fackföreningsavgifter"
+            },
+            {
+              "account_number": "2710",
+              "debit_amount": 0,
+              "credit_amount": 18600,
+              "line_description": "Lön 2026-06: Personalskatt"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 56950,
+              "line_description": "Lön 2026-06: Nettolön"
+            }
+          ]
+        }
+      ],
+      [
+        "createDraftEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-06-25",
+          "description": "Lön 2026-06: Arbetsgivaravgifter",
+          "source_type": "salary_payment",
+          "source_id": "00000000-0000-4000-8000-000000000006",
+          "voucher_series": "L",
+          "lines": [
+            {
+              "account_number": "7510",
+              "debit_amount": 10054.4,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Arbetsgivaravgifter",
+              "dimensions": {
+                "6": "P100"
+              }
+            },
+            {
+              "account_number": "7510",
+              "debit_amount": 13824.8,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Arbetsgivaravgifter",
+              "dimensions": {
+                "1": "KS01"
+              }
+            },
+            {
+              "account_number": "2731",
+              "debit_amount": 0,
+              "credit_amount": 23879,
+              "line_description": "Lön 2026-06: Arbetsgivaravgifter"
+            },
+            {
+              "account_number": "3740",
+              "debit_amount": 0,
+              "credit_amount": 0.2,
+              "line_description": "Lön 2026-06: Öres- och kronutjämning"
+            }
+          ]
+        }
+      ],
+      [
+        "createDraftEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-06-25",
+          "description": "Lön 2026-06: Semesteravsättning",
+          "source_type": "salary_payment",
+          "source_id": "00000000-0000-4000-8000-000000000006",
+          "voucher_series": "L",
+          "lines": [
+            {
+              "account_number": "7090",
+              "debit_amount": 3840,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Semesteravsättning",
+              "dimensions": {
+                "6": "P100"
+              }
+            },
+            {
+              "account_number": "7290",
+              "debit_amount": 4800,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Semesteravsättning",
+              "dimensions": {
+                "1": "KS01"
+              }
+            },
+            {
+              "account_number": "2920",
+              "debit_amount": 0,
+              "credit_amount": 8640,
+              "line_description": "Lön 2026-06: Semesteravsättning"
+            },
+            {
+              "account_number": "7519",
+              "debit_amount": 1206.53,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Sociala avgifter på semester",
+              "dimensions": {
+                "6": "P100"
+              }
+            },
+            {
+              "account_number": "7519",
+              "debit_amount": 1508.16,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Sociala avgifter på semester",
+              "dimensions": {
+                "1": "KS01"
+              }
+            },
+            {
+              "account_number": "2940",
+              "debit_amount": 0,
+              "credit_amount": 2714.69,
+              "line_description": "Lön 2026-06: Sociala avgifter på semester"
+            }
+          ]
+        }
+      ],
+      [
+        "createDraftEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-06-25",
+          "description": "Lön 2026-06: Pensionsavsättning",
+          "source_type": "salary_payment",
+          "source_id": "00000000-0000-4000-8000-000000000006",
+          "voucher_series": "L",
+          "lines": [
+            {
+              "account_number": "7410",
+              "debit_amount": 3174,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Pensionsförsäkringspremier",
+              "dimensions": {
+                "1": "KS01"
+              }
+            },
+            {
+              "account_number": "2740",
+              "debit_amount": 0,
+              "credit_amount": 3174,
+              "line_description": "Lön 2026-06: Pensionsförsäkringspremier"
+            },
+            {
+              "account_number": "7533",
+              "debit_amount": 770.01,
+              "credit_amount": 0,
+              "line_description": "Lön 2026-06: Särskild löneskatt 24,26%",
+              "dimensions": {
+                "1": "KS01"
+              }
+            },
+            {
+              "account_number": "2514",
+              "debit_amount": 0,
+              "credit_amount": 770.01,
+              "line_description": "Lön 2026-06: Särskild löneskatt 24,26%"
+            }
+          ]
+        }
+      ],
+      [
+        "commitEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-1"
+      ],
+      [
+        "commitEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-2"
+      ],
+      [
+        "cancelDraftEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-2"
+      ],
+      [
+        "cancelDraftEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-3"
+      ],
+      [
+        "cancelDraftEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-4"
+      ]
+    ],
+    "outcome": {
+      "error": "commit failed: Lön 2026-06: Arbetsgivaravgifter"
+    }
+  }
+]

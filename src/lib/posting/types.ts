@@ -67,6 +67,24 @@ export interface PostJournalEntryRequest {
 }
 
 /**
+ * A set of verifikat that are one business act, posted all or none: a salary
+ * run's lön, arbetsgivaravgifter, semesteravsättning and pension (1 to 4
+ * verifikat). One event is recorded for the whole set and linked to every
+ * draft before the first voucher number is drawn
+ * (lib/bookkeeping/journal-entry-batch.ts, which keeps its order and its
+ * all-or-nothing checks exactly as they were).
+ */
+export interface PostJournalEntrySetRequest {
+  supabase: SupabaseClient
+  companyId: string
+  userId: string
+  /** What happened, once for the set; a function is called only while the port is on (see PostJournalEntryRequest). */
+  event: BusinessEventDraft | (() => BusinessEventDraft)
+  /** Handed to the engine unchanged, in posting order. */
+  inputs: CreateJournalEntryInput[]
+}
+
+/**
  * The draft half of a posting a producer commits itself, with its own work in
  * between: the kassa and webbshop doors claim their source row on the draft
  * before a voucher number is drawn, and cancel the draft when the claim
@@ -118,10 +136,13 @@ export interface ReverseJournalEntryRequest {
  * 1 moves one producer (bank-line booking) onto it; step 2 moves the rest.
  * A producer that drafts, does its own work and then commits (kassa,
  * webbshop) uses draftJournalEntry and commitJournalEntry instead of
- * postJournalEntry.
+ * postJournalEntry; a producer whose one business act is several verifikat
+ * posted all or none (a salary run) uses postJournalEntrySet.
  */
 export interface PostingPort {
   postJournalEntry(request: PostJournalEntryRequest): Promise<JournalEntry>
+  /** One event for a set of verifikat posted all or none (the design's postSet); see PostJournalEntrySetRequest. */
+  postJournalEntrySet(request: PostJournalEntrySetRequest): Promise<JournalEntry[]>
   /** The draft of a producer that commits itself; see DraftJournalEntryRequest. */
   draftJournalEntry(request: DraftJournalEntryRequest): Promise<JournalEntry>
   commitJournalEntry(request: CommitJournalEntryRequest): Promise<JournalEntry>
@@ -146,6 +167,14 @@ export interface PostingAdapter {
     options?: Omit<CreateEntryOptions, 'businessEvent'>
     businessEvent?: BusinessEventLink
   }): Promise<JournalEntry>
+  /** createJournalEntries (lib/bookkeeping/journal-entry-batch.ts): the set, all or none. */
+  createJournalEntries(args: {
+    supabase: SupabaseClient
+    companyId: string
+    userId: string
+    inputs: CreateJournalEntryInput[]
+    businessEvent?: BusinessEventLink
+  }): Promise<JournalEntry[]>
   createDraftEntry(args: {
     supabase: SupabaseClient
     companyId: string
