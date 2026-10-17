@@ -861,6 +861,36 @@ describe('POST /api/transactions/[id]/book', () => {
     expect(mockAppendProcessingHistory).not.toHaveBeenCalled()
   })
 
+  it('hands the row\'s provider identity to the duplicate detector (crm#1271)', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1', amount: -500, journal_entry_id: null,
+      external_id: 'stripe_acct_A_txn_1_fee', import_source: 'stripe', bank_connection_id: null,
+    })
+    enqueue({ data: tx, error: null }) // fetch
+    mockDetectDup.mockResolvedValue({
+      transaction_id: SIBLING_UUID,
+      journal_entry_id: 'je-existing',
+      voucher_label: 'A142',
+      entry_date: '2025-01-15',
+      description: null,
+      amount: -500,
+    })
+
+    const request = createMockRequest('/api/transactions/tx-1/book', { method: 'POST', body: validBody })
+    await POST(request, createMockRouteParams({ id: 'tx-1' }))
+
+    expect(mockDetectDup).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      expect.objectContaining({
+        id: 'tx-1',
+        external_id: 'stripe_acct_A_txn_1_fee',
+        import_source: 'stripe',
+        bank_connection_id: null,
+      }),
+    )
+  })
+
   it('books when force=true and the expected sibling still matches', async () => {
     const tx = makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null })
     const je = makeJournalEntry({ id: 'je-new' })

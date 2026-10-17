@@ -283,7 +283,15 @@ export default function SIEPreviewStep({
             {continuity.noVouchers && <p>{t('ib_continuity_no_vouchers')}</p>}
             {ibDiffers && (
               <>
-                <p>{t('ib_continuity_carried', { count: continuity.differences.length })}</p>
+                {/* crm#1272: a year with its own IB verifikat opens on it. */}
+                <p>
+                  {continuity.bookedOpeningBalance
+                    ? t('ib_continuity_booked', {
+                        count: continuity.differences.length,
+                        voucher: continuity.bookedOpeningBalance.voucher,
+                      })
+                    : t('ib_continuity_carried', { count: continuity.differences.length })}
+                </p>
                 <OpeningBalanceDifferencesTable
                   rows={continuity.differences.map((row) => ({
                     account: row.account,
@@ -294,7 +302,9 @@ export default function SIEPreviewStep({
                   leftLabel={t('ib_continuity_col_file')}
                   rightLabel={t('ib_continuity_col_books')}
                 />
-                <p className="text-muted-foreground">{t('ib_continuity_advice')}</p>
+                <p className="text-muted-foreground">
+                  {t(continuity.bookedOpeningBalance ? 'ib_continuity_booked_advice' : 'ib_continuity_advice')}
+                </p>
                 <label className="flex items-start gap-2 cursor-pointer">
                   <Checkbox
                     checked={ackContinuity}

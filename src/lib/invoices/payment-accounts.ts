@@ -202,15 +202,19 @@ export function describeMissingInvoicePaymentAccount(
       en: 'The invoice has no payment details: the company has no bankgiro, plusgiro, Swish number or bank account to print on the invoice. Add one under Inställningar → Fakturering (Settings → Invoicing) and try again.',
     }
   }
+  // The gap is almost always the choice, not a missing account (crm#1273):
+  // the company's SEK account with an IBAN can be the payee, and "a payment
+  // account for EUR" sent people looking for an account in EUR. Name the
+  // setting and each step on the way there.
   const routingSv = isNonIbanCurrency(currency)
-    ? `, eller med ${currency === 'USD' ? 'routing number' : 'sort code'}, kontonummer och BIC,`
+    ? ` (eller ${currency === 'USD' ? 'routing number' : 'sort code'}, kontonummer och BIC)`
     : ''
   const routingEn = isNonIbanCurrency(currency)
-    ? `, or with ${currency === 'USD' ? 'routing number' : 'sort code'}, account number and BIC,`
+    ? ` (or its ${currency === 'USD' ? 'routing number' : 'sort code'}, account number and BIC)`
     : ''
   return {
-    sv: `Fakturan är i ${currency}, men företaget saknar ett betalningskonto för ${currency}. Lägg till ett konto med IBAN${routingSv} för ${currency} under Inställningar → Fakturering och försök igen.`,
-    en: `The invoice is in ${currency}, but the company has no ${currency} payment account. Add an account with an IBAN${routingEn} for ${currency} under Inställningar → Fakturering (Settings → Invoicing) and try again.`,
+    sv: `Fakturan är i ${currency}, men inget bankkonto är valt för ${currency}. Det kan vara företagets vanliga konto i SEK: kunden betalar till kontots IBAN. Gå till Inställningar → Fakturering, Bankkonton för kundfakturor: fyll i kontots IBAN${routingSv} om det saknas, lägg till ${currency} under Lägg till valuta och välj kontot som Standard ${currency}. Försök sedan igen.`,
+    en: `The invoice is in ${currency}, but no bank account is chosen for ${currency}. It can be the company's usual SEK account: the customer pays to its IBAN. Go to Inställningar → Fakturering (Settings → Invoicing), Bank accounts for customer invoices: fill in the account's IBAN${routingEn} if it is missing, add ${currency} under Add currency and choose the account as Default ${currency}. Then try again.`,
   }
 }
 

@@ -173,6 +173,7 @@ import {
 import {
   buildEditorPaymentSummary,
   describeEditorPaymentSummary,
+  foreignPayeeChoice,
   paymentReason,
   paymentTermsTexts,
   type EditorPaymentSummaryInput,
@@ -681,6 +682,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const [isCreatingCustomer, setIsCreatingCustomer] = useState(false)
   // The inline "Lägg till betalningsuppgifter" form in the Betalning section.
   const [addingPayee, setAddingPayee] = useState(false)
+  // A foreign-currency invoice's account being chosen (chooseForeignPayee).
+  const [choosingForeignPayee, setChoosingForeignPayee] = useState(false)
   // "Betalning och utseende": the panel that replaces the form column, and
   // its scope (company defaults or this invoice only).
   const [paymentPanelOpen, setPaymentPanelOpen] = useState(false)
@@ -2345,7 +2348,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
 
   // Missing payment details are fixed where they show, in the Betalning
   // section: the inline form when there are none, the panel when they exist
-  // but are hidden. Members are told to ask an administrator there.
+  // but are hidden. Members are told to ask an administrator there. A
+  // foreign-currency invoice is fixed by choosing an account for its
+  // currency, which the section offers instead: the inline form saves SEK
+  // details only, so the send it let through failed again (crm#1273).
   function openPayeeFix() {
     setPane('form')
     if (paymentSummary?.storedAccountUsable && isCompanyAdmin && canWrite) {
@@ -2353,10 +2359,53 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       setPaymentPanelOpen(true)
       return
     }
-    if (isCompanyAdmin && canWrite) setAddingPayee(true)
+    if (isCompanyAdmin && canWrite && !foreignChoice) setAddingPayee(true)
     window.setTimeout(() => {
       document.getElementById('invoice-editor-payment')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     }, 0)
+  }
+
+  // A foreign-currency invoice with no account chosen for its currency
+  // (crm#1273). An administrator makes the picked account the currency's
+  // default, printing the IBAN its bank connection knows when it prints none
+  // yet, so later invoices in that currency have it too. Anyone else picks
+  // an account that already prints an IBAN for this invoice alone.
+  async function chooseForeignPayee(cashAccountId: string) {
+    const currency = watchCurrency as Currency
+    const candidate = foreignChoice?.options.find((option) => option.id === cashAccountId)
+    if (!candidate) return
+    setChoosingForeignPayee(true)
+    try {
+      if (isCompanyAdmin && canWrite) {
+        const send = async (url: string, method: 'PATCH' | 'PUT', body: Record<string, unknown>) => {
+          const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+          const json = await res.json().catch(() => null)
+          if (!res.ok) throw new Error(getErrorMessage(json, { locale, context: 'settings', statusCode: res.status }))
+        }
+        if (candidate.bankIban) {
+          await send(`/api/cash-accounts/${cashAccountId}`, 'PATCH', { iban: candidate.bankIban, invoice_payee: true })
+        }
+        await send('/api/cash-accounts/payee-defaults', 'PUT', { currency, cash_account_id: cashAccountId })
+        const fresh = await fetch('/api/cash-accounts/payee-defaults').then((res) => (res.ok ? res.json() : null))
+        if (fresh?.data) setPayeeState(fresh.data)
+        await refetchCompanySettings()
+        await invalidateReferenceData(['ref:cash-accounts', 'company_settings'])
+        setPreviewRefreshKey((key) => key + 1)
+        toast({
+          title: tPay('foreign_chosen_title', { currency }),
+          description: tPay('foreign_chosen_description', { account: candidate.label, currency }),
+        })
+      } else {
+        setValue('payment_cash_account_id', cashAccountId, { shouldDirty: true })
+      }
+      if (queuedIntent && pendingData) {
+        continueToConfirm(queuedIntent, pendingData.document_type, { bank: true })
+      }
+    } catch (err) {
+      toast({ title: tPay('foreign_choose_failed'), description: getErrorMessage(err, { locale }), variant: 'destructive' })
+    } finally {
+      setChoosingForeignPayee(false)
+    }
   }
 
   async function handleBankSetupComplete() {
@@ -3075,6 +3124,15 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         }
       : null
   const paymentSummary = paymentSummaryInput ? buildEditorPaymentSummary(paymentSummaryInput) : null
+  // A foreign-currency invoice with nothing to pay to: the accounts that can
+  // carry it once chosen, instead of the SEK details form (crm#1273).
+  const foreignChoice = foreignPayeeChoice({
+    summary: paymentSummary,
+    currency: watchCurrency as Currency,
+    accounts: payeeState?.accounts ?? null,
+    canEditCompany: isCompanyAdmin && canWrite,
+    label: payeeAccountLabel,
+  })
   const paymentOverridden = Boolean(watchQrMode) || Boolean(watchPayeeAccount)
   const qrReasonFor = (mode: InvoiceQrMode): string | null => {
     if (!paymentSummaryInput) return null
@@ -4940,6 +4998,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   ) : null
                 }
                 onAddDetails={() => setAddingPayee(true)}
+                foreignChoice={foreignChoice ? { ...foreignChoice, busy: choosingForeignPayee } : null}
+                onChooseAccount={(id) => void chooseForeignPayee(id)}
                 onOpenPanel={() => {
                   setPaymentPanelScope(isCompanyAdmin && canWrite ? 'all' : 'this')
                   setPaymentPanelOpen(true)

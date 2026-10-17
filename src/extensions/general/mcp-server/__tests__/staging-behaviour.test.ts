@@ -794,6 +794,8 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   // asked (prepare only checks that one serves the installation and that the
   // company is on a paid plan: the grant row).
   gnubok_prepare_payments: {
+    // supplier_invoice_ids is optional since a skattekonto payment takes the same tool: name the invoice.
+    args: { supplier_invoice_ids: [SOME_UUID] },
     rows: {
       'rpc:company_capability_grant_rows': { expires_at: null },
       cash_accounts: { iban: 'SE3550000000054910000003', currency: 'SEK', name: 'Företagskonto', enabled: true, bank_connection: { bank_name: 'SEB' } },

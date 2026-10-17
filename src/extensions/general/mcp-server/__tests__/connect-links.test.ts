@@ -272,6 +272,38 @@ describe('onboarding connect-link tools', () => {
     expect(result.token_expires_at).toBe('2026-12-01T00:00:00Z')
   })
 
+  it("skatteverket: connected through another member's session, the caller cannot file and gets the link (crm#1263)", async () => {
+    vi.stubEnv('SKATTEVERKET_ENABLED', 'true')
+    const inMinutes = (m: number) => new Date(Date.now() + m * 60_000).toISOString()
+    const { from } = listClient([
+      { user_id: 'user-2', status: 'active', created_at: inMinutes(-3), expires_at: inMinutes(57), refresh_count: 0, refresh_token: 'c' },
+      { user_id: 'user-1', status: 'needs_reconsent', created_at: '2026-09-20T04:00:46Z', expires_at: '2026-09-20T05:00:46Z', refresh_count: 2, refresh_token: 'c' },
+    ])
+    const result = (await skvTool.execute({}, COMPANY_ID, 'user-1', { from } as never)) as Record<string, unknown>
+    // The company is connected (reads work) ...
+    expect(result.connected).toBe(true)
+    expect(result.status).toBe('connected')
+    // ... but filing runs on the caller's own BankID login, which is dead.
+    expect(result.can_file).toBe(false)
+    expect(result.connect_url).toBe(
+      'https://app.example.test/api/extensions/ext/skatteverket/authorize?return_to=%2F'
+    )
+    expect(String(result.instructions)).toContain('Filing is not possible for this user yet')
+    expect(String(result.instructions)).toContain('another member of the company')
+    expect(String(result.instructions)).not.toContain('can be filed from here')
+  })
+
+  it('skatteverket: can_file when the caller holds the live session', async () => {
+    vi.stubEnv('SKATTEVERKET_ENABLED', 'true')
+    const inMinutes = (m: number) => new Date(Date.now() + m * 60_000).toISOString()
+    const { from } = listClient([
+      { user_id: 'user-1', status: 'active', created_at: inMinutes(-3), expires_at: inMinutes(57), refresh_count: 0, refresh_token: 'c' },
+    ])
+    const result = (await skvTool.execute({}, COMPANY_ID, 'user-1', { from } as never)) as Record<string, unknown>
+    expect(result.can_file).toBe(true)
+    expect(String(result.instructions)).toContain('can be filed from here')
+  })
+
   it('skatteverket: a token flagged needs_reconsent is NOT connected (feedback seq 604946)', async () => {
     vi.stubEnv('SKATTEVERKET_ENABLED', 'true')
     const { from } = listClient([

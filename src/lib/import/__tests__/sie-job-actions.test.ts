@@ -115,6 +115,22 @@ describe('SIE lock refusal', () => {
     expect(userFacingCode(error)).toBe('SIE_IMPORT_PERIOD_LOCKED')
   })
 
+  // crm#1272: start_sie_import_job names a hand-booked IB in the target year
+  // the same way, as its own code instead of "Existing SIE import".
+  it('becomes SIE_IMPORT_PERIOD_HAS_OPENING_BALANCE carrying the sentence that names the verifikat', () => {
+    const ib = 'Räkenskapsåret 2026-01-01 till 2026-12-31 har redan en bokförd ingående balans (verifikation A1, 2026-01-01), ' +
+      'och importen skulle bokföra filens ingående balans en gång till.'
+    const error = jobDatabaseError({ code: '55000', message: `SIE_IMPORT_PERIOD_HAS_OPENING_BALANCE: ${ib}` })
+    expect(error).toMatchObject({ code: 'SIE_IMPORT_PERIOD_HAS_OPENING_BALANCE', pgCode: '55000', message: ib })
+    expect(userFacingCode(error)).toBe('SIE_IMPORT_PERIOD_HAS_OPENING_BALANCE')
+  })
+
+  it('keeps an existing import its own code', () => {
+    const error = jobDatabaseError({ code: '55000', message: 'Existing SIE import requires reviewed replacement or reconciliation' })
+    expect(error.code).toBe('SIE_IMPORT_PERIOD_ALREADY_IMPORTED')
+    expect(userFacingCode(error)).toBeNull()
+  })
+
   it('keeps every other 55000 refusal a CONFLICT', () => {
     const error = jobDatabaseError({ code: '55000', message: 'Another SIE execution must finish before undo' })
     expect(error.code).toBe('CONFLICT')

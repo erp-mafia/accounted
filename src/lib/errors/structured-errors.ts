@@ -671,6 +671,14 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
     message_en:
       'This business event already appears to be booked: either another transaction with the same date and amount, or a voucher that already books the same amount on the bank account (e.g. a paid invoice or a salary run). Do not book the same business event twice. Review the existing voucher and link this transaction to it, or pass force=true to book it anyway if they are genuinely unrelated.',
   },
+  // crm#1264: one open proposal per bank row (lib/pending-operations/transaction-claims.ts).
+  TRANSACTION_ALREADY_STAGED: {
+    httpStatus: 409,
+    message_sv:
+      'Transaktionen ligger redan i ett förslag som väntar på godkännande. En banktransaktion kan bara finnas i ett förslag i taget. Godkänn eller avvisa det förslaget under Att göra innan ett nytt läggs.',
+    message_en:
+      'The transaction is already in a proposal awaiting approval that this call cannot replace (another stager, rows the new proposal leaves out, or an approval running now). A bank row can be in one proposal at a time: approve or reject that proposal first, then stage again. force=true does not override this.',
+  },
   TRANSACTION_BOOK_FORCE_CANDIDATE_MISMATCH: {
     httpStatus: 409,
     message_sv:
@@ -1930,8 +1938,8 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   },
   CASH_ACCOUNT_IBAN_DUPLICATE: {
     httpStatus: 409,
-    message_sv: 'Ett annat bankkonto i företaget har redan detta IBAN. Samma bankkonto ska bara finnas en gång: använd det befintliga kontot.',
-    message_en: 'Another bank account of the company already carries this IBAN. One physical account must exist once: use the existing cash account.',
+    message_sv: 'Ett annat bankkonto i företaget har redan detta IBAN, även om det är avstängt: en bankkoppling hamnar på det kontot. Samma bankkonto ska bara finnas en gång, så lägg uppgifterna på det befintliga kontot. Lades det andra kontot till av misstag: stäng av det och töm dess IBAN, eller ta bort det under Inställningar, Bokföring, Allmänt.',
+    message_en: 'Another bank account of the company already carries this IBAN, also when it is turned off: a bank connection lands on that account. One physical account must exist once, so put the details on the existing account. If the other account was added by mistake, turn it off and clear its IBAN, or remove it under Settings, Bookkeeping, General.',
   },
   // Removing a bank account (remove_cash_account, #3130): one code per
   // refusal, each saying what keeps the account and the way out if there is
@@ -2203,6 +2211,44 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 404,
     message_sv: 'Fakturan kunde inte hittas.',
     message_en: 'Invoice not found.',
+  },
+  // Files emailed with an invoice after its PDF (crm#1269,
+  // lib/invoices/invoice-attachments.ts). They change only on a draft that
+  // has never been emailed; afterwards they are part of what the customer
+  // received and stay with the invoice.
+  INVOICE_ATTACHMENTS_FIXED: {
+    httpStatus: 409,
+    message_sv: 'Bilagorna kan inte ändras när fakturan har skickats. De sparas tillsammans med fakturan enligt bokföringslagen.',
+    message_en: 'Attachments cannot change once the invoice has been sent. They are kept with the invoice under the Swedish Bookkeeping Act.',
+  },
+  INVOICE_ATTACHMENT_DOCUMENT_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Underlaget hittades inte i företagets arkiv.',
+    message_en: 'The document was not found in this company\'s archive.',
+    remediation: {
+      description: 'Pass the id of a current document of the same company: upload the file first, or find its id among the company\'s documents.',
+    },
+  },
+  INVOICE_ATTACHMENT_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Filen är inte bifogad till fakturan.',
+    message_en: 'The file is not attached to this invoice.',
+  },
+  INVOICE_ATTACHMENTS_TOO_MANY: {
+    httpStatus: 400,
+    message_sv: 'En faktura kan ha högst 10 bilagor.',
+    message_en: 'An invoice can have at most 10 attachments.',
+  },
+  INVOICE_ATTACHMENTS_TOO_LARGE: {
+    httpStatus: 400,
+    message_sv: 'Bilagorna får vara högst 25 MB tillsammans. Ta bort en bilaga eller komprimera filen och försök igen.',
+    message_en: 'Attachments may total at most 25 MB. Remove an attachment or compress the file and try again.',
+  },
+  INVOICE_ATTACHMENT_LOAD_FAILED: {
+    httpStatus: 503,
+    message_sv: 'En bilaga kunde inte hämtas från arkivet. Fakturan skickades inte, försök igen om en stund.',
+    message_en: 'An attachment could not be read from the archive. The invoice was not sent; try again shortly.',
+    retryable: true,
   },
   // POST /api/invoices/{id}/refresh-exchange-rate: the repair path for a
   // foreign-currency invoice whose SEK conversion is missing or was stamped
@@ -3539,18 +3585,37 @@ const SIE_IMPORT: Record<string, StructuredErrorEntry> = {
     message_en: 'An SIE import for an overlapping fiscal period already exists.',
   },
   // start_sie_import_job's guard 'Existing SIE import requires reviewed
-  // replacement or reconciliation' (55000), mapped by jobDatabaseError. The
-  // guard also counts a posted ingående balans, so the sentence names both.
+  // replacement or reconciliation' (55000), mapped by jobDatabaseError: the
+  // year holds an earlier import's verifikat, or an import record overlaps
+  // it. An ingående balans booked outside an import has its own code below
+  // (crm#1272).
   SIE_IMPORT_PERIOD_ALREADY_IMPORTED: {
     httpStatus: 409,
-    message_sv: 'Räkenskapsåret har redan en import eller en bokförd ingående balans. Öppna importhistoriken och ångra den tidigare importen innan du importerar året igen.',
-    message_en: 'This fiscal year already has an import or a posted opening balance. Open import history and undo the earlier import before importing the year again.',
+    message_sv: 'Räkenskapsåret har redan importerats. Öppna importhistoriken och ångra den tidigare importen innan du importerar året igen.',
+    message_en: 'This fiscal year has already been imported. Open import history and undo the earlier import before importing the year again.',
     retryable: false,
     remediation: {
       description: 'Read gnubok_sie_import_status for the earlier import of this fiscal year, undo it (gnubok_undo_sie_import or import history in the app), then import the year again.',
       tool: 'gnubok_sie_import_status',
       resource: '/import?mode=sie',
     },
+  },
+  // sie_import_admission_refusal (crm#1272): the year already has an IB
+  // verifikat that no import owns (booked by hand, by the year-end close or
+  // carried forward) and the import would book the file's IB on top of it.
+  // The database writes the Swedish sentence, naming the verifikat.
+  SIE_IMPORT_PERIOD_HAS_OPENING_BALANCE: {
+    httpStatus: 409,
+    message_sv: 'Räkenskapsåret har redan en bokförd ingående balans. Importera filen utan ingående balanser, så läggs verifikationerna ovanpå den bokförda.',
+    message_en: 'This fiscal year already has a posted opening balance (ingående balans), and the import would book the file\'s opening balance a second time. Import the file without opening balances to add its vouchers on top of the posted one.',
+    retryable: false,
+    remediation: {
+      description: 'Stage gnubok_import_sie again with the same file and import_opening_balances=false: the vouchers are imported and the posted ingående balans stays. If the file\'s ingående balans is the correct one, correct the posted one first (gnubok_correct_opening_balances, a storno and a new IB verifikat), then import with import_opening_balances=false. Never reverse the IB just to let the import book its own.',
+      tool: 'gnubok_import_sie',
+      args: { import_opening_balances: false },
+      resource: '/import?mode=sie',
+    },
+    thrown_message_sv: true,
   },
   SIE_IMPORT_UNMAPPED_ACCOUNTS: {
     httpStatus: 400,
@@ -8416,6 +8481,16 @@ const PAYMENT_ORDERS: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'OCR-numret till skattekontot saknas. Lägg in företagets organisationsnummer eller koppla Skatteverket så hämtas det.',
     message_en: 'The OCR number for the tax account is missing. Add the company\'s organisation number or connect Skatteverket to fetch it.',
+  },
+  // A skattekonto payment named from an AGI (source agi) for a month without one.
+  SKATTEKONTO_PAYMENT_AGI_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Det finns ingen arbetsgivardeklaration för månaden. Skapa den under Lön först.',
+    message_en: 'There is no employer declaration (AGI) for the month. Create it under Payroll first.',
+    remediation: {
+      description:
+        'month is the redovisningsperiod (the month the pay went out). Generate the AGI from the salary run, or pay a free amount without a source.',
+    },
   },
   PAYMENT_ORDERS_MIXED_CURRENCY: {
     httpStatus: 400,

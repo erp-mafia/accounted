@@ -89,7 +89,7 @@ describe('prepareSkattekontoPaymentOrder', () => {
   it('pays in what the next charge lacks, the banking day before Skatteverket draws it, with the company OCR', async () => {
     const result = await prepareSkattekontoPaymentOrder(ctx, { cashAccountId: 'acct-1', today: TODAY })
 
-    expect(result).toEqual({ ok: true, data: { order: CREATED, warnings: [], replaced_draft_ids: [] } })
+    expect(result).toEqual({ ok: true, data: { order: CREATED, warnings: [], replaced_draft_ids: [], source: null, balance: null } })
     expect(rpcArgs()).toMatchObject({
       p_company_id: COMPANY,
       p_cash_account_id: 'acct-1',
@@ -199,6 +199,8 @@ describe('prepareSkattekontoPaymentOrder', () => {
         reference: { type: 'ocr', value: OCR },
         warnings: [],
         replaces_drafts: 1,
+        source: null,
+        balance: null,
       },
     })
     expect(db.findCall('rpc:create_skattekonto_payment_order', 'rpc')).toBeUndefined()

@@ -32,6 +32,7 @@ function stage(args: Record<string, unknown>) {
   enqueue({ data: { ledger_account: '1930', currency: 'SEK' }, error: null })
   enqueue({ data: null, error: null })
   enqueue({ data: null, error: null })
+  enqueue({ data: [], error: null }) // open operations on these rows: none (crm#1264)
   enqueue({ data: { id: 'op-1' }, error: null })
   return {
     run: () =>

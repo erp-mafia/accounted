@@ -50,6 +50,13 @@ const mocks = vi.hoisted(() => ({
   createInvoiceJournalEntry: vi.fn(),
   uploadDocument: vi.fn(),
   linkToJournalEntry: vi.fn(),
+  linkInvoiceAttachments: vi.fn(),
+  loadInvoiceEmailAttachments: vi.fn(),
+}))
+
+vi.mock('@/lib/invoices/invoice-attachments', () => ({
+  linkInvoiceAttachments: mocks.linkInvoiceAttachments,
+  loadInvoiceEmailAttachments: mocks.loadInvoiceEmailAttachments,
 }))
 
 vi.mock('@/lib/invoices/invoice-deliveries', () => ({
@@ -138,6 +145,8 @@ beforeEach(() => {
   mocks.createInvoiceJournalEntry.mockResolvedValue({ id: 'je-1' })
   mocks.uploadDocument.mockResolvedValue({ id: 'underlag-1' })
   mocks.linkToJournalEntry.mockResolvedValue(undefined)
+  mocks.linkInvoiceAttachments.mockResolvedValue({ ok: true, value: [] })
+  mocks.loadInvoiceEmailAttachments.mockResolvedValue({ ok: true, value: [] })
 })
 
 describe('commitPendingOperation: send_invoice issues before it emails', () => {
@@ -209,6 +218,51 @@ describe('commitPendingOperation: send_invoice issues before it emails', () => {
       expect.objectContaining({ type: 'application/pdf' }),
       expect.objectContaining({ journal_entry_id: 'je-1' }),
     )
+  })
+})
+
+describe('commitPendingOperation: send_invoice with attachment_document_ids (crm#1269)', () => {
+  function sendOp(): PendingOperation {
+    return { ...op('send_invoice'), params: { invoice_id: 'invoice-1', attachment_document_ids: ['doc-1'] } }
+  }
+
+  it('attaches the staged documents, then emails them after the PDF', async () => {
+    const report = { filename: 'tidrapport.pdf', content: Buffer.from('%PDF'), contentType: 'application/pdf' }
+    mocks.loadInvoiceEmailAttachments.mockResolvedValue({ ok: true, value: [report] })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: draftInvoice(), error: null })
+    enqueue({ data: SETTINGS, error: null })
+    enqueue({ data: [{ id: 'invoice-1' }], error: null }) // status flip draft -> sent
+    enqueue({ data: null, error: null }) // journal_entry_id link
+    enqueue({ data: null, error: null }) // dispatcher finalize
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', sendOp())
+
+    expect(result.status).toBe('committed')
+    expect(mocks.linkInvoiceAttachments).toHaveBeenCalledWith(expect.anything(), 'company-1', 'invoice-1', ['doc-1'])
+    expect(mocks.sendTrackedInvoiceEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ extraAttachments: [report] }),
+    )
+  })
+
+  it('a document that is gone (or another company\'s) stops the send before anything is issued', async () => {
+    mocks.linkInvoiceAttachments.mockResolvedValue({ ok: false, code: 'INVOICE_ATTACHMENT_DOCUMENT_NOT_FOUND' })
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: draftInvoice(), error: null })
+    enqueue({ data: SETTINGS, error: null })
+    enqueue({ data: null, error: null }) // dispatcher reject
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', sendOp())
+
+    // A refusal before any side effect: the operation is rejected, not failed_partial.
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(404)
+    expect(result.error).toBe('Underlaget hittades inte i företagets arkiv.')
+    expect(ensureInvoiceNumber).not.toHaveBeenCalled()
+    expect(findCalls('invoices', 'update')).toEqual([])
+    expect(mocks.sendTrackedInvoiceEmail).not.toHaveBeenCalled()
   })
 })
 

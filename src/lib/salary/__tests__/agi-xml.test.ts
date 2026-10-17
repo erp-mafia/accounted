@@ -245,6 +245,8 @@ describe('generateAGIXml: Individuppgift (IU)', () => {
   })
 
   it('omits empty/zero fields', () => {
+    // Both fixtures withhold tax. FK001 is the one field declared even at 0
+    // (kontroll S_183): see the skattefält block below.
     const xml = generateAGIXml(company, employees, totals)
     const lines = xml.split('\n')
     for (const line of lines) {
@@ -282,10 +284,87 @@ describe('generateAGIXml: F-skatt payee IU (FK131)', () => {
     )
   })
 
-  it('does not emit FK011 or FK001 for the F-skatt payment', () => {
+  it('does not emit FK011 for the F-skatt payment, and declares FK001 as 0', () => {
     const xml = generateAGIXml(company, [fSkattEmployee], totals)
     expect(xml).not.toContain('faltkod="011"')
-    expect(xml).not.toContain('faltkod="001"')
+    // Teknisk beskrivning 5.4: no tax withheld on FK131 means 0 in FK001.
+    expect(xml).toContain('<gem:AvdrPrelSkatt faltkod="001">0</gem:AvdrPrelSkatt>')
+  })
+})
+
+describe('generateAGIXml: every IU carries a skattefält (kontroll S_183, crm#1265)', () => {
+  // S_183: without FK205 at least one of FK001, FK274, FK275, FK094, FK114,
+  // FK253, FK276 must have a value; S_175: at most one of them.
+  const SKATTEFALT = ['001', '274', '275', '094', '114', '253', '276']
+
+  function iuBlocks(xml: string): string[] {
+    return xml.split('<gem:IU>').slice(1).map((b) => b.split('</gem:IU>')[0])
+  }
+
+  function skattefaltIn(iu: string): string[] {
+    return SKATTEFALT.filter((fk) => iu.includes(`faltkod="${fk}"`))
+  }
+
+  const zeroTaxEmployee: AGIEmployeeData = {
+    personnummer: 'emp2_encrypted',
+    specificationNumber: 2,
+    grossSalary: 9000,
+    taxWithheld: 0,
+    avgifterBasis: 9000,
+  }
+
+  it('declares FK001 as 0 for a paid employee with no tax withheld', () => {
+    const [iu] = iuBlocks(generateAGIXml(company, [zeroTaxEmployee], totals))
+    expect(iu).toContain('<gem:KontantErsattningUlagAG faltkod="011">9000</gem:KontantErsattningUlagAG>')
+    expect(iu).toContain('<gem:AvdrPrelSkatt faltkod="001">0</gem:AvdrPrelSkatt>')
+  })
+
+  it('declares FK001 as 0 on a benefit-only IU with no cash and no tax', () => {
+    const benefitOnly: AGIEmployeeData = {
+      personnummer: 'emp2_encrypted',
+      specificationNumber: 2,
+      grossSalary: 0,
+      taxWithheld: 0,
+      avgifterBasis: 0,
+      benefitMeals: 1200,
+    }
+    const [iu] = iuBlocks(generateAGIXml(company, [benefitOnly], totals))
+    expect(iu).not.toContain('faltkod="011"')
+    expect(iu).toContain('<gem:KostformanUlagAG faltkod="015">1200</gem:KostformanUlagAG>')
+    expect(iu).toContain('<gem:AvdrPrelSkatt faltkod="001">0</gem:AvdrPrelSkatt>')
+  })
+
+  it('declares FK001 as 0 when the withheld tax is below one krona', () => {
+    const [iu] = iuBlocks(generateAGIXml(company, [{ ...zeroTaxEmployee, taxWithheld: 0.6 }], totals))
+    expect(iu).toContain('<gem:AvdrPrelSkatt faltkod="001">0</gem:AvdrPrelSkatt>')
+  })
+
+  it('leaves a normal employee unchanged: FK011 and the withheld FK001', () => {
+    const [iu] = iuBlocks(generateAGIXml(company, [employees[0]], totals))
+    expect(iu).toContain('<gem:KontantErsattningUlagAG faltkod="011">40000</gem:KontantErsattningUlagAG>')
+    expect(iu).toContain('<gem:AvdrPrelSkatt faltkod="001">12000</gem:AvdrPrelSkatt>')
+  })
+
+  it('keeps a borttag IU free of FK001 (S_003: identity fields only)', () => {
+    const removed: AGIEmployeeData = { ...zeroTaxEmployee, removed: true }
+    const [iu] = iuBlocks(generateAGIXml(company, [removed], totals))
+    expect(iu).toContain('<gem:Borttag faltkod="205">1</gem:Borttag>')
+    expect(skattefaltIn(iu)).toEqual([])
+  })
+
+  it('gives every non-borttag IU of a mixed roster exactly one skattefält', () => {
+    const roster: AGIEmployeeData[] = [
+      ...employees,
+      { ...zeroTaxEmployee, specificationNumber: 3 },
+      { ...zeroTaxEmployee, specificationNumber: 4, grossSalary: 0, avgifterBasis: 0, fSkattPayment: 5000 },
+      { ...zeroTaxEmployee, specificationNumber: 5, removed: true },
+    ]
+    const ius = iuBlocks(generateAGIXml(company, roster, totals))
+    expect(ius).toHaveLength(5)
+    for (const iu of ius) {
+      const expected = iu.includes('faltkod="205"') ? [] : ['001']
+      expect(skattefaltIn(iu)).toEqual(expected)
+    }
   })
 })
 

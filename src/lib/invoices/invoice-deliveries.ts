@@ -33,6 +33,11 @@ export interface TrackedInvoiceEmailInput {
   text: string
   filename: string
   pdfBuffer: Buffer
+  /**
+   * The invoice's own attachments (lib/invoices/invoice-attachments.ts),
+   * emailed after the PDF in this order with their original file names.
+   */
+  extraAttachments?: NonNullable<SendEmailOptions['attachments']>
 }
 
 export interface TrackedInvoiceEmailResult extends SendEmailResult {
@@ -93,6 +98,7 @@ export async function sendTrackedInvoiceEmail(
     text,
     filename,
     pdfBuffer,
+    extraAttachments = [],
   } = input
 
   const pdfArrayBuffer = new Uint8Array(pdfBuffer).buffer as ArrayBuffer
@@ -165,12 +171,14 @@ export async function sendTrackedInvoiceEmail(
     // The company's own verified sender wins over the brand address
     // (buildFromHeader gives `from` precedence).
     from,
+    // The invoice PDF first, then the files the invoice carries.
     attachments: [
       {
         filename,
         content: pdfBuffer,
         contentType: PDF_CONTENT_TYPE,
       },
+      ...extraAttachments,
     ],
   }
   const result = await emailService.sendEmail(emailOptions)

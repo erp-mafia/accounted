@@ -1399,6 +1399,15 @@ export const SendInvoiceSchema = MarkInvoiceSentSchema.extend({
   },
 )
 
+/**
+ * POST /api/invoices/[id]/attachments: attach documents already in the
+ * archive (uploaded through POST /api/documents) to a draft invoice. The
+ * upper bound is lib/invoices/invoice-attachments MAX_INVOICE_ATTACHMENTS.
+ */
+export const LinkInvoiceAttachmentsSchema = z.object({
+  document_ids: z.array(uuid).min(1).max(10),
+})
+
 /** POST /api/invoices/preview-email: the preview draft plus this send's own texts. */
 export const InvoiceEmailPreviewSchema = InvoicePreviewSchema.extend(InvoiceEmailOverrideShape)
 

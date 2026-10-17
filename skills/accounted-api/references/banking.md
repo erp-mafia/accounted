@@ -640,7 +640,7 @@ Sparse update of one cash account. voucher_series (one letter A-Z, null clears) 
 - Payee fields, name, invoice_payee and enabled are owner/admin only (403 FORBIDDEN); voucher_series alone is open to any writer.
 - Payee fields on a PSP clearing account or a till return 400 INVOICE_PAYEE_ACCOUNT_INVALID: only 1920-1999 bank accounts print on invoices.
 - enabled on an account a bank connection holds returns 409 CASH_ACCOUNT_ENABLED_BANK_MANAGED; disabling the primary returns 400 CASH_ACCOUNT_DISABLE_PRIMARY, and one with unbooked transactions 400 CASH_ACCOUNT_DISABLE_UNRESOLVED.
-- An iban another account already carries returns 409 CASH_ACCOUNT_IBAN_DUPLICATE.
+- An iban another account already carries (printed or as its bank identity iban, enabled or not) returns 409 CASH_ACCOUNT_IBAN_DUPLICATE with details.existing_cash_account_id. If that account was added by mistake: on it, send enabled=false and iban "" (one request is fine). On a disabled account typed in by hand, clearing or changing iban also moves its bank identity iban, which frees the IBAN for the right account.
 - Changing voucher_series only affects entries booked afterwards; nothing posted is renumbered.
 
 | Parameter | In | Type | Required | Notes |
@@ -1041,6 +1041,7 @@ Accepts a SIE4 file (CP437 / Windows-1252 / UTF-8 auto-detected, up to 50 MB) as
 - Body content-type must be multipart/form-data with either a `file` field carrying the .se / .sie / .si file, or `storagePath` and `filename` fields from the signed-upload endpoint.
 - Files up to 50 MB use POST /imports/sie/upload, then upload bytes to Storage and submit storagePath + filename. Inline multipart is limited by the hosting gateway.
 - An identical retry returns the same execution. Deliberate replacement requires options.onExistingPeriod=replace and options.supersedesImportId naming the reviewed predecessor, and uses a new batch after storno.
+- A fiscal year that already has a posted ingående balans booked outside an import (by hand or by a year-end close) answers 409 SIE_IMPORT_PERIOD_HAS_OPENING_BALANCE when the import would book the file's IB on top of it (importOpeningBalances true and no earlier bookkeeping): resend with options.importOpeningBalances=false to import the vouchers on top of the posted IB. A year that already holds an import answers 409 SIE_IMPORT_PERIOD_ALREADY_IMPORTED.
 - A file whose #ORGNR is not the company's organisation number answers 409 SIE_IMPORT_ORG_NUMBER_MISMATCH with both numbers in details. Check with the user, then resend with options.confirmOrgNumberMismatch=true to import it anyway. A file without #ORGNR is not checked.
 - The operation can take 1-5 minutes for multi-year files. The HTTP response returns immediately with operation_id; poll /operations/{id} every ~2s for status.
 - Chunks are visible while importing. Filing and export are held until completion. Undo uses batch storno and retains accounting history.

@@ -100,6 +100,13 @@ const mockSendTrackedInvoiceEmail = vi.fn(async (input: {
   documentId: 'document-1',
 }))
 const mockReserveInvoiceDelivery = vi.fn().mockResolvedValue('delivery-1')
+const mockLinkInvoiceAttachments = vi.fn()
+const mockLoadInvoiceEmailAttachments = vi.fn()
+vi.mock('@/lib/invoices/invoice-attachments', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/invoices/invoice-attachments')>()),
+  linkInvoiceAttachments: (...args: unknown[]) => mockLinkInvoiceAttachments(...args),
+  loadInvoiceEmailAttachments: (...args: unknown[]) => mockLoadInvoiceEmailAttachments(...args),
+}))
 vi.mock('@/lib/invoices/invoice-deliveries', () => ({
   InvoiceDeliverySnapshotError: class InvoiceDeliverySnapshotError extends Error {},
   reserveInvoiceDelivery: (...args: unknown[]) => mockReserveInvoiceDelivery(...args),
@@ -222,6 +229,8 @@ beforeEach(() => {
   })
   mockIsConfigured.mockReturnValue(true)
   mockSendEmail.mockResolvedValue({ success: true, messageId: 're_abc123' })
+  mockLinkInvoiceAttachments.mockResolvedValue({ ok: true, value: [] })
+  mockLoadInvoiceEmailAttachments.mockResolvedValue({ ok: true, value: [] })
 })
 
 describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
@@ -455,6 +464,87 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
         ],
       }),
     )
+  })
+
+  it('attaches attachment_document_ids and emails them after the PDF (crm#1269)', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: [
+          { data: DRAFT_INVOICE, error: null },
+          { data: { invoice_number: '2026-0042' }, error: null },
+        ],
+        company_settings: { data: COMPANY_SETTINGS, error: null },
+      }).supabase,
+    )
+    const documentId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+    const spec = { filename: 'specifikation.pdf', content: Buffer.from('%PDF spec'), contentType: 'application/pdf' }
+    mockLoadInvoiceEmailAttachments.mockResolvedValue({ ok: true, value: [spec] })
+
+    const res = await sendInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`, {
+        attachment_document_ids: [documentId],
+      }),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect(mockLinkInvoiceAttachments).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      INVOICE_ID,
+      [documentId],
+      { dryRun: false },
+    )
+    expect(mockSendTrackedInvoiceEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ extraAttachments: [spec] }),
+    )
+  })
+
+  it('refuses a document of another company before a number is allocated or anything sent', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: DRAFT_INVOICE, error: null },
+        company_settings: { data: COMPANY_SETTINGS, error: null },
+      }).supabase,
+    )
+    mockLinkInvoiceAttachments.mockResolvedValue({ ok: false, code: 'INVOICE_ATTACHMENT_DOCUMENT_NOT_FOUND' })
+
+    const res = await sendInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`, {
+        attachment_document_ids: ['eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'],
+      }),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_ATTACHMENT_DOCUMENT_NOT_FOUND')
+    expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
+    expect(mockReserveInvoiceDelivery).not.toHaveBeenCalled()
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('rejects a malformed attachment_document_ids entry with a validation error', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: DRAFT_INVOICE, error: null },
+        company_settings: { data: COMPANY_SETTINGS, error: null },
+      }).supabase,
+    )
+
+    const res = await sendInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`, {
+        attachment_document_ids: ['not-a-uuid'],
+      }),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    expect(mockLinkInvoiceAttachments).not.toHaveBeenCalled()
+    expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
   it('writes the email with this send\'s own subject and message, without storing them', async () => {

@@ -310,6 +310,7 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
         : sc.verdict === 'ok' ? 'Ser korrekt ut'
         : sc.verdict === 'ok_with_warnings' ? 'OK med anmärkningar'
         : sc.verdict === 'duplicate' ? 'Redan importerad'
+        : sc.verdict === 'blocked' ? 'Kan inte importeras nu'
         : 'Ogiltig fil') + '</span>';
     rows.forEach(function(r) {
       html += '<div class="row"><span class="k">' + esc(r[0]) + '</span><span class="v">' + esc(r[1]) + '</span></div>';
@@ -352,7 +353,9 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
       sha256: fileState.sha256,
       mappings: fileState.preflight.mappings || [],
       create_fiscal_period: true,
-      import_opening_balances: true,
+      // false when the year already has a posted IB (crm#1272): the
+      // preflight says so, and the import is admitted only without the file's.
+      import_opening_balances: fileState.preflight.import_opening_balances !== false,
       import_transactions: true
     })).then(function(res) {
       const sc = parseResult(res);

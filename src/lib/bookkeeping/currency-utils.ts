@@ -109,3 +109,13 @@ export function buildCurrencyMetadata(
     ...(exchangeRate != null && exchangeRate > 0 ? { exchange_rate: exchangeRate } : {}),
   }
 }
+
+/**
+ * Whether `currency` is the ledger currency (kronor today; unset means
+ * kronor). Code that only needs "is this invoice foreign?" asks here, so
+ * the answer follows the jurisdiction setting instead of a 'SEK' literal at
+ * each call site.
+ */
+export function isLedgerCurrency(currency: string | null | undefined): boolean {
+  return !currency || currency === 'SEK'
+}

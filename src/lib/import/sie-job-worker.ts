@@ -110,13 +110,15 @@ async function finalize(supabase: SupabaseClient, job: SIEJob, deadline: number,
   warnings.push(...untransferred.warnings)
   notices.push(...untransferred.notices)
   // A continuation import never books the file's #IB (prior_activity): the
-  // year opens on the carried-forward balance. Where that differs from what
-  // the file stated, the result says so with the amounts (crm#1099); an ended
-  // year whose file held no vouchers is missing its bookkeeping.
+  // year opens on the carried-forward balance, or on its own IB verifikat
+  // when it has one (crm#1272). Where that differs from what the file stated,
+  // the result says so with the amounts (crm#1099); an ended year whose file
+  // held no vouchers is missing its bookkeeping.
   const yearStart = isoDay(job.fiscal_year_start)
   const yearEnd = parsed.stats.fiscalYearEnd
   const ibDifferences = isImport && job.manifest.prior_activity && yearStart
-    ? await diagnoseCarriedForwardDifferences(supabase,job.company_id,yearStart,job.manifest.effectiveOpeningBalances,mappings)
+    ? await diagnoseCarriedForwardDifferences(supabase,job.company_id,yearStart,job.manifest.effectiveOpeningBalances,mappings,
+      job.fiscal_period_id)
     : []
   const continuity = continuityNotices({differences:ibDifferences,
     noVouchers:isImport && parsed.stats.totalVouchers === 0 && yearStart && yearEnd && yearEnd < todayIsoStockholm()

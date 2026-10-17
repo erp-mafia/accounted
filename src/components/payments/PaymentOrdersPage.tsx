@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
@@ -19,6 +20,7 @@ import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, HOVER_REVEAL_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { useToast } from '@/components/ui/use-toast'
+import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
@@ -61,6 +63,9 @@ import { startPollLoop } from '@/components/bank-feed/poll-loop'
 /** The provider's form is filled in by hand: a quarter minute between looks while one is open. */
 const VERIFICATION_POLL_MS = 15_000
 
+// Ny betalning till Skatteverket: the skattekonto payment, loaded when opened.
+const PaySkattekontoViaBankDialog = dynamic(() => import('./PaySkattekontoViaBankDialog'), { loading: DialogLoadingSkeleton })
+
 /**
  * Betalningar: every bank payment the company asked its bank to make, by where
  * it stands, plus the way to the payment files for companies that pay by file.
@@ -82,6 +87,7 @@ export function PaymentOrdersPage() {
   /** The form link opened from this page in this sitting, so it can be opened again. */
   const [verificationUrl, setVerificationUrl] = useState<string | null>(null)
   const [verificationBusy, setVerificationBusy] = useState(false)
+  const [payingSkattekonto, setPayingSkattekonto] = useState(false)
   const [orders, setOrders] = useState<PaymentOrder[] | null>(null)
   const [approving, setApproving] = useState<PaymentOrder[] | null>(null)
   const [signing, setSigning] = useState<PaymentOrder[] | null>(null)
@@ -309,6 +315,13 @@ export function PaymentOrdersPage() {
     <PageHeader
       title={t('title')}
       help={<HelpPopover>{t('help_body')}</HelpPopover>}
+      action={
+        available && canWrite ? (
+          <Button size="sm" variant="outline" onClick={() => setPayingSkattekonto(true)}>
+            {t('new_skattekonto_payment')}
+          </Button>
+        ) : undefined
+      }
     />
   )
 
@@ -593,6 +606,15 @@ export function PaymentOrdersPage() {
             if (!open) setResolving(null)
           }}
           onResolved={refresh}
+        />
+      )}
+      {payingSkattekonto && (
+        <PaySkattekontoViaBankDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setPayingSkattekonto(false)
+          }}
+          onDone={refresh}
         />
       )}
     </div>

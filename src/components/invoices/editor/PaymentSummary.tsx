@@ -19,6 +19,17 @@ interface PaymentSummaryProps {
   /** The inline "Lägg till betalningsuppgifter" form, while it is open. */
   addForm: ReactNode | null
   onAddDetails: () => void
+  /**
+   * A foreign-currency invoice with nothing to pay to: the accounts that can
+   * carry it once chosen, with what each prints. Replaces the inline form,
+   * which saves SEK details only (crm#1273). Null for a SEK invoice.
+   */
+  foreignChoice: {
+    currency: string
+    options: Array<{ id: string; label: string; printed: string }>
+    busy: boolean
+  } | null
+  onChooseAccount: (cashAccountId: string) => void
   onOpenPanel: () => void
 }
 
@@ -37,9 +48,51 @@ export function PaymentSummary({
   canEditCompany,
   addForm,
   onAddDetails,
+  foreignChoice,
+  onChooseAccount,
   onOpenPanel,
 }: PaymentSummaryProps) {
   const t = useTranslations('invoice_editor_pay')
+
+  if (missingDetails && foreignChoice) {
+    const { currency, options, busy } = foreignChoice
+    return (
+      <div className="flex items-start gap-3 text-[13px]">
+        <Landmark className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <div className="min-w-0 flex-1 leading-5">
+          <p className="text-muted-foreground">
+            {t(options.length > 0 ? 'foreign_missing' : 'foreign_missing_no_iban', { currency })}
+          </p>
+          {options.length > 0 ? (
+            <div className="mt-1 flex flex-col items-start gap-1">
+              {options.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onChooseAccount(option.id)}
+                  className="text-left text-foreground underline underline-offset-2 hover:text-muted-foreground disabled:opacity-50"
+                  data-ph-mask=""
+                >
+                  {t(canEditCompany ? 'foreign_use_account' : 'foreign_use_account_here', {
+                    account: option.label,
+                    printed: option.printed,
+                    currency,
+                  })}
+                </button>
+              ))}
+            </div>
+          ) : canEditCompany ? (
+            <Link href="/settings/invoicing" className="text-foreground underline underline-offset-2 hover:text-muted-foreground">
+              {t('foreign_open_settings')}
+            </Link>
+          ) : (
+            <p className="text-muted-foreground">{t('ask_admin')}</p>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   if (missingDetails) {
     if (addForm) return <>{addForm}</>

@@ -18,6 +18,11 @@
  */
 import type { PeriodStatusForDate } from '@/lib/core/bookkeeping/period-status'
 import { insertStagedOperation, stagedRiskLevel } from '@/lib/pending-operations/stage'
+import {
+  checkTransactionClaims,
+  supersedeTransactionClaims,
+  transactionAlreadyStagedFailure,
+} from '@/lib/pending-operations/transaction-claims'
 import type { PendingOperation, PendingOperationActorType, PendingOperationType } from '@/types'
 import { operationPreviewToken, previewStaleFailure } from './preview-token'
 import type {
@@ -54,7 +59,15 @@ export function planStagedOperation(
 
 export type StageOperationResult =
   | { ok: false; outcome: Extract<OperationOutcome<unknown>, { ok: false }> }
-  | { ok: true; dryRun: true; plan: StagePlan; riskLevel: 'low' | 'medium' | 'high'; previewToken: string }
+  | {
+      ok: true
+      dryRun: true
+      plan: StagePlan
+      riskLevel: 'low' | 'medium' | 'high'
+      previewToken: string
+      /** The caller's own pending proposals staging would supersede (crm#1264). */
+      wouldSupersedeOperationIds?: string[]
+    }
   | {
       ok: true
       dryRun: false
@@ -62,6 +75,8 @@ export type StageOperationResult =
       row: PendingOperation
       periodStatus?: PeriodStatusForDate
       previewToken: string
+      /** The caller's own pending proposals this one replaced, rejected as superseded (crm#1264). */
+      supersededOperationIds?: string[]
     }
 
 /**
@@ -93,9 +108,26 @@ export async function stageOperation(
     return { ok: false, outcome: previewStaleFailure(plan.preview, previewToken) }
   }
 
+  // One bank row, one open proposal (crm#1264), as the MCP door: rows another
+  // open operation names are refused; the same proposal again answers with
+  // the operation already pending; the caller's own older proposals the new
+  // one fully covers are superseded once it is staged.
+  const stager = { userId: ctx.userId, actorType: actor.type, actorId: actor.id ?? null }
+  const claim = await checkTransactionClaims(ctx.supabase, ctx.companyId, plan.pendingType, plan.params, stager)
+  if (claim.kind === 'claimed') return { ok: false, outcome: transactionAlreadyStagedFailure(claim.claims) }
+  const toSupersede = claim.kind === 'supersede' ? claim.operations : []
+
   if (options.dryRun) {
-    return { ok: true, dryRun: true, plan, riskLevel: stagedRiskLevel(plan.pendingType, plan.params), previewToken }
+    return {
+      ok: true,
+      dryRun: true,
+      plan,
+      riskLevel: stagedRiskLevel(plan.pendingType, plan.params),
+      previewToken,
+      ...(toSupersede.length > 0 ? { wouldSupersedeOperationIds: toSupersede.map((operation) => operation.id) } : {}),
+    }
   }
+  if (claim.kind === 'replay') return { ok: true, dryRun: false, plan, row: claim.operation, previewToken }
 
   const { row, periodStatus } = await insertStagedOperation(
     ctx.supabase,
@@ -112,5 +144,19 @@ export async function stageOperation(
     },
     ctx.log,
   )
-  return { ok: true, dryRun: false, plan, row, ...(periodStatus ? { periodStatus } : {}), previewToken }
+  const superseded = await supersedeTransactionClaims(ctx.supabase, ctx.companyId, toSupersede, {
+    operationId: row.id,
+    stager,
+    actorLabel: actor.label,
+    channel: 'api',
+  })
+  return {
+    ok: true,
+    dryRun: false,
+    plan,
+    row,
+    ...(periodStatus ? { periodStatus } : {}),
+    previewToken,
+    ...(superseded.length > 0 ? { supersededOperationIds: superseded } : {}),
+  }
 }

@@ -1136,7 +1136,7 @@ Example response `200`:
 **Send a draft invoice to the customer by email.**
 `scope:invoices:write · risk:high · idempotent · dry-run`
 
-The full send pipeline: preflight PDF render → allocate F-series number atomically → final PDF render → issue: flip status to sent and post the journal entry (real invoice, unless kontantmetoden or defer_invoice_booking; a deferred invoice is booked afterwards with POST /invoices/{id}/book) BEFORE the email, fail closed → email via the email extension (Resend or SMTP; PDF attachment, copy to company) → archive PDF as underlag → emit invoice.sent. A refused journal entry returns the engine's error and nothing is sent; post-email failures surface as warnings.
+The full send pipeline: preflight PDF render → allocate F-series number atomically → final PDF render → issue: flip status to sent and post the journal entry (real invoice, unless kontantmetoden or defer_invoice_booking; a deferred invoice is booked afterwards with POST /invoices/{id}/book) BEFORE the email, fail closed → email via the email extension (Resend or SMTP; the PDF, then the invoice's own attachments, copy to company) → archive PDF as underlag → emit invoice.sent. A refused journal entry returns the engine's error and nothing is sent; post-email failures surface as warnings.
 
 **Use when:** You want Accounted to deliver the invoice to the customer via email. Peppol e-invoices go through POST /invoices/{id}/send-peppol (check readiness first with GET /invoices/{id}/peppol; per-company access grant requested with POST /peppol/access-request or under Inställningar > Kopplingar > E-faktura via Peppol (Settings > Connections > E-invoicing via Peppol); senders whose org number is not a personnummer (every legal form except enskild firma), standard invoices only, Swedish org-number buyers whose org number is not a personnummer, SEK with taxable Swedish VAT at 6/12/25 % only, no ROT/RUT deductions). A successful Peppol send issues the invoice itself, so do not call :mark-sent after it; only if it reports that the invoice was sent via Peppol but could not be marked as sent (issuance.ok=false) does :mark-sent complete the issuance. For invoices delivered through another channel (an external e-invoice provider, postal, own SMTP) use :mark-sent instead.
 **Do not use for:** Re-sending an already-sent invoice (returns 409 INVOICE_UPDATE_NOT_DRAFT). Sending a delivery note (no F-series lifecycle). Sending a credit note (use the :credit endpoint to issue the kreditfaktura; subsequent re-send of the credit note via :mark-sent is the supported path).
@@ -1154,6 +1154,7 @@ The full send pipeline: preflight PDF render → allocate F-series number atomic
 - The deprecated cc response field contains only the first address. Use cc_addresses for the complete CC list.
 - BCC recipients are retained only in the restricted delivery archive and are omitted from normal and dry-run responses.
 - email_subject and email_body replace the subject and the message of this one email (the greeting and sign-off stay) and take the same placeholders as the company email texts; they are not stored on the invoice. Empty or whitespace-only means the company or stock text.
+- attachment_document_ids attaches existing documents of the same company (404 INVOICE_ATTACHMENT_DOCUMENT_NOT_FOUND for an unknown or foreign id); there is no upload here. At most 10 files and 25 MB together (400 INVOICE_ATTACHMENTS_TOO_MANY / INVOICE_ATTACHMENTS_TOO_LARGE). Once the invoice is sent its attachments are fixed and their documents can no longer be deleted (BFL retention).
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -1167,7 +1168,8 @@ Request body:
   additional_cc?: string[],
   additional_bcc?: string[],
   email_subject?: string | null,
-  email_body?: string | null
+  email_body?: string | null,
+  attachment_document_ids?: string[]
 }
 ```
 

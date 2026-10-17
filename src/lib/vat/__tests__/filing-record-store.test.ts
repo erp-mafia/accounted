@@ -7,6 +7,7 @@ import {
   previewUnmarkVatPeriodFiled,
   recordVatFilingConfirmed,
   unmarkVatPeriodFiled,
+  vatPeriodDeadline,
 } from '../filing-record-store'
 
 /**
@@ -872,5 +873,31 @@ describe('recordVatFilingConfirmed', () => {
     await expect(
       recordVatFilingConfirmed(supabase, COMPANY, { periodType: 'monthly', year: 2026, period: 7 }),
     ).rejects.toMatchObject({ message: 'boom' })
+  })
+})
+
+describe('vatPeriodDeadline', () => {
+  it('answers the deadline row\'s due date and whether the period is filed', async () => {
+    const { supabase, captured } = createStoreSupabase([
+      CALENDAR_AB,
+      { data: { ...pendingRow, due_date: '2026-08-17', is_completed: true, completed_at: '2026-08-10T12:00:00.000Z', status: 'submitted' } },
+    ])
+    const result = await vatPeriodDeadline(supabase, COMPANY, { periodType: 'quarterly', year: 2026, period: 2 })
+    expect(result).toMatchObject({ tax_period: '2026-Q2', period_end: '2026-06-30', due_date: '2026-08-17', filed: true })
+    expect(captured[1].filters).toContainEqual(['eq', 'tax_period', '2026-Q2'])
+  })
+
+  it('places the due date the way the generator would when the company has no row, on a banking day', async () => {
+    const { supabase } = createStoreSupabase([CALENDAR_AB, { data: null }])
+    // Q3 2026 is due 12 November 2026, a Thursday; Q4 2026 on 12 February 2027, a Friday.
+    expect(await vatPeriodDeadline(supabase, COMPANY, { periodType: 'quarterly', year: 2026, period: 3 })).toMatchObject({
+      due_date: '2026-11-12',
+      filed: false,
+    })
+    const monthly = createStoreSupabase([CALENDAR_AB, { data: null }])
+    // July 2026 (small company) is due 12 September 2026, a Saturday: the next banking day.
+    expect(await vatPeriodDeadline(monthly.supabase, COMPANY, { periodType: 'monthly', year: 2026, period: 7 })).toMatchObject({
+      due_date: '2026-09-14',
+    })
   })
 })

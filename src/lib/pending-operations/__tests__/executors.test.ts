@@ -1,4 +1,8 @@
-vi.mock('@/lib/import/sie-jobs',()=>({submitSIEJob:vi.fn(),requestSIEJobAction:vi.fn()}))
+// The error classes and the refusal mapping stay real: the executor answers
+// a database refusal by its class and code (crm#1272).
+vi.mock('@/lib/import/sie-jobs',async (importOriginal)=>({
+  ...(await importOriginal<typeof import('@/lib/import/sie-jobs')>()),submitSIEJob:vi.fn(),requestSIEJobAction:vi.fn(),
+}))
 /**
  * Unit tests for the executors added to bring every declared op type up to a
  * callable state through `commitPendingOperation`. Tests run through the
@@ -135,7 +139,7 @@ import { commitPendingOperation } from '../commit'
 import { unlockPeriod } from '@/lib/core/bookkeeping/period-service'
 import { codedRefusal } from '@/lib/errors/refusal'
 import { parseSIEFile } from '@/lib/import/sie-parser'
-import { requestSIEJobAction, submitSIEJob } from '@/lib/import/sie-jobs'
+import { jobDatabaseError, requestSIEJobAction, submitSIEJob } from '@/lib/import/sie-jobs'
 import { commitAnnualPostings } from '@/lib/bokslut/assets/depreciation-engine'
 import { createSupplierCreditNoteEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { categorizeMatchedTransaction } from '@/lib/transactions/categorize-core'
@@ -1024,6 +1028,53 @@ describe('commitPendingOperation: import_sie', () => {
 
     expect(result.status).toBe('failed')
     expect(result.error).toMatch(/duplicate import/)
+  })
+
+  // crm#1272: the approval answered the database's English ("Existing SIE
+  // import requires reviewed replacement or reconciliation") with no code,
+  // so the agent had nothing to act on.
+  const sieOp = (importOpeningBalances: boolean) => makePendingOp({
+    operation_type: 'import_sie',
+    params: {
+      file_content: '#FLAGGA 0\n', filename: 'test.sie', mappings: [],
+      create_fiscal_period: true, import_opening_balances: importOpeningBalances, import_transactions: true,
+    },
+  })
+
+  it('answers a year that already has a booked IB with its code, the sentence and the way out', async () => {
+    const sentence = 'Räkenskapsåret 2026-01-01 till 2026-12-31 har redan en bokförd ingående balans (verifikation A1, 2026-01-01), ' +
+      'och importen skulle bokföra filens ingående balans en gång till. Importera filen utan ingående balanser.'
+    vi.mocked(submitSIEJob).mockRejectedValueOnce(jobDatabaseError({
+      code: '55000', message: `SIE_IMPORT_PERIOD_HAS_OPENING_BALANCE: ${sentence}`,
+    }))
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', sieOp(true))
+
+    expect(result).toMatchObject({
+      status: 'rejected',
+      http_status: 409,
+      code: 'SIE_IMPORT_PERIOD_HAS_OPENING_BALANCE',
+      error: sentence,
+      data: { remediation: { tool: 'gnubok_import_sie', args: { import_opening_balances: false } } },
+    })
+  })
+
+  it('answers an earlier import of the year with the registry sentence, not the database English', async () => {
+    vi.mocked(submitSIEJob).mockRejectedValueOnce(jobDatabaseError({
+      code: '55000', message: 'Existing SIE import requires reviewed replacement or reconciliation',
+    }))
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', sieOp(false))
+
+    expect(result).toMatchObject({ status: 'rejected', code: 'SIE_IMPORT_PERIOD_ALREADY_IMPORTED' })
+    expect(result.error).toMatch(/^Räkenskapsåret har redan importerats/)
+    expect(result.data).toMatchObject({ remediation: { tool: 'gnubok_sie_import_status' } })
   })
 })
 

@@ -264,12 +264,22 @@ exports[`the agent briefing for each representative company > aktiebolag missing
         },
         {
           "callable": true,
-          "name": "gnubok_vat_declaration_validate",
+          "name": "gnubok_mark_vat_check_reviewed",
+          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
-          "name": "gnubok_mark_vat_check_reviewed",
+          "name": "gnubok_get_vat_settlement_proposal",
+          "note": "not in tools/list: invoke it through gnubok_call_tool",
+        },
+        {
+          "callable": true,
+          "name": "gnubok_book_vat_settlement",
           "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+        },
+        {
+          "callable": true,
+          "name": "gnubok_vat_declaration_validate",
         },
         {
           "callable": true,
@@ -282,6 +292,11 @@ exports[`the agent briefing for each representative company > aktiebolag missing
         {
           "callable": true,
           "name": "gnubok_approve_pending_operation",
+        },
+        {
+          "callable": true,
+          "name": "gnubok_prepare_payments",
+          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
         },
       ],
       "workflow": "vat_declaration",
@@ -612,12 +627,22 @@ exports[`the agent briefing for each representative company > aktiebolag, every 
         },
         {
           "callable": true,
-          "name": "gnubok_vat_declaration_validate",
+          "name": "gnubok_mark_vat_check_reviewed",
+          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
-          "name": "gnubok_mark_vat_check_reviewed",
+          "name": "gnubok_get_vat_settlement_proposal",
+          "note": "not in tools/list: invoke it through gnubok_call_tool",
+        },
+        {
+          "callable": true,
+          "name": "gnubok_book_vat_settlement",
           "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+        },
+        {
+          "callable": true,
+          "name": "gnubok_vat_declaration_validate",
         },
         {
           "callable": true,
@@ -630,6 +655,11 @@ exports[`the agent briefing for each representative company > aktiebolag, every 
         {
           "callable": true,
           "name": "gnubok_approve_pending_operation",
+        },
+        {
+          "callable": true,
+          "name": "gnubok_prepare_payments",
+          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
         },
       ],
       "workflow": "vat_declaration",
@@ -960,12 +990,22 @@ exports[`the agent briefing for each representative company > archived ekonomisk
         },
         {
           "callable": true,
-          "name": "gnubok_vat_declaration_validate",
+          "name": "gnubok_mark_vat_check_reviewed",
+          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
-          "name": "gnubok_mark_vat_check_reviewed",
+          "name": "gnubok_get_vat_settlement_proposal",
+          "note": "not in tools/list: invoke it through gnubok_call_tool",
+        },
+        {
+          "callable": true,
+          "name": "gnubok_book_vat_settlement",
           "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+        },
+        {
+          "callable": true,
+          "name": "gnubok_vat_declaration_validate",
         },
         {
           "callable": true,
@@ -978,6 +1018,11 @@ exports[`the agent briefing for each representative company > archived ekonomisk
         {
           "callable": true,
           "name": "gnubok_approve_pending_operation",
+        },
+        {
+          "callable": true,
+          "name": "gnubok_prepare_payments",
+          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
         },
       ],
       "workflow": "vat_declaration",
@@ -1316,12 +1361,22 @@ exports[`the agent briefing for each representative company > enskild firma that
         },
         {
           "callable": true,
-          "name": "gnubok_vat_declaration_validate",
+          "name": "gnubok_mark_vat_check_reviewed",
+          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
-          "name": "gnubok_mark_vat_check_reviewed",
+          "name": "gnubok_get_vat_settlement_proposal",
+          "note": "not in tools/list: invoke it through gnubok_call_tool",
+        },
+        {
+          "callable": true,
+          "name": "gnubok_book_vat_settlement",
           "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+        },
+        {
+          "callable": true,
+          "name": "gnubok_vat_declaration_validate",
         },
         {
           "callable": true,
@@ -1334,6 +1389,11 @@ exports[`the agent briefing for each representative company > enskild firma that
         {
           "callable": true,
           "name": "gnubok_approve_pending_operation",
+        },
+        {
+          "callable": true,
+          "name": "gnubok_prepare_payments",
+          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
         },
       ],
       "workflow": "vat_declaration",
@@ -1700,12 +1760,22 @@ exports[`the agent briefing for each representative company > enskild firma with
         },
         {
           "callable": true,
-          "name": "gnubok_vat_declaration_validate",
+          "name": "gnubok_mark_vat_check_reviewed",
+          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
-          "name": "gnubok_mark_vat_check_reviewed",
+          "name": "gnubok_get_vat_settlement_proposal",
+          "note": "not in tools/list: invoke it through gnubok_call_tool",
+        },
+        {
+          "callable": true,
+          "name": "gnubok_book_vat_settlement",
           "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+        },
+        {
+          "callable": true,
+          "name": "gnubok_vat_declaration_validate",
         },
         {
           "callable": true,
@@ -1718,6 +1788,11 @@ exports[`the agent briefing for each representative company > enskild firma with
         {
           "callable": true,
           "name": "gnubok_approve_pending_operation",
+        },
+        {
+          "callable": true,
+          "name": "gnubok_prepare_payments",
+          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
         },
       ],
       "workflow": "vat_declaration",
@@ -2056,12 +2131,22 @@ exports[`the agent briefing for each representative company > ideell förening o
         },
         {
           "callable": true,
-          "name": "gnubok_vat_declaration_validate",
+          "name": "gnubok_mark_vat_check_reviewed",
+          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
-          "name": "gnubok_mark_vat_check_reviewed",
+          "name": "gnubok_get_vat_settlement_proposal",
+          "note": "not in tools/list: invoke it through gnubok_call_tool",
+        },
+        {
+          "callable": true,
+          "name": "gnubok_book_vat_settlement",
           "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+        },
+        {
+          "callable": true,
+          "name": "gnubok_vat_declaration_validate",
         },
         {
           "callable": true,
@@ -2074,6 +2159,11 @@ exports[`the agent briefing for each representative company > ideell förening o
         {
           "callable": true,
           "name": "gnubok_approve_pending_operation",
+        },
+        {
+          "callable": true,
+          "name": "gnubok_prepare_payments",
+          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
         },
       ],
       "workflow": "vat_declaration",

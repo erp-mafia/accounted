@@ -98,6 +98,11 @@ vi.mock('@/lib/invoices/invoice-deliveries', () => ({
   sendTrackedInvoiceEmail: (...args: unknown[]) => mockSendTrackedInvoiceEmail(...args as [never]),
 }))
 
+const mockLoadInvoiceEmailAttachments = vi.fn()
+vi.mock('@/lib/invoices/invoice-attachments', () => ({
+  loadInvoiceEmailAttachments: (...args: unknown[]) => mockLoadInvoiceEmailAttachments(...args),
+}))
+
 const mockLinkToJournalEntry = vi.fn().mockResolvedValue(undefined)
 const mockUploadDocument = vi.fn().mockResolvedValue({ id: 'underlag-1' })
 vi.mock('@/lib/core/documents/document-service', () => ({
@@ -179,6 +184,7 @@ describe('POST /api/invoices/[id]/send', () => {
     eventBus.clear()
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
     mockIsConfigured.mockReturnValue(true)
+    mockLoadInvoiceEmailAttachments.mockResolvedValue({ ok: true, value: [] })
     mockRenderToBuffer.mockResolvedValue(Buffer.from('fake-pdf'))
     mockCreateSchedules.mockResolvedValue({ created: 0, failed: 0 })
     mockIssueCreditNote.mockResolvedValue({
@@ -1112,6 +1118,57 @@ describe('POST /api/invoices/[id]/send', () => {
     expect(body.error.code).toBe('INVOICE_SEND_SNAPSHOT_FAILED')
     expect(mockSupabase.rpc).not.toHaveBeenCalledWith('generate_invoice_number', expect.anything())
     expect(mockSendTrackedInvoiceEmail).not.toHaveBeenCalled()
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('emails the invoice\'s own attachments with the delivery (crm#1269)', async () => {
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: company, error: null })
+    mockSendEmail.mockResolvedValue({ success: true, messageId: 'msg-1' })
+    mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: [{ id: 'inv-1' }], error: null })
+    enqueue({ data: null, error: null })
+    const timeReport = {
+      filename: 'tidrapport-juli.pdf',
+      content: Buffer.from('%PDF-1.7 time report'),
+      contentType: 'application/pdf',
+    }
+    mockLoadInvoiceEmailAttachments.mockResolvedValue({ ok: true, value: [timeReport] })
+
+    const response = await POST(
+      createMockRequest('/api/invoices/inv-1/send', { method: 'POST' }),
+      createMockRouteParams({ id: 'inv-1' }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(mockLoadInvoiceEmailAttachments).toHaveBeenCalledWith(expect.anything(), 'company-1', 'inv-1')
+    expect(mockSendTrackedInvoiceEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ extraAttachments: [timeReport] }),
+    )
+    // Read before anything irreversible: the reservation (and the number
+    // after it) come only once the files are in hand.
+    expect(mockLoadInvoiceEmailAttachments.mock.invocationCallOrder[0]).toBeLessThan(
+      mockReserveInvoiceDelivery.mock.invocationCallOrder[0],
+    )
+  })
+
+  it('refuses attachments over the size limit before a number is allocated or anything issued', async () => {
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: company, error: null })
+    mockLoadInvoiceEmailAttachments.mockResolvedValue({ ok: false, code: 'INVOICE_ATTACHMENTS_TOO_LARGE' })
+
+    const response = await POST(
+      createMockRequest('/api/invoices/inv-1/send', { method: 'POST' }),
+      createMockRouteParams({ id: 'inv-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_ATTACHMENTS_TOO_LARGE')
+    expect(body.error.message).toContain('25 MB')
+    expect(mockReserveInvoiceDelivery).not.toHaveBeenCalled()
+    expect(mockSupabase.rpc).not.toHaveBeenCalledWith('generate_invoice_number', expect.anything())
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 

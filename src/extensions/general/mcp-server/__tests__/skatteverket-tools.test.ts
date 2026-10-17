@@ -8,7 +8,7 @@
  * cross-extension lib modules are mocked so no real SKV call is made.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { createQueuedMockSupabase } from '@/tests/helpers'
+import { createQueuedMockSupabase, createTableMockSupabase } from '@/tests/helpers'
 import { TOOL_SCOPE_MAP, findStageApproveConflict } from '@/lib/auth/api-keys'
 
 const mockSkvRequest = vi.fn()
@@ -55,6 +55,8 @@ vi.mock('@/extensions/general/skatteverket/lib/audit', () => ({
 vi.mock('@/lib/reports/rc-basis-gaps', () => ({ findRcBasisGaps: vi.fn(async () => []) }))
 
 import { tools } from '../server'
+import { getSkvConnectionHealth } from '../skv-connection-health'
+import { toToolError } from '../tool-result'
 import { SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api-client'
 import {
   COMPLETE_VAT_DECLARATION,
@@ -200,6 +202,101 @@ describe('gnubok_vat_declaration_validate', () => {
     expect(mockSkvRequest.mock.calls[0][5]).toEqual({
       endpoint: 'kontrollera', agRegistreradId: '165560000000', redovisningsperiod: '202503',
     })
+  })
+})
+
+describe('VAT filing tools on the caller\'s own session (crm#1263)', () => {
+  // The case: member A connected with BankID minutes earlier, so the briefing
+  // said active; member B's agent (OAuth key owned by B) called validate and
+  // submit, which run on B's own session, flagged needs_reconsent weeks ago.
+  // Both answered a bare "Sessionen har gått ut" and the agent had nowhere to go.
+  const minutes = (m: number) => new Date(Date.now() + m * 60_000).toISOString()
+  const ROWS = [
+    { user_id: 'user-2', status: 'active', created_at: minutes(-3), expires_at: minutes(57), refresh_count: 0, refresh_token: 'c' },
+    { user_id: 'user-1', status: 'needs_reconsent', created_at: minutes(-38_000), expires_at: minutes(-37_940), refresh_count: 2, refresh_token: 'c' },
+  ]
+  const sessionExpired = () => new SkatteverketAuthError('Sessionen har gått ut. Logga in med BankID igen.', 'SESSION_EXPIRED')
+  const clientWith = (rows: unknown[]) =>
+    createTableMockSupabase({
+      skatteverket_tokens: { data: rows },
+      profiles: { data: { full_name: 'Anna Admin' } },
+    })
+  type Refusal = Error & { code?: string; remediation?: { tool?: string } }
+
+  beforeEach(() => {
+    mockBuildMomsuppgift.mockResolvedValue({ redovisare: '165560000000', redovisningsperiod: '202609', momsuppgift: {}, declaration: COMPLETE_VAT_DECLARATION })
+  })
+
+  it('validate names the member whose session is live and sends the caller to connect their own', async () => {
+    mockSkvRequest.mockRejectedValue(sessionExpired())
+    const { supabase } = clientWith(ROWS)
+    const thrown = await validate
+      .execute({ period_type: 'quarterly', year: 2026, period: 3 }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
+      .then(() => null, (err: unknown) => err as Refusal)
+
+    expect(thrown?.code).toBe('SKATTEVERKET_NOT_CONNECTED')
+    expect(thrown?.message).toContain('Your own Skatteverket BankID login for this company has expired')
+    expect(thrown?.message).toContain('Anna Admin')
+    expect(thrown?.remediation?.tool).toBe('gnubok_connect_skatteverket')
+    // Still the caller's own session: the member's is never borrowed.
+    expect(mockSkvRequest.mock.calls[0][1]).toBe('user-1')
+
+    const envelope = toToolError(thrown!, { toolName: 'gnubok_vat_declaration_validate' }).error
+    expect(envelope).toMatchObject({
+      code: 'SKATTEVERKET_NOT_CONNECTED',
+      retryable: false,
+      remediation: { tool: 'gnubok_connect_skatteverket' },
+    })
+    expect(envelope.message_en).toContain('Anna Admin')
+  })
+
+  it('the briefing and the refusal tell the same story from the same rows', async () => {
+    mockSkvRequest.mockRejectedValue(sessionExpired())
+    const { supabase } = clientWith(ROWS)
+    const health = await getSkvConnectionHealth(supabase as never, 'company-1', 'user-1')
+    const thrown = await validate
+      .execute({ period_type: 'quarterly', year: 2026, period: 3 }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
+      .then(() => null, (err: unknown) => err as Refusal)
+
+    expect(health).toMatchObject({ status: 'active', source: 'user', filing: { ready: false, own_session: 'expired' } })
+    expect(thrown?.message).toBe(health?.filing?.message)
+  })
+
+  it('submit refuses at stage time with the same answer and stages nothing', async () => {
+    mockSkvRequest.mockRejectedValue(sessionExpired())
+    const { supabase, findCalls } = clientWith(ROWS)
+    const thrown = await vatSubmit
+      .execute({ period_type: 'quarterly', year: 2026, period: 3 }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
+      .then(() => null, (err: unknown) => err as Refusal)
+
+    expect(thrown?.code).toBe('SKATTEVERKET_NOT_CONNECTED')
+    expect(thrown?.message).toContain('Anna Admin')
+    expect(thrown?.remediation?.tool).toBe('gnubok_connect_skatteverket')
+    expect(findCalls('pending_operations', 'insert')).toEqual([])
+  })
+
+  it('a caller whose own session is live keeps the original Skatteverket answer', async () => {
+    // e.g. a scope refusal on a live row: reconnecting is the fix, but the
+    // readiness message ("you have no session") would be false.
+    mockSkvRequest.mockRejectedValue(new SkatteverketAuthError('Anslutningen saknar scope.', 'MISSING_SCOPE'))
+    const { supabase } = clientWith([
+      { user_id: 'user-1', status: 'active', created_at: minutes(-5), expires_at: minutes(55), refresh_count: 0, refresh_token: 'c' },
+    ])
+    const thrown = await validate
+      .execute({ period_type: 'quarterly', year: 2026, period: 3 }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
+      .then(() => null, (err: unknown) => err as Refusal)
+    expect(thrown?.code).toBe('SKATTEVERKET_NOT_CONNECTED')
+    expect(thrown?.message).toBe('Anslutningen saknar scope.')
+  })
+
+  it('other Skatteverket failures pass through without a token lookup', async () => {
+    mockSkvRequest.mockRejectedValue(new SkatteverketAuthError('Ingen behörighet.', 'BEHORIGHET_SAKNAS'))
+    const { supabase, findCall } = clientWith(ROWS)
+    const thrown = await validate
+      .execute({ period_type: 'quarterly', year: 2026, period: 3 }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
+      .then(() => null, (err: unknown) => err as Refusal)
+    expect(thrown?.code).toBe('SKATTEVERKET_ACCESS_DENIED')
+    expect(findCall('skatteverket_tokens', 'select')).toBeUndefined()
   })
 })
 

@@ -1089,6 +1089,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
             paymentFileFormat={taxPayment?.tax_payment_file_format ?? null}
             paymentFileGeneratedAt={taxPayment?.tax_payment_file_generated_at ?? null}
             taxPaidAt={taxPayment?.tax_paid_at ?? null}
+            agiPeriod={taxPayment ? formatAgiPeriodDashed(agiReportingPeriod(run)) : null}
             defaultFormat={preferredPaymentFormat}
             senderBankgiro={senderBankgiro}
             senderIban={senderIban}

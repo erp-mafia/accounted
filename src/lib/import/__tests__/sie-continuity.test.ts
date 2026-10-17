@@ -140,6 +140,7 @@ describe('diagnoseOpeningBalanceContinuity', () => {
 
   it('shows where the carried-forward balance will differ from the file', async () => {
     enqueueMany([
+      { data: null }, // the year has no IB verifikat of its own
       { data: [{ id: 'je-2018' }] },
       { data: BOOKS_AFTER_FIRST_YEAR },
       { data: [{ id: 'p2018', name: 'Räkenskapsår 2018', period_start: '2018-01-01', period_end: '2018-12-31' }] },
@@ -172,7 +173,7 @@ describe('diagnoseOpeningBalanceContinuity', () => {
   })
 
   it('does not count the import a replacement supersedes', async () => {
-    enqueueMany([{ data: [] }, { data: [] }])
+    enqueueMany([{ data: null }, { data: [] }, { data: [] }])
     await diagnoseOpeningBalanceContinuity(supabase as never, 'company-1', parseSIEFile(SECOND_YEAR), MAPPINGS, {
       replacesImportId: 'import-old',
     })
@@ -180,7 +181,7 @@ describe('diagnoseOpeningBalanceContinuity', () => {
   })
 
   it('books the file\'s IB when the company has no earlier activity, and only explains the source edits', async () => {
-    enqueueMany([{ data: [] }, { data: [] }])
+    enqueueMany([{ data: null }, { data: [] }, { data: [] }])
 
     const result = await diagnoseOpeningBalanceContinuity(supabase as never, 'company-1', parseSIEFile(SECOND_YEAR), MAPPINGS)
 
@@ -192,6 +193,7 @@ describe('diagnoseOpeningBalanceContinuity', () => {
 
   it('names a year missing between the books and the file', async () => {
     enqueueMany([
+      { data: null }, // the year has no IB verifikat of its own
       { data: [{ id: 'je-2017' }] },
       { data: [] },
       { data: [{ id: 'p2017', name: 'Räkenskapsår 2017', period_start: '2017-01-01', period_end: '2017-12-31' }] },
@@ -204,11 +206,72 @@ describe('diagnoseOpeningBalanceContinuity', () => {
 
   it('flags an ended year whose file holds no vouchers', async () => {
     const empty = SECOND_YEAR.split('\n#VER')[0]
-    enqueueMany([{ data: [] }, { data: [] }])
+    enqueueMany([{ data: null }, { data: [] }, { data: [] }])
 
     const result = await diagnoseOpeningBalanceContinuity(supabase as never, 'company-1', parseSIEFile(empty), MAPPINGS)
 
     expect(result?.noVouchers).toBe(true)
+  })
+
+  // crm#1272: a year with its own IB verifikat (booked by hand, by the
+  // year-end close) opens on it; the import never books the file's IB on top.
+  const BOOKED_IB = { id: 'je-ib', voucher_series: 'A', voucher_number: 1, status: 'posted', import_batch_id: null }
+  const ibLines = (credit2990: number) => [
+    { id: 'l1', journal_entry_id: 'je-ib', account_number: '1730', debit_amount: 700, credit_amount: 0 },
+    { id: 'l2', journal_entry_id: 'je-ib', account_number: '1930', debit_amount: 5000, credit_amount: 0 },
+    { id: 'l3', journal_entry_id: 'je-ib', account_number: '2099', debit_amount: 0, credit_amount: 4200 },
+    { id: 'l4', journal_entry_id: 'je-ib', account_number: '2990', debit_amount: 0, credit_amount: credit2990 },
+  ]
+
+  it('compares the file with the year\'s booked IB verifikat: equal, nothing to report', async () => {
+    enqueueMany([
+      { data: { opening_balance_entry_id: 'je-ib' } },
+      { data: BOOKED_IB },
+      { data: [{ id: 'je-ib' }] },
+      { data: ibLines(1500) },
+      { data: [] },
+    ])
+
+    const result = await diagnoseOpeningBalanceContinuity(supabase as never, 'company-1', parseSIEFile(SECOND_YEAR), MAPPINGS)
+
+    expect(result).toMatchObject({
+      carriedForward: true,
+      bookedOpeningBalance: { entryId: 'je-ib', voucher: 'A1' },
+      differences: [],
+    })
+    // The year opens on the verifikat, not on what earlier years carry.
+    expect(supabase.rpc).not.toHaveBeenCalled()
+    expect(mock.findCall('fiscal_periods', 'lte')).toEqual(['period_start', '2019-01-01'])
+  })
+
+  it('names the accounts where the booked IB differs from the file', async () => {
+    enqueueMany([
+      { data: { opening_balance_entry_id: 'je-ib' } },
+      { data: BOOKED_IB },
+      { data: [{ id: 'je-ib' }] },
+      { data: ibLines(1000) },
+      { data: [] },
+    ])
+
+    const result = await diagnoseOpeningBalanceContinuity(supabase as never, 'company-1', parseSIEFile(SECOND_YEAR), MAPPINGS)
+
+    expect(result?.differences).toEqual([{ account: '2990', file: -1500, books: -1000, difference: 500 }])
+  })
+
+  it('does not compare with an IB the replaced import booked', async () => {
+    enqueueMany([
+      { data: { opening_balance_entry_id: 'je-ib' } },
+      { data: { ...BOOKED_IB, import_batch_id: 'import-old' } },
+      { data: [] },
+      { data: [] },
+    ])
+
+    const result = await diagnoseOpeningBalanceContinuity(supabase as never, 'company-1', parseSIEFile(SECOND_YEAR), MAPPINGS, {
+      replacesImportId: 'import-old',
+    })
+
+    expect(result?.bookedOpeningBalance).toBeUndefined()
+    expect(result?.carriedForward).toBe(false)
   })
 
   it('never fails the preview: a failed read returns null', async () => {
@@ -244,6 +307,24 @@ describe('diagnoseCarriedForwardDifferences', () => {
     ])
   })
 
+  it('compares with the year\'s own IB verifikat when the year has one (crm#1272)', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: { opening_balance_entry_id: 'je-ib' } },
+      { data: { id: 'je-ib', voucher_series: 'A', voucher_number: 1, status: 'posted', import_batch_id: null } },
+      { data: [{ id: 'je-ib' }] },
+      { data: [{ id: 'l1', journal_entry_id: 'je-ib', account_number: '1930', debit_amount: 5000, credit_amount: 0 }] },
+    ])
+
+    const differences = await diagnoseCarriedForwardDifferences(
+      supabase as never, 'company-1', '2019-01-01', [{ account: '1930', amount: 5000, yearIndex: 0 }], MAPPINGS, 'fp-2019',
+    )
+
+    expect(differences).toEqual([])
+    expect(findCall('fiscal_periods', 'eq')).toEqual(['company_id', 'company-1'])
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
   it('costs the notice, not the import, when the read fails', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     enqueueMany([{ error: { message: 'boom' } }])
@@ -269,6 +350,17 @@ describe('continuity texts', () => {
 
   it('says nothing when the file and the books agree', () => {
     expect(continuityNotices({ differences: [], noVouchers: null })).toEqual({ warnings: [], notices: [] })
+  })
+
+  it('says the year opens on its booked IB when it has one (crm#1272)', () => {
+    const lines = continuityWarnings(
+      { carriedForward: true, bookedOpeningBalance: { entryId: 'je-ib', voucher: 'A1' }, differences, sourceEdits: [], missingYears: [], noVouchers: false },
+      { start: '2019-01-01', end: '2019-12-31' },
+    )
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('verifikation A1')
+    expect(lines[0]).toContain('1730')
+    expect(lines[0]).not.toContain('föregående års utgående balans')
   })
 
   it('warns before import with the accounts that differ', () => {

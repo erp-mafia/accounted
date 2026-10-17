@@ -16,6 +16,7 @@ import { failureDescription } from '@/lib/browser/action-failure'
 import type { ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency, formatDateTime } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
+import { PayDeclarationViaBankButton } from '@/components/payments/PayDeclarationViaBankButton'
 
 type PaymentFormat = 'bg_lb' | 'pain001'
 
@@ -37,6 +38,11 @@ interface TaxPaymentPanelProps {
   senderBankgiro?: string | null
   senderIban?: string | null
   readOnly?: boolean
+  /**
+   * The AGI's redovisningsperiod (YYYY-MM) when the AGI declaration exists:
+   * offers Betala via banken for it where bank payments are switched on.
+   */
+  agiPeriod?: string | null
   onChange?: () => void
 }
 
@@ -56,6 +62,7 @@ export function TaxPaymentPanel({
   senderBankgiro,
   senderIban,
   readOnly,
+  agiPeriod,
   onChange,
 }: TaxPaymentPanelProps) {
   const t = useTranslations('salary_payments')
@@ -234,6 +241,14 @@ export function TaxPaymentPanel({
 
       {!readOnly && (
         <div className="mt-3 flex flex-wrap justify-end gap-2">
+          {!taxPaidAt && agiPeriod && (
+            <PayDeclarationViaBankButton
+              source={{ source: 'agi', year: Number(agiPeriod.slice(0, 4)), month: Number(agiPeriod.slice(5, 7)) }}
+              sourceLabel={agiPeriod}
+              variant="outline"
+              onDone={onChange}
+            />
+          )}
           <Button onClick={handleDownload} disabled={marking} loading={downloading}>
             {!downloading && <Download className="mr-2 h-4 w-4" />}
             {t('tax_download_button')}

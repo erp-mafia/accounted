@@ -10,11 +10,13 @@ const YEAR_END_CUTOFF_NOTE = isKontantmetodCutoffSuspended()
 
 const body = `# Quarterly VAT Review (Momsdeklaration): Accounted
 
-Review one momsdeklaration (SKV 4700) ruta by ruta, get it to a state that can be filed, and, when Skatteverket is connected and the user says so, stage the filing for approval. Works for monthly, quarterly and annual (helårsmoms) filers despite the slug.
+Review one momsdeklaration (SKV 4700) ruta by ruta, get it to a state that can be filed, book the momsredovisning, and, when Skatteverket is connected and the user says so, stage the filing for approval. Works for monthly, quarterly and annual (helårsmoms) filers despite the slug.
 
 ## Scope
 
-In scope: one VAT period for one company. Find the cadence, check the period is booked and reconciled, read the rutor, explain what drives each one, flag errors, validate, and stage the submission.
+In scope: one VAT period for one company. Find the cadence, check the period is booked and reconciled, read the rutor, explain what drives each one, flag errors, book the momsredovisning verifikat, validate, stage the submission, and prepare the payment.
+
+The order is the one the momsdeklaration in Accounted follows (Kontrollera, Granska, Bokför, Lämna in): steps 1-4 check and review, step 5 books, steps 6-7 file, step 8 pays.
 
 Not in scope, hand off by skill slug instead:
 
@@ -36,7 +38,7 @@ Answer each question with the tool named. Do not guess any of them.
 4. **Which period?** Translate to \`period_type\` + \`year\` + \`period\`: monthly \`1-12\`, quarterly \`1-4\`, yearly \`1\` with \`year\` = the year the räkenskapsår ENDS. If the user asks for a period type that is not their cadence, say so before continuing: a quarterly filer does not file a monthly declaration.
 5. **Fiscal year and period status.** \`gnubok_list_fiscal_periods\`: is the fiscal year open, locked or closed? A locked month is normal after month-end close and does not stop you reading or filing. A closed year means corrections cannot be booked into it (see Stop conditions).
 6. **Is the bank connected and reconciled?** Covered by the \`bank_unreconciled\` blocker in step 1; \`gnubok_get_reconciliation_status\` for detail.
-7. **Is Skatteverket connected?** \`skatteverket_connection\` from the briefing, or \`gnubok_connect_skatteverket\` (\`available\`, \`connected\`). This only matters for steps 5 and 6; do the review either way.
+7. **Is Skatteverket connected?** \`skatteverket_connection\` from the briefing, or \`gnubok_connect_skatteverket\` (\`available\`, \`connected\`). This only matters for steps 6 and 7; do the review either way.
 
 Before starting, tell the user in two lines what you found (company, cadence, period, deadline if known) and what "done" means today: "reviewed and ready", or "filed for BankID signing". Ask which, if they did not say.
 
@@ -70,7 +72,7 @@ Before starting, tell the user in two lines what you found (company, cadence, pe
 
 \`gnubok_get_vat_report({ period_type, year, period })\` returns the rutor, a \`summary\`, \`warnings\` and \`excluded_settlement_entries\`. Pass \`render_ui: true\` to also open the review widget on claude.ai or Claude Desktop (\`gnubok_vat_review_widget\` is an alias). The widget is optional: every other harness uses the structured data, and so should you.
 
-The report is a trimmed view (05, 10-12, 30-32, 35, 39, 40, 48, 49, 60-62). The full SKV 4700 projection that would actually be filed, including rutor 20-24 and 50, is \`momsuppgift\` in the \`gnubok_vat_declaration_validate\` result (step 5). Review against that when you have it.
+The report is a trimmed view (05, 10-12, 30-32, 35, 39, 40, 48, 49, 60-62). The full SKV 4700 projection that would actually be filed, including rutor 20-24 and 50, is \`momsuppgift\` in the \`gnubok_vat_declaration_validate\` result (step 6). Review against that when you have it.
 
 What each ruta means and where it comes from (BAS):
 
@@ -134,20 +136,30 @@ Ask one precise question at a time, with the facts you already have. Good: "Hetz
 - **A purchase that may be private or representation.**
 - **A missing receipt** behind a large deduction.
 - **A negative ruta 49** that is unusual for this company.
-- **Before anything is submitted:** see step 6.
+- **Before the momsredovisning is booked or anything is submitted:** see steps 5 and 7.
 
-## Step 5: Validate (Skatteverket connected)
+## Step 5: Book the momsredovisning (Bokför)
+
+Once the rutor are final (step 1 has no high blocker left and the questions from step 4 are answered), book the momsredovisning verifikat before filing, as the momsdeklaration in Accounted does. Both tools are search-only: if your client cannot call them directly, reach the proposal through \`gnubok_call_tool\` and the booking through \`gnubok_stage_tool\`.
+
+1. \`gnubok_get_vat_settlement_proposal({ period_type, year, period })\` returns the verifikat: every 26xx account of the period cleared, the net on 2650 (att betala, credit) or 1650 (att återfå, debit) at \`filed_net\`, the öre gap on 3740, dated \`entry_date\` (the period's last day, or the first open day after it; \`entry_date_reason\` says why). \`filed_net\` is ruta 49 as filed: it must equal ruta 49 from step 1, and a mismatch is a question, never something to book.
+2. Read \`booking_status\` first. \`booked\`: a posted momsredovisning already exists for the period; do not book again. \`draft\`: an unposted one exists; tell the user. \`is_empty: true\`: nothing to clear; skip to step 6.
+3. Show the user the lines and ask. On a yes, \`gnubok_book_vat_settlement({ period_type, year, period, expected_fingerprint })\` with the proposal's \`fingerprint\` stages it (high risk); approval books exactly those lines. \`VAT_SETTLEMENT_PROPOSAL_CHANGED\` means the ledger changed after the proposal: read it again and show the new lines.
+
+Booking before filing does not change the declaration: the rutor leave the momsredovisning verifikat out. If the books change after it is booked (a correction found in step 6), the momsredovisning no longer matches: the user reverses it (\`gnubok_reverse_journal_entry\`, storno, staged) and you book the new proposal. After filing, any correction is a new booking (storno or rättelse), never an edit.
+
+## Step 6: Validate (Skatteverket connected)
 
 \`gnubok_vat_declaration_validate({ period_type, year, period })\` sends the declaration to Skatteverket's kontrollera endpoint (read-only, nothing is saved there) and runs the same local completeness checks as the web filing UI. Read two flags separately:
 
 - \`arithmetic_ok\`: Skatteverket found no errors in \`kontrollresultat\`. This only means the figures add up; a declaration of all zeros passes.
 - \`completeness_ok\`: our checks found no ERROR in \`completeness_checks\`. False means the declaration is incomplete and must not be filed.
 
-Both must be true before step 6. Show the user \`momsuppgift\` (the exact rutor that would be filed) and \`summary\`, and list any warnings.
+Both must be true before step 7. Show the user \`momsuppgift\` (the exact rutor that would be filed) and \`summary\`, and list any warnings.
 
 Also call \`gnubok_vat_declaration_status({ period_type, year, period })\` before submitting. \`submitted\` and \`decided\` are null when nothing is on file. If a declaration is already submitted or decided for the period, stop: filing again is a correction of a filed declaration and needs the user's explicit decision (see Stop conditions).
 
-## Step 6: Submit, only on an explicit yes
+## Step 7: Submit, only on an explicit yes
 
 Before staging, ask and get a clear answer to all of these, in one message:
 
@@ -156,7 +168,7 @@ Before staging, ask and get a clear answer to all of these, in one message:
 3. They understand that approval sends the declaration for BankID signing, and it is filed only when they sign.
 4. They are firmatecknare or deklarationsombud and can sign with BankID now.
 
-Only then: \`gnubok_vat_declaration_submit({ period_type, year, period })\`. It re-runs kontrollera and stages a \`submit_vat_declaration\` pending operation with risk level \`high\`. It does NOT run the completeness checks, which is why step 5 is mandatory. Nothing is sent yet.
+Only then: \`gnubok_vat_declaration_submit({ period_type, year, period })\`. It re-runs kontrollera and stages a \`submit_vat_declaration\` pending operation with risk level \`high\`. It does NOT run the completeness checks, which is why step 6 is mandatory. Nothing is sent yet.
 
 Approval:
 
@@ -165,11 +177,17 @@ Approval:
 
 After approval the result carries a \`signing_url\`: give it to the user and ask them to sign with BankID. When they say they signed, call \`gnubok_vat_declaration_status({ period_type, year, period, state: "submitted" })\`. Report "inlämnad" only when \`submitted\` is no longer null.
 
-After filing, remind the user of the payment (ruta 49 positive) and that the momsredovisning verifikat (26xx cleared to 2650) is booked from the momsdeklaration report in Accounted. Synced skattekonto rows are booked with \`gnubok_book_skattekonto_rows\` (search-only, reach it via \`gnubok_stage_tool\` if your client needs to; staged); do that only if the user asks.
+If the momsredovisning was not booked in step 5 (the user chose to wait), book it now with the same two tools.
+
+## Step 8: Pay (ruta 49 positive)
+
+Remind the user of the payment: \`net_due\` by \`deadline_label\` from the close check. Synced skattekonto rows are booked with \`gnubok_book_skattekonto_rows\` (search-only, reach it via \`gnubok_stage_tool\` if your client needs to; staged); do that only if the user asks.
+
+When the user wants to pay the moms from the bank, \`gnubok_prepare_payments({ cash_account_id, skattekonto: { source: "vat_declaration", period_type, year, period } })\` stages one draft payment to Skatteverket's bankgiro 5050-1055 with the company's OCR number: ruta 49 as filed, paid the banking day before the deadline. It answers \`PAYMENTS_UNAVAILABLE\` when bank payments are not switched on for the company. Nothing reaches the bank until the user signs it with BankID on the Betalningar page (\`gnubok_get_payments_signing_link\`). Nothing is booked by the payment: the bank row to Skatteverket is booked like any other, against 1630.
 
 ## When Skatteverket is not connected
 
-- \`gnubok_connect_skatteverket\` returns \`available: false\` (or a tool fails with \`EXTENSION_DISABLED\`): the integration is not enabled on this installation. Do the full review (steps 0-4; \`gnubok_vat_close_check\` already carries the same completeness checks as step 5), then tell the user to file the momsdeklaration themselves at skatteverket.se with the reviewed figures; Accounted can download the declaration as a file.
+- \`gnubok_connect_skatteverket\` returns \`available: false\` (or a tool fails with \`EXTENSION_DISABLED\`): the integration is not enabled on this installation. Do the full review (steps 0-4; \`gnubok_vat_close_check\` already carries the same completeness checks as step 6) and book the momsredovisning (step 5), then tell the user to file the momsdeklaration themselves at skatteverket.se with the reviewed figures; Accounted can download the declaration as a file.
 - \`available: true, connected: false\`, or any Skatteverket tool fails with \`SKATTEVERKET_NOT_CONNECTED\`: give the user \`connect_url\` (on claude.ai a connect card renders) and explain they sign in with BankID as firmatecknare. Personal Skatteverket sessions last about an hour, so an expired connection is normal. Do not retry until they say they reconnected.
 - \`SKATTEVERKET_ACCESS_DENIED\`: the signed-in person lacks authority for this company at Skatteverket (firmatecknare or deklarationsombud). Only the user can fix that; stop.
 - \`SKATTEVERKET_RATE_LIMITED\`: wait, then retry the read once.
@@ -182,7 +200,7 @@ After filing, remind the user of the payment (ruta 49 positive) and that the mom
 - **409 / conflict** (an operation already consumed, a duplicate submission): re-read state (\`gnubok_list_pending_operations\`, \`gnubok_vat_declaration_status\`) before doing anything else. Never stage the same submission twice.
 - **Staged for approval**: that is success, not an error. Nothing is committed until the user approves.
 - **\`capability_blocked\` (403) on approval**: the company's plan does not include Skatteverket filing. Tell the user; they file manually at skatteverket.se.
-- **\`SKATTEVERKET_SUBMIT_REJECTED\`** or \`SKATTEVERKET_API_ERROR\`: show Skatteverket's message verbatim, do not retry a write blindly, re-run step 5.
+- **\`SKATTEVERKET_SUBMIT_REJECTED\`** or \`SKATTEVERKET_API_ERROR\`: show Skatteverket's message verbatim, do not retry a write blindly, re-run step 6.
 
 ## Stop conditions: this needs a human
 
@@ -198,7 +216,7 @@ Stop and hand over, phrased as "Det här behöver en människa: här är vad jag
 
 ## Rules
 
-- Never submit without the explicit yes in step 6, and never pass \`confirmed: true\` on your own initiative.
+- Never submit without the explicit yes in step 7, and never pass \`confirmed: true\` on your own initiative.
 - Never file while \`ready_to_close\` or \`completeness_ok\` is false.
 - Never edit, delete or re-date a posted verifikat. Corrections are new, staged bookings in an open period.
 - Never invent an amount, a deadline, a ruta or an account. Numbers come from the tools; account numbers are strings.
@@ -210,7 +228,7 @@ Stop and hand over, phrased as "Det här behöver en människa: här är vad jag
 End with short groups, in the user's language:
 
 - **Klart**: period, cadence, rutor reviewed, ruta 49 (pay or refund, amount, deadline).
-- **Väntar på godkännande**: staged operations (submission, corrections, attestations).
+- **Väntar på godkännande**: staged operations (momsredovisning, submission, corrections, attestations, payment).
 - **Behöver ditt svar**: each open question, one line each.
 - **Kunde inte göra**: what and why (blocker, missing connection, stop condition).
 - **Nästa steg**: the one thing that moves this forward (sign with BankID, answer X, run \`reconcile-month\`).
@@ -223,17 +241,19 @@ End with short groups, in the user's language:
 - \`gnubok_query_journal\`, \`gnubok_get_general_ledger\`: drill into 26xx and the underlying accounts
 - \`gnubok_get_reconciliation_status\`, \`gnubok_list_uncategorized_transactions\`: readiness detail
 - \`gnubok_approve_supplier_invoice\`: stage attestation (user decides)
+- \`gnubok_get_vat_settlement_proposal\`, \`gnubok_book_vat_settlement\`: the momsredovisning verifikat (26xx to 2650/1650), read and staged
 - \`gnubok_connect_skatteverket\`: connection status and link
 - \`gnubok_vat_declaration_validate\`, \`gnubok_vat_declaration_status\`: Skatteverket reads
 - \`gnubok_vat_declaration_submit\`: stage the filing (high risk)
 - \`gnubok_list_pending_operations\`, \`gnubok_approve_pending_operation\`, \`gnubok_reject_pending_operation\`: approval
+- \`gnubok_prepare_payments\` (with \`skattekonto\`), \`gnubok_get_payments_signing_link\`: pay the moms in to the skattekonto from the bank (the user signs)
 `
 
 export const quarterlyVatReviewSkill: Skill = {
   slug: 'quarterly-vat-review',
   name: 'Momsdeklaration',
   summary:
-    'Review and file the momsdeklaration for a monthly, quarterly or annual period: cadence, readiness, ruta-by-ruta review, reverse charge, validation, BankID filing via approval.',
+    'Review and file the momsdeklaration for a monthly, quarterly or annual period: cadence, readiness, ruta-by-ruta review, reverse charge, momsredovisning, validation, BankID filing, payment.',
   tags: ['vat', 'moms', 'momsdeklaration', 'monthly', 'quarterly', 'yearly', 'compliance', 'skatteverket'],
   body,
   tier: 'workflow',

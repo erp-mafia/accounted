@@ -53,7 +53,7 @@ Good question: "Last time Acme AB was invoiced 1 250 kr per hour + moms for cons
 - **No email on the customer**: \`gnubok_send_invoice\` refuses. Ask for the invoicing email and update the customer, or let the user deliver the PDF another way and use \`gnubok_mark_invoice_as_sent\`.
 - **EU company without a VAT number**: ask for it. Without a validated number the invoice gets Swedish moms (the customer is treated as a consumer). Never invent a number or copy one from elsewhere.
 - **The company's own VAT number is missing** (\`INVOICE_SEND_VAT_NUMBER_MISSING\`): a VAT-registered seller must show it (ML 17 kap. 24 §). The user adds it under Inställningar > Skatt; you cannot fix it.
-- **Payment details missing** (\`INVOICE_SEND_PAYMENT_ACCOUNT_MISSING\`): the user adds bankgiro, Swish, bank account or IBAN under Inställningar > Fakturering.
+- **Payment details missing** (\`INVOICE_SEND_PAYMENT_ACCOUNT_MISSING\`): on a SEK invoice the user adds bankgiro, Swish, bank account or IBAN under Inställningar > Fakturering. On another currency the gap is usually that no account is chosen for that currency: any bank account that prints an IBAN can be the payee, a SEK account too. Find it with \`gnubok_list_cash_accounts\` and stage \`gnubok_set_invoice_payee_default\` with the invoice's \`currency\`; if no account prints an IBAN, the user fills it in under Inställningar > Fakturering first. Never create a second account with the same IBAN: it is refused.
 
 ## VAT treatment
 

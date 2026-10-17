@@ -149,6 +149,47 @@ describe('bank payment tools', () => {
     expect(preview.lines).toEqual([expect.objectContaining({ supplier_invoice_id: INVOICE_ID, amount: 737.5 })])
   })
 
+  it('prepare stages a payment in to the skattekonto from a filed AGI, with what it pays in the preview', async () => {
+    const { client, recording } = recordingClient({
+      company_settings: { org_number: '5566778899', is_sandbox: false, vat_registered: true, vat_taxable_base_over_40m: false },
+      cash_accounts: { id: ACCOUNT_ID, iban: 'SE3550000000054910000003', currency: 'SEK', name: 'Företagskonto', enabled: true, bank_connection: { bank_name: 'SEB' } },
+      companies: { org_number: '559547-0021', entity_type: 'aktiebolag' },
+      agi_declarations: { status: 'submitted', total_tax: 18000, total_avgifter: 12568, tax_paid_at: null },
+      deadlines: [],
+      payment_orders: [],
+      extension_data: null,
+      pending_operations: { id: 'pending-3', status: 'pending', operation_type: 'prepare_payment_orders', created_at: '2026-10-16T09:00:00Z' },
+    })
+    const result = (await tool('gnubok_prepare_payments').execute(
+      { cash_account_id: ACCOUNT_ID, skattekonto: { source: 'agi', year: 2026, month: 10 } },
+      COMPANY_ID,
+      USER_ID,
+      client,
+      { type: 'api_key', id: 'key-1' },
+    )) as Record<string, unknown>
+    expect(result.staged).toBe(true)
+    expect(recording.mutations.map((m) => m.table)).toEqual(['pending_operations'])
+    expect(recording.rpcs).toEqual([])
+    expect(result.preview).toMatchObject({
+      amount: 30568,
+      payee: { type: 'bankgiro', label: 'BG 5050-1055', name: 'Skatteverket' },
+      source: { kind: 'agi', tax_period: '2026-10', declared: 30568, filed: true },
+    })
+  })
+
+  it('prepare refuses supplier invoices and skattekonto in one call', async () => {
+    const { client, recording } = recordingClient({})
+    await expect(
+      tool('gnubok_prepare_payments').execute(
+        { cash_account_id: ACCOUNT_ID, supplier_invoice_ids: [INVOICE_ID], skattekonto: { source: 'next_charge' } },
+        COMPANY_ID,
+        USER_ID,
+        client,
+      ),
+    ).rejects.toThrow()
+    expect(recording.mutations).toEqual([])
+  })
+
   it('prepare refuses at staging when no provider serves the company, without staging anything', async () => {
     resetPaymentInitiationProviders()
     const { client, recording } = recordingClient({})

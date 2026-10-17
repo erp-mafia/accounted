@@ -19,6 +19,7 @@ import { ReportBodyLoading } from '@/components/reports/ReportLoading'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { useReportRowExpansion } from '@/components/reports/ReportRowExpansion'
 import { VatFilingStatusCard } from '@/components/reports/VatFilingStatusCard'
+import { PayDeclarationViaBankButton } from '@/components/payments/PayDeclarationViaBankButton'
 import { VatChecksCard } from '@/components/reports/VatChecksCard'
 import { SkatteverketPanel } from '@/components/reports/SkatteverketPanel'
 import { VatAlreadyBookedBanner } from '@/components/reports/VatAlreadyBookedBanner'
@@ -532,6 +533,7 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
   const [pickedFiscalPeriodId, setPickedFiscalPeriodId] = useState('')
   const { periods: fiscalPeriods } = useFiscalPeriods()
   const tReports = useTranslations('reports')
+  const tPay = useTranslations('skattekonto_bank_payment')
   // Latest fetch outcome, tagged with the fetch key it was requested under.
   // loading / error / data are all derived by comparing that tag with the
   // current key, so the fetch effect never sets state synchronously.
@@ -1500,6 +1502,22 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
                   record={filingRecord}
                   canWrite={canWrite}
                   onChanged={() => setFilingsRefreshKey((k) => k + 1)}
+                />
+              )}
+              {/* Filed with moms to pay: pay it in to the skattekonto from the
+                  bank, where bank payments are switched on (crm#1260). */}
+              {periodType && filingRecord && canWrite && buildFiledAmounts(data.rutor).net > 0 && (
+                <PayDeclarationViaBankButton
+                  source={{
+                    source: 'vat_declaration',
+                    period_type: periodType,
+                    year,
+                    period,
+                    ...(isYearly && fiscalPeriodId ? { fiscal_period_id: fiscalPeriodId } : {}),
+                  }}
+                  sourceLabel={filingPeriodLabel}
+                  prompt={tPay('vat_to_pay', { amount: formatAmount(buildFiledAmounts(data.rutor).net) })}
+                  variant="outline"
                 />
               )}
             </section>

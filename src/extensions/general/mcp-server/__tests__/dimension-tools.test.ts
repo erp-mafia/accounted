@@ -891,6 +891,7 @@ describe('gnubok_categorize_transaction: dimensions bag', () => {
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
+    enqueue({ data: [], error: null }) // open operations on these rows: none (crm#1264)
     enqueue({ data: { id: 'op-cat-settlement' }, error: null })
 
     const result = (await categorizeTransaction.execute(
@@ -935,6 +936,7 @@ describe('gnubok_categorize_transaction: dimensions bag', () => {
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
     // pending_operations insert
+    enqueue({ data: [], error: null }) // open operations on these rows: none (crm#1264)
     enqueue({ data: { id: 'op-cat-dims' }, error: null })
 
     const result = (await categorizeTransaction.execute(
@@ -988,6 +990,7 @@ describe('gnubok_categorize_transaction: dimensions bag', () => {
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null }) // period status layer 1
     enqueue({ data: null, error: null }) // period status layer 2
+    enqueue({ data: [], error: null }) // open operations on these rows: none (crm#1264)
     enqueue({ data: { id: 'op-cat-plain' }, error: null })
 
     const result = (await categorizeTransaction.execute(
@@ -1051,6 +1054,7 @@ describe('gnubok_bulk_book_transactions: dimensions bag', () => {
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
     // pending_operations insert
+    enqueue({ data: [], error: null }) // open operations on these rows: none (crm#1264)
     enqueue({ data: { id: 'op-bulk-dims' }, error: null })
 
     const result = (await bulkBookTransactions.execute(
@@ -1161,6 +1165,7 @@ describe('gnubok_bulk_book_transactions: approval-queue title', () => {
     })
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
+    enqueue({ data: [], error: null }) // open operations on these rows: none (crm#1264)
     enqueue({ data: { id: 'op-bulk-title' }, error: null })
 
     await bulkBookTransactions.execute(
@@ -1246,6 +1251,7 @@ describe('gnubok_bulk_book_transactions: dimension policy at stage', () => {
     enqueue({ data: [], error: null }) // chart_of_accounts names
     enqueue({ data: null, error: null }) // resolvePeriodStatusForDate
     enqueue({ data: null, error: null })
+    enqueue({ data: [], error: null }) // open operations on these rows: none (crm#1264)
     enqueue({ data: { id: 'op-bulk-rule' }, error: null }) // pending_operations insert
 
     const result = (await bulkBookTransactions.execute(

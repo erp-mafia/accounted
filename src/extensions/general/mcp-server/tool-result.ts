@@ -30,9 +30,11 @@ export interface AgentToolError {
  * envelope as `error.details` (where v1 carries them too). Every other
  * failure keeps the bare structured error. PREVIEW_STALE carries the fresh
  * preview and its token, which the agent must show the person before it may
- * stage again (lib/operations/preview-token.ts).
+ * stage again (lib/operations/preview-token.ts). TRANSACTION_ALREADY_STAGED
+ * names the open operations to approve or reject first
+ * (lib/pending-operations/transaction-claims.ts).
  */
-const CODES_WITH_DETAILS = new Set(['PREVIEW_STALE'])
+const CODES_WITH_DETAILS = new Set(['PREVIEW_STALE', 'TRANSACTION_ALREADY_STAGED'])
 
 /**
  * Convert a thrown error into the structured tool-error envelope the agent

@@ -75,6 +75,7 @@ async function stage(
   if (String(args.vat_treatment ?? '').startsWith('reverse_charge')) enqueue({ data: momskoder })
   enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
   enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+  enqueue({ data: [], error: null }) // open operations on these rows: none (crm#1264)
   enqueue({ data: { id: 'op-rc-1' } }) // pending_operations insert
 
   const result = (await categorize.execute(

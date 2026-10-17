@@ -33,9 +33,10 @@ import {
   printedLegacySekAccount,
   summarizeInvoicePaymentAccount,
 } from '@/lib/invoices/payment-accounts'
-import { cashAccountPayee, isUsableInvoicePayee } from '@/lib/cash-accounts/invoice-payee-rules'
+import { blankPrimaryPayeeAccount, cashAccountPayee, isUsableInvoicePayee } from '@/lib/cash-accounts/invoice-payee-rules'
 import { isValidSwish, normaliseSwish } from '@/lib/payments/swish'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
+import { foreignInvoicePayeeCandidates } from '@/lib/cash-accounts/invoice-payee-rules'
 import type {
   CashAccount,
   CashAccountPayeeFields,
@@ -158,6 +159,8 @@ export function InvoicePaymentAccountsSettings({
   const [form, setForm] = useState<PayeeForm>(EMPTY_FORM)
   const [isSaving, setIsSaving] = useState(false)
   const [isAdding, setIsAdding] = useState(false)
+  // "Lägg till bankkonto" opened the blank primary instead of a new account.
+  const [addingToPrimary, setAddingToPrimary] = useState(false)
   const [newCurrency, setNewCurrency] = useState<Currency>('SEK')
   const [currencyToAdd, setCurrencyToAdd] = useState<Currency | ''>('')
   const [extraCurrencies, setExtraCurrencies] = useState<Currency[]>([])
@@ -240,6 +243,7 @@ export function InvoicePaymentAccountsSettings({
     () => accounts.find((a) => a.id === editingId) ?? null,
     [accounts, editingId],
   )
+  const blankPrimary = useMemo(() => blankPrimaryPayeeAccount(accounts), [accounts])
   // Legacy entries: payment instructions saved per currency before accounts
   // existed, with no account to land on. They still print (the resolver
   // falls back to them) until the user attaches them to an account.
@@ -268,12 +272,24 @@ export function InvoicePaymentAccountsSettings({
 
   function startEdit(account: CashAccount) {
     setIsAdding(false)
+    setAddingToPrimary(false)
     setEditingId(account.id)
     setForm(formFromAccount(account))
   }
 
-  function startAdd() {
+  /**
+   * While the primary account prints nothing, adding a bank account fills
+   * in that one: a second row would be a second ledger for the same money
+   * (crm#1270). The form offers a new account for when it really is another.
+   */
+  function startAdd(options: { newAccount?: boolean } = {}) {
+    if (blankPrimary && !options.newAccount) {
+      startEdit(blankPrimary)
+      setAddingToPrimary(true)
+      return
+    }
     setEditingId(null)
+    setAddingToPrimary(false)
     setIsAdding(true)
     setNewCurrency('SEK')
     setForm(EMPTY_FORM)
@@ -282,6 +298,7 @@ export function InvoicePaymentAccountsSettings({
   function cancelEdit() {
     setEditingId(null)
     setIsAdding(false)
+    setAddingToPrimary(false)
     setForm(EMPTY_FORM)
   }
 
@@ -456,6 +473,30 @@ export function InvoicePaymentAccountsSettings({
     setIsSaving(true)
     try {
       await setDefault(currency, value === NONE ? null : value)
+    } catch (err) {
+      toast({ title: t('save_failed_title'), description: getUserErrorMessage(err), variant: 'destructive' })
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  /**
+   * Make a bank-connected account whose IBAN only the connection knows the
+   * default for a foreign currency: print that IBAN on it first, then
+   * choose it (crm#1273). The same two writes as typing the IBAN into the
+   * account's form and picking it here.
+   */
+  async function chooseBankIbanAsDefault(currency: Currency, cashAccountId: string, bankIban: string) {
+    setIsSaving(true)
+    try {
+      const res = await fetch(`/api/cash-accounts/${cashAccountId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ iban: bankIban, invoice_payee: true }),
+      })
+      const json = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(getUserErrorMessage(json, { context: 'settings', statusCode: res.status }))
+      await setDefault(currency, cashAccountId)
     } catch (err) {
       toast({ title: t('save_failed_title'), description: getUserErrorMessage(err), variant: 'destructive' })
     } finally {
@@ -677,6 +718,18 @@ export function InvoicePaymentAccountsSettings({
                 <SettingsReveal open={isEditing}>
                   {isEditing && (
                     <>
+                      {addingToPrimary && (
+                        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 px-1 py-2 text-xs text-muted-foreground">
+                          <span>{t('add_to_primary_hint', { account: accountLabel(account) })}</span>
+                          <button
+                            type="button"
+                            onClick={() => startAdd({ newAccount: true })}
+                            className="underline underline-offset-2 transition-colors duration-150 hover:text-foreground"
+                          >
+                            {t('add_other_account')}
+                          </button>
+                        </div>
+                      )}
                       <SettingsRow label={t('name_label')} htmlFor={`payee-${account.id}-name`} align="baseline">
                         <SettingsInput
                           id={`payee-${account.id}-name`}
@@ -714,7 +767,7 @@ export function InvoicePaymentAccountsSettings({
 
           {!isAdding ? (
             <div className="flex justify-end px-1 py-3">
-              <Button type="button" variant="outline" size="sm" onClick={startAdd} disabled={isSaving}>
+              <Button type="button" variant="outline" size="sm" onClick={() => startAdd()} disabled={isSaving}>
                 {t('add_account')}
               </Button>
             </div>
@@ -758,6 +811,11 @@ export function InvoicePaymentAccountsSettings({
           </p>
           {shownCurrencies.map((currency, i) => {
             const usable = accounts.filter((a) => isUsableInvoicePayee(a, currency))
+            // A foreign currency can also go to an account whose IBAN only
+            // its bank connection knows: choosing it prints that IBAN (crm#1273).
+            const withBankIban = foreignInvoicePayeeCandidates(accounts, currency).filter(
+              (candidate): candidate is { account: CashAccount; bankIban: string } => candidate.bankIban !== null,
+            )
             const current = defaultByCurrency.get(currency) ?? NONE
             const unlinked = unlinkedCurrencies.includes(currency)
             const legacy = currency === 'SEK' && !unlinked && current === NONE ? legacySek : null
@@ -773,7 +831,9 @@ export function InvoicePaymentAccountsSettings({
                   value={current}
                   onChange={(event) => {
                     const value = event.target.value
+                    const viaBank = withBankIban.find((candidate) => candidate.account.id === value)
                     if (unlinked && value !== NONE) void attachUnlinked(currency, value)
+                    else if (viaBank) void chooseBankIbanAsDefault(currency, value, viaBank.bankIban)
                     else void handleDefaultChange(currency, value)
                   }}
                   disabled={isSaving}
@@ -785,12 +845,17 @@ export function InvoicePaymentAccountsSettings({
                   {usable.map((account) => (
                     <option key={account.id} value={account.id}>{accountLabel(account)}</option>
                   ))}
+                  {withBankIban.map(({ account, bankIban }) => (
+                    <option key={account.id} value={account.id}>
+                      {t('default_bank_iban_option', { account: accountLabel(account), iban: formatIbanGroups(bankIban) })}
+                    </option>
+                  ))}
                 </SettingsSelect>
                 {unlinked && <SettingsRowNote>{t('unlinked_hint', { currency })}</SettingsRowNote>}
                 {legacy && (
                   <SettingsRowNote>{t('legacy_hint', { summary: summarizeInvoicePaymentAccount(legacy) })}</SettingsRowNote>
                 )}
-                {!unlinked && usable.length === 0 && (
+                {!unlinked && usable.length === 0 && withBankIban.length === 0 && (
                   <SettingsRowNote>{t(currency === 'SEK' ? 'no_usable_sek' : 'no_usable_foreign', { currency })}</SettingsRowNote>
                 )}
               </SettingsRow>

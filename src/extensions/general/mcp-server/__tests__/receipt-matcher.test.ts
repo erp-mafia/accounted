@@ -368,6 +368,7 @@ describe('MCP Receipt Matcher', () => {
         { data: null, error: null },          // checkPeriodLock: covering fiscal period
         { data: null, error: null },          // resolvePeriodStatusForDate: company_settings
         { data: null, error: null },          // resolvePeriodStatusForDate: fiscal_periods
+        { data: [], error: null }, // open operations on these rows: none (crm#1264)
         { data: { id: 'op-1' }, error: null }, // insert into pending_operations
       ])
 
@@ -415,6 +416,7 @@ describe('MCP Receipt Matcher', () => {
         { data: null, error: null },          // checkPeriodLock: covering fiscal period
         { data: null, error: null },          // resolvePeriodStatusForDate: company_settings
         { data: null, error: null },          // resolvePeriodStatusForDate: fiscal_periods
+        { data: [], error: null }, // open operations on these rows: none (crm#1264)
         { data: { id: 'op-1' }, error: null }, // insert into pending_operations
       ])
 

@@ -1,9 +1,13 @@
-import type { CompanySettings, Currency, InvoicePaymentAccount, InvoiceQrMode } from '@/types'
+import type { CashAccount, CompanySettings, Currency, InvoicePaymentAccount, InvoiceQrMode } from '@/types'
 import {
   companyWithInvoicePaymentAccount,
   hasUsableInvoicePaymentAccount,
+  normalizeInvoicePaymentAccount,
   resolveInvoicePaymentAccount,
+  summarizeInvoicePaymentAccount,
 } from '@/lib/invoices/payment-accounts'
+import { cashAccountPayee, foreignInvoicePayeeCandidates } from '@/lib/cash-accounts/invoice-payee-rules'
+import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import {
   buildInvoicePaymentRows,
   printsPayableRow,
@@ -262,6 +266,55 @@ export function paymentReason(
     case 'foreign_customer':
       return { key: 'reason_foreign_customer', action: null }
   }
+}
+
+/** One account the Betalning section offers for a foreign-currency invoice. */
+export interface ForeignPayeeOption {
+  id: string
+  /** "Företagskonto (1930)". */
+  label: string
+  /** What the invoice will print for the payer: "IBAN SE45 5000 ...". */
+  printed: string
+  /** The bank connection's IBAN, printed on the account when it is chosen; null when it prints one already. */
+  bankIban: string | null
+}
+
+/**
+ * A foreign-currency invoice with nothing to pay to, and the accounts that
+ * can carry it once chosen (crm#1273). The section offers these instead of
+ * the first-details form, which saves SEK details only: the account does not
+ * have to be in the invoice currency, a SEK account with an IBAN is the
+ * usual EUR payee. Only an administrator may print an IBAN the bank
+ * connection knows; anyone may pick an account that prints one. Null when
+ * the invoice is in SEK or has something to pay to (or hidden details,
+ * which the panel fixes).
+ */
+export function foreignPayeeChoice(input: {
+  summary: EditorPaymentSummary | null
+  currency: Currency
+  /** The company's cash accounts; null while they load. */
+  accounts: readonly CashAccount[] | null
+  canEditCompany: boolean
+  label: (account: CashAccount) => string
+}): { currency: Currency; options: ForeignPayeeOption[] } | null {
+  const { summary, currency } = input
+  if (isLedgerCurrency(currency) || !summary?.payeeMissing || summary.storedAccountUsable) return null
+  const options = foreignInvoicePayeeCandidates(input.accounts ?? [], currency)
+    .filter((candidate) => input.canEditCompany || candidate.bankIban === null)
+    .map(({ account, bankIban }) => {
+      const payee = cashAccountPayee(account)
+      return {
+        id: account.id,
+        label: input.label(account),
+        printed: summarizeInvoicePaymentAccount(normalizeInvoicePaymentAccount({
+          iban: bankIban ?? payee.iban,
+          bank_code: payee.bank_code,
+          foreign_account_number: payee.foreign_account_number,
+        })),
+        bankIban,
+      }
+    })
+  return { currency, options }
 }
 
 /**

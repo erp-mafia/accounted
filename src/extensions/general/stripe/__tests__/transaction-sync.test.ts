@@ -33,6 +33,7 @@ import {
   type BalanceTxnLike,
 } from '../lib/transaction-sync'
 import type { StripeConnection } from '../types'
+import { PROVIDER_BOOKING_ID_SOURCES } from '@/lib/transactions/external-id'
 
 const CONNECTION: StripeConnection = {
   id: 'conn-1',
@@ -180,6 +181,14 @@ describe('external id formats', () => {
 
   it('fee row id is stripe_{acct}_{txn}_fee', () => {
     expect(stripeFeeExternalId('acct_1', 'txn_abc')).toBe('stripe_acct_1_txn_abc_fee')
+  })
+
+  // The booking-time duplicate guard trusts a different id between two Stripe
+  // rows as proof of two movements (crm#1271). That holds only while these
+  // ids embed Stripe's own balance-transaction id, which the frozen formats
+  // above pin, and while the feed's import_source stays the trusted label.
+  it('is a feed whose stored ids the booking guard trusts as per-booking references', () => {
+    expect(PROVIDER_BOOKING_ID_SOURCES.has(STRIPE_IMPORT_SOURCE)).toBe(true)
   })
 })
 

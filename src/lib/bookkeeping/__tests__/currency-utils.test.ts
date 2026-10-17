@@ -3,6 +3,7 @@ import {
   resolveSekAmount,
   resolveSekAmountOrNull,
   buildCurrencyMetadata,
+  isLedgerCurrency,
 } from '../currency-utils'
 
 /**
@@ -202,5 +203,15 @@ describe('buildCurrencyMetadata', () => {
       currency: 'EUR',
       amount_in_currency: 100,
     })
+  })
+})
+
+describe('isLedgerCurrency', () => {
+  it('kronor, or no currency at all, is the ledger currency; anything else is foreign', () => {
+    expect(isLedgerCurrency('SEK')).toBe(true)
+    expect(isLedgerCurrency(null)).toBe(true)
+    expect(isLedgerCurrency(undefined)).toBe(true)
+    expect(isLedgerCurrency('EUR')).toBe(false)
+    expect(isLedgerCurrency('USD')).toBe(false)
   })
 })

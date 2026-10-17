@@ -17,7 +17,11 @@
  *   - payee details only on giro/bank rows (BAS 1920-1999), never a PSP
  *     clearing account or a till;
  *   - never the same IBAN on two rows (the Grönsinka 1938 case: one physical
- *     account twice means a second ledger for the same money);
+ *     account twice means a second ledger for the same money). A disabled
+ *     row counts too: a bank connection is matched on its iban whether it is
+ *     enabled or not. Clearing or changing the IBAN of a disabled account
+ *     typed in by hand moves that bank identity along, so a duplicate added
+ *     by mistake can let go of it (crm#1270);
  *   - enabled: never a connection-held row, never disable the primary or an
  *     account with unbooked transactions (setEnabled's UPDATE carries the
  *     first two, so a row that changes in between is still refused);
@@ -39,6 +43,7 @@ import {
   loadInvoicePayeeState,
   planManualBankAccount,
   setInvoicePayeeDefault,
+  setTypedAccountIdentity,
   updateCashAccountPayee,
   type InvoicePayeeState,
   type PayeeUpdate,
@@ -203,18 +208,28 @@ export async function updateCashAccount(
   }
 
   let verified = false
+  // The bank identity (iban) a disabled, hand-typed account takes along with
+  // its printed IBAN; undefined leaves the column alone.
+  let identityIban: string | null | undefined
   if (touchesPayee) {
     // Only giro/bank accounts (1920-1999) can be printed as payee. Stripe,
     // Woo and Shopify clearing rows live in the same table and must stay out.
     const { data: existing, error: existingError } = await supabase
       .from('cash_accounts')
-      .select('id, ledger_account, iban, payee_iban')
+      .select('id, ledger_account, iban, payee_iban, enabled, source, bank_connection_id')
       .eq('company_id', companyId)
       .eq('id', cashAccountId)
       .maybeSingle()
     if (existingError) return failed(existingError)
     if (!existing) return NOT_FOUND
-    const row = existing as { ledger_account: string; iban?: string | null; payee_iban?: string | null }
+    const row = existing as {
+      ledger_account: string
+      iban?: string | null
+      payee_iban?: string | null
+      enabled?: boolean
+      source?: string
+      bank_connection_id?: string | null
+    }
     if (!isBankCashAccount(row)) {
       return {
         ok: false,
@@ -228,18 +243,44 @@ export async function updateCashAccount(
     // the IBAN actually changes: a healed twin may still carry this row's own
     // IBAN, and re-saving the form must not trip over it.
     const newIban = ibanKey(payeeUpdate.iban)
-    if (newIban && newIban !== ibanKey(row.iban) && newIban !== ibanKey(row.payee_iban)) {
+    const checksTwin = newIban !== null && newIban !== ibanKey(row.iban) && newIban !== ibanKey(row.payee_iban)
+
+    // An account typed in by hand got the typed IBAN as its bank identity
+    // too (insertManualBankAccount), and nothing else ever showed or edited
+    // that column. While the account is in use the identity stays: a later
+    // bank connection with that IBAN takes the row over in place, and
+    // printing no IBAN does not make it another account. Once it is turned
+    // off (here or in the same request), writing its printed IBAN takes the
+    // identity along, or a duplicate added by mistake keeps the IBAN from
+    // the real account for good (crm#1270). Never a row a bank holds or
+    // held (source), and never an identity another row shares: that is the
+    // twin of a bank-fed account and stays the bank's word.
+    const typedIdentity = ibanKey(row.iban)
+    const followsIdentity = payeeUpdate.iban !== undefined
+      && typedIdentity !== null
+      && newIban !== typedIdentity
+      && row.source === 'manual'
+      && (row.bank_connection_id ?? null) === null
+      && (input.enabled ?? row.enabled) === false
+
+    if (checksTwin || followsIdentity) {
       const { data: others, error: othersError } = await supabase
         .from('cash_accounts')
         .select('id, iban, payee_iban')
         .eq('company_id', companyId)
         .neq('id', cashAccountId)
       if (othersError) return failed(othersError)
-      const twin = ((others ?? []) as { id: string; iban: string | null; payee_iban: string | null }[]).find(
-        (other) => ibanKey(other.iban) === newIban || ibanKey(other.payee_iban) === newIban,
-      )
+      const rows = (others ?? []) as { id: string; iban: string | null; payee_iban: string | null }[]
+      const twin = checksTwin
+        ? rows.find((other) => ibanKey(other.iban) === newIban || ibanKey(other.payee_iban) === newIban)
+        : undefined
       if (twin) {
         return { ok: false, code: 'CASH_ACCOUNT_IBAN_DUPLICATE', details: { existing_cash_account_id: twin.id } }
+      }
+      const carried = (iban: string | null) =>
+        iban !== null && rows.some((other) => ibanKey(other.iban) === iban || ibanKey(other.payee_iban) === iban)
+      if (followsIdentity && !rows.some((other) => ibanKey(other.iban) === typedIdentity) && !carried(newIban)) {
+        identityIban = newIban
       }
     }
   }
@@ -294,6 +335,7 @@ export async function updateCashAccount(
     const changes: Record<string, unknown> = { ...payeeUpdate }
     if (input.voucher_series !== undefined) changes.voucher_series = input.voucher_series
     if (input.enabled !== undefined) changes.enabled = input.enabled
+    if (identityIban !== undefined) changes.bank_identity_iban = identityIban
     return { ok: true, dryRun: true, preview: { cash_account_id: cashAccountId, changes } }
   }
 
@@ -309,6 +351,16 @@ export async function updateCashAccount(
     if (input.enabled !== undefined) {
       updated = await setEnabled(supabase, companyId, cashAccountId, input.enabled)
       if (!updated) return (await explainEnabledRefusal()) ?? NOT_FOUND
+    }
+    // Last, so a request that also turns the account off has done so. The
+    // UPDATE re-checks the row: one a bank took over or someone turned back
+    // on in between keeps its identity.
+    if (identityIban !== undefined) {
+      const moved = await setTypedAccountIdentity(supabase, companyId, cashAccountId, identityIban)
+      if (moved) {
+        updated = moved
+        log.info('cash account bank identity follows its typed IBAN', { companyId, cashAccountId, cleared: identityIban === null })
+      }
     }
   } catch (err) {
     log.error('cash_accounts update failed', err as Error)
