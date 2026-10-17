@@ -1,0 +1,1 @@
+[2026-10-16] ingest.ts keeps its own imports of the invoice pools and the match log, which the inline split and the batch use: transactions -> invoicing drops 33 to 29; routing them through composition would hide the edges, not remove them.

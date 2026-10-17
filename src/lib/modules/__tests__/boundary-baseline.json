@@ -60,11 +60,10 @@
     "supplier-invoices -> vat": 3,
     "transactions -> agent": 2,
     "transactions -> bank-feed": 1,
-    "transactions -> collections": 2,
+    "transactions -> collections": 1,
     "transactions -> deadlines": 1,
     "transactions -> inbox": 1,
-    "transactions -> invoicing": 33,
-    "transactions -> payments": 2,
+    "transactions -> invoicing": 29,
     "transactions -> skatteverket": 9,
     "vat -> parties": 1,
     "year-end -> import": 2,
@@ -78,7 +77,8 @@
   "compositionSeams": {
     "importers": [
       "lib/bookkeeping/engine.ts -> lib/composition/reversal-hooks",
-      "lib/init.ts -> lib/composition/event-consumers"
+      "lib/init.ts -> lib/composition/event-consumers",
+      "lib/transactions/ingest.ts -> lib/composition/ingest-matchers"
     ],
     "imports": [
       "lib/composition/event-consumers.ts -> lib/bookkeeping/handlers/supplier-invoice-handler",
@@ -90,6 +90,11 @@
       "lib/composition/event-consumers.ts -> lib/suggestions/handler",
       "lib/composition/event-consumers.ts -> lib/supplier-invoices/attest-notify",
       "lib/composition/event-consumers.ts -> lib/webhooks/handler",
+      "lib/composition/ingest-matchers.ts -> lib/collections/ingest-matcher",
+      "lib/composition/ingest-matchers.ts -> lib/invoices/customer-invoice-ingest-matcher",
+      "lib/composition/ingest-matchers.ts -> lib/invoices/rot-rut-ingest-matchers",
+      "lib/composition/ingest-matchers.ts -> lib/invoices/supplier-invoice-ingest-matcher",
+      "lib/composition/ingest-matchers.ts -> lib/payments/orders/ingest-matcher",
       "lib/composition/reversal-hooks.ts -> lib/bookkeeping/payment-sync",
       "lib/composition/reversal-hooks.ts -> lib/invoices/migrated-deduction-reversal",
       "lib/composition/reversal-hooks.ts -> lib/invoices/rot-rut-reclaim-reversal"

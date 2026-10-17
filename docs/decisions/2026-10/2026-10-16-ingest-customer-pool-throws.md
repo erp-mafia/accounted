@@ -1,0 +1,1 @@
+[2026-10-16] IngestPools.customerInvoices() throws on a failed read instead of answering null: before the registry the split logged and stored no parts on that throw while the customer pass moved on, and a null would have stored the split against an empty pool.

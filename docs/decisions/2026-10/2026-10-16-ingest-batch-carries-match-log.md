@@ -1,0 +1,1 @@
+[2026-10-16] IngestBatch carries logMatch (logMatchEvent bound to the batch's user), beyond the decided interface: the payment order matcher in lib/payments writes its audit row without a new payments -> invoicing import.
