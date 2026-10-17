@@ -1,0 +1,288 @@
+/**
+ * The bank check: what the bank reports for each bank account against the
+ * booked balance of the account it books on, on the day the bank reported it.
+ *
+ * The bank's side is the booked balance the last PSD2 balance refresh stored
+ * on the cash account (cash_accounts.balance, dated by balance_updated_at),
+ * the figure the reconciliation page prints as "Banken visar". The ledger
+ * side is the balance sheet's figure for that account at the end of that day
+ * (the trial balance with the closing entry, as the bank_balance measure
+ * reads it). Comparing on the bank's own date keeps a balance fetched days
+ * ago from showing every later verifikat as a difference.
+ *
+ * Basis: 1930 Företagskonto (every bank account) is reconciled against the
+ * bank statement, Phase 1 of the bokslut (swedish-year-end-closing).
+ *
+ * The explanation lists the bank's transactions on that account up to that
+ * day that have no verifikat (lib/transactions/unbooked.ts, the one
+ * definition behind every "unbooked" figure): money the bank has moved and
+ * the books have not. What they do not cover is the residual.
+ */
+import { isBankCashAccount } from '@/lib/cash-accounts/invoice-payee-rules'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { toHandle } from '@/lib/handles'
+import { tiesOut } from '@/lib/measures/explain'
+import { fiscalPeriodContaining } from '@/lib/measures/params'
+import { roundOre } from '@/lib/money'
+import { generateTrialBalance } from '@/lib/reports/trial-balance'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { applyUnbookedFilter } from '@/lib/transactions/unbooked'
+import { cannotCheck, companyFacts, kronor, noFiscalPeriod, sourceFailed, statusFor, sumOre } from '../shared'
+import type { CheckBreakdown, CheckContext, CheckDefinition, CheckItem, CheckRun, CheckSide, CheckSource, CheckSubject } from '../types'
+
+const TOLERANCE = 0.005
+
+/** Explanation rows read per account before the list stops and says so. */
+const MAX_UNBOOKED_ROWS = 2000
+
+const BANK_SOURCE: CheckSource = {
+  report: 'Bankens rapporterade saldo (kontoregistret, senaste saldohämtningen)',
+  v1_path: '/cash-accounts',
+  mcp_tool: 'gnubok_list_cash_accounts',
+  screen: '/reconciliation',
+}
+
+const LEDGER_SOURCE: CheckSource = {
+  report: 'Balansräkning, bankkontots rad per dagen banken rapporterade saldot',
+  v1_path: '/reports/balance-sheet',
+  mcp_tool: 'gnubok_get_balance_sheet',
+  screen: '/reports/balance-sheet',
+}
+
+interface CashAccountRow {
+  id: string
+  name: string | null
+  ledger_account: string
+  currency: string
+  iban: string | null
+  balance: number | string | null
+  balance_updated_at: string | null
+  updated_at: string | null
+}
+
+interface BankSource {
+  cashAccountId: string
+  account: string
+  reported: number
+  booked: number
+}
+
+function subjectOf(row: CashAccountRow): CheckSubject {
+  return {
+    kind: 'bank_account',
+    cash_account_id: row.id,
+    handle: toHandle('cash_account', row.id),
+    account_number: row.ledger_account,
+    name: row.name ?? `Bankkonto ${row.ledger_account}`,
+  }
+}
+
+function sidesOf(reported: number | null, booked: number | null, account: string): CheckSide[] {
+  return [
+    { key: 'bank', label_sv: 'Saldo enligt banken', label_en: 'Balance according to the bank', amount: reported, source: BANK_SOURCE },
+    {
+      key: 'ledger',
+      label_sv: `Bokfört saldo på ${account}`,
+      label_en: `Booked balance on ${account}`,
+      amount: booked,
+      source: LEDGER_SOURCE,
+    },
+  ]
+}
+
+/**
+ * Reconnect duplicates (same IBAN and currency twice) keep only the most
+ * recently updated row, as the reconciliation list does: the other is a
+ * stale copy of the same bank account, not a second balance.
+ */
+function withoutReconnectDuplicates(rows: CashAccountRow[]): CashAccountRow[] {
+  const latest = new Map<string, CashAccountRow>()
+  const out: CashAccountRow[] = []
+  for (const row of rows) {
+    if (!row.iban) {
+      out.push(row)
+      continue
+    }
+    const key = `${row.iban}|${row.currency}`
+    const seen = latest.get(key)
+    if (!seen || (row.updated_at ?? '') > (seen.updated_at ?? '')) latest.set(key, row)
+  }
+  return [...out, ...latest.values()].sort((a, b) => a.ledger_account.localeCompare(b.ledger_account) || a.id.localeCompare(b.id))
+}
+
+async function run(ctx: CheckContext): Promise<CheckRun<BankSource>[]> {
+  const company: CheckSubject = { kind: 'company' }
+  let rows: CashAccountRow[]
+  let ledgerCurrency: string | null
+  try {
+    ledgerCurrency = (await companyFacts(ctx)).ledgerCurrency
+    const { data, error } = await ctx.supabase
+      .from('cash_accounts')
+      .select('id, name, ledger_account, currency, iban, balance, balance_updated_at, updated_at')
+      .eq('company_id', ctx.companyId)
+      .eq('enabled', true)
+      .order('ledger_account', { ascending: true })
+    if (error) throw Object.assign(new Error(error.message), { code: error.code })
+    rows = withoutReconnectDuplicates(((data ?? []) as CashAccountRow[]).filter((r) => isBankCashAccount(r)))
+  } catch (err) {
+    return [cannotCheck(company, ctx.today, sourceFailed('bank_balance_vs_bank', 'Kontoregistret', err))]
+  }
+  if (rows.length === 0) {
+    return [
+      cannotCheck(company, ctx.today, {
+        code: 'NO_BANK_BALANCE',
+        message_sv: 'Bolaget har inget bankkonto i kontoregistret, så det finns inget banksaldo att jämföra med.',
+        message_en: 'The company has no bank account in its cash account register, so there is no bank balance to compare with.',
+      }),
+    ]
+  }
+
+  const perLedgerAccount = new Map<string, number>()
+  for (const row of rows) perLedgerAccount.set(row.ledger_account, (perLedgerAccount.get(row.ledger_account) ?? 0) + 1)
+  const balances = new Map<string, Promise<Map<string, number>>>()
+  const balanceAt = (fiscalPeriodId: string, date: string) => {
+    const key = `${fiscalPeriodId}|${date}`
+    let pending = balances.get(key)
+    if (!pending) {
+      pending = generateTrialBalance(ctx.supabase, ctx.companyId, fiscalPeriodId, { closingEntry: 'include', toDate: date }).then(
+        (tb) => new Map(tb.rows.map((r) => [r.account_number, roundOre(r.closing_debit - r.closing_credit)])),
+      )
+      balances.set(key, pending)
+    }
+    return pending
+  }
+
+  return Promise.all(
+    rows.map(async (row): Promise<CheckRun<BankSource>> => {
+      const subject = subjectOf(row)
+      if ((perLedgerAccount.get(row.ledger_account) ?? 0) > 1) {
+        return cannotCheck(subject, ctx.today, {
+          code: 'SHARED_LEDGER_ACCOUNT',
+          message_sv: `Flera bankkonton bokförs på ${row.ledger_account}, så kontots saldo kan inte jämföras med ett enskilt banksaldo. Ge varje bankkonto ett eget bokföringskonto.`,
+          message_en: `Several bank accounts book on ${row.ledger_account}, so its balance cannot be compared with one bank balance. Give each bank account its own ledger account.`,
+          details: { account_number: row.ledger_account },
+        })
+      }
+      if (!ledgerCurrency || row.currency !== ledgerCurrency) {
+        return cannotCheck(subject, ctx.today, {
+          code: 'FOREIGN_CURRENCY_ACCOUNT',
+          message_sv: `Kontot förs i ${row.currency} och bokföringen i ${ledgerCurrency ?? 'okänd valuta'}, så saldona är inte jämförbara.`,
+          message_en: `The account is kept in ${row.currency} and the ledger in ${ledgerCurrency ?? 'an unknown currency'}, so the balances are not comparable.`,
+          details: { currency: row.currency, ledger_currency: ledgerCurrency },
+        })
+      }
+      if (row.balance === null || row.balance_updated_at === null) {
+        return cannotCheck(subject, ctx.today, {
+          code: 'NO_BANK_BALANCE',
+          message_sv: `Banken har inte rapporterat något saldo för ${subject.kind === 'bank_account' ? subject.name : row.ledger_account}. Koppla kontot till banken, eller stäm av mot kontoutdraget.`,
+          message_en: 'The bank has reported no balance for this account. Connect it to the bank, or reconcile against the bank statement.',
+        })
+      }
+      const reported = roundOre(Number(row.balance))
+      const asOf = todayIsoStockholm(new Date(row.balance_updated_at))
+      try {
+        const period = await fiscalPeriodContaining(ctx, asOf)
+        if (!period) return cannotCheck(subject, asOf, noFiscalPeriod(asOf), sidesOf(reported, null, row.ledger_account))
+        const booked = (await balanceAt(period.id, asOf)).get(row.ledger_account) ?? 0
+        const difference = roundOre(reported - booked)
+        const status = statusFor(difference, TOLERANCE)
+        return {
+          subject,
+          status,
+          difference,
+          as_of: asOf,
+          summary_sv:
+            status === 'ok'
+              ? `Bokfört saldo på ${row.ledger_account} stämmer med bankens saldo ${asOf}.`
+              : `Banken visade ${kronor(reported)} ${asOf} men ${row.ledger_account} har ${kronor(booked)} bokfört: differens ${kronor(difference)}.`,
+          sides: sidesOf(reported, booked, row.ledger_account),
+          refusal: null,
+          facts: { balance_fetched_at: row.balance_updated_at },
+          source: { cashAccountId: row.id, account: row.ledger_account, reported, booked },
+        }
+      } catch (err) {
+        return cannotCheck(subject, asOf, sourceFailed('bank_balance_vs_bank', 'Balansräkningen', err))
+      }
+    }),
+  )
+}
+
+async function explain(ctx: CheckContext, run: CheckRun<BankSource>): Promise<CheckBreakdown> {
+  const source = run.source
+  if (!source || run.difference === null) return { parts: [], items: [], residual: null, reconciles: false }
+  const rows = await fetchAllRows<{ id: string; date: string; description: string | null; amount: number | string; currency: string | null }>(
+    ({ from, to }) =>
+      applyUnbookedFilter(
+        ctx.supabase
+          .from('transactions')
+          .select('id, date, description, amount, currency')
+          .eq('company_id', ctx.companyId)
+          .eq('cash_account_id', source.cashAccountId)
+          .lte('date', run.as_of),
+      )
+        .order('date', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to),
+    { maxRows: MAX_UNBOOKED_ROWS },
+  )
+  const items: CheckItem[] = rows.map((row) => ({
+    part: 'unbooked_transactions',
+    item_type: 'transaction',
+    transaction_id: row.id,
+    handle: toHandle('transaction', row.id),
+    date: row.date,
+    label: row.description || 'Banktransaktion',
+    // In the bank's balance, not in the books: it counts as it moved the bank.
+    amount: roundOre(Number(row.amount) || 0),
+    ...(row.currency ? { currency: row.currency } : {}),
+  }))
+  const explained = sumOre(items.map((i) => i.amount))
+  const residual = roundOre(run.difference - explained)
+  const reconciles = tiesOut(explained, run.difference, items.length + 1)
+  const notes: string[] = []
+  if (rows.length >= MAX_UNBOOKED_ROWS) notes.push(`Only the first ${MAX_UNBOOKED_ROWS} unbooked transactions were read.`)
+  if (!reconciles) {
+    notes.push(
+      `Unbooked bank transactions explain ${explained} of ${run.difference}. The residual is usually a verifikat on ${source.account} with no bank transaction behind it (booked twice, or on the wrong account), a verifikat dated that day for a payment the bank had not booked when it reported the balance, an opening balance that differs from the bank's balance that day, or bank transactions the feed has not delivered: gnubok_get_reconciliation_status with account_key bank:${source.cashAccountId} lists both sides.`,
+    )
+  }
+  return {
+    parts: [
+      {
+        key: 'unbooked_transactions',
+        label_sv: `Banktransaktioner utan verifikat till och med ${run.as_of}`,
+        label_en: `Bank transactions without a verifikat through ${run.as_of}`,
+        amount: explained,
+        count: items.length,
+      },
+    ],
+    items,
+    residual,
+    reconciles,
+    ...(notes.length > 0 ? { note: notes.join(' ') } : {}),
+  }
+}
+
+export const bankBalanceVsBank: CheckDefinition<BankSource> = {
+  id: 'bank_balance_vs_bank',
+  name_sv: 'Bokfört banksaldo mot bankens saldo',
+  name_en: 'Booked bank balance against the bank\'s balance',
+  definition:
+    'Per bank account in the cash account register (giro and bank accounts; a reconnect duplicate counted once): the booked balance the bank reported at its last balance refresh (cash_accounts.balance, dated balance_updated_at) minus the booked balance (debit minus credit) of the ledger account the bank account books on, at the end of that same Stockholm day, read as the balance sheet reads it. Zero means the books hold exactly what the bank held that day. Accounts without a reported balance, in another currency than the ledger, or sharing a ledger account cannot be checked.',
+  definition_sv:
+    'Per bankkonto i kontoregistret: saldot banken rapporterade vid senaste saldohämtningen minus bokfört saldo (debet minus kredit) på kontot bankkontot bokförs på, vid slutet av samma dag, så som balansräkningen läser det. Noll betyder att bokföringen har exakt det banken hade den dagen. Konton utan saldo från banken, i annan valuta än bokföringen eller som delar bokföringskonto kan inte kontrolleras.',
+  basis:
+    'Bank accounts (1920 Plusgiro, 1930 Företagskonto) are reconciled against the bank statement, Phase 1 of the bokslut (swedish-year-end-closing). A bank movement that is not booked also breaks BFL 5 kap. 2 § timing once it is old enough (see unbooked_bank_lines_overdue).',
+  unit: 'SEK',
+  tolerance: TOLERANCE,
+  subject_kind: 'bank_account',
+  compares: [BANK_SOURCE, LEDGER_SOURCE],
+  next_action: {
+    message_sv:
+      'Bokför banktransaktionerna utan verifikat som förklaringen listar, och gå igenom avstämningen för kontot om en rest återstår.',
+    tool: 'gnubok_list_uncategorized_transactions',
+    screen: '/reconciliation',
+  },
+  run,
+  explain,
+}

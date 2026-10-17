@@ -26,7 +26,7 @@ describe('SIE undo lock answer', () => {
 })
 
 describe('SIE export snapshot lease', () => {
-  it.each(['reports.balance-sheet.pdf','reports.income-statement','gnubok_get_balance_sheet','gnubok_get_trial_balance','gnubok_vat_declaration_validate','measures.get','measures.explain','gnubok_get_measure','gnubok_explain_measure'])('%s refuses an incomplete external report',async(operation)=>{
+  it.each(['reports.balance-sheet.pdf','reports.income-statement','gnubok_get_balance_sheet','gnubok_get_trial_balance','gnubok_vat_declaration_validate','measures.get','measures.explain','gnubok_get_measure','gnubok_explain_measure','unexplained.list','unexplained.explain','gnubok_list_unexplained','gnubok_get_unexplained'])('%s refuses an incomplete external report',async(operation)=>{
     const {supabase}=createMockSupabase()
     supabase.rpc.mockResolvedValue({data:null,error:{code:'55000',message:'SIE_IMPORT_HOLD'}})
     const read=vi.fn()

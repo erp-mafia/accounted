@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 348 endpoints.
+  pagination, scopes), and all 351 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -214,7 +214,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 348 operations. Paths are shown without
+API version `2026-05-12`, 351 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (22)
@@ -574,7 +574,7 @@ POST /companies/{companyId}/salary-runs/{id}/send-payslips : Email every employe
 POST /companies/{companyId}/salary-runs/{id}/unapprove : Recall the approval of a salary run (approved back to review) [scope:payroll:write risk:medium idempotent dry-run reversible]
 ```
 
-### Reports (40)
+### Reports (43)
 
 Full detail: [references/reports.md](references/reports.md)
 
@@ -618,6 +618,9 @@ GET /companies/{companyId}/reports/vat-declaration/filings : List the VAT period
 POST /companies/{companyId}/reports/vat-declaration/filings : Record that a VAT period was filed outside the Skatteverket connection [scope:bookkeeping:write risk:low idempotent dry-run reversible]
 DELETE /companies/{companyId}/reports/vat-declaration/filings : Undo a manual "filed" mark on a VAT period [scope:bookkeeping:write risk:low idempotent dry-run reversible]
 GET /companies/{companyId}/reports/vat-declaration/settlement-proposal : The proposed momsredovisning verifikat for a VAT period: clear 26xx to 2650 or 1650 [scope:reports:read risk:low idempotent]
+GET /companies/{companyId}/unexplained : The unexplained queue: every expected-zero check run for the company, differences first [scope:reports:read risk:low idempotent]
+GET /companies/{companyId}/unexplained/{checkId} : One expected-zero check: its definition and basis, the figures it compares, and every result [scope:reports:read risk:low idempotent]
+GET /companies/{companyId}/unexplained/{checkId}/explain : What a difference in the queue consists of: its parts and the items behind them, with typed handles [scope:reports:read risk:low idempotent]
 POST /companies/{companyId}/vat/settlement : Book the momsredovisning verifikat for a VAT period, exactly as the proposal gives it [scope:bookkeeping:write risk:high idempotent dry-run]
 ```
 

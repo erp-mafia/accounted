@@ -3275,6 +3275,50 @@ const MEASURE: Record<string, StructuredErrorEntry> = {
   },
 }
 
+// The unexplained queue (lib/unexplained): a check that cannot run answers
+// cannot_check inside the data, never one of these. These refuse only what
+// the caller sent wrong. The runtime sentence travels as the thrown message.
+const UNEXPLAINED: Record<string, StructuredErrorEntry> = {
+  UNEXPLAINED_CHECK_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Kontrollen finns inte.',
+    message_en: 'No check with this id. details.valid lists the check ids.',
+    remediation: {
+      description: 'List the queue (GET /unexplained, gnubok_list_unexplained) and send one of its check_id values.',
+      tool: 'gnubok_list_unexplained',
+    },
+    retryable: false,
+    thrown_message_sv: true,
+  },
+  UNEXPLAINED_PARAMETER_NOT_ACCEPTED: {
+    httpStatus: 400,
+    message_sv: 'Kontrollen tar inte den parametern.',
+    message_en:
+      'The check does not take a subject parameter that was sent: details.refused names it and details.accepted lists what the check takes. Refused rather than ignored.',
+    retryable: false,
+    thrown_message_sv: true,
+  },
+  UNEXPLAINED_SUBJECT_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Kontrollen har flera resultat: ange vilket som ska förklaras.',
+    message_en:
+      'The check has several results (bank accounts or momsperioder): send the subject, as the explain handle of the queue row gives it. details.subjects lists them.',
+    retryable: false,
+    thrown_message_sv: true,
+  },
+  UNEXPLAINED_SUBJECT_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Kontrollen har inget resultat för det angivna kontot eller den angivna perioden.',
+    message_en: 'The check has no result for the subject that was sent. details.subjects lists the ones it has.',
+    remediation: {
+      description: 'Take the subject from the explain handle of the row in GET /unexplained (gnubok_list_unexplained).',
+      tool: 'gnubok_list_unexplained',
+    },
+    retryable: false,
+    thrown_message_sv: true,
+  },
+}
+
 const VAT_REPORT: Record<string, StructuredErrorEntry> = {
   VAT_REPORT_MISSING_PARAMS: {
     httpStatus: 400,
@@ -8957,6 +9001,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...FX,
   ...REPORT,
   ...MEASURE,
+  ...UNEXPLAINED,
   ...VAT_REPORT,
   ...VAT_FILING,
   ...PS_REPORT,

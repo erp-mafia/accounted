@@ -176,6 +176,9 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
       'settings',
       'cash-accounts',
       'measures',
+      // The unexplained queue (lib/unexplained, infrastructure): expected-zero
+      // checks over the ledger and the blocks that feed it, read-only.
+      'unexplained',
     ],
     v1Segments: [
       'journal-entries',
@@ -190,6 +193,7 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
       'compliance',
       'cash-accounts',
       'measures',
+      'unexplained',
     ],
     jurisdictions: SE,
   },
@@ -521,6 +525,9 @@ export const INFRA_LIB_FOLDERS: readonly string[] = Object.freeze([
   'support',
   'theme',
   'ui-state',
+  // The unexplained queue: expected-zero checks that read across the ledger
+  // and the blocks (reconciliation, VAT filings, bank rows), like the worklist.
+  'unexplained',
   'worklist',
   'xml',
 ])

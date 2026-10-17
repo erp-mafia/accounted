@@ -395,6 +395,7 @@ import {
 } from '@/lib/pending-operations/transaction-claims'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { withSIEExternalReport } from '@/lib/import/sie-period-read'
+import type { UnexplainedBriefing } from '@/lib/unexplained'
 import {
   existingOpeningBalanceMessage,
   findExistingOpeningBalance,
@@ -4324,6 +4325,50 @@ const MEASURES_POINTER = {
     'Answer "how much" questions from gnubok_get_measure (via gnubok_call_tool when not listed) instead of summing report rows; pass its explain handle to gnubok_explain_measure for the vouchers behind a figure. Definitions: gnubok_list_measures.',
 } as const
 
+/**
+ * The briefing's unexplained block (lib/unexplained): how many differences
+ * that should be zero are open, how many checks could not run, and the top
+ * three, never the full list (gnubok_list_unexplained has it). Best-effort
+ * inside a time budget and behind the SIE import lease like every ledger
+ * read: a timeout, an import in progress or a failed read says so and still
+ * names the tool. Undeclared in the briefing's outputSchema, like
+ * capabilities (tools/list budget).
+ */
+const UNEXPLAINED_BRIEFING_BUDGET_MS = 2500
+const UNEXPLAINED_HOW =
+  'Differences that should be zero (reskontra vs ledger, bank and skattekonto vs the outside balance, declared moms not settled, overdue unbooked bank rows). ' +
+  'gnubok_list_unexplained lists every result with its fix; pass a row\'s explain arguments to gnubok_explain_unexplained for the records behind it. cannot_check means not checked, never ok.'
+
+type UnexplainedBlock =
+  | (UnexplainedBriefing & { how: string })
+  | { tool: 'gnubok_list_unexplained'; unavailable: 'timeout' | 'error'; how: string }
+
+async function briefUnexplained(supabase: SupabaseClient, companyId: string): Promise<UnexplainedBlock> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<UnexplainedBlock>((resolve) => {
+    timer = setTimeout(
+      () => resolve({ tool: 'gnubok_list_unexplained', unavailable: 'timeout', how: UNEXPLAINED_HOW }),
+      UNEXPLAINED_BRIEFING_BUDGET_MS,
+    )
+  })
+  const read = (async (): Promise<UnexplainedBlock> => {
+    try {
+      const { summarizeUnexplained } = await import('@/lib/unexplained')
+      const summary = await withSIEExternalReport(supabase, companyId, 'unexplained.list', () =>
+        summarizeUnexplained({ supabase, companyId }),
+      )
+      return { ...summary, how: UNEXPLAINED_HOW }
+    } catch {
+      return { tool: 'gnubok_list_unexplained', unavailable: 'error', how: UNEXPLAINED_HOW }
+    }
+  })()
+  try {
+    return await Promise.race([read, timeout])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 export const tools: McpTool[] = [
   {
     // The bridge that makes `catalogVisibility: 'search'` usable on hosts that
@@ -6805,6 +6850,10 @@ export const tools: McpTool[] = [
       // session, not on the company connection (crm#1263).
       const safeSkvConnection = getSkvConnectionHealth(supabase, companyId, userId)
 
+      // The unexplained queue's count and top rows (briefUnexplained): started
+      // with the other best-effort reads, bounded by its own time budget.
+      const unexplainedRead = briefUnexplained(supabase, companyId)
+
       // The document inbox address (crm#1174): an agent asked to route a
       // card provider's receipts into Accounted looked here and in the inbox
       // list, found neither, and concluded there was no address. Best-effort
@@ -7018,6 +7067,7 @@ export const tools: McpTool[] = [
       const inboxAddress = await inboxAddressRead
       const capabilities = await safeCapabilities
       const openSuggestions = await openSuggestionsRead
+      const unexplainedBlock = await unexplainedRead
       const capabilityDigestRows = capabilities ? capabilityDigest(capabilities) : null
       // The company's profile beside the digest: which starting point decides
       // the packages tools/list shows, and the packages that are off (by the
@@ -7088,6 +7138,9 @@ export const tools: McpTool[] = [
 
         // Defined measures: a pointer, never values (MEASURES_POINTER).
         measures: MEASURES_POINTER,
+
+        // Differences that should be zero: the count and the top three, never the list (briefUnexplained).
+        unexplained: unexplainedBlock,
 
         // Static per-workflow loadouts (issue #1098): lets a deferred-loading
         // harness batch-load a whole workflow cluster in one call. Validated

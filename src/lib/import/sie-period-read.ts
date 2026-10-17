@@ -16,6 +16,10 @@ const EXTERNAL_LEDGER_REPORTS = new Set([
   // Defined measures (lib/operations/measures.ts) read the same ledger: the
   // MCP tools by name, the v1 doors by operation id. The list reads nothing.
   'gnubok_get_measure','gnubok_explain_measure','measures.get','measures.explain',
+  // The unexplained queue (lib/operations/unexplained.ts): every door runs the
+  // checks over the ledger, the list included.
+  'gnubok_list_unexplained','gnubok_get_unexplained','gnubok_explain_unexplained',
+  'unexplained.list','unexplained.get','unexplained.explain',
 ])
 
 /** An external report has no persistent dashboard banner. Hold the complete
