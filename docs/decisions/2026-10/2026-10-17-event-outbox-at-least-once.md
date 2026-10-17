@@ -1,0 +1,1 @@
+[2026-10-17] Event outbox delivery is at-least-once: a rare duplicate, such as a second mail after a crash, is accepted; each consumer gets a cheap idempotency marker when it is flipped to async in E3 (Jakob).

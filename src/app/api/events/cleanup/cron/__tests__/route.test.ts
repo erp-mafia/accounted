@@ -1,6 +1,7 @@
 /**
  * Tests for the event_log cleanup cron's differentiated retention:
- * delivery events at 30 days, agent telemetry (mcp.*, agent.*) at 180 days.
+ * delivery events at 30 days, agent telemetry (mcp.*, agent.*) at 180 days;
+ * then the event outbox prune (prune_event_outbox), best effort.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -19,9 +20,11 @@ interface DeleteCapture {
 
 const deleteCalls: DeleteCapture[] = []
 let deleteResults: Array<{ error: unknown; count: number | null }> = []
+const rpc = vi.fn()
 
 vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: vi.fn(() => ({
+    rpc: (...args: unknown[]) => rpc(...args),
     from: vi.fn(() => {
       const capture: DeleteCapture = { filters: [] }
       deleteCalls.push(capture)
@@ -54,6 +57,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   deleteCalls.length = 0
   deleteResults = []
+  rpc.mockResolvedValue({ data: 0, error: null })
 })
 
 describe('GET /api/events/cleanup/cron', () => {
@@ -71,6 +75,7 @@ describe('GET /api/events/cleanup/cron', () => {
       deleted: 15,
       deletedDelivery: 12,
       deletedTelemetry: 3,
+      prunedOutbox: 0,
     })
 
     expect(deleteCalls).toHaveLength(2)
@@ -93,13 +98,42 @@ describe('GET /api/events/cleanup/cron', () => {
     expect(pass2.filters.filter((f) => f.method === 'not')).toHaveLength(0)
   })
 
+  it('prunes the event outbox after the event_log passes', async () => {
+    rpc.mockResolvedValue({ data: 7, error: null })
+    const response = await GET(createCronRequest('/api/events/cleanup/cron'))
+    const json = await response.json()
+    expect(rpc).toHaveBeenCalledWith('prune_event_outbox')
+    expect(json).toMatchObject({ success: true, prunedOutbox: 7 })
+  })
+
+  it.each([
+    ['not deployed yet', { code: 'PGRST202', message: 'Could not find the function public.prune_event_outbox' }],
+    ['failing', { code: 'XX000', message: 'boom' }],
+  ])('still answers the event_log cleanup when the outbox prune is %s', async (_label, error) => {
+    deleteResults = [
+      { error: null, count: 4 },
+      { error: null, count: 1 },
+    ]
+    rpc.mockResolvedValue({ data: null, error })
+    const response = await GET(createCronRequest('/api/events/cleanup/cron'))
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
+      success: true,
+      deleted: 5,
+      deletedDelivery: 4,
+      deletedTelemetry: 1,
+      prunedOutbox: 0,
+    })
+  })
+
   it('short-circuits with an error envelope when the delivery pass fails', async () => {
     deleteResults = [{ error: { message: 'boom', code: 'XX000' }, count: null }]
 
     const response = await GET(createCronRequest('/api/events/cleanup/cron'))
 
     expect(response.status).toBeGreaterThanOrEqual(500)
-    // The 180-day pass never ran.
+    // The 180-day pass never ran, nor the outbox prune.
     expect(deleteCalls).toHaveLength(1)
+    expect(rpc).not.toHaveBeenCalled()
   })
 })

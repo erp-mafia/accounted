@@ -1,0 +1,1 @@
+[2026-10-17] The outbox dispatcher is /api/events/dispatch/cron, not /api/events/dispatch: the scheduled routes in vercel.json end in /cron, as the webhook dispatcher /api/webhooks/dispatch/cron does.

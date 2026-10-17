@@ -9,7 +9,9 @@
  * that emits (Promise.allSettled in lib/events/bus.ts).
  *
  * Adding a consumer changes which handlers run on which events, which
- * src/lib/events/__tests__/subscriptions.test.ts pins: record it there.
+ * src/lib/events/__tests__/subscriptions.test.ts pins: record it there, and
+ * in the consumer index the event bus reads (lib/events/consumer-index.ts,
+ * kept fresh by consumer-index.test.ts).
  */
 import { handleSupplierInvoiceRetroMatch } from '@/lib/bookkeeping/handlers/supplier-invoice-handler'
 import { unlearnOnReversal } from '@/lib/bookkeeping/handlers/unlearn-on-reversal'

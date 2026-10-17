@@ -1,0 +1,1 @@
+[2026-10-17] event_outbox.company_id references companies ON DELETE CASCADE and enqueue_event stores NULL for an id that is not a company: a removed company takes its queued payloads along, and no event is lost over its tag.
