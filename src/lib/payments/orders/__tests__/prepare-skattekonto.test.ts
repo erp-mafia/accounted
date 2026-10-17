@@ -104,6 +104,17 @@ describe('prepareSkattekontoPaymentOrder', () => {
     expect(rpcArgs()).not.toHaveProperty('p_payee_bankgiro')
   })
 
+  it('stays the next charge by default: no declaration is read and no combined parts are answered (crm#1260)', async () => {
+    const result = await prepareSkattekontoPaymentOrder(ctx, { cashAccountId: 'acct-1', today: TODAY, dryRun: true })
+
+    expect(result).toMatchObject({ ok: true, dryRun: true, preview: { amount: 11000, source: null } })
+    if (!result.ok || !result.dryRun) throw new Error('expected a preview')
+    expect(result.preview).not.toHaveProperty('combined')
+    expect(db.tables()).not.toContain('agi_declarations')
+    expect(db.tables()).not.toContain('deadlines')
+    expect(db.findCalls('company_settings', 'select').map(([columns]) => columns)).not.toContain('vat_registered, moms_period')
+  })
+
   it('takes the amount the person enters, rounded to öre, and refuses zero or less', async () => {
     await prepareSkattekontoPaymentOrder(ctx, { cashAccountId: 'acct-1', amount: 1234.567, today: TODAY })
     expect(rpcArgs().p_amount).toBe(1234.57)

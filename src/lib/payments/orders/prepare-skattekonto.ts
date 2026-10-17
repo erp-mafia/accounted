@@ -7,10 +7,14 @@
  * the next charge the synced saldo does not cover, less the bank payments
  * already on their way. Named from a declaration (source: a momsdeklaration
  * or an AGI, skattekonto-sources.ts), it pays what that declaration asks
- * for, by its due date, and the synced saldo is shown, never netted. The
- * person may pay in another amount. The day defaults to the last banking day
- * before Skatteverket draws the charge, so the money is on the skattekonto
- * by the due date; a day on or after it is allowed with a warning, because
+ * for, by its due date, and the synced saldo is shown, never netted. Named
+ * from a day (source due_date), it pays everything declared due that day as
+ * one payment: the database holds one open skattekonto order per company,
+ * so moms and AGI due together are paid together. A declaration paid on its
+ * own warns when another one is due the same day. The person may pay in
+ * another amount. The day defaults to the last banking day before
+ * Skatteverket draws the charge, so the money is on the skattekonto by the
+ * due date; a day on or after it is allowed with a warning, because
  * Skatteverket charges interest (kostnadsränta) on what is missing.
  *
  * Everything else follows the supplier payment (prepare.ts): the same door,
@@ -35,7 +39,15 @@ import { readReportedSkattekontoSaldo, resolveSkattekontoOcr, SKATTEKONTO_BANKGI
 import { createServiceClient } from '@/lib/supabase/server'
 import { listSkattekontoPaymentDue } from '@/lib/worklist/categories'
 import { loadDebtor } from './debtor'
-import { resolveSkattekontoSource, type SkattekontoPaymentSource, type SkattekontoSourceDue } from './skattekonto-sources'
+import {
+  resolveSkattekontoDueDate,
+  resolveSkattekontoSource,
+  type SkattekontoDeclarationSource,
+  type SkattekontoDueDateComponent,
+  type SkattekontoDueDateDue,
+  type SkattekontoPaymentSource,
+  type SkattekontoSourceDue,
+} from './skattekonto-sources'
 import { openPaymentsDoor } from './switched-on'
 import { logPaymentOrderEvents, type PaymentOrderRow } from './types'
 
@@ -63,7 +75,7 @@ export interface PrepareSkattekontoPaymentInput {
   executionDate?: string | null
   /** YYYY-MM-DD in Stockholm; injected so tests and the preview agree. */
   today: string
-  /** The declaration paid: its amount and due date replace the next charge's. */
+  /** The declaration paid, or the day whose declarations are paid: its amount and due date replace the next charge's. */
   source?: SkattekontoPaymentSource | null
   /** Run every check and answer the payment that would be created, without writing anything. The dialog's preview. */
   dryRun?: boolean
@@ -76,8 +88,10 @@ export interface SkattekontoPaymentWarning {
    * not_filed: the declaration paid is not on record as filed with Skatteverket.
    * possible_duplicate: a bank payment to the skattekonto of the same amount
    * was executed since the declaration's period, and may already pay it.
+   * same_due_date_parts: another declaration is due the same day as the one
+   * paid; the combined source (due_date) pays them all as one payment.
    */
-  code: 'late' | 'date_moved' | 'not_filed' | 'possible_duplicate'
+  code: 'late' | 'date_moved' | 'not_filed' | 'possible_duplicate' | 'same_due_date_parts'
   /** For late: the day Skatteverket draws. */
   due?: string
   /** For date_moved: the day asked for and the banking day it became. */
@@ -86,6 +100,17 @@ export interface SkattekontoPaymentWarning {
   /** For possible_duplicate: the executed order and when the bank paid it. */
   payment_order_id?: string
   executed_at?: string | null
+  /** For not_filed and possible_duplicate on a payment of several declarations: the declaration meant. */
+  source?: 'vat_declaration' | 'agi'
+  period?: string
+  /** For same_due_date_parts (due is the day): the other declarations due that day that ask for a payment. */
+  parts?: SkattekontoDueDateComponent[]
+  /** For same_due_date_parts: everything declared due that day, this declaration included. */
+  total?: number
+  /** For same_due_date_parts: a draft nobody approved is replaced by this payment (it may pay one of the parts). */
+  replaces_draft?: boolean
+  /** For same_due_date_parts: the source that pays every part as one payment. */
+  suggested_source?: { source: 'due_date'; due_date: string }
 }
 
 export interface PrepareSkattekontoPaymentResult {
@@ -93,8 +118,14 @@ export interface PrepareSkattekontoPaymentResult {
   warnings: SkattekontoPaymentWarning[]
   /** A skattekonto draft nobody approved, cancelled here so the person's latest choice wins. */
   replaced_draft_ids: string[]
-  /** The declaration paid, when the payment was named from one. */
+  /** The declaration paid, when the payment was named from one (or pays exactly one declaration due on the day). */
   source: SkattekontoSourceDue | null
+  /**
+   * Only with source due_date: the declarations due that day, those paid
+   * (components, summed) and those left out. Absent otherwise, so the other
+   * sources answer exactly as before.
+   */
+  combined?: SkattekontoDueDateDue
   /** With a source: the saldo Skatteverket last reported, as information; never netted. */
   balance: SkattekontoBalance | null
 }
@@ -133,6 +164,49 @@ const RPC_CODES: Record<string, string> = {
   already_in_payment: 'SKATTEKONTO_PAYMENT_ALREADY_IN_PAYMENT',
   idempotency_mismatch: 'PAYMENT_ORDERS_IDEMPOTENCY_MISMATCH',
   invalid_payload: 'VALIDATION_ERROR',
+}
+
+/**
+ * same_due_date_parts for a declaration paid on its own: the other
+ * declarations due the same day that ask for a payment, so the person or
+ * agent sees them before an unapproved draft paying one of them is replaced.
+ * Advisory: when the other parts cannot be read the warning is left out,
+ * never the payment.
+ */
+async function sameDueDateWarning(
+  supabase: SupabaseClient,
+  companyId: string,
+  paid: { source: SkattekontoDeclarationSource; due: SkattekontoSourceDue },
+  today: string,
+  replacesDraft: boolean,
+  log: Logger,
+): Promise<SkattekontoPaymentWarning | null> {
+  const day = paid.due.due_date
+  if (!day) return null
+  try {
+    const resolved = await resolveSkattekontoDueDate(supabase, companyId, day, today, paid)
+    if (!resolved.ok) return null
+    const others = resolved.combined.components.filter(
+      (c) => !(c.source === paid.due.kind && c.period === paid.due.tax_period),
+    )
+    if (others.length === 0) return null
+    return {
+      code: 'same_due_date_parts',
+      due: day,
+      parts: others,
+      total: resolved.combined.total,
+      replaces_draft: replacesDraft,
+      suggested_source: { source: 'due_date', due_date: day },
+    }
+  } catch (err) {
+    log.warn('skattekonto payment: same-day declarations not read', { companyId, reason: (err as { message?: string })?.message })
+    return null
+  }
+}
+
+/** The earliest day a bank payment may already pay one of the declarations (their paid_from). */
+function earliestPaidFrom(parts: SkattekontoSourceDue[]): string | null {
+  return parts.reduce<string | null>((min, p) => (min === null || p.paid_from < min ? p.paid_from : min), null)
 }
 
 /**
@@ -194,26 +268,57 @@ export async function prepareSkattekontoPaymentOrder(
   }
   const staleDraftIds = open.filter((o) => o.status === 'draft').map((o) => o.id)
 
-  // A declaration names its own amount and due date. Without one, what Hem
-  // asks for: the next charge, the shortfall against the saldo, and the bank
-  // payments already covering part of it.
+  // A declaration names its own amount and due date; a day names every
+  // declaration due on it, summed. Without either, what Hem asks for: the
+  // next charge, the shortfall against the saldo, and the bank payments
+  // already covering part of it.
   let source: SkattekontoSourceDue | null = null
-  if (input.source) {
+  let combined: SkattekontoDueDateDue | null = null
+  /** The declarations the payment pays, for the filing and duplicate warnings. */
+  let declarations: SkattekontoSourceDue[] = []
+  let dayParts: SkattekontoSourceDue[] = []
+  if (input.source?.kind === 'due_date') {
+    const resolved = await resolveSkattekontoDueDate(supabase, companyId, input.source.dueDate, input.today)
+    if (!resolved.ok) return { ok: false, code: resolved.code, details: resolved.details }
+    combined = resolved.combined
+    dayParts = resolved.parts
+    declarations = resolved.parts.filter((p) => p.payable !== null)
+    // One declaration due that day asks for a payment: the payment is that
+    // declaration's, exactly as if it were named on its own.
+    source = declarations.length === 1 ? (declarations[0] ?? null) : null
+  } else if (input.source) {
     const resolved = await resolveSkattekontoSource(supabase, companyId, input.source, input.today)
     if (!resolved.ok) return { ok: false, code: resolved.code, details: resolved.details }
     source = resolved.due
+    declarations = [source]
   }
-  const due = source ? null : await listSkattekontoPaymentDue(supabase, companyId, input.today)
-  const amount = chosenAmount ?? (source ? source.payable : (due?.amount ?? null))
+  const due = input.source ? null : await listSkattekontoPaymentDue(supabase, companyId, input.today)
+  const amount =
+    chosenAmount ?? (combined ? (combined.total > 0 ? combined.total : null) : source ? source.payable : (due?.amount ?? null))
   if (amount === null) {
-    if (!source) return { ok: false, code: 'SKATTEKONTO_PAYMENT_NOTHING_DUE' }
-    return {
-      ok: false,
-      code: 'SKATTEKONTO_PAYMENT_NOTHING_DUE',
-      details: { reason: source.nothing_due, declared: source.declared, tax_period: source.tax_period },
+    // A day with one declaration answers as that declaration does.
+    const only = combined ? (dayParts.length === 1 ? (dayParts[0] ?? null) : null) : source
+    if (only) {
+      return {
+        ok: false,
+        code: 'SKATTEKONTO_PAYMENT_NOTHING_DUE',
+        details: { reason: only.nothing_due, declared: only.declared, tax_period: only.tax_period },
+      }
     }
+    if (combined) {
+      return {
+        ok: false,
+        code: 'SKATTEKONTO_PAYMENT_NOTHING_DUE',
+        details: {
+          reason: dayParts.length === 0 ? 'no_declaration' : 'nothing_payable',
+          due_date: combined.due_date,
+          excluded: combined.excluded,
+        },
+      }
+    }
+    return { ok: false, code: 'SKATTEKONTO_PAYMENT_NOTHING_DUE' }
   }
-  const dueDate = source ? source.due_date : (due?.due ?? null)
+  const dueDate = combined ? combined.due_date : source ? source.due_date : (due?.due ?? null)
 
   const ocr = due?.ocr ?? (await skattekontoOcr(supabase, companyId, log))
   if (!ocr) return { ok: false, code: 'SKATTEKONTO_PAYMENT_OCR_MISSING' }
@@ -230,10 +335,39 @@ export async function prepareSkattekontoPaymentOrder(
   }
   if (dueDate && executionDate >= dueDate) warnings.push({ code: 'late', due: dueDate })
   let balance: SkattekontoBalance | null = null
-  if (source) {
-    if (!source.filed) warnings.push({ code: 'not_filed' })
-    const paid = await executedPaymentLike(supabase, companyId, amount, source.paid_from)
-    if (paid) warnings.push({ code: 'possible_duplicate', payment_order_id: paid.id, executed_at: paid.executed_at })
+  if (input.source) {
+    // Several declarations in one payment: each warning names the one it is about.
+    const named = declarations.length > 1
+    const which = (part: SkattekontoSourceDue) => (named ? { source: part.kind, period: part.tax_period } : {})
+    for (const part of declarations) if (!part.filed) warnings.push({ code: 'not_filed', ...which(part) })
+    const since = earliestPaidFrom(declarations)
+    const seen = new Set<string>()
+    const paid = since ? await executedPaymentLike(supabase, companyId, amount, since) : null
+    if (paid) {
+      seen.add(paid.id)
+      warnings.push({ code: 'possible_duplicate', payment_order_id: paid.id, executed_at: paid.executed_at })
+    }
+    // A declaration of the payment already paid on its own.
+    if (named) {
+      for (const part of declarations) {
+        const alone = await executedPaymentLike(supabase, companyId, part.payable ?? part.declared, part.paid_from)
+        if (!alone || seen.has(alone.id)) continue
+        seen.add(alone.id)
+        warnings.push({ code: 'possible_duplicate', payment_order_id: alone.id, executed_at: alone.executed_at, ...which(part) })
+      }
+    }
+    // Only a declaration that asks for a payment is one to pay together with the others.
+    if (input.source.kind !== 'due_date' && source && source.payable !== null) {
+      const sameDay = await sameDueDateWarning(
+        supabase,
+        companyId,
+        { source: input.source, due: source },
+        input.today,
+        staleDraftIds.length > 0,
+        log,
+      )
+      if (sameDay) warnings.push(sameDay)
+    }
     const reported = await readReportedSkattekontoSaldo(supabase, companyId)
     balance = reported ? { saldo: roundOre(reported.saldo), fetched_at: reported.fetched_at } : null
   }
@@ -252,6 +386,7 @@ export async function prepareSkattekontoPaymentOrder(
         date_moved_from: input.executionDate && executionDate !== input.executionDate ? input.executionDate : null,
         due: due ? { date: due.due, charge: due.charge, balance: due.balance, amount: due.amount } : null,
         source,
+        ...(combined ? { combined } : {}),
         balance,
         payee: { type: 'bankgiro', label: formatPayeeLabel({ type: 'bankgiro', bankgiro }), name: SKATTEKONTO_PAYEE_NAME },
         reference: { type: 'ocr', value: ocr },
@@ -314,5 +449,8 @@ export async function prepareSkattekontoPaymentOrder(
       details: { rpc_code: result.code, rpc_details: result.details as Record<string, unknown> | undefined },
     }
   }
-  return { ok: true, data: { order: result.order, warnings, replaced_draft_ids: replaced, source, balance } }
+  return {
+    ok: true,
+    data: { order: result.order, warnings, replaced_draft_ids: replaced, source, ...(combined ? { combined } : {}), balance },
+  }
 }

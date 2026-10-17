@@ -372,21 +372,38 @@ export function preparePaymentOrders(input: {
 
 /** A warning on a payment in to the skattekonto (lib/payments/orders/prepare-skattekonto). */
 export interface SkattekontoPaymentWarning {
-  code: 'late' | 'date_moved' | 'not_filed' | 'possible_duplicate'
+  code: 'late' | 'date_moved' | 'not_filed' | 'possible_duplicate' | 'same_due_date_parts'
   due?: string
   from?: string
   to?: string
   payment_order_id?: string
   executed_at?: string | null
+  /** With several declarations in one payment: the declaration a not_filed or possible_duplicate is about. */
+  source?: 'vat_declaration' | 'agi'
+  period?: string
+  /** same_due_date_parts: the other declarations due the same day, everything due that day, and an unapproved draft replaced. */
+  parts?: SkattekontoDueDatePart[]
+  total?: number
+  replaces_draft?: boolean
+}
+
+/** One declaration in a payment of everything due on a day. */
+export interface SkattekontoDueDatePart {
+  source: 'vat_declaration' | 'agi'
+  /** The declaration's period label: YYYY-MM, YYYY-QN, or the räkenskapsår. */
+  period: string
+  amount: number
 }
 
 /**
  * The declaration a skattekonto payment is named from: a momsdeklaration by
- * its period, or the AGI of a month (lib/payments/orders/skattekonto-sources).
+ * its period, the AGI of a month, or every declaration due on a day
+ * (lib/payments/orders/skattekonto-sources).
  */
 export type SkattekontoPaymentSourceInput =
   | { source: 'vat_declaration'; period_type: 'monthly' | 'quarterly' | 'yearly'; year: number; period: number; fiscal_period_id?: string }
   | { source: 'agi'; year: number; month: number }
+  | { source: 'due_date'; due_date: string }
 
 /** What the declaration asks for, as the server read it. */
 export interface SkattekontoPaymentSourceDue {
@@ -415,8 +432,20 @@ export interface SkattekontoPaymentPreview {
   warnings: SkattekontoPaymentWarning[]
   /** A skattekonto draft nobody approved that this payment replaces. */
   replaces_drafts: number
-  /** The declaration paid, when the payment is named from one. */
+  /** The declaration paid, when the payment is named from one (or pays the one declaration due on the day). */
   source: SkattekontoPaymentSourceDue | null
+  /** With source due_date: what the payment consists of, and the declarations due that day left out. */
+  combined?: {
+    due_date: string
+    total: number
+    components: SkattekontoDueDatePart[]
+    excluded: Array<{
+      source: 'vat_declaration' | 'agi'
+      period: string
+      declared: number
+      reason: 'refund' | 'zero' | 'already_paid' | 'period_not_ended'
+    }>
+  }
   /** With a declaration: the saldo Skatteverket last reported, as information (never netted). */
   balance: { saldo: number; fetched_at: string | null } | null
 }

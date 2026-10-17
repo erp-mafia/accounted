@@ -104,6 +104,9 @@ function rpcArgs(): Record<string, unknown> {
 }
 
 describe('prepareSkattekontoPaymentOrder from a momsdeklaration', () => {
+  // No AGI due the same day here: moms and AGI together are prepare-skattekonto-due-date.test.ts.
+  beforeEach(() => db.setTable('agi_declarations', { data: null }))
+
   it('pays ruta 49 as filed, the banking day before the deadline, with the OCR from the skattekonto module', async () => {
     const result = await prepareSkattekontoPaymentOrder(ctx, { cashAccountId: 'acct-1', source: VAT_Q3, today: TODAY })
 

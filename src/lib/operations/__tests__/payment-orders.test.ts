@@ -334,6 +334,28 @@ describe('payment-orders.prepare with skattekonto', () => {
     expect(db.findCall('rpc:create_payment_orders', 'rpc')).toBeUndefined()
   })
 
+  it('takes skattekonto.source due_date with a real day, and answers what the payment consists of (crm#1260)', async () => {
+    const parse = (input: unknown) => paymentOrdersPrepare.input.safeParse(input).success
+    expect(parse({ cash_account_id: ACCOUNT, skattekonto: { source: 'due_date', due_date: '2026-11-12' } })).toBe(true)
+    expect(parse({ cash_account_id: ACCOUNT, skattekonto: { source: 'due_date', due_date: '2026-11-31' } })).toBe(false)
+    expect(parse({ cash_account_id: ACCOUNT, skattekonto: { source: 'due_date' } })).toBe(false)
+    expect(paymentOrdersPrepare.mcp?.stage?.title?.({ skattekonto: { source: 'due_date', due_date: '2026-11-12' } })).toBe(
+      'Förbered bankbetalning till Skatteverket: allt som förfaller 2026-11-12',
+    )
+
+    // The company reports no moms here: the October AGI is all that is due on the 12th.
+    const result = await run(paymentOrdersPrepare, {
+      cash_account_id: ACCOUNT,
+      skattekonto: { source: 'due_date', due_date: '2026-11-12' },
+    })
+    if (!result.ok || result.dryRun) throw new Error('unexpected')
+    expect(result.data.skattekonto).toMatchObject({
+      source: { kind: 'agi', tax_period: '2026-10', declared: 30568 },
+      combined: { due_date: '2026-11-12', total: 30568, components: [{ source: 'agi', period: '2026-10', amount: 30568 }], excluded: [] },
+    })
+    expect(paymentOrdersPrepare.output.safeParse(result.data).success).toBe(true)
+  })
+
   it('answers the refusal of a declaration that asks for nothing', async () => {
     db.setTable('agi_declarations', { data: { status: 'submitted', total_tax: 18000, total_avgifter: 12568, tax_paid_at: '2026-11-12T00:00:00Z' } })
     const result = await run(paymentOrdersPrepare, { cash_account_id: ACCOUNT, skattekonto: { source: 'agi', year: 2026, month: 10 } })

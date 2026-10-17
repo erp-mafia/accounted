@@ -19,7 +19,7 @@ const PrepareSkattekontoSchema = z
     execution_date: z.iso.date().nullish(),
     /** Every rule runs and the payment that would be created is answered; nothing is written. The dialog's preview. */
     dry_run: z.boolean().optional(),
-    // The declaration paid (vat_declaration, agi) or the next charge, as payment-orders.prepare names it.
+    // The declaration paid (vat_declaration, agi), every declaration due on a day (due_date) or the next charge, as payment-orders.prepare names it.
     ...SKATTEKONTO_SOURCE_FIELDS,
   })
   .superRefine(refineSkattekontoSource)
@@ -30,7 +30,8 @@ const PrepareSkattekontoSchema = z
  * amount defaults to what the next charge lacks and the day to the last
  * banking day before Skatteverket draws it; named from a declaration
  * (source vat_declaration or agi), what that declaration asks for by its due
- * date. Nothing reaches the bank: the draft is approved and signed with
+ * date; named from a day (source due_date), everything declared due that
+ * day as one payment. Nothing reaches the bank: the draft is approved and signed with
  * BankID like a supplier payment. The rules live in
  * lib/payments/orders/prepare-skattekonto.ts.
  */
