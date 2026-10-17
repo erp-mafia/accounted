@@ -1,4 +1,4 @@
-import { createJournalEntry, findFiscalPeriod } from './engine'
+import { findFiscalPeriod } from './engine'
 import { resolveCashAccountVoucherSeries } from './cash-account-voucher-series'
 import { bankBookingContext } from './bank-booking-context'
 import { resolveSekAmountOrNull, buildCurrencyMetadata } from './currency-utils'
@@ -6,6 +6,11 @@ import { coerceDimensionsBag, mergeDimensionBags } from './dimension-resolver'
 import { roundOre } from '@/lib/money'
 import { InvalidMappingResultError, TransactionMissingSekValueError } from '@/lib/bookkeeping/errors'
 import { createLogger } from '@/lib/logger'
+import type { LinkBasisColumns } from '@/lib/links/link-basis'
+import { postingPort } from '@/lib/posting/port'
+import { categoryForTransactionCategory } from '@/lib/posting/categories'
+import { mappingVersion, type MappingSource } from '@/lib/posting/mapping-version'
+import type { BusinessEventDraft } from '@/lib/posting/types'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   CreateJournalEntryInput,
@@ -13,6 +18,7 @@ import type {
   JournalEntry,
   MappingResult,
   Transaction,
+  TransactionCategory,
   VatJournalLine,
 } from '@/types'
 
@@ -318,8 +324,83 @@ export function buildTransactionEntryLines(
 }
 
 /**
+ * What a door knows about a bank-line booking decision beyond the mapping
+ * result, for the business event the posting port records (POSTING_EVENTS
+ * shadow or strict; nothing is read from it while the port is off).
+ */
+export interface TransactionBusinessEventContext {
+  /** The category the row is stored with (a template's fallback, the category, or 'private'). */
+  category?: TransactionCategory | null
+  /** Where the kontering came from; derived from the mapping result when absent. */
+  source?: MappingSource
+  /** The VAT treatment the booking was made under, when the door knows it. */
+  vatTreatment?: string | null
+  /** The link basis the door stamps on the row (linkBasisColumns): who decided, the rule, the operation. */
+  linkBasis?: LinkBasisColumns | null
+  inboxItemId?: string | null
+  proposalId?: string | null
+  templateId?: string | null
+  counterpartyTemplateId?: string | null
+}
+
+/**
+ * The business event of a bank-line booking (kind bank.categorized). Pure:
+ * reads only the row, the mapping result and what the door passed.
+ */
+export function transactionBusinessEvent(
+  transaction: Transaction,
+  mappingResult: MappingResult,
+  context: TransactionBusinessEventContext = {},
+  rubricVersion?: string,
+): BusinessEventDraft {
+  const sekAmount = resolveSekAmountOrNull(
+    transaction.amount, transaction.amount_sek, transaction.currency, transaction.exchange_rate
+  )
+  const direction = transaction.amount < 0 ? 'out' : 'in'
+  const source: MappingSource = context.source
+    ?? (mappingResult.rule?.id ? 'mappingRule' : mappingResult.template_id ? 'bookingTemplate' : 'mappingEngine')
+  // The moms beside the business line, on the single-pair path only: there
+  // every vat_line is a moms line. A pattern's vat_lines carry its business
+  // and tax lines too, and a private booking has none.
+  const vat = !mappingResult.default_private && !mappingResult.all_lines_complete && mappingResult.vat_lines.length > 0
+    ? vatBesideBusinessLine(mappingResult.vat_lines, direction === 'out' ? 'debit' : 'credit')
+    : null
+  const linkEvidence = context.linkBasis?.link_evidence ?? null
+  return {
+    kind: 'bank.categorized',
+    category: categoryForTransactionCategory(context.category ?? null),
+    occurredOn: transaction.date,
+    subject: { type: 'transaction', id: transaction.id },
+    currency: transaction.currency ?? 'SEK',
+    amount: Math.abs(transaction.amount),
+    amountSek: sekAmount === null ? null : Math.abs(sekAmount),
+    taxAmounts: vat !== null && vat >= 0 ? [{ tax: 'vat', treatment: context.vatTreatment ?? null, amount_sek: vat }] : [],
+    evidence: {
+      direction,
+      document_id: transaction.document_id ?? undefined,
+      inbox_item_id: context.inboxItemId ?? undefined,
+      proposal_id: context.proposalId ?? undefined,
+      template_id: context.templateId ?? mappingResult.template_id ?? undefined,
+      counterparty_template_id: context.counterpartyTemplateId ?? undefined,
+      rule_id: mappingResult.rule?.id ?? undefined,
+      link_basis: context.linkBasis?.link_basis ?? undefined,
+      link_evidence: linkEvidence ?? undefined,
+    },
+    pendingOperationId: linkEvidence?.pending_operation_id ?? null,
+    mappingVersion: mappingVersion(source, rubricVersion),
+    jurisdiction: 'SE',
+  }
+}
+
+/**
  * Create a journal entry from a bank transaction using mapping engine result.
  * Line patterns are documented on buildTransactionEntryLines above.
+ *
+ * Posting port pilot (step 1): the posting goes through lib/posting, which
+ * hands `input` to the engine unchanged and, while POSTING_EVENTS is shadow
+ * or strict, records the bank.categorized event first and has the engine
+ * link it to the draft before a voucher number is drawn. Off (the default),
+ * the engine is called exactly as before.
  */
 export async function createTransactionJournalEntry(
   supabase: SupabaseClient,
@@ -334,7 +415,8 @@ export async function createTransactionJournalEntry(
   notes?: string,
   // rubricVersion: the rules a recorded decision was made under
   // (suggestion_log.rule_version), stamped on the verifikat by the commit RPC.
-  options: { rubricVersion?: string } = {},
+  // businessEvent: the door's side of the business event (posting port).
+  options: { rubricVersion?: string; businessEvent?: TransactionBusinessEventContext } = {},
 ): Promise<JournalEntry | null> {
   // Build lines first — throws InvalidMappingResultError on a broken mapping
   // before any period lookup, preserving the original validation order.
@@ -402,5 +484,13 @@ export async function createTransactionJournalEntry(
     ...(voucherSeries ? { voucher_series: voucherSeries } : {}),
   }
 
-  return createJournalEntry(supabase, companyId, userId, input, undefined, options.rubricVersion)
+  return postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    // Built only while the port is on: off, the call is the one main made.
+    event: () => transactionBusinessEvent(transaction, mappingResult, options.businessEvent, options.rubricVersion),
+    input,
+    rubricVersion: options.rubricVersion,
+  })
 }

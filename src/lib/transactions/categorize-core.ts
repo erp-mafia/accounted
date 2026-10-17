@@ -846,6 +846,20 @@ export async function categorizeTransaction(
     bookedEntry = await createTransactionJournalEntry(supabase, companyId, userId, transaction, mappingResult, input.notes, {
       // The voucher carries the rules its decision was made under.
       rubricVersion: suggestionSnapshot.ruleVersion,
+      // The business event (posting port pilot; read only while
+      // POSTING_EVENTS is shadow or strict): the kontering's source follows
+      // buildCategorizeMapping's own order.
+      businessEvent: {
+        category: finalCategory,
+        source: input.counterparty_template_id && isBusiness ? 'counterpartyTemplate' : context.template ? 'bookingTemplate' : 'category',
+        vatTreatment: input.vat_treatment ?? context.template?.vat_treatment ?? null,
+        // The basis the row is stamped with below, resolved in the same scope.
+        linkBasis: linkBasisColumns('user_created'),
+        inboxItemId: input.inbox_item_id ?? null,
+        proposalId: input.proposal_id ?? null,
+        templateId: context.template?.id ?? null,
+        counterpartyTemplateId: isBusiness ? (input.counterparty_template_id ?? null) : null,
+      },
     })
   } catch (err) {
     // An account deactivated between the check above and the engine call.

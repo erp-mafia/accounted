@@ -1,0 +1,1 @@
+[2026-10-16] Manual vouchers from people, agents and the API get kind ledger.manual with an optional category; create_voucher will accept a category and never refuse a voucher without one (step 2), so manual bookkeeping is never blocked.

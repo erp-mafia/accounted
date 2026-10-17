@@ -162,6 +162,10 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
       // Defined measures: figures read off the statutory reports and their
       // registers, each equal to its report (lib/measures).
       'measures',
+      // The posting port (Phase 2): every posting's business event and the
+      // ledger adapter in front of the engine. Kernel, beside the engine it
+      // fronts; blocks post through it.
+      'posting',
     ],
     operationPrefixes: [
       'journal-entries',

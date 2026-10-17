@@ -338,7 +338,21 @@ describe('categorizeTransaction: the decision record', () => {
     const outcome = await categorizeTransaction(ledger().supabase as never, 'user-1', COMPANY_ID, TX_ID, business, live)
 
     expect(outcome.ok).toBe(true)
-    expect(createTxJE.mock.calls[0][6]).toEqual({ rubricVersion: 'bank-proposals.1+a38016f12abc' })
+    expect(createTxJE.mock.calls[0][6]).toEqual({
+      rubricVersion: 'bank-proposals.1+a38016f12abc',
+      // What the door tells the posting port about the decision (read only
+      // while POSTING_EVENTS is shadow or strict).
+      businessEvent: {
+        category: 'expense_office',
+        source: 'category',
+        vatTreatment: null,
+        linkBasis: { link_basis: 'user_created', link_evidence: null },
+        inboxItemId: null,
+        proposalId: null,
+        templateId: null,
+        counterpartyTemplateId: null,
+      },
+    })
     const expected = [pass('already_booked'), pass('duplicate'), pass('counter_legs'), pass('chart'), pass('period_lock')]
     expect(recordedChecks()).toEqual(expected)
     if (outcome.ok && !outcome.dryRun) expect(outcome.booked.checks).toEqual(expected)

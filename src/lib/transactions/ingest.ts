@@ -1839,7 +1839,19 @@ export async function ingestTransactions(
             companyId,
             userId,
             newTransaction as Transaction,
-            mappingResult
+            mappingResult,
+            undefined,
+            // The business event (posting port pilot; read only while
+            // POSTING_EVENTS is shadow or strict), with the basis the row is
+            // stamped with below. No category: the row is booked without one.
+            {
+              businessEvent: {
+                linkBasis: linkBasisColumns('system_derived', {
+                  ...(mappingResult.rule?.id ? { rule_id: mappingResult.rule.id } : {}),
+                  score: mappingResult.confidence,
+                }),
+              },
+            },
           )
 
           if (journalEntry) {

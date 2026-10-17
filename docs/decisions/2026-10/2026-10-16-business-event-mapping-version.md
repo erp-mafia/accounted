@@ -1,0 +1,1 @@
+[2026-10-16] mapping_version is <source>@<version> (se.category-mapping, se.booking-template, se.mapping-engine, counterparty-template, mapping-rule), versioned by the rubric version the verifikat records, else the build id: dates automatic rules (BFNAR 2013:2 p. 9.16).

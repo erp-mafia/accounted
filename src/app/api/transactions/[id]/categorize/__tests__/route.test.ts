@@ -762,7 +762,8 @@ describe('POST /api/transactions/[id]/categorize', () => {
       expect.objectContaining({ id: 'tx-1' }),
       expect.objectContaining({ dimensions: { '1': 'KS1', '6': 'P001' } }),
       undefined,
-      { rubricVersion: undefined },
+      // The posting port pilot adds the business event context beside it.
+      expect.objectContaining({ rubricVersion: undefined }),
     )
   })
 

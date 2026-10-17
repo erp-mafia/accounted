@@ -1,0 +1,1 @@
+[2026-10-16] Business events keep the party as type and id only, never a name or a personnummer: GDPR erasure stays with the party tables, and the append-only event table holds no personal data to erase.

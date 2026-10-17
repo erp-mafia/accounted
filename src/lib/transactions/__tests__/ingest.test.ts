@@ -2185,7 +2185,11 @@ describe('ingestTransactions', () => {
       COMPANY_ID,
       USER_ID,
       expect.objectContaining({ id: 'tx-cat' }),
-      expect.objectContaining({ confidence: 0.85 })
+      expect.objectContaining({ confidence: 0.85 }),
+      undefined,
+      // The business event context of the posting port pilot: the same link
+      // basis the row is stamped with.
+      { businessEvent: { linkBasis: expect.objectContaining({ link_basis: 'system_derived' }) } },
     )
   })
 

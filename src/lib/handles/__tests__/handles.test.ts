@@ -50,6 +50,7 @@ describe('the prefix table (a public contract)', () => {
       reconciliation_signoff: 'rso',
       voucher_gap_explanation: 'vgap',
       team: 'team',
+      business_event: 'bev',
     })
   })
 
