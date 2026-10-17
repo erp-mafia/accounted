@@ -41,7 +41,10 @@ import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib
 import type { CoreEvent } from '@/lib/events/types'
 import type { AccountingMethod, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { eventBus } from '@/lib/events'
-import { getSwedishLocalDate, reverseEntry } from '@/lib/bookkeeping/engine'
+import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
+import { supplierInvoiceStornoBusinessEvent } from '@/lib/bookkeeping/supplier-invoice-business-events'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { postingPort } from '@/lib/posting/port'
 import {
   assertSupplierCreditNoteRowsMatchPayable,
   createSupplierCreditNoteEntry,
@@ -212,6 +215,30 @@ async function rollbackCreditNote(
       reason,
     })
   }
+}
+
+/**
+ * Take back the credit verifikat this credit just posted, on the credit date,
+ * when the credit note cannot point at it or a concurrent credit won the
+ * race. Through the posting port: while POSTING_EVENTS is on, the storno
+ * records ledger.storno of the credit note (system_derived: no one chose it).
+ */
+async function reverseOwnCreditEntry(
+  ctx: OperationContext,
+  journalEntryId: string,
+  creditDate: string,
+  creditNoteId: string,
+): Promise<void> {
+  const { supabase, companyId, userId } = ctx
+  await postingPort.reverseJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    entryId: journalEntryId,
+    reversalDate: creditDate,
+    event: () => supplierInvoiceStornoBusinessEvent(creditNoteId, todayIsoStockholm(), linkBasisColumns('system_derived')),
+    role: 'reversal',
+  })
 }
 
 export async function creditSupplierInvoice(
@@ -485,6 +512,10 @@ export async function creditSupplierInvoice(
         supplierType,
         supplier?.name ?? undefined,
         payableSek,
+        // The posting port's event, while POSTING_EVENTS is on: the person
+        // (or the approved operation) credited it, from this inbox item when
+        // there is one.
+        () => ({ linkBasis: linkBasisColumns('user_created'), inboxItemId: item?.id ?? null }),
       )
       if (!entry) {
         // No fiscal year covers the date: a credit without its verifikat
@@ -521,7 +552,7 @@ export async function creditSupplierInvoice(
         journalEntryId,
       })
       try {
-        await reverseEntry(supabase, companyId, userId, journalEntryId, creditDate)
+        await reverseOwnCreditEntry(ctx, journalEntryId, creditDate, creditNote.id)
       } catch (revErr) {
         log.error('credit: storno after link failure failed, manual reconciliation required', revErr as Error, {
           journalEntryId,
@@ -562,7 +593,7 @@ export async function creditSupplierInvoice(
     })
     if (journalEntryId) {
       try {
-        await reverseEntry(supabase, companyId, userId, journalEntryId, creditDate)
+        await reverseOwnCreditEntry(ctx, journalEntryId, creditDate, creditNote.id)
       } catch (revErr) {
         log.error('credit: storno of the losing credit failed', revErr as Error, { journalEntryId })
       }

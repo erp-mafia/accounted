@@ -4805,6 +4805,9 @@ async function commitCreateSupplierInvoiceFromInbox(
         itemInserts as unknown as SupplierInvoiceItem[],
         supplier.supplier_type,
         supplier.name,
+        // The posting port's event, while POSTING_EVENTS is on: registered
+        // from this inbox item inside the operation's approval.
+        () => ({ linkBasis: linkBasisColumns('user_created'), inboxItemId }),
       )
 
       if (journalEntry) {

@@ -39,6 +39,7 @@ import {
   createSupplierInvoiceRegistrationEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
+import { linkBasisColumns } from '@/lib/links/stamp'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
@@ -190,6 +191,9 @@ export async function bookSupplierInvoice(
       items,
       supplierType,
       supplierName,
+      // The posting port's event, while POSTING_EVENTS is on: the person (or
+      // the approved operation) booked the registration.
+      () => ({ linkBasis: linkBasisColumns('user_created') }),
     )
   } catch (err) {
     return generatorFailure(err)

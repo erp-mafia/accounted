@@ -13,6 +13,12 @@ import { generateSlpLines, isSlpPensionAccount } from './slp-lines'
 import { coerceDimensionsBag } from './dimension-resolver'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
+import { postingPort } from '@/lib/posting/port'
+import {
+  supplierCreditNoteBusinessEvent,
+  supplierInvoiceRegistrationBusinessEvent,
+  type SupplierInvoicePostingContext,
+} from './supplier-invoice-business-events'
 import { creditNatural, debitNatural } from './line-side'
 import { supplierInvoiceTotalsTolerance } from '@/lib/supplier-invoices/line-totals'
 import {
@@ -133,6 +139,13 @@ export class SupplierCreditNoteRowsMismatchError extends Error {
  *
  * Note: Goods imports via Tullverket (customs) use a different accounting path
  * (2615/2645) and are not handled here: only services use reverse charge.
+ *
+ * Posting port (step 2d): the verifikat goes through lib/posting, which
+ * hands `input` to the engine unchanged and, while POSTING_EVENTS is shadow
+ * or strict, records the purchase.registered event first and has the engine
+ * link it to the draft before a voucher number is drawn. `posting` is what
+ * the door saw (its link basis, the inbox item), called only while the port
+ * is on: off, the engine gets the call it always did.
  */
 export async function createSupplierInvoiceRegistrationEntry(
   supabase: SupabaseClient,
@@ -141,13 +154,20 @@ export async function createSupplierInvoiceRegistrationEntry(
   invoice: SupplierInvoice,
   items: SupplierInvoiceItem[],
   supplierType: string,
-  supplierName?: string
+  supplierName?: string,
+  posting?: () => SupplierInvoicePostingContext,
 ): Promise<JournalEntry | null> {
   const input = await buildSupplierInvoiceRegistrationEntryInput(
     supabase, companyId, invoice, items, supplierType, supplierName
   )
   if (!input) return null
-  return createJournalEntry(supabase, companyId, userId, input)
+  return postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    event: () => supplierInvoiceRegistrationBusinessEvent(invoice, posting?.()),
+    input,
+  })
 }
 
 /**
@@ -849,6 +869,7 @@ export async function createSupplierCreditNoteEntry(
   supplierType: string,
   supplierName?: string,
   invoicePayableSek?: number | null,
+  posting?: () => SupplierInvoicePostingContext,
 ): Promise<JournalEntry | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, creditNote.invoice_date)
   if (!fiscalPeriodId) {
@@ -870,7 +891,15 @@ export async function createSupplierCreditNoteEntry(
     lines,
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  // Posting port (step 2d), as the registration: the purchase.credited event
+  // is recorded and linked to the draft only while POSTING_EVENTS is on.
+  return postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    event: () => supplierCreditNoteBusinessEvent(creditNote, posting?.()),
+    input,
+  })
 }
 
 /**

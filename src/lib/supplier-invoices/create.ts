@@ -38,7 +38,9 @@ import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import { sellerVatIsCost } from '@/lib/bookkeeping/vat-registration'
-import { reverseEntry } from '@/lib/bookkeeping/engine'
+import { supplierInvoiceStornoBusinessEvent } from '@/lib/bookkeeping/supplier-invoice-business-events'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { postingPort } from '@/lib/posting/port'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import type { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
 import {
@@ -817,6 +819,9 @@ export async function createSupplierInvoice(
         itemInserts as unknown as SupplierInvoiceItem[],
         supplier.supplier_type as string,
         supplier.name as string,
+        // The posting port's event, while POSTING_EVENTS is on: the person
+        // (or the approved operation) registered the invoice.
+        () => ({ linkBasis: linkBasisColumns('user_created') }),
       )
       if (!journalEntry) {
         // Returned null ONLY when no fiscal period covers invoice_date, before
@@ -1092,7 +1097,17 @@ async function undoFailedRegistration(
   }
 
   try {
-    await reverseEntry(supabase, companyId, userId, entryId, invoiceDate)
+    // Through the posting port: while POSTING_EVENTS is on, the storno
+    // records ledger.storno of the invoice (system_derived: no one chose it).
+    await postingPort.reverseJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      entryId,
+      reversalDate: invoiceDate,
+      event: () => supplierInvoiceStornoBusinessEvent(invoiceId, todayIsoStockholm(), linkBasisColumns('system_derived')),
+      role: 'reversal',
+    })
   } catch (err) {
     // The verifikat is still live. Marking the invoice `reversed` now would
     // hide a booked registration behind a retired invoice, so the invoice

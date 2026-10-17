@@ -18,8 +18,9 @@
  *
  * Uncredit:
  *   - the credit note's posted verifikat is cancelled with a storno
- *     (reverseEntry), never edited or deleted; an already reversed or never
- *     posted verifikat is fine and the row cleanup continues;
+ *     (reverseEntry, through the posting port), never edited or deleted; an
+ *     already reversed or never posted verifikat is fine and the row cleanup
+ *     continues;
  *   - the credit note row is kept and marked 'reversed' (BFL 7 kap retention,
  *     unbroken ankomstnummer series, sambandskravet);
  *   - the original's status and remaining amount are recomputed from its
@@ -37,7 +38,10 @@ import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type { SupplierInvoice, SupplierInvoicePayment } from '@/types'
 import { roundOre } from '@/lib/money'
 import { eventBus } from '@/lib/events'
-import { reverseEntry } from '@/lib/bookkeeping/engine'
+import { supplierInvoiceStornoBusinessEvent } from '@/lib/bookkeeping/supplier-invoice-business-events'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { postingPort } from '@/lib/posting/port'
 import {
   CannotReverseNonPostedError,
   EntryAlreadyReversedError,
@@ -364,7 +368,16 @@ export async function uncreditSupplierInvoice(
   let reversalEntryId: string | null = null
   if (creditNote?.registration_journal_entry_id) {
     try {
-      const reversal = await reverseEntry(supabase, companyId, userId, creditNote.registration_journal_entry_id)
+      // Through the posting port: while POSTING_EVENTS is on, the storno
+      // records ledger.storno of the credit note, dated the day it is undone.
+      const reversal = await postingPort.reverseJournalEntry({
+        supabase,
+        companyId,
+        userId,
+        entryId: creditNote.registration_journal_entry_id,
+        event: () => supplierInvoiceStornoBusinessEvent(creditNote.id, todayIsoStockholm(), linkBasisColumns('user_created')),
+        role: 'reversal',
+      })
       reversalEntryId = reversal.id
     } catch (err) {
       // Already reversed (by hand or a concurrent uncredit): continue with

@@ -1,0 +1,1 @@
+[2026-10-17] mapping_version names one rule source, se.supplier-invoice-lines, for the registration and the credit note: both come from supplier-invoice-registration-lines.ts (moms, reverse charge, SLP, 2440), the credit on the other side; the cost accounts are the rows' own.

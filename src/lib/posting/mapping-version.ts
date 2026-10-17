@@ -28,8 +28,12 @@ import { currentAppVersion } from '@/lib/reports/app-version'
  * avskrivning (lib/bokslut/assets/depreciation-engine.ts), the disposal
  * plan with its jämkning (buildAssetDisposalPlan in asset-service.ts), the
  * salary run's verifikat (buildSalaryRunEntryLines and the account mapping
- * in lib/salary) and the semesterårsavslut's drift adjustment
- * (commitVacationYearClose in lib/salary/semesterberedning.ts).
+ * in lib/salary), the semesterårsavslut's drift adjustment
+ * (commitVacationYearClose in lib/salary/semesterberedning.ts) and the
+ * supplier invoice's registration and credit note lines (the moms,
+ * reverse-charge, SLP and 2440 rows of
+ * lib/bookkeeping/supplier-invoice-registration-lines.ts, which the credit
+ * note books on the other side).
  *
  * The version is the rubric version the producer already records on the
  * verifikat (journal_entries.rubric_version: the proposal rule revision plus
@@ -54,6 +58,7 @@ export const MAPPING_SOURCES = {
   assetDisposal: 'se.asset-disposal',
   salaryRun: 'se.salary-run',
   vacationYearClose: 'se.vacation-year-close',
+  supplierInvoice: 'se.supplier-invoice-lines',
 } as const
 
 export type MappingSource = keyof typeof MAPPING_SOURCES

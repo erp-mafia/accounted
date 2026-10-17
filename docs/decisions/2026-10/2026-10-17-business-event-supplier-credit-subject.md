@@ -1,0 +1,1 @@
+[2026-10-17] purchase.credited takes the credit note row as subject (the verifikat's source_id; it names the original in credited_invoice_id), dated the credit note's date, when the buyer reduces ingående moms (ML 17 kap 22-23 §); undoing it records ledger.storno of the credit note.
