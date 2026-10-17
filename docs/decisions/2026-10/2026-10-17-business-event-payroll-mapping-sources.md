@@ -1,0 +1,1 @@
+[2026-10-17] mapping_version names two payroll rule sources at the build: se.salary-run (buildSalaryRunEntryLines and the salary account mapping) and se.vacation-year-close (the semesterlöneskuld drift split); a run's storno records none, as its lines mirror the run.

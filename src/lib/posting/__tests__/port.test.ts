@@ -65,6 +65,7 @@ function fakeSupabase(insert: () => InsertResult, existing: { id: string } | nul
 }
 
 type CreateArgs = Parameters<PostingAdapter['createJournalEntry']>[0]
+type SetArgs = Parameters<PostingAdapter['createJournalEntries']>[0]
 type DraftArgs = Parameters<PostingAdapter['createDraftEntry']>[0]
 type CommitArgs = Parameters<PostingAdapter['commitEntry']>[0]
 type ReverseArgs = Parameters<PostingAdapter['reverseEntry']>[0]
@@ -74,6 +75,7 @@ function fakeAdapter() {
   const adapter = {
     id: 'ledger' as const,
     createJournalEntry: vi.fn(async (_args: CreateArgs) => entry),
+    createJournalEntries: vi.fn(async (args: SetArgs) => args.inputs.map((_, i) => ({ id: `je-set-${i + 1}` }) as JournalEntry)),
     createDraftEntry: vi.fn(async (_args: DraftArgs) => entry),
     commitEntry: vi.fn(async (_args: CommitArgs) => entry),
     reverseEntry: vi.fn(async (_args: ReverseArgs) => entry),
@@ -277,6 +279,70 @@ describe('posting port: a producer that drafts and commits itself', () => {
       port('strict', adapter).draftJournalEntry({ supabase, companyId: COMPANY, userId: 'u', event: EVENT, input: INPUT }),
     ).rejects.toBeInstanceOf(BookkeepingDatabaseError)
     expect(adapter.createDraftEntry).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('posting port: a set of verifikat that is one business act (postJournalEntrySet)', () => {
+  const SET: CreateJournalEntryInput[] = [
+    INPUT,
+    { ...INPUT, description: 'Arbetsgivaravgifter', lines: [
+      { account_number: '7510', debit_amount: 314.2, credit_amount: 0 },
+      { account_number: '2731', debit_amount: 0, credit_amount: 314.2 },
+    ] },
+  ]
+
+  it('off: hands the inputs to the adapter as the same array, builds no event and writes nothing else', async () => {
+    const adapter = fakeAdapter()
+    const { supabase, from } = fakeSupabase(() => ({ error: null }))
+    const build = vi.fn(() => EVENT)
+    const posted = await port('off', adapter).postJournalEntrySet({ supabase, companyId: COMPANY, userId: 'u', event: build, inputs: SET })
+    expect(posted.map((e) => e.id)).toEqual(['je-set-1', 'je-set-2'])
+    expect(build).not.toHaveBeenCalled()
+    expect(from).not.toHaveBeenCalled()
+    const args = callArgs(adapter.createJournalEntries, 0)
+    expect(args.inputs).toBe(SET)
+    expect(args.businessEvent).toBeUndefined()
+  })
+
+  it('shadow: records ONE event for the set and hands its link to the adapter for every draft', async () => {
+    const adapter = fakeAdapter()
+    const { supabase, inserted } = fakeSupabase(() => ({ error: null }))
+    await port('shadow', adapter).postJournalEntrySet({ supabase, companyId: COMPANY, userId: 'u', event: EVENT, inputs: SET })
+    expect(inserted).toHaveLength(1)
+    expect(adapter.createJournalEntries).toHaveBeenCalledTimes(1)
+    expect(callArgs(adapter.createJournalEntries, 0).businessEvent).toEqual({ id: EVENT_ID, role: 'produced', onFailure: 'log' })
+  })
+
+  it('a resumed set links to the event an earlier attempt recorded (idempotency key)', async () => {
+    const adapter = fakeAdapter()
+    const { supabase } = fakeSupabase(() => ({ error: { message: 'duplicate key', code: '23505' } }), { id: EXISTING_ID })
+    await port('strict', adapter).postJournalEntrySet({
+      supabase, companyId: COMPANY, userId: 'u', event: { ...EVENT, idempotencyKey: 'payroll.salary_paid:salary_run:x' }, inputs: SET,
+    })
+    expect(callArgs(adapter.createJournalEntries, 0).businessEvent).toEqual({ id: EXISTING_ID, role: 'produced', onFailure: 'abort' })
+  })
+
+  it('shadow posts the set through a refused event write; strict stops before the adapter drafts anything', async () => {
+    const adapter = fakeAdapter()
+    const { supabase } = fakeSupabase(() => ({ error: { message: 'refused', code: '42501' } }))
+    const posted = await port('shadow', adapter).postJournalEntrySet({ supabase, companyId: COMPANY, userId: 'u', event: EVENT, inputs: SET })
+    expect(posted).toHaveLength(2)
+    expect(callArgs(adapter.createJournalEntries, 0).businessEvent).toBeUndefined()
+    await expect(
+      port('strict', adapter).postJournalEntrySet({ supabase, companyId: COMPANY, userId: 'u', event: EVENT, inputs: SET }),
+    ).rejects.toBeInstanceOf(BookkeepingDatabaseError)
+    expect(adapter.createJournalEntries).toHaveBeenCalledTimes(1)
+  })
+
+  it('an empty set (every voucher adopted) and a set the engine will refuse record no event', async () => {
+    const adapter = fakeAdapter()
+    const { supabase, from } = fakeSupabase(() => ({ error: null }))
+    await port('strict', adapter).postJournalEntrySet({ supabase, companyId: COMPANY, userId: 'u', event: EVENT, inputs: [] })
+    const unbalanced = [INPUT, { ...INPUT, lines: [{ account_number: '7510', debit_amount: 1, credit_amount: 0 }] }]
+    await port('strict', adapter).postJournalEntrySet({ supabase, companyId: COMPANY, userId: 'u', event: EVENT, inputs: unbalanced })
+    expect(from).not.toHaveBeenCalled()
+    expect(callArgs(adapter.createJournalEntries, 0)).toMatchObject({ inputs: [], businessEvent: undefined })
+    expect(callArgs(adapter.createJournalEntries, 1).inputs).toBe(unbalanced)
   })
 })
 

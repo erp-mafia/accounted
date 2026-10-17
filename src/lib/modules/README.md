@@ -320,3 +320,17 @@ the port and commit with `commit_asset_depreciation` and
 either RPC draws the number; their proof is
 `tests/pg/posting-parity-tax-assets.pg.test.ts` and the producers'
 `*.engine-input.test.ts`.
+
+Step 2c moves payroll. A salary run (`createSalaryRunEntries`, 1 to 4
+verifikat) posts through `postJournalEntrySet`, the design's postSet: one
+`payroll.salary_paid` event per run, subject the run, its link handed to every
+draft inside `createJournalEntries`, so the set keeps its order and its
+all-or-nothing checks and every link lands before the first number is drawn
+(a link refused under strict on any voucher stops the whole run). The run's
+idempotency key ties a resumed booking to the event its first attempt
+recorded. A run's correction (`correctSalaryRun`) records one `ledger.storno`
+event linked to every storno, and the semesterårsavslut's adjustment
+(`commitVacationYearClose`) records `payroll.vacation_liability_adjusted`.
+Payroll has no SQL posting function, so nothing waits on an event id; their
+proof is `tests/pg/posting-parity-payroll.pg.test.ts` and the producers'
+`*.engine-input.test.ts`.

@@ -1,0 +1,1 @@
+[2026-10-17] A salary run's event and its correction's event carry an idempotency key per run, so a booking resumed after an interruption, or a storno retried, links to the event the first attempt recorded: one event per run, however many attempts posted its verifikat.

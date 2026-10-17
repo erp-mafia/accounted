@@ -25,8 +25,11 @@ import { currentAppVersion } from '@/lib/reports/app-version'
  * the system seeds and the company's own rows, the skatteverket extension's
  * skattekonto-booking.ts), the skattekonto account transfer
  * (lib/skatteverket/skattekonto-account-service.ts), the planenlig
- * avskrivning (lib/bokslut/assets/depreciation-engine.ts) and the disposal
- * plan with its jämkning (buildAssetDisposalPlan in asset-service.ts).
+ * avskrivning (lib/bokslut/assets/depreciation-engine.ts), the disposal
+ * plan with its jämkning (buildAssetDisposalPlan in asset-service.ts), the
+ * salary run's verifikat (buildSalaryRunEntryLines and the account mapping
+ * in lib/salary) and the semesterårsavslut's drift adjustment
+ * (commitVacationYearClose in lib/salary/semesterberedning.ts).
  *
  * The version is the rubric version the producer already records on the
  * verifikat (journal_entries.rubric_version: the proposal rule revision plus
@@ -49,6 +52,8 @@ export const MAPPING_SOURCES = {
   taxAccountTransfer: 'se.skattekonto-account-transfer',
   assetDepreciation: 'se.asset-depreciation',
   assetDisposal: 'se.asset-disposal',
+  salaryRun: 'se.salary-run',
+  vacationYearClose: 'se.vacation-year-close',
 } as const
 
 export type MappingSource = keyof typeof MAPPING_SOURCES

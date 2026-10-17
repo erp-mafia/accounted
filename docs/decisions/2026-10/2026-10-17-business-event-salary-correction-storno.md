@@ -1,0 +1,1 @@
+[2026-10-17] Correcting a salary run records kind ledger.storno, role reversal, subject the run, dated the day of correction, one event for all its stornos and no party; no payroll.correction kind: the correction run books its own payroll.salary_paid event, as for an utlägg removal.

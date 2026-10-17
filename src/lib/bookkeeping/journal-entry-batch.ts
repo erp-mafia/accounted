@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { BusinessEventLink } from '@/lib/bookkeeping/business-event-link'
 import { cancelDraftEntry, commitEntry, createDraftEntry } from '@/lib/bookkeeping/engine'
 import {
   applyDimensionRules,
@@ -42,21 +43,34 @@ const log = createLogger('bookkeeping.journal-entry-batch')
  * deleted), the remaining drafts are cancelled and the error is rethrown. A
  * caller that can be retried must look up what an earlier attempt posted
  * instead of posting it again (createSalaryRunEntries does).
+ *
+ * Posting port (src/lib/posting, postJournalEntrySet): `options.businessEvent`
+ * is the set's one business event, already recorded. Every draft carries the
+ * link (createDraftEntry writes it right after the header), so every link is
+ * written in phase 2, before phase 3 draws the first voucher number: a link
+ * refused under strict mode on ANY voucher stops the whole set like any other
+ * draft-time refusal, with no number drawn. Absent (every caller outside the
+ * port, and every set while POSTING_EVENTS is off), each draft is made with
+ * the four arguments it always was.
  */
 export async function createJournalEntries(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
   inputs: CreateJournalEntryInput[],
+  options: { businessEvent?: BusinessEventLink } = {},
 ): Promise<JournalEntry[]> {
   if (inputs.length === 0) return []
 
   await assertRequiredDimensions(supabase, companyId, inputs)
 
+  const { businessEvent } = options
   const drafts: JournalEntry[] = []
   try {
     for (const input of inputs) {
-      const draft = await createDraftEntry(supabase, companyId, userId, input)
+      const draft = businessEvent
+        ? await createDraftEntry(supabase, companyId, userId, input, { businessEvent })
+        : await createDraftEntry(supabase, companyId, userId, input)
       if (!draft?.id) {
         throw new BookkeepingDatabaseError('create_draft_entry', 'the draft could not be read back')
       }

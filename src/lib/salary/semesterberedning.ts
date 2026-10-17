@@ -13,7 +13,8 @@
  *   Årsavslut (SEK): reconcile the day-valued semesterlöneskuld against the
  *   BOOKED 2920/2940 balances (per-run accruals never relieve 2920 when
  *   vacation is taken, so drift accumulates by design) and post ONE
- *   adjustment verifikation via the bookkeeping engine when |drift| > 1 kr.
+ *   adjustment verifikation via the bookkeeping engine when |drift| > 1 kr,
+ *   through the posting port (kind payroll.vacation_liability_adjusted).
  *
  * Day valuation (BFNAR 2016:10 per-employee, simplified and shown in the
  * review report before anything commits):
@@ -51,6 +52,10 @@ import {
 } from './account-mapping'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import type { LinkBasisColumns } from '@/lib/links/link-basis'
+import { categoryForTemplateGroup } from '@/lib/posting/categories'
+import { mappingVersion } from '@/lib/posting/mapping-version'
+import type { BusinessEventDraft } from '@/lib/posting/types'
 
 const STANDARD_AVGIFTER_RATE = 0.3142
 /** Ålderspensionsavgift only, for fyllt 67 vid årets ingång (SAL 2 kap). */
@@ -485,6 +490,33 @@ export async function previewVacationYearClose(
   }
 }
 
+/**
+ * The business event of the semesterårsavslut's adjustment (kind
+ * payroll.vacation_liability_adjusted), for the posting port: recorded while
+ * POSTING_EVENTS is shadow or strict, never built while it is off. Pure.
+ *
+ * Dated the adjustment date (the closing vacation year's last day, the
+ * verifikat date) and filed under expense.personnel like the salary run. No
+ * subject: the closure row has no typed handle; the verifikat's source_id
+ * names it. A close of one employee names that employee as party (type and
+ * id only), one of several names none. No amount: the 2920 and 2940 drifts
+ * can move in opposite directions, and a magnitude cannot say which way;
+ * the lines carry both. Nothing per employee goes into the evidence.
+ */
+export function vacationYearCloseBusinessEvent(report: VacationCloseReport, linkBasis: LinkBasisColumns): BusinessEventDraft {
+  const only = report.rows.length === 1 ? report.rows[0] : null
+  return {
+    kind: 'payroll.vacation_liability_adjusted',
+    category: categoryForTemplateGroup('personnel'),
+    occurredOn: report.adjustment_date,
+    party: only ? { type: 'employee', id: only.employee_id } : null,
+    evidence: { link_basis: linkBasis.link_basis, link_evidence: linkBasis.link_evidence ?? undefined },
+    pendingOperationId: linkBasis.link_evidence?.pending_operation_id ?? null,
+    mappingVersion: mappingVersion('vacationYearClose'),
+    jurisdiction: 'SE',
+  }
+}
+
 export async function commitVacationYearClose(
   supabase: SupabaseClient,
   companyId: string,
@@ -635,14 +667,26 @@ export async function commitVacationYearClose(
 
     if (lines.length > 0) {
       try {
-        const { createJournalEntry } = await import('@/lib/bookkeeping/engine')
-        const entry = await createJournalEntry(supabase, companyId, userId, {
-          fiscal_period_id: (period as { id: string }).id,
-          entry_date: report.adjustment_date,
-          description: `Semesterårsavslut ${closingYearStart.slice(0, 4)}: justering semesterlöneskuld`,
-          source_type: 'salary_payment',
-          source_id: closureId,
-          lines,
+        // Posting port (step 2): the engine gets the input unchanged; while
+        // POSTING_EVENTS is shadow or strict the adjustment's event is
+        // recorded first and linked to the draft before a voucher number is
+        // drawn.
+        const { postingPort } = await import('@/lib/posting/port')
+        const { linkBasisColumns } = await import('@/lib/links/stamp')
+        const entry = await postingPort.postJournalEntry({
+          supabase,
+          companyId,
+          userId,
+          // Built only while the port is on: off, the call is the one it was.
+          event: () => vacationYearCloseBusinessEvent(report, linkBasisColumns('user_created')),
+          input: {
+            fiscal_period_id: (period as { id: string }).id,
+            entry_date: report.adjustment_date,
+            description: `Semesterårsavslut ${closingYearStart.slice(0, 4)}: justering semesterlöneskuld`,
+            source_type: 'salary_payment',
+            source_id: closureId,
+            lines,
+          },
         })
         adjustmentEntryId = entry.id
         const { error: linkError } = await supabase
