@@ -89,6 +89,8 @@ const CONDITIONAL_DELETE_GUARDS: Record<string, string> = {
   enforce_dimension_value_retention:
     'only while a posted line uses the value; journal entries are gone before dimensions',
   remove_team_member_from_companies: 'never raises',
+  company_grants_immutable:
+    'refuses a DELETE only while the company row exists; the teardown removes grants through the ON DELETE CASCADE of DELETE FROM companies, when that row is already gone',
 }
 
 type Statement = { kind: 'delete' | 'update'; table: string; cols: string[]; pos: number }

@@ -508,6 +508,10 @@ export const INFRA_LIB_FOLDERS: readonly string[] = Object.freeze([
   'errors',
   'events',
   'extensions',
+  // Company rules for automatic booking (grants): policy over staged
+  // operations, a composition layer beside pending-operations and
+  // suggestions, for any key credential (not the in-app assistant's module).
+  'grants',
   'handles',
   'hooks',
   'http',

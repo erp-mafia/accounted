@@ -192,7 +192,8 @@
   ],
   "transaction.categorized": [
     "event-log",
-    "webhooks"
+    "webhooks",
+    "suggestion-detectors"
   ],
   "transaction.reconciled": [
     "event-log",

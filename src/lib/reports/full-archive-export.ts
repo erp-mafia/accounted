@@ -1252,6 +1252,11 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   { name: 'categorization_templates', file: 'categorization_templates.json' },
   { name: 'booking_template_library', file: 'booking_template_library.json' },
   { name: 'skattekonto_rules', file: 'skattekonto_rules.json' },
+  // Rules for automatic booking (grants): every version with what it
+  // permitted, who accepted it and when it was revoked, and which postings
+  // each rule let through without a person (BFNAR 2013:2 p. 9.16).
+  { name: 'company_grants', file: 'company_grants.json', orderBy: 'created_at' },
+  { name: 'company_grant_uses', file: 'company_grant_uses.json', orderBy: 'created_at' },
   // Salary (räkenskapsinformation with 7-year retention)
   { name: 'employees', file: 'employees.json', orderBy: 'created_at' },
   { name: 'employee_benefits', file: 'employee_benefits.json', orderBy: 'created_at' },
@@ -1375,6 +1380,7 @@ export const ARCHIVE_COVERED_ELSEWHERE_TABLES: Record<string, string> = {
   account_reconciliation_attachments: 'bilagor/ + bilagor/manifest.json',
   sie_imports: 'sie/imports.json + sie/original/',
   sie_account_mappings: 'sie/account_mappings.json',
+  company_grant_settings: 'revision/behandlingshistorik.json (every pause and resumption of the rules for automatic booking, dated)',
 }
 
 /**

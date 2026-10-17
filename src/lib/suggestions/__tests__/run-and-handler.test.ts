@@ -104,7 +104,7 @@ describe('runDetector', () => {
 describe('the event consumer', () => {
   it('subscribes to exactly the event types the event detectors name', () => {
     expect([...detectorsByEventType().keys()].sort()).toEqual(
-      ['employee.created', 'pos.connected', 'shopify.connected', 'woocommerce.connected', 'zettle.connected'].sort(),
+      ['employee.created', 'pos.connected', 'shopify.connected', 'transaction.categorized', 'woocommerce.connected', 'zettle.connected'].sort(),
     )
   })
 

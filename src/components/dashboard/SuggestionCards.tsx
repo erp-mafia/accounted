@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Lightbulb } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { OpenSuggestion } from '@/lib/suggestions/types'
@@ -24,6 +25,10 @@ import type { OpenSuggestion } from '@/lib/suggestions/types'
  *   Inte nu     rejects it with the reason "Inte nu": asked again in 30 days.
  *   Visa aldrig rejects it with the reason "Visa aldrig": never asked again.
  * (The database reads the reason, migration 20261016200600.)
+ *
+ * A rule for automatic booking (create_grant, lib/grants) hands posting
+ * authority to agents, so its Ja first asks for a confirmation that says
+ * what the rule lets through, as every high-risk approval does.
  */
 
 type Answer = 'yes' | 'not_now' | 'never'
@@ -46,6 +51,7 @@ export function SuggestionCards({
   const router = useRouter()
   const { toast } = useToast()
   const [busy, setBusy] = useState<{ id: string; answer: Answer } | null>(null)
+  const [confirming, setConfirming] = useState<OpenSuggestion | null>(null)
 
   async function answer(suggestion: OpenSuggestion, choice: Answer) {
     setBusy({ id: suggestion.suggestion_id, answer: choice })
@@ -105,7 +111,7 @@ export function SuggestionCards({
                   size="sm"
                   loading={working && busy?.answer === 'yes'}
                   disabled={working}
-                  onClick={() => void answer(s, 'yes')}
+                  onClick={() => (s.operation_type === 'create_grant' ? setConfirming(s) : void answer(s, 'yes'))}
                 >
                   {t('suggestion_yes')}
                 </Button>
@@ -132,6 +138,16 @@ export function SuggestionCards({
           </div>
         )
       })}
+      <ConfirmDialog
+        open={confirming !== null}
+        onOpenChange={(open) => !open && setConfirming(null)}
+        title={t('suggestion_grant_confirm_title')}
+        description={confirming ? `${confirming.title} ${t('suggestion_grant_confirm_description')}` : undefined}
+        confirmLabel={t('suggestion_grant_confirm')}
+        onConfirm={async () => {
+          if (confirming) await answer(confirming, 'yes')
+        }}
+      />
     </div>
   )
 }

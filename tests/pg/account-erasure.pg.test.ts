@@ -78,6 +78,10 @@ const RETAINED = new Set([
   'payment_signing_links.created_by', // Who asked the firmatecknare to sign a basket of payments; the company keeps the record.
   'company_attest_policies.updated_by', // Who last changed the attest policy; the company keeps the record.
   'company_capability_config.decided_by', // Who approved a package switch (a processing-rule change); the company keeps the record.
+  'company_grants.accepted_by', // Who accepted a rule for automatic booking (a dated processing rule); the company keeps the record.
+  'company_grants.revoked_by', // Who revoked or superseded that rule; the company keeps the record.
+  'company_grant_uses.reviewed_by', // Who reviewed a posting a rule let through; the company keeps the record.
+  'company_grant_settings.decided_by', // Who paused or resumed the company's rules; the company keeps the record.
   'supplier_invoice_attestations.user_id', // Who attested or rejected a supplier invoice; the company keeps the record.
   'supplier_invoice_attest_links.attester_user_id', // The attester an attest link speaks for; the link refuses anyone no longer a member.
   'supplier_invoices.approved_by', // Who gave the attest; the company keeps the record.

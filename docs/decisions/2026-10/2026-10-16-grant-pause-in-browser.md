@@ -1,0 +1,1 @@
+[2026-10-16] The grants kill switch is an owner or admin action in the app (ui-only in session parity: turning rules back on hands authority to agents); revoke and mark-reviewed doors for agents are recorded as gaps P2 and P3.

@@ -175,7 +175,7 @@ export const DecisionReceiptSchema = z.object({
     .string()
     .nullable()
     .describe(
-      'The approval policy confidence_band was evaluated under, thresholds included: direct-booking.<revision>;... for a bank line, staged-approval.<revision>;approver=person|credential[;unattended_limit=<SEK>|none] for a staged operation. Null without a band.',
+      'The approval policy confidence_band was evaluated under, thresholds included: direct-booking.<revision>;... for a bank line, staged-approval.<revision>;approver=person|credential[;unattended_limit=<SEK>|none] for a staged operation, grant.<revision>;grant_id=<id>;grant_version=<n> for one a company grant let through without a person. Null without a band.',
     ),
   input_hash: z
     .string()
@@ -193,7 +193,7 @@ export const DecisionReceiptSchema = z.object({
     .enum(['direct', 'review'])
     .nullable()
     .describe(
-      "Under policy_version at decision time: direct, the acted-on suggestion books without a review; review, it opens one. From deterministic evidence, never the model's own score. For a staged operation: review when a person approved it, direct when a key credential did within its unattended ceiling. Null without an acted-on suggestion, and for an underlag.",
+      "Under policy_version at decision time: direct, the acted-on suggestion books without a review; review, it opens one. From deterministic evidence, never the model's own score. For a staged operation: review when a person approved it, direct when a key credential did within its unattended ceiling or a company grant let it through. Null without an acted-on suggestion, and for an underlag.",
     ),
 })
 

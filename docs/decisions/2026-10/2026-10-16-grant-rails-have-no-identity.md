@@ -1,0 +1,1 @@
+[2026-10-16] A bank text naming only a payment processor or rail (PayPal, Klarna, Swish, Internet bet) has no counterparty identity for grants: every purchase through it shares the name, so it never gets a grant.

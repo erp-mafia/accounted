@@ -103,6 +103,7 @@ export const SESSION_SEGMENT_PACKAGES: Readonly<Record<string, SwitchablePackage
   dimensions: null,
   documents: null,
   extensions: null,
+  grants: null,
   import: null,
   kpi: null,
   log: null,

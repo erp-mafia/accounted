@@ -1,0 +1,1 @@
+[2026-10-16] GRANT_SUGGESTIONS off turns the whole grants feature off: no detector, create_grant refused, and the staging door never asks the claim gate, so existing grants stop applying. Revoke and pause stay possible.

@@ -20,6 +20,7 @@ import {
 import { listResumeItems } from '@/lib/worklist/resume'
 import { listMissingUnderlagSample } from '@/lib/worklist/missing-underlag'
 import { listOpenSuggestions } from '@/lib/suggestions/list'
+import { loadGrantReview } from '@/lib/grants/review'
 import { getCompanyNotices } from '@/lib/notices'
 import { expiringBankConnectionsFrom } from '@/lib/notices/categories'
 import { vatDeadlineLine } from '@/lib/onboarding/checklist'
@@ -258,6 +259,9 @@ export async function HemPanesSection({
   // And the open suggestions: one Förslag card each (at most three); the
   // count is the list's length.
   const openSuggestionsPromise = listOpenSuggestions(supabase, companyId)
+  // And what the company's rules for automatic booking let through since the
+  // last review (one indexed probe for a company that never had a rule).
+  const grantReviewPromise = loadGrantReview(supabase, companyId)
   const [
     worklist,
     suggestedMatches,
@@ -268,6 +272,7 @@ export async function HemPanesSection({
     paymentsVerification,
     supplierPayeeChanges,
     openSuggestions,
+    grantReview,
     resumeItems,
     bankConnectionsRes,
     postedEntries,
@@ -294,6 +299,7 @@ export async function HemPanesSection({
       paymentsVerificationPromise,
       supplierPayeeChangesPromise,
       openSuggestionsPromise,
+      grantReviewPromise,
       // In-progress work for the Fortsätt pane: pure draft-state derivation.
       listResumeItems(supabase, companyId, now),
       supabase.from('bank_connections').select('id, status, consent_expires, bank_name, last_sie_sweep').eq('company_id', companyId).eq('status', 'active'),
@@ -336,6 +342,7 @@ export async function HemPanesSection({
           paymentsVerification={paymentsVerification}
           supplierPayeeChanges={supplierPayeeChanges}
           suggestions={openSuggestions}
+          grantReview={grantReview}
           expiringBankConnections={expiringBankConnections}
           emptyLedger={emptyLedger}
           hasActiveBankConnection={hasActiveBankConnection}

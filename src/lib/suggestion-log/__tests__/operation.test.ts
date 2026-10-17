@@ -87,6 +87,7 @@ function fakeDb(
         }
         const data = rows
           .filter((r) => r.company_id === eqs.get('company_id') && r.pending_operation_id === eqs.get('pending_operation_id'))
+          .filter((r) => !eqs.has('kind') || r.kind === eqs.get('kind'))
           .map((r) => ({ id: r.id, journal_entry_id: (r.final as { journal_entry_id?: string } | null)?.journal_entry_id ?? null }))
         return { data, error: null }
       }
@@ -167,6 +168,16 @@ describe('approvalPolicy', () => {
       })
     }
     expect(approvalPolicy({ type: 'api_key', unattendedCommitLimit: 0 }).policyVersion).toMatch(/unattended_limit=none$/)
+  })
+
+  it('records a company grant as the policy, band direct, when a key committed under it', () => {
+    const grant = { grantId: '44444444-4444-4444-8444-444444444444', grantVersion: 2 }
+    expect(approvalPolicy({ type: 'api_key', label: 'Claude', unattendedCommitLimit: 500 }, grant)).toEqual({
+      policyVersion: 'grant.1;grant_id=44444444-4444-4444-8444-444444444444;grant_version=2',
+      band: 'direct',
+    })
+    // A person approving is the person's decision, whatever is passed along.
+    expect(approvalPolicy(person, grant)).toEqual({ policyVersion: 'staged-approval.1;approver=person', band: 'review' })
   })
 
   it('records no policy for an approver it cannot classify: never a policy without its band', () => {
@@ -259,6 +270,20 @@ describe('recordOperationDecision', () => {
       ['bank_line', ENTRY],
       ['operation', ENTRY_2],
     ])
+  })
+
+  it('under a grant, writes its operation row beside the door row, naming the grant, once', async () => {
+    const grant = { grantId: '44444444-4444-4444-8444-444444444444', grantVersion: 1 }
+    const db = fakeDb({
+      rows: [{ id: 'door-row', company_id: COMPANY, kind: 'bank_line', pending_operation_id: OPERATION_ID, final: { journal_entry_id: ENTRY } }],
+    })
+    const underGrant = decision({ actor: { type: 'api_key', label: 'Claude', unattendedCommitLimit: null }, grant })
+    await expect(recordOperationDecision(db.client, underGrant)).resolves.toBe(1)
+    expect(db.rows.map((r) => [r.kind, r.policy_version, r.confidence_band])).toEqual([
+      ['bank_line', undefined, undefined],
+      ['operation', 'grant.1;grant_id=44444444-4444-4444-8444-444444444444;grant_version=1', 'direct'],
+    ])
+    await expect(recordOperationDecision(db.client, underGrant)).resolves.toBe(0)
   })
 
   it('is idempotent: recording the same approval again writes nothing', async () => {
