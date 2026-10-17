@@ -6,7 +6,7 @@ paths:
 
 # Design Context & Design System
 
-Always use the `/frontend-design` skill for new UI. The conventions below are locked: deviating from them on existing pages is a regression.
+The conventions below are locked: deviating from them on existing pages is a regression.
 
 ## Users
 

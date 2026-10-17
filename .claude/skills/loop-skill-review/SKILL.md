@@ -40,12 +40,10 @@ Markdown validator is a syntax gate, not a privacy or compliance reviewer.
    a sibling `registry/skills/<slug>/SKILL.md`, and an author profile if needed.
    Never overwrite an existing handle's identity. Verify identity with the author
    before attributing to an existing profile.
-3. Run `npm run validate:registry` and `npm run skills:generate`. Follow
-   `loop-verify` before opening the registry PR. The normal Swedish compliance bot
-   reviews the PR; its findings require a human decision, not automatic acceptance.
-   Include the content hash fingerprint, review sources, review date, and consent
-   evidence without tenant IDs. Follow the repository's PR signing rules; Jakob
-   handles any required admin merge. Never merge from this loop.
+3. Run `npm run validate:registry` and `npm run skills:generate`, then the
+   Definition of Done checks in `CLAUDE.md`, before opening the registry MR. A
+   founder reviews it. Include the content hash fingerprint, review sources, review
+   date, and consent evidence without tenant IDs. Never merge from this loop.
 4. `record-pr --id <uuid> --pr <number> --project <ref>` records the review link,
    with specific production write approval when applicable. The app stays Granskas.
 5. On a later run, `published --id <uuid> --slug <slug> --pr <number> --project
