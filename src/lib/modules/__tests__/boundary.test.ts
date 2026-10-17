@@ -10,6 +10,14 @@
  * baseline) when one shrinks. What counts as an edge is documented in
  * import-scan.ts: runtime imports only, one per (file, imported path).
  *
+ * Composition seams (compositionSeams): src/lib/composition is
+ * infrastructure, so the module-pair counts above never see what a kernel
+ * reaches through it. Its edges are pinned here instead, by name: only the
+ * recorded files may import a composition module, a composition file may
+ * import only the recorded (hook leaf) modules, and none may import lib/init,
+ * lib/initialized or the event bus (the seams are static wiring, never lazy
+ * registration).
+ *
  * Update the baseline (only for a reviewed, deliberate coupling, or after
  * removing edges):
  *
@@ -18,9 +26,10 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { boundaryReport, scanLibImports, type LibImportEdge } from './import-scan'
+import { boundaryReport, compositionSeamReport, scanLibImports, type LibImportEdge } from './import-scan'
 
 const LIB_ROOT = join(__dirname, '..', '..')
+const SRC_ROOT = join(LIB_ROOT, '..')
 const BASELINE_PATH = join(__dirname, 'boundary-baseline.json')
 const UPDATE_COMMAND =
   'UPDATE_BOUNDARY_BASELINE=1 npx vitest run --project unit src/lib/modules/__tests__/boundary.test.ts'
@@ -28,7 +37,11 @@ const UPDATE_COMMAND =
 type Section = 'kernelToBlock' | 'undeclaredBlockToBlock' | 'undeclaredKernelToKernel'
 const SECTIONS: Section[] = ['kernelToBlock', 'undeclaredBlockToBlock', 'undeclaredKernelToKernel']
 
-type Baseline = { _note: string } & Record<Section, Record<string, number>>
+type CompositionSeams = { importers: string[]; imports: string[] }
+type Baseline = { _note: string; compositionSeams?: CompositionSeams } & Record<Section, Record<string, number>>
+
+/** What no composition file may import: the seams are static wiring, never lazy registration. */
+const COMPOSITION_FORBIDDEN = /^lib\/(init|initialized|events)(\/|$)/
 
 const sorted = (counts: Record<string, number>) =>
   Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)))
@@ -38,6 +51,7 @@ const describeEdges = (edges: LibImportEdge[] = []) =>
 
 describe('module boundary ratchet', () => {
   const report = boundaryReport(scanLibImports(LIB_ROOT))
+  const seams = compositionSeamReport(SRC_ROOT)
 
   it('does not add kernel-to-block or undeclared block-to-block or kernel-to-kernel imports', () => {
     if (process.env.UPDATE_BOUNDARY_BASELINE === '1') {
@@ -46,6 +60,7 @@ describe('module boundary ratchet', () => {
         kernelToBlock: sorted(report.kernelToBlock),
         undeclaredBlockToBlock: sorted(report.undeclaredBlockToBlock),
         undeclaredKernelToKernel: sorted(report.undeclaredKernelToKernel),
+        compositionSeams: seams,
       }
       writeFileSync(BASELINE_PATH, `${JSON.stringify(next, null, 2)}\n`)
       return
@@ -82,6 +97,36 @@ describe('module boundary ratchet', () => {
         'Prefer: move the shared code into the kernel or infrastructure, invert the call through an event or a',
         'registry, or, when the block genuinely needs the other block, add it to dependsOn in lib/modules/manifest.ts.',
         `Only for a reviewed, deliberate coupling, record it: ${UPDATE_COMMAND}`,
+      ].join('\n'),
+    ).toEqual([])
+  })
+
+  it('keeps the composition seams to their recorded importers and hook leaves (compositionSeams)', () => {
+    const forbidden = seams.imports.filter((edge) => COMPOSITION_FORBIDDEN.test(edge.split(' -> ')[1]))
+    expect(forbidden, 'a composition file imports lib/init, lib/initialized or the event bus').toEqual([])
+    if (process.env.UPDATE_BOUNDARY_BASELINE === '1') return
+
+    const recorded = (JSON.parse(readFileSync(BASELINE_PATH, 'utf8')) as Baseline).compositionSeams ?? {
+      importers: [],
+      imports: [],
+    }
+    const added = [
+      ...seams.importers.filter((e) => !recorded.importers.includes(e)).map((e) => `  importer ${e}`),
+      ...seams.imports.filter((e) => !recorded.imports.includes(e)).map((e) => `  import   ${e}`),
+    ]
+    const removed = [
+      ...recorded.importers.filter((e) => !seams.importers.includes(e)),
+      ...recorded.imports.filter((e) => !seams.imports.includes(e)),
+    ]
+    if (removed.length > 0) {
+      console.warn(`[module boundary] composition seam edges gone; lower the baseline with:\n  ${UPDATE_COMMAND}\n  ${removed.join('\n  ')}`)
+    }
+    expect(
+      added,
+      [
+        'New composition seam edges (src/lib/composition). Only the recorded files may import a composition module,',
+        'and a composition file may import only hook leaf modules: code that never reaches engine.ts, lib/init or the bus.',
+        `Only for a reviewed, deliberate seam, record it: ${UPDATE_COMMAND}`,
       ].join('\n'),
     ).toEqual([])
   })

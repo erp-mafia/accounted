@@ -7,7 +7,7 @@
     "ledger -> deadlines": 4,
     "ledger -> import": 7,
     "ledger -> inbox": 2,
-    "ledger -> invoicing": 22,
+    "ledger -> invoicing": 20,
     "ledger -> parties": 5,
     "ledger -> payments": 1,
     "ledger -> payroll": 6,
@@ -74,5 +74,15 @@
   },
   "undeclaredKernelToKernel": {
     "platform -> ledger": 2
+  },
+  "compositionSeams": {
+    "importers": [
+      "lib/bookkeeping/engine.ts -> lib/composition/reversal-hooks"
+    ],
+    "imports": [
+      "lib/composition/reversal-hooks.ts -> lib/bookkeeping/payment-sync",
+      "lib/composition/reversal-hooks.ts -> lib/invoices/migrated-deduction-reversal",
+      "lib/composition/reversal-hooks.ts -> lib/invoices/rot-rut-reclaim-reversal"
+    ]
   }
 }

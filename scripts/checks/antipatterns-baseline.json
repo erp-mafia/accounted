@@ -633,12 +633,11 @@
     }
   },
   "kernelImports": {
-    "count": 31,
+    "count": 30,
     "files": {
       "lib/bookkeeping/engine.ts": [
-        "lib/import/sie-job-contract",
-        "lib/invoices/migrated-deduction-reversal",
-        "lib/invoices/rot-rut-reclaim-reversal"
+        "lib/composition/reversal-hooks",
+        "lib/import/sie-job-contract"
       ],
       "lib/core/audit/audit-service.ts": [
         "lib/api/v1/pagination",

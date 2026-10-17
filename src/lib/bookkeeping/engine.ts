@@ -41,12 +41,8 @@ import {
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { buildStornoLines } from '@/lib/bookkeeping/line-side'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
-import { syncInvoiceStatusFromPaymentEntry, isPaymentSourceType } from '@/lib/bookkeeping/payment-sync'
-import { syncRotRutReclaimAfterReversal } from '@/lib/invoices/rot-rut-reclaim-reversal'
-import {
-  assertMigratedDeductionReversible,
-  syncMigratedDeductionAfterReversal,
-} from '@/lib/invoices/migrated-deduction-reversal'
+import { selectReversalHooks, type ReversalHookContext } from '@/lib/bookkeeping/reversal-hooks'
+import { REVERSAL_HOOKS } from '@/lib/composition/reversal-hooks'
 import { defaultCommitMethod, getActor } from '@/lib/bookkeeping/actor-context'
 import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
 import type {
@@ -1883,10 +1879,17 @@ export async function reverseEntry(
     }
   }
 
-  // A migrated invoice's deduction reclassification is refused while a
-  // begäran holds the invoice: checked before a voucher number is spent.
-  if (original.source_type === 'rot_rut_reclassification') {
-    await assertMigratedDeductionReversible(supabase, companyId, original)
+  // The business-state mirrors this storno must run (reversal hooks:
+  // lib/bookkeeping/reversal-hooks.ts, wired in lib/composition). Selected
+  // and checked before anything is written, so neither refusal spends a
+  // voucher number: a source type that needs a mirror with none registered
+  // throws ReversalHookMissingError, and a beforeReversal may refuse (a
+  // migrated invoice's deduction reclassification while a begäran holds the
+  // invoice).
+  const reversalHooks = selectReversalHooks(REVERSAL_HOOKS, original.source_type)
+  const reversalHookContext: ReversalHookContext = { supabase, companyId, entry: original as JournalEntry }
+  for (const hook of reversalHooks) {
+    if (hook.beforeReversal) await hook.beforeReversal(reversalHookContext)
   }
 
   const lines = (original.lines as JournalEntryLine[]) || []
@@ -2244,26 +2247,12 @@ export async function reverseEntry(
     }
   }
 
-  // If this was a payment entry, sync the linked invoice/supplier-invoice status.
-  // Helper is shared with the DELETE journal entry route so both code paths leave
-  // the invoice in a consistent state (BFL 5 kap 5§ requires GL reversal; this
-  // covers the business-level state that lives outside the GL).
-  if (isPaymentSourceType(original.source_type)) {
-    await syncInvoiceStatusFromPaymentEntry(supabase, companyId, original as JournalEntry)
-  }
-
-  // A reversed rot_rut_reclaim voucher hands the refused share back to
-  // Skatteverket's side: the invoices it reopened close again, the begäran
-  // becomes reclaimable again (same business-state mirror as the payment
-  // sync above, skeptic #2397 R3).
-  if (original.source_type === 'rot_rut_reclaim') {
-    await syncRotRutReclaimAfterReversal(supabase, companyId, original.id)
-  }
-
-  // A reversed deduction reclassification puts the deduction back on 1510:
-  // the migrated invoice reads it as the buyer's again.
-  if (original.source_type === 'rot_rut_reclassification') {
-    await syncMigratedDeductionAfterReversal(supabase, companyId, original)
+  // The business-state mirrors selected above (the invoice behind a payment
+  // voucher, a ROT/RUT begäran, a migrated invoice's deduction), in list
+  // order, one at a time. Not caught: an unexpected throw propagates, the
+  // storno stands and the emits below are skipped.
+  for (const hook of reversalHooks) {
+    if (hook.afterReversal) await hook.afterReversal(reversalHookContext)
   }
 
   // Fetch complete reversal entry with lines

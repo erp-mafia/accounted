@@ -41,6 +41,7 @@ import {
   EntryAlreadyReversedError,
   EntryDateOutsideFiscalPeriodError,
   MigratedDeductionHeldByRequestError,
+  ReversalHookMissingError,
   FiscalPeriodNotFoundError,
   InvalidMappingResultError,
   JournalEntryNotBalancedError,
@@ -665,6 +666,9 @@ export function extractBookkeepingDetails(err: unknown): { code: string; details
   if (err instanceof EntryAlreadyReversedError) return { code: err.code }
   if (err instanceof MigratedDeductionHeldByRequestError) {
     return { code: err.code, details: { invoiceId: err.invoiceId } }
+  }
+  if (err instanceof ReversalHookMissingError) {
+    return { code: err.code, details: { sourceType: err.sourceType } }
   }
   if (err instanceof CurrencyRevaluationAlreadyExistsError) return { code: err.code }
   if (err instanceof InvalidMappingResultError) {
