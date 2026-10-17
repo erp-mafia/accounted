@@ -28,10 +28,15 @@
  */
 import { createHash } from 'node:crypto'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
-import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { toEntryPreview } from '@/lib/bookkeeping/entry-preview'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import type { LinkBasisColumns } from '@/lib/links/link-basis'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { mappingVersion } from '@/lib/posting/mapping-version'
+import { postingPort } from '@/lib/posting/port'
+import type { BusinessEventDraft } from '@/lib/posting/types'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
 import {
   buildVatSettlementProposal,
@@ -122,6 +127,37 @@ export interface BookVatSettlementResult {
   rounding_amount: number
 }
 
+/**
+ * The business event of a booked momsredovisning (kind vat.settled), for the
+ * posting port: recorded while POSTING_EVENTS is shadow or strict, never
+ * built while it is off. Pure. The act is the settlement of the period, so it
+ * is dated the period's last day even when the verifikat moved past a closed
+ * year; the amount is ruta 49 as filed (whole kronor), its direction out when
+ * it is moms att betala and in when it is moms att återfå. Skatteverket is
+ * no party (the closed party types name the company's own counterparties)
+ * and a VAT period has no typed handle, so neither is named.
+ */
+export function vatSettlementBusinessEvent(proposal: VatSettlementProposal, linkBasis: LinkBasisColumns): BusinessEventDraft {
+  const net = Math.abs(proposal.filed_net)
+  return {
+    kind: 'vat.settled',
+    category: 'se.tax.settlement',
+    occurredOn: proposal.period.end,
+    // Ruta 49 is in the ledger currency.
+    currency: 'SEK',
+    amount: net,
+    amountSek: net,
+    evidence: {
+      ...(proposal.filed_net !== 0 ? { direction: proposal.filed_net > 0 ? 'out' : 'in' } : {}),
+      link_basis: linkBasis.link_basis,
+      link_evidence: linkBasis.link_evidence ?? undefined,
+    },
+    pendingOperationId: linkBasis.link_evidence?.pending_operation_id ?? null,
+    mappingVersion: mappingVersion('vatSettlement'),
+    jurisdiction: 'SE',
+  }
+}
+
 const DRAFT_EXISTS: OperationWarning = {
   code: 'VAT_SETTLEMENT_DRAFT_EXISTS',
   message_sv: 'Det fanns redan ett utkast för momsen i perioden. Utkastet påverkas inte; ta bort det om det inte behövs.',
@@ -208,7 +244,17 @@ export async function bookVatSettlement(
 
   let entry
   try {
-    entry = await createJournalEntry(supabase, companyId, userId, entryInput)
+    // Posting port (step 2): the engine gets entryInput unchanged; while
+    // POSTING_EVENTS is shadow or strict the vat.settled event is recorded
+    // first and linked to the draft before a voucher number is drawn.
+    entry = await postingPort.postJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      // Built only while the port is on: off, the call is the one it was.
+      event: () => vatSettlementBusinessEvent(proposal, linkBasisColumns('user_created')),
+      input: entryInput,
+    })
   } catch (err) {
     if (isBookkeepingError(err)) return { ok: false, code: 'VAT_SETTLEMENT_FAILED', error: err }
     log.error('vat settlement booking failed', err as Error, { ...input })

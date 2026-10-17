@@ -19,8 +19,14 @@ import { currentAppVersion } from '@/lib/reports/app-version'
  * (lib/expenses/expense-claims-service.ts, expense-claim-vat.ts), the
  * milersättning lines at the year's schablon (lib/mileage), the kassa day's
  * tender, VAT group and tips lines (lib/pos-sales/evaluate.ts, with the
- * connection's account settings) and the webbshop prefill
- * (lib/webshop-orders/booking-lines.ts).
+ * connection's account settings), the webbshop prefill
+ * (lib/webshop-orders/booking-lines.ts), the momsredovisning proposal
+ * (lib/reports/vat-settlement.ts), the skattekonto rules (skattekonto_rules:
+ * the system seeds and the company's own rows, the skatteverket extension's
+ * skattekonto-booking.ts), the skattekonto account transfer
+ * (lib/skatteverket/skattekonto-account-service.ts), the planenlig
+ * avskrivning (lib/bokslut/assets/depreciation-engine.ts) and the disposal
+ * plan with its jämkning (buildAssetDisposalPlan in asset-service.ts).
  *
  * The version is the rubric version the producer already records on the
  * verifikat (journal_entries.rubric_version: the proposal rule revision plus
@@ -38,6 +44,11 @@ export const MAPPING_SOURCES = {
   mileageAllowance: 'se.mileage-allowance',
   posDailyTakings: 'se.pos-daily-takings',
   webshopOrder: 'se.webshop-order-lines',
+  vatSettlement: 'se.vat-settlement',
+  taxAccountRules: 'se.skattekonto-rules',
+  taxAccountTransfer: 'se.skattekonto-account-transfer',
+  assetDepreciation: 'se.asset-depreciation',
+  assetDisposal: 'se.asset-disposal',
 } as const
 
 export type MappingSource = keyof typeof MAPPING_SOURCES

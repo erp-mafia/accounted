@@ -1,0 +1,1 @@
+[2026-10-16] mapping_version names five more Sweden-only rule sources (se.vat-settlement, se.skattekonto-rules, se.skattekonto-account-transfer, se.asset-depreciation, se.asset-disposal), versioned by the build: the lines of these producers come from rules in code or skattekonto_rules.

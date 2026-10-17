@@ -1,6 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { createAssetDepreciationEntry } from '@/lib/bookkeeping/engine'
+import { commitAssetDepreciation } from '@/lib/bookkeeping/engine'
 import { AssetDepreciationRefusedError } from '@/lib/bookkeeping/errors'
+import type { LinkBasisColumns } from '@/lib/links/link-basis'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { mappingVersion } from '@/lib/posting/mapping-version'
+import { postingPort } from '@/lib/posting/port'
+import type { BusinessEventDraft } from '@/lib/posting/types'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type {
@@ -402,6 +407,35 @@ export async function proposeAnnualPostings(
 }
 
 /**
+ * The business event of one planenlig avskrivning (kind asset.depreciated),
+ * for the posting port: recorded while POSTING_EVENTS is shadow or strict,
+ * never built while it is off. Pure. The asset is the subject, dated the
+ * period's end, the amount what the register records. No category: the
+ * asset's own accounts carry what it was.
+ */
+export function assetDepreciationBusinessEvent(args: {
+  assetId: string
+  amount: number
+  periodEnd: string
+  linkBasis: LinkBasisColumns
+}): BusinessEventDraft {
+  return {
+    kind: 'asset.depreciated',
+    category: null,
+    occurredOn: args.periodEnd,
+    subject: { type: 'asset', id: args.assetId },
+    // Planenlig avskrivning is in the ledger currency.
+    currency: 'SEK',
+    amount: args.amount,
+    amountSek: args.amount,
+    evidence: { link_basis: args.linkBasis.link_basis, link_evidence: args.linkBasis.link_evidence ?? undefined },
+    pendingOperationId: args.linkBasis.link_evidence?.pending_operation_id ?? null,
+    mappingVersion: mappingVersion('assetDepreciation'),
+    jurisdiction: 'SE',
+  }
+}
+
+/**
  * Commit the proposal as journal entries. Creates ONE journal entry per
  * asset (rather than a single batch entry) so each can be reversed
  * independently and so the depreciation_schedules row links one-to-one to
@@ -457,24 +491,36 @@ export async function commitAnnualPostings(
     // no register row. An unposted draft row for (asset, period) is adopted
     // by the RPC; a posted one makes it refuse.
     try {
-      const { entry, scheduleId } = await createAssetDepreciationEntry(
+      // Posting port (step 2): the draft goes through draftJournalEntry, so
+      // while POSTING_EVENTS is shadow or strict the asset.depreciated event
+      // is recorded first and linked to the draft; commit_asset_depreciation
+      // then draws the number and writes the register row as before.
+      const draft = await postingPort.draftJournalEntry({
         supabase,
         companyId,
         userId,
-        {
+        // Built only while the port is on: off, the call is the one it was.
+        event: () =>
+          assetDepreciationBusinessEvent({
+            assetId: item.asset.id,
+            amount: item.amount,
+            periodEnd,
+            linkBasis: linkBasisColumns('user_created'),
+          }),
+        input: {
           fiscal_period_id: fiscalPeriodId,
           entry_date: periodEnd,
           description: `Planenlig avskrivning ${periodName}: ${item.asset.name}`,
           source_type: 'year_end',
           lines,
         },
-        {
-          asset_id: item.asset.id,
-          planned_depreciation: item.amount,
-          opening_accumulated_depreciation: Number(item.asset.opening_accumulated_depreciation ?? 0),
-          opening_depreciation_date: item.asset.opening_depreciation_date ?? null,
-        },
-      )
+      })
+      const { entry, scheduleId } = await commitAssetDepreciation(supabase, companyId, userId, draft, {
+        asset_id: item.asset.id,
+        planned_depreciation: item.amount,
+        opening_accumulated_depreciation: Number(item.asset.opening_accumulated_depreciation ?? 0),
+        opening_depreciation_date: item.asset.opening_depreciation_date ?? null,
+      })
       posted.push({ assetId: item.asset.id, entry, scheduleId })
     } catch (error) {
       // Posted by someone else first, or the asset was deleted while we

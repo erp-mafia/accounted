@@ -1,0 +1,1 @@
+[2026-10-16] Asset events take the asset handle as subject and no category or party: an expense key would count the purchase twice and the register names no buyer. A disposal's amount is the gross consideration (0 for a scrapping) with its utgående moms; jämkning stays in the lines.

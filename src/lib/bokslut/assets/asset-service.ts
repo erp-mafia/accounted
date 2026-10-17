@@ -1,8 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import {
-  commitAssetDisposal,
-  createDraftEntry,
-} from '@/lib/bookkeeping/engine'
+import { commitAssetDisposal } from '@/lib/bookkeeping/engine'
+import type { LinkBasisColumns } from '@/lib/links/link-basis'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { mappingVersion } from '@/lib/posting/mapping-version'
+import { postingPort } from '@/lib/posting/port'
+import type { BusinessEventDraft } from '@/lib/posting/types'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { roundOre } from '@/lib/money'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
@@ -993,6 +995,43 @@ export async function previewAssetDisposal(
   return { asset, fiscalPeriod, plan }
 }
 
+/**
+ * The business event of an asset disposal (kind asset.disposed), for the
+ * posting port: recorded while POSTING_EVENTS is shadow or strict, never
+ * built while it is off. Pure. The asset is the subject; the amount is the
+ * gross consideration (0 for a scrapping), money in when there is any, with
+ * the utgående moms on it. No category: the asset's own accounts carry what
+ * it was, and no party, as the register names no buyer.
+ */
+export function assetDisposalBusinessEvent(args: {
+  asset: Pick<Asset, 'id'>
+  input: Pick<DisposeAssetInput, 'disposed_at'>
+  plan: Pick<DisposalPlan, 'proceedsGross' | 'proceedsVat' | 'vatTreatment'>
+  linkBasis: LinkBasisColumns
+}): BusinessEventDraft {
+  const { asset, input, plan, linkBasis } = args
+  return {
+    kind: 'asset.disposed',
+    category: null,
+    occurredOn: input.disposed_at,
+    subject: { type: 'asset', id: asset.id },
+    // The register keeps the consideration in the ledger currency.
+    currency: 'SEK',
+    amount: plan.proceedsGross,
+    amountSek: plan.proceedsGross,
+    taxAmounts:
+      plan.proceedsVat > 0 ? [{ tax: 'vat', treatment: plan.vatTreatment, amount_sek: plan.proceedsVat }] : [],
+    evidence: {
+      ...(plan.proceedsGross > 0 ? { direction: 'in' } : {}),
+      link_basis: linkBasis.link_basis,
+      link_evidence: linkBasis.link_evidence ?? undefined,
+    },
+    pendingOperationId: linkBasis.link_evidence?.pending_operation_id ?? null,
+    mappingVersion: mappingVersion('assetDisposal'),
+    jurisdiction: 'SE',
+  }
+}
+
 export async function disposeAsset(
   supabase: SupabaseClient,
   companyId: string,
@@ -1018,13 +1057,24 @@ export async function disposeAsset(
 
   let draft: JournalEntry | null = null
   if (plan.lines.length > 0) {
-    draft = await createDraftEntry(supabase, companyId, userId, {
-      fiscal_period_id: input.fiscal_period_id,
-      entry_date: input.disposed_at,
-      description: `Avyttring av tillgång: ${asset.name}`,
-      source_type: 'system',
-      lines: plan.lines,
-      ...(componentNotes ? { notes: componentNotes } : {}),
+    // Posting port (step 2): the engine gets the input unchanged; while
+    // POSTING_EVENTS is shadow or strict the asset.disposed event is recorded
+    // first and linked to the draft, before commit_asset_disposal draws the
+    // voucher number.
+    draft = await postingPort.draftJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      // Built only while the port is on: off, the call is the one it was.
+      event: () => assetDisposalBusinessEvent({ asset, input, plan, linkBasis: linkBasisColumns('user_created') }),
+      input: {
+        fiscal_period_id: input.fiscal_period_id,
+        entry_date: input.disposed_at,
+        description: `Avyttring av tillgång: ${asset.name}`,
+        source_type: 'system',
+        lines: plan.lines,
+        ...(componentNotes ? { notes: componentNotes } : {}),
+      },
     })
   }
 

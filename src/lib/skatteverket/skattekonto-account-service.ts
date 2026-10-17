@@ -8,7 +8,8 @@
  * never edited); from the change on, booking, matching and the
  * reconciliation read the new account. When the old account still carries a
  * balance the user decides: the transfer is offered as a DRAFT verifikat
- * (engine createDraftEntry) the user reviews and posts, never posted here.
+ * (drafted through the posting port, src/lib/posting) the user reviews and
+ * posts, never posted here.
  *
  * Who: the choice is a company setting, so owners and admins only
  * (requireCompanyAdmin, same as every company_settings write); the draft is
@@ -17,12 +18,16 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { activateAccounts, createAccount } from '@/lib/bookkeeping/chart-of-accounts-service'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
-import { createDraftEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { roundOre } from '@/lib/money'
 import { requireCompanyAdmin } from '@/lib/operations/access'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
+import { committingOperationId } from '@/lib/pending-operations/commit-scope'
+import { mappingVersion } from '@/lib/posting/mapping-version'
+import { postingPort } from '@/lib/posting/port'
+import type { BusinessEventDraft } from '@/lib/posting/types'
 import { findOpeningBalanceFloor, sumAccountBalance } from '@/lib/reconciliation/gl-balance'
 import type { EntityType } from '@/types'
 import {
@@ -215,6 +220,33 @@ export interface SkattekontoTransferDraft {
 }
 
 /**
+ * The business event of the transfer draft, for the posting port: recorded
+ * while POSTING_EVENTS is shadow or strict, never built while it is off.
+ * Pure. A balance moved between two of the company's own accounts, booked
+ * as an ordinary verifikat (source_type manual), so it is ledger.manual
+ * filed under the skattekonto; no party, no subject and no direction, as no
+ * money moves.
+ */
+export function skattekontoTransferBusinessEvent(args: {
+  entryDate: string
+  amount: number
+  pendingOperationId: string | null
+}): BusinessEventDraft {
+  return {
+    kind: 'ledger.manual',
+    category: 'se.tax.settlement',
+    occurredOn: args.entryDate,
+    // A ledger balance: the ledger currency.
+    currency: 'SEK',
+    amount: args.amount,
+    amountSek: args.amount,
+    pendingOperationId: args.pendingOperationId,
+    mappingVersion: mappingVersion('taxAccountTransfer'),
+    jurisdiction: 'SE',
+  }
+}
+
+/**
  * Draft (never post) one verifikat that moves the balance left on the
  * account the company no longer uses to the one it uses now, as of
  * `entryDate` (today by default). The user reviews and posts it; the draft
@@ -258,15 +290,26 @@ export async function createSkattekontoTransferDraft(
         ]
   const chartFailure = await ensureChartAccount(ctx, to)
   if (chartFailure) return chartFailure
-  const entry = await createDraftEntry(ctx.supabase, ctx.companyId, ctx.userId, {
-    fiscal_period_id: fiscalPeriodId,
-    entry_date: entryDate,
-    description,
-    source_type: 'manual',
-    notes:
-      `Utkast skapat när skattekontots konto ändrades till ${to}. Saldot på ${from} per ${entryDate}. ` +
-      'Kontrollera beloppet mot skattekontoutdraget innan du bokför.',
-    lines,
+  // Posting port (step 2): a draft only, so draftJournalEntry; the engine
+  // gets the input unchanged and, while POSTING_EVENTS is shadow or strict,
+  // the event is linked to the draft before the user posts it.
+  const entry = await postingPort.draftJournalEntry({
+    supabase: ctx.supabase,
+    companyId: ctx.companyId,
+    userId: ctx.userId,
+    // Built only while the port is on: off, the call is the one it was.
+    event: () =>
+      skattekontoTransferBusinessEvent({ entryDate, amount: value, pendingOperationId: committingOperationId() }),
+    input: {
+      fiscal_period_id: fiscalPeriodId,
+      entry_date: entryDate,
+      description,
+      source_type: 'manual',
+      notes:
+        `Utkast skapat när skattekontots konto ändrades till ${to}. Saldot på ${from} per ${entryDate}. ` +
+        'Kontrollera beloppet mot skattekontoutdraget innan du bokför.',
+      lines,
+    },
   })
   ctx.log.info('skattekonto transfer drafted', { companyId: ctx.companyId, from, to, journalEntryId: entry.id })
   return {

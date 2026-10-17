@@ -1,0 +1,1 @@
+[2026-10-16] The momsredovisning verifikat records the existing kind vat.settled (its source type vat_settlement maps there), not a new tax.vat_settlement as the 2b brief named it: the list is add-only and already names the act.

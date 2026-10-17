@@ -1179,6 +1179,11 @@ export interface AssetDepreciationLink {
  *
  * Throws AssetDepreciationRefusedError for the two outcomes a batch should
  * skip rather than fail on. No voucher is posted in either case.
+ *
+ * The same as createDraftEntry followed by commitAssetDepreciation, which is
+ * how the producer (lib/bokslut/assets/depreciation-engine.ts) posts since
+ * the posting port: it drafts through the port, so the business event is
+ * linked to the draft before a voucher number is drawn.
  */
 export async function createAssetDepreciationEntry(
   supabase: SupabaseClient,
@@ -1188,6 +1193,26 @@ export async function createAssetDepreciationEntry(
   link: AssetDepreciationLink,
 ): Promise<{ entry: JournalEntry; scheduleId: string }> {
   const draft = await createDraftEntry(supabase, companyId, userId, input)
+  return commitAssetDepreciation(supabase, companyId, userId, draft, link)
+}
+
+/**
+ * Commit a planenlig avskrivning draft: the voucher AND its
+ * depreciation_schedules link in one database transaction
+ * (commit_asset_depreciation, which delegates numbering to
+ * commit_journal_entry and holds the asset row lock throughout). On any
+ * refusal the draft is left cancelled, never stranded.
+ *
+ * Throws AssetDepreciationRefusedError for the two outcomes a batch should
+ * skip rather than fail on. No voucher is posted in either case.
+ */
+export async function commitAssetDepreciation(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  draft: Pick<JournalEntry, 'id' | 'fiscal_period_id'>,
+  link: AssetDepreciationLink,
+): Promise<{ entry: JournalEntry; scheduleId: string }> {
   const actor = getActor()
 
   const { data, error } = await supabase.rpc('commit_asset_depreciation', {
