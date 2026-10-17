@@ -3,6 +3,7 @@ import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 import { createLogger } from '@/lib/logger'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { PendingOperation } from '@/types'
+import { grantPolicyVersion } from '@/lib/grants/types'
 import { operationInputHash } from './provenance'
 
 /**
@@ -22,7 +23,9 @@ import { operationInputHash } from './provenance'
  *     preview the approver was shown, ./provenance.ts);
  *   - the policy that let it through (policy_version, confidence_band):
  *     review when a person approved it, direct when a credential approved it
- *     under its unattended ceiling. An approver of any other kind records
+ *     under its unattended ceiling, and direct under the company grant that
+ *     let it through without a person (grant.<revision>;grant_id=...;
+ *     grant_version=..., lib/grants). An approver of any other kind records
  *     neither, as a policy is never recorded without its band.
  * The one suggestion on offer is the staged operation, acted on as staged
  * (acted_on 0, outcome 'accepted'): an approval books what was staged or
@@ -40,7 +43,12 @@ import { operationInputHash } from './provenance'
  * those rows carry the same pending_operation_id) is the richer record and
  * wins; a voucher that already has a row for this operation is skipped, so a
  * repeated call writes nothing. The approval's atomic claim already lets only
- * one caller run the commit.
+ * one caller run the commit. One exception: a commit under a grant also
+ * writes its operation row beside the door's bank-line row, because the
+ * bank-line row says what was on offer while only the operation row can say
+ * which company rule decided it without a person (its band needs an
+ * acted-on suggestion, which the staged operation is). Still at most one
+ * operation row per voucher and operation.
  *
  * Never a precondition for the commit: it runs after the commit succeeded,
  * and every failure is logged and dropped, as in the bank-line and underlag
@@ -98,7 +106,14 @@ export interface ApprovalPolicy {
  * reviewed the staged proposal; a key credential finished it unattended,
  * within its ceiling (none when the key has no positive limit).
  */
-export function approvalPolicy(actor: CommitActor | undefined): ApprovalPolicy {
+export function approvalPolicy(
+  actor: CommitActor | undefined,
+  grant?: { grantId: string; grantVersion: number } | null,
+): ApprovalPolicy {
+  // A company grant decided it: the rule, not the credential, is the policy.
+  if (grant && actor && CREDENTIAL_ACTORS.has(actor.type)) {
+    return { policyVersion: grantPolicyVersion(grant), band: 'direct' }
+  }
   if (actor?.type === 'user') return { policyVersion: `${POLICY};approver=person`, band: 'review' }
   if (actor && CREDENTIAL_ACTORS.has(actor.type)) {
     const limit =
@@ -125,12 +140,14 @@ export interface OperationDecision {
   claimedAt: string | null
   /** Who approved (commitPendingOperation's opts.actor). */
   actor: CommitActor | undefined
+  /** The company grant that let the operation through without a person (commitPendingOperation's opts.grant). */
+  grant?: { grantId: string; grantVersion: number } | null
 }
 
 /** The rows for `entries`, one per voucher; `posted` is every voucher the approval posted. */
 export function buildOperationDecisionRows(decision: OperationDecision, entries: string[], posted: string[]) {
   const { operation, actor } = decision
-  const policy = approvalPolicy(actor)
+  const policy = approvalPolicy(actor, decision.grant)
   const model = typeof operation.agent_metadata?.model === 'string' ? operation.agent_metadata.model : null
   const suggestion = {
     source: 'pending_operation',
@@ -192,17 +209,24 @@ async function postedSince(
   return ids.filter((id) => posted.has(id))
 }
 
-/** The vouchers already recorded for this operation, by a door or an earlier call. */
-async function recordedEntries(supabase: SupabaseClient, companyId: string, operationId: string): Promise<Set<string>> {
-  const rows = await fetchAllRows<{ id: string; journal_entry_id: string | null }>(({ from, to }) =>
-    supabase
+/**
+ * The vouchers already recorded for this operation, by a door or an earlier
+ * call; under a grant only the operation rows count (see the header).
+ */
+async function recordedEntries(
+  supabase: SupabaseClient,
+  companyId: string,
+  operationId: string,
+  onlyOperationRows: boolean,
+): Promise<Set<string>> {
+  const rows = await fetchAllRows<{ id: string; journal_entry_id: string | null }>(({ from, to }) => {
+    const query = supabase
       .from('suggestion_log')
       .select('id, journal_entry_id:final->>journal_entry_id')
       .eq('company_id', companyId)
       .eq('pending_operation_id', operationId)
-      .order('id', { ascending: true })
-      .range(from, to),
-  )
+    return (onlyOperationRows ? query.eq('kind', 'operation') : query).order('id', { ascending: true }).range(from, to)
+  })
   return new Set(rows.map((r) => r.journal_entry_id).filter((id): id is string => !!id))
 }
 
@@ -218,7 +242,7 @@ export async function recordOperationDecision(supabase: SupabaseClient, decision
     if (named.length === 0) return 0
     const posted = await postedSince(supabase, decision.companyId, named, decision.claimedAt)
     if (posted.length === 0) return 0
-    const recorded = await recordedEntries(supabase, decision.companyId, decision.operation.id)
+    const recorded = await recordedEntries(supabase, decision.companyId, decision.operation.id, !!decision.grant)
     const entries = posted.filter((id) => !recorded.has(id))
     if (entries.length === 0) return 0
     const rows = buildOperationDecisionRows(decision, entries, posted)

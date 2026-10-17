@@ -22,8 +22,12 @@ import type { CoreEvent, CoreEventType } from '@/lib/events/types'
 import type { Logger } from '@/lib/logger'
 import type { CompanyCapabilities } from '@/lib/modules/capabilities'
 
-/** The operations a suggestion can propose today: a package switch. */
-export const SUGGESTION_OPERATION_TYPES = ['enable_package', 'disable_package'] as const
+/**
+ * The operations a suggestion can propose today: a package switch, and a
+ * company grant (lib/grants: book a known counterparty unattended, within a
+ * limit; the grant-suggestion detector, behind GRANT_SUGGESTIONS).
+ */
+export const SUGGESTION_OPERATION_TYPES = ['enable_package', 'disable_package', 'create_grant'] as const
 export type SuggestionOperationType = (typeof SUGGESTION_OPERATION_TYPES)[number]
 
 /** What a detector proposes: one staged operation, said in plain Swedish. */

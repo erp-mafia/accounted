@@ -318,6 +318,24 @@ describe('gnubok_approve_pending_operation', () => {
     expect(commitSpy).not.toHaveBeenCalled()
   })
 
+  it('refuses a rule for automatic booking with GRANT_NEEDS_PERSON, for every key and even with confirmed=true', async () => {
+    for (const actor of [
+      { type: 'api_key' as const },
+      { type: 'api_key' as const, oauthKey: true },
+      { type: 'api_key' as const, serviceAccountId: 'sa-1' },
+    ]) {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({
+        data: { id: 'op-1', operation_type: 'create_grant', company_id: 'company-1', status: 'pending', risk_level: 'high', params: { counterparty_key: 'spotify' } },
+        error: null,
+      })
+      const refusal = approveTool.execute({ operation_id: 'op-1', confirmed: true }, 'company-1', 'user-1', supabase as never, actor)
+      await expect(refusal).rejects.toMatchObject({ code: 'GRANT_NEEDS_PERSON' })
+      await expect(refusal).rejects.toThrow(/Att göra/)
+    }
+    expect(commitSpy).not.toHaveBeenCalled()
+  })
+
   it('approves a collections action that only serves the case', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({

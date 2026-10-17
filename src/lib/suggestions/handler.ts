@@ -40,11 +40,14 @@ export async function runEventDetectors(
   event: CoreEvent,
   detectors: readonly Detector<unknown>[] = detectorsByEventType().get(event.type) ?? [],
 ): Promise<void> {
+  // A detector behind a switch that is off is not run at all, so an event
+  // whose only detectors are switched off reads nothing (GRANT_SUGGESTIONS).
+  const enabled = detectors.filter((d) => !d.enabled || d.enabled())
   const payload = event.payload as Record<string, unknown>
   const companyId = payload.companyId
   const userId = payload.userId
   if (typeof companyId !== 'string' || !companyId || typeof userId !== 'string' || !userId) return
-  if (detectors.length === 0) return
+  if (enabled.length === 0) return
   try {
     const ctx = createDetectorContext({
       supabase: createServiceClientNoCookies(),
@@ -52,7 +55,7 @@ export async function runEventDetectors(
       userId,
       log,
     })
-    for (const detector of detectors) {
+    for (const detector of enabled) {
       await runDetector(detector, ctx, event)
     }
   } catch (err) {

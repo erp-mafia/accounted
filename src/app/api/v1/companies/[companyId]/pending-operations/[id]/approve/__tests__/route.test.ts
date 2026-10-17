@@ -217,6 +217,16 @@ describe('POST .../pending-operations/:id/approve', () => {
     expect(state.row?.status).toBe('pending')
   })
 
+  it('403 GRANT_NEEDS_PERSON for a rule for automatic booking: only a person accepts it, in Att göra', async () => {
+    const { state } = client(operationRow({ operation_type: 'create_grant', risk_level: 'high', params: { counterparty_key: 'spotify' } }))
+    const res = await POST(request({ confirmed: true }), params)
+    expect(res.status).toBe(403)
+    const { error } = await res.json()
+    expect(error.code).toBe('GRANT_NEEDS_PERSON')
+    expect(error.message).toMatch(/Att göra/)
+    expect(state.row?.status).toBe('pending')
+  })
+
   it('200 with the committed outcome, attributed to the key', async () => {
     const { state } = client(operationRow())
     const res = await POST(request(), params)

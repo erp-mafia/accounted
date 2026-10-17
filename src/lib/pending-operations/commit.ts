@@ -71,6 +71,9 @@ import { getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
 import { createServiceClient } from '@/lib/supabase/server'
 import { revokeServiceAccount } from '@/lib/service-accounts/service'
 import { PackageSwitchParamsSchema, switchCompanyPackage } from '@/lib/suggestions/package-switch'
+import { createGrantFromOperation, revokeGrantFromOperation } from '@/lib/grants/commit'
+import { CreateGrantParamsSchema, GRANT_OPERATION_TYPES, RevokeGrantParamsSchema } from '@/lib/grants/types'
+import { grantsEnabled } from '@/lib/grants/flag'
 import { runInOperationCommit } from './commit-scope'
 import { recordOperationDecision } from '@/lib/suggestion-log/operation'
 import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
@@ -151,7 +154,7 @@ import {
 import { linkDocumentCopyToVoucher, linkDocumentToVoucher, type LinkDocumentRefusal } from '@/lib/documents/link-document'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { classifyError, isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
-import { requiresWebApproval } from '@/lib/pending-operations/risk-tiers'
+import { requiresWebApproval, webOnlyRefusalCode } from '@/lib/pending-operations/risk-tiers'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { createDimensionValue } from '@/lib/dimensions/registry-service'
 import { SIEJobDatabaseError, submitSIEJob } from '@/lib/import/sie-jobs'
@@ -352,6 +355,16 @@ export interface CommitOptions {
    * Omitted → NULL attribution, identical to pre-attribution behaviour.
    */
   actor?: CommitActor
+  /**
+   * The company grant that let this operation through without a person
+   * (lib/grants/enforce.ts, after claim_company_grant matched it). Only the
+   * grant path sets it, and only for a key credential's own staged
+   * operation of a type a grant covers; the commit refuses any other use.
+   * The pending operation's result_data and the decision receipt name the
+   * grant and its version. The key's unattended ceiling (actor) still
+   * applies: the stricter of the two wins.
+   */
+  grant?: { grantId: string; grantVersion: number; useId: string }
 }
 
 // ensureFiscalPeriod moved to lib/transactions/categorize-core.ts (imported
@@ -1362,6 +1375,64 @@ async function commitPackageSwitch(
       ...(result.obligations ? { data: { obligations: result.obligations } } : {}),
     }
   }
+  return { data: result.data }
+}
+
+/**
+ * create_grant and revoke_grant (Profiles and Suggestions, step 4;
+ * lib/grants): a company rule that lets a key credential book one known
+ * counterparty's bank lines unattended within limits, staged by the
+ * grant-suggestion detector (create) or from Att göra (revoke) and approved
+ * by an owner or admin. Accepting a grant is a person's decision in the app
+ * (create_grant is web-only, and here the actor must be 'user'): no agent
+ * accepts its own authority, whatever key relays it. With GRANT_SUGGESTIONS
+ * off nothing is accepted at all. Revoking stays open to any approver who
+ * may approve, since it only takes authority away.
+ * create_company_grant and revoke_company_grant (migration 20261017100300)
+ * are the authority, called through the service client on every path: they
+ * re-check that the approver is an owner or admin (403 hands the op back to
+ * pending for one who is), create_company_grant re-checks that a person
+ * decided, and both write the rule with the audit row behandlingshistorik
+ * shows. Revoking answers the postings the grant let through.
+ */
+async function commitGrantDecision(
+  userId: string,
+  companyId: string,
+  pendingOp: PendingOperation,
+  kind: 'create' | 'revoke',
+): Promise<ExecutorResult> {
+  const actor = getActor()
+  if (kind === 'create') {
+    // GRANT_SUGGESTIONS is the master switch: off, no grant is accepted,
+    // however the operation reached the queue.
+    if (!grantsEnabled()) {
+      const entry = getErrorEntry('GRANTS_SWITCHED_OFF')
+      return { error: entry?.message_sv ?? 'GRANTS_SWITCHED_OFF', errorCode: 'GRANTS_SWITCHED_OFF', status: entry?.httpStatus ?? 409 }
+    }
+    // Accepting is a person's decision in the app: never a key, an OAuth
+    // connector, the in-app assistant, a service account, or no actor at all.
+    if (actor?.type !== 'user') {
+      const entry = getErrorEntry('GRANT_NEEDS_PERSON')
+      return { error: entry?.message_sv ?? 'GRANT_NEEDS_PERSON', errorCode: 'GRANT_NEEDS_PERSON', status: entry?.httpStatus ?? 403 }
+    }
+  }
+  const decision = {
+    companyId,
+    userId,
+    pendingOperationId: pendingOp.id,
+    actor: { type: actor?.type ?? 'user', ...(actor?.label ? { label: actor.label } : {}) },
+  }
+  if (kind === 'create') {
+    const parsed = CreateGrantParamsSchema.safeParse(pendingOp.params)
+    if (!parsed.success) return invalidStagedParams(parsed.error)
+    const result = await createGrantFromOperation(createServiceClient(), { ...decision, params: parsed.data })
+    if (!result.ok) return { error: result.message_sv, errorCode: result.code, status: result.status }
+    return { data: result.data }
+  }
+  const parsed = RevokeGrantParamsSchema.safeParse(pendingOp.params)
+  if (!parsed.success) return invalidStagedParams(parsed.error)
+  const result = await revokeGrantFromOperation(createServiceClient(), { ...decision, params: parsed.data })
+  if (!result.ok) return { error: result.message_sv, errorCode: result.code, status: result.status }
   return { data: result.data }
 }
 
@@ -6827,11 +6898,13 @@ async function commitPendingOperationInner(
     requiresWebApproval(pendingOp.operation_type, pendingOp.params) &&
     !(opts.commitMethod === 'user_accept' && opts.actor?.type === 'user')
   ) {
+    // A grant answers its own code, pointing the person to Att göra.
+    const webOnlyCode = webOnlyRefusalCode(pendingOp.operation_type)
     return {
       status: 'failed',
-      error: getErrorEntry('COLLECTION_ATTESTATION_WEB_ONLY')?.message_sv ?? 'Det här måste godkännas av en person i Accounted.',
+      error: getErrorEntry(webOnlyCode)?.message_sv ?? 'Det här måste godkännas av en person i Accounted.',
       http_status: 403,
-      code: 'COLLECTION_ATTESTATION_WEB_ONLY',
+      code: webOnlyCode,
       operation_status: 'pending',
     }
   }
@@ -6928,6 +7001,25 @@ async function commitPendingOperationInner(
         attempted: unattended.attempted as number,
         limit: unattended.limit as number,
       },
+    }
+  }
+
+  // ── A grant only ever carries a key credential's own operation of a type a
+  //    grant covers (lib/grants/enforce.ts after claim_company_grant). Any
+  //    other use is a programming error and is refused before the claim, so
+  //    the op stays pending for a person.
+  if (
+    opts.grant &&
+    (!(GRANT_OPERATION_TYPES as readonly string[]).includes(pendingOp.operation_type) ||
+      !opts.actor ||
+      !['api_key', 'mcp_oauth', 'service_account'].includes(opts.actor.type))
+  ) {
+    return {
+      status: 'failed',
+      error: getErrorEntry('GRANT_NOT_APPLICABLE')?.message_sv ?? 'GRANT_NOT_APPLICABLE',
+      http_status: 403,
+      code: 'GRANT_NOT_APPLICABLE',
+      operation_status: 'pending',
     }
   }
 
@@ -7109,6 +7201,12 @@ async function commitPendingOperationInner(
         break
       case 'disable_package':
         result = await commitPackageSwitch(userId, companyId, pendingOp, false)
+        break
+      case 'create_grant':
+        result = await commitGrantDecision(userId, companyId, pendingOp, 'create')
+        break
+      case 'revoke_grant':
+        result = await commitGrantDecision(userId, companyId, pendingOp, 'revoke')
         break
       case 'import_sie':
         result = await commitImportSie(supabase, userId, companyId, pendingOp.params)
@@ -7429,13 +7527,20 @@ async function commitPendingOperationInner(
     }
   }
 
+  // Under a grant, the operation records the rule that let it through.
+  const resultData: Record<string, unknown> = opts.grant
+    ? {
+        ...(result.data || {}),
+        grant: { grant_id: opts.grant.grantId, grant_version: opts.grant.grantVersion, use_id: opts.grant.useId },
+      }
+    : result.data || {}
   const now = new Date().toISOString()
   const { error: finalizeError } = await supabase
     .from('pending_operations')
     .update({
       status: 'committed',
       resolved_at: now,
-      result_data: result.data || {},
+      result_data: resultData,
     })
     .eq('id', pendingOp.id)
 
@@ -7472,11 +7577,12 @@ async function commitPendingOperationInner(
     resultData: result.data,
     claimedAt: typeof claimedAt === 'string' ? claimedAt : null,
     actor: opts.actor,
+    ...(opts.grant ? { grant: { grantId: opts.grant.grantId, grantVersion: opts.grant.grantVersion } } : {}),
   })
 
   return {
     status: 'committed',
-    data: result.data,
+    data: opts.grant ? resultData : result.data,
     operation_status: 'committed',
   }
 }

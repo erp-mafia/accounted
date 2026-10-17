@@ -24,6 +24,10 @@ vi.mock('@/lib/suggestions/list', () => ({
   listOpenSuggestions: vi.fn().mockResolvedValue([]),
 }))
 
+vi.mock('@/lib/grants/review', () => ({
+  loadGrantReview: vi.fn().mockResolvedValue({ postings: [], paused: false, has_active_grants: false }),
+}))
+
 vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/api-keys')>()
   return {
@@ -720,6 +724,85 @@ describe('suggestions (Profiles and Suggestions, step 3)', () => {
     const result = await tool().execute({}, COMPANY, 'user-1', supabase as never, { type: 'api_key' })
     expect(result).not.toHaveProperty('suggestions')
     expect(result).not.toHaveProperty('suggestions_how')
+  })
+})
+
+describe('grants (Profiles and Suggestions, step 4)', () => {
+  const tool = () => tools.find((t) => t.name === 'gnubok_get_agent_briefing')!
+  const COMPANY = 'company-1'
+
+  it('lists what the company rules booked since the last review, compactly, with how they work', async () => {
+    vi.stubEnv('GRANT_SUGGESTIONS', 'true')
+    const { loadGrantReview } = await import('@/lib/grants/review')
+    vi.mocked(loadGrantReview).mockResolvedValueOnce({
+      paused: false,
+      has_active_grants: true,
+      postings: [
+        {
+          use_id: 'u-1', grant_id: 'g-1', grant_version: 2, counterparty_label: 'Spotify AB', account_number: '5420',
+          amount_limit_sek: 200, grant_accepted_at: '2026-10-12T10:00:00Z', grant_revoked_at: null, pending_operation_id: 'op-1',
+          transaction_id: 't-1', journal_entry_id: 'je-1', voucher: 'A12', entry_status: 'reversed', entry_date: '2026-10-14',
+          amount_sek: 149, pattern_verified: true, committed_at: '2026-10-14T08:00:00Z', reviewed_at: null,
+        },
+      ],
+    })
+    const supabase = mockSupabase({ profile: null })
+    const result = (await tool().execute({}, COMPANY, 'user-1', supabase as never, { type: 'api_key' })) as {
+      grants?: { paused: boolean; posted_since_review: unknown[]; how: string }
+    }
+    expect(loadGrantReview).toHaveBeenCalledWith(supabase, COMPANY, { limit: 10 })
+    expect(result.grants).toEqual({
+      paused: false,
+      posted_since_review: [
+        { journal_entry_id: 'je-1', voucher: 'A12', entry_date: '2026-10-14', amount_sek: 149, counterparty: 'Spotify AB', grant_id: 'g-1', grant_version: 2, undone: true },
+      ],
+      how: expect.stringContaining('Bokfört enligt regel'),
+    })
+    expect(JSON.stringify(result.grants).length).toBeLessThan(900)
+    vi.unstubAllEnvs()
+  })
+
+  it('says the rules are switched off while GRANT_SUGGESTIONS is off, and still lists what they booked', async () => {
+    vi.stubEnv('GRANT_SUGGESTIONS', 'false')
+    const { loadGrantReview } = await import('@/lib/grants/review')
+    vi.mocked(loadGrantReview).mockResolvedValueOnce({ paused: false, has_active_grants: true, postings: [] })
+    const supabase = mockSupabase({ profile: null })
+    const result = (await tool().execute({}, COMPANY, 'user-1', supabase as never, { type: 'api_key' })) as {
+      grants?: { switched_off?: boolean; how: string }
+    }
+    expect(result.grants).toMatchObject({ switched_off: true, how: expect.stringContaining('switched off') })
+    vi.unstubAllEnvs()
+  })
+
+  it('marks a grant suggestion as accepted by the person in the app only', async () => {
+    const { listOpenSuggestions } = await import('@/lib/suggestions/list')
+    vi.mocked(listOpenSuggestions).mockResolvedValueOnce([
+      {
+        suggestion_id: 's-2',
+        pending_operation_id: 'op-2',
+        detector: 'grant-candidate',
+        suggestion_key: 'create_grant:cp-0123456789abcdef',
+        operation_type: 'create_grant',
+        package_id: null,
+        title: 'Godkänn Spotify AB automatiskt nästa gång, upp till 200 kr?',
+        reason: 'Samma motpart bokad på samma sätt 5 gånger.',
+        created_at: '2026-10-16T10:00:00Z',
+      },
+    ])
+    const supabase = mockSupabase({ profile: null })
+    const result = (await tool().execute({}, COMPANY, 'user-1', supabase as never, { type: 'api_key' })) as {
+      suggestions?: Array<Record<string, unknown>>
+      suggestions_how?: string
+    }
+    expect(result.suggestions).toEqual([expect.objectContaining({ operation_id: 'op-2', accept: 'person_in_app' })])
+    expect(result.suggestions_how).toContain('person_in_app')
+    expect(result.suggestions_how).toContain('Att göra')
+  })
+
+  it('leaves the key out for a company without grants', async () => {
+    const supabase = mockSupabase({ profile: null })
+    const result = await tool().execute({}, COMPANY, 'user-1', supabase as never, { type: 'api_key' })
+    expect(result).not.toHaveProperty('grants')
   })
 })
 

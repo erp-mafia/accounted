@@ -13,6 +13,8 @@ export const SUGGESTION_RANKS = {
   enablePayroll: 30,
   /** Kassa och webbshop for a company that has connected one. */
   enableSalesChannels: 20,
+  /** A grant for a counterparty booked the same way again and again: saves an approval every month. */
+  grant: 15,
   /** Hiding an unused package only tidies the menu. */
   hideUnused: 10,
 } as const

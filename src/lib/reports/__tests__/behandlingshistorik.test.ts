@@ -1544,6 +1544,57 @@ describe('collection cases', () => {
 // Beslut och förslag (suggestion_log, read as decision receipts)
 // ============================================================
 
+describe('rules for automatic booking (grants)', () => {
+  const grant = {
+    id: 'g-1', counterparty_key: 'spotify', counterparty_label: 'Spotify AB', version: 1, account_number: '5420',
+    vat_treatment: 'standard_25', line_accounts: ['1930', '2641', '5420'], amount_limit_sek: 5000, monthly_limit_sek: 10000,
+    credential_scope: 'any', valid_from: '2026-10-12T08:00:00Z', revoked_at: null, revoked_reason: null,
+  }
+
+  it('dates the rule when it is accepted, saying what it permits', () => {
+    const ev = auditRowToEvent(auditRow({ table_name: 'company_grants', action: 'INSERT', actor_type: 'api_key', actor_label: 'Claude', new_state: grant }))
+    expect(ev).toMatchObject({
+      category: 'installningar',
+      code: 'grant.accepted',
+      event: 'Regel för automatisk bokföring godkänd',
+      object: 'Regel för automatisk bokföring: Spotify AB, upp till 5\u00a0000 kr',
+    })
+    expect(ev!.details).toEqual([
+      'Version: 1',
+      'Bokföring: konto 5420, moms 25 %',
+      'Konton i verifikatet: 1930, 2641, 5420',
+      'Högst per månad: 10\u00a0000 kr',
+      'Gäller: alla nycklar i företaget',
+      'Gäller från: 2026-10-12',
+    ])
+  })
+
+  it('dates a revocation and a supersession, and nothing else that changes', () => {
+    const revoked = auditRowToEvent(auditRow({
+      table_name: 'company_grants', action: 'UPDATE', old_state: grant,
+      new_state: { ...grant, revoked_at: '2026-10-20T08:00:00Z', revoked_reason: 'revoked' },
+    }))
+    expect(revoked).toMatchObject({ code: 'grant.revoked', event: 'Regel för automatisk bokföring återkallad', details: ['Version: 1'] })
+    const superseded = auditRowToEvent(auditRow({
+      table_name: 'company_grants', action: 'UPDATE', old_state: grant,
+      new_state: { ...grant, revoked_at: '2026-10-20T08:00:00Z', revoked_reason: 'superseded' },
+    }))
+    expect(superseded).toMatchObject({ code: 'grant.superseded', event: 'Regel för automatisk bokföring ersatt av ny version' })
+    expect(auditRowToEvent(auditRow({ table_name: 'company_grants', action: 'UPDATE', old_state: grant, new_state: grant }))).toBeNull()
+  })
+
+  it('dates the pause and the resumption of every rule', () => {
+    expect(auditRowToEvent(auditRow({ table_name: 'company_grant_settings', action: 'INSERT', new_state: { paused: true } }))).toMatchObject({
+      code: 'grants.paused',
+      event: 'Automatisk bokföring enligt regler pausad',
+      object: 'Alla regler för automatisk bokföring',
+    })
+    expect(auditRowToEvent(auditRow({ table_name: 'company_grant_settings', action: 'UPDATE', old_state: { paused: true }, new_state: { paused: false } }))).toMatchObject({
+      code: 'grants.resumed',
+    })
+  })
+})
+
 describe('decisionEvents', () => {
   const rule = {
     source: 'rule',
@@ -1702,6 +1753,25 @@ describe('decisionEvents', () => {
       'Föreslaget av: Tjänstekonto: Attestharness',
       'Policy: staged-approval.1;approver=person, bedömning: krävde granskning',
     ])
+  })
+
+  it('a posting a company grant let through: booked automatically under the rule, named with its version', () => {
+    const grantId = '55555555-5555-4555-8555-555555555555'
+    const staged = { ...op, id: 'op-8', operation_type: 'categorize_transaction', actor_type: 'api_key', actor_label: 'Claude' }
+    const [ev] = decisionEvents(buildDecisionReceipts([row({
+      id: 'sl-grant',
+      kind: 'operation',
+      transaction_id: null,
+      pending_operation_id: 'op-8',
+      suggestions: [{ source: 'pending_operation', source_id: 'op-8', rank: 0, proposal: { operation_type: 'categorize_transaction', risk_level: 'medium' }, confidence: null, model: null, prompt_sha256: null, matches_final: true }],
+      final: { journal_entry_id: 'entry-1', operation_type: 'categorize_transaction', journal_entry_ids: ['entry-1'] },
+      actor_type: 'api_key',
+      policy_version: `grant.1;grant_id=${grantId};grant_version=2`,
+      confidence_band: 'direct',
+    })], { ...ctx, operationsById: new Map([['op-8', staged]]) }))
+    expect(ev).toMatchObject({ event: 'Bokfört automatiskt enligt regel', object: 'A12', actor: { type: 'api_key' } })
+    expect(ev.details).toContain(`Bokfört utan godkännande av en person, enligt regel ${grantId} version 2`)
+    expect(ev.details).toContain(`Policy: grant.1;grant_id=${grantId};grant_version=2, bedömning: kunde bokföras direkt`)
   })
 
   it('a samlingsverifikat names the rules version its decisions share', () => {

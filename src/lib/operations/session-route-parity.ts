@@ -590,6 +590,10 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
     'gnubok_enable_package',
     'gnubok_disable_package',
   ]),
+  // Rules for automatic booking (grants, lib/grants): Att göra's "Bokfört enligt regel".
+  'POST /api/grants/:id/revoke': gap('P2', 'stage revoke_grant for a rule for automatic booking; agents see the rules and their postings in the briefing but cannot stage a revoke yet'),
+  'POST /api/grants/review': gap('P3', 'mark postings a rule let through as reviewed; the briefing lists them'),
+  'POST /api/grants/pause': uiOnly("switches the company's rules for automatic booking off and on: switching them back on hands posting authority to agents, so a person does it in the browser"),
   'POST /api/pending-operations/:id/commit': covered([`POST ${V}/pending-operations/:id/approve`, 'gnubok_approve_pending_operation']),
   'POST /api/pending-operations/:id/reject': covered([`POST ${V}/pending-operations/:id/reject`, 'gnubok_reject_pending_operation']),
   'POST /api/pending-operations/bulk-commit': covered(
@@ -804,4 +808,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 136
+export const GAP_CEILING = 138

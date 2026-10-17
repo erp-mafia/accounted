@@ -120,6 +120,44 @@ and webhook handlers (lib/init); staging logs and skips when the database
 does not have the operation types yet, so an early deploy never breaks the
 write that emitted.
 
+## Grants: rules for automatic booking, suggested and reviewed after
+
+Step 4 of the design (`src/lib/grants`, migrations `20261017100000` to
+`20261017100500`). A grant is a dated, versioned company rule
+(`company_grants`): one counterparty, as `grant_counterparty_key` keys it,
+booked by category exactly one way (direction, category, VAT treatment, the
+business account and every account the posting touches), up to a limit per
+posting (and optionally per month), by any key credential of the company or
+one named API key or service account. It is created only by an approved
+`create_grant` (risk high and web-only: an owner or admin accepts it in the
+app, never an agent or a key; the executor and `create_company_grant` both
+require actor `user`) and revoked only by an approved `revoke_grant` (any
+approver), each with a receipt, an `audit_log` row and a dated line in
+behandlingshistorik.
+
+When an agent stages `gnubok_categorize_transaction` with a key, the MCP
+dispatcher's door (`grant-door.ts`) asks `claim_company_grant`, which matches
+the staged row field by field and refuses anything else: another account or
+VAT treatment, an amount above the grant's limit or the key's own unattended
+ceiling (the stricter wins), a monthly limit reached, a locked period, an
+unknown counterparty, a duplicate override, dimensions, another credential,
+the company's kill switch. A match is committed through
+`commitPendingOperation` as that key, with the grant on `result_data` and on
+the decision receipt (policy `grant.1;grant_id=...;grant_version=...`, band
+direct); anything else waits for a person as before. Att göra lists what rules
+let through under "Bokfört enligt regel" (Ångra is the bank line's storno
+undo, Återkalla stages `revoke_grant`, Markera som granskat, Pausa alla
+regler), and the briefing's `grants` block lists the same.
+
+- `grant-candidate`: `transaction.categorized`, behind `GRANT_SUGGESTIONS`
+  (off): the latest five approved stagings of the counterparty, all the same
+  way: "Godkänn <motpart> automatiskt nästa gång, upp till X kr?".
+
+`GRANT_SUGGESTIONS` (`src/lib/grants/flag.ts`) is Jakob's master switch for
+the whole feature: off, the detector does not run, `create_grant` is refused
+(`GRANTS_SWITCHED_OFF`) and the staging door never asks the claim gate, so
+grants that exist stop applying. Revoking and pausing stay possible.
+
 ## Capabilities: what one company can use
 
 `capabilities.ts` resolves one object per company:

@@ -47,9 +47,9 @@ afterEach(() => {
 })
 
 describe('the detector registry', () => {
-  it('splits the three detectors into event and scheduled ones', () => {
-    expect(DETECTORS.map((d) => d.id)).toEqual(['first-employee', 'sales-channel-connected', 'hide-unused'])
-    expect(EVENT_DETECTORS.map((d) => d.id)).toEqual(['first-employee', 'sales-channel-connected'])
+  it('splits the four detectors into event and scheduled ones', () => {
+    expect(DETECTORS.map((d) => d.id)).toEqual(['first-employee', 'sales-channel-connected', 'hide-unused', 'grant-candidate'])
+    expect(EVENT_DETECTORS.map((d) => d.id)).toEqual(['first-employee', 'sales-channel-connected', 'grant-candidate'])
     expect(SCHEDULED_DETECTORS.map((d) => d.id)).toEqual(['hide-unused'])
   })
 })

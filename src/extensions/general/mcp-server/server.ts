@@ -222,6 +222,9 @@ import {
 } from '@/lib/modules/capabilities'
 import { obligationsPhraseSv } from '@/lib/modules/obligations'
 import { listOpenSuggestions } from '@/lib/suggestions/list'
+import { loadGrantReview } from '@/lib/grants/review'
+import { grantsEnabled } from '@/lib/grants/flag'
+import { applyGrantDoor } from './grant-door'
 import type { ModuleId } from '@/lib/modules/manifest'
 import { moduleForTool } from './tool-modules'
 import { prompts, findPrompt } from './prompts'
@@ -258,7 +261,7 @@ import {
   toPublicToolName,
   type McpToolNamespace,
 } from './tool-namespace'
-import { getRiskLevel, requiresWebApproval } from '@/lib/pending-operations/risk-tiers'
+import { getRiskLevel, requiresWebApproval, webOnlyRefusalCode } from '@/lib/pending-operations/risk-tiers'
 import {
   CARD_PAYEE_COLUMNS,
   loadPayeeHolds,
@@ -4309,7 +4312,7 @@ async function commitStagedOperation(params: {
  * reason, migration 20261016200600). Said once per briefing, not per item.
  */
 const SUGGESTIONS_HOW =
-  'Raise each suggestion with the user in chat and relay the answer. Ja: gnubok_approve_pending_operation with operation_id. ' +
+  'Raise each suggestion with the user in chat and relay the answer. Ja: gnubok_approve_pending_operation with operation_id, except where accept is person_in_app (a rule for automatic booking): you cannot accept that one, the person does, in Att göra. ' +
   'Inte nu: gnubok_reject_pending_operation with operation_id (asked again in 30 days). ' +
   'Visa aldrig: gnubok_reject_pending_operation with operation_id and reason "Visa aldrig" (never asked again).'
 
@@ -4368,6 +4371,18 @@ async function briefUnexplained(supabase: SupabaseClient, companyId: string): Pr
     if (timer) clearTimeout(timer)
   }
 }
+
+/**
+ * How the agent reads the briefing's `grants`: the company's rules for
+ * automatic booking (lib/grants) and what they let through since the user
+ * last reviewed it. A rule-confirming suggestion (create_grant) is
+ * risk_level high: approving it needs confirmed=true after the user's yes.
+ */
+const GRANTS_HOW =
+  'A bank line you stage with gnubok_categorize_transaction that matches one of these company rules exactly (counterparty, accounts, VAT, within the limit) is booked at once, without approval; anything else waits for approval. ' +
+  'Tell the user what was booked under a rule; they review it, and can undo it, in Att göra under "Bokfört enligt regel". Only the person accepts a new rule, in Att göra.'
+const GRANTS_SWITCHED_OFF_HOW =
+  'Rules for automatic booking are switched off on this installation: every write you stage waits for approval. The postings listed were booked under a rule earlier; the user can still review and undo them in Att göra.'
 
 export const tools: McpTool[] = [
   {
@@ -6842,6 +6857,13 @@ export const tools: McpTool[] = [
       // in outputSchema like capabilities (tools/list budget). Never throws.
       const openSuggestionsRead = listOpenSuggestions(supabase, companyId)
 
+      // Rules for automatic booking (lib/grants) and the postings they let
+      // through since the user's last review: the same records Att göra lists
+      // under "Bokfört enligt regel". Omitted for a company that never had a
+      // grant (one indexed probe); undeclared in outputSchema like the
+      // suggestions. Never throws.
+      const grantReviewRead = loadGrantReview(supabase, companyId, { limit: 10 })
+
       // Skatteverket connection health, so the agent warns the user at
       // session start instead of discovering a dead session mid-task.
       // Best-effort and emitted only when a connection (or verified system
@@ -7068,6 +7090,7 @@ export const tools: McpTool[] = [
       const capabilities = await safeCapabilities
       const openSuggestions = await openSuggestionsRead
       const unexplainedBlock = await unexplainedRead
+      const grantReview = await grantReviewRead
       const capabilityDigestRows = capabilities ? capabilityDigest(capabilities) : null
       // The company's profile beside the digest: which starting point decides
       // the packages tools/list shows, and the packages that are off (by the
@@ -7121,8 +7144,30 @@ export const tools: McpTool[] = [
                 operation_id: s.pending_operation_id,
                 title: s.title,
                 reason: s.reason,
+                // A rule for automatic booking is web-only: the agent tells the
+                // person, who accepts it in Att göra; no key can approve it.
+                ...(requiresWebApproval(s.operation_type) ? { accept: 'person_in_app' } : {}),
               })),
               suggestions_how: SUGGESTIONS_HOW,
+            }
+          : {}),
+        ...(grantReview.has_active_grants || grantReview.postings.length > 0
+          ? {
+              grants: {
+                paused: grantReview.paused,
+                posted_since_review: grantReview.postings.map((p) => ({
+                  journal_entry_id: p.journal_entry_id,
+                  voucher: p.voucher,
+                  entry_date: p.entry_date,
+                  amount_sek: p.amount_sek,
+                  counterparty: p.counterparty_label,
+                  grant_id: p.grant_id,
+                  grant_version: p.grant_version,
+                  ...(p.entry_status === 'reversed' ? { undone: true } : {}),
+                })),
+                ...(grantsEnabled() ? {} : { switched_off: true }),
+                how: grantsEnabled() ? GRANTS_HOW : GRANTS_SWITCHED_OFF_HOW,
+              },
             }
           : {}),
         // Always present, so the absence of an address is a stated fact and
@@ -24769,13 +24814,17 @@ export const tools: McpTool[] = [
       // (BFL 5 kap 5§: irreversible postings require positive acknowledgment).
       const operation = op as PendingOperation
       // Handing an invoice over to collection and escalating a case rest on
-      // a person's own word: only a person approves them, in Accounted.
+      // a person's own word, and accepting a rule for automatic booking hands
+      // agents posting authority: only a person approves them, in Accounted.
       if (requiresWebApproval(operation.operation_type, operation.params)) {
+        const code = webOnlyRefusalCode(operation.operation_type)
         throw Object.assign(
           new Error(
-            `Operation "${operation.operation_type}" can only be approved by a person in the Accounted web UI (Granskning). Ask the user to approve it there.`,
+            code === 'GRANT_NEEDS_PERSON'
+              ? 'A rule for automatic booking (create_grant) is accepted only by an owner or admin in Accounted, under Att göra (Förslag). No key can approve it: tell the user it is waiting for them there.'
+              : `Operation "${operation.operation_type}" can only be approved by a person in the Accounted web UI (Granskning). Ask the user to approve it there.`,
           ),
-          { code: 'COLLECTION_ATTESTATION_WEB_ONLY' },
+          { code },
         )
       }
       if (operation.risk_level === 'high' && args.confirmed !== true) {
@@ -27449,7 +27498,12 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             // The company block is for keys that reach several companies; the
             // lookup runs alongside the tool and is cached per user.
             const simpleModeLookup = companyEcho ? resolveSimpleCompanyMode() : null
-            const rawResult = await withSIEExternalReport(supabase,tenantId,toolName,()=>tool.execute(toolArgs,tenantId,userId,supabase,actor))
+            // A staged write a company grant matches exactly is booked at once
+            // (./grant-door.ts); the tool itself only staged it.
+            const rawResult = await applyGrantDoor(
+              await withSIEExternalReport(supabase,tenantId,toolName,()=>tool.execute(toolArgs,tenantId,userId,supabase,actor)),
+              { toolName, toolArgs: toolArgs as Record<string, unknown>, supabase, companyId: tenantId, userId, actor, log },
+            )
             const canonicalResult = effectiveCompanyId
               ? addCompanyToTopLevelNext(rawResult, effectiveCompanyId)
               : rawResult
@@ -27569,7 +27623,12 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         // The company block is for keys that reach several companies; the
         // lookup runs alongside the tool and is cached per user.
         const simpleModeLookup = companyEcho ? resolveSimpleCompanyMode() : null
-        const rawResult = await withSIEExternalReport(supabase,tenantId,toolName,()=>tool.execute(toolArgs,tenantId,userId,supabase,actor))
+        // A staged write a company grant matches exactly is booked at once
+            // (./grant-door.ts); the tool itself only staged it.
+            const rawResult = await applyGrantDoor(
+              await withSIEExternalReport(supabase,tenantId,toolName,()=>tool.execute(toolArgs,tenantId,userId,supabase,actor)),
+              { toolName, toolArgs: toolArgs as Record<string, unknown>, supabase, companyId: tenantId, userId, actor, log },
+            )
         const canonicalResult = effectiveCompanyId
           ? addCompanyToTopLevelNext(rawResult, effectiveCompanyId)
           : rawResult

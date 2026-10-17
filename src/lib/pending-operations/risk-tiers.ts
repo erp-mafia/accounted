@@ -174,6 +174,15 @@ const RISK_TIERS = {
   // or admin.
   enable_package: 'low',
   disable_package: 'low',
+  // Grants (Profiles and Suggestions, step 4; lib/grants): a company rule
+  // that lets a key credential book one known counterparty's bank lines
+  // without a person, within limits. Creating one hands posting authority to
+  // agents, so it is high (never in a bulk approval, the approver confirms
+  // it) and web-only (WEB_ONLY_APPROVAL_TYPES below): only an owner or admin
+  // approving in the app accepts it, never an agent or a key. Revoking only
+  // takes authority away and books nothing.
+  create_grant: 'high',
+  revoke_grant: 'low',
   update_dimension: 'low',
   // Deleting is refused by the DB guard when anything is booked on the
   // dimension, but it removes the dimension and its values for good.
@@ -512,7 +521,21 @@ export const WEB_ONLY_APPROVAL_TYPES: ReadonlySet<string> = new Set([
   'collections_daily_batch',
   // A person vouches that the supplier's new bank details are real.
   'confirm_supplier_payee',
+  // Accepting a rule for automatic booking (lib/grants) hands posting
+  // authority to agents: only the person decides, in the app, so an agent
+  // never accepts its own grant whatever key it holds.
+  'create_grant',
 ])
+
+/**
+ * The code a door answers when an agent or key tries to approve an
+ * operation only a person may approve in the app: a grant names its own
+ * (with a message pointing the person to Att göra), everything else the
+ * collections code it has always answered.
+ */
+export function webOnlyRefusalCode(operationType: string): 'GRANT_NEEDS_PERSON' | 'COLLECTION_ATTESTATION_WEB_ONLY' {
+  return operationType === 'create_grant' ? 'GRANT_NEEDS_PERSON' : 'COLLECTION_ATTESTATION_WEB_ONLY'
+}
 
 export function requiresWebApproval(operationType: string, params?: Record<string, unknown> | null): boolean {
   if (WEB_ONLY_APPROVAL_TYPES.has(operationType)) return true

@@ -6341,6 +6341,84 @@ const PACKAGE: Record<string, StructuredErrorEntry> = {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// Grants (create_grant, revoke_grant, the claim gate; lib/grants)
+// ─────────────────────────────────────────────────────────────────
+
+const GRANT: Record<string, StructuredErrorEntry> = {
+  GRANT_ADMIN_REQUIRED: {
+    httpStatus: 403,
+    message_sv: 'Endast ägare och administratörer kan godkänna, återkalla eller pausa regler för automatisk bokföring.',
+    message_en: 'Only owners and admins can approve, revoke or pause rules for automatic booking.',
+    retryable: false,
+  },
+  GRANT_NEEDS_PERSON: {
+    httpStatus: 403,
+    message_sv:
+      'Regler för automatisk bokföring godkänner en ägare eller administratör själv, under Förslag i Att göra i Accounted. En agent, en API-nyckel eller ett tjänstekonto kan inte godkänna dem.',
+    message_en:
+      'An owner or admin accepts rules for automatic booking themselves, under Suggestions in Att göra in Accounted. An agent, an API key or a service account cannot accept them.',
+    retryable: false,
+    remediation: {
+      description: 'Tell the user the rule is waiting for them in Accounted, under Att göra (Förslag). Do not retry the approval with any key.',
+    },
+  },
+  GRANTS_SWITCHED_OFF: {
+    httpStatus: 409,
+    message_sv: 'Regler för automatisk bokföring är avstängda i den här installationen, så regeln kan inte godkännas.',
+    message_en: 'Rules for automatic booking are switched off on this installation, so the rule cannot be accepted.',
+    retryable: false,
+  },
+  GRANT_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Regeln för automatisk bokföring är ofullständig. Avvisa förslaget, så föreslås den på nytt.',
+    message_en: 'The rule for automatic booking is incomplete. Reject the suggestion and it is proposed again.',
+    retryable: false,
+  },
+  GRANT_UNKNOWN_COUNTERPARTY: {
+    httpStatus: 400,
+    message_sv: 'Banktexten pekar inte ut en motpart, så den kan inte bokföras automatiskt.',
+    message_en: 'The bank text does not identify a counterparty, so it cannot be booked automatically.',
+    retryable: false,
+  },
+  GRANT_ACCOUNT_INACTIVE: {
+    httpStatus: 409,
+    message_sv: 'Kontot i regeln är inte aktivt i kontoplanen. Aktivera kontot eller avvisa förslaget.',
+    message_en: 'The account in the rule is not active in the chart of accounts. Activate it or reject the suggestion.',
+    retryable: false,
+  },
+  GRANT_CREDENTIAL_UNKNOWN: {
+    httpStatus: 409,
+    message_sv: 'API-nyckeln eller tjänstekontot som regeln gäller finns inte längre i företaget.',
+    message_en: 'The API key or service account the rule names no longer exists in the company.',
+    retryable: false,
+  },
+  GRANT_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Regeln för automatisk bokföring hittades inte.',
+    message_en: 'The rule for automatic booking was not found.',
+    retryable: false,
+  },
+  GRANT_ALREADY_REVOKED: {
+    httpStatus: 409,
+    message_sv: 'Regeln för automatisk bokföring är redan återkallad.',
+    message_en: 'The rule for automatic booking is already revoked.',
+    retryable: false,
+  },
+  GRANT_NOT_APPLICABLE: {
+    httpStatus: 403,
+    message_sv: 'Den här åtgärden kan inte bokföras automatiskt enligt en regel. En person behöver godkänna den.',
+    message_en: 'This operation cannot be booked automatically under a rule. A person has to approve it.',
+    retryable: false,
+  },
+  GRANT_REVIEW_FORBIDDEN: {
+    httpStatus: 403,
+    message_sv: 'Du har inte behörighet att markera automatiska bokföringar som granskade i det här företaget.',
+    message_en: 'You are not allowed to mark automatic bookings as reviewed in this company.',
+    retryable: false,
+  },
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Provider connection / external HTTP codes
 // ─────────────────────────────────────────────────────────────────
 
@@ -9035,6 +9113,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...API_KEY,
   ...SERVICE_ACCOUNT,
   ...PACKAGE,
+  ...GRANT,
   ...PROVIDER,
   ...SKATTEVERKET,
   ...BOLAGSVERKET,

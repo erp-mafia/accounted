@@ -23,6 +23,8 @@ import { NO_AI_CONNECTION, type AiConnection } from '@/lib/onboarding/ai-clients
 import { AiTaskAction } from './AiTaskAction'
 import { KopplingarChips } from './KopplingarChips'
 import { SuggestionCards } from './SuggestionCards'
+import { GrantPostings } from './GrantPostings'
+import type { GrantReview } from '@/lib/grants/types'
 import type { OpenSuggestion } from '@/lib/suggestions/types'
 import { BATCH_REVIEW_HREF } from '@/lib/collections/batch-dialog'
 import {
@@ -113,6 +115,13 @@ interface AttGoraSectionProps {
    * aldrig. The customer's agent finds the same three in its briefing.
    */
   suggestions?: OpenSuggestion[]
+  /**
+   * What the company's rules for automatic booking (lib/grants) let an agent
+   * book without asking, since someone last marked it reviewed: the
+   * "Bokfört enligt regel" band, with Ångra per posting and Återkalla per
+   * rule. Absent or empty for a company without grants (nearly all).
+   */
+  grantReview?: GrantReview | null
   expiringBankConnections?: ExpiringBankConnection[]
   /**
    * True while the setup checklist is open and the company has zero posted
@@ -225,6 +234,7 @@ export default function AttGoraSection({
   paymentsVerification = null,
   supplierPayeeChanges = [],
   suggestions = [],
+  grantReview = null,
   expiringBankConnections = [],
   emptyLedger = false,
   hasActiveBankConnection = true,
@@ -398,11 +408,15 @@ export default function AttGoraSection({
     calmSwitches.length > 0 ||
     verificationCalm !== null ||
     expiringBankConnections.length > 0
+  // Shown while anything waits for a look, or while the rules are paused (so
+  // the switch to turn them back on stays in reach).
+  const grantRows = !!grantReview && (grantReview.postings.length > 0 || grantReview.paused)
   const allClear =
     !bokforRows &&
     !betalaRows &&
     !granskaRows &&
     openSuggestions.length === 0 &&
+    !grantRows &&
     !bevakaRows &&
     urgentSwitches.length === 0 &&
     verificationExpired === null &&
@@ -834,6 +848,18 @@ export default function AttGoraSection({
                       setOpenSuggestions((prev) => prev.filter((s) => s.suggestion_id !== answered.suggestion_id))
                       void refetchCounts()
                     }}
+                  />
+                </div>
+              )}
+
+              {grantRows && grantReview && (
+                <div>
+                  <BandHeader>{t('band_grant_postings')}</BandHeader>
+                  {/* Keyed by what the server sent, so a refreshed render resets the list. */}
+                  <GrantPostings
+                    key={`${grantReview.paused ? 'p' : 'a'}:${grantReview.postings.map((p) => p.use_id).join(',')}`}
+                    review={grantReview}
+                    onChanged={() => router.refresh()}
                   />
                 </div>
               )}

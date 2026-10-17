@@ -192,7 +192,7 @@ Example response `200`:
 Commits a pending operation now, through the same executor as Godkänn in the app and the MCP approve tool, and answers the operation as committed: `status` committed, `task_state` completed and `result` holding what was created or posted. A high-risk operation (vouchers, corrections, storno, period lock/close, year-end, sends) needs `{"confirmed": true}` once a person has acknowledged it. Approving twice never commits twice: a second approval answers 409 PENDING_OPERATION_NOT_PENDING with the operation as it stands. Approvals are recorded with commit method api_key and the key as actor, and the key's unattended commit limit applies.
 
 **Use when:** Your attest or approval flow (or the person it asked) has decided yes on an operation that was staged with `?stage=true` or by an agent.
-**Do not use for:** Attesting a supplier invoice under the attest policy (POST /supplier-invoices/{id}/approve). Operations only a person may approve in the app (collections): those answer 403 COLLECTION_ATTESTATION_WEB_ONLY.
+**Do not use for:** Attesting a supplier invoice under the attest policy (POST /supplier-invoices/{id}/approve). Operations only a person may approve in the app (collections): those answer 403 COLLECTION_ATTESTATION_WEB_ONLY; a rule for automatic booking (create_grant) answers 403 GRANT_NEEDS_PERSON.
 
 **Pitfalls:**
 - Idempotency-Key is mandatory; a retry with the same key and body replays the first answer.

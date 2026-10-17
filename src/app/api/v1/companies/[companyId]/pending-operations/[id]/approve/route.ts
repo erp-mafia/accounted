@@ -22,6 +22,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { hasErrorEntry } from '@/lib/errors/structured-errors'
 import { approvePendingOperationAsApiKey } from '@/lib/pending-operations/api-approval'
+import { webOnlyRefusalCode } from '@/lib/pending-operations/risk-tiers'
 import {
   PENDING_OPERATION_VIEW_EXAMPLE,
   PendingOperationView,
@@ -48,7 +49,7 @@ registerEndpoint({
   useWhen:
     'Your attest or approval flow (or the person it asked) has decided yes on an operation that was staged with `?stage=true` or by an agent.',
   doNotUseFor:
-    'Attesting a supplier invoice under the attest policy (POST /supplier-invoices/{id}/approve). Operations only a person may approve in the app (collections): those answer 403 COLLECTION_ATTESTATION_WEB_ONLY.',
+    'Attesting a supplier invoice under the attest policy (POST /supplier-invoices/{id}/approve). Operations only a person may approve in the app (collections): those answer 403 COLLECTION_ATTESTATION_WEB_ONLY; a rule for automatic booking (create_grant) answers 403 GRANT_NEEDS_PERSON.',
   pitfalls: [
     'Idempotency-Key is mandatory; a retry with the same key and body replays the first answer.',
     'risk_level high without confirmed=true answers 400 PENDING_OPERATION_CONFIRMATION_REQUIRED and commits nothing.',
@@ -82,6 +83,7 @@ registerEndpoint({
       'PENDING_OPERATION_CONFIRMATION_REQUIRED',
       'PENDING_OPERATION_COMMIT_FAILED',
       'COLLECTION_ATTESTATION_WEB_ONLY',
+      'GRANT_NEEDS_PERSON',
       'UNATTENDED_COMMIT_LIMIT_EXCEEDED',
       'ACCOUNTS_NOT_IN_CHART',
     ],
@@ -153,7 +155,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           details: { pending_operation: toPendingOperationView(outcome.operation) },
         })
       case 'web_only':
-        return v1ErrorResponseFromCode('COLLECTION_ATTESTATION_WEB_ONLY', ctx.log, {
+        // A rule for automatic booking answers its own code, pointing the person to Att göra.
+        return v1ErrorResponseFromCode(webOnlyRefusalCode(outcome.operation.operation_type), ctx.log, {
           requestId: ctx.requestId,
           details: { pending_operation: toPendingOperationView(outcome.operation) },
         })

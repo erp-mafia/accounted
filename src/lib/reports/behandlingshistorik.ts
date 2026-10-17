@@ -5,6 +5,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchAppReleases, type AppReleaseRow } from '@/lib/reports/app-releases'
 import { SOURCE_TYPE_LABELS_SV } from '@/lib/reports/systemdokumentation'
 import { getPackage, packageForConfigKey } from '@/lib/modules/packages'
+import { parseGrantPolicyVersion } from '@/lib/grants/types'
 import {
   buildDecisionReceipts,
   fetchDecisionRowsInWindow,
@@ -295,6 +296,13 @@ export const AUDITED_TABLES = [
   // company's own choice). Only the package keys render; the rows are written
   // by set_company_package_choice, which logs every change here.
   'company_capability_config',
+  // Rules for automatic booking (grants, migration 20261017100200): which
+  // counterparty an agent may book without a person, how, up to what amount,
+  // who accepted it and when it was revoked; and the company's switch that
+  // pauses them all. Written by create_company_grant, revoke_company_grant
+  // and set_company_grants_paused, which log every change here.
+  'company_grants',
+  'company_grant_settings',
 ] as const
 
 /**
@@ -322,7 +330,7 @@ export const GLOBAL_ACTIONS = [
  * names statically; a unit test pins it to AUDITED_TABLES / GLOBAL_ACTIONS.
  */
 export const AUDIT_ROW_FILTER =
-  'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults,mail_connections,collection_connections,service_accounts,company_capability_config),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED)'
+  'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults,mail_connections,collection_connections,service_accounts,company_capability_config,company_grants,company_grant_settings),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED)'
 
 const COMMIT_METHOD_LABELS: Record<string, string> = {
   user_accept: 'Godkänd av användare',
@@ -1256,6 +1264,86 @@ function packageChoiceAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEven
   })
 }
 
+/** Whole kronor with Swedish grouping, for a grant's limit. */
+function fmtKronor(value: number): string {
+  return value.toLocaleString('sv-SE', { maximumFractionDigits: 0 })
+}
+
+const GRANT_VAT_LABELS: Record<string, string> = {
+  standard_25: 'moms 25 %',
+  reduced_12: 'moms 12 %',
+  reduced_6: 'moms 6 %',
+  reverse_charge: 'omvänd betalningsskyldighet',
+  exempt: 'ingen moms',
+  export: 'export utan moms',
+}
+
+/**
+ * A rule for automatic booking (grant, migration 20261017100200): an
+ * automatkontering in BFNAR 2013:2 p. 9.16's sense, dated when it is
+ * accepted, superseded or revoked. The approver is the actor. One line says
+ * what the rule permits: "Regel för automatisk bokföring: <motpart>, upp
+ * till <belopp> kr".
+ */
+function grantAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
+  const state = (row.new_state ?? row.old_state ?? {}) as Record<string, unknown>
+  const counterparty = str(state.counterparty_label) ?? str(state.counterparty_key) ?? 'okänd motpart'
+  const limitRaw = state.amount_limit_sek
+  const limit = typeof limitRaw === 'number' ? limitRaw : Number(limitRaw)
+  const limitText = Number.isFinite(limit) ? `, upp till ${fmtKronor(limit)} kr` : ''
+  const version = typeof state.version === 'number' ? state.version : Number(state.version)
+  const object = `Regel för automatisk bokföring: ${counterparty}${limitText}`
+  if (row.action === 'INSERT') {
+    const details: string[] = []
+    if (Number.isFinite(version)) details.push(`Version: ${version}`)
+    const account = str(state.account_number)
+    if (account) {
+      const vat = str(state.vat_treatment)
+      details.push(`Bokföring: konto ${account}${vat ? `, ${GRANT_VAT_LABELS[vat] ?? vat}` : ''}`)
+    }
+    const accounts = Array.isArray(state.line_accounts) ? (state.line_accounts as unknown[]).map(String) : []
+    if (accounts.length > 0) details.push(`Konton i verifikatet: ${accounts.join(', ')}`)
+    const monthlyRaw = state.monthly_limit_sek
+    const monthly = monthlyRaw === null || monthlyRaw === undefined ? null : Number(monthlyRaw)
+    if (monthly !== null && Number.isFinite(monthly)) details.push(`Högst per månad: ${fmtKronor(monthly)} kr`)
+    const scope = str(state.credential_scope)
+    details.push(
+      scope === 'api_key'
+        ? 'Gäller: en namngiven API-nyckel'
+        : scope === 'service_account'
+          ? 'Gäller: ett namngivet tjänstekonto'
+          : 'Gäller: alla nycklar i företaget',
+    )
+    const validFrom = str(state.valid_from)
+    if (validFrom) details.push(`Gäller från: ${validFrom.slice(0, 10)}`)
+    return auditEvent(row, { category: 'installningar', code: 'grant.accepted', event: 'Regel för automatisk bokföring godkänd', object, details })
+  }
+  if (row.action === 'UPDATE' && !row.old_state?.revoked_at && row.new_state?.revoked_at) {
+    const superseded = str(row.new_state?.revoked_reason) === 'superseded'
+    return auditEvent(row, {
+      category: 'installningar',
+      code: superseded ? 'grant.superseded' : 'grant.revoked',
+      event: superseded ? 'Regel för automatisk bokföring ersatt av ny version' : 'Regel för automatisk bokföring återkallad',
+      object,
+      details: Number.isFinite(version) ? [`Version: ${version}`] : [],
+    })
+  }
+  return null
+}
+
+/** The company's switch that pauses every rule for automatic booking at once. */
+function grantSettingsAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
+  if (row.action !== 'INSERT' && row.action !== 'UPDATE') return null
+  const paused = row.new_state?.paused === true
+  if (row.action === 'UPDATE' && (row.old_state?.paused === true) === paused) return null
+  return auditEvent(row, {
+    category: 'installningar',
+    code: paused ? 'grants.paused' : 'grants.resumed',
+    event: paused ? 'Automatisk bokföring enligt regler pausad' : 'Automatisk bokföring enligt regler återupptagen',
+    object: 'Alla regler för automatisk bokföring',
+  })
+}
+
 /**
  * A mailbox the receipt hunt reads underlag from: who connected it, with
  * which access, and when it was disconnected (and whether the provider
@@ -1547,6 +1635,10 @@ export function auditRowToEvent(
       return serviceAccountAuditEvent(row)
     case 'company_capability_config':
       return packageChoiceAuditEvent(row)
+    case 'company_grants':
+      return grantAuditEvent(row)
+    case 'company_grant_settings':
+      return grantSettingsAuditEvent(row)
     case 'dimensions':
       return genericAuditEvent(row, {
         category: 'installningar',
@@ -2123,7 +2215,9 @@ function decisionObject(kind: DecisionReceipt['subject_kind']): string {
 function decisionEventLabel(r: DecisionReceipt): string {
   if (r.outcome === 'dismissed') return r.subject_kind === 'bank_line' ? 'Banktransaktion ignorerad' : 'Underlag raderat'
   // An approval books exactly what was staged: no suggestion to follow or change.
-  if (r.subject_kind === 'operation') return 'Agentförslag godkänt'
+  if (r.subject_kind === 'operation') {
+    return parseGrantPolicyVersion(r.policy_version) ? 'Bokfört automatiskt enligt regel' : 'Agentförslag godkänt'
+  }
   return DECISION_OUTCOME_LABELS[r.outcome]
 }
 
@@ -2163,6 +2257,10 @@ export function decisionDetails(r: DecisionReceipt): string[] {
       new Map(),
     )
     details.push(`Föreslaget av: ${proposer}`)
+  }
+  const grant = r.subject_kind === 'operation' ? parseGrantPolicyVersion(r.policy_version) : null
+  if (grant) {
+    details.push(`Bokfört utan godkännande av en person, enligt regel ${grant.grantId} version ${grant.grantVersion}`)
   }
   details.push(...decisionProvenanceDetails(r))
   return details
@@ -2468,7 +2566,7 @@ async function fetchAuditRows(
       // Literal on purpose (not AUDIT_ROW_FILTER): the schema guard only
       // resolves string literals here. A test pins the two to each other.
       .or(
-        'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults,mail_connections,collection_connections,service_accounts,company_capability_config),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED)',
+        'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults,mail_connections,collection_connections,service_accounts,company_capability_config,company_grants,company_grant_settings),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED)',
       )
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })
