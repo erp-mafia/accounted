@@ -7,7 +7,14 @@ import {
   categoryForTransactionCategory,
   isBusinessEventCategory,
 } from '../categories'
-import { BUSINESS_EVENT_KIND_PATTERN, BUSINESS_EVENT_KINDS, KIND_BY_SOURCE_TYPE, isBusinessEventKind, kindForSourceType } from '../kinds'
+import {
+  BUSINESS_EVENT_KIND_PATTERN,
+  BUSINESS_EVENT_KINDS,
+  KIND_BY_SOURCE_TYPE,
+  KINDS_WITHOUT_SOURCE_TYPE,
+  isBusinessEventKind,
+  kindForSourceType,
+} from '../kinds'
 import { postingEventsMode } from '../mode'
 import { mappingVersion } from '../mapping-version'
 import type { TransactionCategory } from '@/types'
@@ -41,13 +48,15 @@ describe('business event kinds (a closed, add-only list)', () => {
       'expense.paid_out', 'vat.settled', 'year_end.closing', 'year_end.result_appropriated',
       'se.rot_rut.payout_received', 'se.rot_rut.reclaimed', 'se.rot_rut.reclassified',
     ])
+    expect(BUSINESS_EVENT_KINDS.slice(29, 30)).toEqual(['expense.mileage_allowance'])
   })
 
-  it('gives every source type the database accepts a kind, and every kind a source type', () => {
+  it('gives every source type the database accepts a kind, and every kind but the producer-named ones a source type', () => {
     for (const sourceType of SOURCE_TYPES) expect(kindForSourceType(sourceType), sourceType).not.toBeNull()
     expect(Object.keys(KIND_BY_SOURCE_TYPE).sort()).toEqual([...SOURCE_TYPES].sort())
     const reached = new Set(Object.values(KIND_BY_SOURCE_TYPE))
-    expect(BUSINESS_EVENT_KINDS.filter((k) => !reached.has(k))).toEqual([])
+    expect(BUSINESS_EVENT_KINDS.filter((k) => !reached.has(k))).toEqual([...KINDS_WITHOUT_SOURCE_TYPE])
+    for (const kind of KINDS_WITHOUT_SOURCE_TYPE) expect(reached.has(kind), kind).toBe(false)
   })
 
   it('keeps kinds unique and in the shape the database checks', () => {
@@ -140,6 +149,10 @@ describe('mapping_version', () => {
     expect(mappingVersion('counterpartyTemplate', 'r1')).toBe('counterparty-template@r1')
     expect(mappingVersion('mappingRule', 'r1')).toBe('mapping-rule@r1')
     expect(mappingVersion('mappingEngine', 'r1')).toBe('se.mapping-engine@r1')
+    expect(mappingVersion('expenseClaim', 'r1')).toBe('se.expense-claim@r1')
+    expect(mappingVersion('mileageAllowance', 'r1')).toBe('se.mileage-allowance@r1')
+    expect(mappingVersion('posDailyTakings', 'r1')).toBe('se.pos-daily-takings@r1')
+    expect(mappingVersion('webshopOrder', 'r1')).toBe('se.webshop-order-lines@r1')
     const before = { sha: process.env.VERCEL_GIT_COMMIT_SHA, build: process.env.NEXT_PUBLIC_BUILD_ID }
     try {
       process.env.VERCEL_GIT_COMMIT_SHA = 'abcdef1234567890'

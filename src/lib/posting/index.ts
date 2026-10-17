@@ -12,6 +12,7 @@ export { postingEventsMode, POSTING_EVENTS_MODES, type PostingEventsMode } from 
 export {
   BUSINESS_EVENT_KINDS,
   KIND_BY_SOURCE_TYPE,
+  KINDS_WITHOUT_SOURCE_TYPE,
   isBusinessEventKind,
   kindForSourceType,
   type BusinessEventKind,
@@ -41,6 +42,8 @@ export {
 } from './store'
 export type {
   BusinessEventDraft,
+  CommitJournalEntryRequest,
+  DraftJournalEntryRequest,
   PostJournalEntryRequest,
   PostingAdapter,
   PostingPort,

@@ -1,0 +1,1 @@
+[2026-10-16] Kassa days and webbshop orders file under income.sales: neither producer knows whether a line is goods or services; utlägg get no category, as the claimant picks the cost account and an account is never read as a category.

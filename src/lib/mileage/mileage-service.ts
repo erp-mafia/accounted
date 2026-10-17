@@ -5,7 +5,6 @@ import type {
   MileageTrip,
   MileageVehicleType,
 } from '@/types'
-import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { loadPayrollConfig, type PayrollConfig } from '@/lib/salary/payroll-config'
 import { baseLineItemAccount } from '@/lib/salary/account-mapping'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -18,6 +17,12 @@ import {
   type MileageCounterAccount,
 } from '@/lib/mileage/counter-accounts'
 import type { EntityType } from '@/types'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import type { LinkBasisColumns } from '@/lib/links/link-basis'
+import { postingPort } from '@/lib/posting/port'
+import { categoryForTemplateGroup } from '@/lib/posting/categories'
+import { mappingVersion } from '@/lib/posting/mapping-version'
+import type { BusinessEventDraft } from '@/lib/posting/types'
 
 /**
  * Körjournal service: trip log per Skatteverket documentation requirements
@@ -198,6 +203,36 @@ export type BookMileageResult =
     }
 
 /**
+ * The business event of a milersättning booking (kind
+ * expense.mileage_allowance), for the posting port: recorded while
+ * POSTING_EVENTS is shadow or strict, never built while it is off. Pure.
+ * Filed under the booking template family of 7331 milersättning
+ * (personnel); the employee is a party by type and id, the owner's own trips
+ * name nobody.
+ */
+export function mileageBusinessEvent(args: {
+  entryDate: string
+  employeeId: string | null
+  totalAmount: number
+  linkBasis: LinkBasisColumns
+}): BusinessEventDraft {
+  return {
+    kind: 'expense.mileage_allowance',
+    category: categoryForTemplateGroup('personnel'),
+    occurredOn: args.entryDate,
+    party: args.employeeId ? { type: 'employee', id: args.employeeId } : null,
+    // Schablon amounts: always the ledger currency.
+    currency: 'SEK',
+    amount: Math.abs(args.totalAmount),
+    amountSek: Math.abs(args.totalAmount),
+    evidence: { link_basis: args.linkBasis.link_basis, link_evidence: args.linkBasis.link_evidence ?? undefined },
+    pendingOperationId: args.linkBasis.link_evidence?.pending_operation_id ?? null,
+    mappingVersion: mappingVersion('mileageAllowance'),
+    jurisdiction: 'SE',
+  }
+}
+
+/**
  * Book all draft trips in [from, to] as one milersättning verifikat:
  * debit 7331 per vehicle type, credit the counter account the legal form
  * allows for these trips (mileageCounterAccounts: 2820 skuld till anställda,
@@ -350,27 +385,43 @@ export async function bookMileagePeriod(
 
   let entry
   try {
-    entry = await createJournalEntry(supabase, companyId, userId, {
-      fiscal_period_id: period.period_id,
-      entry_date: params.entryDate,
-      description: `Milersättning ${params.from} till ${params.to} (${trips.length} resor, ${totalMil} mil${motpart})`,
-      source_type: 'manual',
-      lines: [
-        ...summaries.map((s) => ({
-          account_number: MILEAGE_TAXFREE_ACCOUNT,
-          debit_amount: s.amount,
-          credit_amount: 0,
-          line_description: `Milersättning ${VEHICLE_TYPE_LABELS[s.vehicle_type]}: ${s.total_mil} mil × ${s.rate_per_mil} kr`,
-        })),
-        {
-          account_number: counter.account,
-          debit_amount: 0,
-          credit_amount: totalAmount,
-          line_description: isOwnerDeposit(entityType, counter.account)
-            ? 'Milersättning, egen insättning'
-            : 'Milersättning att utbetala',
-        },
-      ],
+    // Posting port (step 2): the engine gets the input unchanged; while
+    // POSTING_EVENTS is shadow or strict the expense.mileage_allowance event
+    // is recorded first and linked to the draft before a number is drawn.
+    entry = await postingPort.postJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      // Built only while the port is on: off, the call is the one it was.
+      event: () =>
+        mileageBusinessEvent({
+          entryDate: params.entryDate,
+          employeeId: employeeId ?? null,
+          totalAmount,
+          linkBasis: linkBasisColumns('user_created'),
+        }),
+      input: {
+        fiscal_period_id: period.period_id,
+        entry_date: params.entryDate,
+        description: `Milersättning ${params.from} till ${params.to} (${trips.length} resor, ${totalMil} mil${motpart})`,
+        source_type: 'manual',
+        lines: [
+          ...summaries.map((s) => ({
+            account_number: MILEAGE_TAXFREE_ACCOUNT,
+            debit_amount: s.amount,
+            credit_amount: 0,
+            line_description: `Milersättning ${VEHICLE_TYPE_LABELS[s.vehicle_type]}: ${s.total_mil} mil × ${s.rate_per_mil} kr`,
+          })),
+          {
+            account_number: counter.account,
+            debit_amount: 0,
+            credit_amount: totalAmount,
+            line_description: isOwnerDeposit(entityType, counter.account)
+              ? 'Milersättning, egen insättning'
+              : 'Milersättning att utbetala',
+          },
+        ],
+      },
     })
   } catch (err) {
     await revertClaim()

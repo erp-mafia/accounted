@@ -14,7 +14,13 @@ import { currentAppVersion } from '@/lib/reports/app-version'
  * mapping engine (lib/bookkeeping/mapping-engine.ts: rules, learned
  * templates, catalogue, default) are Sweden-only rule sets and carry the se.
  * prefix; a counterparty template and a mapping rule are the company's own
- * learned or saved data (their ids go into the evidence).
+ * learned or saved data (their ids go into the evidence). The producers'
+ * own line rules are Sweden-only too: the utlägg lines
+ * (lib/expenses/expense-claims-service.ts, expense-claim-vat.ts), the
+ * milersättning lines at the year's schablon (lib/mileage), the kassa day's
+ * tender, VAT group and tips lines (lib/pos-sales/evaluate.ts, with the
+ * connection's account settings) and the webbshop prefill
+ * (lib/webshop-orders/booking-lines.ts).
  *
  * The version is the rubric version the producer already records on the
  * verifikat (journal_entries.rubric_version: the proposal rule revision plus
@@ -28,6 +34,10 @@ export const MAPPING_SOURCES = {
   counterpartyTemplate: 'counterparty-template',
   mappingRule: 'mapping-rule',
   mappingEngine: 'se.mapping-engine',
+  expenseClaim: 'se.expense-claim',
+  mileageAllowance: 'se.mileage-allowance',
+  posDailyTakings: 'se.pos-daily-takings',
+  webshopOrder: 'se.webshop-order-lines',
 } as const
 
 export type MappingSource = keyof typeof MAPPING_SOURCES

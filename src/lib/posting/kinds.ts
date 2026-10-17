@@ -5,7 +5,8 @@ import type { JournalEntrySourceType } from '@/types'
  *
  * Derived from journal_entries.source_type, so every verifikat the engine can
  * post has a kind, and the read-side projection (./project.ts) answers the
- * same vocabulary for history. Several source types can be one business act
+ * same vocabulary for history; a few acts booked under a generic source type
+ * are named only by their producer (KINDS_WITHOUT_SOURCE_TYPE). Several source types can be one business act
  * (an invoice paid by bank or in cash is one payment received). Sweden-only
  * acts carry the se. prefix.
  *
@@ -44,9 +45,18 @@ export const BUSINESS_EVENT_KINDS = [
   'se.rot_rut.payout_received',
   'se.rot_rut.reclaimed',
   'se.rot_rut.reclassified',
+  'expense.mileage_allowance',
 ] as const
 
 export type BusinessEventKind = (typeof BUSINESS_EVENT_KINDS)[number]
+
+/**
+ * The kinds no source type maps to: business acts whose verifikat carries a
+ * generic source type, so only the producer that records the event can name
+ * them. Milersättning (a kostnadsersättning, not an utlägg) is booked with
+ * source_type 'manual'; its history projects as ledger.manual.
+ */
+export const KINDS_WITHOUT_SOURCE_TYPE: readonly BusinessEventKind[] = ['expense.mileage_allowance']
 
 /** The shape business_events_kind_check enforces. */
 export const BUSINESS_EVENT_KIND_PATTERN = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/

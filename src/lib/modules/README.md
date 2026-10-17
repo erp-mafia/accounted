@@ -291,4 +291,12 @@ number is drawn when its event cannot be written, and waits for step 2. The
 pilot producer is bank-line booking (`createTransactionJournalEntry`).
 `tests/pg/posting-parity.pg.test.ts` proves booking output against a fixture
 taken from main before the port existed; each block that moves onto the port
-in step 2 extends it.
+in step 2 extends it or adds a sibling with its own fixture taken first.
+
+Step 2a moves utlägg and milersättning (`registerExpenseClaim`,
+`deleteExpenseClaim`, `bookMileagePeriod`) and kassa and webbshop
+(`bookPosSalesDay`, `bookOrderThroughEngine`, which draft and commit through
+the port so their claim on the draft still decides the race before a number
+is drawn); their proof is `tests/pg/posting-parity-blocks.pg.test.ts` and the
+producers' `*.engine-input.test.ts`. The utlägg payout batch waits until
+`create_expense_payout_batch` takes an event id.
