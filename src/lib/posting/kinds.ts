@@ -46,6 +46,9 @@ export const BUSINESS_EVENT_KINDS = [
   'se.rot_rut.reclaimed',
   'se.rot_rut.reclassified',
   'expense.mileage_allowance',
+  'asset.depreciated',
+  'asset.disposed',
+  'se.tax_account.booked',
 ] as const
 
 export type BusinessEventKind = (typeof BUSINESS_EVENT_KINDS)[number]
@@ -54,9 +57,18 @@ export type BusinessEventKind = (typeof BUSINESS_EVENT_KINDS)[number]
  * The kinds no source type maps to: business acts whose verifikat carries a
  * generic source type, so only the producer that records the event can name
  * them. Milersättning (a kostnadsersättning, not an utlägg) is booked with
- * source_type 'manual'; its history projects as ledger.manual.
+ * source_type 'manual'; its history projects as ledger.manual. A planenlig
+ * avskrivning is booked as 'year_end' and an asset disposal as 'system'
+ * (lib/bokslut/assets); a skattekonto row booked from the Skatteverket feed
+ * is 'system' too (the skatteverket extension). Their history projects as
+ * year_end.closing and ledger.system.
  */
-export const KINDS_WITHOUT_SOURCE_TYPE: readonly BusinessEventKind[] = ['expense.mileage_allowance']
+export const KINDS_WITHOUT_SOURCE_TYPE: readonly BusinessEventKind[] = [
+  'expense.mileage_allowance',
+  'asset.depreciated',
+  'asset.disposed',
+  'se.tax_account.booked',
+]
 
 /** The shape business_events_kind_check enforces. */
 export const BUSINESS_EVENT_KIND_PATTERN = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/

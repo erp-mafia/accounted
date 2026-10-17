@@ -49,6 +49,7 @@ describe('business event kinds (a closed, add-only list)', () => {
       'se.rot_rut.payout_received', 'se.rot_rut.reclaimed', 'se.rot_rut.reclassified',
     ])
     expect(BUSINESS_EVENT_KINDS.slice(29, 30)).toEqual(['expense.mileage_allowance'])
+    expect(BUSINESS_EVENT_KINDS.slice(30, 33)).toEqual(['asset.depreciated', 'asset.disposed', 'se.tax_account.booked'])
   })
 
   it('gives every source type the database accepts a kind, and every kind but the producer-named ones a source type', () => {
@@ -153,6 +154,11 @@ describe('mapping_version', () => {
     expect(mappingVersion('mileageAllowance', 'r1')).toBe('se.mileage-allowance@r1')
     expect(mappingVersion('posDailyTakings', 'r1')).toBe('se.pos-daily-takings@r1')
     expect(mappingVersion('webshopOrder', 'r1')).toBe('se.webshop-order-lines@r1')
+    expect(mappingVersion('vatSettlement', 'r1')).toBe('se.vat-settlement@r1')
+    expect(mappingVersion('taxAccountRules', 'r1')).toBe('se.skattekonto-rules@r1')
+    expect(mappingVersion('taxAccountTransfer', 'r1')).toBe('se.skattekonto-account-transfer@r1')
+    expect(mappingVersion('assetDepreciation', 'r1')).toBe('se.asset-depreciation@r1')
+    expect(mappingVersion('assetDisposal', 'r1')).toBe('se.asset-disposal@r1')
     const before = { sha: process.env.VERCEL_GIT_COMMIT_SHA, build: process.env.NEXT_PUBLIC_BUILD_ID }
     try {
       process.env.VERCEL_GIT_COMMIT_SHA = 'abcdef1234567890'

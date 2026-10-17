@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { booksCurrentTax, resolveCompanyEntityType } from '@/lib/company/entity-type'
-import { commitEntry, createDraftEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { roundOre } from '@/lib/money'
@@ -47,6 +47,11 @@ import type {
   SkattekontoLedgerTwin,
 } from '@/types/skatteverket'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import type { LinkBasisColumns } from '@/lib/links/link-basis'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { mappingVersion } from '@/lib/posting/mapping-version'
+import { postingPort } from '@/lib/posting/port'
+import type { BusinessEventDraft } from '@/lib/posting/types'
 
 /**
  * Per-row "Bokför" helper.
@@ -1014,6 +1019,42 @@ export function buildSkattekontoEntry(
 }
 
 /**
+ * The business event of a booked skattekonto row (kind
+ * se.tax_account.booked), for the posting port: recorded while
+ * POSTING_EVENTS is shadow or strict, never built while it is off. Pure.
+ * Dated the row's transaktionsdatum, the amount Skatteverket's belopp as a
+ * magnitude, the direction in for a credit on the skattekonto (a payment, a
+ * refund, intäktsränta) and out for a debit (a charge). Filed under the
+ * skattekonto; the counter account came from skattekonto_rules. The row has
+ * no typed handle and Skatteverket is no party (the closed party types name
+ * the company's own counterparties): the verifikat's source_id names the
+ * row.
+ */
+export function skattekontoBusinessEvent(
+  tx: Pick<SkattekontoEntrySource, 'transaktionsdatum' | 'belopp_skatteverket'>,
+  linkBasis: LinkBasisColumns,
+): BusinessEventDraft {
+  const belopp = Number(tx.belopp_skatteverket)
+  return {
+    kind: 'se.tax_account.booked',
+    category: 'se.tax.settlement',
+    occurredOn: tx.transaktionsdatum,
+    // Skatteverket keeps the skattekonto in kronor.
+    currency: 'SEK',
+    amount: Math.abs(belopp),
+    amountSek: Math.abs(belopp),
+    evidence: {
+      ...(belopp !== 0 ? { direction: belopp > 0 ? 'in' : 'out' } : {}),
+      link_basis: linkBasis.link_basis,
+      link_evidence: linkBasis.link_evidence ?? undefined,
+    },
+    pendingOperationId: linkBasis.link_evidence?.pending_operation_id ?? null,
+    mappingVersion: mappingVersion('taxAccountRules'),
+    jurisdiction: 'SE',
+  }
+}
+
+/**
  * The counter line of a built skattekonto verifikat: the line that is not on
  * the skattekonto account and not the 3740 öresavrundning, in ledger sign.
  * What the direct-booking check (skattekonto-direct.ts) looks for.
@@ -1298,7 +1339,19 @@ export async function bokforSkattekontoTransaction(
   // the same Swedish message the precheck gives.
   let entry: JournalEntry
   try {
-    entry = await createDraftEntry(supabase, companyId, userId, input)
+    // Posting port (step 2): the engine gets the input unchanged; while
+    // POSTING_EVENTS is shadow or strict the se.tax_account.booked event is
+    // recorded first and linked to the draft, before the claim below and
+    // before a voucher number is drawn (a batch commits it, the single-row
+    // door leaves it for review).
+    entry = await postingPort.draftJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      // Built only while the port is on: off, the call is the one it was.
+      event: () => skattekontoBusinessEvent(tx, linkBasisColumns('user_created')),
+      input,
+    })
   } catch (err) {
     if (isSystemSourceLiveUniqueError(err)) {
       throw new SkattekontoBookingError(
@@ -1479,13 +1532,14 @@ export async function bokforSkattekontoTransactionsBatch(
     }
 
     try {
-      const committed = await commitEntry(
+      // The draft carries its event link already: the commit is commitEntry's own.
+      const committed = await postingPort.commitJournalEntry({
         supabase,
         companyId,
         userId,
-        entry.id,
+        entryId: entry.id,
         commitMethod,
-      )
+      })
       results.push({
         id,
         ok: true,

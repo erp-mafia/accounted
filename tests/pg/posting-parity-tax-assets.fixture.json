@@ -1,0 +1,744 @@
+{
+  "dumps": [
+    {
+      "flow": "vat: quarterly settlement, moms att betala",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 3,
+          "entry_date": "2026-03-31",
+          "description": "Momsredovisning Kvartal 1 2026",
+          "source_type": "vat_settlement",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 0,
+              "debit_amount": "2500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 1,
+              "debit_amount": "0",
+              "credit_amount": "500",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 2,
+              "debit_amount": "0",
+              "credit_amount": "2000",
+              "exchange_rate": null,
+              "account_number": "2650",
+              "line_description": "Moms att betala",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "vat: quarterly settlement, moms att återfå with öresutjämning, approved from a staged operation",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 6,
+          "entry_date": "2026-06-30",
+          "description": "Momsredovisning Kvartal 2 2026",
+          "source_type": "vat_settlement",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 0,
+              "debit_amount": "250.1",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 1,
+              "debit_amount": "0",
+              "credit_amount": "5000",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 2,
+              "debit_amount": "4750",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1650",
+              "line_description": "Moms att återfå",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 3,
+              "debit_amount": "0",
+              "credit_amount": "0.1",
+              "exchange_rate": null,
+              "account_number": "3740",
+              "line_description": "Öres- och kronutjämning",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "skattekonto: three settled rows booked in one batch",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 7,
+          "entry_date": "2026-07-12",
+          "description": "Skattekonto: Debiterad preliminärskatt",
+          "source_type": "system",
+          "status": "posted",
+          "notes": "Genererad från skattekonto-synk. Skatteverket-id: 9001",
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 0,
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2510",
+              "line_description": "Preliminär skatt",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 1,
+              "debit_amount": "0",
+              "credit_amount": "1000",
+              "exchange_rate": null,
+              "account_number": "1630",
+              "line_description": "Debiterad preliminärskatt",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 8,
+          "entry_date": "2026-07-14",
+          "description": "Skattekonto: Inbetalning bokförd",
+          "source_type": "system",
+          "status": "posted",
+          "notes": "Genererad från skattekonto-synk. Skatteverket-id: 9002",
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 0,
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1630",
+              "line_description": "Inbetalning bokförd",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 1,
+              "debit_amount": "0",
+              "credit_amount": "1000",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Inbetalning till skattekonto",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 9,
+          "entry_date": "2026-07-31",
+          "description": "Skattekonto: Kostnadsränta",
+          "source_type": "system",
+          "status": "posted",
+          "notes": "Genererad från skattekonto-synk. Skatteverket-id: 9003",
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 0,
+              "debit_amount": "12",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "8423",
+              "line_description": "Kostnadsränta skattekonto",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 1,
+              "debit_amount": "0",
+              "credit_amount": "12",
+              "exchange_rate": null,
+              "account_number": "1630",
+              "line_description": "Kostnadsränta",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "skattekonto: one row drafted for review",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 0,
+          "entry_date": "2026-08-12",
+          "description": "Skattekonto: Debiterad preliminärskatt",
+          "source_type": "system",
+          "status": "draft",
+          "notes": "Genererad från skattekonto-synk. Skatteverket-id: -",
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 0,
+              "debit_amount": "1500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2510",
+              "line_description": "Preliminär skatt",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 1,
+              "debit_amount": "0",
+              "credit_amount": "1500",
+              "exchange_rate": null,
+              "account_number": "1630",
+              "line_description": "Debiterad preliminärskatt",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "skattekonto: a row approved from a staged operation",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 10,
+          "entry_date": "2026-08-20",
+          "description": "Skattekonto: Intäktsränta",
+          "source_type": "system",
+          "status": "posted",
+          "notes": "Genererad från skattekonto-synk. Skatteverket-id: 9005",
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 0,
+              "debit_amount": "3",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1630",
+              "line_description": "Intäktsränta",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 1,
+              "debit_amount": "0",
+              "credit_amount": "3",
+              "exchange_rate": null,
+              "account_number": "8314",
+              "line_description": "Intäktsränta skattekonto",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "skattekonto account: the transfer drafted when an enskild firma moves its skattekonto to 2012",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 0,
+          "entry_date": "2026-09-01",
+          "description": "Omföring av skattekontot från 1630 till 2012",
+          "source_type": "manual",
+          "status": "draft",
+          "notes": "Utkast skapat när skattekontots konto ändrades till 2012. Saldot på 1630 per 2026-09-01. Kontrollera beloppet mot skattekontoutdraget innan du bokför.",
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 0,
+              "debit_amount": "800",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2012",
+              "line_description": "Omföring av skattekontot från 1630 till 2012",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 1,
+              "debit_amount": "0",
+              "credit_amount": "800",
+              "exchange_rate": null,
+              "account_number": "1630",
+              "line_description": "Omföring av skattekontot från 1630 till 2012",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "assets: annual planenlig avskrivning of two assets, one acquired mid-year",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 11,
+          "entry_date": "2026-12-31",
+          "description": "Planenlig avskrivning 2026: Fräsmaskin",
+          "source_type": "year_end",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 0,
+              "debit_amount": "20000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7832",
+              "line_description": "Avskrivning Fräsmaskin",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 1,
+              "debit_amount": "0",
+              "credit_amount": "20000",
+              "exchange_rate": null,
+              "account_number": "1229",
+              "line_description": "Ack. avskrivning Fräsmaskin",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 12,
+          "entry_date": "2026-12-31",
+          "description": "Planenlig avskrivning 2026: Server",
+          "source_type": "year_end",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 0,
+              "debit_amount": "9041",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7832",
+              "line_description": "Avskrivning Server",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 1,
+              "debit_amount": "0",
+              "credit_amount": "9041",
+              "exchange_rate": null,
+              "account_number": "1229",
+              "line_description": "Ack. avskrivning Server",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "assets: a sale with 25 % moms, depreciated to the disposal day",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 13,
+          "entry_date": "2026-06-30",
+          "description": "Avyttring av tillgång: Lastbil",
+          "source_type": "system",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 0,
+              "debit_amount": "5951",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7832",
+              "line_description": "Avskrivning till avyttringsdag: Lastbil",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 1,
+              "debit_amount": "0",
+              "credit_amount": "5951",
+              "exchange_rate": null,
+              "account_number": "1229",
+              "line_description": "Ackumulerad avskrivning till avyttringsdag: Lastbil",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 2,
+              "debit_amount": "5951",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1229",
+              "line_description": "Avyttring: nollställ ackumulerad avskrivning Lastbil",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 3,
+              "debit_amount": "0",
+              "credit_amount": "60000",
+              "exchange_rate": null,
+              "account_number": "1220",
+              "line_description": "Avyttring: nollställ anskaffningsvärde Lastbil",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 4,
+              "debit_amount": "50000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Avyttring: erhållet belopp Lastbil",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 5,
+              "debit_amount": "0",
+              "credit_amount": "10000",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": "Utgående moms vid avyttring av Lastbil",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 6,
+              "debit_amount": "14049",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7973",
+              "line_description": "Förlust vid avyttring av Lastbil",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "assets: scrapped (utrangering)",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 14,
+          "entry_date": "2026-09-30",
+          "description": "Avyttring av tillgång: Kopiator",
+          "source_type": "system",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 0,
+              "debit_amount": "6630",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7832",
+              "line_description": "Avskrivning till avyttringsdag: Kopiator",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 1,
+              "debit_amount": "0",
+              "credit_amount": "6630",
+              "exchange_rate": null,
+              "account_number": "1229",
+              "line_description": "Ackumulerad avskrivning till avyttringsdag: Kopiator",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 2,
+              "debit_amount": "6630",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1229",
+              "line_description": "Avyttring: nollställ ackumulerad avskrivning Kopiator",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 3,
+              "debit_amount": "0",
+              "credit_amount": "30000",
+              "exchange_rate": null,
+              "account_number": "1220",
+              "line_description": "Avyttring: nollställ anskaffningsvärde Kopiator",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 4,
+              "debit_amount": "23370",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7973",
+              "line_description": "Förlust vid avyttring av Kopiator",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "assets: avskrivning approved from a staged operation",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 15,
+          "entry_date": "2026-12-31",
+          "description": "Planenlig avskrivning 2026: Bärbar dator",
+          "source_type": "year_end",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 0,
+              "debit_amount": "3025",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7832",
+              "line_description": "Avskrivning Bärbar dator",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": 1,
+              "debit_amount": "0",
+              "credit_amount": "3025",
+              "exchange_rate": null,
+              "account_number": "1229",
+              "line_description": "Ack. avskrivning Bärbar dator",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "register": {
+    "skattekonto": [
+      {
+        "date": "2026-07-12",
+        "text": "Debiterad preliminärskatt",
+        "entry_status": "posted",
+        "voucher_number": 7
+      },
+      {
+        "date": "2026-07-14",
+        "text": "Inbetalning bokförd",
+        "entry_status": "posted",
+        "voucher_number": 8
+      },
+      {
+        "date": "2026-07-31",
+        "text": "Kostnadsränta",
+        "entry_status": "posted",
+        "voucher_number": 9
+      },
+      {
+        "date": "2026-08-12",
+        "text": "Debiterad preliminärskatt",
+        "entry_status": "draft",
+        "voucher_number": 0
+      },
+      {
+        "date": "2026-08-20",
+        "text": "Intäktsränta",
+        "entry_status": "posted",
+        "voucher_number": 10
+      }
+    ],
+    "schedules": [
+      {
+        "name": "Bärbar dator",
+        "planned": "3025.00",
+        "voucher_number": 15
+      },
+      {
+        "name": "Fräsmaskin",
+        "planned": "20000.00",
+        "voucher_number": 11
+      },
+      {
+        "name": "Kopiator",
+        "planned": "6630.00",
+        "voucher_number": 14
+      },
+      {
+        "name": "Lastbil",
+        "planned": "5951.00",
+        "voucher_number": 13
+      },
+      {
+        "name": "Server",
+        "planned": "9041.00",
+        "voucher_number": 12
+      }
+    ],
+    "assets": [
+      {
+        "name": "Bärbar dator",
+        "disposed_at": null,
+        "disposal_type": null,
+        "proceeds": null,
+        "proceeds_vat": "0.00",
+        "disposal_voucher": null
+      },
+      {
+        "name": "Fräsmaskin",
+        "disposed_at": null,
+        "disposal_type": null,
+        "proceeds": null,
+        "proceeds_vat": "0.00",
+        "disposal_voucher": null
+      },
+      {
+        "name": "Kopiator",
+        "disposed_at": "2026-09-30",
+        "disposal_type": "scrap",
+        "proceeds": "0.00",
+        "proceeds_vat": "0.00",
+        "disposal_voucher": 14
+      },
+      {
+        "name": "Lastbil",
+        "disposed_at": "2026-06-30",
+        "disposal_type": "sale",
+        "proceeds": "50000.00",
+        "proceeds_vat": "10000.00",
+        "disposal_voucher": 13
+      },
+      {
+        "name": "Server",
+        "disposed_at": null,
+        "disposal_type": null,
+        "proceeds": null,
+        "proceeds_vat": "0.00",
+        "disposal_voucher": null
+      }
+    ]
+  }
+}

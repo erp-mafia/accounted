@@ -300,3 +300,16 @@ the port so their claim on the draft still decides the race before a number
 is drawn); their proof is `tests/pg/posting-parity-blocks.pg.test.ts` and the
 producers' `*.engine-input.test.ts`. The utlägg payout batch waits until
 `create_expense_payout_batch` takes an event id.
+
+Step 2b moves the VAT and Skatteverket block and the asset block: the
+momsredovisning (`bookVatSettlement`, kind `vat.settled`), the skattekonto
+booking of the skatteverket extension (`bokforSkattekontoTransaction` and its
+batch, kind `se.tax_account.booked`), the skattekonto account transfer
+(`createSkattekontoTransferDraft`, a draft only, `ledger.manual`), the
+planenlig avskrivning (`commitAnnualPostings`, `asset.depreciated`) and the
+disposal (`disposeAsset`, `asset.disposed`). The asset doors draft through
+the port and commit with `commit_asset_depreciation` and
+`commit_asset_disposal` as before, so the event is linked to the draft before
+either RPC draws the number; their proof is
+`tests/pg/posting-parity-tax-assets.pg.test.ts` and the producers'
+`*.engine-input.test.ts`.

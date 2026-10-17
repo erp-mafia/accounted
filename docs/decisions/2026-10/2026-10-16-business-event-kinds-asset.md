@@ -1,0 +1,1 @@
+[2026-10-16] Asset events get their own kinds, asset.depreciated and asset.disposed (add-only, no source type): a planenlig avskrivning is booked as year_end and a disposal as system, whose kinds (year_end.closing, ledger.system) do not say what happened to the asset.

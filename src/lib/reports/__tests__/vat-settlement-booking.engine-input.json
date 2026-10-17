@@ -1,0 +1,123 @@
+[
+  {
+    "name": "quarter with moms att betala",
+    "createJournalEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-03-31",
+          "description": "Momsredovisning Kvartal 1 2026",
+          "source_type": "vat_settlement",
+          "lines": [
+            {
+              "account_number": "2611",
+              "debit_amount": 2500,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 0,
+              "credit_amount": 500
+            },
+            {
+              "account_number": "2650",
+              "debit_amount": 0,
+              "credit_amount": 2000,
+              "line_description": "Moms att betala"
+            }
+          ]
+        }
+      ]
+    ]
+  },
+  {
+    "name": "quarter with moms att återfå and öresutjämning",
+    "createJournalEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-06-30",
+          "description": "Momsredovisning Kvartal 2 2026",
+          "source_type": "vat_settlement",
+          "lines": [
+            {
+              "account_number": "2611",
+              "debit_amount": 250.1,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 0,
+              "credit_amount": 5000
+            },
+            {
+              "account_number": "1650",
+              "debit_amount": 4750,
+              "credit_amount": 0,
+              "line_description": "Moms att återfå"
+            },
+            {
+              "account_number": "3740",
+              "debit_amount": 0,
+              "credit_amount": 0.1,
+              "line_description": "Öres- och kronutjämning"
+            }
+          ]
+        }
+      ]
+    ]
+  },
+  {
+    "name": "helårsmoms with reverse charge, moved past a closed year, a draft already there",
+    "createJournalEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-01-01",
+          "description": "Momsredovisning År 2025",
+          "source_type": "vat_settlement",
+          "lines": [
+            {
+              "account_number": "2611",
+              "debit_amount": 10000,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "2614",
+              "debit_amount": 1250,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 0,
+              "credit_amount": 3000
+            },
+            {
+              "account_number": "2645",
+              "debit_amount": 0,
+              "credit_amount": 1250
+            },
+            {
+              "account_number": "2650",
+              "debit_amount": 0,
+              "credit_amount": 7000,
+              "line_description": "Moms att betala"
+            }
+          ]
+        }
+      ]
+    ]
+  }
+]

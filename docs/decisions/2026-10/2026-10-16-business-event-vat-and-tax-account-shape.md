@@ -1,0 +1,1 @@
+[2026-10-16] vat.settled is dated the VAT period's end, not the verifikat date it may move to, with ruta 49 as filed as amount, direction out for att betala and in for att återfå; a skattekonto row's direction is its belopp sign. Both file under se.tax.settlement.
