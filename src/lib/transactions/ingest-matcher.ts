@@ -72,6 +72,16 @@ export interface IngestPools {
   supplierInvoices: SupplierInvoice[]
 }
 
+/**
+ * The module that owns each pool. A batch whose package gate skips that
+ * module's matchers (lib/transactions/ingest-package-gate.ts) leaves the pool
+ * empty and never reads it, for the Bankgirot split too.
+ */
+export const INGEST_POOL_OWNERS: Readonly<Record<keyof IngestPools, ModuleId>> = Object.freeze({
+  customerInvoices: 'invoicing',
+  supplierInvoices: 'supplier-invoices',
+})
+
 /** One ingestTransactions call, as the matchers see it. */
 export interface IngestBatch {
   readonly supabase: SupabaseClient

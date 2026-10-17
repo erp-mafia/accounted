@@ -14596,6 +14596,7 @@
       "unpaid_customer_invoices": "unpaid customer invoices",
       "active_recurring_invoices": "active recurring invoices",
       "open_collection_cases": "open collection cases",
+      "open_rot_rut_payout_requests": "ROT/RUT payout requests whose payout from Skatteverket is not yet booked",
       "unpaid_supplier_invoices": "unpaid supplier invoices",
       "payments_in_flight": "payments on their way",
       "unhandled_documents": "documents not yet handled",

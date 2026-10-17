@@ -4,8 +4,10 @@
  * list, no lazy registration, no lib/init, no event bus. Each matcher lives
  * with the block that owns it; the contract is lib/transactions/ingest-matcher.ts.
  *
- * Every matcher runs for every company, as before the list existed: nothing
- * here reads a package switch.
+ * Nothing here reads a package switch. Behind INGEST_PACKAGE_GATING (off),
+ * ingest skips the matchers of a package that is switched off with nothing
+ * open, by each matcher's module (lib/transactions/ingest-package-gate.ts);
+ * otherwise every matcher runs for every company, as before the list existed.
  */
 import type { IngestMatcher } from '@/lib/transactions/ingest-matcher'
 import { customerInvoiceIngestMatcher } from '@/lib/invoices/customer-invoice-ingest-matcher'

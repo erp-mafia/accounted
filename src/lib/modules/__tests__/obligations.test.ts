@@ -177,6 +177,32 @@ describe('probePackageObligations', () => {
     ])
   })
 
+  it('keeps Kundfakturor open while a ROT/RUT begäran awaits its payout, not once it is settled, rejected or cancelled', async () => {
+    // The table answers like Postgres would: only the rows the probe's own filters keep.
+    const requests = (rows: Array<{ id: string; status: string; settlement_journal_entry_id: string | null }>): TableMockResolver =>
+      (chain) => {
+        const statuses = arg(chain, 'in', 'status') as string[] | undefined
+        const voucherless = chain.some((c) => c.method === 'is' && c.args[0] === 'settlement_journal_entry_id' && c.args[1] === null)
+        return {
+          data: rows.filter((r) => (!statuses || statuses.includes(r.status)) && (!voucherless || r.settlement_journal_entry_id === null)),
+        }
+      }
+    const probe = (rows: Parameters<typeof requests>[0]) =>
+      probePackageObligations(supabaseWith({ rot_rut_payout_requests: requests(rows) }).supabase, COMPANY_ID, 'customer-invoices', {
+        today: TODAY,
+      })
+
+    // Generated, submitted, and a beslut recorded (paid or partially paid) whose money is not booked yet: open.
+    for (const status of ['generated', 'submitted', 'paid', 'partially_paid']) {
+      expect(await probe([{ id: 'r1', status, settlement_journal_entry_id: null }]), status).toEqual(['open_rot_rut_payout_requests'])
+    }
+    // Settled (the payout booked), rejected (avslag) or cancelled: nothing left to arrive.
+    expect(await probe([{ id: 'r1', status: 'paid', settlement_journal_entry_id: 'je-1' }])).toEqual([])
+    expect(await probe([{ id: 'r1', status: 'partially_paid', settlement_journal_entry_id: 'je-2' }])).toEqual([])
+    expect(await probe([{ id: 'r1', status: 'rejected', settlement_journal_entry_id: null }])).toEqual([])
+    expect(await probe([{ id: 'r1', status: 'cancelled', settlement_journal_entry_id: null }])).toEqual([])
+  })
+
   it('counts an obligation whose read fails as open', async () => {
     const { supabase } = supabaseWith({ expense_claims: { data: null, error: { message: 'down' } } })
     expect(await probePackageObligations(supabase, COMPANY_ID, 'expenses', { today: TODAY })).toEqual([
