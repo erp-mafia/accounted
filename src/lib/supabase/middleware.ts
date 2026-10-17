@@ -359,10 +359,11 @@ async function updateSessionInner(
   // Hook-built links carry type=email_change; stock GoTrue links verify on
   // the GoTrue host and return through redirect_to with only the
   // flow=email_change marker that /api/account/email stamps on it, so both
-  // shapes must pass.
+  // shapes must pass. A hook-built link waits on /auth/confirm for its click
+  // (lib/auth/confirm-link.ts), so that page passes with the same markers.
   if (
     pathname.startsWith('/auth/email-change') ||
-    (pathname.startsWith('/auth/callback') &&
+    ((pathname.startsWith('/auth/callback') || pathname.startsWith('/auth/confirm')) &&
       (request.nextUrl.searchParams.get('type') === 'email_change' ||
         request.nextUrl.searchParams.get('flow') === 'email_change'))
   ) {

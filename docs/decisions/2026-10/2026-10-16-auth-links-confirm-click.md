@@ -1,0 +1,1 @@
+[2026-10-16] Emailed auth links verify on a button click, not on GET: scanners and link-check HEADs spent the token first. Chosen over a HEAD-only guard (GET scanners remain) and linking to /reset-password (recovery only, skips BankID reconcile); the token rides in a cookie, not a URL.

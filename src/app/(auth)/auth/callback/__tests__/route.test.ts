@@ -39,7 +39,8 @@ vi.mock('@/lib/company/landing-server', () => ({
     (await resolveLandingDestinationMock(...args)) ?? '/',
 }))
 
-import { GET } from '../route'
+import { GET, POST } from '../route'
+import { clickEmailLink } from './click-email-link'
 
 // Shared by the MCP OAuth consent and WL-14 describe blocks: an SSR client
 // whose team_members lookup finds an existing membership.
@@ -65,20 +66,87 @@ function clientWithTeamMembership() {
   }
 }
 
-describe('GET /auth/callback: recovery flow', () => {
+describe('/auth/callback: an emailed token link waits for the click', () => {
+  // The shape the Send Email hook builds: redirect_to's query, then the token.
+  const RECOVERY_LINK =
+    'http://localhost:3000/auth/callback?next=%2Freset-password&token_hash=abc&type=recovery'
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    verifyOtp.mockResolvedValue({ error: null })
+  })
+
+  it('holds the token in a cookie and sends the browser to /auth/confirm without spending it', async () => {
+    const response = await GET(new NextRequest(RECOVERY_LINK))
+
+    expect(verifyOtp).not.toHaveBeenCalled()
+    expect(response.headers.get('location')).toBe(
+      'http://localhost:3000/auth/confirm?next=%2Freset-password&type=recovery'
+    )
+    expect(response.cookies.get('accounted-confirm-link')).toMatchObject({
+      value: 'abc',
+      httpOnly: true,
+      path: '/auth/callback',
+      sameSite: 'lax',
+      maxAge: 3600,
+    })
+  })
+
+  it('leaves the link working through the fetches a mail system makes before the click', async () => {
+    // The production trace: a scanner GET on delivery, then a HEAD half a
+    // second before the user's own click (Next.js serves HEAD with the GET
+    // handler). Each used to run verifyOtp, so the first spent the token and
+    // the user's click failed as an expired link.
+    await GET(new NextRequest(RECOVERY_LINK))
+    await GET(new NextRequest(RECOVERY_LINK, { method: 'HEAD' }))
+    expect(verifyOtp).not.toHaveBeenCalled()
+
+    const response = await clickEmailLink(RECOVERY_LINK)
+
+    expect(verifyOtp).toHaveBeenCalledTimes(1)
+    expect(verifyOtp).toHaveBeenCalledWith({ token_hash: 'abc', type: 'recovery' })
+    expect(response.status).toBe(303)
+    expect(response.headers.get('location')).toBe('http://localhost:3000/reset-password')
+  })
+
+  it('answers the click with 303 and clears the held token', async () => {
+    const response = await clickEmailLink(RECOVERY_LINK)
+
+    expect(response.status).toBe(303)
+    expect(response.headers.get('set-cookie') ?? '').toContain('accounted-confirm-link=;')
+  })
+
+  it('treats a click without a held token as a dead link and never asks GoTrue', async () => {
+    // Another browser, an hour later, or the back button after the token was
+    // spent. A token_hash in the query is not a held token.
+    const response = await POST(
+      new NextRequest(
+        'http://localhost:3000/auth/callback?next=%2Freset-password&type=recovery&token_hash=abc',
+        { method: 'POST' }
+      )
+    )
+
+    expect(verifyOtp).not.toHaveBeenCalled()
+    expect(response.status).toBe(303)
+    expect(response.headers.get('location')).toBe(
+      'http://localhost:3000/login?error=auth_error&flow=recovery'
+    )
+  })
+})
+
+describe('/auth/callback: recovery flow', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('redirects to /reset-password after a successful recovery OTP (token-hash flow)', async () => {
+  it('redirects to /reset-password after a confirmed recovery link (token-hash flow)', async () => {
     verifyOtp.mockResolvedValue({ error: null })
 
-    const request = new NextRequest(
+    const response = await clickEmailLink(
       'http://localhost:3000/auth/callback?token_hash=abc&type=recovery&next=/reset-password'
     )
-    const response = await GET(request)
 
-    expect(response.status).toBe(307)
+    expect(response.status).toBe(303)
     expect(response.headers.get('location')).toBe('http://localhost:3000/reset-password')
     expect(verifyOtp).toHaveBeenCalledWith({ token_hash: 'abc', type: 'recovery' })
   })
@@ -99,12 +167,11 @@ describe('GET /auth/callback: recovery flow', () => {
   it('tags a failed recovery link with flow=recovery so the login page shows reset copy', async () => {
     verifyOtp.mockResolvedValue({ error: { message: 'Token has expired or is invalid' } })
 
-    const request = new NextRequest(
+    const response = await clickEmailLink(
       'http://localhost:3000/auth/callback?token_hash=expired&type=recovery&next=/reset-password'
     )
-    const response = await GET(request)
 
-    expect(response.status).toBe(307)
+    expect(response.status).toBe(303)
     expect(response.headers.get('location')).toBe(
       'http://localhost:3000/login?error=auth_error&flow=recovery'
     )
@@ -153,7 +220,7 @@ describe('GET /auth/callback: recovery flow', () => {
   })
 })
 
-describe('GET /auth/callback: admin invite flow (type=invite)', () => {
+describe('/auth/callback: admin invite flow (type=invite)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -161,12 +228,11 @@ describe('GET /auth/callback: admin invite flow (type=invite)', () => {
   it('routes a verified invite to /reset-password and preserves the invite token from next', async () => {
     verifyOtp.mockResolvedValue({ error: null })
 
-    const request = new NextRequest(
+    const response = await clickEmailLink(
       'http://localhost:3000/auth/callback?token_hash=abc&type=invite&next=/invite/gnubok_inv_tok123'
     )
-    const response = await GET(request)
 
-    expect(response.status).toBe(307)
+    expect(response.status).toBe(303)
     expect(response.headers.get('location')).toBe('http://localhost:3000/reset-password')
     expect(verifyOtp).toHaveBeenCalledWith({ token_hash: 'abc', type: 'invite' })
     // The company invite token is persisted as the pre-auth invite cookie so
@@ -180,18 +246,17 @@ describe('GET /auth/callback: admin invite flow (type=invite)', () => {
   it('routes a verified invite without an invite path in next to /reset-password without the cookie', async () => {
     verifyOtp.mockResolvedValue({ error: null })
 
-    const request = new NextRequest(
+    const response = await clickEmailLink(
       'http://localhost:3000/auth/callback?token_hash=abc&type=invite'
     )
-    const response = await GET(request)
 
-    expect(response.status).toBe(307)
+    expect(response.status).toBe(303)
     expect(response.headers.get('location')).toBe('http://localhost:3000/reset-password')
     expect(response.headers.get('set-cookie') ?? '').not.toContain('gnubok-invite-token')
   })
 })
 
-describe('GET /auth/callback: resuming an MCP OAuth consent flow (issue #1814)', () => {
+describe('/auth/callback: resuming an MCP OAuth consent flow (issue #1814)', () => {
   // A signup that started from an MCP client's Connect popup confirms its
   // e-mail (or completes Google OAuth) here. The consent page handles the
   // zero-company state itself, so it is the one `next` this callback honours
@@ -206,12 +271,11 @@ describe('GET /auth/callback: resuming an MCP OAuth consent flow (issue #1814)',
   it('sends a confirmed signup back to the consent page when next targets it', async () => {
     verifyOtp.mockResolvedValue({ error: null })
 
-    const request = new NextRequest(
+    const response = await clickEmailLink(
       `http://localhost:3000/auth/callback?token_hash=abc&type=signup&next=${encodeURIComponent(CONSENT)}`
     )
-    const response = await GET(request)
 
-    expect(response.status).toBe(307)
+    expect(response.status).toBe(303)
     expect(response.headers.get('location')).toBe(`http://localhost:3000${CONSENT}`)
   })
 
@@ -223,10 +287,9 @@ describe('GET /auth/callback: resuming an MCP OAuth consent flow (issue #1814)',
     })
     vi.mocked(createServerClient).mockImplementation(() => client as never)
 
-    const request = new NextRequest(
+    const response = await clickEmailLink(
       `http://localhost:3000/auth/callback?token_hash=abc&type=signup&next=${encodeURIComponent(CONSENT)}`
     )
-    const response = await GET(request)
 
     const location = new URL(response.headers.get('location')!)
     expect(location.pathname).toBe('/mfa/verify')
@@ -236,10 +299,9 @@ describe('GET /auth/callback: resuming an MCP OAuth consent flow (issue #1814)',
   it('still lands on the dashboard for any other next', async () => {
     verifyOtp.mockResolvedValue({ error: null })
 
-    const request = new NextRequest(
+    const response = await clickEmailLink(
       'http://localhost:3000/auth/callback?token_hash=abc&type=signup&next=%2Fsettings'
     )
-    const response = await GET(request)
 
     expect(response.headers.get('location')).toBe('http://localhost:3000/')
   })
@@ -247,16 +309,15 @@ describe('GET /auth/callback: resuming an MCP OAuth consent flow (issue #1814)',
   it('ignores an off-origin next that merely contains the consent path', async () => {
     verifyOtp.mockResolvedValue({ error: null })
 
-    const request = new NextRequest(
+    const response = await clickEmailLink(
       `http://localhost:3000/auth/callback?token_hash=abc&type=signup&next=${encodeURIComponent('https://evil.example' + CONSENT)}`
     )
-    const response = await GET(request)
 
     expect(response.headers.get('location')).toBe('http://localhost:3000/')
   })
 })
 
-describe('GET /auth/callback: WL-14 cockpit landing', () => {
+describe('/auth/callback: WL-14 cockpit landing', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(createServerClient).mockImplementation(() => clientWithTeamMembership() as never)
@@ -266,11 +327,10 @@ describe('GET /auth/callback: WL-14 cockpit landing', () => {
     verifyOtp.mockResolvedValue({ error: null })
     resolveLandingDestinationMock.mockResolvedValue('/clients')
 
-    const request = new NextRequest(
+    const response = await clickEmailLink(
       'http://localhost:3000/auth/callback?token_hash=abc&type=magiclink',
       { headers: { 'x-forwarded-host': 'app.brand-f.se' } }
     )
-    const response = await GET(request)
 
     expect(response.headers.get('location')).toBe('http://localhost:3000/clients')
     expect(resolveLandingDestinationMock).toHaveBeenCalledWith(
@@ -284,10 +344,9 @@ describe('GET /auth/callback: WL-14 cockpit landing', () => {
     verifyOtp.mockResolvedValue({ error: null })
     resolveLandingDestinationMock.mockRejectedValue(new Error('brands unavailable'))
 
-    const request = new NextRequest(
+    const response = await clickEmailLink(
       'http://localhost:3000/auth/callback?token_hash=abc&type=magiclink'
     )
-    const response = await GET(request)
 
     expect(response.headers.get('location')).toBe('http://localhost:3000/')
   })
@@ -296,17 +355,16 @@ describe('GET /auth/callback: WL-14 cockpit landing', () => {
     verifyOtp.mockResolvedValue({ error: null })
     const consent = '/api/mcp-oauth/authorize?response_type=code&state=xyz'
 
-    const request = new NextRequest(
+    const response = await clickEmailLink(
       `http://localhost:3000/auth/callback?token_hash=abc&type=signup&next=${encodeURIComponent(consent)}`
     )
-    const response = await GET(request)
 
     expect(response.headers.get('location')).toBe(`http://localhost:3000${consent}`)
     expect(resolveLandingDestinationMock).not.toHaveBeenCalled()
   })
 })
 
-describe('GET /auth/callback: byrå-team invite acceptance', () => {
+describe('/auth/callback: byrå-team invite acceptance', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(createServerClient).mockImplementation(() => clientWithTeamMembership() as never)
@@ -323,11 +381,10 @@ describe('GET /auth/callback: byrå-team invite acceptance', () => {
     // Membership now exists, so the landing helper resolves the cockpit.
     resolveLandingDestinationMock.mockResolvedValue('/clients')
 
-    const request = new NextRequest(
+    const response = await clickEmailLink(
       'http://localhost:3000/auth/callback?token_hash=abc&type=signup',
       { headers: { cookie: 'gnubok-invite-token=gnubok_inv_team', 'x-forwarded-host': 'app.brand-f.se' } }
     )
-    const response = await GET(request)
 
     expect(acceptPendingTeamInviteByTokenMock).toHaveBeenCalledWith(
       { id: 'user-1', email: undefined },
@@ -344,11 +401,10 @@ describe('GET /auth/callback: byrå-team invite acceptance', () => {
     acceptPendingTeamInviteByTokenMock.mockResolvedValue({ status: 'invalid' })
     resolveLandingDestinationMock.mockResolvedValue('/')
 
-    const request = new NextRequest(
+    const response = await clickEmailLink(
       'http://localhost:3000/auth/callback?token_hash=abc&type=signup',
       { headers: { cookie: 'gnubok-invite-token=gnubok_inv_team' } }
     )
-    const response = await GET(request)
 
     // Not consumed: the cookie is not actively deleted here (no max-age=0).
     expect(response.headers.get('set-cookie') ?? '').not.toContain('gnubok-invite-token=;')

@@ -1,5 +1,10 @@
 import { createServerClient } from '@supabase/ssr'
 import { type NextRequest, NextResponse } from 'next/server'
+import {
+  CONFIRM_LINK_COOKIE,
+  CONFIRM_LINK_COOKIE_PATH,
+  CONFIRM_LINK_MAX_AGE_SECONDS,
+} from '@/lib/auth/confirm-link'
 import { hashInviteToken } from '@/lib/auth/invite-tokens'
 import { INVITE_COOKIE_NAME } from '@/lib/auth/consume-invite-cookie'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
@@ -168,10 +173,67 @@ async function resolveStockEmailChangeStatus(
   return user.new_email ? 'partial' : 'done'
 }
 
+/** verifyOtp's answer for a confirm click whose held token is gone. */
+const NO_HELD_TOKEN = {
+  data: { user: null, session: null },
+  error: { message: 'No held token for this link' },
+} as const
+
+/**
+ * Emailed links, OAuth providers and GoTrue's own redirects land here. An
+ * emailed link carrying a one-time token is only held and handed to
+ * /auth/confirm (lib/auth/confirm-link.ts): nothing on GET spends it, so a
+ * mail scanner's fetch, or a link checker's HEAD (Next.js serves HEAD with
+ * this handler), leaves the link working for the user. Verifying here let
+ * the first automated fetch burn the link before the user's own click.
+ */
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url)
+  const tokenHash = searchParams.get('token_hash')
+  if (tokenHash) {
+    const confirmUrl = new URL('/auth/confirm', origin)
+    const query = new URLSearchParams(searchParams)
+    query.delete('token_hash')
+    confirmUrl.search = query.toString()
+    const response = NextResponse.redirect(confirmUrl)
+    response.cookies.set(CONFIRM_LINK_COOKIE, tokenHash, {
+      path: CONFIRM_LINK_COOKIE_PATH,
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: CONFIRM_LINK_MAX_AGE_SECONDS,
+    })
+    return response
+  }
+  return completeCallback(request, null)
+}
+
+/**
+ * The confirm click from /auth/confirm: verifies the token GET held. Answered
+ * with 303 so the browser follows with a GET; completeCallback's redirects
+ * are 307 (NextResponse.redirect's default), which would replay this POST
+ * against the destination page. The held token is cleared whatever the
+ * outcome, so a second click never retries a spent one.
+ */
+export async function POST(request: NextRequest) {
+  const tokenHash = request.cookies.get(CONFIRM_LINK_COOKIE)?.value || null
+  const landed = await completeCallback(request, { tokenHash })
+  const response = new NextResponse(null, { status: 303, headers: landed.headers })
+  response.cookies.delete({ name: CONFIRM_LINK_COOKIE, path: CONFIRM_LINK_COOKIE_PATH })
+  return response
+}
+
+/**
+ * `click` is set only for the confirm POST and carries the held token: null
+ * when the cookie is gone (another browser, more than an hour later, or the
+ * back button after the token was spent), which is a dead link.
+ */
+async function completeCallback(
+  request: NextRequest,
+  click: { tokenHash: string | null } | null,
+) {
+  const { searchParams, origin } = new URL(request.url)
   const code = searchParams.get('code')
-  const token_hash = searchParams.get('token_hash')
   const type = searchParams.get('type')
   const next = searchParams.get('next') ?? '/'
   const resumeOAuth = oauthResumePath(next)
@@ -211,7 +273,7 @@ export async function GET(request: NextRequest) {
   // branch below. Before this they fell through to the login bounce with no
   // message, which reads as "det funkar inte" and invites a retry that voids
   // the mails just sent.
-  if (searchParams.get('flow') === 'email_change' && !token_hash) {
+  if (!click && searchParams.get('flow') === 'email_change') {
     const status = await resolveStockEmailChangeStatus(supabase, searchParams, code)
     const response = NextResponse.redirect(
       new URL(`/auth/email-change?status=${status}`, origin),
@@ -229,12 +291,16 @@ export async function GET(request: NextRequest) {
     const { error } = await supabase.auth.exchangeCodeForSession(code)
     authenticated = !error
   }
-  // Handle token hash flow (email verification / magic link)
-  else if (token_hash && type) {
-    const { data, error } = await supabase.auth.verifyOtp({
-      token_hash,
-      type: type as 'signup' | 'invite' | 'magiclink' | 'recovery' | 'email_change' | 'email',
-    })
+  // Handle token hash flow (email verification / magic link): the confirm
+  // click, with the token GET held for it. A click whose token is gone is
+  // answered as a rejected token, without asking GoTrue.
+  else if (click && type) {
+    const { data, error } = click.tokenHash
+      ? await supabase.auth.verifyOtp({
+          token_hash: click.tokenHash,
+          type: type as 'signup' | 'invite' | 'magiclink' | 'recovery' | 'email_change' | 'email',
+        })
+      : NO_HELD_TOKEN
 
     // Email change never lands silently: with secure email change enabled the
     // user must confirm from BOTH addresses, and dropping them on the

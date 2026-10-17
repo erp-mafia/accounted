@@ -30,7 +30,8 @@ vi.mock('@supabase/ssr', () => ({
   }),
 }))
 
-import { GET } from '../route'
+import { GET, POST } from '../route'
+import { clickEmailLink } from './click-email-link'
 
 const STATUS_PAGE = 'https://app.testbrand.example/auth/email-change?status='
 
@@ -129,13 +130,33 @@ describe('GET /auth/callback flow=email_change (stock GoTrue links)', () => {
       error: null,
     })
 
-    const res = await GET(
-      makeRequest({ flow: 'email_change', token_hash: 'th', type: 'email_change' }),
+    const res = await clickEmailLink(
+      makeRequest({ flow: 'email_change', token_hash: 'th', type: 'email_change' }).url,
     )
 
     expect(verifyOtp).toHaveBeenCalledWith({ token_hash: 'th', type: 'email_change' })
     expect(exchangeCodeForSession).not.toHaveBeenCalled()
     expect(res.headers.get('location')).toBe(`${STATUS_PAGE}partial`)
+  })
+
+  it('reports a confirm click whose held token is gone as failed, never from the pending state', async () => {
+    // The stock fallback reads the account: with a change still pending it
+    // would say one click remains, as if this click had registered.
+    getUser.mockResolvedValue({
+      data: { user: { id: 'u1', new_email: 'new@testbrand.example' } },
+      error: null,
+    })
+
+    const res = await POST(
+      new NextRequest(
+        'https://app.testbrand.example/auth/callback?flow=email_change&type=email_change',
+        { method: 'POST' },
+      ),
+    )
+
+    expect(verifyOtp).not.toHaveBeenCalled()
+    expect(getUser).not.toHaveBeenCalled()
+    expect(res.headers.get('location')).toBe(`${STATUS_PAGE}failed`)
   })
 
   it('does not hijack other flows that carry a ?message= or ?code=', async () => {

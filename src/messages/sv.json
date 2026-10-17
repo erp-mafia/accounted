@@ -1614,6 +1614,25 @@
     "link_invalid_description": "Länken är ogiltig eller har redan använts. Ange engångskoden från mailet i stället, eller begär en ny återställning.",
     "code_invalid_description": "Koden är ogiltig eller har gått ut. Kontrollera koden eller begär en ny återställning från inloggningssidan."
   },
+  "auth_confirm": {
+    "recovery_title": "Välj nytt lösenord",
+    "recovery_subtitle": "Bekräfta för att fortsätta till lösenordsåterställningen.",
+    "recovery_button": "Fortsätt",
+    "signup_title": "Bekräfta din e-postadress",
+    "signup_subtitle": "Bekräfta för att aktivera ditt konto.",
+    "signup_button": "Bekräfta e-postadress",
+    "invite_title": "Ta emot inbjudan",
+    "invite_subtitle": "Bekräfta för att ta emot inbjudan och välja ett lösenord.",
+    "invite_button": "Fortsätt",
+    "email_change_title": "Bekräfta ny e-postadress",
+    "email_change_subtitle": "Bekräfta för att fortsätta med bytet av e-postadress.",
+    "email_change_button": "Bekräfta",
+    "other_title": "Bekräfta länken",
+    "other_subtitle": "Bekräfta för att fortsätta.",
+    "other_button": "Fortsätt",
+    "verifying": "Verifierar...",
+    "hint": "Av säkerhetsskäl används länken först när du klickar på knappen."
+  },
   "customer_detail": {
     "back": "Tillbaka till kunder",
     "edit": "Redigera",
