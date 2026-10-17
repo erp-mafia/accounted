@@ -461,9 +461,15 @@ const SkattekontoPayment = z
       .number()
       .positive()
       .optional()
-      .describe('Kronor and öre to pay in instead of what the source asks for (a fyllnadsinbetalning, or VAT and AGI due the same day as one payment).'),
+      .describe('Kronor and öre to pay in instead of what the source asks for (a fyllnadsinbetalning, or a part payment).'),
   })
   .superRefine(refineSkattekontoSource)
+
+const DueDatePart = z.object({
+  source: z.enum(['vat_declaration', 'agi']),
+  period: z.string().describe('The declaration\'s period: YYYY-MM, YYYY-QN, or the räkenskapsår for helårsmoms.'),
+  amount: z.number().describe('What the declaration adds to the payment.'),
+})
 
 const SkattekontoPrepared = z.object({
   source: z
@@ -476,7 +482,26 @@ const SkattekontoPrepared = z.object({
       paid_at: z.string().nullable().describe('AGI: when the month\'s tax was marked paid.'),
     })
     .nullable()
-    .describe('The declaration paid; null for next_charge or an amount without a source.'),
+    .describe('The declaration paid; null for next_charge, an amount without a source, or a due_date payment of several declarations.'),
+  combined: z
+    .object({
+      due_date: z.string(),
+      total: z.number().describe('The sum of the components: what the payment pays without an amount.'),
+      components: z.array(DueDatePart).describe('Each declaration due that day that asks for a payment.'),
+      excluded: z
+        .array(
+          z.object({
+            source: z.enum(['vat_declaration', 'agi']),
+            period: z.string(),
+            declared: z.number().describe('As declared; negative = money back.'),
+            reason: z.enum(['refund', 'zero', 'already_paid', 'period_not_ended']),
+          }),
+        )
+        .describe('Declarations due that day that ask for nothing: left out, never netted against the payment.'),
+    })
+    .nullable()
+    .optional()
+    .describe('source due_date: what the payment consists of; null otherwise.'),
   balance: z
     .object({ saldo: z.number(), fetched_at: z.string().nullable() })
     .nullable()
@@ -484,17 +509,24 @@ const SkattekontoPrepared = z.object({
   warnings: z.array(
     z.object({
       code: z
-        .enum(['late', 'date_moved', 'not_filed', 'possible_duplicate'])
+        .enum(['late', 'date_moved', 'not_filed', 'possible_duplicate', 'same_due_date_parts'])
         .describe(
           'late: the day is on or after the due date (Skatteverket charges kostnadsränta); date_moved: the day asked for was no banking ' +
             'day; not_filed: the declaration is not on record as filed; possible_duplicate: a bank payment to the skattekonto of the ' +
-            'same amount was executed since the period.',
+            'same amount was executed since the period; same_due_date_parts: other declarations (parts) are due the same day (due), ' +
+            'total for all: pay them as one with suggested_source.',
         ),
       due: z.string().optional(),
       from: z.string().optional(),
       to: z.string().optional(),
       payment_order_id: z.string().optional(),
       executed_at: z.string().nullable().optional(),
+      source: z.enum(['vat_declaration', 'agi']).optional().describe('With several declarations in the payment: the one the warning is about.'),
+      period: z.string().optional(),
+      parts: z.array(DueDatePart).optional(),
+      total: z.number().optional(),
+      replaces_draft: z.boolean().optional().describe('same_due_date_parts: an unapproved draft (perhaps paying a part) is replaced by this payment.'),
+      suggested_source: z.object({ source: z.literal('due_date'), due_date: z.string() }).optional(),
     }),
   ),
   replaced_draft_ids: z.array(z.string().uuid()).describe('A skattekonto draft nobody approved, cancelled so this one replaces it.'),
@@ -516,7 +548,7 @@ async function prepareSkattekonto(
     dryRun,
   })
   if (!outcome.ok || outcome.dryRun) return outcome
-  const { order, warnings, replaced_draft_ids, source, balance } = outcome.data
+  const { order, warnings, replaced_draft_ids, source, combined, balance } = outcome.data
   return {
     ok: true as const,
     created: true,
@@ -535,6 +567,7 @@ async function prepareSkattekonto(
               paid_at: source.paid_at,
             }
           : null,
+        combined: combined ?? null,
         balance,
         warnings,
         replaced_draft_ids,
@@ -568,8 +601,9 @@ export const paymentOrdersPrepare = defineOperation({
       'With skattekonto instead of supplier_invoice_ids it creates one draft payment in to the skattekonto: Skatteverket\'s bankgiro ' +
       '5050-1055 with the company\'s OCR number (set by Accounted, never typed). skattekonto.source names what it pays: next_charge ' +
       '(default: what the synced skattekonto lacks for its next charge), vat_declaration (ruta 49 of the momsdeklaration as filed, due ' +
-      'on its deadline) or agi (avdragen skatt + arbetsgivaravgifter of the arbetsgivardeklaration, due the 12th, 17th in January and ' +
-      'August); skattekonto.amount pays another amount instead. The day defaults to the banking day before the due date. The synced ' +
+      'on its deadline), agi (avdragen skatt + arbetsgivaravgifter of the arbetsgivardeklaration, due the 12th, 17th in January and ' +
+      'August) or due_date (everything declared due on skattekonto.due_date as one payment, its parts in skattekonto.combined); ' +
+      'skattekonto.amount pays another amount instead. The day defaults to the banking day before the due date. The synced ' +
       'saldo comes back as information and is never netted. Nothing is booked when the order is made or paid: the bank row to ' +
       'Skatteverket is booked like any other, against the skattekonto account (1630).',
     useWhen:
@@ -586,8 +620,9 @@ export const paymentOrdersPrepare = defineOperation({
       'use_stated_payee_for pays the account the invoice states instead of the supplier card for the listed invoices; the database then marks the order\'s payee changed and a person confirms it at approval.',
       'Only SEK; at most 100 invoices per call; execution_date may not be in the past.',
       'Send supplier_invoice_ids or skattekonto, never both.',
-      'One open payment to Skatteverket at a time: SKATTEKONTO_PAYMENT_ALREADY_IN_PAYMENT while one is approved or at the bank, and a draft nobody approved is replaced (skattekonto.replaced_draft_ids). VAT and AGI due the same day are paid as one payment: pass the sum in skattekonto.amount.',
-      'SKATTEKONTO_PAYMENT_NOTHING_DUE: the declaration asks for no payment (details.reason refund, zero, already_paid, period_not_ended) or nothing is due on the skattekonto; skattekonto.amount pays in anyway.',
+      'One open payment to Skatteverket at a time: SKATTEKONTO_PAYMENT_ALREADY_IN_PAYMENT while one is approved or at the bank, and a draft nobody approved is replaced (skattekonto.replaced_draft_ids). VAT and AGI due the same day are paid as one payment: source due_date with due_date. Paying one of them alone warns same_due_date_parts.',
+      'source due_date never nets: a declaration asking for nothing (a refund in ruta 49, already paid) is left out and listed in skattekonto.combined.excluded.',
+      'SKATTEKONTO_PAYMENT_NOTHING_DUE: the declaration asks for no payment (details.reason refund, zero, already_paid, period_not_ended; for due_date also no_declaration, nothing_payable) or nothing is due on the skattekonto; skattekonto.amount pays in anyway.',
       'skattekonto.warnings not_filed: the declaration is not on record as filed; possible_duplicate: a bank payment to the skattekonto of the same amount was executed since the period. Tell the person before they sign.',
     ],
     example: {
@@ -683,8 +718,13 @@ export const paymentOrdersPrepare = defineOperation({
     stage: {
       pendingType: 'prepare_payment_orders',
       title: (input) => {
-        const skattekonto = input.skattekonto as { source?: string; year?: number; period?: number; month?: number; period_type?: string } | undefined
+        const skattekonto = input.skattekonto as
+          | { source?: string; year?: number; period?: number; month?: number; period_type?: string; due_date?: string }
+          | undefined
         if (skattekonto) {
+          if (skattekonto.source === 'due_date') {
+            return `Förbered bankbetalning till Skatteverket: allt som förfaller ${skattekonto.due_date}`
+          }
           if (skattekonto.source === 'vat_declaration') {
             return `Förbered bankbetalning till Skatteverket: moms ${formatPeriodLabel(skattekonto.period_type as 'monthly' | 'quarterly' | 'yearly', Number(skattekonto.year), Number(skattekonto.period))}`
           }

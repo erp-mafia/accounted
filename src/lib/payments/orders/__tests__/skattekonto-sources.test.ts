@@ -1,7 +1,8 @@
 /**
  * What a declaration asks to have on the skattekonto (../skattekonto-sources.ts):
  * the momsdeklaration's ruta 49 as filed and the AGI's skatt + avgifter, with
- * the day the money must be there, and the source fields every door shares.
+ * the day the money must be there, everything declared due on one day, and
+ * the source fields every door shares.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
@@ -13,6 +14,7 @@ vi.mock('@/lib/vat/filing-record-store', () => ({ vatPeriodDeadline: vat.vatPeri
 
 import {
   refineSkattekontoSource,
+  resolveSkattekontoDueDate,
   resolveSkattekontoSource,
   SKATTEKONTO_SOURCE_FIELDS,
   toSkattekontoSource,
@@ -182,7 +184,18 @@ describe('the source fields', () => {
     expect(schema.safeParse({ source: 'next_charge' }).success).toBe(true)
   })
 
+  it('needs the day for due_date, a real date, and no declaration period beside it', () => {
+    expect(schema.safeParse({ source: 'due_date', due_date: '2026-11-12' }).success).toBe(true)
+    expect(schema.safeParse({ source: 'due_date' }).success).toBe(false)
+    expect(schema.safeParse({ source: 'due_date', due_date: '2026-02-30' }).success).toBe(false)
+    expect(schema.safeParse({ source: 'due_date', due_date: '12/11/2026' }).success).toBe(false)
+    expect(schema.safeParse({ source: 'due_date', due_date: '2026-11-12', year: 2026 }).success).toBe(false)
+    expect(schema.safeParse({ source: 'agi', year: 2026, month: 10, due_date: '2026-11-12' }).success).toBe(false)
+    expect(schema.safeParse({ due_date: '2026-11-12' }).success).toBe(false)
+  })
+
   it('turns the fields into a source, and the next charge into none', () => {
+    expect(toSkattekontoSource({ source: 'due_date', due_date: '2026-11-12' })).toEqual({ kind: 'due_date', dueDate: '2026-11-12' })
     expect(toSkattekontoSource({ source: 'vat_declaration', period_type: 'monthly', year: 2026, period: 9 })).toEqual({
       kind: 'vat_declaration',
       periodType: 'monthly',
@@ -193,5 +206,118 @@ describe('the source fields', () => {
     expect(toSkattekontoSource({ source: 'agi', year: 2026, month: 9 })).toEqual({ kind: 'agi', year: 2026, month: 9 })
     expect(toSkattekontoSource({ source: 'next_charge' })).toBeNull()
     expect(toSkattekontoSource({})).toBeNull()
+  })
+})
+
+describe('resolveSkattekontoDueDate: everything declared due on one day', () => {
+  const DUE = '2026-11-12'
+  const AGI_ROW = { status: 'submitted', total_tax: 18000, total_avgifter: 12568, tax_paid_at: null }
+  type Chain = Array<{ method: string; args: unknown[] }>
+
+  /** agi_declarations by the month asked for. */
+  const agiByMonth = (rows: Record<number, Record<string, unknown>>) => (calls: Chain) => {
+    const month = calls.find((c) => c.method === 'eq' && c.args[0] === 'period_month')?.args[1] as number
+    return { data: rows[month] ?? null }
+  }
+
+  /** The moms deadline of each period: Q3 and September (monthly, below SEK 40M) are due with the October AGI. */
+  function vatDeadlines(_supabase: unknown, _companyId: string, input: { periodType: string; year: number; period: number }) {
+    const due: Record<string, string> = {
+      'quarterly-2026-3': DUE,
+      'monthly-2026-9': DUE,
+      'monthly-2026-10': '2026-12-14',
+    }
+    const taxPeriod =
+      input.periodType === 'quarterly' ? `${input.year}-Q${input.period}` : `${input.year}-${String(input.period).padStart(2, '0')}`
+    return Promise.resolve({
+      tax_period: taxPeriod,
+      due_date: due[`${input.periodType}-${input.year}-${input.period}`] ?? '2026-01-01',
+      filed: true,
+    })
+  }
+
+  beforeEach(() => {
+    db.setTable('company_settings', { data: { vat_registered: true, vat_taxable_base_over_40m: false, moms_period: 'quarterly' } })
+    db.setTable('agi_declarations', agiByMonth({ 10: AGI_ROW, 9: AGI_ROW }))
+    vat.vatPeriodDeadline.mockImplementation(vatDeadlines)
+    vat.computeVatDeclaration.mockResolvedValue(declaration({ ruta10: 96755.6, ruta48: 19351.3 }))
+  })
+
+  it('sums the quarter\'s moms and the October AGI due the same 12 November, each read by its own resolver', async () => {
+    const result = await resolveSkattekontoDueDate(db.supabase as never, COMPANY, DUE, TODAY)
+
+    expect(result).toMatchObject({
+      ok: true,
+      combined: {
+        due_date: DUE,
+        total: 107972,
+        components: [
+          { source: 'vat_declaration', period: '2026-Q3', amount: 77404 },
+          { source: 'agi', period: '2026-10', amount: 30568 },
+        ],
+        excluded: [],
+      },
+    })
+    // Only the quarter that ended before the day is placed, and computed once.
+    expect(vat.vatPeriodDeadline).toHaveBeenCalledTimes(1)
+    expect(vat.vatPeriodDeadline).toHaveBeenCalledWith(db.supabase, COMPANY, { periodType: 'quarterly', year: 2026, period: 3 })
+    expect(vat.computeVatDeclaration).toHaveBeenCalledTimes(1)
+    expect(vat.computeVatDeclaration).toHaveBeenCalledWith(db.supabase, COMPANY, 'quarterly', 2026, 3, {})
+  })
+
+  it('keeps only the periods whose own deadline is the day: the September AGI and the October moms are not due then', async () => {
+    db.setTable('company_settings', { data: { vat_registered: true, vat_taxable_base_over_40m: false, moms_period: 'monthly' } })
+
+    const result = await resolveSkattekontoDueDate(db.supabase as never, COMPANY, DUE, TODAY)
+
+    if (!result.ok) throw new Error('expected parts')
+    expect(result.combined.components.map((c) => c.period)).toEqual(['2026-09', '2026-10'])
+    expect(vat.computeVatDeclaration).toHaveBeenCalledTimes(1)
+    expect(vat.computeVatDeclaration).toHaveBeenCalledWith(db.supabase, COMPANY, 'monthly', 2026, 9, {})
+  })
+
+  it('leaves a refund out and reports it, never netted against the AGI', async () => {
+    vat.computeVatDeclaration.mockResolvedValue(declaration({ ruta10: 1000, ruta48: 4000 }))
+
+    const result = await resolveSkattekontoDueDate(db.supabase as never, COMPANY, DUE, TODAY)
+
+    expect(result).toMatchObject({
+      ok: true,
+      combined: {
+        total: 30568,
+        components: [{ source: 'agi', period: '2026-10', amount: 30568 }],
+        excluded: [{ source: 'vat_declaration', period: '2026-Q3', declared: -3000, reason: 'refund' }],
+      },
+    })
+  })
+
+  it('reads no moms for a company that does not report it, and nothing for a day without declarations', async () => {
+    db.setTable('company_settings', { data: { vat_registered: false, vat_taxable_base_over_40m: false, moms_period: null } })
+    let result = await resolveSkattekontoDueDate(db.supabase as never, COMPANY, DUE, TODAY)
+    expect(result).toMatchObject({ ok: true, combined: { total: 30568, components: [{ source: 'agi' }] } })
+    expect(vat.vatPeriodDeadline).not.toHaveBeenCalled()
+
+    db.setTable('agi_declarations', { data: null })
+    result = await resolveSkattekontoDueDate(db.supabase as never, COMPANY, DUE, TODAY)
+    expect(result).toEqual({ ok: true, combined: { due_date: DUE, total: 0, components: [], excluded: [] }, parts: [] })
+  })
+
+  it('takes a declaration the caller resolved already instead of reading it again', async () => {
+    const known = await resolveSkattekontoSource(db.supabase as never, COMPANY, VAT_Q3, TODAY)
+    if (!known.ok) throw new Error('expected the quarter')
+    vi.clearAllMocks()
+    vat.vatPeriodDeadline.mockImplementation(vatDeadlines)
+
+    const result = await resolveSkattekontoDueDate(db.supabase as never, COMPANY, DUE, TODAY, { source: VAT_Q3, due: known.due })
+
+    expect(result).toMatchObject({ ok: true, combined: { total: 107972 } })
+    expect(vat.vatPeriodDeadline).not.toHaveBeenCalled()
+    expect(vat.computeVatDeclaration).not.toHaveBeenCalled()
+  })
+
+  it('answers VAT_REPORT_GENERATION_FAILED when the moms due that day cannot be computed', async () => {
+    vat.computeVatDeclaration.mockRejectedValue(new Error('no fiscal period'))
+    const result = await resolveSkattekontoDueDate(db.supabase as never, COMPANY, DUE, TODAY)
+    expect(result).toMatchObject({ ok: false, code: 'VAT_REPORT_GENERATION_FAILED' })
   })
 })

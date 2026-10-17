@@ -10701,7 +10701,22 @@
     "nothing_due_refund": "The declaration shows money back, nothing to pay in. Enter an amount to pay in anyway.",
     "nothing_due_zero": "The declaration shows nothing to pay. Enter an amount to pay in anyway.",
     "nothing_due_already_paid": "The month's tax is already marked as paid. Enter an amount to pay in anyway.",
-    "nothing_due_period_not_ended": "The period has not ended, so there is no declaration to pay yet. Enter an amount to pay in ahead."
+    "nothing_due_period_not_ended": "The period has not ended, so there is no declaration to pay yet. Enter an amount to pay in ahead.",
+    "nothing_due_no_declaration": "Nothing declared is due that day. Enter an amount to pay in anyway.",
+    "nothing_due_nothing_payable": "Nothing due that day asks for a payment. Enter an amount to pay in anyway.",
+    "part_vat": "VAT return for {period}",
+    "part_agi": "Employer declaration for {period}",
+    "same_due_date_parts": "This must also be on the tax account by {date}:",
+    "same_due_date_replaces_draft": "An unapproved payment draft is replaced by this one, possibly the payment of what is due the same day. Pay everything as one payment so nothing is left out.",
+    "pay_all_due": "Pay everything due {date} ({amount})",
+    "combined_title": "The payment covers everything due {date}:",
+    "excluded_refund": "{name} shows money back ({amount}). It is not deducted from the payment.",
+    "excluded_zero": "{name} shows nothing to pay.",
+    "excluded_already_paid": "{name} is already marked as paid.",
+    "excluded_period_not_ended": "{name}: the period has not ended, so it is not included.",
+    "pay_only_this": "Pay only this declaration",
+    "not_filed_part": "{name} is not marked as filed.",
+    "possible_duplicate_part": "A bank payment to Skatteverket of the same amount as {name} went out on {date}. Check that it is not already paid."
   },
   "expense_claims": {
     "title": "Expense claims",

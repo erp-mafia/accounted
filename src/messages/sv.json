@@ -10701,7 +10701,22 @@
     "nothing_due_refund": "Deklarationen visar pengar tillbaka, inget att betala in. Ange ett belopp om du vill betala in ändå.",
     "nothing_due_zero": "Deklarationen visar inget att betala. Ange ett belopp om du vill betala in ändå.",
     "nothing_due_already_paid": "Skatten för månaden är redan markerad som betald. Ange ett belopp om du vill betala in ändå.",
-    "nothing_due_period_not_ended": "Perioden är inte slut än, så det finns ingen deklaration att betala. Ange ett belopp om du vill betala in i förväg."
+    "nothing_due_period_not_ended": "Perioden är inte slut än, så det finns ingen deklaration att betala. Ange ett belopp om du vill betala in i förväg.",
+    "nothing_due_no_declaration": "Inget deklarerat förfaller den dagen. Ange ett belopp om du vill betala in ändå.",
+    "nothing_due_nothing_payable": "Inget av det som förfaller den dagen ska betalas in. Ange ett belopp om du vill betala in ändå.",
+    "part_vat": "Momsdeklarationen för {period}",
+    "part_agi": "Arbetsgivardeklarationen för {period}",
+    "same_due_date_parts": "Det här ska också finnas på skattekontot senast {date}:",
+    "same_due_date_replaces_draft": "Ett utkast till betalning som ingen godkänt ersätts av den här, kanske betalningen av det som förfaller samma dag. Betala allt i en betalning så att inget faller bort.",
+    "pay_all_due": "Betala allt som förfaller {date} ({amount})",
+    "combined_title": "Betalningen omfattar allt som förfaller {date}:",
+    "excluded_refund": "{name} visar pengar tillbaka ({amount}). Det räknas inte av från betalningen.",
+    "excluded_zero": "{name} visar inget att betala.",
+    "excluded_already_paid": "{name} är redan markerad som betald.",
+    "excluded_period_not_ended": "{name}: perioden är inte slut än, så den ingår inte.",
+    "pay_only_this": "Betala bara den här deklarationen",
+    "not_filed_part": "{name} är inte markerad som inlämnad.",
+    "possible_duplicate_part": "En bankbetalning till Skatteverket på samma belopp som {name} gick iväg {date}. Kontrollera att den inte redan är betald."
   },
   "expense_claims": {
     "title": "Utlägg",

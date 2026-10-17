@@ -82,6 +82,31 @@ describe('POST /api/payments/orders/skattekonto with a declaration', () => {
     expect(prepare).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ source: null }))
   })
 
+  it('hands a day to the service as the combined source (crm#1260)', async () => {
+    prepare.mockResolvedValue({ ok: true, dryRun: true, preview: { amount: 107972 } })
+    const response = await POST(post({ cash_account_id: ACCOUNT, source: 'due_date', due_date: '2026-11-12', dry_run: true }), none)
+    expect(response.status).toBe(200)
+    expect(prepare).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ source: { kind: 'due_date', dueDate: '2026-11-12' }, amount: null, dryRun: true }),
+    )
+  })
+
+  it('answers 400 for a bad due date, a day without source due_date, and due_date with a period', async () => {
+    for (const body of [
+      { cash_account_id: ACCOUNT, source: 'due_date', due_date: '2026-02-30' },
+      { cash_account_id: ACCOUNT, source: 'due_date', due_date: '12/11/2026' },
+      { cash_account_id: ACCOUNT, source: 'due_date', due_date: '' },
+      { cash_account_id: ACCOUNT, source: 'due_date' },
+      { cash_account_id: ACCOUNT, due_date: '2026-11-12' },
+      { cash_account_id: ACCOUNT, source: 'due_date', due_date: '2026-11-12', year: 2026, month: 10 },
+    ]) {
+      const response = await POST(post(body), none)
+      expect(response.status).toBe(400)
+    }
+    expect(prepare).not.toHaveBeenCalled()
+  })
+
   it('answers 404 in Swedish for a month without an AGI', async () => {
     prepare.mockResolvedValue({ ok: false, code: 'SKATTEKONTO_PAYMENT_AGI_NOT_FOUND', details: { tax_period: '2026-10' } })
     const { status, body } = await parseJsonResponse<ErrorBody>(await POST(post({ cash_account_id: ACCOUNT, source: 'agi', year: 2026, month: 10 }), none))

@@ -33,6 +33,9 @@ import {
   type SkattekontoPaymentSourceInput,
 } from './payments-client'
 
+/** A declaration as the dialog names it: the source kind and its period label. */
+type DeclarationRef = { source?: 'vat_declaration' | 'agi'; period?: string }
+
 /**
  * Betala via banken for the skattekonto, from Skattekonto (Betalningsuppgifter)
  * or the Hem row Betala in till Skatteverket:
@@ -53,7 +56,10 @@ import {
  * Opened from a filed declaration (the momsdeklaration's step 4, the salary
  * run's tax payment), the dialog pays what that declaration asks for by its
  * due date instead of the next charge, and shows the synced saldo beside it
- * without netting it.
+ * without netting it. When another declaration is due the same day (moms and
+ * AGI on the 12th), it lists it and offers to pay everything due that day as
+ * one payment (source due_date): one skattekonto payment is open at a time,
+ * so paying them one by one would replace the first draft.
  */
 
 type Phase = 'preview' | 'sign'
@@ -75,7 +81,15 @@ function inlineRefusalOf(error: unknown): string | null {
 }
 
 /** Why a declaration asks for nothing (details.reason of SKATTEKONTO_PAYMENT_NOTHING_DUE). */
-const NOTHING_DUE_REASONS = ['refund', 'zero', 'already_paid', 'period_not_ended'] as const
+const NOTHING_DUE_REASONS = [
+  'refund',
+  'zero',
+  'already_paid',
+  'period_not_ended',
+  // A day (source due_date) with no declaration due, or none that asks for a payment.
+  'no_declaration',
+  'nothing_payable',
+] as const
 type NothingDueReason = (typeof NOTHING_DUE_REASONS)[number]
 
 function nothingDueReasonOf(error: unknown): NothingDueReason | null {
@@ -120,7 +134,10 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
   const [busy, setBusy] = useState(false)
   const [order, setOrder] = useState<PaymentOrder | null>(null)
   const [signingStage, setSigningStage] = useState<SigningFlowStage>('method')
+  /** Betala allt som förfaller: the day whose declarations are paid instead of the one the dialog opened with. */
+  const [payAllDue, setPayAllDue] = useState<string | null>(null)
   const changed = useRef(false)
+  const paying: SkattekontoPaymentSourceInput | null = payAllDue ? { source: 'due_date', due_date: payAllDue } : source
 
   const fail = useCallback(
     (title: string, error: unknown) => {
@@ -171,7 +188,15 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
 
   // The source as a value the effect below can compare: a page passes a new
   // object on every render.
-  const sourceKey = source ? JSON.stringify(source) : ''
+  const sourceKey = paying ? JSON.stringify(paying) : ''
+
+  /** Pay everything due on `day` (null: back to the declaration the dialog opened with); the amount follows the new preview. */
+  function payAllDueOn(day: string | null) {
+    setPayAllDue(day)
+    setAmountTouched(false)
+    setAmountText('')
+    setAmount(null)
+  }
 
   // The preview follows the account, the amount and the day: a dry run on the
   // server, every rule, nothing written.
@@ -216,10 +241,15 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
   // Signing pays exactly what the preview showed: never while the field says another amount.
   const inSync = preview !== null && (typedAmount === null || typedAmount === preview.amount)
   const late = preview?.warnings.find((w) => w.code === 'late')
-  const notFiled = preview?.warnings.some((w) => w.code === 'not_filed') ?? false
+  const notFiled = preview?.warnings.filter((w) => w.code === 'not_filed') ?? []
   const duplicate = preview?.warnings.find((w) => w.code === 'possible_duplicate')
-  const declared = preview?.source ?? null
+  const sameDay = payAllDue ? undefined : preview?.warnings.find((w) => w.code === 'same_due_date_parts')
+  const combined = preview?.combined ?? null
+  // With every declaration due on a day, the parts list says what is paid.
+  const declared = combined ? null : (preview?.source ?? null)
   const declaredPeriod = sourceLabel ?? declared?.tax_period ?? ''
+  const partName = (part: DeclarationRef) =>
+    t(part.source === 'agi' ? 'part_agi' : 'part_vat', { period: part.period ?? '' })
 
   async function signNow() {
     if (!preview) return
@@ -230,7 +260,7 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
         cashAccountId: accountId,
         amount: preview.amount,
         executionDate: preview.requested_execution_date,
-        source,
+        source: paying,
       })
       changed.current = true
       setOrder(prepared.order)
@@ -346,6 +376,48 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
                     {declared.due_date && <> {t('source_due', { date: formatDate(declared.due_date) })}</>}
                   </p>
                 )}
+                {sameDay?.due && (
+                  <div className="space-y-2 text-[12.5px] text-muted-foreground">
+                    <p>{t('same_due_date_parts', { date: formatDate(sameDay.due) })}</p>
+                    <ul className="space-y-1">
+                      {(sameDay.parts ?? []).map((part) => (
+                        <li key={`${part.source}-${part.period}`} className="flex justify-between gap-4">
+                          <span>{partName(part)}</span>
+                          <span className="tabular-nums">{formatCurrency(part.amount)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    {sameDay.replaces_draft && <p>{t('same_due_date_replaces_draft')}</p>}
+                    <Button variant="outline" size="sm" onClick={() => payAllDueOn(sameDay.due ?? null)}>
+                      {t('pay_all_due', { date: formatDate(sameDay.due), amount: formatCurrency(sameDay.total ?? 0) })}
+                    </Button>
+                  </div>
+                )}
+                {combined && (
+                  <div className="space-y-2 text-[12.5px] text-muted-foreground">
+                    <p>{t('combined_title', { date: formatDate(combined.due_date) })}</p>
+                    {combined.components.length > 0 && (
+                      <ul className="space-y-1">
+                        {combined.components.map((part) => (
+                          <li key={`${part.source}-${part.period}`} className="flex justify-between gap-4">
+                            <span>{partName(part)}</span>
+                            <span className="tabular-nums">{formatCurrency(part.amount)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {combined.excluded.map((part) => (
+                      <p key={`${part.source}-${part.period}`}>
+                        {t(`excluded_${part.reason}`, { name: partName(part), amount: formatCurrency(part.declared) })}
+                      </p>
+                    ))}
+                    {payAllDue && source && (
+                      <button type="button" className="underline underline-offset-2 hover:opacity-80" onClick={() => payAllDueOn(null)}>
+                        {t('pay_only_this')}
+                      </button>
+                    )}
+                  </div>
+                )}
                 {preview?.balance && (
                   <p className="text-[12.5px] text-muted-foreground">{t('balance_info', { saldo: formatCurrency(preview.balance.saldo) })}</p>
                 )}
@@ -363,9 +435,22 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
                 )}
                 {late && <AttnLine>{t('late', { date: formatDate(late.due ?? preview?.due?.date ?? '') })}</AttnLine>}
                 {!late && duplicate && (
-                  <AttnLine>{t('possible_duplicate', { date: duplicate.executed_at ? formatDate(duplicate.executed_at) : '' })}</AttnLine>
+                  <AttnLine>
+                    {duplicate.period
+                      ? t('possible_duplicate_part', {
+                          name: partName(duplicate),
+                          date: duplicate.executed_at ? formatDate(duplicate.executed_at) : '',
+                        })
+                      : t('possible_duplicate', { date: duplicate.executed_at ? formatDate(duplicate.executed_at) : '' })}
+                  </AttnLine>
                 )}
-                {!late && !duplicate && notFiled && <p className="text-[12.5px] text-muted-foreground">{t('not_filed')}</p>}
+                {!late &&
+                  !duplicate &&
+                  notFiled.map((w) => (
+                    <p key={`${w.source ?? 'source'}-${w.period ?? ''}`} className="text-[12.5px] text-muted-foreground">
+                      {w.period ? t('not_filed_part', { name: partName(w) }) : t('not_filed')}
+                    </p>
+                  ))}
 
                 {refusal === 'SKATTEKONTO_PAYMENT_ALREADY_IN_PAYMENT' && (
                   <AttnLine action={{ label: tb('open_payments_page'), href: '/payments' }}>{t('already_in_payment')}</AttnLine>
@@ -379,7 +464,9 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
 
                 {preview && (
                   <>
-                    {preview.replaces_drafts > 0 && <p className="text-[12.5px] text-muted-foreground">{t('replaces_draft')}</p>}
+                    {preview.replaces_drafts > 0 && !sameDay?.replaces_draft && (
+                      <p className="text-[12.5px] text-muted-foreground">{t('replaces_draft')}</p>
+                    )}
                     <p className="text-[12.5px] text-muted-foreground">{t('sign_hint')}</p>
                     <BankPaymentsAllowanceLine usage={usage} count={1} canRequest />
                   </>
