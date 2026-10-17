@@ -363,18 +363,46 @@ export async function fetchVatAccountTotals(
 }
 
 /**
- * Map aggregated per-account totals to the momsdeklaration boxes, including
- * the recomputed ruta 49 net (FK009). Pure projection over ACCOUNT_RUTA plus
- * the company's own ruta 05 accounts (fetchDynamicRuta05Accounts).
- *
- * `dynamicRuta05Accounts` is optional so callers that only need the 26xx boxes
- * keep working untouched: ruta 05 is a beskattningsunderlag, not moms, so it
- * never reaches ruta 49 and the settlement proposal nets the same either way.
+ * The rutor ruta 49 nets (FK009): summaMoms = (10 + 11 + 12 + 30 + 31 + 32 +
+ * 60 + 61 + 62) - 48, as box and sign. rutorFromTotals spells the same sum
+ * out; a breakdown of ruta 49 by account (the vat_payable measure,
+ * lib/measures) reads it from here, and a test there pins the two together.
  */
-export function rutorFromTotals(
+export const RUTA_49_TERMS: ReadonlyArray<{ box: keyof VatDeclarationRutor; sign: 1 | -1 }> = [
+  { box: 'ruta10', sign: 1 },
+  { box: 'ruta11', sign: 1 },
+  { box: 'ruta12', sign: 1 },
+  { box: 'ruta30', sign: 1 },
+  { box: 'ruta31', sign: 1 },
+  { box: 'ruta32', sign: 1 },
+  { box: 'ruta60', sign: 1 },
+  { box: 'ruta61', sign: 1 },
+  { box: 'ruta62', sign: 1 },
+  { box: 'ruta48', sign: -1 },
+]
+
+/** One account's balance as it lands in one ruta, unrounded. */
+export interface VatRutaContribution {
+  account_number: string
+  box: keyof VatDeclarationRutor
+  side: 'credit' | 'debit'
+  /** The account's balance on its ruta's side: credit - debit for 'credit'. */
+  amount: number
+}
+
+type DynamicRutaAccounts = Pick<DynamicVatAccounts, 'mappingByAccount' | 'explicitAccounts'> | string[]
+
+/**
+ * What each account adds to its ruta, in the order rutorFromTotals adds it:
+ * the fixed BAS map (ACCOUNT_RUTA) first, minus the accounts the company
+ * classified itself, then the company's own classification. rutorFromTotals
+ * is a fold over this list, so a breakdown read from it cannot disagree with
+ * the filed rutor.
+ */
+export function vatRutaContributions(
   totals: Map<string, { debit: number; credit: number }>,
-  dynamicVatAccounts?: Pick<DynamicVatAccounts, 'mappingByAccount' | 'explicitAccounts'> | string[],
-): VatDeclarationRutor {
+  dynamicVatAccounts?: DynamicRutaAccounts,
+): VatRutaContribution[] {
   const dynamic = Array.isArray(dynamicVatAccounts)
     ? {
         mappingByAccount: new Map(dynamicVatAccounts.map((account) => [
@@ -383,6 +411,42 @@ export function rutorFromTotals(
         explicitAccounts: new Set<string>(),
       }
     : dynamicVatAccounts
+  const contributions: VatRutaContribution[] = []
+
+  for (const [account, mapping] of Object.entries(ACCOUNT_RUTA)) {
+    if (dynamic?.explicitAccounts.has(account)) continue
+    const t = totals.get(account)
+    if (!t) continue
+    const balance = mapping.side === 'credit'
+      ? t.credit - t.debit
+      : t.debit - t.credit
+    contributions.push({ account_number: account, box: mapping.box, side: mapping.side, amount: balance })
+  }
+
+  for (const [account, mapping] of dynamic?.mappingByAccount ?? []) {
+    const t = totals.get(account)
+    if (!t) continue
+    const balance = mapping.side === 'credit' ? t.credit - t.debit : t.debit - t.credit
+    contributions.push({ account_number: account, box: mapping.box, side: mapping.side, amount: balance })
+  }
+
+  return contributions
+}
+
+/**
+ * Map aggregated per-account totals to the momsdeklaration boxes, including
+ * the recomputed ruta 49 net (FK009). Pure projection over ACCOUNT_RUTA plus
+ * the company's own ruta 05 accounts (fetchDynamicRuta05Accounts), folded
+ * over vatRutaContributions.
+ *
+ * `dynamicRuta05Accounts` is optional so callers that only need the 26xx boxes
+ * keep working untouched: ruta 05 is a beskattningsunderlag, not moms, so it
+ * never reaches ruta 49 and the settlement proposal nets the same either way.
+ */
+export function rutorFromTotals(
+  totals: Map<string, { debit: number; credit: number }>,
+  dynamicVatAccounts?: DynamicRutaAccounts,
+): VatDeclarationRutor {
   const rutor: VatDeclarationRutor = {
     ruta05: 0, ruta06: 0, ruta07: 0, ruta08: 0,
     ruta10: 0, ruta11: 0, ruta12: 0,
@@ -394,21 +458,8 @@ export function rutorFromTotals(
     ruta50: 0, ruta60: 0, ruta61: 0, ruta62: 0,
   }
 
-  for (const [account, mapping] of Object.entries(ACCOUNT_RUTA)) {
-    if (dynamic?.explicitAccounts.has(account)) continue
-    const t = totals.get(account)
-    if (!t) continue
-    const balance = mapping.side === 'credit'
-      ? t.credit - t.debit
-      : t.debit - t.credit
-    rutor[mapping.box] = round(rutor[mapping.box] + balance)
-  }
-
-  for (const [account, mapping] of dynamic?.mappingByAccount ?? []) {
-    const t = totals.get(account)
-    if (!t) continue
-    const balance = mapping.side === 'credit' ? t.credit - t.debit : t.debit - t.credit
-    rutor[mapping.box] = round(rutor[mapping.box] + balance)
+  for (const contribution of vatRutaContributions(totals, dynamicVatAccounts)) {
+    rutor[contribution.box] = round(rutor[contribution.box] + contribution.amount)
   }
 
   // FK009: summaMoms = (10 + 11 + 12 + 30 + 31 + 32 + 60 + 61 + 62) - 48

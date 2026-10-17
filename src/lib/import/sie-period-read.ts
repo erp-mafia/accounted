@@ -13,6 +13,9 @@ const EXTERNAL_LEDGER_REPORTS = new Set([
   'gnubok_get_cash_flow_statement','gnubok_get_bokslutsbilagor','gnubok_get_behandlingshistorik',
   'gnubok_get_vat_settlement_proposal',
   'gnubok_get_forenklat_arsbokslut',
+  // Defined measures (lib/operations/measures.ts) read the same ledger: the
+  // MCP tools by name, the v1 doors by operation id. The list reads nothing.
+  'gnubok_get_measure','gnubok_explain_measure','measures.get','measures.explain',
 ])
 
 /** An external report has no persistent dashboard banner. Hold the complete

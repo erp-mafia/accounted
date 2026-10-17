@@ -160,6 +160,7 @@ describe('path parameter typing', () => {
       'keys/:keyId': 'api_key',
       'lines/:lineId': null,
       'links/:linkId': null,
+      'measures/:measureId': null,
       'operations/:id': 'operation',
       'payment-orders/:id': 'payment_order',
       'payslips/:employeeId': 'employee',

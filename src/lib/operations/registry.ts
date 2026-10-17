@@ -214,6 +214,7 @@ import {
   arsredovisningValidateIxbrl,
 } from './arsredovisning'
 import { reportsForenklatArsbokslut } from './forenklat-arsbokslut'
+import { MEASURE_OPERATIONS } from './measures'
 import {
   skattekontoSync,
   skatteverketAgiValidateHuvuduppgift,
@@ -431,6 +432,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   arsredovisningValidateIxbrl,
   // forenklat-arsbokslut (ideell förening, BFNAR 2010:1)
   reportsForenklatArsbokslut,
+  // measures: defined figures equal to their report, explained down to every line (lib/measures)
+  ...MEASURE_OPERATIONS,
   // skatteverket-helpers
   skatteverketAgiValidateHuvuduppgift,
   skatteverketAgiValidateIndividuppgift,

@@ -4264,6 +4264,18 @@ const SUGGESTIONS_HOW =
   'Inte nu: gnubok_reject_pending_operation with operation_id (asked again in 30 days). ' +
   'Visa aldrig: gnubok_reject_pending_operation with operation_id and reason "Visa aldrig" (never asked again).'
 
+/**
+ * The briefing's pointer to the defined measures (lib/measures): that they
+ * exist and how to reach them, never their values. Undeclared in the
+ * briefing's outputSchema, like capabilities (tools/list budget).
+ */
+const MEASURES_POINTER = {
+  tool: 'gnubok_get_measure',
+  how:
+    'Defined figures, each equal to its report: vat_payable, accounts_receivable, accounts_payable, bank_balance, liquid_funds, result_to_date, net_revenue, operating_expenses, unpaid_customer_invoices, unpaid_supplier_invoices. ' +
+    'Answer "how much" questions from gnubok_get_measure (via gnubok_call_tool when not listed) instead of summing report rows; pass its explain handle to gnubok_explain_measure for the vouchers behind a figure. Definitions: gnubok_list_measures.',
+} as const
+
 export const tools: McpTool[] = [
   {
     // The bridge that makes `catalogVisibility: 'search'` usable on hosts that
@@ -7020,6 +7032,9 @@ export const tools: McpTool[] = [
             ? 'Forward mail here, by hand or with a forwarding rule: each attachment, or the mail body when there is none, becomes an inbox item. Holding the file itself? Upload it directly (gnubok_create_document_upload, PUT the bytes, gnubok_complete_document_upload): document_id comes back at once.'
             : 'No inbox address on this install: upload files directly with gnubok_create_document_upload, PUT the bytes, then gnubok_complete_document_upload.',
         },
+
+        // Defined measures: a pointer, never values (MEASURES_POINTER).
+        measures: MEASURES_POINTER,
 
         // Static per-workflow loadouts (issue #1098): lets a deferred-loading
         // harness batch-load a whole workflow cluster in one call. Validated

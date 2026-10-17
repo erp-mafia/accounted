@@ -1,0 +1,1 @@
+[2026-10-16] Measure doors refuse unknown and non-applicable parameters, unlike the report doors that ignore them: no integration depends on them yet, and a dropped as_of would answer today's figure to a question about another day.

@@ -26,14 +26,14 @@ describe('SIE undo lock answer', () => {
 })
 
 describe('SIE export snapshot lease', () => {
-  it.each(['reports.balance-sheet.pdf','reports.income-statement','gnubok_get_balance_sheet','gnubok_get_trial_balance','gnubok_vat_declaration_validate'])('%s refuses an incomplete external report',async(operation)=>{
+  it.each(['reports.balance-sheet.pdf','reports.income-statement','gnubok_get_balance_sheet','gnubok_get_trial_balance','gnubok_vat_declaration_validate','measures.get','measures.explain','gnubok_get_measure','gnubok_explain_measure'])('%s refuses an incomplete external report',async(operation)=>{
     const {supabase}=createMockSupabase()
     supabase.rpc.mockResolvedValue({data:null,error:{code:'55000',message:'SIE_IMPORT_HOLD'}})
     const read=vi.fn()
     await expect(withSIEExternalReport(supabase as unknown as SupabaseClient,'company',operation,read)).rejects.toMatchObject({code:'CONFLICT'})
     expect(read).not.toHaveBeenCalled()
   })
-  it.each(['gnubok_sie_import_status','gnubok_list_accounts','imports.sie.create'])('keeps %s available for recovery',async(operation)=>{
+  it.each(['gnubok_sie_import_status','gnubok_list_accounts','imports.sie.create','measures.list','gnubok_list_measures'])('keeps %s available for recovery',async(operation)=>{
     const {supabase}=createMockSupabase(),read=vi.fn().mockResolvedValue('available')
     expect(await withSIEExternalReport(supabase as unknown as SupabaseClient,'company',operation,read)).toBe('available')
     expect(supabase.rpc).not.toHaveBeenCalled()

@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 342 endpoints.
+  pagination, scopes), and all 345 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -214,7 +214,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 342 operations. Paths are shown without
+API version `2026-05-12`, 345 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (19)
@@ -571,12 +571,15 @@ POST /companies/{companyId}/salary-runs/{id}/send-payslips : Email every employe
 POST /companies/{companyId}/salary-runs/{id}/unapprove : Recall the approval of a salary run (approved back to review) [scope:payroll:write risk:medium idempotent dry-run reversible]
 ```
 
-### Reports (37)
+### Reports (40)
 
 Full detail: [references/reports.md](references/reports.md)
 
 ```text
 GET /companies/{companyId}/audit-trail : The audit log: every trigger-recorded change to the books and their settings, newest first [scope:reports:read risk:low idempotent]
+GET /companies/{companyId}/measures : The defined measures: id, name, precise definition, parameters and the report each equals [scope:reports:read risk:low idempotent]
+GET /companies/{companyId}/measures/{measureId} : One defined measure: the value, its definition, what it covers, caveats and an explain handle [scope:reports:read risk:low idempotent]
+GET /companies/{companyId}/measures/{measureId}/explain : What a defined measure adds: contributors and the journal lines or invoices behind it, paged [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/ar-ledger : AR ledger: unpaid customer invoices with aging [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/avgifter-basis : Annual arbetsgivaravgifter basis per employee [scope:payroll:read risk:low idempotent]
 GET /companies/{companyId}/reports/balance-sheet : Balance sheet (balansräkning) for a fiscal period or as of a custom date [scope:reports:read risk:low idempotent]

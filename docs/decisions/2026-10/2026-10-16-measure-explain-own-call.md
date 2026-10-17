@@ -1,0 +1,1 @@
+[2026-10-16] Measure explanations are their own operation (GET /measures/{id}/explain, gnubok_explain_measure), all three tools search-only: a value carries its pinned explain arguments, tools/list has no headroom, and a v1 boolean flag would arrive as a string.
