@@ -1,0 +1,1 @@
+[2026-10-16] lib/init subscribes the core consumers once per process (initState), replacing the webhook handler's own once-flag: a retry after a later init step failed no longer doubles any consumer, where before every core consumer but webhooks was doubled.

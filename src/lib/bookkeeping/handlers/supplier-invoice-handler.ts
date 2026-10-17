@@ -26,7 +26,7 @@ const log = createLogger('supplier-invoice-handler')
  * Setting supplier_invoice_id directly would skip that confirmation and strand
  * the payment unbooked. This handler therefore never creates a journal entry.
  */
-async function handleSupplierInvoiceRetroMatch(
+export async function handleSupplierInvoiceRetroMatch(
   // .registered and .approved share this payload shape.
   payload: EventPayload<'supplier_invoice.registered'>
 ): Promise<void> {
@@ -118,7 +118,8 @@ async function handleSupplierInvoiceRetroMatch(
 
 /**
  * Register the core supplier invoice handlers on the event bus.
- * Returns a combined unsubscribe function.
+ * Returns a combined unsubscribe function. lib/init subscribes the same
+ * handler through EVENT_CONSUMERS (lib/composition/event-consumers.ts).
  *
  * No subscriber books on supplier_invoice.confirmed: the flow that creates
  * the invoice posts its registration entry inline when booksInvoicesOnIssue()

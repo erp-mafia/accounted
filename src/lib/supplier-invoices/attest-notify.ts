@@ -9,9 +9,10 @@
  * (notification_settings.attest_request_email_enabled, default on), with
  * Godkänn / Neka links that work without a login (attest-links.ts).
  *
- * Bound to supplier_invoice.registered (registerAttestNotificationHandler,
- * lib/init.ts). Never throws at the emitter: a failed mail leaves the
- * worklist row, which asks for the same attest.
+ * Bound to supplier_invoice.registered (the attest-notify consumer in
+ * lib/composition/event-consumers.ts, which lib/init subscribes). Never
+ * throws at the emitter: a failed mail leaves the worklist row, which asks
+ * for the same attest.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -131,7 +132,7 @@ export async function notifyAttestersOfInvoice(
   return result
 }
 
-async function handleSupplierInvoiceRegistered(payload: EventPayload<'supplier_invoice.registered'>): Promise<void> {
+export async function handleSupplierInvoiceRegistered(payload: EventPayload<'supplier_invoice.registered'>): Promise<void> {
   const { supplierInvoice, companyId } = payload
   try {
     await notifyAttestersOfInvoice(createServiceClient(), companyId, supplierInvoice.id)
@@ -144,7 +145,7 @@ async function handleSupplierInvoiceRegistered(payload: EventPayload<'supplier_i
   }
 }
 
-/** Wired in lib/init.ts beside the other core handlers. */
+/** Subscribes the handler on its own; lib/init subscribes it through EVENT_CONSUMERS. */
 export function registerAttestNotificationHandler(): () => void {
   return eventBus.on('supplier_invoice.registered', handleSupplierInvoiceRegistered)
 }

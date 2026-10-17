@@ -64,8 +64,8 @@ export async function runEventDetectors(
 }
 
 /**
- * Subscribe the event detectors. Called once by lib/init's
- * ensureInitialized(); returns the unsubscribe functions.
+ * Subscribe the event detectors; returns the unsubscribe functions. lib/init
+ * subscribes them through EVENT_CONSUMERS (lib/composition/event-consumers.ts).
  */
 export function registerSuggestionDetectorHandler(): (() => void)[] {
   return [...detectorsByEventType().entries()].map(([type, detectors]) =>

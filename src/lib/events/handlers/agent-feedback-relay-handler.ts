@@ -80,33 +80,36 @@ function escapeHtml(s: string): string {
  * report is still in event_log, where the weekly loop reads it.
  */
 export function registerAgentFeedbackRelayHandler(): () => void {
-  return eventBus.on('agent.feedback', async (feedback) => {
-    const to = agentFeedbackRecipient()
-    if (!to || !isRelayWorthy(feedback)) return
-    const email = await getEmailService()
-    if (!email.isConfigured()) return
-    try {
-      const service = createServiceClientNoCookies()
-      const [{ data: userData }, { data: company }] = await Promise.all([
-        service.auth.admin.getUserById(feedback.userId),
-        service.from('companies').select('name').eq('id', feedback.companyId).maybeSingle(),
-      ])
-      const from = userData?.user?.email
-      if (!from) {
-        log.warn('agent feedback not relayed: reporter has no email', { company: feedback.companyId })
-        return
-      }
-      const mail = composeAgentFeedbackMail(feedback, { email: from, companyName: company?.name ?? null })
-      const sent = await email.sendEmail({
-        to,
-        subject: `[${getBranding().appName.toLowerCase()} support] ${mail.subject}`,
-        replyTo: from,
-        text: mail.text,
-        html: mail.html,
-      })
-      if (!sent.success) log.warn('agent feedback relay failed', { company: feedback.companyId, error: sent.error })
-    } catch (err) {
-      log.warn('agent feedback relay failed', { company: feedback.companyId, error: err instanceof Error ? err.message : String(err) })
+  return eventBus.on('agent.feedback', relayAgentFeedback)
+}
+
+/** The agent.feedback handler; lib/init subscribes it through EVENT_CONSUMERS (lib/composition/event-consumers.ts). */
+export async function relayAgentFeedback(feedback: AgentFeedback): Promise<void> {
+  const to = agentFeedbackRecipient()
+  if (!to || !isRelayWorthy(feedback)) return
+  const email = await getEmailService()
+  if (!email.isConfigured()) return
+  try {
+    const service = createServiceClientNoCookies()
+    const [{ data: userData }, { data: company }] = await Promise.all([
+      service.auth.admin.getUserById(feedback.userId),
+      service.from('companies').select('name').eq('id', feedback.companyId).maybeSingle(),
+    ])
+    const from = userData?.user?.email
+    if (!from) {
+      log.warn('agent feedback not relayed: reporter has no email', { company: feedback.companyId })
+      return
     }
-  })
+    const mail = composeAgentFeedbackMail(feedback, { email: from, companyName: company?.name ?? null })
+    const sent = await email.sendEmail({
+      to,
+      subject: `[${getBranding().appName.toLowerCase()} support] ${mail.subject}`,
+      replyTo: from,
+      text: mail.text,
+      html: mail.html,
+    })
+    if (!sent.success) log.warn('agent feedback relay failed', { company: feedback.companyId, error: sent.error })
+  } catch (err) {
+    log.warn('agent feedback relay failed', { company: feedback.companyId, error: err instanceof Error ? err.message : String(err) })
+  }
 }
