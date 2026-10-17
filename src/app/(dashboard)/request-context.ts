@@ -6,6 +6,8 @@ import { createClient } from '@/lib/supabase/server'
 import { claimsPinned, userFromClaims } from '@/lib/auth/claims'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
+import { loadOpenObligations, type ObligationCode } from '@/lib/modules/obligations'
+import type { PackageId } from '@/lib/modules/packages'
 import type { FiscalPeriod, Team } from '@/types'
 
 /**
@@ -164,3 +166,18 @@ export const getResolvedDashboardAgentProfile = cache(async () => {
 
   return profile
 })
+
+/**
+ * Request-local open obligations (lib/modules/obligations.ts) of the
+ * packages the active company has switched off, keyed by their ids joined
+ * with commas so the layout (the menu keeps a winding-down package) and the
+ * Anpassa page share one probe. Never called for a company with every
+ * package on.
+ */
+export const getDashboardOpenObligations = cache(
+  async (packageIdsKey: string): Promise<Partial<Record<PackageId, ObligationCode[]>>> => {
+    const [{ supabase }, companyId] = await Promise.all([getDashboardAuthContext(), getDashboardCompanyId()])
+    if (!companyId || !packageIdsKey) return {}
+    return loadOpenObligations(supabase, companyId, packageIdsKey.split(',') as PackageId[])
+  },
+)

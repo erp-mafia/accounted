@@ -3,18 +3,21 @@
  * disable_package run once a person approved them
  * (lib/pending-operations/commit.ts).
  *
- * set_company_package_choice (migration 20261016200400) is the authority: it
- * re-checks that the approver is an owner or admin, refuses to switch a
- * package off while package_open_obligations names anything ("winding down"
- * is not built yet), writes the company's choice with who decided, and
- * writes the audit_log row behandlingshistorik shows as a dated line. It runs
+ * set_company_package_choice (migration 20261016230000, restating
+ * 20261016200400) is the authority: it re-checks that the approver is an
+ * owner or admin, writes the company's choice with who decided, and writes
+ * the audit_log row behandlingshistorik shows as a dated line. It runs
  * through the service role on every path, an approval in the app included
- * (a session client may not call it).
+ * (a session client may not call it). Switching off is never refused for
+ * what is still open: the package winds down (lib/modules/obligations.ts)
+ * and the answer names what keeps it visible.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { z } from 'zod'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { probePackageObligations, type ObligationCode } from '@/lib/modules/obligations'
 import { getPackage, PACKAGES } from '@/lib/modules/packages'
+import type { SwitchablePackageId } from '@/lib/modules/profiles'
 
 /** The packages a company can switch: every package but Bokföring. */
 export const SWITCHABLE_PACKAGE_IDS: readonly string[] = Object.freeze(PACKAGES.filter((p) => p.switchable).map((p) => p.id))
@@ -85,6 +88,14 @@ export type PackageSwitchResult =
         changed: boolean
         capability_config_id: string | null
         decided_at: string | null
+        /**
+         * Switched off with obligations still open: the package stays
+         * visible, its start doors closed, until they are settled. False
+         * when switched on, and when nothing was open.
+         */
+        winding_down: boolean
+        /** What keeps it winding down (lib/modules/obligations.ts); empty unless winding_down. */
+        open_obligations: ObligationCode[]
       }
     }
   | { ok: false; code: string; message_sv: string; status: number; obligations?: string[] }
@@ -122,6 +133,8 @@ export async function switchCompanyPackage(
   if (error) throw new Error(`Failed to switch the package: ${error.message}`)
   const result = (data ?? {}) as ChoiceRpcResult
   if (!result.ok) {
+    // Only a database still on 20261016200400 answers this (a deploy that
+    // reaches it before the migration): the switch is refused as before.
     if (result.code === 'PACKAGE_HAS_OPEN_OBLIGATIONS') {
       const obligations = Array.isArray(result.obligations) ? result.obligations : []
       return {
@@ -134,6 +147,12 @@ export async function switchCompanyPackage(
     }
     return refusal(result.code ?? 'PACKAGE_SWITCH_FAILED', 400)
   }
+  // Switched off: what is still open keeps the package winding down. Read
+  // after the write, through the same client, so the answer and the menu
+  // agree; a failed probe counts as open (obligations.ts).
+  const openObligations = input.enabled
+    ? []
+    : await probePackageObligations(serviceClient, input.companyId, params.package_id as SwitchablePackageId)
   return {
     ok: true,
     data: {
@@ -143,6 +162,8 @@ export async function switchCompanyPackage(
       changed: result.unchanged !== true,
       capability_config_id: result.capability_config_id ?? null,
       decided_at: result.decided_at ?? null,
+      winding_down: openObligations.length > 0,
+      open_obligations: openObligations,
     },
   }
 }

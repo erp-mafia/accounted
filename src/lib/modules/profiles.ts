@@ -24,7 +24,7 @@
  * Pure data with no server imports: client code may read it.
  */
 import type { EntityType } from '@/types'
-import { PACKAGES, type PackageId } from './packages'
+import { PACKAGES, type PackageDefinition, type PackageId } from './packages'
 
 export const PROFILE_IDS = [
   'sole-trader',
@@ -198,6 +198,23 @@ export function resolveStoredProfile(stored: StoredProfile | null | undefined): 
     if (found) return { definition: found, source: 'stored' }
   }
   return { definition: latestProfile(STANDARD_PROFILE_ID), source: 'implicit' }
+}
+
+/**
+ * Why a package is switched off, or null when it is on: the company's own
+ * choice wins both ways, else the profile's default decides. Bokföring is
+ * never off. The one rule the resolver and the start gate
+ * (./package-gate.ts) both apply.
+ */
+export function packageSwitchedOff(
+  pkg: Pick<PackageDefinition, 'id' | 'switchable'>,
+  profile: ProfileDefinition,
+  choice: boolean | undefined,
+): 'turned_off_by_company' | 'off_in_profile' | null {
+  if (!pkg.switchable) return null
+  if (choice === false) return 'turned_off_by_company'
+  if (choice === undefined && profile.packages[pkg.id as SwitchablePackageId] === 'off') return 'off_in_profile'
+  return null
 }
 
 /**

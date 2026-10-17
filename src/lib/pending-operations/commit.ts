@@ -263,6 +263,8 @@ import {
 } from '@/lib/api/schemas'
 import { z } from 'zod'
 import { operationForPendingType } from '@/lib/operations/registry'
+import { startPackageForPendingType } from '@/lib/modules/package-doors'
+import { packageStartRefusal } from '@/lib/modules/package-gate'
 import { rejectSupersededInboxConversions } from './supersede'
 import { backfillSupplierPaymentDetails, inboxStatedPaymentDetails } from '@/lib/supplier-invoices/payment-details-backfill'
 import { assessRegisteredPayee, payeeAlertWarning } from '@/lib/payments/payee-registration'
@@ -6868,6 +6870,29 @@ async function commitPendingOperationInner(
       http_status: 403,
       code: 'capability_blocked',
       operation_status: 'pending',
+    }
+  }
+
+  // ── Package start gate (commit-time twin of the doors' gate,
+  //    lib/modules/package-doors.ts). Approving a staged start (a new
+  //    invoice, salary run, asset, ...) starts that work now, so it refuses
+  //    while the company has the package switched off or winding down, even
+  //    when it was staged before the switch. Before the claim, so the op stays
+  //    'pending' and commits once the package is on again.
+  const startPackage = startPackageForPendingType(
+    pendingOp.operation_type,
+    operationForPendingType(pendingOp.operation_type)?.id,
+  )
+  if (startPackage) {
+    const refusal = await packageStartRefusal(supabase, companyId, startPackage)
+    if (refusal) {
+      return {
+        status: 'failed',
+        error: refusal.messageSv,
+        http_status: refusal.status,
+        code: refusal.code,
+        operation_status: 'pending',
+      }
     }
   }
 

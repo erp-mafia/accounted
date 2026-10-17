@@ -232,6 +232,7 @@ import {
   posSalesVenuesList,
 } from './pos-sales'
 import { COLLECTIONS_OPERATION_LIST } from './collections'
+import { PACKAGE_OPERATIONS } from './packages'
 import { BANK_FEED_OPERATIONS } from './bank-feed'
 import { PAYMENT_SIGNING_LINK_OPERATIONS } from './payment-signing-links'
 import { SUPPLIER_INVOICE_ATTEST_OPERATIONS } from './supplier-invoice-attest'
@@ -456,6 +457,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   ...PAYMENT_SIGNING_LINK_OPERATIONS,
   // The attest policy for supplier invoices: read it (also as an MCP tool), save it (v1 only: owners and admins), and one invoice's attest trail.
   ...SUPPLIER_INVOICE_ATTEST_OPERATIONS,
+  // Packages: read their status (winding down included) and stage a switch on or off; approval by an owner or admin.
+  ...PACKAGE_OPERATIONS,
 ]
 
 /**

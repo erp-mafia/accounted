@@ -165,13 +165,20 @@ export async function v1ErrorResponse(
 export async function v1ErrorResponseFromCode(
   code: string,
   log: Logger,
-  ctx: V1ErrorContext & { reason?: string },
+  ctx: V1ErrorContext & {
+    reason?: string
+    /** The thrower's own sentences, for a code whose message names something (thrown_message_sv). */
+    messageSv?: string
+    messageEn?: string
+  },
 ): Promise<NextResponse> {
   const legacy = legacyErrorResponseFromCode(code, log, {
     requestId: ctx.requestId,
     details: ctx.details,
     status: ctx.status,
     reason: ctx.reason,
+    ...(ctx.messageSv ? { messageSv: ctx.messageSv } : {}),
+    ...(ctx.messageEn ? { messageEn: ctx.messageEn } : {}),
   })
   return rewriteEnvelope(legacy, ctx)
 }

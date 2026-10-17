@@ -1,0 +1,1 @@
+[2026-10-16] A live bank, till or webshop connection and an active recurring invoice keep their package winding down: they still bring in work to book, and disconnecting or pausing lives in that package. Crons keep running while a package is off.

@@ -42,6 +42,8 @@ import { shouldExposeTimingHeaders } from '@/lib/observability/timing-headers'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
+import { startPackageForSessionRequest } from '@/lib/modules/package-doors'
+import { packageStartRefusal } from '@/lib/modules/package-gate'
 
 export interface RouteContext {
   /** Stable id for this HTTP request: appears in logs, error envelope, X-Request-Id header. */
@@ -192,6 +194,22 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
             writeCheck.response.headers.set('X-Request-Id', requestId)
           }
           return writeCheck.response
+        }
+      }
+
+      // A route that starts new work in a package (lib/modules/package-doors.ts)
+      // refuses while the company has that package switched off or winding
+      // down. Every other route skips this: the match is in memory.
+      const startPackage = startPackageForSessionRequest(request.method, new URL(request.url).pathname)
+      if (startPackage) {
+        const refusal = await packageStartRefusal(supabase, companyId, startPackage)
+        if (refusal) {
+          return errorResponseFromCode(refusal.code, userLog.child({ companyId }), {
+            requestId,
+            messageSv: refusal.messageSv,
+            messageEn: refusal.messageEn,
+            details: refusal.details,
+          })
         }
       }
 

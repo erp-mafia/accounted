@@ -14,6 +14,7 @@ import {
   capabilityInputsFromEntitlements,
   capabilitySurface,
   readStoredProfile,
+  withOpenObligations,
   resolveCapabilities,
 } from '@/lib/modules/capabilities'
 import { isArkivSectionEnabled } from '@/lib/arkiv/flag'
@@ -107,19 +108,20 @@ export async function loadNavGateContext(
 
   // The resolved capabilities, from the reads above: the same function the
   // dashboard layout hands the sidebar its surface with.
-  const capabilities = resolveCapabilities(
-    capabilityInputsFromEntitlements(
-      {
-        jurisdiction: company?.jurisdiction,
-        ledgerCurrency: company?.ledger_currency,
-        entityType,
-        paysSalaries,
-        profileId: storedProfile?.id,
-        profileVersion: storedProfile?.version,
-      },
-      entitlements,
-    ),
+  // A package that winds down keeps its pages, as in the menu: its open
+  // obligations are read only when a package is switched off.
+  const inputs = capabilityInputsFromEntitlements(
+    {
+      jurisdiction: company?.jurisdiction,
+      ledgerCurrency: company?.ledger_currency,
+      entityType,
+      paysSalaries,
+      profileId: storedProfile?.id,
+      profileVersion: storedProfile?.version,
+    },
+    entitlements,
   )
+  const capabilities = await withOpenObligations(supabase, companyId, inputs, resolveCapabilities(inputs))
 
   return {
     entityType,

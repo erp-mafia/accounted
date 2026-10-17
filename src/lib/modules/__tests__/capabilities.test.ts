@@ -333,6 +333,49 @@ describe('loadCompanyCapabilities: package switches', () => {
     expect(moduleOf(result!, 'bank-feed')).toMatchObject({ status: 'off', availability: 'off' })
     expect(packageOf(result!, 'bank').availability).toBe('on')
   })
+
+  it('probes the obligations of a switched-off package and winds it down while one is open', async () => {
+    const mock = createTableMockSupabase({
+      companies: { data: { jurisdiction: 'SE', ledger_currency: 'SEK', entity_type: 'aktiebolag' } },
+      company_settings: { data: { entity_type: 'aktiebolag', pays_salaries: null } },
+      company_capability_config: { data: [{ capability_key: 'package:payroll', enabled: false }] },
+      'rpc:company_capability_grant_rows': { data: ACTIVE_GRANTS },
+      salary_runs: { data: [{ id: 'run-1' }] },
+    })
+    const result = await loadCompanyCapabilities(mock.supabase as unknown as SupabaseClient, COMPANY_ID)
+    expect(packageOf(result!, 'payroll')).toMatchObject({
+      availability: 'winding_down',
+      reasons: ['turned_off_by_company', 'open_obligations'],
+    })
+    expect(packageOf(result!, 'payroll').open_obligations).toContain('open_salary_runs')
+    // Only the switched-off package is probed.
+    expect(mock.tables()).not.toContain('invoices')
+    expect(mock.tables()).not.toContain('bank_connections')
+  })
+
+  it('reads no obligation for a company with every package on, and none when asked not to', async () => {
+    const allOn = createTableMockSupabase({
+      companies: { data: { jurisdiction: 'SE', ledger_currency: 'SEK', entity_type: 'aktiebolag' } },
+      company_settings: { data: { entity_type: 'aktiebolag', pays_salaries: null } },
+      company_capability_config: { data: [] },
+      'rpc:company_capability_grant_rows': { data: ACTIVE_GRANTS },
+    })
+    await loadCompanyCapabilities(allOn.supabase as unknown as SupabaseClient, COMPANY_ID)
+    expect([...new Set(allOn.tables())].sort()).toEqual(['companies', 'company_capability_config', 'company_settings'])
+
+    const off = createTableMockSupabase({
+      companies: { data: { jurisdiction: 'SE', ledger_currency: 'SEK', entity_type: 'aktiebolag' } },
+      company_settings: { data: { entity_type: 'aktiebolag', pays_salaries: null } },
+      company_capability_config: { data: [{ capability_key: 'package:payroll', enabled: false }] },
+      'rpc:company_capability_grant_rows': { data: ACTIVE_GRANTS },
+      salary_runs: { data: [{ id: 'run-1' }] },
+    })
+    const result = await loadCompanyCapabilities(off.supabase as unknown as SupabaseClient, COMPANY_ID, {
+      obligations: false,
+    })
+    expect(packageOf(result!, 'payroll').availability).toBe('off')
+    expect(off.tables()).not.toContain('salary_runs')
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -389,16 +432,33 @@ describe('resolveCapabilities: packages', () => {
 
   it('winds a switched-off package down while it has open obligations', () => {
     const result = resolveCapabilities(
-      inputs({ packageChoices: { payroll: false }, openObligations: new Set<PackageId>(['payroll']) }),
+      inputs({ packageChoices: { payroll: false }, openObligations: { payroll: ['open_salary_runs', 'unfiled_agi'] } }),
     )
     expect(packageOf(result, 'payroll')).toMatchObject({
       availability: 'winding_down',
       reasons: ['turned_off_by_company', 'open_obligations'],
+      open_obligations: ['open_salary_runs', 'unfiled_agi'],
     })
     expect(moduleOf(result, 'payroll').availability).toBe('winding_down')
     // Obligations alone change nothing for a package that is on.
-    const on = resolveCapabilities(inputs({ openObligations: new Set<PackageId>(['payroll']) }))
-    expect(packageOf(on, 'payroll')).toMatchObject({ availability: 'on', reasons: [] })
+    const on = resolveCapabilities(inputs({ openObligations: { payroll: ['open_salary_runs'] } }))
+    expect(packageOf(on, 'payroll')).toMatchObject({ availability: 'on', reasons: [], open_obligations: [] })
+    // Settled: an empty list is off, so the package disappears.
+    const settled = resolveCapabilities(inputs({ packageChoices: { payroll: false }, openObligations: { payroll: [] } }))
+    expect(packageOf(settled, 'payroll')).toMatchObject({ availability: 'off', open_obligations: [] })
+  })
+
+  it('winds a package the profile leaves off down the same way', () => {
+    const result = resolveCapabilities(
+      inputs({
+        profile: { id: 'limited-company-no-employees', version: 1 },
+        openObligations: { payroll: ['open_salary_runs'] },
+      }),
+    )
+    expect(packageOf(result, 'payroll')).toMatchObject({
+      availability: 'winding_down',
+      reasons: ['off_in_profile', 'open_obligations'],
+    })
   })
 
   it('reports a package as outside the plan only when every module in it needs a capability the plan lacks', () => {
@@ -450,7 +510,7 @@ describe('resolveCapabilities: packages', () => {
       inputs({
         entitled: new Set(),
         packageChoices: Object.fromEntries(PACKAGES.map((p) => [p.id, false])),
-        openObligations: new Set<PackageId>(['payroll']),
+        openObligations: { payroll: ['open_salary_runs'] },
       }),
     ]
     for (const input of worst) {
@@ -489,7 +549,7 @@ describe('capabilitySurface', () => {
       'webshop',
     ])
     const winding = resolveCapabilities(
-      inputs({ packageChoices: { payroll: false }, openObligations: new Set<PackageId>(['payroll']) }),
+      inputs({ packageChoices: { payroll: false }, openObligations: { payroll: ['unfiled_agi'] } }),
     )
     expect(capabilitySurface(winding).hidden).toEqual([])
     const abroad = capabilitySurface(resolveCapabilities(inputs({ jurisdiction: 'NO' })))

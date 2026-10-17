@@ -6238,6 +6238,54 @@ const PACKAGE: Record<string, StructuredErrorEntry> = {
       description: 'Settle what details.obligations names (pay the invoices, book the runs, end the connections), then switch the package off again.',
     },
   },
+  // A start door of a package that is switched off or winding down
+  // (lib/modules/package-doors.ts): the open work stays reachable, nothing
+  // new starts. The doors pass the sentence that names the package
+  // (lib/modules/package-gate.ts); this one is the fallback.
+  PACKAGE_OFF: {
+    httpStatus: 409,
+    message_sv: 'Paketet är avstängt för företaget, så inget nytt kan startas där. Slå på det under Anpassa.',
+    message_en: 'This package is switched off for the company, so no new work can start in it. Switch it on in Anpassa.',
+    retryable: false,
+    remediation: {
+      description:
+        'Ask an owner or admin to switch the package (details.package_id) on under Inställningar, Anpassa, or stage the switch with gnubok_enable_package for them to approve. Everything already open in the package (paying, booking, filing, matching) keeps working while it is off.',
+      tool: 'gnubok_enable_package',
+    },
+  },
+  PACKAGE_SWITCH_STAGE_ONLY: {
+    httpStatus: 400,
+    message_sv: 'Ett paket slås på eller av genom ett förslag som en ägare eller administratör godkänner.',
+    message_en: 'A package switch is staged and then approved by an owner or admin: send it with ?stage=true.',
+    retryable: false,
+    remediation: {
+      description:
+        'Send the same request with ?stage=true, then approve the pending operation (POST /pending-operations/{id}/approve) or let an owner or admin approve it in Accounted.',
+    },
+  },
+  PACKAGE_NOT_IN_PLAN: {
+    httpStatus: 403,
+    message_sv: 'Paketet ingår inte i företagets abonnemang.',
+    message_en: 'The package is not included in the company plan.',
+    retryable: false,
+    remediation: { description: 'Upgrade the plan under Inställningar, Abonnemang, then switch the package on.' },
+  },
+  PACKAGE_NOT_IN_COUNTRY: {
+    httpStatus: 400,
+    message_sv: 'Paketet finns inte för företag i det här landet.',
+    message_en: 'The package is not offered for companies in this country.',
+    retryable: false,
+  },
+  PACKAGE_NOT_FOR_LEGAL_FORM: {
+    httpStatus: 400,
+    message_sv: 'Paketet är inte tillgängligt för företagets bolagsform.',
+    message_en: 'The package is not offered for the company legal form.',
+    retryable: false,
+    remediation: {
+      description:
+        'For Lön in an enskild firma: set pays_salaries in the company tax profile (Inställningar, Skatt), then switch the package on.',
+    },
+  },
 }
 
 // ─────────────────────────────────────────────────────────────────

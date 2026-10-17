@@ -214,7 +214,13 @@ import { generateMonthlyBreakdown } from '@/lib/reports/monthly-breakdown'
 import { uiWidgets, findUiWidget, WIDGET_MIME_TYPE } from './widgets'
 import { dataResources, findResource, parseResourceQuery } from './resources'
 import { buildLedgerContext } from '@/lib/agent-context/ledger-context'
-import { capabilityDigest, capabilitySurface, loadCompanyCapabilities } from '@/lib/modules/capabilities'
+import {
+  capabilityDigest,
+  capabilitySurface,
+  loadCompanyCapabilities,
+  type CompanyCapabilities,
+} from '@/lib/modules/capabilities'
+import { obligationsPhraseSv } from '@/lib/modules/obligations'
 import { listOpenSuggestions } from '@/lib/suggestions/list'
 import type { ModuleId } from '@/lib/modules/manifest'
 import { moduleForTool } from './tool-modules'
@@ -568,7 +574,9 @@ import {
 import { toSameOriginStorageUrl } from '@/lib/core/documents/storage-proxy'
 import { createArkivTools } from './arkiv-tools'
 import { createOperationTools, toolOutputSchema } from './operation-tools'
-import { OPERATIONS } from '@/lib/operations/registry'
+import { ALL_OPERATIONS, OPERATIONS } from '@/lib/operations/registry'
+import { startPackageForTool } from '@/lib/modules/package-doors'
+import { packageOffToolError, packageStartRefusal } from '@/lib/modules/package-gate'
 import { createHash, randomUUID } from 'node:crypto'
 import { ExtractionSchema as InvoiceExtractionSchema, AgentExtractionSchema, fetchOwnCompanyIdentity } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
 import { extractAndMirror } from '@/lib/documents/inbox-extraction/extract-and-mirror'
@@ -1230,6 +1238,35 @@ export interface McpTool {
 // ── Shared constants ─────────────────────────────────────────
 
 const log = createLogger('mcp-server')
+
+/**
+ * The operation a generated tool was made from, by tool name: the package
+ * start gate (lib/modules/package-doors.ts) classifies a generated tool by
+ * its operation. Dark operations included, as the commit path finds them.
+ */
+/**
+ * The briefing's view of the packages that wind down: each with the
+ * obligations that keep it visible, as codes and one Swedish phrase. Empty
+ * (no key at all) for a company where nothing winds down.
+ */
+function windingDownBriefing(capabilities: CompanyCapabilities): {
+  packages_winding_down?: Array<{ package_id: string; name_sv: string; open_obligations: string[]; open_obligations_sv: string }>
+} {
+  const winding = capabilities.packages.filter((p) => p.availability === 'winding_down')
+  if (winding.length === 0) return {}
+  return {
+    packages_winding_down: winding.map((p) => ({
+      package_id: p.id,
+      name_sv: p.name_sv,
+      open_obligations: [...p.open_obligations],
+      open_obligations_sv: obligationsPhraseSv(p.open_obligations),
+    })),
+  }
+}
+
+const OPERATION_ID_BY_TOOL: ReadonlyMap<string, string> = new Map(
+  ALL_OPERATIONS.flatMap((op) => (op.mcp ? [[op.mcp.name, op.id] as const] : [])),
+)
 
 // gnubok_feedback rate limit: 1 per 60s per actor. In-memory single-process;
 // no Redis dependency. See the gnubok_feedback tool definition below.
@@ -4074,6 +4111,17 @@ async function runInnerTool(params: {
     if (requiredCapability && !(await hasCapability(supabase, companyId, requiredCapability))) {
       const blocked = capabilityBlockedError(requiredCapability)
       throw Object.assign(new Error(blocked.message_en ?? blocked.message_sv), { code: blocked.code })
+    }
+    // The package start gate, per company, as for a direct call.
+    const startPackage = startPackageForTool(inner.name, OPERATION_ID_BY_TOOL.get(inner.name))
+    if (startPackage) {
+      const refusal = await packageStartRefusal(supabase, companyId, startPackage)
+      if (refusal) {
+        throw Object.assign(new Error(refusal.messageEn), {
+          code: refusal.code,
+          remediation: { description: refusal.messageEn, tool: 'gnubok_enable_package', args: { package_id: refusal.packageId } },
+        })
+      }
     }
     const result = await withSIEExternalReport(supabase, companyId, inner.name, () =>
       inner.execute({ ...innerArgs }, companyId, userId, supabase, actor)
@@ -6984,6 +7032,11 @@ export const tools: McpTool[] = [
             name_sv: capabilities.profile.name_sv,
             source: capabilities.profile.source,
             packages_off: capabilities.packages.filter((p) => p.availability === 'off').map((p) => p.id),
+            // Switched off with obligations still open: listed and usable for
+            // settling them, but every start tool answers PACKAGE_OFF until
+            // they are settled (lib/modules/obligations.ts). Present only
+            // when a package winds down, so no company pays for it otherwise.
+            ...windingDownBriefing(capabilities),
           }
         : null
       // The same view of the packages tools/list takes for a single-company
@@ -25951,7 +26004,7 @@ function emitToolCallTelemetry(payload: {
   success: boolean
   isError: boolean
   errorCode: string | null
-  errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'company_access_denied' | 'invalid_arguments' | 'unknown_tool' | 'test_key_write_blocked' | 'unattended_write_blocked' | 'bridge_refused' | null
+  errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'company_access_denied' | 'invalid_arguments' | 'unknown_tool' | 'test_key_write_blocked' | 'unattended_write_blocked' | 'bridge_refused' | 'package_off' | null
   errorMessage: string | null
   /**
    * The specific English diagnostic, passed as `structured.error.message_en`.
@@ -27179,6 +27232,42 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             isError: true,
           }))
         )
+      }
+
+      // A tool that starts new work in a package (a new invoice, salary run,
+      // asset, till connection; lib/modules/package-doors.ts) refuses while
+      // the company has that package switched off or winding down, the
+      // commit-time twin is in commitPendingOperation. Everything that settles
+      // what is open keeps working. Before anything is staged.
+      const startPackage = effectiveCompanyId
+        ? startPackageForTool(toolName, OPERATION_ID_BY_TOOL.get(toolName))
+        : null
+      if (startPackage && effectiveCompanyId) {
+        const refusal = await packageStartRefusal(supabase, effectiveCompanyId, startPackage)
+        if (refusal) {
+          const offError = packageOffToolError(refusal)
+          emitToolCallTelemetry({
+            tool: toolName,
+            requiredScope: requiredScope ?? null,
+            actor,
+            latencyMs: 0,
+            success: false,
+            isError: true,
+            errorCode: offError.error.code,
+            errorKind: 'package_off',
+            errorMessage: offError.error.message_sv,
+            errorDetail: offError.error.message_en,
+            requestId: id ?? null,
+            userId,
+            companyId: effectiveCompanyId,
+          })
+          return NextResponse.json(
+            jsonRpc(id ?? null, decorate({
+              content: [{ type: 'text', text: JSON.stringify(projectMcpPayload(offError, toolNamespace), null, 2) }],
+              isError: true,
+            }))
+          )
+        }
       }
 
       // Test-mode API keys are simulation-only. Mirror the v1 REST guard

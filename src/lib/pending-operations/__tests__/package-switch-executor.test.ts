@@ -81,6 +81,8 @@ describe('commitPendingOperation: enable_package and disable_package', () => {
       changed: true,
       capability_config_id: 'cfg-1',
       decided_at: '2026-10-16T10:00:00Z',
+      winding_down: false,
+      open_obligations: [],
     })
     expect(svc.findCall('rpc:set_company_package_choice', 'rpc')).toEqual([
       {

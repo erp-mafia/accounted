@@ -225,6 +225,10 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_connect_migration:               'companies:read',
   gnubok_get_company_settings:            'companies:read',
   gnubok_update_company_settings:         'companies:write',
+  // Packages (Lön, Kundfakturor, ...): their status, and the staged switch an owner or admin approves.
+  gnubok_list_packages:                   'companies:read',
+  gnubok_enable_package:                  'companies:write',
+  gnubok_disable_package:                 'companies:write',
   // Service accounts: the same opt-in scope as the v1 doors; a service
   // account's own key never holds it.
   gnubok_list_service_accounts:           'service_accounts:manage',

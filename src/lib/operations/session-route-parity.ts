@@ -583,6 +583,13 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'DELETE /api/salary/runs/:id/lines/:lineId': covered([`DELETE ${V}/salary-runs/:id/lines/:lineId`, 'gnubok_delete_payslip_line']),
 
   // ── Staged operations (Granskning) ─────────────────────────────────
+  // The Anpassa page's package switch: stages enable_package or disable_package; approval is the commit door below.
+  'POST /api/packages/:packageId': covered([
+    `POST ${V}/packages/:packageId/enable`,
+    `POST ${V}/packages/:packageId/disable`,
+    'gnubok_enable_package',
+    'gnubok_disable_package',
+  ]),
   'POST /api/pending-operations/:id/commit': covered([`POST ${V}/pending-operations/:id/approve`, 'gnubok_approve_pending_operation']),
   'POST /api/pending-operations/:id/reject': covered([`POST ${V}/pending-operations/:id/reject`, 'gnubok_reject_pending_operation']),
   'POST /api/pending-operations/bulk-commit': covered(
