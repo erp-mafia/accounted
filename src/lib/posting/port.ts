@@ -119,6 +119,24 @@ export function createPostingPort(deps: PostingPortDeps = {}): PostingPort {
       return adapter.createJournalEntry({ supabase, companyId, userId, input, commitMethod, rubricVersion, options, businessEvent })
     },
 
+    async draftJournalEntry(request): Promise<JournalEntry> {
+      const { supabase, companyId, userId, event, input, options } = request
+      const mode = modeOf()
+      // As postJournalEntry: the event and its link, then the draft, before
+      // the producer's own work and before any voucher number.
+      const businessEvent =
+        mode !== 'off' && linesPassEngineChecks(input.lines)
+          ? await recordFor(mode, supabase, companyId, event, 'produced')
+          : undefined
+      return adapter.createDraftEntry({ supabase, companyId, userId, input, options, businessEvent })
+    },
+
+    async commitJournalEntry(request): Promise<JournalEntry> {
+      const { supabase, companyId, userId, entryId, commitMethod, rubricVersion } = request
+      // The draft carries its event link already: nothing to record here.
+      return adapter.commitEntry({ supabase, companyId, userId, entryId, commitMethod, rubricVersion })
+    },
+
     async reverseJournalEntry(request): Promise<JournalEntry> {
       const { supabase, companyId, userId, event, entryId, reversalDate, options, role } = request
       const mode = modeOf()

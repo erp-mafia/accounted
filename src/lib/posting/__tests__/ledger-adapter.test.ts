@@ -7,10 +7,12 @@ import type { CreateJournalEntryInput } from '@/types'
 
 vi.mock('@/lib/bookkeeping/engine', () => ({
   createJournalEntry: vi.fn(async () => ({ id: 'je-1' })),
+  createDraftEntry: vi.fn(async () => ({ id: 'je-3' })),
+  commitEntry: vi.fn(async () => ({ id: 'je-3' })),
   reverseEntry: vi.fn(async () => ({ id: 'je-2' })),
 }))
 
-const { createJournalEntry, reverseEntry } = await import('@/lib/bookkeeping/engine')
+const { commitEntry, createDraftEntry, createJournalEntry, reverseEntry } = await import('@/lib/bookkeeping/engine')
 const { ledgerAdapter } = await import('../ledger-adapter')
 
 const INPUT = { description: 'x', lines: [] } as unknown as CreateJournalEntryInput
@@ -39,7 +41,31 @@ describe('ledger adapter', () => {
     expect(vi.mocked(createJournalEntry).mock.calls[1]).toEqual(['sb', 'c', 'u', INPUT, undefined, undefined, { replayDimensions: true }])
   })
 
+  it('drafts with exactly the producer\'s four arguments when there is nothing to add, the link as the fifth', async () => {
+    await ledgerAdapter.createDraftEntry({ supabase: 'sb' as never, companyId: 'c', userId: 'u', input: INPUT })
+    const call = vi.mocked(createDraftEntry).mock.calls[0]!
+    expect(call).toHaveLength(4)
+    expect(call).toEqual(['sb', 'c', 'u', INPUT])
+    expect(call[3]).toBe(INPUT)
+    await ledgerAdapter.createDraftEntry({ supabase: 'sb' as never, companyId: 'c', userId: 'u', input: INPUT, businessEvent: LINK })
+    expect(vi.mocked(createDraftEntry).mock.calls[1]).toEqual(['sb', 'c', 'u', INPUT, { businessEvent: LINK }])
+  })
+
+  it('commits with only the arguments the producer passed', async () => {
+    await ledgerAdapter.commitEntry({ supabase: 'sb' as never, companyId: 'c', userId: 'u', entryId: 'je-3' })
+    expect(vi.mocked(commitEntry).mock.calls[0]).toEqual(['sb', 'c', 'u', 'je-3'])
+    expect(vi.mocked(commitEntry).mock.calls[0]).toHaveLength(4)
+    await ledgerAdapter.commitEntry({ supabase: 'sb' as never, companyId: 'c', userId: 'u', entryId: 'je-3', commitMethod: 'user_accept' })
+    expect(vi.mocked(commitEntry).mock.calls[1]).toEqual(['sb', 'c', 'u', 'je-3', 'user_accept'])
+    await ledgerAdapter.commitEntry({ supabase: 'sb' as never, companyId: 'c', userId: 'u', entryId: 'je-3', rubricVersion: 'r1' })
+    expect(vi.mocked(commitEntry).mock.calls[2]).toEqual(['sb', 'c', 'u', 'je-3', undefined, 'r1'])
+  })
+
   it('reverses with the same rule', async () => {
+    await ledgerAdapter.reverseEntry({ supabase: 'sb' as never, companyId: 'c', userId: 'u', entryId: 'je-1' })
+    expect(vi.mocked(reverseEntry).mock.calls.at(-1)).toEqual(['sb', 'c', 'u', 'je-1'])
+    expect(vi.mocked(reverseEntry).mock.calls.at(-1)).toHaveLength(4)
+    vi.mocked(reverseEntry).mockClear()
     await ledgerAdapter.reverseEntry({ supabase: 'sb' as never, companyId: 'c', userId: 'u', entryId: 'je-1', reversalDate: '2026-03-31' })
     expect(vi.mocked(reverseEntry).mock.calls[0]).toEqual(['sb', 'c', 'u', 'je-1', '2026-03-31'])
     await ledgerAdapter.reverseEntry({

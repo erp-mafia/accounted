@@ -66,6 +66,39 @@ export interface PostJournalEntryRequest {
   options?: Omit<CreateEntryOptions, 'businessEvent'>
 }
 
+/**
+ * The draft half of a posting a producer commits itself, with its own work in
+ * between: the kassa and webbshop doors claim their source row on the draft
+ * before a voucher number is drawn, and cancel the draft when the claim
+ * loses. The event is recorded and linked to the draft exactly as for
+ * postJournalEntry; the commit goes through commitJournalEntry.
+ */
+export interface DraftJournalEntryRequest {
+  supabase: SupabaseClient
+  companyId: string
+  userId: string
+  /** What happened; a function is called only while the port is on (see PostJournalEntryRequest). */
+  event: BusinessEventDraft | (() => BusinessEventDraft)
+  /** Handed to the engine unchanged. */
+  input: CreateJournalEntryInput
+  /** Engine options of the producer (replayDimensions); the port adds only the event link. */
+  options?: Omit<CreateEntryOptions, 'businessEvent'>
+}
+
+/**
+ * The commit of a draft made through draftJournalEntry: commitEntry's own
+ * arguments. The event was linked to the draft already, so nothing else is
+ * written here in any mode.
+ */
+export interface CommitJournalEntryRequest {
+  supabase: SupabaseClient
+  companyId: string
+  userId: string
+  entryId: string
+  commitMethod?: string
+  rubricVersion?: string
+}
+
 /** A storno through the port: the event it answers, and reverseEntry's own arguments. */
 export interface ReverseJournalEntryRequest {
   supabase: SupabaseClient
@@ -83,9 +116,15 @@ export interface ReverseJournalEntryRequest {
 /**
  * The posting port: every new posting records its business event here. Step
  * 1 moves one producer (bank-line booking) onto it; step 2 moves the rest.
+ * A producer that drafts, does its own work and then commits (kassa,
+ * webbshop) uses draftJournalEntry and commitJournalEntry instead of
+ * postJournalEntry.
  */
 export interface PostingPort {
   postJournalEntry(request: PostJournalEntryRequest): Promise<JournalEntry>
+  /** The draft of a producer that commits itself; see DraftJournalEntryRequest. */
+  draftJournalEntry(request: DraftJournalEntryRequest): Promise<JournalEntry>
+  commitJournalEntry(request: CommitJournalEntryRequest): Promise<JournalEntry>
   reverseJournalEntry(request: ReverseJournalEntryRequest): Promise<JournalEntry>
 }
 
@@ -106,6 +145,22 @@ export interface PostingAdapter {
     rubricVersion?: string
     options?: Omit<CreateEntryOptions, 'businessEvent'>
     businessEvent?: BusinessEventLink
+  }): Promise<JournalEntry>
+  createDraftEntry(args: {
+    supabase: SupabaseClient
+    companyId: string
+    userId: string
+    input: CreateJournalEntryInput
+    options?: Omit<CreateEntryOptions, 'businessEvent'>
+    businessEvent?: BusinessEventLink
+  }): Promise<JournalEntry>
+  commitEntry(args: {
+    supabase: SupabaseClient
+    companyId: string
+    userId: string
+    entryId: string
+    commitMethod?: string
+    rubricVersion?: string
   }): Promise<JournalEntry>
   reverseEntry(args: {
     supabase: SupabaseClient

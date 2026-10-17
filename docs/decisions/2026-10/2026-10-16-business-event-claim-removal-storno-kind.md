@@ -1,0 +1,1 @@
+[2026-10-16] Removing an utlägg records kind ledger.storno, role reversal, subject the claim, dated the day of removal: the same kind history projects for a storno, and no event lookup is added to the delete path.

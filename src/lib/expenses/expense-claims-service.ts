@@ -26,7 +26,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Currency } from '@/types'
 import type { CreateJournalEntryInput, CreateJournalEntryLineInput } from '@/types'
-import { commitExpensePayoutBatch, createJournalEntry, findFiscalPeriod, reverseEntry } from '@/lib/bookkeeping/engine'
+import { commitExpensePayoutBatch, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import {
   claimInboxItemForEntry,
@@ -44,6 +44,11 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { mergeDimensionBags } from '@/lib/bookkeeping/dimension-resolver'
 import { expenseClaimReverseChargeLines, type ExpenseClaimReverseCharge } from '@/lib/expenses/expense-claim-vat'
 import { linkBasisColumns } from '@/lib/links/stamp'
+import type { LinkBasisColumns } from '@/lib/links/link-basis'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { postingPort } from '@/lib/posting/port'
+import { mappingVersion } from '@/lib/posting/mapping-version'
+import type { BusinessEventDraft } from '@/lib/posting/types'
 
 const log = createLogger('expenses/claims')
 
@@ -405,6 +410,61 @@ export async function planExpenseClaim(
   }
 }
 
+/**
+ * The business event of a registered claim (kind expense.claimed), for the
+ * posting port: recorded while POSTING_EVENTS is shadow or strict, never
+ * built while it is off. Pure. The claimant is a party only as an employee
+ * (type and id); an owner's claim names nobody, the claim row carries the
+ * name.
+ */
+export function expenseClaimBusinessEvent(
+  claimId: string,
+  input: RegisterExpenseClaimInput,
+  plan: ExpenseClaimPlan,
+  linkBasis: LinkBasisColumns,
+): BusinessEventDraft {
+  return {
+    kind: 'expense.claimed',
+    category: null,
+    occurredOn: input.expense_date,
+    subject: { type: 'expense_claim', id: claimId },
+    party: plan.employeeId ? { type: 'employee', id: plan.employeeId } : null,
+    currency: input.currency,
+    amount: Math.abs(input.amount),
+    amountSek: Math.abs(plan.amountSek),
+    taxAmounts: plan.vatSek > 0 ? [{ tax: 'vat', treatment: null, amount_sek: plan.vatSek }] : [],
+    evidence: {
+      document_id: input.document_id,
+      inbox_item_id: input.inbox_item_id,
+      link_basis: linkBasis.link_basis,
+      link_evidence: linkBasis.link_evidence ?? undefined,
+    },
+    pendingOperationId: linkBasis.link_evidence?.pending_operation_id ?? null,
+    // The generated lines are this module's rules; a person's own lines are no automatic kontering.
+    mappingVersion: input.lines ? null : mappingVersion('expenseClaim'),
+    jurisdiction: 'SE',
+  }
+}
+
+/**
+ * The business event of a claim's removal: the storno of its verifikat
+ * (kind ledger.storno, linked with role reversal). Pure.
+ */
+export function expenseClaimRemovalBusinessEvent(
+  claimId: string,
+  occurredOn: string,
+  linkBasis: LinkBasisColumns,
+): BusinessEventDraft {
+  return {
+    kind: 'ledger.storno',
+    occurredOn,
+    subject: { type: 'expense_claim', id: claimId },
+    evidence: { link_basis: linkBasis.link_basis, link_evidence: linkBasis.link_evidence ?? undefined },
+    pendingOperationId: linkBasis.link_evidence?.pending_operation_id ?? null,
+    jurisdiction: 'SE',
+  }
+}
+
 export async function registerExpenseClaim(
   supabase: SupabaseClient,
   companyId: string,
@@ -466,7 +526,17 @@ export async function registerExpenseClaim(
 
   let journalEntryId: string
   try {
-    const entry = await createJournalEntry(supabase, companyId, userId, entryInput)
+    // Posting port (step 2): the engine gets entryInput unchanged; while
+    // POSTING_EVENTS is shadow or strict the expense.claimed event is
+    // recorded first and linked to the draft before a number is drawn.
+    const entry = await postingPort.postJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      // Built only while the port is on: off, the call is the one it was.
+      event: () => expenseClaimBusinessEvent(claim.id as string, input, plan, linkBasisColumns('user_created')),
+      input: entryInput,
+    })
     journalEntryId = entry.id
   } catch (err) {
     await supabase.from('expense_claims').delete().eq('id', claim.id).eq('company_id', companyId)
@@ -715,7 +785,7 @@ export async function deleteExpenseClaim(
       return { ok: true, reversal_entry_id: null }
     }
     // The client is untyped, so say what the guard above already proved:
-    // without this the variable stays `string | null` for reverseEntry below.
+    // without this the variable stays `string | null` for the storno below.
     entryId = sourced.id as string
   }
   // Retry safety: if a previous attempt posted the storno but failed to
@@ -733,7 +803,14 @@ export async function deleteExpenseClaim(
   if (entry?.status === 'reversed') {
     reversalEntryId = entry.reversed_by_id ?? null
   } else {
-    const reversal = await reverseEntry(supabase, companyId, userId, entryId)
+    const reversal = await postingPort.reverseJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      entryId,
+      event: () => expenseClaimRemovalBusinessEvent(claimId, todayIsoStockholm(), linkBasisColumns('user_created')),
+      role: 'reversal',
+    })
     reversalEntryId = reversal.id
   }
 
@@ -841,6 +918,10 @@ interface PayoutRpcRow {
  * with ALREADY_PAID, so a double click can never book a second transfer.
  * The claimant/liability/status rules are enforced by the RPC and echoed
  * here as result codes.
+ *
+ * Not through the posting port yet: the RPC drafts and commits in one
+ * transaction, so an event link needs the function to take an event id (a
+ * migration of its own, step 2's SQL posting functions).
  */
 export async function createPayoutBatch(
   supabase: SupabaseClient,

@@ -65,6 +65,8 @@ function fakeSupabase(insert: () => InsertResult, existing: { id: string } | nul
 }
 
 type CreateArgs = Parameters<PostingAdapter['createJournalEntry']>[0]
+type DraftArgs = Parameters<PostingAdapter['createDraftEntry']>[0]
+type CommitArgs = Parameters<PostingAdapter['commitEntry']>[0]
 type ReverseArgs = Parameters<PostingAdapter['reverseEntry']>[0]
 
 function fakeAdapter() {
@@ -72,6 +74,8 @@ function fakeAdapter() {
   const adapter = {
     id: 'ledger' as const,
     createJournalEntry: vi.fn(async (_args: CreateArgs) => entry),
+    createDraftEntry: vi.fn(async (_args: DraftArgs) => entry),
+    commitEntry: vi.fn(async (_args: CommitArgs) => entry),
     reverseEntry: vi.fn(async (_args: ReverseArgs) => entry),
   } satisfies PostingAdapter
   return adapter
@@ -237,6 +241,42 @@ describe('posting port', () => {
     })
     await port('off', adapter).reverseJournalEntry({ supabase, companyId: COMPANY, userId: 'u', entryId: 'je-1', event: EVENT })
     expect(callArgs(adapter.reverseEntry, 1).businessEvent).toBeUndefined()
+  })
+})
+
+describe('posting port: a producer that drafts and commits itself', () => {
+  it('off: drafts and commits with the producer\'s arguments and writes nothing else', async () => {
+    const adapter = fakeAdapter()
+    const { supabase, from } = fakeSupabase(() => ({ error: null }))
+    const build = vi.fn(() => EVENT)
+    await port('off', adapter).draftJournalEntry({ supabase, companyId: COMPANY, userId: 'u', event: build, input: INPUT })
+    await port('off', adapter).commitJournalEntry({ supabase, companyId: COMPANY, userId: 'u', entryId: 'je-1' })
+    expect(build).not.toHaveBeenCalled()
+    expect(from).not.toHaveBeenCalled()
+    expect(callArgs(adapter.createDraftEntry, 0).input).toBe(INPUT)
+    expect(callArgs(adapter.createDraftEntry, 0).businessEvent).toBeUndefined()
+    expect(callArgs(adapter.commitEntry, 0)).toMatchObject({ entryId: 'je-1', commitMethod: undefined, rubricVersion: undefined })
+  })
+
+  it('shadow: records the event before the draft, links it to the draft, and the commit records nothing more', async () => {
+    const adapter = fakeAdapter()
+    const { supabase, inserted } = fakeSupabase(() => ({ error: null }))
+    await port('shadow', adapter).draftJournalEntry({ supabase, companyId: COMPANY, userId: 'u', event: EVENT, input: INPUT })
+    expect(inserted).toHaveLength(1)
+    expect(callArgs(adapter.createDraftEntry, 0).businessEvent).toEqual({ id: EVENT_ID, role: 'produced', onFailure: 'log' })
+    await port('shadow', adapter).commitJournalEntry({ supabase, companyId: COMPANY, userId: 'u', entryId: 'je-1' })
+    expect(inserted).toHaveLength(1)
+  })
+
+  it('shadow drafts through a refused event write; strict stops before the draft', async () => {
+    const adapter = fakeAdapter()
+    const { supabase } = fakeSupabase(() => ({ error: { message: 'refused', code: '42501' } }))
+    await port('shadow', adapter).draftJournalEntry({ supabase, companyId: COMPANY, userId: 'u', event: EVENT, input: INPUT })
+    expect(callArgs(adapter.createDraftEntry, 0).businessEvent).toBeUndefined()
+    await expect(
+      port('strict', adapter).draftJournalEntry({ supabase, companyId: COMPANY, userId: 'u', event: EVENT, input: INPUT }),
+    ).rejects.toBeInstanceOf(BookkeepingDatabaseError)
+    expect(adapter.createDraftEntry).toHaveBeenCalledTimes(1)
   })
 })
 

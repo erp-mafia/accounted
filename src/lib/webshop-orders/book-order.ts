@@ -1,7 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
-import { createDraftEntry, commitEntry } from '@/lib/bookkeeping/engine'
+import { resolveSekAmountOrNull } from '@/lib/bookkeeping/currency-utils'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
+import type { LinkBasisColumns } from '@/lib/links/link-basis'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { postingPort } from '@/lib/posting/port'
+import { mappingVersion } from '@/lib/posting/mapping-version'
+import type { BusinessEventDraft } from '@/lib/posting/types'
 import { ensureWebshopPrefillAccounts } from '@/lib/webshop-orders/ensure-accounts'
 import { roundOre } from '@/lib/money'
 import type {
@@ -23,7 +28,8 @@ import type {
  *      non-SEK rows.
  *   3. bookOrderThroughEngine(): chart repair for our own prefill accounts,
  *      then the race-free draft -> atomic claim -> commit sequence through
- *      lib/bookkeeping/engine (source_type 'webshop_order').
+ *      the posting port (lib/posting) to lib/bookkeeping/engine
+ *      (source_type 'webshop_order').
  *
  * Anything added to the single-order path (e.g. underlag anchoring) belongs
  * in these functions, never inline in one route, so single and bulk booking
@@ -191,6 +197,35 @@ export type BookOrderEngineOutcome =
   | { ok: false; kind: 'engine_error'; stage: 'draft' | 'commit'; error: unknown }
 
 /**
+ * The business event of a booked webbshop order or refund (kind
+ * sale.webshop_order, a refund told apart by its direction), for the posting
+ * port: recorded while POSTING_EVENTS is shadow or strict, never built while
+ * it is off. Pure. The order row is named by the verifikat's source_id; the
+ * customer has no party record (the order carries names, never copied here).
+ */
+export function webshopOrderBusinessEvent(order: WebshopOrder, linkBasis: LinkBasisColumns): BusinessEventDraft {
+  const currency = order.currency.toUpperCase()
+  const vatSek = resolveSekAmountOrNull(Math.abs(order.total_tax), null, currency, order.exchange_rate)
+  return {
+    kind: 'sale.webshop_order',
+    category: 'income.sales',
+    occurredOn: (order.paid_date ?? order.order_date).slice(0, 10),
+    currency,
+    amount: Math.abs(order.total),
+    amountSek: order.total_sek === null ? null : Math.abs(order.total_sek),
+    taxAmounts: vatSek !== null && vatSek > 0 ? [{ tax: 'vat', treatment: null, amount_sek: vatSek }] : [],
+    evidence: {
+      direction: order.row_type === 'refund' ? 'out' : 'in',
+      link_basis: linkBasis.link_basis,
+      link_evidence: linkBasis.link_evidence ?? undefined,
+    },
+    pendingOperationId: linkBasis.link_evidence?.pending_operation_id ?? null,
+    mappingVersion: mappingVersion('webshopOrder'),
+    jurisdiction: 'SE',
+  }
+}
+
+/**
  * Race-free booking: draft -> atomic claim -> commit. The read-then-book
  * pattern let two concurrent requests each post an immutable verifikat
  * for the same order (skeptic finding). Instead the order row is claimed
@@ -226,15 +261,26 @@ export async function bookOrderThroughEngine(
 
   let draft: JournalEntry
   try {
-    draft = await createDraftEntry(supabase, companyId, userId, {
-      fiscal_period_id: input.fiscal_period_id,
-      entry_date: input.entry_date,
-      description: input.description,
-      source_type: 'webshop_order',
-      source_id: orderId,
-      voucher_series: input.voucher_series,
-      notes: input.notes,
-      lines: input.lines,
+    // Posting port (step 2): the engine gets the input unchanged; while
+    // POSTING_EVENTS is shadow or strict the sale.webshop_order event is
+    // recorded first and linked to the draft, before the claim below and
+    // before a voucher number is drawn.
+    draft = await postingPort.draftJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      // Built only while the port is on: off, the call is the one it was.
+      event: () => webshopOrderBusinessEvent(order, linkBasisColumns('user_created')),
+      input: {
+        fiscal_period_id: input.fiscal_period_id,
+        entry_date: input.entry_date,
+        description: input.description,
+        source_type: 'webshop_order',
+        source_id: orderId,
+        voucher_series: input.voucher_series,
+        notes: input.notes,
+        lines: input.lines,
+      },
     })
   } catch (err) {
     return { ok: false, kind: 'engine_error', stage: 'draft', error: err }
@@ -277,7 +323,7 @@ export async function bookOrderThroughEngine(
 
   let journalEntry: JournalEntry | null
   try {
-    journalEntry = await commitEntry(supabase, companyId, userId, draft.id)
+    journalEntry = await postingPort.commitJournalEntry({ supabase, companyId, userId, entryId: draft.id })
   } catch (err) {
     // Unlink so the row does not point at a cancelled draft, then cancel.
     // Order matters: the financial-freeze trigger keys on journal_entry_id

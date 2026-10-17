@@ -1,6 +1,7 @@
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
-import { commitEntry, createDraftEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { resolveSekAmountOrNull } from '@/lib/bookkeeping/currency-utils'
 import { toEntryPreview } from '@/lib/bookkeeping/entry-preview'
 import { BookkeepingDatabaseError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { uploadDocument } from '@/lib/core/documents/document-service'
@@ -12,6 +13,10 @@ import { buildPosDayEntry, evaluatePosDay, posDayDescription } from './evaluate'
 import { resolvePosSalesSettings } from './settings'
 import { normalizeDaySummary, type PosConnectionRow, type PosSalesDayRow } from './types'
 import { linkBasisColumns } from '@/lib/links/stamp'
+import type { LinkBasisColumns } from '@/lib/links/link-basis'
+import { postingPort } from '@/lib/posting/port'
+import { mappingVersion } from '@/lib/posting/mapping-version'
+import type { BusinessEventDraft } from '@/lib/posting/types'
 
 /**
  * Book one point-of-sale day as its daily takings voucher (source_type
@@ -115,6 +120,35 @@ async function archiveDayReport(
   }
 }
 
+/**
+ * The business event of a booked kassa day (kind sale.pos_daily_takings), for
+ * the posting port: recorded while POSTING_EVENTS is shadow or strict, never
+ * built while it is off. Pure. The day's own row is named by the verifikat's
+ * source_id; the day report is archived after the commit, so it is not in the
+ * evidence.
+ */
+export function posDayBusinessEvent(day: PosSalesDayRow, linkBasis: LinkBasisColumns): BusinessEventDraft {
+  const currency = (day.currency || day.day.currency).toUpperCase()
+  const vatSek = resolveSekAmountOrNull(Math.abs(day.vat), null, currency, null)
+  return {
+    kind: 'sale.pos_daily_takings',
+    category: 'income.sales',
+    occurredOn: day.business_date,
+    currency,
+    amount: Math.abs(day.gross),
+    amountSek: resolveSekAmountOrNull(Math.abs(day.gross), null, currency, null),
+    taxAmounts: vatSek !== null && vatSek > 0 ? [{ tax: 'vat', treatment: null, amount_sek: vatSek }] : [],
+    evidence: {
+      direction: day.gross < 0 ? 'out' : 'in',
+      link_basis: linkBasis.link_basis,
+      link_evidence: linkBasis.link_evidence ?? undefined,
+    },
+    pendingOperationId: linkBasis.link_evidence?.pending_operation_id ?? null,
+    mappingVersion: mappingVersion('posDailyTakings'),
+    jurisdiction: 'SE',
+  }
+}
+
 export async function bookPosSalesDay(
   ctx: OperationContext,
   input: BookPosDayInput,
@@ -184,7 +218,18 @@ export async function bookPosSalesDay(
 
   let draft: JournalEntry
   try {
-    draft = await createDraftEntry(supabase, companyId, userId, entryInput)
+    // Posting port (step 2): the engine gets entryInput unchanged; while
+    // POSTING_EVENTS is shadow or strict the sale.pos_daily_takings event is
+    // recorded first and linked to the draft, before the claim below and
+    // before a voucher number is drawn.
+    draft = await postingPort.draftJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      // Built only while the port is on: off, the call is the one it was.
+      event: () => posDayBusinessEvent(day, linkBasisColumns('user_created')),
+      input: entryInput,
+    })
   } catch (err) {
     // The live-voucher index: another booking of this day holds a draft or a posted voucher.
     if (err instanceof BookkeepingDatabaseError && err.pgCode === '23505') {
@@ -226,7 +271,7 @@ export async function bookPosSalesDay(
 
   let committed: JournalEntry | null
   try {
-    committed = await commitEntry(supabase, companyId, userId, draft.id)
+    committed = await postingPort.commitJournalEntry({ supabase, companyId, userId, entryId: draft.id })
   } catch (err) {
     // A commit whose answer was lost may still have posted: a posted voucher
     // keeps its link (the freeze trigger refuses the unlink anyway) and the

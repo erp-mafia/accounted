@@ -1,0 +1,1 @@
+[2026-10-16] The utlägg payout batch stays on create_expense_payout_batch in step 2a: the SQL function drafts and commits in one transaction, so an event link needs it to take an event id, a migration of its own; the brief allowed none.
