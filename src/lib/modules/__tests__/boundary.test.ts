@@ -40,8 +40,13 @@ const SECTIONS: Section[] = ['kernelToBlock', 'undeclaredBlockToBlock', 'undecla
 type CompositionSeams = { importers: string[]; imports: string[] }
 type Baseline = { _note: string; compositionSeams?: CompositionSeams } & Record<Section, Record<string, number>>
 
-/** What no composition file may import: the seams are static wiring, never lazy registration. */
-const COMPOSITION_FORBIDDEN = /^lib\/(init|initialized|events)(\/|$)/
+/**
+ * What no composition file may import: the seams are static wiring, never
+ * lazy registration. The event bus (and the lib/events barrel that re-exports
+ * it) is forbidden; the event consumer list may import handler leaf modules
+ * and the consumer contract under lib/events.
+ */
+const COMPOSITION_FORBIDDEN = /^lib\/(init|initialized|events|events\/bus)$/
 
 const sorted = (counts: Record<string, number>) =>
   Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)))

@@ -1,4 +1,5 @@
 import { eventBus } from '@/lib/events/bus'
+import type { EventPayload } from '@/lib/events/types'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { enqueueDocumentJob } from '@/lib/documents/jobs/queue'
 import { readerForMime } from '@/lib/documents/read/types'
@@ -18,14 +19,17 @@ const log = createLogger('document-read')
  * behind a hundred no-ops (prod: 112 queued for one company, 3 a minute).
  */
 export function registerDocumentReadHandler(): () => void {
-  return eventBus.on('document.uploaded', async ({ document, companyId }) => {
-    const company = document.company_id ?? companyId
-    if (!company) return
-    if (readerForMime(document.mime_type) === 'structured') return
-    try {
-      await enqueueDocumentJob(createServiceClientNoCookies(), company, document.id, 'read')
-    } catch (err) {
-      log.warn('document read enqueue failed', { doc: document.id, reason: err instanceof Error ? err.message : String(err) })
-    }
-  })
+  return eventBus.on('document.uploaded', enqueueDocumentRead)
+}
+
+/** The document.uploaded handler; lib/init subscribes it through EVENT_CONSUMERS (lib/composition/event-consumers.ts). */
+export async function enqueueDocumentRead({ document, companyId }: EventPayload<'document.uploaded'>): Promise<void> {
+  const company = document.company_id ?? companyId
+  if (!company) return
+  if (readerForMime(document.mime_type) === 'structured') return
+  try {
+    await enqueueDocumentJob(createServiceClientNoCookies(), company, document.id, 'read')
+  } catch (err) {
+    log.warn('document read enqueue failed', { doc: document.id, reason: err instanceof Error ? err.message : String(err) })
+  }
 }

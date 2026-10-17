@@ -214,51 +214,55 @@ async function persistEvent(
 /**
  * Register event log handlers on the event bus.
  * Persists events to the event_log table for external automation platforms.
- * Returns an array of unsubscribe functions.
+ * Returns an array of unsubscribe functions. lib/init subscribes the same
+ * handler through EVENT_CONSUMERS (lib/composition/event-consumers.ts).
  */
 export function registerEventLogHandler(): (() => void)[] {
   return PERSISTED_EVENT_TYPES.map((eventType) =>
-    eventBus.on(eventType, async (payload) => {
-      try {
-        const rawPayload = payload as Record<string, unknown>
-        const userId = rawPayload.userId as string
-        const companyId = rawPayload.companyId
-
-        // All persisted event payloads mandate companyId in TypeScript; this guard
-        // protects against any caller that bypasses the type system. Writing NULL
-        // would make the row invisible to the company_id-scoped SELECT RLS policy.
-        if (typeof companyId !== 'string' || companyId.length === 0) {
-          log.error(`Event ${eventType} missing companyId; skipping persistence`)
-          return
-        }
-
-        // transaction.synced carries an array: batch insert
-        if (eventType === 'transaction.synced' && Array.isArray(rawPayload.transactions)) {
-          const transactions = rawPayload.transactions as Array<Record<string, unknown>>
-          if (transactions.length === 0) return
-
-          const rows = transactions.map(tx => ({
-            user_id: userId,
-            company_id: companyId,
-            event_type: eventType,
-            entity_id: typeof tx.id === 'string' ? tx.id : null,
-            data: { transaction: tx },
-          }))
-
-          const supabase = createServiceClientNoCookies()
-          const { error } = await supabase.from('event_log').insert(rows)
-          if (error) {
-            log.error(`Failed to persist batch transaction.synced:`, error.message)
-          }
-          return
-        }
-
-        const entityId = extractEntityId(rawPayload)
-        const data = stripMetaFields(rawPayload)
-        await persistEvent(eventType, userId, companyId, entityId, data)
-      } catch (err) {
-        log.error(`Event log handler error for ${eventType}:`, err)
-      }
-    })
+    eventBus.on(eventType, (payload) => writeEventLog(eventType, payload)),
   )
+}
+
+/** Persist one event of a PERSISTED_EVENT_TYPES type to event_log. Never throws. */
+export async function writeEventLog(eventType: CoreEventType, payload: unknown): Promise<void> {
+  try {
+    const rawPayload = payload as Record<string, unknown>
+    const userId = rawPayload.userId as string
+    const companyId = rawPayload.companyId
+
+    // All persisted event payloads mandate companyId in TypeScript; this guard
+    // protects against any caller that bypasses the type system. Writing NULL
+    // would make the row invisible to the company_id-scoped SELECT RLS policy.
+    if (typeof companyId !== 'string' || companyId.length === 0) {
+      log.error(`Event ${eventType} missing companyId; skipping persistence`)
+      return
+    }
+
+    // transaction.synced carries an array: batch insert
+    if (eventType === 'transaction.synced' && Array.isArray(rawPayload.transactions)) {
+      const transactions = rawPayload.transactions as Array<Record<string, unknown>>
+      if (transactions.length === 0) return
+
+      const rows = transactions.map(tx => ({
+        user_id: userId,
+        company_id: companyId,
+        event_type: eventType,
+        entity_id: typeof tx.id === 'string' ? tx.id : null,
+        data: { transaction: tx },
+      }))
+
+      const supabase = createServiceClientNoCookies()
+      const { error } = await supabase.from('event_log').insert(rows)
+      if (error) {
+        log.error(`Failed to persist batch transaction.synced:`, error.message)
+      }
+      return
+    }
+
+    const entityId = extractEntityId(rawPayload)
+    const data = stripMetaFields(rawPayload)
+    await persistEvent(eventType, userId, companyId, entityId, data)
+  } catch (err) {
+    log.error(`Event log handler error for ${eventType}:`, err)
+  }
 }

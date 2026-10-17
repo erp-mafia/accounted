@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { unlearnCounterpartyTemplate, type UnlearnOutcome } from '@/lib/bookkeeping/counterparty-templates'
 import { eventBus } from '@/lib/events/bus'
+import type { EventPayload } from '@/lib/events/types'
 import { createLogger } from '@/lib/logger'
 import type { JournalEntry } from '@/types'
 
@@ -20,9 +21,12 @@ type VerifikatLine = { account_number: string; debit_amount: number | string; cr
  * same: a failure is logged and the reversal stands.
  */
 export function registerUnlearnOnReversalHandler(): () => void {
-  return eventBus.on('journal_entry.reversed', async ({ originalEntry, companyId }) => {
-    await unlearnReversedBankBooking(createServiceClientNoCookies(), companyId, originalEntry)
-  })
+  return eventBus.on('journal_entry.reversed', unlearnOnReversal)
+}
+
+/** The journal_entry.reversed handler; lib/init subscribes it through EVENT_CONSUMERS (lib/composition/event-consumers.ts). */
+export async function unlearnOnReversal({ originalEntry, companyId }: EventPayload<'journal_entry.reversed'>): Promise<void> {
+  await unlearnReversedBankBooking(createServiceClientNoCookies(), companyId, originalEntry)
 }
 
 export async function unlearnReversedBankBooking(

@@ -1,0 +1,1 @@
+[2026-10-16] Each extension's event handlers are one consumer, ext:<id>, subscribed by the registry through the same subscriber; handlers of one extension for the same type settle together: same delivery for every configured extension, and the consumer id stays unique.

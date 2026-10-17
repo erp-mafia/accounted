@@ -1,8 +1,8 @@
-import { eventBus } from '@/lib/events/bus'
+import { subscribeEventConsumers, type EventConsumer } from '@/lib/events/consumers'
 import { whenInitialized } from '@/lib/initialized'
 import { globalSingleton } from '@/lib/global-singleton'
 import type { CoreEventType } from '@/lib/events/types'
-import type { Extension, ExtensionContext } from './types'
+import type { Extension, ExtensionContext, ExtensionEventHandler } from './types'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 /** Factory function type for creating extension contexts */
@@ -47,11 +47,8 @@ class ExtensionRegistry {
   private unsubscribers = new Map<string, (() => void)[]>()
 
   /**
-   * Register an extension: store it and wire its event handlers to the bus.
-   *
-   * Each handler is wrapped so it receives `(payload, ctx)`. The context is
-   * built lazily when the event fires, using the userId from the payload and
-   * a Supabase client created from the current request cookies.
+   * Register an extension: store it and wire its event handlers to the bus,
+   * as the extension's event consumer (extensionEventConsumer below).
    */
   register(extension: Extension): void {
     if (this.extensions.has(extension.id)) {
@@ -61,34 +58,8 @@ class ExtensionRegistry {
 
     this.extensions.set(extension.id, extension)
 
-    // Wire event handlers to the bus
-    const unsubs: (() => void)[] = []
-    if (extension.eventHandlers) {
-      for (const { eventType, handler } of extension.eventHandlers) {
-        // Wrap handler to inject ExtensionContext as second argument
-        const wrappedHandler = async (payload: { userId: string; companyId?: string; [key: string]: unknown }) => {
-          let ctx: ExtensionContext | undefined
-          const contextFactory = contextFactoryHolder.factory
-          if (contextFactory && payload.userId) {
-            try {
-              // Dynamic import to avoid circular deps at module load time
-              const { createClient } = await import('@/lib/supabase/server')
-              const supabase = await createClient()
-              const companyId = payload.companyId ?? payload.userId // fallback for legacy events
-              ctx = contextFactory(supabase, payload.userId, companyId, extension.id)
-            } catch {
-              // Context creation failed (e.g. no request cookies in cron jobs).
-              // Handler still gets called: ctx will be undefined.
-            }
-          }
-          return handler(payload, ctx)
-        }
-
-        const unsub = eventBus.on(eventType as CoreEventType, wrappedHandler)
-        unsubs.push(unsub)
-      }
-    }
-    this.unsubscribers.set(extension.id, unsubs)
+    const consumer = extensionEventConsumer(extension)
+    this.unsubscribers.set(extension.id, consumer ? subscribeEventConsumers([consumer]) : [])
   }
 
   /**
@@ -127,3 +98,63 @@ class ExtensionRegistry {
 
 /** Process-wide singleton, shared by every copy of this module. */
 export const extensionRegistry = globalSingleton('extensionRegistry', () => new ExtensionRegistry())
+
+/**
+ * An extension's event handlers as one event consumer, `ext:<extension id>`,
+ * subscribed to each event type it handles; null when it handles none.
+ *
+ * Each handler receives `(payload, ctx)`. The context is built lazily when
+ * the event fires, using the userId from the payload and a Supabase client
+ * created from the current request cookies. Several handlers of one
+ * extension for the same event type run concurrently and all settle before
+ * the delivery does; the first failure is the one rethrown to the bus.
+ */
+export function extensionEventConsumer(extension: Extension): EventConsumer | null {
+  const handlersByType = new Map<CoreEventType, ExtensionEventHandler['handler'][]>()
+  for (const { eventType, handler } of extension.eventHandlers ?? []) {
+    handlersByType.set(eventType, [...(handlersByType.get(eventType) ?? []), handler])
+  }
+  if (handlersByType.size === 0) return null
+
+  const id = `ext:${extension.id}` as const
+  return {
+    id,
+    owner: id,
+    eventTypes: [...handlersByType.keys()],
+    handle(event) {
+      const handlers = handlersByType.get(event.type) ?? []
+      const payload = event.payload as ExtensionEventPayload
+      if (handlers.length === 1) return runExtensionHandler(extension.id, handlers[0], payload)
+      return settleAll(handlers.map((handler) => runExtensionHandler(extension.id, handler, payload)))
+    },
+  }
+}
+
+type ExtensionEventPayload = { userId: string; companyId?: string; [key: string]: unknown }
+
+async function runExtensionHandler(
+  extensionId: string,
+  handler: ExtensionEventHandler['handler'],
+  payload: ExtensionEventPayload,
+): Promise<void> {
+  let ctx: ExtensionContext | undefined
+  const contextFactory = contextFactoryHolder.factory
+  if (contextFactory && payload.userId) {
+    try {
+      // Dynamic import to avoid circular deps at module load time
+      const { createClient } = await import('@/lib/supabase/server')
+      const supabase = await createClient()
+      const companyId = payload.companyId ?? payload.userId // fallback for legacy events
+      ctx = contextFactory(supabase, payload.userId, companyId, extensionId)
+    } catch {
+      // Context creation failed (e.g. no request cookies in cron jobs).
+      // Handler still gets called: ctx will be undefined.
+    }
+  }
+  return handler(payload, ctx)
+}
+
+async function settleAll(deliveries: Promise<void>[]): Promise<void> {
+  const failed = (await Promise.allSettled(deliveries)).find((r) => r.status === 'rejected')
+  if (failed) throw failed.reason
+}

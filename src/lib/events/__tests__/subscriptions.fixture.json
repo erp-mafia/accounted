@@ -1,0 +1,210 @@
+{
+  "agent.feedback": [
+    "event-log",
+    "agent-feedback-relay"
+  ],
+  "agi.generated": [
+    "event-log",
+    "webhooks"
+  ],
+  "article.deleted": [
+    "event-log"
+  ],
+  "bank_connection.account_selection_changed": [
+    "event-log"
+  ],
+  "bank_connection.consent_denied": [
+    "event-log"
+  ],
+  "bank_connection.consent_granted": [
+    "event-log"
+  ],
+  "bank_connection.finalize_failed": [
+    "event-log"
+  ],
+  "bank_connection.revoked": [
+    "event-log"
+  ],
+  "bank_connection.superseded": [
+    "event-log"
+  ],
+  "bank_connection.sync_failed": [
+    "event-log"
+  ],
+  "credit_note.created": [
+    "event-log",
+    "webhooks",
+    "ext:stripe"
+  ],
+  "customer.created": [
+    "event-log",
+    "webhooks"
+  ],
+  "document.accessed": [
+    "event-log"
+  ],
+  "document.classified": [
+    "ext:invoice-inbox"
+  ],
+  "document.deleted": [
+    "event-log"
+  ],
+  "document.uploaded": [
+    "event-log",
+    "document-read",
+    "webhooks",
+    "ext:document-extraction"
+  ],
+  "employee.created": [
+    "suggestion-detectors"
+  ],
+  "invoice.cancelled": [
+    "event-log"
+  ],
+  "invoice.created": [
+    "event-log",
+    "webhooks"
+  ],
+  "invoice.draft_deleted": [
+    "event-log"
+  ],
+  "invoice.match_confirmed": [
+    "event-log"
+  ],
+  "invoice.paid": [
+    "event-log",
+    "webhooks",
+    "ext:stripe"
+  ],
+  "invoice.sent": [
+    "event-log",
+    "webhooks"
+  ],
+  "journal_entry.committed": [
+    "event-log",
+    "webhooks"
+  ],
+  "journal_entry.corrected": [
+    "event-log",
+    "webhooks"
+  ],
+  "journal_entry.reversed": [
+    "unlearn-on-reversal",
+    "event-log",
+    "webhooks"
+  ],
+  "mcp.next_hint_followed": [
+    "event-log"
+  ],
+  "mcp.resource_read": [
+    "event-log"
+  ],
+  "mcp.skill_loaded": [
+    "event-log"
+  ],
+  "mcp.tool_called": [
+    "event-log"
+  ],
+  "mcp.tools_list_called": [
+    "event-log"
+  ],
+  "mcp.workflow_started": [
+    "event-log"
+  ],
+  "period.locked": [
+    "event-log",
+    "webhooks"
+  ],
+  "period.unlocked": [
+    "event-log",
+    "webhooks"
+  ],
+  "period.year_closed": [
+    "event-log",
+    "webhooks"
+  ],
+  "pos.connected": [
+    "suggestion-detectors"
+  ],
+  "reconciliation.matched": [
+    "event-log",
+    "webhooks"
+  ],
+  "reconciliation.reopened": [
+    "event-log",
+    "webhooks"
+  ],
+  "reconciliation.signed_off": [
+    "event-log",
+    "webhooks"
+  ],
+  "reconciliation.unmatched": [
+    "event-log",
+    "webhooks"
+  ],
+  "salary_run.approved": [
+    "event-log",
+    "webhooks"
+  ],
+  "salary_run.booked": [
+    "event-log",
+    "webhooks"
+  ],
+  "salary_run.created": [
+    "event-log",
+    "webhooks"
+  ],
+  "shopify.connected": [
+    "suggestion-detectors"
+  ],
+  "supplier.created": [
+    "event-log",
+    "webhooks"
+  ],
+  "supplier_invoice.approved": [
+    "supplier-invoice-retro-match",
+    "event-log",
+    "webhooks"
+  ],
+  "supplier_invoice.confirmed": [
+    "event-log"
+  ],
+  "supplier_invoice.credited": [
+    "event-log",
+    "webhooks"
+  ],
+  "supplier_invoice.match_confirmed": [
+    "event-log"
+  ],
+  "supplier_invoice.paid": [
+    "event-log",
+    "webhooks"
+  ],
+  "supplier_invoice.registered": [
+    "supplier-invoice-retro-match",
+    "attest-notify",
+    "event-log",
+    "webhooks"
+  ],
+  "supplier_invoice.uncredited": [
+    "event-log",
+    "webhooks"
+  ],
+  "transaction.categorized": [
+    "event-log",
+    "webhooks"
+  ],
+  "transaction.reconciled": [
+    "event-log",
+    "webhooks"
+  ],
+  "transaction.synced": [
+    "event-log"
+  ],
+  "woocommerce.connected": [
+    "suggestion-detectors"
+  ],
+  "zettle.connected": [
+    "suggestion-detectors"
+  ]
+}

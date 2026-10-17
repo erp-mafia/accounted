@@ -1,14 +1,8 @@
 import { loadExtensions } from '@/lib/extensions/loader'
 import { setContextFactory } from '@/lib/extensions/registry'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
-import { registerSupplierInvoiceHandler } from '@/lib/bookkeeping/handlers/supplier-invoice-handler'
-import { registerUnlearnOnReversalHandler } from '@/lib/bookkeeping/handlers/unlearn-on-reversal'
-import { registerAttestNotificationHandler } from '@/lib/supplier-invoices/attest-notify'
-import { registerEventLogHandler } from '@/lib/events/handlers/event-log-handler'
-import { registerDocumentReadHandler } from '@/lib/events/handlers/document-read-handler'
-import { registerAgentFeedbackRelayHandler } from '@/lib/events/handlers/agent-feedback-relay-handler'
-import { registerWebhookHandler } from '@/lib/webhooks/handler'
-import { registerSuggestionDetectorHandler } from '@/lib/suggestions/handler'
+import { subscribeEventConsumers } from '@/lib/events/consumers'
+import { EVENT_CONSUMERS } from '@/lib/composition/event-consumers'
 import { registerConfiguredPeppolTransports } from '@/lib/invoices/transports'
 import { registerConnectPaymentsProvider } from '@/lib/payments/initiation/connect'
 import { ensureObservability } from '@/lib/analytics/ensure-observability'
@@ -24,7 +18,7 @@ const log = createLogger('init')
 // Per process, not per module copy: the bus and the registries this fills are
 // process-wide (lib/global-singleton.ts), so a second copy of this module that
 // initialised again would subscribe every handler twice.
-const initState = globalSingleton('initDone', () => ({ initialized: false }))
+const initState = globalSingleton('initDone', () => ({ initialized: false, consumersSubscribed: false }))
 
 const REQUIRED_CORE_VARS = [
   'NEXT_PUBLIC_SUPABASE_URL',
@@ -110,19 +104,14 @@ export function ensureInitialized(): void {
   // the same function for the route wrappers and the root layout, so entries
   // get it without this init.
   ensureObservability()
-  registerSupplierInvoiceHandler()
-  // A reversed bank booking takes back the counterpart template it taught.
-  registerUnlearnOnReversalHandler()
-  // The attest mail to each attester when an invoice that needs attest is registered.
-  registerAttestNotificationHandler()
-  registerEventLogHandler()
-  registerDocumentReadHandler()
-  registerAgentFeedbackRelayHandler()
-  registerWebhookHandler()
-  // Suggestion detectors (lib/suggestions): the events that can call for a
-  // package switch (an employee registered, a till or webshop connected)
-  // stage it for a person to approve. Never an automatic change.
-  registerSuggestionDetectorHandler()
+  // The core event consumers (lib/composition/event-consumers.ts), in their
+  // dispatch order. Once per process: a retry after a later step failed must
+  // not subscribe them twice. Each extension with event handlers joins as one
+  // more consumer when loadExtensions() registers it, below.
+  if (!initState.consumersSubscribed) {
+    subscribeEventConsumers(EVENT_CONSUMERS)
+    initState.consumersSubscribed = true
+  }
   // Peppol Access Point adapters are registered from the environment here;
   // every reader goes through the async getters, which load this init first.
   registerConfiguredPeppolTransports()

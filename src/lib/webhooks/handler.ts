@@ -8,8 +8,9 @@
  * immediately (see dispatch-kick.ts); the per-minute cron stays as the retry
  * and sweep path.
  *
- * Wired from lib/init.ts via registerWebhookHandler(), which instrumentation.ts
- * loads at boot and the bus waits for before the first event of a process
+ * Wired by lib/init through the webhooks consumer in
+ * lib/composition/event-consumers.ts; instrumentation.ts registers the loader
+ * of lib/init and the bus waits for it before the first event of a process
  * (lib/initialized.ts), exactly once.
  *
  * Design notes:
@@ -42,44 +43,55 @@ const log = createLogger('webhooks/handler')
  */
 const PUBLIC_WEBHOOK_EVENTS = new Set<CoreEventType>(PUBLIC_WEBHOOK_EVENT_CATALOGUE)
 
+/** The event types the webhook consumer subscribes to, once each. */
+export const WEBHOOK_EVENT_TYPES: readonly CoreEventType[] = [...PUBLIC_WEBHOOK_EVENTS]
+
 let registered = false
 
 /**
  * Subscribe the webhook handler to every event in PUBLIC_WEBHOOK_EVENTS.
- * Idempotent: safe to call from ensureInitialized() across hot reloads.
+ * Idempotent. lib/init subscribes the same handler through EVENT_CONSUMERS
+ * (lib/composition/event-consumers.ts) instead.
  */
 export function registerWebhookHandler(): void {
   if (registered) return
   registered = true
 
   for (const eventType of PUBLIC_WEBHOOK_EVENTS) {
-    eventBus.on(eventType, async (payload) => {
-      // payload type depends on eventType but every variant carries
-      // companyId: the only field we structurally need here.
-      const companyId = (payload as { companyId?: string }).companyId
-      if (!companyId) {
-        // Surface as an error: every CoreEvent payload variant types
-        // companyId as required, so a missing value indicates an emit-site
-        // bug that silently breaks webhook delivery for that event. Logging
-        // at error level ensures it shows up in monitoring rather than
-        // disappearing into routine warn-noise.
-        log.error('event missing companyId: webhook fanout skipped', new Error('missing companyId'), { eventType })
-        return
-      }
-
-      try {
-        await fanOutToWebhooks({
-          eventType,
-          companyId,
-          payload: minimisePayload(payload as Record<string, unknown>),
-        })
-      } catch (err) {
-        log.error('webhook fanout failed', err as Error, { eventType, companyId })
-      }
-    })
+    eventBus.on(eventType, (payload) => fanOutEvent(eventType, payload))
   }
 
   log.info('webhook handler registered', { eventCount: PUBLIC_WEBHOOK_EVENTS.size })
+}
+
+/**
+ * The handler for one PUBLIC_WEBHOOK_EVENTS event: one webhook_deliveries row
+ * per matching webhook of the company. Never throws. lib/init subscribes it
+ * through EVENT_CONSUMERS (lib/composition/event-consumers.ts).
+ */
+export async function fanOutEvent(eventType: CoreEventType, payload: unknown): Promise<void> {
+  // payload type depends on eventType but every variant carries
+  // companyId: the only field we structurally need here.
+  const companyId = (payload as { companyId?: string }).companyId
+  if (!companyId) {
+    // Surface as an error: every CoreEvent payload variant types
+    // companyId as required, so a missing value indicates an emit-site
+    // bug that silently breaks webhook delivery for that event. Logging
+    // at error level ensures it shows up in monitoring rather than
+    // disappearing into routine warn-noise.
+    log.error('event missing companyId: webhook fanout skipped', new Error('missing companyId'), { eventType })
+    return
+  }
+
+  try {
+    await fanOutToWebhooks({
+      eventType,
+      companyId,
+      payload: minimisePayload(payload as Record<string, unknown>),
+    })
+  } catch (err) {
+    log.error('webhook fanout failed', err as Error, { eventType, companyId })
+  }
 }
 
 /**

@@ -1,0 +1,1 @@
+[2026-10-16] A bus subscription is named after its consumer id, so a handler failure logs handler: event-log (was anonymous or a function name); the only visible change of the registry, and what lets the characterisation read the subscription set off the bus.

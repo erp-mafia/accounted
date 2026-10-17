@@ -77,9 +77,19 @@
   },
   "compositionSeams": {
     "importers": [
-      "lib/bookkeeping/engine.ts -> lib/composition/reversal-hooks"
+      "lib/bookkeeping/engine.ts -> lib/composition/reversal-hooks",
+      "lib/init.ts -> lib/composition/event-consumers"
     ],
     "imports": [
+      "lib/composition/event-consumers.ts -> lib/bookkeeping/handlers/supplier-invoice-handler",
+      "lib/composition/event-consumers.ts -> lib/bookkeeping/handlers/unlearn-on-reversal",
+      "lib/composition/event-consumers.ts -> lib/events/consumers",
+      "lib/composition/event-consumers.ts -> lib/events/handlers/agent-feedback-relay-handler",
+      "lib/composition/event-consumers.ts -> lib/events/handlers/document-read-handler",
+      "lib/composition/event-consumers.ts -> lib/events/handlers/event-log-handler",
+      "lib/composition/event-consumers.ts -> lib/suggestions/handler",
+      "lib/composition/event-consumers.ts -> lib/supplier-invoices/attest-notify",
+      "lib/composition/event-consumers.ts -> lib/webhooks/handler",
       "lib/composition/reversal-hooks.ts -> lib/bookkeeping/payment-sync",
       "lib/composition/reversal-hooks.ts -> lib/invoices/migrated-deduction-reversal",
       "lib/composition/reversal-hooks.ts -> lib/invoices/rot-rut-reclaim-reversal"
