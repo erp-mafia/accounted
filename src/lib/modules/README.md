@@ -229,6 +229,13 @@ build and not counted; one edge per importing file and imported path) and
 compares the count per `from -> to` pair with `boundary-baseline.json`. A
 pair that grows, or a new pair, fails the test with the offending imports.
 
+`src/lib/composition` is infrastructure, so those counts never see what a
+kernel reaches through it. The same test pins it by name instead
+(`compositionSeams` in the baseline): only the recorded files may import a
+composition module (today `bookkeeping/engine.ts`, for the reversal hooks),
+a composition file may import only the recorded hook leaf modules, and none
+may import `lib/init`, `lib/initialized` or the event bus.
+
 ## Adding a module or a folder
 
 Add the id to `MODULE_IDS` and its definition to `MODULES` in `manifest.ts`,

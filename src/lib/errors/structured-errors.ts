@@ -425,6 +425,14 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
     message_en:
       'The invoice is part of a payout request to Skatteverket. Cancel the request before reversing the deduction reclassification.',
   },
+  REVERSAL_HOOK_MISSING: {
+    httpStatus: 500,
+    message_sv:
+      'Verifikationen kan inte stornas: den hör till ett register som måste följa med i stornot, och den kopplingen saknas i den här installationen. Inget har bokförts. Kontakta supporten.',
+    message_en:
+      'The entry cannot be reversed: its source type needs a reversal hook to keep its sub-ledger in step, and none is registered in this installation. Nothing was written. Contact support.',
+    retryable: false,
+  },
   CURRENCY_REVALUATION_ALREADY_EXISTS: {
     httpStatus: 409,
     message_sv: 'En valutaomvärdering finns redan för denna period.',

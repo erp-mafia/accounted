@@ -31,6 +31,7 @@ export const CANNOT_EDIT_NON_DRAFT = 'CANNOT_EDIT_NON_DRAFT' as const
 export const CANNOT_CANCEL_NON_DRAFT = 'CANNOT_CANCEL_NON_DRAFT' as const
 export const ENTRY_ALREADY_REVERSED = 'ENTRY_ALREADY_REVERSED' as const
 export const MIGRATED_DEDUCTION_HELD_BY_REQUEST = 'MIGRATED_DEDUCTION_HELD_BY_REQUEST' as const
+export const REVERSAL_HOOK_MISSING = 'REVERSAL_HOOK_MISSING' as const
 export const CURRENCY_REVALUATION_ALREADY_EXISTS = 'CURRENCY_REVALUATION_ALREADY_EXISTS' as const
 export const ASSET_DEPRECIATION_REFUSED = 'ASSET_DEPRECIATION_REFUSED' as const
 export const INVALID_MAPPING_RESULT = 'INVALID_MAPPING_RESULT' as const
@@ -266,6 +267,22 @@ export class MigratedDeductionHeldByRequestError extends Error {
   constructor(public readonly invoiceId: string) {
     super('The invoice is held by a ROT/RUT request; cancel the request before reversing')
     this.name = 'MigratedDeductionHeldByRequestError'
+  }
+}
+
+/**
+ * Raised by reverseEntry before anything is written when the entry's source
+ * type needs a business-state mirror on storno (REVERSAL_MIRROR_REQUIRED in
+ * lib/bookkeeping/reversal-hooks.ts) and no reversal hook for it is
+ * registered (lib/composition/reversal-hooks.ts). A refused storno can be
+ * retried once the hook is back; a storno that left its sub-ledger half
+ * mirrored could not be detected later.
+ */
+export class ReversalHookMissingError extends Error {
+  readonly code = REVERSAL_HOOK_MISSING
+  constructor(public readonly sourceType: string) {
+    super(`No reversal hook is registered for source type ${sourceType}; the storno was refused before anything was written`)
+    this.name = 'ReversalHookMissingError'
   }
 }
 
@@ -588,6 +605,7 @@ export function isBookkeepingError(err: unknown): boolean {
     err instanceof CannotCancelNonDraftError ||
     err instanceof EntryAlreadyReversedError ||
     err instanceof MigratedDeductionHeldByRequestError ||
+    err instanceof ReversalHookMissingError ||
     err instanceof CurrencyRevaluationAlreadyExistsError ||
     err instanceof InvalidMappingResultError ||
     err instanceof TransactionMissingSekValueError ||
@@ -804,6 +822,13 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
     return NextResponse.json(
       { error: { code: err.code, message: err.message, details: { invoiceId: err.invoiceId } } },
       { status: 409 }
+    )
+  }
+
+  if (err instanceof ReversalHookMissingError) {
+    return NextResponse.json(
+      { error: { code: err.code, message: err.message, details: { sourceType: err.sourceType } } },
+      { status: 500 }
     )
   }
 

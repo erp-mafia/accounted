@@ -177,3 +177,49 @@ export function boundaryReport(edges: readonly LibImportEdge[]): BoundaryReport 
   }
   return { kernelToBlock, undeclaredBlockToBlock, undeclaredKernelToKernel, edgesByKey }
 }
+
+/** The src/lib folder whose seams compositionSeamReport watches. */
+export const COMPOSITION_FOLDER = 'lib/composition/'
+
+export interface CompositionSeamReport {
+  /**
+   * `importer -> composition module` edges from anywhere under src
+   * (`lib/bookkeeping/engine.ts -> lib/composition/reversal-hooks`), the
+   * composition folder itself excluded.
+   */
+  importers: string[]
+  /**
+   * `composition file -> imported module` edges for every runtime import a
+   * composition file makes: src-relative paths for code under src
+   * (`lib/composition/reversal-hooks.ts -> lib/bookkeeping/payment-sync`),
+   * the bare specifier for a package.
+   */
+  imports: string[]
+}
+
+/**
+ * Who imports the composition seams under src/lib/composition, and what
+ * they import. Scans every runtime import under src (routes, components and
+ * extensions too, not only src/lib), with the same counting rules as
+ * scanLibImports. Sorted, deduplicated.
+ */
+export function compositionSeamReport(srcRoot: string): CompositionSeamReport {
+  const importers = new Set<string>()
+  const imports = new Set<string>()
+  for (const file of listSourceFiles(srcRoot).sort()) {
+    const from = toPosix(relative(srcRoot, file))
+    const inComposition = from.startsWith(COMPOSITION_FOLDER)
+    for (const { specifier } of extractRuntimeSpecifiers(readFileSync(file, 'utf8'))) {
+      let to: string
+      if (specifier.startsWith('@/tests/') || specifier.startsWith('@/scripts/')) to = specifier
+      else if (specifier.startsWith('@/')) to = specifier.slice(2)
+      else if (specifier.startsWith('./') || specifier.startsWith('../')) {
+        to = toPosix(relative(srcRoot, resolve(dirname(file), specifier)))
+      } else to = specifier
+      to = to.replace(/\.(tsx?|mjs|cjs|js)$/, '').replace(/\/index$/, '')
+      if (inComposition) imports.add(`${from} -> ${to}`)
+      else if (`${to}/`.startsWith(COMPOSITION_FOLDER)) importers.add(`${from} -> ${to}`)
+    }
+  }
+  return { importers: [...importers].sort(), imports: [...imports].sort() }
+}

@@ -1,0 +1,1 @@
+[2026-10-16] A storno of a source type that needs a reversal mirror but has no registered hook is refused before anything is written (ReversalHookMissingError): a storno can be retried, a half-mirrored begäran cannot be detected later.

@@ -477,7 +477,10 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
  * Folders under src/lib that belong to no module: shared infrastructure every
  * module may import, and composition layers (operations, pending operations,
  * the worklist, onboarding) that sit above the modules and wire them
- * together. Their imports are not ratcheted. Files directly in src/lib
+ * together. Their imports are not ratcheted by module pair. `composition`
+ * holds the seams a kernel imports to reach blocks (the ledger's reversal
+ * hooks); who may import it and what it may import is pinned by
+ * compositionSeams in __tests__/boundary.test.ts. Files directly in src/lib
  * (logger.ts, money.ts, init.ts, ...) count as infrastructure too.
  */
 export const INFRA_LIB_FOLDERS: readonly string[] = Object.freeze([
@@ -487,6 +490,7 @@ export const INFRA_LIB_FOLDERS: readonly string[] = Object.freeze([
   'branding',
   'browser',
   'calendar',
+  'composition',
   'connect',
   'crypto',
   'currency',
