@@ -61,6 +61,14 @@ const SERVICE_ROLE_ONLY = [
   'collection_forward_case_for_invoice(uuid,uuid,boolean)',
   // The forward reconcile (20261012030500): the sync cron only.
   'reconcile_collection_forwards(uuid)',
+  // The event outbox (20261017120100): the event bus's writer, the
+  // dispatcher, the events cleanup cron and the shadow reconciliation.
+  'enqueue_event(text,uuid,jsonb,text[],text,jsonb)',
+  'claim_event_deliveries(integer,integer,integer)',
+  'complete_event_deliveries(bigint[],text[],integer[])',
+  'fail_event_delivery(bigint,text,integer,text,integer,integer)',
+  'prune_event_outbox(interval,interval,integer)',
+  'event_outbox_shadow_counts(timestamp with time zone,timestamp with time zone)',
 ]
 
 // Called on the user's session client by the app, so authenticated keeps

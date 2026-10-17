@@ -3,6 +3,7 @@ import { setContextFactory } from '@/lib/extensions/registry'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
 import { subscribeEventConsumers } from '@/lib/events/consumers'
 import { EVENT_CONSUMERS } from '@/lib/composition/event-consumers'
+import { installEventOutbox } from '@/lib/events/outbox'
 import { registerConfiguredPeppolTransports } from '@/lib/invoices/transports'
 import { registerConnectPaymentsProvider } from '@/lib/payments/initiation/connect'
 import { ensureObservability } from '@/lib/analytics/ensure-observability'
@@ -112,6 +113,9 @@ export function ensureInitialized(): void {
     subscribeEventConsumers(EVENT_CONSUMERS)
     initState.consumersSubscribed = true
   }
+  // The event outbox writer (lib/events/outbox.ts). The bus calls it only
+  // with EVENT_OUTBOX_MODE=shadow; with the mode off it is never called.
+  installEventOutbox()
   // Peppol Access Point adapters are registered from the environment here;
   // every reader goes through the async getters, which load this init first.
   registerConfiguredPeppolTransports()

@@ -1455,6 +1455,8 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   email_change_requests:
     'per-user in-flight login-email change claim (migration 20260903083000); gates token re-issue, not räkenskapsinformation',
   event_log: '30-day TTL event bus log',
+  event_outbox:
+    'event delivery queue (raw internal event payloads, pruned after 7 days; event_deliveries has no company_id), not räkenskapsinformation',
   extension_data: 'extension runtime state (includes this backup\'s own state)',
   idempotency_keys: 'infrastructure',
   sandbox_seed_attempts: 'infrastructure: disposable demo seed coordination, no accounting records',

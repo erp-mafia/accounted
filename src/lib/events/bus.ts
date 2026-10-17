@@ -2,12 +2,29 @@ import type { CoreEvent, CoreEventType, EventHandler } from './types'
 import { createLogger } from '@/lib/logger'
 import { whenInitialized } from '@/lib/initialized'
 import { globalSingleton } from '@/lib/global-singleton'
+import { eventOutboxMode, isIndexedConsumer, outboxConsumerIds } from './consumer-index'
 
 // Internal handler type: loose enough for the Map, but type-safe at the public API
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyHandler = (payload: any) => Promise<void> | void
 
 const log = createLogger('event-bus')
+
+/** What a consumer did inline in the emitting request, as the shadow enqueue records it. */
+export type InlineResult = 'ok' | 'failed' | 'not_subscribed'
+
+/** One outbox delivery the bus asks for in shadow mode: a consumer and its inline result. */
+export interface ShadowDelivery {
+  readonly consumerId: string
+  readonly inline: InlineResult
+}
+
+/**
+ * Writes an event and its deliveries to the event outbox (lib/events/outbox.ts,
+ * set by lib/init). The bus imports no writer itself: it is in the graph of
+ * every server entry and may reach nothing but the consumer index.
+ */
+export type OutboxWriter = (event: CoreEvent, deliveries: readonly ShadowDelivery[]) => Promise<void>
 
 /**
  * In-process event bus.
@@ -25,9 +42,16 @@ const log = createLogger('event-bus')
  * - Rejected handlers are logged with structured fields so they're greppable
  *   in Vercel logs by event type, handler name, and the originating request id
  *   (when carried in the payload).
+ * - EVENT_OUTBOX_MODE=shadow (lib/events/consumer-index.ts; off by default):
+ *   after the handlers settled, the event is also enqueued in the event
+ *   outbox for its consumers other than event-log, with what each did
+ *   inline. Nothing more runs; a failed or impossible enqueue is logged and
+ *   skipped, never thrown. With the mode off emit() does exactly what it did
+ *   before the outbox existed.
  */
 class EventBus {
   private handlers = new Map<string, Set<AnyHandler>>()
+  private outboxWriter: OutboxWriter | null = null
 
   on<T extends CoreEventType>(
     eventType: T,
@@ -64,7 +88,10 @@ class EventBus {
     }
 
     const handlerSet = this.handlers.get(event.type)
-    if (!handlerSet || handlerSet.size === 0) return
+    if (!handlerSet || handlerSet.size === 0) {
+      if (eventOutboxMode() === 'shadow') await this.enqueueShadow(event, [], [])
+      return
+    }
 
     const handlers = [...handlerSet]
     const results = await Promise.allSettled(
@@ -85,6 +112,55 @@ class EventBus {
           userId: typeof payload.userId === 'string' ? payload.userId : undefined,
         })
       }
+    }
+
+    if (eventOutboxMode() === 'shadow') await this.enqueueShadow(event, handlers, results)
+  }
+
+  /**
+   * Set (or with null remove) what writes the event outbox. lib/init sets
+   * it; emit() calls it only when EVENT_OUTBOX_MODE is shadow.
+   */
+  setOutboxWriter(writer: OutboxWriter | null): void {
+    this.outboxWriter = writer
+  }
+
+  /**
+   * Shadow mode: enqueue the event for its outbox consumers, recording what
+   * each did inline (a subscription is named after its consumer,
+   * subscribeEventConsumers). A consumer that ran inline but is not in the
+   * consumer index for this type would never get a delivery: logged, so the
+   * reconciliation can count it. Never throws.
+   */
+  private async enqueueShadow(event: CoreEvent, handlers: AnyHandler[], results: PromiseSettledResult<void>[]): Promise<void> {
+    const inline = new Map<string, InlineResult>()
+    for (let i = 0; i < handlers.length; i++) {
+      const consumerId = handlers[i].name
+      inline.set(consumerId, results[i].status === 'fulfilled' ? 'ok' : 'failed')
+      if (!isIndexedConsumer(event.type, consumerId)) {
+        log.warn('event consumer ran inline outside the consumer index', {
+          eventType: event.type,
+          consumerId: consumerId || 'anonymous',
+        })
+      }
+    }
+
+    const consumerIds = outboxConsumerIds(event.type)
+    const writer = this.outboxWriter
+    if (consumerIds.length === 0 || !writer) return
+
+    const deliveries = consumerIds.map((consumerId) => ({
+      consumerId,
+      inline: inline.get(consumerId) ?? 'not_subscribed',
+    }))
+    try {
+      await writer(event, deliveries)
+    } catch (err) {
+      log.warn('event outbox shadow enqueue failed', {
+        eventType: event.type,
+        consumers: consumerIds,
+        error: err instanceof Error ? err.message : String(err),
+      })
     }
   }
 
