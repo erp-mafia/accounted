@@ -23,14 +23,28 @@ const log = createLogger('deadline-status')
 export const ACTION_NEEDED_THRESHOLD_DAYS = 14
 
 /**
+ * Days since the epoch for the local calendar date of `date`. Date.UTC puts
+ * the local date parts on a timeline that has no DST, where every day is
+ * exactly 24 hours long, so the division is always a whole number.
+ */
+function localDaysSinceEpoch(date: Date): number {
+  return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / (1000 * 60 * 60 * 24)
+}
+
+/**
  * Calculate days until a deadline
+ *
+ * Counted in calendar days, which is what a deadline is: a date, not an
+ * instant. This used to subtract two local midnights and divide by 24 hours,
+ * so any span crossing a DST change came out fractional and the rounding then
+ * moved the answer a whole day. In Europe/Stockholm a deadline 14 calendar
+ * days out measured 14.0417 days in late October and reported 15, putting it
+ * outside ACTION_NEEDED_THRESHOLD_DAYS, and a deadline one day past measured
+ * -0.9583 days in late March and reported 0, reading as due today instead of
+ * overdue.
  */
 export function daysUntilDeadline(dueDate: string): number {
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const deadline = new Date(dueDate)
-  deadline.setHours(0, 0, 0, 0)
-  return Math.ceil((deadline.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+  return localDaysSinceEpoch(new Date(dueDate)) - localDaysSinceEpoch(new Date())
 }
 
 /**
