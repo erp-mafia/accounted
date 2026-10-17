@@ -1,0 +1,1 @@
+[2026-10-17] A ROT/RUT begäran without a settlement voucher (generated, submitted, paid, partially paid) is an open Kundfakturor obligation, in obligations.ts and package_open_obligations alike: Skatteverket's payout must still find it while the package winds down.

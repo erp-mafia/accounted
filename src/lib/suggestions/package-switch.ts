@@ -38,6 +38,7 @@ const OBLIGATION_PHRASES_SV: Record<string, string> = {
   unpaid_customer_invoices: 'obetalda kundfakturor',
   active_recurring_invoices: 'aktiva återkommande fakturor',
   open_collection_cases: 'öppna inkassoärenden',
+  open_rot_rut_payout_requests: 'ROT/RUT-begäranden där utbetalningen från Skatteverket inte är bokförd',
   unpaid_supplier_invoices: 'obetalda leverantörsfakturor',
   payments_in_flight: 'betalningar som är på väg',
   unhandled_documents: 'underlag som inte är hanterade',

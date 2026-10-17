@@ -26,6 +26,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { OPEN_ROT_RUT_PAYOUT_STATUSES } from '@/lib/invoices/rot-rut-payout-matching'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { agiReportingPeriod, formatAgiPeriodDashed } from '@/lib/salary/agi/reporting-period'
@@ -40,6 +41,7 @@ export const OBLIGATION_CODES = [
   'unpaid_customer_invoices',
   'active_recurring_invoices',
   'open_collection_cases',
+  'open_rot_rut_payout_requests',
   'unpaid_supplier_invoices',
   'payments_in_flight',
   'unhandled_documents',
@@ -60,7 +62,12 @@ export type ObligationCode = (typeof OBLIGATION_CODES)[number]
 /** The obligations each switchable package can have, in the order they are shown. */
 export const PACKAGE_OBLIGATIONS: Readonly<Record<SwitchablePackageId, readonly ObligationCode[]>> = Object.freeze({
   bank: ['active_bank_connection'],
-  'customer-invoices': ['unpaid_customer_invoices', 'active_recurring_invoices', 'open_collection_cases'],
+  'customer-invoices': [
+    'unpaid_customer_invoices',
+    'active_recurring_invoices',
+    'open_collection_cases',
+    'open_rot_rut_payout_requests',
+  ],
   'supplier-invoices-and-payments': ['unpaid_supplier_invoices', 'payments_in_flight'],
   'receipts-and-documents': ['unhandled_documents'],
   expenses: ['unpaid_expense_claims', 'unbooked_mileage'],
@@ -85,6 +92,10 @@ export const OBLIGATION_LABELS: Readonly<Record<ObligationCode, { sv: string; en
   unpaid_customer_invoices: { sv: 'obetalda kundfakturor', en: 'unpaid customer invoices' },
   active_recurring_invoices: { sv: 'aktiva återkommande fakturor', en: 'active recurring invoices' },
   open_collection_cases: { sv: 'öppna inkassoärenden', en: 'open collection cases' },
+  open_rot_rut_payout_requests: {
+    sv: 'ROT/RUT-begäranden där utbetalningen från Skatteverket inte är bokförd',
+    en: 'ROT/RUT payout requests whose payout from Skatteverket is not yet booked',
+  },
   unpaid_supplier_invoices: { sv: 'obetalda leverantörsfakturor', en: 'unpaid supplier invoices' },
   payments_in_flight: { sv: 'betalningar som är på väg', en: 'payments on their way' },
   unhandled_documents: { sv: 'underlag som inte är hanterade', en: 'documents not yet handled' },
@@ -296,13 +307,21 @@ const PROBES: Readonly<Record<ObligationCode, Probe>> = {
   // Bank: a live connection keeps reading bank lines in; disconnecting it lives in the package.
   active_bank_connection: (ctx) =>
     exists('active_bank_connection', ctx, 'bank_connections', (q) => q.in('status', ['active', 'pending_selection', 'error'])),
-  // Kundfakturor: a receivable still open, invoices still generated, cases still open.
+  // Kundfakturor: a receivable still open, invoices still generated, cases
+  // still open, Skatteverket's share of a ROT/RUT invoice still to arrive.
   unpaid_customer_invoices: (ctx) =>
     exists('unpaid_customer_invoices', ctx, 'invoices', (q) =>
       q.eq('document_type', 'invoice').in('status', ['sent', 'overdue', 'partially_paid'])),
   active_recurring_invoices: (ctx) =>
     exists('active_recurring_invoices', ctx, 'recurring_invoice_schedules', (q) => q.eq('status', 'active')),
   open_collection_cases: (ctx) => exists('open_collection_cases', ctx, 'collection_cases', (q) => q.eq('is_open', true)),
+  // A begäran om utbetalning whose payout is not booked yet: the pool the
+  // bank ingest's ROT/RUT matchers read (loadOpenRotRutPayoutRequests), so
+  // Skatteverket's payout still finds its begäran while the package winds
+  // down. Settled (a settlement voucher), rejected and cancelled do not count.
+  open_rot_rut_payout_requests: (ctx) =>
+    exists('open_rot_rut_payout_requests', ctx, 'rot_rut_payout_requests', (q) =>
+      q.in('status', [...OPEN_ROT_RUT_PAYOUT_STATUSES]).is('settlement_journal_entry_id', null)),
   // Leverantörsfakturor och betalningar: a debt still to pay, a payment on its way.
   unpaid_supplier_invoices: (ctx) =>
     exists('unpaid_supplier_invoices', ctx, 'supplier_invoices', (q) =>

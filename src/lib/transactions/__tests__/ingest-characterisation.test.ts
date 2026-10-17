@@ -247,9 +247,11 @@ interface FakeDbOptions {
   tables: Record<string, Row[]>
   /** A write the database refuses: the error it answers with, or null. */
   failWrite?: (write: { op: string; table: string; payload: unknown }) => { message: string; code?: string } | null
+  /** A read the database refuses: the error it answers with, or null. */
+  failRead?: (table: string) => { message: string } | null
 }
 
-function fakeDb({ tables, failWrite }: FakeDbOptions) {
+function fakeDb({ tables, failWrite, failRead }: FakeDbOptions) {
   const reads: string[] = []
 
   class Query {
@@ -352,6 +354,8 @@ function fakeDb({ tables, failWrite }: FakeDbOptions) {
       const rows = (tables[this.table] ?? []).filter((row) => this.filters.every((f) => matches(row, f)))
       if (this.op === 'select') {
         reads.push(`${this.table}: ${describeFilters(this.filters)}`)
+        const readError = failRead?.(this.table) ?? null
+        if (readError) return { data: null, error: readError }
         let out = rows
         if (this.window) out = out.slice(this.window[0], this.window[1] + 1)
         if (this.max !== null) out = out.slice(0, this.max)
@@ -646,6 +650,31 @@ function openPaymentsScenario(): { scenario: Scenario; tables: Record<string, Ro
   return { scenario, tables, rows }
 }
 
+/** The failure batch: an invoice pool that fails on every income row, a settle that throws. */
+function failuresScenario(): { scenario: Scenario; tables: Record<string, Row[]>; rows: RawTransaction[] } {
+  const base = openPaymentsScenario()
+  const scenario: Scenario = {
+    ...base.scenario,
+    invoicePoolFails: true,
+    paymentOrders: [executedOrder('po-throws', 77, 'si-throws', 'Kastare AB')],
+    settle: { 'po-throws': 'throw' },
+    rotRut: [],
+    split: {},
+  }
+  const tables = {
+    ...base.tables,
+    transactions: [],
+    supplier_invoices: [supplierInvoice('si-throws', 77, { payment_reference: '7070707' }, 'Kastare AB')],
+  }
+  const rows = [
+    raw('fail-income-1', { date: '2026-10-14', amount: 500, description: 'KUND BETALAR' }),
+    raw('fail-income-2', { date: '2026-10-14', amount: 600, description: 'KUND BETALAR IGEN' }),
+    raw('fail-settle', { date: '2026-10-14', amount: -77, description: 'KASTARE', reference: '7070707' }),
+    raw('fail-mapping', { date: '2026-10-14', amount: -99, description: 'SPOTIFY' }),
+  ]
+  return { scenario, tables, rows }
+}
+
 const failingWrites = (write: { op: string; table: string; payload: unknown }) => {
   const payload = (write.payload ?? {}) as Row
   if (write.op !== 'update' || write.table !== 'transactions') return null
@@ -661,12 +690,13 @@ const failingWrites = (write: { op: string; table: string; payload: unknown }) =
 async function record(
   setup: { scenario: Scenario; tables: Record<string, Row[]>; rows: RawTransaction[] },
   options: Parameters<typeof ingestTransactions>[4],
+  failRead?: FakeDbOptions['failRead'],
 ) {
   h.trace.length = 0
   h.logs.length = 0
   for (const key of Object.keys(h.loads)) delete h.loads[key]
   Object.assign(h.scenario, setup.scenario)
-  const db = fakeDb({ tables: setup.tables, failWrite: failingWrites })
+  const db = fakeDb({ tables: setup.tables, failWrite: failingWrites, failRead })
   const result = await ingestTransactions(db.supabase as never, COMPANY, USER, setup.rows, options)
   return {
     result,
@@ -707,27 +737,7 @@ describe('ingestTransactions suggestion passes (characterisation)', () => {
   })
 
   it('failures: an invoice pool that fails on every income row, a settle that throws, the heuristics after it', async () => {
-    const base = openPaymentsScenario()
-    const scenario: Scenario = {
-      ...base.scenario,
-      invoicePoolFails: true,
-      paymentOrders: [executedOrder('po-throws', 77, 'si-throws', 'Kastare AB')],
-      settle: { 'po-throws': 'throw' },
-      rotRut: [],
-      split: {},
-    }
-    const tables = {
-      ...base.tables,
-      transactions: [],
-      supplier_invoices: [supplierInvoice('si-throws', 77, { payment_reference: '7070707' }, 'Kastare AB')],
-    }
-    const rows = [
-      raw('fail-income-1', { date: '2026-10-14', amount: 500, description: 'KUND BETALAR' }),
-      raw('fail-income-2', { date: '2026-10-14', amount: 600, description: 'KUND BETALAR IGEN' }),
-      raw('fail-settle', { date: '2026-10-14', amount: -77, description: 'KASTARE', reference: '7070707' }),
-      raw('fail-mapping', { date: '2026-10-14', amount: -99, description: 'SPOTIFY' }),
-    ]
-    const recorded = await record({ scenario, tables, rows }, { settlementAccount: '1930' })
+    const recorded = await record(failuresScenario(), { settlementAccount: '1930' })
     expect(recorded).toMatchSnapshot()
   })
 
@@ -779,5 +789,153 @@ describe('ingestTransactions suggestion passes (characterisation)', () => {
       'st:op-reread-split',
     ])
     expect(result).toMatchObject({ enriched_updated: 5, duplicates: 7, errors: 0 })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The package gate (INGEST_PACKAGE_GATING, lib/transactions/ingest-package-gate.ts)
+// ---------------------------------------------------------------------------
+
+type Recording = Awaited<ReturnType<typeof record>>
+
+/** The gate's switch read: the stored profile, then the switches of the packages that own a matcher. */
+const PROFILE_READ = `companies: eq id "${COMPANY}"`
+const SWITCH_READ = `company_capability_config: eq company_id "${COMPANY}"; in capability_key ["package:customer-invoices","package:supplier-invoices-and-payments"]`
+/** Kundfakturor's obligation probes (lib/modules/obligations.ts), read only once it is switched off. */
+const CUSTOMER_INVOICE_PROBES = [
+  `invoices: eq company_id "${COMPANY}"; eq document_type "invoice"; in status ["sent","overdue","partially_paid"]`,
+  `recurring_invoice_schedules: eq company_id "${COMPANY}"; eq status "active"`,
+  `collection_cases: eq company_id "${COMPANY}"; eq is_open true`,
+  `rot_rut_payout_requests: eq company_id "${COMPANY}"; in status ["generated","submitted","paid","partially_paid"]; is settlement_journal_entry_id null`,
+]
+
+/**
+ * The recording without the gate's own reads, after checking they ran as one
+ * block (the profile and switch read, then any probes).
+ */
+function withoutGateReads(recorded: Recording, probes: string[] = []): Recording {
+  const gateReads = [PROFILE_READ, SWITCH_READ, ...probes]
+  const at = recorded.reads.indexOf(SWITCH_READ) - 1
+  expect(at).toBeGreaterThanOrEqual(0)
+  expect(recorded.reads.slice(at, at + gateReads.length)).toEqual(gateReads)
+  return { ...recorded, reads: [...recorded.reads.slice(0, at), ...recorded.reads.slice(at + gateReads.length)] }
+}
+
+/** A company's own choice for a package, as set_company_package_choice stores it. */
+const switchedOff = (packageId: string): Row => ({ company_id: COMPANY, capability_key: `package:${packageId}`, enabled: false })
+
+/** Which passes the batch's log line counted, and the packages it skipped. */
+function passLine(recorded: Recording) {
+  const line = recorded.logs.find((rec) => rec.msg === 'ingest suggestion passes') as
+    | { passes: Record<string, unknown>; packagesOff?: string[] }
+    | undefined
+  return { passes: Object.keys(line?.passes ?? {}).sort(), packagesOff: line?.packagesOff }
+}
+
+describe('ingestTransactions package gate (INGEST_PACKAGE_GATING)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-16T09:00:00.000Z'))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllEnvs()
+  })
+
+  it('flag on, every package on: each characterised batch runs exactly as with the flag off, plus the one switch read', async () => {
+    const base = openPaymentsScenario()
+    const rawRows = ['op-split-complete', 'op-swedbank', 'op-ocr', 'op-reread-ocr'].map(
+      (id) => base.rows.find((r) => r.external_id === id)!,
+    )
+    const batches: Array<[ReturnType<typeof openPaymentsScenario>, Parameters<typeof ingestTransactions>[4]]> = [
+      [openPaymentsScenario(), { settlementAccount: '1930' }],
+      [{ ...openPaymentsScenario(), rows: rawRows }, { settlementAccount: '1930', rawInsertOnly: true }],
+      [failuresScenario(), { settlementAccount: '1930' }],
+    ]
+    for (const [setup, options] of batches) {
+      const flagOff = await record(setup, options)
+      vi.stubEnv('INGEST_PACKAGE_GATING', 'true')
+      const flagOn = await record(setup, options)
+      vi.unstubAllEnvs()
+      expect(withoutGateReads(flagOn)).toEqual(flagOff)
+    }
+  })
+
+  it('Kundfakturor switched off with nothing open: no customer invoice, ROT/RUT or collections pass and no customer pool; the supplier side runs as before', async () => {
+    const setup = openPaymentsScenario()
+    setup.tables.company_capability_config = [switchedOff('customer-invoices')]
+    const flagOff = await record(setup, { settlementAccount: '1930' })
+    vi.stubEnv('INGEST_PACKAGE_GATING', 'true')
+    const flagOn = await record(setup, { settlementAccount: '1930' })
+
+    const trace = flagOn.trace as Array<Record<string, unknown>>
+    // The customer invoice pool and the open begäran are never read, the sweep never scheduled.
+    expect(trace.filter((t) => t.call === 'loadInvoiceMatchPool' || t.call === 'bestInvoiceMatch')).toEqual([])
+    expect(trace.filter((t) => t.call === 'scheduleCollectionSweep')).toEqual([])
+    expect(flagOn.loads).toEqual({ loadOpenPaymentOrders: 1 })
+    expect(flagOff.loads).toEqual({ loadOpenPaymentOrders: 1, loadOpenRotRutPayoutRequests: 1 })
+    // No customer invoice or begäran hint is written.
+    const hints = (column: string) => trace.filter((t) => t.write === 'update' && (t.payload as Row)?.[column] !== undefined)
+    expect(hints('potential_invoice_id')).toEqual([])
+    expect(hints('potential_rot_rut_payout_request_id')).toEqual([])
+    // The split still runs, against an empty customer pool.
+    const split = trace.find((t) => t.call === 'applyTransactionSplit' && t.tx === 'tx:op-split-complete')
+    expect((split?.pools as { customerInvoices: string[] }).customerInvoices).toEqual([])
+    // The gate read Kundfakturor's obligations, found none, and the log names it.
+    withoutGateReads(flagOn, CUSTOMER_INVOICE_PROBES)
+    expect(passLine(flagOn).packagesOff).toEqual(['customer-invoices'])
+    expect(passLine(flagOn).passes.filter((p) => p.startsWith('rot-rut') || p === 'customer-invoice')).toEqual([])
+    expect(passLine(flagOff).packagesOff).toBeUndefined()
+
+    // The expense side is untouched: the same order debits, the same supplier hints.
+    const supplierSide = (recorded: Recording) =>
+      (recorded.trace as Array<Record<string, unknown>>).filter(
+        (t) => t.call === 'settleOrderWithDebit' || (t.write === 'update' && (t.payload as Row)?.potential_supplier_invoice_id !== undefined),
+      )
+    expect(supplierSide(flagOn)).toEqual(supplierSide(flagOff))
+    expect(supplierSide(flagOn).length).toBeGreaterThan(0)
+  })
+
+  it('Kundfakturor switched off while a begäran awaits its payout: winding down, every matcher runs as with the flag off', async () => {
+    const setup = openPaymentsScenario()
+    setup.tables.company_capability_config = [switchedOff('customer-invoices')]
+    setup.tables.rot_rut_payout_requests = [
+      { id: 'rr-pending', company_id: COMPANY, status: 'submitted', settlement_journal_entry_id: null },
+    ]
+    const flagOff = await record(setup, { settlementAccount: '1930' })
+    vi.stubEnv('INGEST_PACKAGE_GATING', 'true')
+    const flagOn = await record(setup, { settlementAccount: '1930' })
+    expect(withoutGateReads(flagOn, CUSTOMER_INVOICE_PROBES)).toEqual(flagOff)
+  })
+
+  it('a switch read that fails runs every matcher as with the flag off', async () => {
+    const setup = openPaymentsScenario()
+    setup.tables.company_capability_config = [switchedOff('customer-invoices')]
+    const failSwitch = (table: string) => (table === 'company_capability_config' ? { message: 'switch read failed' } : null)
+    const flagOff = await record(setup, { settlementAccount: '1930' }, failSwitch)
+    vi.stubEnv('INGEST_PACKAGE_GATING', 'true')
+    const flagOn = await record(setup, { settlementAccount: '1930' }, failSwitch)
+    expect(withoutGateReads(flagOn)).toEqual(flagOff)
+  })
+
+  it('Leverantörsfakturor och betalningar off by the profile with nothing open: no order or supplier pass, the supplier pool never read', async () => {
+    const setup = openPaymentsScenario()
+    // Enskild firma starts with the package off; nothing is owed or on its way.
+    setup.tables.companies = [{ ...company, profile_id: 'sole-trader', profile_version: 1 }]
+    setup.tables.supplier_invoices = []
+    vi.stubEnv('INGEST_PACKAGE_GATING', 'true')
+    const flagOn = await record(setup, { settlementAccount: '1930' })
+
+    const trace = flagOn.trace as Array<Record<string, unknown>>
+    expect(flagOn.loads).toEqual({ loadOpenRotRutPayoutRequests: 1 })
+    expect(flagOn.reads.filter((r) => r.startsWith('supplier_invoices:') && r.includes('remaining_amount'))).toEqual([])
+    expect(trace.filter((t) => t.call === 'settleOrderWithDebit')).toEqual([])
+    const split = trace.find((t) => t.call === 'applyTransactionSplit' && t.tx === 'tx:op-split-supplier')
+    expect((split?.pools as { supplierInvoices: string[] }).supplierInvoices).toEqual([])
+    expect(passLine(flagOn).packagesOff).toEqual(['supplier-invoices-and-payments'])
+    expect(passLine(flagOn).passes.filter((p) => p === 'payment-order' || p === 'supplier-invoice')).toEqual([])
+    // The income side still matches: the OCR hint and the ROT/RUT payout.
+    expect(trace.some((t) => t.write === 'update' && (t.payload as Row)?.potential_invoice_id === 'inv-ocr')).toBe(true)
+    expect(trace.some((t) => t.write === 'update' && (t.payload as Row)?.potential_rot_rut_payout_request_id === 'rr-1')).toBe(true)
   })
 })

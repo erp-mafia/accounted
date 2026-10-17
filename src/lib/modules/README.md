@@ -177,7 +177,8 @@ running (the founder's rule). Three pieces:
 
 - `obligations.ts`: one small read-only probe per obligation, per switchable
   package: Bank (a live connection), Kundfakturor (unpaid invoices, active
-  recurring invoices, open collection cases), Leverantörsfakturor och
+  recurring invoices, open collection cases, a ROT/RUT begäran whose payout
+  is not booked yet), Leverantörsfakturor och
   betalningar (unpaid supplier invoices, payments on their way), Kvitton och
   underlag (unhandled underlag, the Att göra predicate), Utlägg (claims not
   paid out, trips not booked), Lön (runs not paid and booked, an AGI not filed
@@ -204,6 +205,12 @@ running (the founder's rule). Three pieces:
   Swedish, naming the package and "Slå på <paket> under Anpassa". Two small
   reads, only on a start door; a failed read lets the start through.
   Unit tests model every package on (`tests/unit/setup.ts`).
+- `packages-off.ts`: which packages are fully off (switched off with nothing
+  open), for background work that skips a package's passes. The bank ingest
+  reads it once per batch behind `INGEST_PACKAGE_GATING` (off) and skips the
+  matchers, and their pools, of a fully-off package
+  (`lib/transactions/ingest-package-gate.ts`); a winding-down package keeps
+  them, and a failed read skips nothing.
 
 The switch itself: Inställningar, Företag, Anpassa (`/settings/anpassa`), and
 `packages.list`, `packages.enable` and `packages.disable` over v1

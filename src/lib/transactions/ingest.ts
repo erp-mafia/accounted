@@ -15,7 +15,13 @@ import { isImportedTransaction } from '@/lib/transactions/origin'
 import { applyTransactionSplit } from '@/lib/transactions/parts-apply'
 import { createLogger } from '@/lib/logger'
 import { INGEST_MATCHERS } from '@/lib/composition/ingest-matchers'
-import { createIngestClaims, startIngestMatchers, type IngestBatch } from '@/lib/transactions/ingest-matcher'
+import { createIngestClaims, INGEST_POOL_OWNERS, startIngestMatchers, type IngestBatch } from '@/lib/transactions/ingest-matcher'
+import {
+  gateIngestMatchers,
+  ingestPackageGatingEnabled,
+  readIngestPackageGate,
+  RUN_EVERY_MATCHER,
+} from '@/lib/transactions/ingest-package-gate'
 import { physicalAccountKey, reenableIfUnused, resolveDefaultCashAccount, sameCashAccount } from '@/lib/cash-accounts/service'
 import type { Transaction, RawTransaction, IngestResult, IngestOptions, IngestSkipReason, IngestSkippedRow, SupplierInvoice, Currency, ExchangeRate } from '@/types'
 import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
@@ -1040,12 +1046,20 @@ export async function ingestTransactions(
   // claimed, so no two rows are offered the same invoice, order or begäran,
   // and the open invoice pools.
   const claims = createIngestClaims()
+  // Behind INGEST_PACKAGE_GATING (off: no read, every matcher runs): the
+  // packages switched off with nothing open skip their matchers, and the
+  // pools only those matchers read stay empty (lib/transactions/
+  // ingest-package-gate.ts). Read once for the batch; a failed read skips
+  // nothing. A package that is winding down keeps every matcher.
+  const gate = ingestPackageGatingEnabled()
+    ? await readIngestPackageGate(supabase, companyId, INGEST_MATCHERS)
+    : RUN_EVERY_MATCHER
   // Open customer invoices for income matching: read once for the batch, on
   // the first income row (an all-expense batch never reads them), instead of
   // once per row. Nothing in this loop changes an invoice or its payments, so
   // every row scores against what it would have read itself. A failed read is
   // not kept: the next income row tries again, as each row used to.
-  let invoiceMatchPool: InvoiceMatchPool | null = null
+  let invoiceMatchPool: InvoiceMatchPool | null = gate.skips(INGEST_POOL_OWNERS.customerInvoices) ? { invoices: [] } : null
   const batch: IngestBatch = {
     supabase,
     companyId,
@@ -1062,7 +1076,7 @@ export async function ingestTransactions(
       return logMatchEvent(supabase, userId, transactionId, action, opts)
     },
   }
-  const matchers = startIngestMatchers(INGEST_MATCHERS, batch, tallyPass)
+  const matchers = startIngestMatchers(gateIngestMatchers(INGEST_MATCHERS, gate), batch, tallyPass)
 
   // Keyed by `${currency}|${date}` so each non-SEK transaction gets the
   // rate that was valid on its own transaction date, not the import date.
@@ -1071,20 +1085,23 @@ export async function ingestTransactions(
   // When rawInsertOnly is set (viewer imports), skip pre-fetching supplier
   // invoices, the matchers' reads and exchange rates: they are not used.
   if (!options?.rawInsertOnly) {
-  // Pre-fetch unpaid supplier invoices for expense matching (non-critical)
-  try {
-    batch.pools.supplierInvoices = await fetchAllRows<SupplierInvoice>(({ from, to }) =>
-      supabase
-        .from('supplier_invoices')
-        .select('*, supplier:suppliers(*)')
-        .eq('company_id', companyId)
-        .in('status', [...MATCHABLE_SUPPLIER_INVOICE_STATUSES])
-        .gt('remaining_amount', 0)
-        .order('id', { ascending: true })
-        .range(from, to)
-    )
-  } catch {
-    // Non-critical: supplier invoice matching will be skipped
+  // Pre-fetch unpaid supplier invoices for expense matching (non-critical).
+  // A gate that skips their package leaves the pool empty, unread.
+  if (!gate.skips(INGEST_POOL_OWNERS.supplierInvoices)) {
+    try {
+      batch.pools.supplierInvoices = await fetchAllRows<SupplierInvoice>(({ from, to }) =>
+        supabase
+          .from('supplier_invoices')
+          .select('*, supplier:suppliers(*)')
+          .eq('company_id', companyId)
+          .in('status', [...MATCHABLE_SUPPLIER_INVOICE_STATUSES])
+          .gt('remaining_amount', 0)
+          .order('id', { ascending: true })
+          .range(from, to)
+      )
+    } catch {
+      // Non-critical: supplier invoice matching will be skipped
+    }
   }
   // What each matcher reads once per batch: the open bank payment orders a
   // debit may settle, the open ROT/RUT begäran Skatteverket's payout may
@@ -1660,6 +1677,8 @@ export async function ingestTransactions(
       imported: result.imported,
       rereads: rereadPasses,
       passes: passHits,
+      // Only when the package gate skipped something (INGEST_PACKAGE_GATING).
+      ...(gate.off.size > 0 ? { packagesOff: [...gate.off].sort() } : {}),
     })
   }
 

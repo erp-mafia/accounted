@@ -380,7 +380,7 @@ Response `200`:
 {
   data: {
     profile: { profile_id: string, name_sv: string, source: "stored" | "implicit" },
-    packages: { package_id: string, name: string, name_sv: string, switchable: boolean, availability: "on" | "off" | "winding_down" | "not_in_plan" | "not_in_country", reasons: string[], open_obligations: { code: "active_bank_connection" | "unpaid_customer_invoices" | "active_recurring_invoices" | "open_collection_cases" | "unpaid_supplier_invoices" | "payments_in_flight" | "unhandled_documents" | "unpaid_expense_claims" | "unbooked_mileage" | "open_salary_runs" | "unfiled_agi" | "unmatched_salary_payments" | "active_assets" | "active_pos_connection" | "unbooked_pos_days" | "active_webshop_connection" | "unbooked_webshop_orders", label_sv: string, label_en: string }[], modules: { module_id: string, name_sv: string }[] }[]
+    packages: { package_id: string, name: string, name_sv: string, switchable: boolean, availability: "on" | "off" | "winding_down" | "not_in_plan" | "not_in_country", reasons: string[], open_obligations: { code: "active_bank_connection" | "unpaid_customer_invoices" | "active_recurring_invoices" | "open_collection_cases" | "open_rot_rut_payout_requests" | "unpaid_supplier_invoices" | "payments_in_flight" | "unhandled_documents" | "unpaid_expense_claims" | "unbooked_mileage" | "open_salary_runs" | "unfiled_agi" | "unmatched_salary_payments" | "active_assets" | "active_pos_connection" | "unbooked_pos_days" | "active_webshop_connection" | "unbooked_webshop_orders", label_sv: string, label_en: string }[], modules: { module_id: string, name_sv: string }[] }[]
   },
   meta: {
     request_id: string,
