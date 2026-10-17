@@ -1,0 +1,1 @@
+[2026-10-17] Deleted six loop skills (pr-ci-triage, issue-triage, vercel-errors, design-scan, ignite, verify) and the design-scan workflow; kept four: since the GitLab move they produced one issue and no merge requests, and resolve-pr covers review and CI.

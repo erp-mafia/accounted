@@ -124,7 +124,7 @@ a wrong filter, a missing status check, a stale label, a copy error, a missing t
 step 1b, an `untyped-error` whose throw site is plain (a validation message, a not-found) and an
 `alias` fixed by keywords or a description are small too; a `capability-gap` or `param-gap` is a
 digest line for the founder, never a loop PR (it adds surface). Every PR
-passes the **[`loop-verify`](../loop-verify/SKILL.md)** gate first. PR body links the digest line and
+passes the Definition of Done checks in `CLAUDE.md` first. PR body links the digest line and
 quotes the report's ids so the fix is verifiable. Anything touching posted journal entries, money math,
 a migration, or Swedish tax law is `medium`+ and gets a digest line + `needs-human`, never a loop PR.
 

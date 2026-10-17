@@ -1,0 +1,1 @@
+[2026-10-17] CLAUDE.md asks first only before production writes, sends, deletes, new dependencies or a changed reading of law, and a go runs to merged and live: a blanket stop-and-ask on money math paused agents on routine fixes.
