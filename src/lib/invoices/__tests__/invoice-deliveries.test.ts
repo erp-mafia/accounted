@@ -110,6 +110,32 @@ describe('invoice delivery tracking', () => {
     })
   })
 
+  it('attaches the invoice PDF first, then the invoice\'s own files in order (crm#1269)', async () => {
+    const { supabase } = makeSupabase()
+    const sendEmail = vi.fn().mockResolvedValue({ success: true, provider: 'resend', messageId: 'm-1' })
+    const timeReport = { filename: 'tidrapport.pdf', content: Buffer.from('report'), contentType: 'application/pdf' }
+    const receipt = { filename: 'kvitto tåg.jpg', content: Buffer.from('jpeg'), contentType: 'image/jpeg' }
+
+    await sendTrackedInvoiceEmail({
+      ...makeInput(supabase, makeEmailService(sendEmail)),
+      extraAttachments: [timeReport, receipt],
+    })
+
+    const attachments = sendEmail.mock.calls[0]![0].attachments as Array<{ filename: string; content: Buffer }>
+    expect(attachments.map((a) => a.filename)).toEqual(['faktura-f-1001.pdf', 'tidrapport.pdf', 'kvitto tåg.jpg'])
+    expect(attachments[0]!.content).toEqual(Buffer.from('exact-pdf'))
+    expect(attachments[2]).toBe(receipt)
+  })
+
+  it('sends only the PDF when the invoice carries no files', async () => {
+    const { supabase } = makeSupabase()
+    const sendEmail = vi.fn().mockResolvedValue({ success: true, provider: 'resend', messageId: 'm-1' })
+
+    await sendTrackedInvoiceEmail(makeInput(supabase, makeEmailService(sendEmail)))
+
+    expect(sendEmail.mock.calls[0]![0].attachments).toHaveLength(1)
+  })
+
   it('persists the exact payload before sending and records provider success', async () => {
     const { supabase, rpcSpy } = makeSupabase()
     const sendEmail = vi.fn().mockResolvedValue({

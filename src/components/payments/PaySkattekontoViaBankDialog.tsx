@@ -30,6 +30,7 @@ import {
   type PaymentOrder,
   type PaymentsAvailability,
   type SkattekontoPaymentPreview,
+  type SkattekontoPaymentSourceInput,
 } from './payments-client'
 
 /**
@@ -48,6 +49,11 @@ import {
  * A skattekonto draft nobody approved is replaced by the server, so a second
  * attempt never fails on the first one's leftovers. Nothing books the debit
  * when it arrives: the bank row is booked the normal way.
+ *
+ * Opened from a filed declaration (the momsdeklaration's step 4, the salary
+ * run's tax payment), the dialog pays what that declaration asks for by its
+ * due date instead of the next charge, and shows the synced saldo beside it
+ * without netting it.
  */
 
 type Phase = 'preview' | 'sign'
@@ -68,14 +74,28 @@ function inlineRefusalOf(error: unknown): string | null {
   return error instanceof PaymentsClientError && error.code && INLINE_REFUSALS.has(error.code) ? error.code : null
 }
 
+/** Why a declaration asks for nothing (details.reason of SKATTEKONTO_PAYMENT_NOTHING_DUE). */
+const NOTHING_DUE_REASONS = ['refund', 'zero', 'already_paid', 'period_not_ended'] as const
+type NothingDueReason = (typeof NOTHING_DUE_REASONS)[number]
+
+function nothingDueReasonOf(error: unknown): NothingDueReason | null {
+  if (!(error instanceof PaymentsClientError)) return null
+  const reason = (error.body as { error?: { details?: { reason?: unknown } } } | null)?.error?.details?.reason
+  return NOTHING_DUE_REASONS.find((r) => r === reason) ?? null
+}
+
 interface PaySkattekontoViaBankDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   /** Called when the dialog closes after anything changed (a draft made, approved or sent to the bank). */
   onDone?: () => void
+  /** The declaration paid; omitted, the next charge on the synced skattekonto. */
+  source?: SkattekontoPaymentSourceInput | null
+  /** How the page names the declaration's period (e.g. Kvartal 3 2026); the period key otherwise. */
+  sourceLabel?: string
 }
 
-export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone }: PaySkattekontoViaBankDialogProps) {
+export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone, source = null, sourceLabel }: PaySkattekontoViaBankDialogProps) {
   const t = useTranslations('skattekonto_bank_payment')
   const tb = useTranslations('bank_payments')
   const locale = useLocale() as ErrorLocale
@@ -95,6 +115,7 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
   const [executionDate, setExecutionDate] = useState('')
   const [preview, setPreview] = useState<SkattekontoPaymentPreview | null>(null)
   const [refusal, setRefusal] = useState<string | null>(null)
+  const [nothingDueReason, setNothingDueReason] = useState<NothingDueReason | null>(null)
   const [previewing, setPreviewing] = useState(false)
   const [busy, setBusy] = useState(false)
   const [order, setOrder] = useState<PaymentOrder | null>(null)
@@ -148,24 +169,32 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
   }, [typedAmount, amountInvalid])
   const amountShown = amountTouched ? amountText : preview ? AMOUNT_INPUT_FORMAT.format(preview.amount) : ''
 
+  // The source as a value the effect below can compare: a page passes a new
+  // object on every render.
+  const sourceKey = source ? JSON.stringify(source) : ''
+
   // The preview follows the account, the amount and the day: a dry run on the
   // server, every rule, nothing written.
   useEffect(() => {
     if (!open || !accountId || phase !== 'preview') return
     let cancelled = false
     setPreviewing(true)
-    previewSkattekontoPayment({ cashAccountId: accountId, amount, executionDate: executionDate || null })
+    const named = sourceKey ? (JSON.parse(sourceKey) as SkattekontoPaymentSourceInput) : null
+    previewSkattekontoPayment({ cashAccountId: accountId, amount, executionDate: executionDate || null, source: named })
       .then((data) => {
         if (cancelled) return
         setPreview(data)
         setRefusal(null)
+        setNothingDueReason(null)
       })
       .catch((error) => {
         if (cancelled) return
         setPreview(null)
         const code = inlineRefusalOf(error)
-        if (code) setRefusal(code)
-        else fail(tb('preview_failed_title'), error)
+        if (code) {
+          setRefusal(code)
+          setNothingDueReason(nothingDueReasonOf(error))
+        } else fail(tb('preview_failed_title'), error)
       })
       .finally(() => {
         if (!cancelled) setPreviewing(false)
@@ -173,7 +202,7 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
     return () => {
       cancelled = true
     }
-  }, [open, accountId, amount, executionDate, phase, fail, tb])
+  }, [open, accountId, amount, executionDate, phase, sourceKey, fail, tb])
 
   const payableAccounts = availability?.accounts.filter((a) => a.payable) ?? []
   const account = payableAccounts.find((a) => a.id === accountId) ?? null
@@ -187,6 +216,10 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
   // Signing pays exactly what the preview showed: never while the field says another amount.
   const inSync = preview !== null && (typedAmount === null || typedAmount === preview.amount)
   const late = preview?.warnings.find((w) => w.code === 'late')
+  const notFiled = preview?.warnings.some((w) => w.code === 'not_filed') ?? false
+  const duplicate = preview?.warnings.find((w) => w.code === 'possible_duplicate')
+  const declared = preview?.source ?? null
+  const declaredPeriod = sourceLabel ?? declared?.tax_period ?? ''
 
   async function signNow() {
     if (!preview) return
@@ -197,6 +230,7 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
         cashAccountId: accountId,
         amount: preview.amount,
         executionDate: preview.requested_execution_date,
+        source,
       })
       changed.current = true
       setOrder(prepared.order)
@@ -303,6 +337,18 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
                 </dl>
 
                 {amountInvalid && <p className="text-[12.5px] text-destructive">{t('amount_invalid')}</p>}
+                {declared && (
+                  <p className="text-[12.5px] text-muted-foreground">
+                    {t(declared.kind === 'agi' ? 'source_agi' : 'source_vat', {
+                      period: declaredPeriod,
+                      amount: formatCurrency(declared.declared),
+                    })}
+                    {declared.due_date && <> {t('source_due', { date: formatDate(declared.due_date) })}</>}
+                  </p>
+                )}
+                {preview?.balance && (
+                  <p className="text-[12.5px] text-muted-foreground">{t('balance_info', { saldo: formatCurrency(preview.balance.saldo) })}</p>
+                )}
                 {preview?.due && (
                   <p className="text-[12.5px] text-muted-foreground">
                     {t('due_hint', {
@@ -316,11 +362,19 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
                   <p className="text-[12.5px] text-muted-foreground">{t('date_moved', { from: formatDate(preview.date_moved_from) })}</p>
                 )}
                 {late && <AttnLine>{t('late', { date: formatDate(late.due ?? preview?.due?.date ?? '') })}</AttnLine>}
+                {!late && duplicate && (
+                  <AttnLine>{t('possible_duplicate', { date: duplicate.executed_at ? formatDate(duplicate.executed_at) : '' })}</AttnLine>
+                )}
+                {!late && !duplicate && notFiled && <p className="text-[12.5px] text-muted-foreground">{t('not_filed')}</p>}
 
                 {refusal === 'SKATTEKONTO_PAYMENT_ALREADY_IN_PAYMENT' && (
                   <AttnLine action={{ label: tb('open_payments_page'), href: '/payments' }}>{t('already_in_payment')}</AttnLine>
                 )}
-                {refusal === 'SKATTEKONTO_PAYMENT_NOTHING_DUE' && <p className="text-[12.5px] text-muted-foreground">{t('nothing_due')}</p>}
+                {refusal === 'SKATTEKONTO_PAYMENT_NOTHING_DUE' && (
+                  <p className="text-[12.5px] text-muted-foreground">
+                    {nothingDueReason ? t(`nothing_due_${nothingDueReason}`) : t('nothing_due')}
+                  </p>
+                )}
                 {refusal === 'SKATTEKONTO_PAYMENT_OCR_MISSING' && <AttnLine>{t('ocr_missing')}</AttnLine>}
 
                 {preview && (

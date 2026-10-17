@@ -116,6 +116,34 @@ export async function updateCashAccountPayee(
 }
 
 /**
+ * Point the bank identity (iban) of a disabled account typed in by hand at
+ * its printed IBAN, or clear it with null (lib/cash-accounts/manage.ts
+ * decides when). The UPDATE carries the conditions itself, under the same
+ * company lock every bank identity writer takes: a row a bank connection
+ * took over, or one turned back on, in the meantime keeps its identity and
+ * answers null.
+ */
+export async function setTypedAccountIdentity(
+  supabase: SupabaseClient,
+  companyId: string,
+  cashAccountId: string,
+  iban: string | null,
+): Promise<CashAccount | null> {
+  const { data, error } = await supabase
+    .from('cash_accounts')
+    .update({ iban })
+    .eq('company_id', companyId)
+    .eq('id', cashAccountId)
+    .eq('source', 'manual')
+    .eq('enabled', false)
+    .is('bank_connection_id', null)
+    .select('*')
+    .maybeSingle()
+  if (error) throw new Error(`cash_accounts identity update failed: ${error.message}`)
+  return (data as CashAccount | null) ?? null
+}
+
+/**
  * Make `cashAccountId` the default payee for `currency`, or clear the
  * default when null. The account must belong to the company: the composite
  * FK rejects a foreign id and the caller sees the error.

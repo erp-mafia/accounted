@@ -25,6 +25,10 @@ type TxRow = {
   cash_account_id: string | null
   /** NULL = no 1:1 anchor; booked-ness may still come from links/payments. */
   journal_entry_id: string | null
+  /** Provider identity (absent in most fixtures: the ids then cannot speak). */
+  external_id?: string | null
+  import_source?: string | null
+  bank_connection_id?: string | null
 }
 type JeRow = { voucher_series: string | null; voucher_number: number | null; entry_date: string | null }
 
@@ -441,6 +445,9 @@ type LedgerTxLink = {
   amount?: number | string
   currency?: string | null
   cash_account_id?: string | null
+  external_id?: string | null
+  import_source?: string | null
+  bank_connection_id?: string | null
 }
 
 function makeLedgerSupabase(opts: {
@@ -892,6 +899,179 @@ describe('detectBookingDuplicate (orchestrator)', () => {
       { id: 'self', date: '2026-03-26', amount: 98565, currency: 'SEK', cash_account_id: null },
       { excludeTransactionIds: ['sib-batch'], excludeJournalEntryIds: ['je-2'] },
     )
+    expect(result).toBeNull()
+  })
+})
+
+// ── Provider identity (crm#1271, crm#1277) ───────────────────────────────────
+// A Stripe payout carries several fee rows of the same öre, and two customers
+// can pay the same price on the same day. Each row's external_id embeds
+// Stripe's balance-transaction id, so two different ids are two movements:
+// content alone (date, amount, account) called them twins.
+
+const STRIPE_CASH = 'ca-stripe'
+const stripeTarget = (over: Record<string, unknown> = {}) => ({
+  id: 'self',
+  date: '2026-10-12',
+  amount: -4.43,
+  currency: 'SEK',
+  cash_account_id: STRIPE_CASH,
+  external_id: 'stripe_acct_A_txn_111_fee',
+  import_source: 'stripe',
+  bank_connection_id: null,
+  ...over,
+})
+const stripeSibling = (over: Partial<TxRow> = {}): TxRow => ({
+  id: 'sib-stripe',
+  date: '2026-10-12',
+  amount: -4.43,
+  description: 'Stripe-avgift',
+  cash_account_id: STRIPE_CASH,
+  journal_entry_id: 'je-sib',
+  external_id: 'stripe_acct_A_txn_222_fee',
+  import_source: 'stripe',
+  bank_connection_id: null,
+  ...over,
+})
+
+describe('provider identity: detectBookedDuplicateTransaction', () => {
+  it('does NOT flag a same-amount Stripe sibling under a different balance-transaction id', async () => {
+    const supabase = makeSupabase([stripeSibling()])
+    const result = await detectBookedDuplicateTransaction(supabase, COMPANY, stripeTarget())
+    expect(result).toBeNull()
+  })
+
+  it('does NOT flag a customer payment that shares its amount with another customer\'s (distinct ids)', async () => {
+    const supabase = makeSupabase([
+      stripeSibling({ amount: 50.1, external_id: 'stripe_acct_A_txn_payB', description: 'Stripe-betalning B' }),
+    ])
+    const result = await detectBookedDuplicateTransaction(
+      supabase,
+      COMPANY,
+      stripeTarget({ amount: 50.1, external_id: 'stripe_acct_A_txn_payA' }),
+    )
+    expect(result).toBeNull()
+  })
+
+  it('still flags a sibling carrying the SAME provider id (the ids cannot clear it)', async () => {
+    const supabase = makeSupabase([stripeSibling({ external_id: 'stripe_acct_A_txn_111_fee' })])
+    const result = await detectBookedDuplicateTransaction(supabase, COMPANY, stripeTarget())
+    expect(result?.transaction_id).toBe('sib-stripe')
+  })
+
+  it('skips only the proven-distinct sibling and still flags a content twin from another channel', async () => {
+    // The Stripe sibling is another booking; the hand-entered row on the same
+    // cash account may be this very movement typed in by hand.
+    const supabase = makeSupabase([
+      stripeSibling(),
+      stripeSibling({ id: 'sib-manual', external_id: null, import_source: 'mcp', journal_entry_id: 'je-manual' }),
+    ])
+    const result = await detectBookedDuplicateTransaction(supabase, COMPANY, stripeTarget())
+    expect(result?.transaction_id).toBe('sib-manual')
+  })
+
+  it('still flags a re-imported bank file duplicate whose synthetic id differs', async () => {
+    // File-import ids are row hashes: the same movement imported twice can
+    // carry two ids, so a different id proves nothing there.
+    const fileRow = { import_source: 'csv_generic_csv', bank_connection_id: null }
+    const supabase = makeSupabase([
+      sibling({ ...fileRow, external_id: 'generic_csv_aaaa' }),
+    ])
+    const result = await detectBookedDuplicateTransaction(supabase, COMPANY, {
+      id: 'self', date: '2025-12-19', amount: -1616, currency: 'SEK', cash_account_id: null,
+      ...fileRow, external_id: 'generic_csv_bbbb',
+    })
+    expect(result?.transaction_id).toBe('sib-1')
+  })
+
+  it('still flags a bank-feed sibling whose content-derived id differs (Enable Banking)', async () => {
+    const feed = { import_source: 'enable_banking', bank_connection_id: 'bc-1' }
+    const supabase = makeSupabase([sibling({ ...feed, external_id: 'eb_SE00_2025-12-19_-161600_1' })])
+    const result = await detectBookedDuplicateTransaction(supabase, COMPANY, {
+      id: 'self', date: '2025-12-19', amount: -1616, currency: 'SEK', cash_account_id: null,
+      ...feed, external_id: 'eb_SE00_2025-12-19_-161600_0',
+    })
+    expect(result?.transaction_id).toBe('sib-1')
+  })
+
+  it('still flags a Stripe sibling when the target carries no identity (a door that omits it)', async () => {
+    const supabase = makeSupabase([stripeSibling()])
+    const result = await detectBookedDuplicateTransaction(supabase, COMPANY, {
+      id: 'self', date: '2026-10-12', amount: -4.43, currency: 'SEK', cash_account_id: STRIPE_CASH,
+    })
+    expect(result?.transaction_id).toBe('sib-stripe')
+  })
+})
+
+describe('provider identity: detectLedgerDuplicateVoucher', () => {
+  const stripeFeeLeg = (over: Partial<Jel['journal_entry']> = {}) =>
+    jel({
+      account_number: '1686',
+      debit_amount: 0,
+      credit_amount: 4.43,
+      journal_entry: {
+        id: 'je-fee', entry_date: '2026-10-11', description: 'Stripe-avgifter',
+        voucher_series: 'A', voucher_number: 375, status: 'posted', source_type: 'manual',
+        ...over,
+      },
+    })
+
+  it('still flags a voucher with no linked transaction (ids cannot decide)', async () => {
+    const supabase = makeLedgerSupabase({ ledgerAccount: '1686', lines: [stripeFeeLeg()] })
+    const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, stripeTarget())
+    expect(result?.journal_entry_id).toBe('je-fee')
+    expect(result?.transaction_id).toBeNull()
+  })
+
+  it('excludes a voucher linked to ANOTHER Stripe booking of the same amount (not a twin, not an orphan)', async () => {
+    const supabase = makeLedgerSupabase({
+      ledgerAccount: '1686',
+      lines: [stripeFeeLeg()],
+      txLinks: [{
+        id: 'sib-stripe', date: '2026-10-11', amount: -4.43, currency: 'SEK',
+        cash_account_id: STRIPE_CASH, journal_entry_id: 'je-fee',
+        external_id: 'stripe_acct_A_txn_222_fee', import_source: 'stripe', bank_connection_id: null,
+      }],
+    })
+    const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, stripeTarget())
+    expect(result).toBeNull()
+  })
+
+  it('still returns the linked twin when the linking row comes from another channel', async () => {
+    const supabase = makeLedgerSupabase({
+      ledgerAccount: '1686',
+      lines: [stripeFeeLeg()],
+      txLinks: [{
+        id: 'manual-1', date: '2026-10-11', amount: -4.43, currency: 'SEK',
+        cash_account_id: STRIPE_CASH, journal_entry_id: 'je-fee',
+        external_id: null, import_source: 'mcp', bank_connection_id: null,
+      }],
+    })
+    const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, stripeTarget())
+    expect(result?.journal_entry_id).toBe('je-fee')
+    expect(result?.transaction_id).toBe('manual-1')
+  })
+})
+
+describe('provider identity: detectBookingDuplicate (orchestrator)', () => {
+  it('clears the crm#1271 shape end to end: a booked same-amount Stripe fee on its own voucher', async () => {
+    // Both halves see the other fee: the sibling scan as a booked sibling, the
+    // ledger scan as the voucher it is linked to. Neither may call it a twin.
+    const booked = stripeSibling({ journal_entry_id: 'je-fee' })
+    const supabase = makeLedgerSupabase({
+      ledgerAccount: '1686',
+      transactionRows: [booked],
+      lines: [jel({
+        account_number: '1686',
+        debit_amount: 0,
+        credit_amount: 4.43,
+        journal_entry: {
+          id: 'je-fee', entry_date: '2026-10-12', description: 'Stripe-avgift',
+          voucher_series: 'A', voucher_number: 435, status: 'posted', source_type: 'bank_transaction',
+        },
+      })],
+    })
+    const result = await detectBookingDuplicate(supabase, COMPANY, stripeTarget())
     expect(result).toBeNull()
   })
 })

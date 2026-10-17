@@ -5,6 +5,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { AccountMapping, ImportResult, ParsedSIEFile, SIEVoucher } from './types'
 import { calculateFileHash, getEffectiveOpeningBalances, hasOpeningBalanceVoucherCandidate, isBalanceSheetAccount, parseSIEFile } from './sie-parser'
 import { ensureFiscalPeriod } from './sie-import'
+import { NO_MATCHING_FISCAL_YEAR } from './sie-admission'
 import { SIE_JOB_VERSION, SIE_LIMITS, type SIEJob } from './sie-job-contract'
 import { SIEJobMappingsSchema, SIEJobOptionsSchema } from '@/lib/api/schemas'
 import { isAccountNumber } from '@/lib/invariants/account-number'
@@ -161,26 +162,32 @@ export class SIEJobDatabaseError extends Error {
 }
 
 // 55000 alone does not say which guard refused: start_sie_import_job raises it
-// for six reasons. A refusal whose raised sentence has its own registry entry
-// keeps that meaning instead of the generic CONFLICT.
+// for several reasons. A refusal whose raised sentence has its own registry
+// entry keeps that meaning instead of the generic CONFLICT.
 const JOB_REFUSALS: Record<string,string> = {
   'Existing SIE import requires reviewed replacement or reconciliation':'SIE_IMPORT_PERIOD_ALREADY_IMPORTED',
   'Legacy SIE import requires reviewed reconciliation before replacement':'SIE_IMPORT_LEGACY_REVIEW_REQUIRED',
 }
 
 /**
- * The undo, the resume of an undo and the replacement refuse a locked fiscal
- * year or company lock date before anything is queued (migration
- * 20261005193558, crm#1022). The database writes the sentence after this
- * prefix: it names the locked range and the setting to change, so it reaches
- * the reader as is through every door.
+ * Refusals the database words for the reader: it writes a Swedish sentence
+ * after the code and a colon, naming what is in the way and what to change,
+ * so the sentence reaches the reader as is through every door.
+ *
+ *   SIE_IMPORT_PERIOD_LOCKED: the undo, the resume of an undo and the
+ *     replacement refuse a locked fiscal year or company lock date before
+ *     anything is queued (migration 20261005193558, crm#1022).
+ *   SIE_IMPORT_PERIOD_HAS_OPENING_BALANCE: the year already has an IB
+ *     verifikat no import owns and the import would book the file's IB on
+ *     top of it (sie_import_admission_refusal, crm#1272).
  */
-const LOCK_REFUSAL_PREFIX = 'SIE_IMPORT_PERIOD_LOCKED: '
+const PREFIXED_REFUSALS = ['SIE_IMPORT_PERIOD_LOCKED','SIE_IMPORT_PERIOD_HAS_OPENING_BALANCE'] as const
 
 export function jobDatabaseError(error:{code?:string;message:string}):SIEJobDatabaseError {
-  if (error.code === '55000' && error.message.startsWith(LOCK_REFUSAL_PREFIX)) {
-    return userFacing(new SIEJobDatabaseError(error.message.slice(LOCK_REFUSAL_PREFIX.length),
-      'SIE_IMPORT_PERIOD_LOCKED',error.code),'SIE_IMPORT_PERIOD_LOCKED')
+  const prefixed = error.code === '55000'
+    ? PREFIXED_REFUSALS.find(code => error.message.startsWith(`${code}: `)) : undefined
+  if (prefixed) {
+    return userFacing(new SIEJobDatabaseError(error.message.slice(prefixed.length + 2),prefixed,error.code),prefixed)
   }
   // 55P03 (lock not available) frees itself: the same request succeeds on a
   // retry, which is what TRANSIENT_ERROR says. It is never an existing import.
@@ -395,7 +402,7 @@ export async function submitSIEJob(supabase: SupabaseClient, companyId: string, 
   } else {
     const { data, error } = await supabase.from('fiscal_periods').select('id').eq('company_id',companyId)
       .lte('period_start',parsed.stats.fiscalYearStart!).gte('period_end',parsed.stats.fiscalYearEnd!).single()
-    if (error || !data) throw new SIEJobValidationError('Inget matchande räkenskapsår hittades.')
+    if (error || !data) throw new SIEJobValidationError(NO_MATCHING_FISCAL_YEAR)
     periodId = data.id
   }
   if (options.onExistingPeriod === 'replace' && !options.supersedesImportId) {

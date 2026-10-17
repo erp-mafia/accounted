@@ -82,6 +82,11 @@ import {
   InvoiceDeliverySnapshotError,
 } from '@/lib/invoices/invoice-deliveries'
 import {
+  MAX_INVOICE_ATTACHMENTS,
+  linkInvoiceAttachments,
+  loadInvoiceEmailAttachments,
+} from '@/lib/invoices/invoice-attachments'
+import {
   EMAIL_PATTERN,
   exceedsInvoiceEmailRecipientLimit,
   MAX_INVOICE_EMAIL_COPY_RECIPIENTS,
@@ -113,6 +118,12 @@ const InvoiceSendBody = z.object({
     .max(MAX_INVOICE_EMAIL_COPY_RECIPIENTS)
     .optional(),
   ...InvoiceEmailOverrideShape,
+  attachment_document_ids: z.array(z.string().uuid())
+    .max(MAX_INVOICE_ATTACHMENTS)
+    .optional()
+    .describe(
+      'Ids of documents already in the company archive to attach to the invoice before it is sent (upload first via POST /documents). They are emailed after the invoice PDF, together with any files already attached to the draft, and stay with the invoice once it is sent.',
+    ),
 }).refine(
   (data) => (
     (data.additional_cc?.length ?? 0) + (data.additional_bcc?.length ?? 0)
@@ -144,7 +155,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices/:id/send',
   summary: 'Send a draft invoice to the customer by email.',
   description:
-    'The full send pipeline: preflight PDF render → allocate F-series number atomically → final PDF render → issue: flip status to sent and post the journal entry (real invoice, unless kontantmetoden or defer_invoice_booking; a deferred invoice is booked afterwards with POST /invoices/{id}/book) BEFORE the email, fail closed → email via the email extension (Resend or SMTP; PDF attachment, copy to company) → archive PDF as underlag → emit invoice.sent. A refused journal entry returns the engine\'s error and nothing is sent; post-email failures surface as warnings.',
+    'The full send pipeline: preflight PDF render → allocate F-series number atomically → final PDF render → issue: flip status to sent and post the journal entry (real invoice, unless kontantmetoden or defer_invoice_booking; a deferred invoice is booked afterwards with POST /invoices/{id}/book) BEFORE the email, fail closed → email via the email extension (Resend or SMTP; the PDF, then the invoice\'s own attachments, copy to company) → archive PDF as underlag → emit invoice.sent. A refused journal entry returns the engine\'s error and nothing is sent; post-email failures surface as warnings.',
   useWhen:
     'You want Accounted to deliver the invoice to the customer via email. Peppol e-invoices go through POST /invoices/{id}/send-peppol (check readiness first with GET /invoices/{id}/peppol; per-company access grant requested with POST /peppol/access-request or under Inställningar > Kopplingar > E-faktura via Peppol (Settings > Connections > E-invoicing via Peppol); senders whose org number is not a personnummer (every legal form except enskild firma), standard invoices only, Swedish org-number buyers whose org number is not a personnummer, SEK with taxable Swedish VAT at 6/12/25 % only, no ROT/RUT deductions). A successful Peppol send issues the invoice itself, so do not call :mark-sent after it; only if it reports that the invoice was sent via Peppol but could not be marked as sent (issuance.ok=false) does :mark-sent complete the issuance. For invoices delivered through another channel (an external e-invoice provider, postal, own SMTP) use :mark-sent instead.',
   doNotUseFor:
@@ -162,6 +173,7 @@ registerEndpoint({
     'The deprecated cc response field contains only the first address. Use cc_addresses for the complete CC list.',
     'BCC recipients are retained only in the restricted delivery archive and are omitted from normal and dry-run responses.',
     'email_subject and email_body replace the subject and the message of this one email (the greeting and sign-off stay) and take the same placeholders as the company email texts; they are not stored on the invoice. Empty or whitespace-only means the company or stock text.',
+    'attachment_document_ids attaches existing documents of the same company (404 INVOICE_ATTACHMENT_DOCUMENT_NOT_FOUND for an unknown or foreign id); there is no upload here. At most 10 files and 25 MB together (400 INVOICE_ATTACHMENTS_TOO_MANY / INVOICE_ATTACHMENTS_TOO_LARGE). Once the invoice is sent its attachments are fixed and their documents can no longer be deleted (BFL retention).',
   ],
   example: {
     request: {
@@ -478,6 +490,21 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       }
     }
 
+    // Step 5b: the files the invoice carries (crm#1269). Requested documents
+    // are attached first (checked only, on a dry run); the whole set is then
+    // read before a number is allocated or anything is issued, so a missing
+    // or oversized file stops the send while nothing irreversible happened.
+    const attachments = await linkInvoiceAttachments(
+      ctx.supabase,
+      ctx.companyId!,
+      invoiceId,
+      bodyResult.data.attachment_document_ids ?? [],
+      { dryRun: ctx.dryRun },
+    )
+    if (!attachments.ok) {
+      return v1ErrorResponseFromCode(attachments.code, ctx.log, { requestId: ctx.requestId })
+    }
+
     if (ctx.dryRun) {
       // Dry-run stops here. Validated everything that doesn't have side
       // effects; preview the would-be sent state.
@@ -489,6 +516,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           would_send_to: customer.email,
           would_cc: recipients.cc[0] ?? null,
           would_cc_addresses: recipients.cc,
+          would_attach: attachments.value.map((a) => a.file_name),
           would_create_journal_entry:
             (!typed.document_type || typed.document_type === 'invoice') &&
             booksInvoicesOnIssue(settings),
@@ -499,6 +527,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       )
       response.headers.set('Cache-Control', 'private, no-store')
       return response
+    }
+
+    const extraAttachments = await loadInvoiceEmailAttachments(ctx.supabase, ctx.companyId!, invoiceId)
+    if (!extraAttachments.ok) {
+      return v1ErrorResponseFromCode(extraAttachments.code, ctx.log, { requestId: ctx.requestId })
     }
 
     let deliveryId: string
@@ -731,6 +764,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         from: await resolveInvoiceSender(ctx.supabase, ctx.companyId!, settings.company_name),
         filename,
         pdfBuffer,
+        extraAttachments: extraAttachments.value,
       })
     } catch (err) {
       ctx.log.error('invoices.send: delivery snapshot failed before email', err as Error, {

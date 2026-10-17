@@ -76,6 +76,11 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         amount_sek: transaction.amount_sek ?? null,
         exchange_rate: transaction.exchange_rate ?? null,
         cash_account_id: transaction.cash_account_id ?? null,
+        // Provider identity: two bookings of one feed under different ids
+        // are never twins (crm#1271).
+        external_id: transaction.external_id ?? null,
+        import_source: transaction.import_source ?? null,
+        bank_connection_id: transaction.bank_connection_id ?? null,
       })
       if (!force) {
         if (candidate) {

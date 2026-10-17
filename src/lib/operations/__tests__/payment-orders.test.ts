@@ -267,6 +267,80 @@ describe('payment-orders.prepare', () => {
   })
 })
 
+describe('payment-orders.prepare with skattekonto', () => {
+  const TAX_ROW = orderRow(ORDER_A, {
+    supplier_invoice_id: null,
+    supplier_invoice: undefined,
+    amount: 77404,
+    payee_name: 'Skatteverket',
+    payee_source: 'skatteverket',
+    reference: '1655954700217',
+    requested_execution_date: '2026-11-11',
+  })
+
+  beforeEach(() => {
+    db.setTable('companies', { data: { org_number: '559547-0021', entity_type: 'aktiebolag' } })
+    db.setTable('skattekonto_transactions', { data: [] })
+    db.setTable('agi_declarations', { data: { status: 'submitted', total_tax: 18000, total_avgifter: 12568, tax_paid_at: null } })
+    db.setTable('deadlines', { data: [] })
+    db.setTable('rpc:create_skattekonto_payment_order', { data: { ok: true, order: TAX_ROW } })
+  })
+
+  it('refuses supplier invoices and skattekonto together, or neither, and a declaration without its period', () => {
+    const parse = (input: unknown) => paymentOrdersPrepare.input.safeParse(input).success
+    expect(parse({ cash_account_id: ACCOUNT })).toBe(false)
+    expect(parse({ cash_account_id: ACCOUNT, supplier_invoice_ids: [INVOICE_A], skattekonto: {} })).toBe(false)
+    expect(parse({ cash_account_id: ACCOUNT, skattekonto: { source: 'agi', year: 2026 } })).toBe(false)
+    expect(parse({ cash_account_id: ACCOUNT, skattekonto: { amount: 0 } })).toBe(false)
+    expect(parse({ cash_account_id: ACCOUNT, skattekonto: {} })).toBe(true)
+    expect(parse({ cash_account_id: ACCOUNT, skattekonto: { source: 'agi', year: 2026, month: 10 } })).toBe(true)
+  })
+
+  it('dry run: answers the payment to Skatteverket from the AGI and writes nothing', async () => {
+    const result = await run(paymentOrdersPrepare, { cash_account_id: ACCOUNT, skattekonto: { source: 'agi', year: 2026, month: 10 } }, true)
+    if (!result.ok || !result.dryRun) throw new Error('expected a preview')
+    expect(result.preview).toMatchObject({
+      amount: 30568,
+      payee: { type: 'bankgiro', label: 'BG 5050-1055', name: 'Skatteverket' },
+      source: { kind: 'agi', tax_period: '2026-10', declared: 30568 },
+    })
+    expect(db.findCall('rpc:create_skattekonto_payment_order', 'rpc')).toBeUndefined()
+    expect(db.calls.filter((c) => ['insert', 'update', 'upsert', 'delete'].includes(c.method))).toEqual([])
+  })
+
+  it('creates the draft and answers it with what it pays and the Betalningar link', async () => {
+    const result = await run(paymentOrdersPrepare, {
+      cash_account_id: ACCOUNT,
+      skattekonto: { source: 'agi', year: 2026, month: 10, amount: 77404 },
+    })
+    if (!result.ok || result.dryRun) throw new Error('unexpected')
+    expect(result.created).toBe(true)
+    expect(result.data.payment_orders).toEqual([
+      expect.objectContaining({
+        payment_order_id: ORDER_A,
+        supplier_invoice_id: null,
+        amount: 77404,
+        payee: expect.objectContaining({ label: 'BG 5050-1055', name: 'Skatteverket', source: 'skatteverket' }),
+        reference: { type: 'ocr', value: '1655954700217' },
+      }),
+    ])
+    expect(result.data.skattekonto).toMatchObject({
+      source: { kind: 'agi', tax_period: '2026-10', declared: 30568, filed: true },
+      replaced_draft_ids: [],
+    })
+    expect(result.data.next.sign_in_app).toBe(paymentsPageUrl([ORDER_A]))
+    const [args] = db.findCall('rpc:create_skattekonto_payment_order', 'rpc') as [Record<string, unknown>]
+    expect(args).toMatchObject({ p_amount: 77404, p_cash_account_id: ACCOUNT })
+    expect(db.findCall('rpc:create_payment_orders', 'rpc')).toBeUndefined()
+  })
+
+  it('answers the refusal of a declaration that asks for nothing', async () => {
+    db.setTable('agi_declarations', { data: { status: 'submitted', total_tax: 18000, total_avgifter: 12568, tax_paid_at: '2026-11-12T00:00:00Z' } })
+    const result = await run(paymentOrdersPrepare, { cash_account_id: ACCOUNT, skattekonto: { source: 'agi', year: 2026, month: 10 } })
+    expect(result).toMatchObject({ ok: false, code: 'SKATTEKONTO_PAYMENT_NOTHING_DUE', details: { reason: 'already_paid' } })
+  })
+})
+
 describe('payment-orders.approve / unapprove', () => {
   it('dry run previews the orders and who needs a payee confirmation, without writing', async () => {
     db.setTable('payment_orders', { data: [orderRow(ORDER_A, { payee_check: 'new' })] })

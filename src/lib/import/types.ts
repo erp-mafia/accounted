@@ -628,13 +628,26 @@ export interface SourceOpeningBalanceEdit {
   difference: number
 }
 
+/** The posted IB verifikat a fiscal year opens on (fiscal_periods.opening_balance_entry_id). */
+export interface BookedOpeningBalance {
+  entryId: string
+  /** Series and number, e.g. "A1". */
+  voucher: string
+}
+
 /** IB/UB continuity between a SIE file and the books (lib/import/sie-continuity.ts, crm#1099). */
 export interface OpeningBalanceContinuity {
   /**
    * The import will not book the file's #IB: the books already have activity
-   * up to the year's end, so the year opens on the carried-forward balance.
+   * up to the year's end, so the year opens on the carried-forward balance,
+   * or the year already has its own IB verifikat (bookedOpeningBalance).
    */
   carriedForward: boolean
+  /**
+   * The year's posted IB verifikat, when it has one: the year opens on it, and
+   * an import never books the file's IB on top of it (crm#1272).
+   */
+  bookedOpeningBalance?: BookedOpeningBalance
   /** Only when carriedForward: the accounts where the books will differ from the file. */
   differences: OpeningBalanceDifference[]
   /** The file's #IB 0 against its own #UB -1, in source account numbers. */

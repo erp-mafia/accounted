@@ -1,7 +1,7 @@
 /**
  * Bank payments (payment initiation, lib/payments/orders) through the machine
- * doors: list and read payment orders, prepare drafts for supplier invoices,
- * approve and un-approve them, cancel one, read whether the company can pay
+ * doors: list and read payment orders, prepare drafts for supplier invoices
+ * or for a payment in to the skattekonto, approve and un-approve them, cancel one, read whether the company can pay
  * through its bank and whether the provider has verified it, and hand out the
  * link to the Betalningar page where a person signs with BankID.
  *
@@ -9,14 +9,16 @@
  * approve: the account holder attests and signs money out in person
  * (session-route-parity PAYMENT_SIGNING). An agent prepares and follows up;
  * a person approves and signs in Accounted. The rules live in
- * lib/payments/orders (prepare.ts, lifecycle.ts, availability.ts); the
- * dashboard routes under /api/payments call the same functions.
+ * lib/payments/orders (prepare.ts, prepare-skattekonto.ts, lifecycle.ts,
+ * availability.ts); the dashboard routes under /api/payments call the same
+ * functions.
  */
 import { z } from 'zod'
 import { DEFAULT_LIMIT, MAX_LIMIT, decodeDefaultCursor, nextCursorFromPage } from '@/lib/api/v1/pagination'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { getCanonicalAppOrigin } from '@/lib/domains/trusted-app-origin'
 import { isoDateSchema } from '@/lib/invariants/zod'
+import { formatPeriodLabel } from '@/lib/reports/period-dates'
 import {
   getCompanyPaymentVerification,
   getPaymentsAvailability,
@@ -26,6 +28,8 @@ import { PAYMENTS_PAGE_PATH } from '@/lib/payments/orders/page-path'
 import { VERIFICATION_STATES } from '@/lib/payments/orders/verification-state'
 import { approvePaymentOrders, cancelPaymentOrder, unapprovePaymentOrders } from '@/lib/payments/orders/lifecycle'
 import { preparePaymentOrders } from '@/lib/payments/orders/prepare'
+import { prepareSkattekontoPaymentOrder } from '@/lib/payments/orders/prepare-skattekonto'
+import { refineSkattekontoSource, SKATTEKONTO_SOURCE_FIELDS, toSkattekontoSource } from '@/lib/payments/orders/skattekonto-sources'
 import { BANK_ACCOUNTS_INCLUDED_PER_MONTH, BANK_PAYMENTS_INCLUDED_PER_MONTH, getBankPaymentsUsage } from '@/lib/payments/usage'
 import { PAYMENT_ORDER_STATUSES } from '@/lib/payments/orders/status'
 import type { PaymentOrderRow } from '@/lib/payments/orders/types'
@@ -450,6 +454,99 @@ const PrepareWarning = z.object({
   to: z.string().optional().describe('For date_moved: the banking day the payment got.'),
 })
 
+const SkattekontoPayment = z
+  .object({
+    ...SKATTEKONTO_SOURCE_FIELDS,
+    amount: z
+      .number()
+      .positive()
+      .optional()
+      .describe('Kronor and öre to pay in instead of what the source asks for (a fyllnadsinbetalning, or VAT and AGI due the same day as one payment).'),
+  })
+  .superRefine(refineSkattekontoSource)
+
+const SkattekontoPrepared = z.object({
+  source: z
+    .object({
+      kind: z.enum(['vat_declaration', 'agi']),
+      tax_period: z.string().describe('YYYY-MM, YYYY-QN, or the räkenskapsår for helårsmoms.'),
+      declared: z.number().describe('What the declaration declares: ruta 49 (negative = to get back), or the AGI\'s skatt + avgifter.'),
+      due_date: z.string().nullable().describe('YYYY-MM-DD the money must be on the skattekonto by.'),
+      filed: z.boolean().describe('On record as filed with Skatteverket.'),
+      paid_at: z.string().nullable().describe('AGI: when the month\'s tax was marked paid.'),
+    })
+    .nullable()
+    .describe('The declaration paid; null for next_charge or an amount without a source.'),
+  balance: z
+    .object({ saldo: z.number(), fetched_at: z.string().nullable() })
+    .nullable()
+    .describe('The saldo Skatteverket last reported for the skattekonto (positive = money on it), as information: never netted.'),
+  warnings: z.array(
+    z.object({
+      code: z
+        .enum(['late', 'date_moved', 'not_filed', 'possible_duplicate'])
+        .describe(
+          'late: the day is on or after the due date (Skatteverket charges kostnadsränta); date_moved: the day asked for was no banking ' +
+            'day; not_filed: the declaration is not on record as filed; possible_duplicate: a bank payment to the skattekonto of the ' +
+            'same amount was executed since the period.',
+        ),
+      due: z.string().optional(),
+      from: z.string().optional(),
+      to: z.string().optional(),
+      payment_order_id: z.string().optional(),
+      executed_at: z.string().nullable().optional(),
+    }),
+  ),
+  replaced_draft_ids: z.array(z.string().uuid()).describe('A skattekonto draft nobody approved, cancelled so this one replaces it.'),
+})
+
+/** payment-orders.prepare with skattekonto: one payment in to the skattekonto (lib/payments/orders/prepare-skattekonto.ts). */
+async function prepareSkattekonto(
+  ctx: OperationContext,
+  skattekonto: z.infer<typeof SkattekontoPayment>,
+  input: { cash_account_id: string; execution_date?: string },
+  dryRun: boolean,
+) {
+  const outcome = await prepareSkattekontoPaymentOrder(ctx, {
+    cashAccountId: input.cash_account_id,
+    amount: skattekonto.amount ?? null,
+    executionDate: input.execution_date ?? null,
+    source: toSkattekontoSource(skattekonto),
+    today: todayIsoStockholm(),
+    dryRun,
+  })
+  if (!outcome.ok || outcome.dryRun) return outcome
+  const { order, warnings, replaced_draft_ids, source, balance } = outcome.data
+  return {
+    ok: true as const,
+    created: true,
+    data: {
+      payment_orders: [toOrderOut(order)],
+      skipped: [],
+      warnings: [],
+      skattekonto: {
+        source: source
+          ? {
+              kind: source.kind,
+              tax_period: source.tax_period,
+              declared: source.declared,
+              due_date: source.due_date,
+              filed: source.filed,
+              paid_at: source.paid_at,
+            }
+          : null,
+        balance,
+        warnings,
+        replaced_draft_ids,
+      },
+      next: {
+        approve: '/api/v1/companies/{companyId}/payment-orders/approve',
+        sign_in_app: paymentsPageUrl([order.id]),
+      },
+    },
+  }
+}
+
 export const paymentOrdersPrepare = defineOperation({
   id: 'payment-orders.prepare',
   kind: 'write',
@@ -457,7 +554,7 @@ export const paymentOrdersPrepare = defineOperation({
   risk: 'medium',
   reversible: true,
   docs: {
-    summary: 'Prepare draft bank payments (betalningar via banken) for supplier invoices.',
+    summary: 'Prepare draft bank payments (betalningar via banken) for supplier invoices, or one payment in to the skattekonto.',
     description:
       'Creates one draft payment order per payable supplier invoice, from one of the company\'s own bank accounts: the remaining ' +
       'amount, the due date (or today when it has passed) unless execution_date is given, the supplier\'s bankgiro, plusgiro or bank ' +
@@ -467,10 +564,18 @@ export const paymentOrdersPrepare = defineOperation({
       'changed accounts need that person\'s confirmation at approval. Invoices that cannot be paid are skipped with a reason; the ' +
       'request fails only when nothing is payable. Dry-runnable: ?dry_run=true answers the lines without creating anything; each ' +
       'line carries document: what the invoice document states (document_id, the account and the OCR read off it, its total and due ' +
-      'date) and checks (same, differs or missing) for the account and the reference against what would be paid.',
+      'date) and checks (same, differs or missing) for the account and the reference against what would be paid. ' +
+      'With skattekonto instead of supplier_invoice_ids it creates one draft payment in to the skattekonto: Skatteverket\'s bankgiro ' +
+      '5050-1055 with the company\'s OCR number (set by Accounted, never typed). skattekonto.source names what it pays: next_charge ' +
+      '(default: what the synced skattekonto lacks for its next charge), vat_declaration (ruta 49 of the momsdeklaration as filed, due ' +
+      'on its deadline) or agi (avdragen skatt + arbetsgivaravgifter of the arbetsgivardeklaration, due the 12th, 17th in January and ' +
+      'August); skattekonto.amount pays another amount instead. The day defaults to the banking day before the due date. The synced ' +
+      'saldo comes back as information and is never netted. Nothing is booked when the order is made or paid: the bank row to ' +
+      'Skatteverket is booked like any other, against the skattekonto account (1630).',
     useWhen:
-      'The user wants to pay approved supplier invoices from their bank account in Accounted instead of a payment file. Call with the ' +
-      'invoices and the account; then hand the person the Betalningar link (GET /payment-orders/signing-link).',
+      'The user wants to pay approved supplier invoices from their bank account in Accounted instead of a payment file, or to pay ' +
+      'the moms or the arbetsgivardeklaration (or any amount) in to the skattekonto after filing. Call with the invoices or skattekonto ' +
+      'and the account; then hand the person the Betalningar link (GET /payment-orders/signing-link).',
     doNotUseFor:
       'A payment file (POST /supplier-payment-batches), marking an invoice paid (mark-paid), or signing: no API or MCP door signs.',
     pitfalls: [
@@ -480,6 +585,10 @@ export const paymentOrdersPrepare = defineOperation({
       'An invoice already in an open bank payment or an active betalfil is skipped (already_in_payment, in_payment_file), never paid twice.',
       'use_stated_payee_for pays the account the invoice states instead of the supplier card for the listed invoices; the database then marks the order\'s payee changed and a person confirms it at approval.',
       'Only SEK; at most 100 invoices per call; execution_date may not be in the past.',
+      'Send supplier_invoice_ids or skattekonto, never both.',
+      'One open payment to Skatteverket at a time: SKATTEKONTO_PAYMENT_ALREADY_IN_PAYMENT while one is approved or at the bank, and a draft nobody approved is replaced (skattekonto.replaced_draft_ids). VAT and AGI due the same day are paid as one payment: pass the sum in skattekonto.amount.',
+      'SKATTEKONTO_PAYMENT_NOTHING_DUE: the declaration asks for no payment (details.reason refund, zero, already_paid, period_not_ended) or nothing is due on the skattekonto; skattekonto.amount pays in anyway.',
+      'skattekonto.warnings not_filed: the declaration is not on record as filed; possible_duplicate: a bank payment to the skattekonto of the same amount was executed since the period. Tell the person before they sign.',
     ],
     example: {
       request: { supplier_invoice_ids: [EXAMPLE_INVOICE_ID], cash_account_id: EXAMPLE_ACCOUNT_ID },
@@ -488,6 +597,7 @@ export const paymentOrdersPrepare = defineOperation({
           payment_orders: [{ ...EXAMPLE_ORDER, supplier_invoice: null }],
           skipped: [],
           warnings: [],
+          skattekonto: null,
           next: { approve: '/api/v1/companies/{companyId}/payment-orders/approve', sign_in_app: 'https://app.accounted.se/payments' },
         },
         meta: META,
@@ -499,7 +609,11 @@ export const paymentOrdersPrepare = defineOperation({
       .array(z.string().uuid())
       .min(1)
       .max(100)
-      .describe('The supplier invoices to pay (supplier_invoice_id), 1-100. Only SEK.'),
+      .optional()
+      .describe('The supplier invoices to pay (supplier_invoice_id), 1-100. Only SEK. Omit when skattekonto is sent.'),
+    skattekonto: SkattekontoPayment.optional().describe(
+      'Instead of supplier_invoice_ids: one payment in to the skattekonto (bankgiro 5050-1055, the company\'s OCR number).',
+    ),
     cash_account_id: z
       .string()
       .uuid()
@@ -512,11 +626,16 @@ export const paymentOrdersPrepare = defineOperation({
       .max(100)
       .optional()
       .describe('Invoice ids where the account the invoice states is paid instead of the supplier card.'),
+  }).superRefine((value, ctx) => {
+    if (Boolean(value.supplier_invoice_ids) === Boolean(value.skattekonto)) {
+      ctx.addIssue({ code: 'custom', path: ['supplier_invoice_ids'], message: 'Send supplier_invoice_ids or skattekonto, not both or neither.' })
+    }
   }),
   output: z.object({
     payment_orders: z.array(OrderOut),
     skipped: z.array(z.object({ supplier_invoice_id: z.string().uuid(), reason: SKIP_REASON })),
     warnings: z.array(PrepareWarning),
+    skattekonto: SkattekontoPrepared.nullable().optional().describe('For a payment in to the skattekonto: what it pays, and its warnings.'),
     next: z.object({
       approve: z.string().describe('The v1 path that attests the drafts (a person\'s API key).'),
       sign_in_app: z.string().describe('The Betalningar page where a person approves and signs with BankID.'),
@@ -532,14 +651,20 @@ export const paymentOrdersPrepare = defineOperation({
     'PAYMENT_ORDERS_AMOUNT_EXCEEDS_REMAINING',
     'PAYMENT_ORDERS_CURRENCY_MISMATCH',
     'PAYMENT_ORDERS_PAYEE_MISMATCH',
+    'SKATTEKONTO_PAYMENT_ALREADY_IN_PAYMENT',
+    'SKATTEKONTO_PAYMENT_NOTHING_DUE',
+    'SKATTEKONTO_PAYMENT_OCR_MISSING',
+    'SKATTEKONTO_PAYMENT_AGI_NOT_FOUND',
+    'VAT_REPORT_GENERATION_FAILED',
   ],
   http: { method: 'POST', path: '/api/v1/companies/:companyId/payment-orders' },
   mcp: {
     name: 'gnubok_prepare_payments',
     title: 'Prepare Bank Payments',
     description:
-      'Stage draft bank payments for supplier invoices from a company account. Nothing reaches the bank: a person approves and signs ' +
-      'with BankID on the Betalningar page (gnubok_get_payments_signing_link). Agents prepare, never sign.',
+      'Stage draft bank payments for supplier invoices, or one payment in to the skattekonto (moms or AGI after filing, or any ' +
+      'sum). Nothing reaches the bank: a person approves and signs with BankID on the Betalningar page ' +
+      '(gnubok_get_payments_signing_link). Agents prepare, never sign.',
     keywords: [
       'betala via banken',
       'bankbetalning',
@@ -549,18 +674,34 @@ export const paymentOrdersPrepare = defineOperation({
       'betalningsuppdrag',
       'bankid betalning',
       'open payments',
+      'betala skatt',
+      'betala moms',
+      'betala in till skattekontot',
+      'skattekonto',
+      'arbetsgivaravgifter betala',
     ],
     stage: {
       pendingType: 'prepare_payment_orders',
       title: (input) => {
+        const skattekonto = input.skattekonto as { source?: string; year?: number; period?: number; month?: number; period_type?: string } | undefined
+        if (skattekonto) {
+          if (skattekonto.source === 'vat_declaration') {
+            return `Förbered bankbetalning till Skatteverket: moms ${formatPeriodLabel(skattekonto.period_type as 'monthly' | 'quarterly' | 'yearly', Number(skattekonto.year), Number(skattekonto.period))}`
+          }
+          if (skattekonto.source === 'agi') {
+            return `Förbered bankbetalning till Skatteverket: arbetsgivardeklaration ${skattekonto.year}-${String(skattekonto.month).padStart(2, '0')}`
+          }
+          return 'Förbered bankbetalning till Skatteverket'
+        }
         const count = Array.isArray(input.supplier_invoice_ids) ? input.supplier_invoice_ids.length : 0
         return `Förbered bankbetalning: ${count} ${count === 1 ? 'leverantörsfaktura' : 'leverantörsfakturor'}`
       },
     },
   },
   run: async (ctx, input, { dryRun }) => {
+    if (input.skattekonto) return prepareSkattekonto(ctx, input.skattekonto, input, dryRun)
     const outcome = await preparePaymentOrders(ctx, {
-      supplierInvoiceIds: input.supplier_invoice_ids,
+      supplierInvoiceIds: input.supplier_invoice_ids ?? [],
       cashAccountId: input.cash_account_id,
       executionDate: input.execution_date ?? null,
       useStatedPayeeFor: input.use_stated_payee_for,
@@ -575,6 +716,7 @@ export const paymentOrdersPrepare = defineOperation({
         payment_orders: outcome.data.orders.map((order) => toOrderOut(order)),
         skipped: outcome.data.skipped,
         warnings: outcome.data.warnings,
+        skattekonto: null,
         next: {
           approve: '/api/v1/companies/{companyId}/payment-orders/approve',
           sign_in_app: paymentsPageUrl(outcome.data.orders.map((order) => order.id)),

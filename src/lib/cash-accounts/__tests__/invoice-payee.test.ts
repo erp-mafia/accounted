@@ -5,9 +5,15 @@ import {
   insertManualBankAccount,
   planManualBankAccount,
   propagateLegacyPayeeWrite,
+  setTypedAccountIdentity,
   updateCashAccountPayee,
 } from '../invoice-payee'
-import { cashAccountPayee, isBankCashAccount, isUsableInvoicePayee } from '../invoice-payee-rules'
+import {
+  blankPrimaryPayeeAccount,
+  cashAccountPayee,
+  isBankCashAccount,
+  isUsableInvoicePayee,
+} from '../invoice-payee-rules'
 
 vi.mock('@/lib/import/account-sync', () => ({
   syncMappedAccounts: vi.fn().mockResolvedValue({ error: null }),
@@ -101,6 +107,56 @@ describe('isBankCashAccount', () => {
     expect(isBankCashAccount({ ledger_account: '1919' })).toBe(false)
     expect(isBankCashAccount({ ledger_account: '1686' })).toBe(false)
     expect(isBankCashAccount({ ledger_account: '1584' })).toBe(false)
+  })
+})
+
+describe('blankPrimaryPayeeAccount (crm#1270: adding a bank account fills in the seeded 1930 first)', () => {
+  it('picks the enabled primary bank account while it prints nothing', () => {
+    const primary = account({ id: 'primary', invoice_payee: false })
+    const other = account({ id: 'other', is_primary: false, ledger_account: '1940' })
+    expect(blankPrimaryPayeeAccount([primary, other])?.id).toBe('primary')
+    // A bank name alone prints nothing either: still the account to fill in.
+    expect(blankPrimaryPayeeAccount([account({ bank_name: 'SEB' })])?.ledger_account).toBe('1930')
+  })
+
+  it('answers null once the primary prints something, so adding creates a new account', () => {
+    expect(blankPrimaryPayeeAccount([account({ bankgiro: '5050-1234' })])).toBeNull()
+    expect(blankPrimaryPayeeAccount([account({ payee_iban: 'SE4550000000058398257466' })])).toBeNull()
+    // The bank-identity iban never prints: a connected primary with no payee details is still blank.
+    expect(blankPrimaryPayeeAccount([account({ iban: 'SE4550000000058398257466' })])?.id).toBe('ca-1')
+  })
+
+  it('never a non-primary, disabled or non-bank account', () => {
+    expect(blankPrimaryPayeeAccount([account({ is_primary: false })])).toBeNull()
+    expect(blankPrimaryPayeeAccount([account({ enabled: false })])).toBeNull()
+    expect(blankPrimaryPayeeAccount([account({ ledger_account: '1910' })])).toBeNull()
+    expect(blankPrimaryPayeeAccount([])).toBeNull()
+  })
+})
+
+describe('setTypedAccountIdentity', () => {
+  it('writes only iban, and only on a disabled manual row no bank connection holds', async () => {
+    enqueue({ data: account({ id: 'ca-dup', enabled: false, is_primary: false, ledger_account: '1931' }) })
+    const row = await setTypedAccountIdentity(supabase as never, 'company-1', 'ca-dup', null)
+    expect(row?.id).toBe('ca-dup')
+    const [update] = findCalls('cash_accounts', 'update')
+    expect(update[0]).toEqual({ iban: null })
+    const eqCalls = findCalls('cash_accounts', 'eq')
+    expect(eqCalls).toContainEqual(['company_id', 'company-1'])
+    expect(eqCalls).toContainEqual(['id', 'ca-dup'])
+    expect(eqCalls).toContainEqual(['source', 'manual'])
+    expect(eqCalls).toContainEqual(['enabled', false])
+    expect(findCalls('cash_accounts', 'is')).toContainEqual(['bank_connection_id', null])
+  })
+
+  it('answers null when the row no longer qualifies (a bank took it over, or it was turned on)', async () => {
+    enqueue({ data: null })
+    await expect(setTypedAccountIdentity(supabase as never, 'company-1', 'ca-dup', null)).resolves.toBeNull()
+  })
+
+  it('throws on a database error instead of reporting success', async () => {
+    enqueue({ data: null, error: { message: 'boom' } })
+    await expect(setTypedAccountIdentity(supabase as never, 'company-1', 'ca-dup', null)).rejects.toThrow(/identity update failed/)
   })
 })
 

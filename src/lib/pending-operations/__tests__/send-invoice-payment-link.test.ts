@@ -58,6 +58,12 @@ vi.mock('@/lib/email/invoice-templates', async (importOriginal) => ({
   generateInvoiceEmailSubject: vi.fn().mockReturnValue('Faktura'),
 }))
 
+// The invoice carries no files of its own here (crm#1269).
+vi.mock('@/lib/invoices/invoice-attachments', () => ({
+  linkInvoiceAttachments: vi.fn(),
+  loadInvoiceEmailAttachments: vi.fn(async () => ({ ok: true, value: [] })),
+}))
+
 vi.mock('@/lib/invoices/invoice-deliveries', () => ({
   reserveInvoiceDelivery: vi.fn().mockResolvedValue('delivery-1'),
   sendTrackedInvoiceEmail: mocks.sendTrackedInvoiceEmail,

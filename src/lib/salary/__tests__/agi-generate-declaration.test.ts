@@ -19,6 +19,7 @@ vi.mock('../personnummer', () => ({
   decryptPersonnummer: (encrypted: string) => {
     if (encrypted === 'emp1_encrypted') return '199001011234'
     if (encrypted === 'emp2_encrypted') return '198506159876'
+    if (encrypted === 'emp3_encrypted') return '197703031234'
     return '000000000000'
   },
 }))
@@ -280,7 +281,7 @@ describe('generateAgiDeclaration: redovisningsperiod follows the payout month (#
 })
 
 describe('generateAgiDeclaration: F-skatt payee (FK131 only, issue #315)', () => {
-  it('reports F-skatt cash on FK131 only, never FK011/FK001, in a mixed roster', async () => {
+  it('reports F-skatt cash on FK131 only, never FK011, with FK001 as 0, in a mixed roster', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     enqueueHappyPath(enqueueMany, [REGULAR_ROW, F_SKATT_ROW])
 
@@ -297,7 +298,8 @@ describe('generateAgiDeclaration: F-skatt payee (FK131 only, issue #315)', () =>
       '<gem:KontantErsattningEjUlagSA faltkod="131">15000</gem:KontantErsattningEjUlagSA>',
     )
     expect(fSkattIu).not.toContain('faltkod="011"')
-    expect(fSkattIu).not.toContain('faltkod="001"')
+    // No tax withheld still needs a skattefält (kontroll S_183, crm#1265).
+    expect(fSkattIu).toContain('<gem:AvdrPrelSkatt faltkod="001">0</gem:AvdrPrelSkatt>')
   })
 
   it('leaves the regular employee IU unchanged (FK011 + FK001, no FK131)', async () => {
@@ -352,6 +354,70 @@ describe('generateAgiDeclaration: F-skatt payee (FK131 only, issue #315)', () =>
     )
     // Nothing on this declaration reports the payment as AG underlag.
     expect(result.xml).not.toContain('faltkod="011"')
+  })
+})
+
+describe('generateAgiDeclaration: no tax withheld still files FK001 (kontroll S_183, crm#1265)', () => {
+  // A-skatt employee paid below the tax table threshold (or jämkad to 0 %):
+  // wage on FK011, nothing withheld.
+  const ZERO_TAX_ROW = {
+    ...REGULAR_ROW,
+    employee_id: '33333333-3333-4333-8333-333333333333',
+    monthly_salary: 9000,
+    gross_salary: 9000,
+    tax_withheld: 0,
+    avgifter_basis: 9000,
+    avgifter_amount: 2827.8,
+    employee: { personnummer: 'emp2_encrypted', specification_number: 2, f_skatt_status: 'a_skatt' },
+  }
+  // On the roster but paid nothing this month: no IU at all.
+  const NO_PAY_ROW = {
+    ...REGULAR_ROW,
+    employee_id: '44444444-4444-4444-8444-444444444444',
+    monthly_salary: 0,
+    gross_salary: 0,
+    tax_withheld: 0,
+    avgifter_basis: 0,
+    avgifter_amount: 0,
+    employee: { personnummer: 'emp3_encrypted', specification_number: 3, f_skatt_status: 'a_skatt' },
+  }
+
+  async function generate(roster: unknown[]) {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueHappyPath(enqueueMany, roster)
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error('expected ok')
+    return result
+  }
+
+  it('declares FK011 and FK001 = 0 for the employee with nothing withheld', async () => {
+    const result = await generate([REGULAR_ROW, ZERO_TAX_ROW, NO_PAY_ROW])
+    const iu = iuBlockFor(result.xml, '198506159876')
+    expect(iu).toContain('<gem:KontantErsattningUlagAG faltkod="011">9000</gem:KontantErsattningUlagAG>')
+    expect(iu).toContain('<gem:AvdrPrelSkatt faltkod="001">0</gem:AvdrPrelSkatt>')
+  })
+
+  it('leaves the employee with withheld tax unchanged, and FK497 at the withheld sum', async () => {
+    const result = await generate([REGULAR_ROW, ZERO_TAX_ROW, NO_PAY_ROW])
+    const iu = iuBlockFor(result.xml, '199001011234')
+    expect(iu).toContain('<gem:KontantErsattningUlagAG faltkod="011">40000</gem:KontantErsattningUlagAG>')
+    expect(iu).toContain('<gem:AvdrPrelSkatt faltkod="001">12000</gem:AvdrPrelSkatt>')
+    expect(result.xml).toContain('<gem:SummaSkatteavdr faltkod="497">12000</gem:SummaSkatteavdr>')
+  })
+
+  it('still files no IU for the employee paid nothing at all', async () => {
+    const result = await generate([REGULAR_ROW, ZERO_TAX_ROW, NO_PAY_ROW])
+    expect(result.employeeCount).toBe(2)
+    expect(result.xml.split('<gem:IU>')).toHaveLength(3)
+    expect(result.xml).not.toContain('197703031234')
+  })
+
+  it('keeps a roster of only unpaid employees a nolldeklaration without IU', async () => {
+    const result = await generate([NO_PAY_ROW])
+    expect(result.employeeCount).toBe(0)
+    expect(result.xml).not.toContain('<gem:IU>')
+    expect(result.xml).not.toContain('faltkod="001"')
   })
 })
 

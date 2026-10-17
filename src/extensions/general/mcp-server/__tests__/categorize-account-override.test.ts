@@ -143,6 +143,7 @@ describe('gnubok_categorize_transaction: account_override', () => {
     enqueue({ data: { account_number: '4020', account_class: 4, is_active: true } }) // override chart hit
     enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
     enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: [], error: null }) // open operations on these rows: none (crm#1264)
     enqueue({ data: { id: 'op-override-1' } }) // pending_operations insert
 
     const result = (await categorize.execute(

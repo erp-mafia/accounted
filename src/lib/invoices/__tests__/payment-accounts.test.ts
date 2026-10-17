@@ -246,6 +246,18 @@ describe('describeMissingInvoicePaymentAccount (#2126)', () => {
     expect(en).toContain('IBAN')
   })
 
+  it('EUR: says a SEK account with an IBAN will do and names the setting that picks it (crm#1273)', () => {
+    const { sv, en } = describeMissingInvoicePaymentAccount('EUR')
+    // Not "a payment account for EUR": that read as an account in EUR.
+    expect(sv).not.toContain('betalningskonto för EUR')
+    expect(sv).toContain('konto i SEK')
+    expect(sv).toContain('Lägg till valuta')
+    expect(sv).toContain('Standard EUR')
+    expect(en).toContain('SEK account')
+    expect(en).toContain('Add currency')
+    expect(en).toContain('Default EUR')
+  })
+
   it('USD/GBP: also offers the non-IBAN routing path', () => {
     expect(describeMissingInvoicePaymentAccount('USD').sv).toContain('routing number')
     expect(describeMissingInvoicePaymentAccount('GBP').sv).toContain('sort code')

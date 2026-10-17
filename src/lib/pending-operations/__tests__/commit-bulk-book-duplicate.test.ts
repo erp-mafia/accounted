@@ -156,3 +156,39 @@ describe('commitPendingOperation(bulk_book_transactions): duplicate guard at app
     )
   })
 })
+
+// crm#1264: two pending operations for the same bank row (staged before the
+// staging check refused that). Approving the second after the first must not
+// book the row again: the RPC refuses a booked row under its row locks, the
+// dispatcher consumes the op as a 409, and no duplicate dismissal is written
+// for a booking that never happened.
+describe('commitPendingOperation(bulk_book_transactions): the row another approval already booked', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+  })
+
+  it('auto-rejects with BULK_BOOK_TX_ALREADY_BOOKED, force or not', async () => {
+    vi.mocked(detectBookingDuplicate).mockResolvedValue(null)
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: { id: 'op-bulk-dup' }, error: null }, // atomic claim pending -> committing
+      { data: [{ ...ROW, journal_entry_id: 'je-first' }], error: null }, // transactions: booked by the first approval
+      { data: { ok: false, code: 'BULK_BOOK_TX_ALREADY_BOOKED', details: { tx_id: TX } }, error: null }, // RPC
+      { data: null, error: null }, // dispatcher: rejected update
+    ])
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makeBulkBookOp({ force: true }),
+    )
+
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(result.code).toBe('BULK_BOOK_TX_ALREADY_BOOKED')
+    expect(result.operation_status).toBe('rejected')
+    expect(appendProcessingHistory).not.toHaveBeenCalled()
+  })
+})

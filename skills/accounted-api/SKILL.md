@@ -374,7 +374,7 @@ GET /companies/{companyId}/expense-claims/{id} : Read one expense claim (utlägg
 DELETE /companies/{companyId}/expense-claims/{id} : Delete a registered expense claim; its verifikat is reversed by storno, never deleted [scope:suppliers:write risk:medium idempotent dry-run]
 POST /companies/{companyId}/expense-claims/payouts : Record that the company paid a person back for their expense claims [scope:suppliers:write risk:medium idempotent dry-run]
 GET /companies/{companyId}/payment-orders : List bank payment orders (betalningar via banken), newest first [scope:suppliers:read risk:low idempotent]
-POST /companies/{companyId}/payment-orders : Prepare draft bank payments (betalningar via banken) for supplier invoices [scope:suppliers:write risk:medium idempotent dry-run reversible]
+POST /companies/{companyId}/payment-orders : Prepare draft bank payments (betalningar via banken) for supplier invoices, or one payment in to the skattekonto [scope:suppliers:write risk:medium idempotent dry-run reversible]
 GET /companies/{companyId}/payment-orders/{id} : Read one bank payment order [scope:suppliers:read risk:low idempotent]
 POST /companies/{companyId}/payment-orders/{id}/cancel : Cancel a bank payment order [scope:suppliers:write risk:medium idempotent dry-run]
 POST /companies/{companyId}/payment-orders/approve : Approve (attest) draft bank payments so they can be signed [scope:suppliers:write risk:high idempotent dry-run reversible]

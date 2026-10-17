@@ -132,7 +132,9 @@ function ledger() {
     cash_accounts: { data: [], error: null },
     chart_of_accounts: { data: { account_number: '5410', account_class: 5, is_active: true }, error: null },
     fiscal_periods: { data: [{ id: 'fp-1' }], error: null },
-    pending_operations: { data: { id: 'op-1' }, error: null },
+    // The staging insert answers the row; the open-claims read (crm#1264) finds none.
+    pending_operations: (chainCalls) =>
+      chainCalls.some((c) => c.method === 'insert') ? { data: { id: 'op-1' }, error: null } : { data: [], error: null },
   })
 }
 

@@ -372,10 +372,31 @@ export function preparePaymentOrders(input: {
 
 /** A warning on a payment in to the skattekonto (lib/payments/orders/prepare-skattekonto). */
 export interface SkattekontoPaymentWarning {
-  code: 'late' | 'date_moved'
+  code: 'late' | 'date_moved' | 'not_filed' | 'possible_duplicate'
   due?: string
   from?: string
   to?: string
+  payment_order_id?: string
+  executed_at?: string | null
+}
+
+/**
+ * The declaration a skattekonto payment is named from: a momsdeklaration by
+ * its period, or the AGI of a month (lib/payments/orders/skattekonto-sources).
+ */
+export type SkattekontoPaymentSourceInput =
+  | { source: 'vat_declaration'; period_type: 'monthly' | 'quarterly' | 'yearly'; year: number; period: number; fiscal_period_id?: string }
+  | { source: 'agi'; year: number; month: number }
+
+/** What the declaration asks for, as the server read it. */
+export interface SkattekontoPaymentSourceDue {
+  kind: 'vat_declaration' | 'agi'
+  tax_period: string
+  /** Signed: ruta 49 (negative = to get back), or the AGI's skatt + avgifter. */
+  declared: number
+  due_date: string | null
+  filed: boolean
+  paid_at: string | null
 }
 
 /** The dry run of a payment in to the skattekonto: what would be paid, from where, when and with which OCR. */
@@ -394,6 +415,10 @@ export interface SkattekontoPaymentPreview {
   warnings: SkattekontoPaymentWarning[]
   /** A skattekonto draft nobody approved that this payment replaces. */
   replaces_drafts: number
+  /** The declaration paid, when the payment is named from one. */
+  source: SkattekontoPaymentSourceDue | null
+  /** With a declaration: the saldo Skatteverket last reported, as information (never netted). */
+  balance: { saldo: number; fetched_at: string | null } | null
 }
 
 export interface PreparedSkattekontoPayment {
@@ -402,22 +427,31 @@ export interface PreparedSkattekontoPayment {
   replaced_draft_ids: string[]
 }
 
-function skattekontoPaymentBody(input: { cashAccountId: string; amount: number | null; executionDate: string | null }, dryRun: boolean) {
+interface SkattekontoPaymentInput {
+  cashAccountId: string
+  amount: number | null
+  executionDate: string | null
+  /** The declaration paid; omitted, the next charge on the synced skattekonto. */
+  source?: SkattekontoPaymentSourceInput | null
+}
+
+function skattekontoPaymentBody(input: SkattekontoPaymentInput, dryRun: boolean) {
   return JSON.stringify({
     cash_account_id: input.cashAccountId,
     amount: input.amount,
     execution_date: input.executionDate,
+    ...(input.source ?? {}),
     ...(dryRun ? { dry_run: true } : {}),
   })
 }
 
 /** The dry run of a payment in to the skattekonto: every rule, nothing written. The dialog's preview. */
-export function previewSkattekontoPayment(input: { cashAccountId: string; amount: number | null; executionDate: string | null }): Promise<SkattekontoPaymentPreview> {
+export function previewSkattekontoPayment(input: SkattekontoPaymentInput): Promise<SkattekontoPaymentPreview> {
   return send<SkattekontoPaymentPreview>('/api/payments/orders/skattekonto', { method: 'POST', body: skattekontoPaymentBody(input, true) })
 }
 
 /** A draft payment in to the skattekonto, to be approved and signed like a supplier payment. */
-export function prepareSkattekontoPayment(input: { cashAccountId: string; amount: number | null; executionDate: string | null }): Promise<PreparedSkattekontoPayment> {
+export function prepareSkattekontoPayment(input: SkattekontoPaymentInput): Promise<PreparedSkattekontoPayment> {
   return send<PreparedSkattekontoPayment>('/api/payments/orders/skattekonto', { method: 'POST', body: skattekontoPaymentBody(input, false) })
 }
 

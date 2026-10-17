@@ -647,6 +647,42 @@ describe('POST /api/transactions/bulk-book: duplicate guard', () => {
     )
   })
 
+  it('passes each row\'s provider identity, so two Stripe bookings with different ids never pair (crm#1271)', async () => {
+    const STRIPE_TXS = SEK_TXS.map((tx, i) => ({
+      ...tx,
+      external_id: `stripe_acct_A_txn_${i}_fee`,
+      import_source: 'stripe',
+      bank_connection_id: null,
+    }))
+    enqueue({ data: STRIPE_TXS, error: null })
+    enqueue({
+      data: {
+        ok: true, mode: 'link_existing', journal_entry_id: JE,
+        voucher_series: 'A', voucher_number: 12, linked_tx_count: 2, tx_sum: 300,
+      },
+      error: null,
+    })
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/transactions/bulk-book', {
+      method: 'POST',
+      body: { tx_ids: [TX1, TX2], existing_journal_entry_id: JE },
+    })
+    const response = await POST(request, createMockRouteParams({}))
+    expect(response.status).toBe(200)
+    expect(detectBookingDuplicate).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      expect.objectContaining({
+        id: TX2,
+        external_id: 'stripe_acct_A_txn_1_fee',
+        import_source: 'stripe',
+        bank_connection_id: null,
+      }),
+      expect.anything(),
+    )
+  })
+
   it('force=true books through and records each dismissed candidate in behandlingshistorik', async () => {
     enqueue({ data: SEK_TXS, error: null })
     enqueue({

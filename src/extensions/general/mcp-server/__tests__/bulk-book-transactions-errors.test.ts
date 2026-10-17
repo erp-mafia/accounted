@@ -149,6 +149,7 @@ describe('gnubok_bulk_book_transactions: duplicate-booking guard at stage', () =
     enqueue({ data: { id: JE_1, entry_date: '2026-05-12', status: 'posted' }, error: null }) // link target
     enqueue({ data: null, error: null }) // resolvePeriodStatusForDate: 2 layers
     enqueue({ data: null, error: null })
+    enqueue({ data: [], error: null }) // open operations on these rows: none (crm#1264)
     enqueue({ data: { id: 'op-dup' }, error: null }) // pending_operations insert
 
     await bulkBook.execute(

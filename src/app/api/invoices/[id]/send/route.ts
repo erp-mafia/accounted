@@ -31,6 +31,7 @@ import {
   sendTrackedInvoiceEmail,
   InvoiceDeliverySnapshotError,
 } from '@/lib/invoices/invoice-deliveries'
+import { loadInvoiceEmailAttachments } from '@/lib/invoices/invoice-attachments'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { SendInvoiceSchema } from '@/lib/api/schemas'
 import { parseCustomIssuanceLines } from '@/lib/invoices/issuance-custom-lines'
@@ -320,6 +321,14 @@ export const POST = withRouteContext(
       }
     }
 
+    // The files the invoice carries (crm#1269), read before a number is
+    // allocated or anything is issued: a missing or oversized file stops the
+    // send while nothing irreversible has happened.
+    const extraAttachments = await loadInvoiceEmailAttachments(supabase, companyId!, id)
+    if (!extraAttachments.ok) {
+      return errorResponseFromCode(extraAttachments.code, opLog, { requestId })
+    }
+
     let deliveryId: string
     try {
       deliveryId = await reserveInvoiceDelivery({
@@ -573,6 +582,7 @@ export const POST = withRouteContext(
         from: await resolveInvoiceSender(supabase, companyId!, company.company_name),
         filename,
         pdfBuffer,
+        extraAttachments: extraAttachments.value,
       })
     } catch (err) {
       opLog.error('failed to persist invoice delivery snapshot before send', err as Error)

@@ -19,6 +19,8 @@ import { escapeXml } from '@/lib/xml/escape'
  *   - IU identity: BetalningsmottagarId (215), Specifikationsnummer (570)
  *   - IU amounts: KontantErsattningUlagAG (011), AvdrPrelSkatt (001)
  *   - Every HU and IU must include AgRegistreradId (201) + RedovisningsPeriod (006)
+ *   - Every IU that is not a borttag carries FK001, as 0 when no tax was
+ *     withheld (kontroll S_183)
  *
  * CRITICAL: FK570 (specifikationsnummer) must stay consistent per employee.
  * Corrections are detected by Skatteverket matching the same FK570.
@@ -489,10 +491,16 @@ export function generateAGIXml(
       lines.push(`        <gem:KontantErsattningUlagAG faltkod="011">${formatAmount(emp.grossSalary)}</gem:KontantErsattningUlagAG>`)
     }
 
-    // FK001: Avdragen preliminärskatt
-    if (emp.taxWithheld > 0) {
-      lines.push(`        <gem:AvdrPrelSkatt faltkod="001">${formatAmount(emp.taxWithheld)}</gem:AvdrPrelSkatt>`)
-    }
+    // FK001: Avdragen preliminärskatt, on every IU that is not a borttag,
+    // with 0 when no tax was withheld (jämkning to 0 %, a wage below the
+    // tax table threshold, an F-skatt payee, a benefit-only IU). Kontroll
+    // S_183 rejects an IU without FK205 unless one of the seven skattefält
+    // (FK001, FK274, FK275, FK094, FK114, FK253, FK276) has a value, and
+    // this generator emits none of the other six; S_175 allows at most one
+    // (Bilaga Kontroller 1.1.18.1). Teknisk beskrivning 1.1.18.2, 8.3.2:
+    // "Om ett beloppsfält ska användas men något skatteavdrag inte gjorts,
+    // ska noll (0) redovisas i beloppsfältet." (crm#1265)
+    lines.push(`        <gem:AvdrPrelSkatt faltkod="001">${formatAmount(emp.taxWithheld)}</gem:AvdrPrelSkatt>`)
 
     const exclSA = emp.benefitsExcludedFromSAUnderlag === true
 

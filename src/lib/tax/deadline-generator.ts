@@ -13,6 +13,7 @@ import {
   getApplicableDeadlineConfigs,
   type CompanySettingsForDeadlines,
   type DeadlineInstance,
+  type FiscalYearForDeadlines,
   type TaxAssessmentNoticeForDeadline,
 } from './deadline-config'
 import { adjustDeadlineToNextBankingDay } from './swedish-holidays'
@@ -125,7 +126,47 @@ export function toDeadlineSettings(
     punktskatt_enabled: settings.punktskatt_enabled ?? false,
     fyllnadsinbetalning_enabled: settings.fyllnadsinbetalning_enabled ?? false,
     tax_assessment_notices: settings.tax_assessment_notices,
+    fiscal_years: settings.fiscal_years,
   }
+}
+
+/**
+ * Every company's fiscal_periods (or one company's), grouped by company: the
+ * räkenskapsår the yearly deadlines are computed from
+ * (CompanySettingsForDeadlines.fiscal_years). One paginated query for every
+ * company when companyId is omitted (cron paths).
+ */
+async function fetchFiscalYears(
+  supabase: SupabaseClient,
+  companyId?: string,
+): Promise<Map<string, FiscalYearForDeadlines[]>> {
+  const rows = await fetchAllRows<{ company_id: string; period_start: string; period_end: string }>(
+    ({ from, to }) => {
+      let query = supabase
+        .from('fiscal_periods')
+        .select('company_id, period_start, period_end')
+      if (companyId) query = query.eq('company_id', companyId)
+      return query.order('id', { ascending: true }).range(from, to)
+    },
+  )
+  const byCompany = new Map<string, FiscalYearForDeadlines[]>()
+  for (const row of rows) {
+    const current = byCompany.get(row.company_id) ?? []
+    current.push({ start: row.period_start, end: row.period_end })
+    byCompany.set(row.company_id, current)
+  }
+  return byCompany
+}
+
+async function hydrateFiscalYears(
+  supabase: SupabaseClient,
+  settingsRows: DeadlineSettingsRow[],
+): Promise<DeadlineSettingsRow[]> {
+  const byCompany = await fetchFiscalYears(supabase)
+  return settingsRows.map((settings) => ({
+    ...settings,
+    fiscal_years: byCompany.get(settings.company_id) ?? [],
+  }))
 }
 
 interface TaxAssessmentNoticeRow {
@@ -279,6 +320,13 @@ export async function generateTaxDeadlinesForUser(
       ...settings,
       tax_assessment_notices: notices.map(toDeadlineNotice),
     }
+  }
+
+  // The company's real räkenskapsår decide the yearly deadlines (and, for a
+  // company whose first year starts mid-month, where its periods begin).
+  if (settings.fiscal_years === undefined) {
+    const fiscalYears = await fetchFiscalYears(supabase, companyId)
+    settings = { ...settings, fiscal_years: fiscalYears.get(companyId) ?? [] }
   }
 
   // Recurring deadlines use the current rolling window. Explicit tax notices
@@ -654,7 +702,11 @@ export function getExpectedUpcomingDeadlineKeys(
 
   const today = new Date(fromDate)
   today.setHours(0, 0, 0, 0)
-  const keys = new Set<string>()
+  // Keyed by type:period, last one wins, exactly like the generator's own
+  // de-duplication: two räkenskapsår ending in the same calendar year (a
+  // re-laid year) can share a label, and expecting both dates while the
+  // generator inserts one would flag the company every night.
+  const keysByTypeAndPeriod = new Map<string, string>()
 
   for (const config of getApplicableDeadlineConfigs(settings)) {
     const horizonEnd = horizonEndFor(config.type, today)
@@ -667,13 +719,16 @@ export function getExpectedUpcomingDeadlineKeys(
         // Same window as the generator: past rows and rows beyond the
         // rolling horizon are never expected.
         if (adjustedDate >= today && adjustedDate <= horizonEnd) {
-          keys.add(deadlineIdentity(config.type, instance.period, formatDateISO(adjustedDate)))
+          keysByTypeAndPeriod.set(
+            `${config.type}:${instance.period}`,
+            deadlineIdentity(config.type, instance.period, formatDateISO(adjustedDate)),
+          )
         }
       }
     }
   }
 
-  return keys
+  return new Set(keysByTypeAndPeriod.values())
 }
 
 export function findSettingsMissingUpcomingDeadlines(
@@ -720,6 +775,70 @@ export function findSettingsMissingUpcomingDeadlines(
   })
 }
 
+/**
+ * Types whose rows detection cannot predict from settings alone:
+ * rot_rut_begaran exists only for years with paid deduction invoices, which
+ * the generator reads from the invoices table and detection never loads.
+ */
+const UNPREDICTABLE_TYPES = new Set<string>(['rot_rut_begaran'])
+
+/**
+ * Companies holding a pending system deadline the generator would not create
+ * today, the mirror of findSettingsMissingUpcomingDeadlines. Without it a row
+ * for an obligation that never existed (a räkenskapsår that is not the
+ * company's, a quarter before it was registered) stays on the deadlines page
+ * and in the calendar feed after the schedule is fixed, because nothing ever
+ * regenerates a company that is missing nothing.
+ *
+ * Only rows regeneration actually replaces count, so a flagged company stops
+ * being flagged after one run: pending (not completed, not dismissed), due
+ * from today through the end of the year after the window, and of a type
+ * detection can predict.
+ */
+export function findSettingsWithStaleUpcomingDeadlines(
+  settingsRows: DeadlineSettingsRow[],
+  upcomingDeadlineRows: UpcomingDeadlineCompanyRow[],
+  years: number[] = [],
+  fromDate: Date = new Date(),
+): DeadlineSettingsRow[] {
+  const windowYears = years.length > 0
+    ? years
+    : [fromDate.getFullYear(), fromDate.getFullYear() + 1]
+  const today = new Date(fromDate)
+  today.setHours(0, 0, 0, 0)
+  const todayIso = formatDateISO(today)
+  // The generator's delete window (generateTaxDeadlinesForUser's endDate).
+  const windowEnd = `${Math.max(...windowYears) + 1}-12-31`
+
+  const replaceableByCompany = new Map<string, UpcomingDeadlineCompanyRow[]>()
+  for (const row of upcomingDeadlineRows) {
+    if (row.is_completed || row.dismissed_at) continue
+    if (!row.due_date || row.due_date < todayIso || row.due_date > windowEnd) continue
+    if (row.tax_deadline_type && UNPREDICTABLE_TYPES.has(row.tax_deadline_type)) continue
+    const rows = replaceableByCompany.get(row.company_id) ?? []
+    rows.push(row)
+    replaceableByCompany.set(row.company_id, rows)
+  }
+
+  return settingsRows.filter((settings) => {
+    const rows = replaceableByCompany.get(settings.company_id)
+    if (!rows) return false
+    try {
+      const expectedKeys = getExpectedUpcomingDeadlineKeys(
+        toDeadlineSettings(settings),
+        windowYears,
+        fromDate,
+      )
+      return rows.some(
+        (row) => !expectedKeys.has(deadlineIdentity(row.tax_deadline_type, row.tax_period, row.due_date)),
+      )
+    } catch {
+      // Malformed settings are already returned by the missing-side check.
+      return false
+    }
+  })
+}
+
 // Paginate: PostgREST silently caps a plain .select() at 1000 rows, which
 // would leave companies beyond the cap without deadlines.
 async function fetchAllDeadlineSettings(supabase: SupabaseClient): Promise<DeadlineSettingsRow[]> {
@@ -739,9 +858,9 @@ export async function generateNewYearDeadlines(
   supabase: SupabaseClient
 ): Promise<{ usersProcessed: number; totalCreated: number }> {
   const newYear = new Date().getFullYear()
-  const allSettings = await hydrateTaxAssessmentNotices(
+  const allSettings = await hydrateFiscalYears(
     supabase,
-    await fetchAllDeadlineSettings(supabase),
+    await hydrateTaxAssessmentNotices(supabase, await fetchAllDeadlineSettings(supabase)),
   )
 
   let usersProcessed = 0
@@ -791,13 +910,27 @@ export async function backfillMissingTaxDeadlines(
         .range(from, to),
     ),
   ])
-  const allSettings = await hydrateTaxAssessmentNotices(supabase, rawSettings)
+  // Fiscal years must be hydrated here exactly as the generator resolves
+  // them: if detection expected a räkenskapsår the generator refuses to
+  // create, the company would be regenerated every night.
+  const allSettings = await hydrateFiscalYears(
+    supabase,
+    await hydrateTaxAssessmentNotices(supabase, rawSettings),
+  )
 
-  const missingSettings = findSettingsMissingUpcomingDeadlines(allSettings, upcomingDeadlineRows)
+  // Missing rows and rows the schedule no longer produces both need a
+  // regeneration; one per company.
+  const toRepair = new Map<string, DeadlineSettingsRow>()
+  for (const settings of [
+    ...findSettingsMissingUpcomingDeadlines(allSettings, upcomingDeadlineRows),
+    ...findSettingsWithStaleUpcomingDeadlines(allSettings, upcomingDeadlineRows),
+  ]) {
+    toRepair.set(settings.company_id, settings)
+  }
   let companiesRepaired = 0
   let totalCreated = 0
 
-  for (const settings of missingSettings) {
+  for (const settings of toRepair.values()) {
     try {
       const result = await regenerateTaxDeadlinesForUser(
         supabase,

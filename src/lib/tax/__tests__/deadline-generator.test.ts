@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   ANNUAL_HORIZON_DAYS,
@@ -7,6 +7,7 @@ import {
   generateTaxDeadlinesForUser,
   getExpectedUpcomingDeadlineKeys,
   shouldRegenerateTaxDeadlines,
+  toDeadlineSettings,
 } from '../deadline-generator'
 import type { CompanySettingsForDeadlines } from '../deadline-config'
 
@@ -71,11 +72,21 @@ function makeRecordingSupabase(opts: {
   insertError?: { code: string; message: string }
   completedRows?: Array<{ tax_deadline_type: string; tax_period: string }>
   supersededRows?: SupersededRow[]
+  fiscalPeriods?: Array<{ company_id: string; period_start: string; period_end: string }>
 } = {}) {
   const calls: string[] = []
   let insertPayload: Array<Record<string, unknown>> | null = null
 
-  const from = vi.fn(() => {
+  const from = vi.fn((table: string) => {
+    if (table === 'fiscal_periods') {
+      // The generator's own fiscal-year lookup (paginated).
+      const periods: Record<string, ReturnType<typeof vi.fn>> = {}
+      periods.select = vi.fn(() => periods)
+      periods.eq = vi.fn(() => periods)
+      periods.order = vi.fn(() => periods)
+      periods.range = vi.fn(async () => ({ data: opts.fiscalPeriods ?? [], error: null }))
+      return periods
+    }
     const chain: Record<string, ReturnType<typeof vi.fn>> = {}
     let isDelete = false
     // The completed/dismissed lookup is the only read that uses .or();
@@ -681,5 +692,64 @@ describe('shouldRegenerateTaxDeadlines', () => {
   it('does not regenerate when nothing changed and deadlines already exist', () => {
     // Avoid clobbering existing status/progress on unrelated settings saves.
     expect(shouldRegenerateTaxDeadlines(false, 12)).toBe(false)
+  })
+})
+
+describe('generateTaxDeadlinesForUser: the company\'s real räkenskapsår (crm#1278)', () => {
+  // An AB registered mid-October 2026 whose first räkenskapsår is extended
+  // to 31 December 2027, quarterly moms, generated on 16 October 2026.
+  const NEW_COMPANY: CompanySettingsForDeadlines = {
+    ...SETTINGS,
+    moms_period: 'quarterly',
+    preliminary_tax_monthly: null,
+    pays_salaries: false,
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 9, 16, 12))
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('reads fiscal_periods and inserts no row for a räkenskapsår or quarter that never existed', async () => {
+    const { supabase, getInsertPayload } = makeRecordingSupabase({
+      fiscalPeriods: [{ company_id: 'company-1', period_start: '2026-10-12', period_end: '2027-12-31' }],
+    })
+
+    await generateTaxDeadlinesForUser(supabase, 'company-1', NEW_COMPANY)
+
+    expect(supabase.from).toHaveBeenCalledWith('fiscal_periods')
+    expect(getInsertPayload()!.map((row) => `${row.tax_deadline_type}:${row.tax_period}:${row.due_date}`))
+      .toEqual(['moms_quarterly:2026-Q4:2027-02-12'])
+  })
+
+  it('keeps the twelve-month schedule for a company without recorded fiscal periods', async () => {
+    const { supabase, getInsertPayload } = makeRecordingSupabase({ fiscalPeriods: [] })
+
+    await generateTaxDeadlinesForUser(supabase, 'company-1', NEW_COMPANY)
+
+    expect(getInsertPayload()!.map((row) => `${row.tax_deadline_type}:${row.tax_period}`).sort()).toEqual([
+      'arsredovisning:2026',
+      'arsstamma:2026',
+      'inkomstdeklaration_ab:2026',
+      'moms_quarterly:2026-Q3',
+      'moms_quarterly:2026-Q4',
+    ])
+  })
+
+  it('does not query fiscal_periods when the caller already resolved them', async () => {
+    const { supabase } = makeRecordingSupabase()
+
+    await generateTaxDeadlinesForUser(supabase, 'company-1', { ...NEW_COMPANY, fiscal_years: [] })
+
+    expect(supabase.from).not.toHaveBeenCalledWith('fiscal_periods')
+  })
+
+  it('carries resolved fiscal years through toDeadlineSettings', () => {
+    const fiscalYears = [{ start: '2026-10-12', end: '2027-12-31' }]
+    expect(toDeadlineSettings({ ...SETTINGS, fiscal_years: fiscalYears }).fiscal_years).toEqual(fiscalYears)
   })
 })

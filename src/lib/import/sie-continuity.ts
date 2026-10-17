@@ -10,6 +10,7 @@ import { getEffectiveOpeningBalances, isBalanceSheetAccount } from './sie-parser
 import { makeNotice, type ImportNotice } from './notices'
 import type {
   AccountMapping,
+  BookedOpeningBalance,
   OpeningBalanceContinuity,
   OpeningBalanceDifference,
   ParsedSIEFile,
@@ -139,21 +140,67 @@ export function findSourceOpeningBalanceEdits(
   return edits.sort((a, b) => a.account.localeCompare(b.account))
 }
 
-/** The carried-forward balance at the year's first day against the file's #IB. */
+/**
+ * What the year opens on in the books against the file's #IB: the year's own
+ * IB verifikat when it has one, otherwise the balance carried forward to its
+ * first day.
+ */
 async function compareWithBooks(
   supabase: SupabaseClient,
   companyId: string,
   fiscalYearStart: string,
   fileBalances: readonly { account: string; amount: number; yearIndex?: number }[],
   mappings: AccountMapping[],
+  openingBalanceEntryId: string | null = null,
 ): Promise<OpeningBalanceDifference[]> {
   // A file that states no opening balance has nothing to compare.
   if (fileBalances.length === 0) return []
   const { balances } = await getOpeningBalances(supabase, companyId, {
     period_start: fiscalYearStart,
-    opening_balance_entry_id: null,
+    opening_balance_entry_id: openingBalanceEntryId,
   })
   return compareOpeningBalances(fileOpeningBalanceByAccount(fileBalances, mappings), balances)
+}
+
+/**
+ * The posted IB verifikat a fiscal year opens on, when it has one
+ * (fiscal_periods.opening_balance_entry_id: booked by hand, by the year-end
+ * close, or by an earlier import). An import never books the file's IB on
+ * top of it (sie_import_admission_refusal, crm#1272), so the file's IB is
+ * compared with this verifikat, not with the balance earlier years carry
+ * forward. An IB the replaced import booked does not count.
+ */
+async function findBookedOpeningBalance(
+  supabase: SupabaseClient,
+  companyId: string,
+  year: { periodId: string } | { start: string; end: string },
+  replacesImportId: string | null,
+): Promise<BookedOpeningBalance | null> {
+  const base = supabase.from('fiscal_periods').select('opening_balance_entry_id').eq('company_id', companyId)
+  const { data: period, error } = await ('periodId' in year
+    ? base.eq('id', year.periodId)
+    : base.lte('period_start', year.start).gte('period_end', year.end)
+  ).maybeSingle()
+  if (error) throw new Error(error.message)
+  const entryId = (period as { opening_balance_entry_id?: string | null } | null)?.opening_balance_entry_id
+  if (!entryId) return null
+  const { data: entry, error: entryError } = await supabase
+    .from('journal_entries')
+    .select('id, voucher_series, voucher_number, status, import_batch_id')
+    .eq('company_id', companyId)
+    .eq('id', entryId)
+    .maybeSingle()
+  if (entryError) throw new Error(entryError.message)
+  const row = entry as {
+    id: string
+    voucher_series: string | null
+    voucher_number: number | null
+    status: string
+    import_batch_id: string | null
+  } | null
+  if (!row || row.status !== 'posted') return null
+  if (replacesImportId && row.import_batch_id === replacesImportId) return null
+  return { entryId: row.id, voucher: `${row.voucher_series ?? ''}${row.voucher_number ?? ''}` }
 }
 
 const FILE_PERIOD_ID = 'sie-file'
@@ -191,12 +238,16 @@ export async function diagnoseOpeningBalanceContinuity(
   const end = parsed.stats.fiscalYearEnd
   if (!start || !end) return null
   try {
-    const carriedForward = await willCarryForward(supabase, companyId, end, options.replacesImportId ?? null)
+    const replacesImportId = options.replacesImportId ?? null
+    const booked = await findBookedOpeningBalance(supabase, companyId, { start, end }, replacesImportId)
+    const carriedForward = booked !== null || (await willCarryForward(supabase, companyId, end, replacesImportId))
     const differences = carriedForward
-      ? await compareWithBooks(supabase, companyId, start, getEffectiveOpeningBalances(parsed).balances, mappings)
+      ? await compareWithBooks(supabase, companyId, start, getEffectiveOpeningBalances(parsed).balances, mappings,
+          booked?.entryId ?? null)
       : []
     return {
       carriedForward,
+      ...(booked ? { bookedOpeningBalance: booked } : {}),
       differences,
       sourceEdits: findSourceOpeningBalanceEdits(parsed),
       missingYears: await findMissingYears(supabase, companyId, start, end),
@@ -214,8 +265,9 @@ export async function diagnoseOpeningBalanceContinuity(
 /**
  * After a continuation import (the job's sealed prior_activity): the
  * accounts where the books now open on another amount than the file stated,
- * read from the file's IB in the job manifest. Never throws: a failed read
- * costs the notice, not the import.
+ * read from the file's IB in the job manifest. With `fiscalPeriodId`, a year
+ * that has its own IB verifikat is compared with it (crm#1272). Never throws:
+ * a failed read costs the notice, not the import.
  */
 export async function diagnoseCarriedForwardDifferences(
   supabase: SupabaseClient,
@@ -223,9 +275,14 @@ export async function diagnoseCarriedForwardDifferences(
   fiscalYearStart: string,
   fileBalances: unknown,
   mappings: AccountMapping[],
+  fiscalPeriodId?: string,
 ): Promise<OpeningBalanceDifference[]> {
   try {
-    return await compareWithBooks(supabase, companyId, fiscalYearStart, storedOpeningBalances(fileBalances), mappings)
+    const booked = fiscalPeriodId
+      ? await findBookedOpeningBalance(supabase, companyId, { periodId: fiscalPeriodId }, null)
+      : null
+    return await compareWithBooks(supabase, companyId, fiscalYearStart, storedOpeningBalances(fileBalances), mappings,
+      booked?.entryId ?? null)
   } catch (err) {
     log.warn('opening-balance continuity check failed; the import is unaffected', {
       companyId,
@@ -284,7 +341,13 @@ export function continuityWarnings(
   for (const gap of continuity.missingYears) {
     lines.push(`Räkenskapsår saknas mellan företagets bokföring och filen: ${gap.from} till ${gap.to}.`)
   }
-  if (continuity.differences.length > 0) {
+  if (continuity.differences.length > 0 && continuity.bookedOpeningBalance) {
+    lines.push(
+      `Filens ingående balans bokförs inte: räkenskapsåret har redan en bokförd ingående balans (verifikation ${continuity.bookedOpeningBalance.voucher}). ` +
+        `Den skiljer sig från filen på ${accountList(continuity.differences)}. Stäm av mot källsystemet innan importen; ` +
+        'är det filens ingående balans som stämmer, korrigera den bokförda.',
+    )
+  } else if (continuity.differences.length > 0) {
     lines.push(
       'Filens ingående balans bokförs inte: företaget har redan bokföring fram till räkenskapsårets slut, så året ' +
         `öppnar på föregående års utgående balans. Den skiljer sig från filen på ${accountList(continuity.differences)}. ` +

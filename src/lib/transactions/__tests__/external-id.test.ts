@@ -7,6 +7,8 @@ import {
   normalizeImportedDescription,
   reconcileStableExternalIds,
   FALLBACK_DESCRIPTION,
+  idsProveDistinctBookings,
+  PROVIDER_BOOKING_ID_SOURCES,
 } from '../external-id'
 
 describe('amountToOre', () => {
@@ -270,5 +272,64 @@ describe('reconcileStableExternalIds', () => {
       [...stored, { externalId: 'csv_lunar_ab12cd34', desc: 'other' }],
     )
     expect(ids).toEqual(['csv_lunar_ab12cd34', 'eb_SE47_2026-09-22_20000_0'])
+  })
+})
+
+describe('idsProveDistinctBookings (crm#1271)', () => {
+  const stripe = (external_id: string | null, over: Record<string, unknown> = {}) => ({
+    external_id,
+    import_source: 'stripe',
+    bank_connection_id: null,
+    ...over,
+  })
+
+  it('lists only feeds whose stored ids are the provider\'s own per-booking references', () => {
+    expect([...PROVIDER_BOOKING_ID_SOURCES]).toEqual(['stripe'])
+  })
+
+  it('proves two Stripe rows with different balance-transaction ids distinct', () => {
+    expect(idsProveDistinctBookings(
+      stripe('stripe_acct_A_txn_1_fee'),
+      stripe('stripe_acct_A_txn_2_fee'),
+    )).toBe(true)
+  })
+
+  it('does not prove anything for the same id', () => {
+    expect(idsProveDistinctBookings(stripe('stripe_acct_A_txn_1'), stripe('stripe_acct_A_txn_1'))).toBe(false)
+  })
+
+  it('does not prove anything when either id is missing', () => {
+    expect(idsProveDistinctBookings(stripe(null), stripe('stripe_acct_A_txn_1'))).toBe(false)
+    expect(idsProveDistinctBookings(stripe('stripe_acct_A_txn_1'), stripe(null))).toBe(false)
+    expect(idsProveDistinctBookings({}, stripe('stripe_acct_A_txn_1'))).toBe(false)
+  })
+
+  it('does not prove anything across two channels (Stripe vs a hand-entered or file row)', () => {
+    expect(idsProveDistinctBookings(stripe('stripe_acct_A_txn_1'), stripe('x', { import_source: 'mcp' }))).toBe(false)
+    expect(idsProveDistinctBookings(stripe('stripe_acct_A_txn_1'), stripe('y', { import_source: 'csv_generic_csv' }))).toBe(false)
+  })
+
+  it('does not prove anything across two bank connections of the same feed', () => {
+    expect(idsProveDistinctBookings(
+      stripe('stripe_acct_A_txn_1', { bank_connection_id: 'bc-1' }),
+      stripe('stripe_acct_A_txn_2', { bank_connection_id: 'bc-2' }),
+    )).toBe(false)
+  })
+
+  it('never trusts derived ids: bank feeds and file imports dedup on content', () => {
+    // buildStableExternalIds' occurrence index and bank-file row hashes can
+    // change for the same booking, so two different values prove nothing.
+    expect(idsProveDistinctBookings(
+      { external_id: 'eb_SE00_2026-10-01_-443_0', import_source: 'enable_banking', bank_connection_id: 'bc-1' },
+      { external_id: 'eb_SE00_2026-10-01_-443_1', import_source: 'enable_banking', bank_connection_id: 'bc-1' },
+    )).toBe(false)
+    expect(idsProveDistinctBookings(
+      { external_id: 'eb_SE00_2026-10-01_-443_0', import_source: 'open_payments', bank_connection_id: null },
+      { external_id: 'eb_SE00_2026-10-01_-443_1', import_source: 'open_payments', bank_connection_id: null },
+    )).toBe(false)
+    expect(idsProveDistinctBookings(
+      { external_id: 'generic_csv_aaaa', import_source: 'csv_generic_csv' },
+      { external_id: 'generic_csv_bbbb', import_source: 'csv_generic_csv' },
+    )).toBe(false)
   })
 })

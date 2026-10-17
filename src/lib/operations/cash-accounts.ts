@@ -44,7 +44,7 @@ const CashAccountOut = z.object({
   ledger_account: z.string().describe('BAS 19xx account the bank account books on, as a string.'),
   name: z.string().nullable(),
   currency: z.string(),
-  iban: z.string().nullable().describe('The bank identity IBAN (written by the bank sync).'),
+  iban: z.string().nullable().describe('The bank identity IBAN (written by the bank sync; on an account typed in by hand, the IBAN typed for it). A bank connection with this IBAN lands on this account.'),
   source: z.enum(['enable_banking', 'open_payments', 'manual', 'sie_import']),
   bank_connected: z.boolean().describe('True when a bank connection holds the account.'),
   enabled: z.boolean(),
@@ -182,7 +182,7 @@ export const cashAccountsUpdate = defineOperation({
       'Payee fields, name, invoice_payee and enabled are owner/admin only (403 FORBIDDEN); voucher_series alone is open to any writer.',
       'Payee fields on a PSP clearing account or a till return 400 INVOICE_PAYEE_ACCOUNT_INVALID: only 1920-1999 bank accounts print on invoices.',
       'enabled on an account a bank connection holds returns 409 CASH_ACCOUNT_ENABLED_BANK_MANAGED; disabling the primary returns 400 CASH_ACCOUNT_DISABLE_PRIMARY, and one with unbooked transactions 400 CASH_ACCOUNT_DISABLE_UNRESOLVED.',
-      'An iban another account already carries returns 409 CASH_ACCOUNT_IBAN_DUPLICATE.',
+      'An iban another account already carries (printed or as its bank identity iban, enabled or not) returns 409 CASH_ACCOUNT_IBAN_DUPLICATE with details.existing_cash_account_id. If that account was added by mistake: on it, send enabled=false and iban "" (one request is fine). On a disabled account typed in by hand, clearing or changing iban also moves its bank identity iban, which frees the IBAN for the right account.',
       'Changing voucher_series only affects entries booked afterwards; nothing posted is renumbered.',
     ],
     example: {

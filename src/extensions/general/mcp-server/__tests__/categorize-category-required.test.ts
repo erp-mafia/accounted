@@ -121,6 +121,7 @@ describe('gnubok_categorize_transaction: category presence guard (#1662)', () =>
     enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
     enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: [], error: null }) // open operations on these rows: none (crm#1264)
     enqueue({ data: { id: 'op-cat-1' } }) // pending_operations insert
 
     const result = (await categorize.execute(

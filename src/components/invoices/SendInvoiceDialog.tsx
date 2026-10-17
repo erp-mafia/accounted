@@ -32,6 +32,7 @@ import { creditNoteNeedsJournalEntry, issueBooksDocument } from '@/lib/bookkeepi
 import { itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { explainVatTreatment, requiresSwedishVatAcknowledgement } from '@/lib/invoices/vat-rules'
 import { VatTreatmentNotice } from '@/components/invoices/VatTreatmentNotice'
+import { InvoiceAttachmentsSection } from '@/components/invoices/InvoiceAttachmentsSection'
 import { Mail, Send } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
@@ -88,6 +89,9 @@ export default function SendInvoiceDialog({
   const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
 
   const [isSubmitting, setIsSubmitting] = useState(false)
+  // A file still uploading to the invoice's attachments holds the send.
+  const [attachmentsBusy, setAttachmentsBusy] = useState(false)
+  const showAttachments = mode === 'email' && invoice.status === 'draft' && !isSandbox && canEmail
   // Session-cached reference data (lib/reference-data), seeded by the
   // dashboard layout: settings, the period containing the invoice date and
   // the chart are known on the first paint, so opening the dialog costs no
@@ -372,6 +376,7 @@ export default function SendInvoiceDialog({
   const handleConfirm = async () => {
     if (editable && (!isBalanced || hasOrphanAmounts)) return
     if (mode === 'email' && recipientError) return
+    if (mode === 'email' && attachmentsBusy) return
     if (needsSwedishVatAcknowledgement && !swedishVatAcknowledged) return
     setIsSubmitting(true)
 
@@ -628,6 +633,13 @@ export default function SendInvoiceDialog({
                 )}
               </div>
             )}
+            {showAttachments && (
+              <InvoiceAttachmentsSection
+                invoiceId={invoice.id}
+                disabled={isSubmitting}
+                onBusyChange={setAttachmentsBusy}
+              />
+            )}
             {showJournalPreview && editable ? (
               <>
                 <p className="text-sm text-muted-foreground">
@@ -749,7 +761,7 @@ export default function SendInvoiceDialog({
             disabled={
               !isInitialized ||
               (editable && (!isBalanced || hasOrphanAmounts)) ||
-              (mode === 'email' && (isSandbox || !canEmail || !!recipientError)) ||
+              (mode === 'email' && (isSandbox || !canEmail || !!recipientError || attachmentsBusy)) ||
               (needsSwedishVatAcknowledgement && !swedishVatAcknowledged)
             }
             title={

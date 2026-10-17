@@ -254,7 +254,8 @@ describe('POST /api/import/sie/parse', () => {
   // crm#1099: a year imported on top of earlier bookkeeping opens on the
   // carried-forward balance, not the file's #IB. Queue order after the
   // stored-mappings select: chart_of_accounts page, fiscal_periods containing,
-  // then the continuity check: journal_entries (prior activity), the
+  // then the continuity check: fiscal_periods (the year's own IB verifikat,
+  // crm#1272), journal_entries (prior activity), the
   // compute_prior_opening_balances RPC, fiscal_periods (missing years).
   describe('opening balance against the books', () => {
     const SECOND_YEAR = [
@@ -280,6 +281,7 @@ describe('POST /api/import/sie/parse', () => {
     it('shows the accounts where the books will open on another amount than the file', async () => {
       enqueue({ data: [] }) // company chart
       enqueue({ data: { id: 'p-2019' } }) // containing period
+      enqueue({ data: null }) // the year has no IB verifikat of its own
       enqueue({ data: [{ id: 'entry-2018' }] }) // activity up to the year's end
       enqueue({
         data: [
@@ -316,6 +318,7 @@ describe('POST /api/import/sie/parse', () => {
     it('says the file\'s IB is booked as it stands when the company has no earlier activity', async () => {
       enqueue({ data: [] })
       enqueue({ data: { id: 'p-2019' } })
+      enqueue({ data: null }) // no IB verifikat of its own
       enqueue({ data: [] }) // no activity: the import books the file's #IB
       enqueue({ data: [] })
 

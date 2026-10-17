@@ -162,6 +162,7 @@ import {
 import { DEDUCTION_TYPES, isDeductionType, validateDeductionLines, type DeductionType } from '@/lib/invoices/rot-rut-rules'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
+import { MAX_INVOICE_ATTACHMENTS, linkInvoiceAttachments } from '@/lib/invoices/invoice-attachments'
 import { creditNoteNumber, creditNoteOriginalReference } from '@/lib/invoices/build-credit-note'
 import { resolveSupplierInvoiceExchangeRate } from '@/lib/currency/supplier-invoice-rate'
 import { getBranding } from '@/lib/branding/service'
@@ -381,6 +382,11 @@ import {
 } from '@/lib/suppliers/match-supplier'
 import { assertNoPlaintextPersonnummer } from '@/lib/pending-operations/staging-pii-guard'
 import { pendingOperationTaskState, type TaskStateSource } from '@/lib/pending-operations/task-state'
+import {
+  checkTransactionClaims,
+  supersedeTransactionClaims,
+  transactionAlreadyStagedRefusal,
+} from '@/lib/pending-operations/transaction-claims'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { withSIEExternalReport } from '@/lib/import/sie-period-read'
 import {
@@ -579,7 +585,7 @@ import { buildMomsuppgift, resolveRedovisare } from '@/extensions/general/skatte
 import { fetchVatDeclarationStatus } from '@/extensions/general/skatteverket/lib/declaration-status'
 import type { SkvVatDeclarationState } from '@/lib/skatteverket/declaration-status'
 import { skvAuthCodeToStructured } from '@/extensions/general/skatteverket/lib/error-map'
-import { getSkvConnectionHealth, SKV_NEEDS_RECONSENT_MESSAGE } from './skv-connection-health'
+import { getSkvConnectionHealth, getSkvFilingReadiness, SKV_NEEDS_RECONSENT_MESSAGE } from './skv-connection-health'
 import { suggestToolNames } from './tool-suggest'
 // Stage-time preview for book_skattekonto_row(s): same deterministic rule
 // matcher the skattekonto list page and the booking commit path use. The
@@ -1748,6 +1754,10 @@ async function stagePendingOperation(
   dry_run?: boolean
   idempotency_replay?: boolean
   operation_id?: string
+  /** Older proposals of this stager for the same bank rows, rejected as superseded (crm#1264). */
+  superseded_operation_ids?: string[]
+  /** A dry run's: the proposals staging would supersede. */
+  would_supersede_operation_ids?: string[]
   risk_level: 'low' | 'medium' | 'high'
   actor: ActorContext
   message: string
@@ -1808,6 +1818,18 @@ async function stagePendingOperation(
     }
   }
 
+  // ── One bank row, one open proposal (crm#1264). Rows another open
+  //    operation names are refused, a dry run included, whatever force
+  //    says; the same proposal again is answered below as a replay; this
+  //    stager's own older proposals the new one fully covers are superseded
+  //    once it is staged. A service account's key stages as the service
+  //    account, every other connection as its own type.
+  const stagedActorType = actor.type === 'api_key' && actor.serviceAccountId ? 'service_account' : actor.type
+  const stager = { userId, actorType: stagedActorType, actorId: actor.id ?? null }
+  const claim = await checkTransactionClaims(supabase, companyId, operationType, params, stager)
+  if (claim.kind === 'claimed') throw transactionAlreadyStagedRefusal(claim.claims)
+  const toSupersede = claim.kind === 'supersede' ? claim.operations.map((operation) => operation.id) : []
+
   // ── Dry-run path: skip both the cache and the insert. Return the preview
   //    so the agent sees exactly what would happen without committing.
   if (options.dryRun) {
@@ -1816,7 +1838,8 @@ async function stagePendingOperation(
       dry_run: true,
       risk_level: riskLevel,
       actor,
-      message: `Dry run: would stage "${operationType}" (risk: ${riskLevel}). No changes made.${options.complianceNote ? ` WARNING: ${options.complianceNote}` : ''}`,
+      message: `Dry run: would stage "${operationType}" (risk: ${riskLevel})${toSupersede.length > 0 ? ` and supersede your pending proposal(s) ${toSupersede.join(', ')} for the same bank rows` : ''}. No changes made.${options.complianceNote ? ` WARNING: ${options.complianceNote}` : ''}`,
+      ...(toSupersede.length > 0 ? { would_supersede_operation_ids: toSupersede } : {}),
       preview: previewData,
       ...(periodStatus ? { period_status: periodStatus } : {}),
       ...(next ? { next: addCompanyToNextHint(next, companyId) as NextActionHint } : {}),
@@ -1857,6 +1880,30 @@ async function stagePendingOperation(
     }
   }
 
+  // ── The same proposal for the same bank rows is still pending (a retry
+  //    without idempotency_key): answer with that operation, as a keyed
+  //    replay does, instead of a second approvable card (crm#1264).
+  if (claim.kind === 'replay') {
+    const existing = claim.operation
+    const existingRisk = existing.risk_level ?? riskLevel
+    const existingPreview = existing.preview_data ?? {}
+    return {
+      staged: true,
+      idempotency_replay: true,
+      operation_id: existing.id,
+      risk_level: existingRisk,
+      actor,
+      message: `Already staged: pending_operation ${existing.id} (staged ${existing.created_at}) holds exactly this proposal for these bank rows, so nothing new was staged. ${buildApprovalGuidance(existing.id, existingRisk)}`,
+      approve: {
+        tool: 'gnubok_approve_pending_operation',
+        args: { operation_id: existing.id, company_id: companyId },
+      },
+      preview: periodStatus ? { ...existingPreview, period_status: periodStatus } : existingPreview,
+      ...(periodStatus ? { period_status: periodStatus } : {}),
+      ...(next ? { next: addCompanyToNextHint(next, companyId) as NextActionHint } : {}),
+    }
+  }
+
   const { data, error } = await supabase
     .from('pending_operations')
     .insert({
@@ -1868,7 +1915,7 @@ async function stagePendingOperation(
       preview_data: previewData,
       // A service account's key stages as the service account (its label is
       // the account's name); every other connection as its own type.
-      actor_type: actor.type === 'api_key' && actor.serviceAccountId ? 'service_account' : actor.type,
+      actor_type: stagedActorType,
       actor_id: actor.id ?? null,
       actor_label: actor.label ?? null,
       agent_metadata: await loadSkillProvenance(supabase, companyId, userId, actor),
@@ -1882,6 +1929,17 @@ async function stagePendingOperation(
 
   if (error) throw new Error(`Failed to stage operation: ${error.message}`)
 
+  // The older proposals this one replaces leave the queue (crm#1264).
+  const superseded =
+    claim.kind === 'supersede'
+      ? await supersedeTransactionClaims(supabase, companyId, claim.operations, {
+          operationId: data.id,
+          stager,
+          actorLabel: actor.label,
+          channel: 'mcp',
+        })
+      : []
+
   // approve.args carries only the operation_id. For high-risk operations the
   // LLM must supply confirmed=true itself after surfacing the BFL 5 kap 5§
   // irreversibility implications to the user: pre-filling it server-side
@@ -1893,7 +1951,8 @@ async function stagePendingOperation(
     operation_id: data.id,
     risk_level: riskLevel,
     actor,
-    message: `Staged as pending_operation ${data.id} (risk: ${riskLevel}). ${buildApprovalGuidance(data.id, riskLevel)} The user can also approve at /pending in the ${branding} web app.${options.complianceNote ? ` WARNING: ${options.complianceNote}` : ''}`,
+    message: `Staged as pending_operation ${data.id} (risk: ${riskLevel}).${superseded.length > 0 ? ` It replaces your earlier proposal(s) ${superseded.join(', ')} for the same bank rows, now rejected as superseded.` : ''} ${buildApprovalGuidance(data.id, riskLevel)} The user can also approve at /pending in the ${branding} web app.${options.complianceNote ? ` WARNING: ${options.complianceNote}` : ''}`,
+    ...(superseded.length > 0 ? { superseded_operation_ids: superseded } : {}),
     approve: {
       tool: 'gnubok_approve_pending_operation',
       args: { operation_id: data.id, company_id: companyId } as Record<string, unknown>,
@@ -2035,6 +2094,31 @@ function mapSkatteverketError(err: unknown): Error {
     return out
   }
   return err instanceof Error ? err : new Error(String(err))
+}
+
+/**
+ * mapSkatteverketError for the filing tools, whose Skatteverket calls run on
+ * the CALLER's own BankID session. A bare "Sessionen har gått ut" beside a
+ * briefing that said active (another member's session) left the agent
+ * nowhere to go (crm#1263): the refusal now says whose session is live and
+ * that the caller connects their own, the same words as the briefing's
+ * skatteverket_connection.filing. Other failures pass through unchanged.
+ */
+async function mapFilingSkvError(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  err: unknown,
+): Promise<Error> {
+  const mapped = mapSkatteverketError(err)
+  if ((mapped as Error & { code?: string }).code !== 'SKATTEVERKET_NOT_CONNECTED') return mapped
+  const filing = await getSkvFilingReadiness(supabase, companyId, userId)
+  if (!filing?.message) return mapped
+  return codedRefusal('SKATTEVERKET_NOT_CONNECTED', filing.message, {
+    description:
+      "Filing needs the user's own BankID login: call gnubok_connect_skatteverket for the connect_url and give it to the user. Do not retry until they confirm.",
+    tool: 'gnubok_connect_skatteverket',
+  })
 }
 
 // ── Skattekonto row booking (stage side) ─────────────────────
@@ -5745,7 +5829,7 @@ export const tools: McpTool[] = [
     },
     _meta: { ui: { resourceUri: 'ui://connect-card/app.html' } },
     annotations: ANNOTATIONS_READ_ONLY,
-    async execute(_args, companyId, _userId, supabase) {
+    async execute(_args, companyId, userId, supabase) {
       const enabled = isSkatteverketEnabled()
       const { data, error } = await supabase
         .from('skatteverket_tokens')
@@ -5759,18 +5843,27 @@ export const tools: McpTool[] = [
       // A token row is not a working connection: one flagged needs_reconsent
       // used to answer connected: true (feedback seq 604946) while the
       // briefing said the opposite. Same health check as the briefing now.
-      const health = await getSkvConnectionHealth(supabase, companyId)
+      const health = await getSkvConnectionHealth(supabase, companyId, userId)
       const needsReconsent = health?.status === 'needs_reconsent'
       const connected = health?.status === 'active'
+      // Filing runs on the caller's own BankID session: a company connected
+      // through another member still needs this caller to connect before
+      // anything is filed from here (crm#1263). Undeclared in outputSchema,
+      // like the briefing's capabilities (tools/list budget). A failed
+      // readiness read keeps the old answer (connected).
+      const canFile = enabled && (health?.filing ? health.filing.ready : connected)
       const connectUrl = `${connectLinkBaseUrl()}/api/extensions/ext/skatteverket/authorize?return_to=%2F`
       return {
         available: enabled,
         connected,
+        can_file: canFile,
         status: !enabled ? 'unavailable' : connected ? 'connected' : needsReconsent ? 'needs_reconsent' : 'not_connected',
         token_expires_at: token?.expires_at ?? null,
         connect_url: enabled ? connectUrl : null,
         instructions: !enabled
           ? 'The Skatteverket integration is not enabled on this installation. Declarations can still be downloaded as files and filed manually at skatteverket.se.'
+          : connected && !canFile && health?.filing?.message
+            ? `Skatteverket is connected for the company, so skattekonto syncs and declaration status reads work. Filing is not possible for this user yet. ${health.filing.message}`
           : connected
             ? 'Skatteverket is connected. Skattekonto syncs automatically; momsdeklaration and AGI can be filed from here (each filing stages for approval).'
             : needsReconsent
@@ -6503,7 +6596,7 @@ export const tools: McpTool[] = [
         skatteverket_connection: {
           type: 'object',
           description:
-            'Connection status and grant detail, if connected. needs_reconsent requires a person using BankID in Settings > Skatteverket; warn before SKV work.',
+            'Connection status and grant detail, if connected. needs_reconsent requires a person using BankID in Settings > Skatteverket; warn before SKV work. filing.ready: can THIS user file.',
         },
       },
       required: ['company', 'user_name', 'profile_summary', 'atoms', 'memory', 'recommended_tools'],
@@ -6648,7 +6741,9 @@ export const tools: McpTool[] = [
       // session start instead of discovering a dead session mid-task.
       // Best-effort and emitted only when a connection (or verified system
       // grant) exists: never-connected companies pay no payload for it.
-      const safeSkvConnection = getSkvConnectionHealth(supabase, companyId)
+      // `filing` answers for THIS caller: filing runs on their own BankID
+      // session, not on the company connection (crm#1263).
+      const safeSkvConnection = getSkvConnectionHealth(supabase, companyId, userId)
 
       // The document inbox address (crm#1174): an agent asked to route a
       // card provider's receipts into Accounted looked here and in the inbox
@@ -10107,7 +10202,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_send_invoice',
-    keywords: ['skicka faktura', 'kundfaktura', 'e-faktura', 'mejla faktura'],
+    keywords: ['skicka faktura', 'kundfaktura', 'e-faktura', 'mejla faktura', 'bifoga underlag', 'bilaga'],
     title: 'Send Invoice by Email',
     description: 'Send invoice via email with PDF attachment. Stages for approval. Requires customer email + email service configured.',
     inputSchema: {
@@ -10115,6 +10210,12 @@ export const tools: McpTool[] = [
       additionalProperties: false,
       properties: {
         invoice_id: { type: 'string', description: 'UUID of the invoice to send' },
+        attachment_document_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          maxItems: MAX_INVOICE_ATTACHMENTS,
+          description: 'Document ids emailed after the PDF (25 MB total). Fixed once sent.',
+        },
       },
       required: ['invoice_id'],
     },
@@ -10139,6 +10240,21 @@ export const tools: McpTool[] = [
       // A draft has no number until approval: name it by customer and amount
       // instead of printing "null", and say what approval will number and post.
       const issue = await buildIssuePreview(supabase, companyId, invoice)
+
+      // The files the email will carry (crm#1269): requested documents are
+      // checked now (same company, size, count) and attached at approval.
+      const requestedAttachments = Array.isArray(args.attachment_document_ids)
+        ? [...new Set((args.attachment_document_ids as unknown[]).filter((id): id is string => typeof id === 'string'))]
+        : []
+      const attachments = await linkInvoiceAttachments(
+        supabase,
+        companyId,
+        invoiceId,
+        requestedAttachments,
+        { dryRun: true },
+      )
+      if (!attachments.ok) throw registryError(attachments.code)
+
       const sendLabel = invoice.invoice_number
         ? invoice.invoice_number
         : `${describeUnnumberedInvoice(invoice, customer.name || '')}${expectedNumberSuffix(invoice, issue)}`
@@ -10149,13 +10265,19 @@ export const tools: McpTool[] = [
         userId,
         type: 'send_invoice',
         title: `Skicka: ${sendLabel} till ${customer.email}`,
-        params: { invoice_id: invoiceId },
+        params: {
+          invoice_id: invoiceId,
+          ...(requestedAttachments.length > 0 ? { attachment_document_ids: requestedAttachments } : {}),
+        },
         preview: {
           invoice_number: invoice.invoice_number,
           customer_name: customer.name,
           customer_email: customer.email,
           total: invoice.total,
           currency: invoice.currency,
+          ...(attachments.value.length > 0
+            ? { attachments: attachments.value.map((a) => a.file_name) }
+            : {}),
           ...issue,
         },
         actor,
@@ -17698,7 +17820,7 @@ export const tools: McpTool[] = [
           ].join(' '),
         }
       } catch (err) {
-        throw mapSkatteverketError(err)
+        throw await mapFilingSkvError(supabase, companyId, userId, err)
       }
     },
   },
@@ -17756,7 +17878,7 @@ export const tools: McpTool[] = [
           }
           return { ...prep, kontrollresultat: await res.json() }
         } catch (err) {
-          throw mapSkatteverketError(err)
+          throw await mapFilingSkvError(supabase, companyId, userId, err)
         }
       })()
       return stage({
@@ -22301,7 +22423,7 @@ export const tools: McpTool[] = [
     outputSchema: {
       type: 'object',
       properties: {
-        verdict: { type: 'string', enum: ['ok', 'ok_with_warnings', 'invalid', 'duplicate'] },
+        verdict: { type: 'string', enum: ['ok', 'ok_with_warnings', 'invalid', 'duplicate', 'blocked'] },
         target_company: { type: 'object' },
         file: { type: 'object' },
         validation: { type: 'object' },
@@ -22391,6 +22513,29 @@ export const tools: McpTool[] = [
           parsed.stats.fiscalYearEnd
         )
       }
+      // The import's own admission rule (crm#1272), with gnubok_import_sie's
+      // defaults (create the year, bring the IB): the year it would use and
+      // what that year already holds. The overlap test above only names the
+      // earlier import; this decides whether the import is refused.
+      const { checkSIEImportAdmission } = await import('@/lib/import/sie-admission')
+      const admission =
+        parsed.stats.fiscalYearStart && parsed.stats.fiscalYearEnd
+          ? await checkSIEImportAdmission(
+              supabase,
+              companyId,
+              { start: parsed.stats.fiscalYearStart, end: parsed.stats.fiscalYearEnd },
+              { importOpeningBalances: true, createFiscalPeriod: true },
+            )
+          : null
+      const refusal = admission?.refusal ?? null
+      const fiscalYearRefusal =
+        admission && (admission.fiscalYear.verdict === 'conflict' || admission.fiscalYear.verdict === 'invalid')
+          ? admission.fiscalYear.message
+          : null
+      // Admitted only without the file's IB: the year already has its own.
+      const bookedIb = refusal?.reason === 'opening_balance' ? refusal : null
+      const unfinishedImport = refusal?.reason === 'unfinished_import' ? refusal : null
+
       const duplicate = duplicateFile
         ? { kind: 'file', import_id: duplicateFile.id, imported_at: duplicateFile.imported_at }
         : duplicatePeriod
@@ -22401,7 +22546,9 @@ export const tools: McpTool[] = [
               fiscal_year_end: duplicatePeriod.fiscal_year_end,
               imported_at: duplicatePeriod.imported_at,
             }
-          : null
+          : refusal?.reason === 'existing_import'
+            ? { kind: 'period', import_id: refusal.importId }
+            : null
 
       const bookkeepingAccounts = parsed.accounts.filter((a) => !isSystemAccount(a.number))
       const { data: storedMappings } = await supabase
@@ -22432,14 +22579,31 @@ export const tools: McpTool[] = [
           ? continuityWarnings(continuity, { start: parsed.stats.fiscalYearStart, end: parsed.stats.fiscalYearEnd })
           : []
 
-      const allWarnings = [...validation.warnings, ...encodingWarnings, ...continuityTexts]
+      // What would refuse the import now although the file is fine: the
+      // fiscal year conflicts with the company's years, or another import is
+      // not finished. Swedish, for the widget and the user.
+      const blockingTexts = [
+        ...(fiscalYearRefusal ? [fiscalYearRefusal] : []),
+        ...(unfinishedImport
+          ? ['En annan SIE-import för företaget är inte klar. Låt den bli klar, eller ångra den, innan den här filen importeras.']
+          : []),
+      ]
+      const bookedIbTexts = bookedIb
+        ? [
+            `Räkenskapsåret har redan en bokförd ingående balans (verifikation ${bookedIb.voucher}, ${bookedIb.entryDate}). ` +
+              'Filens ingående balans bokförs inte; verifikationerna läggs ovanpå den bokförda.',
+          ]
+        : []
+      const allWarnings = [...validation.warnings, ...encodingWarnings, ...bookedIbTexts, ...continuityTexts]
       const verdict = !validation.valid
         ? 'invalid'
         : duplicate
           ? 'duplicate'
-          : allWarnings.length > 0 || orgMatch.match === false
-            ? 'ok_with_warnings'
-            : 'ok'
+          : blockingTexts.length > 0
+            ? 'blocked'
+            : allWarnings.length > 0 || orgMatch.match === false
+              ? 'ok_with_warnings'
+              : 'ok'
       // Structured twins of the warning strings, with the tier the drop
       // widget renders (lib/import/notices.ts): a wrong organisation number
       // is a blocking action, mis-encoded text an action, the rest notices.
@@ -22457,7 +22621,9 @@ export const tools: McpTool[] = [
               : ''),
         })
       }
+      for (const w of blockingTexts) notices.push({ code: 'sie_import_refused', severity: 'action', text: w })
       for (const w of encodingWarnings) notices.push({ code: 'sie_encoding_artifacts', severity: 'action', text: w })
+      for (const w of bookedIbTexts) notices.push({ code: 'sie_period_has_opening_balance', severity: 'action', text: w })
       for (const w of continuityTexts) notices.push({ code: 'sie_ib_continuity', severity: 'action', text: w })
       for (const w of validation.warnings) notices.push({ code: 'legacy', severity: 'notice', text: w })
 
@@ -22486,14 +22652,25 @@ export const tools: McpTool[] = [
         mappings,
         mapping_stats: mappingStats,
         opening_balance_continuity: continuity,
+        // The year already has its own IB (crm#1272): the import is admitted
+        // only without the file's. The drop widget passes it on as is.
+        // Undeclared in outputSchema, like target_company on the upload tool.
+        ...(bookedIb ? { import_opening_balances: false } : {}),
         instructions:
           verdict === 'invalid'
             ? 'The file has blocking errors: report them to the user and do not import. A fresh export from the source system usually fixes them.'
             : verdict === 'duplicate'
               ? 'This file or fiscal year has import history. Read gnubok_sie_import_status for the import before proposing replacement. Legacy imports need outcome review; do not retry or undo them automatically.'
-              : orgMatch.match === false
-                ? `STOP: the file belongs to a different organisation than this company (${targetCompany.name ?? companyId}).${fileCompanyHint} Ask the user whether it belongs here (an ombildning or a company registered under the wrong number can be legitimate). Only on their yes, call gnubok_import_sie with confirm_org_number_mismatch=true; without it the import is refused.`
-                : `Summarize the scan for the user (source system, fiscal year, voucher count, balance status, any warnings) and name the company it imports into (target_company: ${targetCompany.name ?? companyId}). On their go-ahead call gnubok_import_sie with this same file, the returned mappings and the same company_id; the import stages for approval.`,
+              : verdict === 'blocked'
+                ? (fiscalYearRefusal
+                    ? `The import would be refused: the file's fiscal year does not fit the company's fiscal years (${fiscalYearRefusal}). Tell the user what to change; do not stage the import until it is resolved.`
+                    : `The import would be refused: another SIE import of this company is not finished (import_id ${unfinishedImport?.importId ?? 'unknown'}). Read gnubok_sie_import_status for it and let it finish, or resume or undo it with the user, then run this preflight again.`)
+                : orgMatch.match === false
+                  ? `STOP: the file belongs to a different organisation than this company (${targetCompany.name ?? companyId}).${fileCompanyHint} Ask the user whether it belongs here (an ombildning or a company registered under the wrong number can be legitimate). Only on their yes, call gnubok_import_sie with confirm_org_number_mismatch=true; without it the import is refused.`
+                  : `Summarize the scan for the user (source system, fiscal year, voucher count, balance status, any warnings) and name the company it imports into (target_company: ${targetCompany.name ?? companyId}). On their go-ahead call gnubok_import_sie with this same file, the returned mappings and the same company_id; the import stages for approval.` +
+                    (bookedIb
+                      ? ` This fiscal year already has a posted ingående balans (verifikation ${bookedIb.voucher}): pass import_opening_balances=false, which imports the vouchers on top of it; with true the import is refused. If the file's IB is the correct one, correct the posted IB first (gnubok_correct_opening_balances), then import with import_opening_balances=false.`
+                      : ''),
       }
     },
   },
@@ -22518,7 +22695,7 @@ export const tools: McpTool[] = [
           items: { type: 'object' },
         },
         create_fiscal_period: { type: 'boolean' },
-        import_opening_balances: { type: 'boolean', description: 'Default true, like the other two flags' },
+        import_opening_balances: { type: 'boolean', description: 'Default true. false when gnubok_sie_preflight finds a posted IB' },
         import_transactions: { type: 'boolean' },
         voucher_series: { type: 'string', description: 'Override voucher series for imported vouchers' },
         opening_balance_series: { type: 'string', description: 'Series for the IB voucher; default avoids series used by the file' },

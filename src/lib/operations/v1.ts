@@ -239,6 +239,7 @@ async function v1StageResponse(
         title: staged.plan.title,
         risk_level: staged.riskLevel,
         preview: staged.plan.preview,
+        ...(staged.wouldSupersedeOperationIds ? { would_supersede_operation_ids: staged.wouldSupersedeOperationIds } : {}),
       },
       { requestId: ctx.requestId, log: ctx.log, previewToken: staged.previewToken },
     )
@@ -249,6 +250,8 @@ async function v1StageResponse(
     {
       ...toPendingOperationView(staged.row),
       ...(staged.periodStatus ? { period_status: staged.periodStatus } : {}),
+      // The caller's own older proposals for the same bank rows this one replaced (crm#1264).
+      ...(staged.supersededOperationIds ? { superseded_operation_ids: staged.supersededOperationIds } : {}),
     },
     STAGED_PENDING_OPERATION_HANDLES,
   ).value

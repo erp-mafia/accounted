@@ -5,11 +5,13 @@
  *
  * What it pays by default is what Hem asks for (listSkattekontoPaymentDue):
  * the next charge the synced saldo does not cover, less the bank payments
- * already on their way. The person may pay in another amount. The day
- * defaults to the last banking day before Skatteverket draws the charge, so
- * the money is on the skattekonto by the due date; a day on or after it is
- * allowed with a warning, because Skatteverket charges interest
- * (kostnadsränta) on what is missing.
+ * already on their way. Named from a declaration (source: a momsdeklaration
+ * or an AGI, skattekonto-sources.ts), it pays what that declaration asks
+ * for, by its due date, and the synced saldo is shown, never netted. The
+ * person may pay in another amount. The day defaults to the last banking day
+ * before Skatteverket draws the charge, so the money is on the skattekonto
+ * by the due date; a day on or after it is allowed with a warning, because
+ * Skatteverket charges interest (kostnadsränta) on what is missing.
  *
  * Everything else follows the supplier payment (prepare.ts): the same door,
  * the sandbox refusal, the same debtor, a draft nobody approved replaced by
@@ -29,10 +31,11 @@ import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { earliestExecutionDateIso, executionDateFor, previousBankDayIso } from '@/lib/payments/bank-days'
 import { formatPayeeLabel } from '@/lib/payments/supplier-payee'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
-import { resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
+import { readReportedSkattekontoSaldo, resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
 import { createServiceClient } from '@/lib/supabase/server'
 import { listSkattekontoPaymentDue } from '@/lib/worklist/categories'
 import { loadDebtor } from './debtor'
+import { resolveSkattekontoSource, type SkattekontoPaymentSource, type SkattekontoSourceDue } from './skattekonto-sources'
 import { openPaymentsDoor } from './switched-on'
 import { logPaymentOrderEvents, type PaymentOrderRow } from './types'
 
@@ -60,6 +63,8 @@ export interface PrepareSkattekontoPaymentInput {
   executionDate?: string | null
   /** YYYY-MM-DD in Stockholm; injected so tests and the preview agree. */
   today: string
+  /** The declaration paid: its amount and due date replace the next charge's. */
+  source?: SkattekontoPaymentSource | null
   /** Run every check and answer the payment that would be created, without writing anything. The dialog's preview. */
   dryRun?: boolean
 }
@@ -68,13 +73,19 @@ export interface SkattekontoPaymentWarning {
   /**
    * late: the payment day is on or after the day Skatteverket draws the charge.
    * date_moved: the day asked for is no banking day the bank takes, so it moved to the next one.
+   * not_filed: the declaration paid is not on record as filed with Skatteverket.
+   * possible_duplicate: a bank payment to the skattekonto of the same amount
+   * was executed since the declaration's period, and may already pay it.
    */
-  code: 'late' | 'date_moved'
+  code: 'late' | 'date_moved' | 'not_filed' | 'possible_duplicate'
   /** For late: the day Skatteverket draws. */
   due?: string
   /** For date_moved: the day asked for and the banking day it became. */
   from?: string
   to?: string
+  /** For possible_duplicate: the executed order and when the bank paid it. */
+  payment_order_id?: string
+  executed_at?: string | null
 }
 
 export interface PrepareSkattekontoPaymentResult {
@@ -82,6 +93,39 @@ export interface PrepareSkattekontoPaymentResult {
   warnings: SkattekontoPaymentWarning[]
   /** A skattekonto draft nobody approved, cancelled here so the person's latest choice wins. */
   replaced_draft_ids: string[]
+  /** The declaration paid, when the payment was named from one. */
+  source: SkattekontoSourceDue | null
+  /** With a source: the saldo Skatteverket last reported, as information; never netted. */
+  balance: SkattekontoBalance | null
+}
+
+/** The synced skattekonto saldo (positive = money on the account) and when it was fetched. */
+export interface SkattekontoBalance {
+  saldo: number
+  fetched_at: string | null
+}
+
+/**
+ * A bank payment to the skattekonto the bank executed since `since` for
+ * exactly `amount`: it may already pay the declaration. Executed only: an
+ * open one is the one payment at a time the checks above already hold to.
+ */
+async function executedPaymentLike(
+  supabase: SupabaseClient,
+  companyId: string,
+  amount: number,
+  since: string,
+): Promise<{ id: string; executed_at: string | null } | null> {
+  const { data, error } = await supabase
+    .from('payment_orders')
+    .select('id, amount, executed_at')
+    .eq('company_id', companyId)
+    .eq('purpose', 'skattekonto')
+    .eq('status', 'executed')
+    .gte('created_at', since)
+  if (error) throw error
+  const rows = (data ?? []) as Array<{ id: string; amount: number | string; executed_at: string | null }>
+  return rows.find((row) => roundOre(Number(row.amount)) === amount) ?? null
 }
 
 const RPC_CODES: Record<string, string> = {
@@ -150,11 +194,26 @@ export async function prepareSkattekontoPaymentOrder(
   }
   const staleDraftIds = open.filter((o) => o.status === 'draft').map((o) => o.id)
 
-  // What Hem asks for: the next charge, the shortfall against the saldo, and
-  // the bank payments already covering part of it.
-  const due = await listSkattekontoPaymentDue(supabase, companyId, input.today)
-  const amount = chosenAmount ?? due?.amount ?? null
-  if (amount === null) return { ok: false, code: 'SKATTEKONTO_PAYMENT_NOTHING_DUE' }
+  // A declaration names its own amount and due date. Without one, what Hem
+  // asks for: the next charge, the shortfall against the saldo, and the bank
+  // payments already covering part of it.
+  let source: SkattekontoSourceDue | null = null
+  if (input.source) {
+    const resolved = await resolveSkattekontoSource(supabase, companyId, input.source, input.today)
+    if (!resolved.ok) return { ok: false, code: resolved.code, details: resolved.details }
+    source = resolved.due
+  }
+  const due = source ? null : await listSkattekontoPaymentDue(supabase, companyId, input.today)
+  const amount = chosenAmount ?? (source ? source.payable : (due?.amount ?? null))
+  if (amount === null) {
+    if (!source) return { ok: false, code: 'SKATTEKONTO_PAYMENT_NOTHING_DUE' }
+    return {
+      ok: false,
+      code: 'SKATTEKONTO_PAYMENT_NOTHING_DUE',
+      details: { reason: source.nothing_due, declared: source.declared, tax_period: source.tax_period },
+    }
+  }
+  const dueDate = source ? source.due_date : (due?.due ?? null)
 
   const ocr = due?.ocr ?? (await skattekontoOcr(supabase, companyId, log))
   if (!ocr) return { ok: false, code: 'SKATTEKONTO_PAYMENT_OCR_MISSING' }
@@ -163,13 +222,21 @@ export async function prepareSkattekontoPaymentOrder(
   // leaves the banking day before Skatteverket draws, so it is on the
   // skattekonto by the due date; without a charge to pay towards, the
   // earliest day the bank takes.
-  const wantedDate = input.executionDate ?? (due ? previousBankDayIso(due.due) : earliestExecutionDateIso(input.today))
+  const wantedDate = input.executionDate ?? (dueDate ? previousBankDayIso(dueDate) : earliestExecutionDateIso(input.today))
   const executionDate = executionDateFor(wantedDate, input.today)
   const warnings: SkattekontoPaymentWarning[] = []
   if (input.executionDate && executionDate !== input.executionDate) {
     warnings.push({ code: 'date_moved', from: input.executionDate, to: executionDate })
   }
-  if (due && executionDate >= due.due) warnings.push({ code: 'late', due: due.due })
+  if (dueDate && executionDate >= dueDate) warnings.push({ code: 'late', due: dueDate })
+  let balance: SkattekontoBalance | null = null
+  if (source) {
+    if (!source.filed) warnings.push({ code: 'not_filed' })
+    const paid = await executedPaymentLike(supabase, companyId, amount, source.paid_from)
+    if (paid) warnings.push({ code: 'possible_duplicate', payment_order_id: paid.id, executed_at: paid.executed_at })
+    const reported = await readReportedSkattekontoSaldo(supabase, companyId)
+    balance = reported ? { saldo: roundOre(reported.saldo), fetched_at: reported.fetched_at } : null
+  }
 
   const bankgiro = SKATTEKONTO_BANKGIRO.replace(/\D/g, '')
   if (input.dryRun) {
@@ -184,6 +251,8 @@ export async function prepareSkattekontoPaymentOrder(
         requested_execution_date: executionDate,
         date_moved_from: input.executionDate && executionDate !== input.executionDate ? input.executionDate : null,
         due: due ? { date: due.due, charge: due.charge, balance: due.balance, amount: due.amount } : null,
+        source,
+        balance,
         payee: { type: 'bankgiro', label: formatPayeeLabel({ type: 'bankgiro', bankgiro }), name: SKATTEKONTO_PAYEE_NAME },
         reference: { type: 'ocr', value: ocr },
         warnings,
@@ -245,5 +314,5 @@ export async function prepareSkattekontoPaymentOrder(
       details: { rpc_code: result.code, rpc_details: result.details as Record<string, unknown> | undefined },
     }
   }
-  return { ok: true, data: { order: result.order, warnings, replaced_draft_ids: replaced } }
+  return { ok: true, data: { order: result.order, warnings, replaced_draft_ids: replaced, source, balance } }
 }

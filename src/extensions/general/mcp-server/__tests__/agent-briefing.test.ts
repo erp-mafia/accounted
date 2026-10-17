@@ -72,7 +72,14 @@ function mockSupabase(opts: {
   dimensionRuleRows?: Array<{ account_number: string; rule_type: string; dimension_id: string }>
   dimensionsEnabled?: boolean
   // skatteverket_tokens rows for the connection-health block. Default: none.
-  skvTokenRows?: Array<{ user_id: string; status: string | null; created_at: string | null }>
+  skvTokenRows?: Array<{
+    user_id: string
+    status: string | null
+    created_at: string | null
+    expires_at?: string | null
+    refresh_count?: number | null
+    refresh_token?: string | null
+  }>
   // company_inboxes.local_part of the active inbox (crm#1174). undefined → no row.
   inboxLocalPart?: string
   errors?: { profile?: string; memory?: string; atoms?: string }
@@ -738,9 +745,17 @@ describe('skatteverket_connection health block', () => {
   })
 
   it('reports an active personal session with its connect time (the ~65 min fuse)', async () => {
+    const connectedAt = new Date(Date.now() - 5 * 60_000).toISOString()
     const supabase = mockSupabase({
       profile: null,
-      skvTokenRows: [{ user_id: 'user-1', status: 'active', created_at: '2026-08-25T09:12:00Z' }],
+      skvTokenRows: [{
+        user_id: 'user-1',
+        status: 'active',
+        created_at: connectedAt,
+        expires_at: new Date(Date.now() + 55 * 60_000).toISOString(),
+        refresh_count: 0,
+        refresh_token: 'ciphertext',
+      }],
     })
     const result = (await tool().execute(
       {},
@@ -759,8 +774,53 @@ describe('skatteverket_connection health block', () => {
     expect(result.skatteverket_connection).toEqual({
       status: 'active',
       source: 'user',
-      connected_at: '2026-08-25T09:12:00Z',
+      connected_at: connectedAt,
+      // The session is the caller's own, so the filing tools will work.
+      filing: { ready: true, own_session: 'active' },
     })
+  })
+
+  it("crm#1263: active through another member's session, but this caller cannot file", async () => {
+    // Member user-2 connected minutes ago; the caller's own row expired weeks
+    // ago. The status line stays the company's truth, and `filing` says what
+    // gnubok_vat_declaration_validate/_submit will answer this caller.
+    const memberConnectedAt = new Date(Date.now() - 3 * 60_000).toISOString()
+    const supabase = mockSupabase({
+      profile: null,
+      userFullName: 'Anna Admin',
+      skvTokenRows: [
+        {
+          user_id: 'user-2',
+          status: 'active',
+          created_at: memberConnectedAt,
+          expires_at: new Date(Date.now() + 57 * 60_000).toISOString(),
+          refresh_count: 0,
+          refresh_token: 'ciphertext',
+        },
+        {
+          user_id: 'user-1',
+          status: 'needs_reconsent',
+          created_at: '2026-09-20T04:00:46Z',
+          expires_at: '2026-09-20T05:00:46Z',
+          refresh_count: 2,
+          refresh_token: 'ciphertext',
+        },
+      ],
+    })
+    const result = (await tool().execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      skatteverket_connection?: {
+        status: string
+        connected_at?: string | null
+        filing?: { ready: boolean; own_session: string; message?: string }
+      }
+    }
+    expect(result.skatteverket_connection).toMatchObject({
+      status: 'active',
+      connected_at: memberConnectedAt,
+      filing: { ready: false, own_session: 'expired' },
+    })
+    expect(result.skatteverket_connection?.filing?.message).toContain('Anna Admin')
+    expect(result.skatteverket_connection?.filing?.message).toContain('gnubok_connect_skatteverket')
   })
 
   it('reports needs_reconsent with the directive message so the agent warns the user up front', async () => {

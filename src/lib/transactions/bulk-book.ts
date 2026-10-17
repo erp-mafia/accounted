@@ -127,6 +127,9 @@ type SelectedTx = Pick<
   | 'exchange_rate'
   | 'cash_account_id'
   | 'journal_entry_id'
+  | 'external_id'
+  | 'import_source'
+  | 'bank_connection_id'
 >
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
@@ -150,7 +153,7 @@ export async function bulkBookTransactions(
   // the amounts, every branch the currencies.
   const { data: txs, error: txError } = await supabase
     .from('transactions')
-    .select('id, amount, currency, description, merchant_name, date, amount_sek, exchange_rate, cash_account_id, journal_entry_id')
+    .select('id, amount, currency, description, merchant_name, date, amount_sek, exchange_rate, cash_account_id, journal_entry_id, external_id, import_source, bank_connection_id')
     .in('id', body.tx_ids)
     .eq('company_id', companyId)
 
@@ -606,7 +609,9 @@ export async function enforceBulkBookDimensionPolicy<
 export type BulkBookDuplicateTx = Pick<
   Transaction,
   'id' | 'amount' | 'currency' | 'date' | 'amount_sek' | 'exchange_rate' | 'cash_account_id'
->
+> &
+  /** Provider identity: optional, a row without it is compared on content only. */
+  Partial<Pick<Transaction, 'external_id' | 'import_source' | 'bank_connection_id'>>
 
 export type BulkBookDuplicateGuardResult =
   /** verdicts: how the guard let each row through, for its decision's checks (empty on a dry-run force). */
@@ -663,6 +668,11 @@ export async function runBulkBookDuplicateGuard(
         amount_sek: tx.amount_sek ?? null,
         exchange_rate: tx.exchange_rate ?? null,
         cash_account_id: tx.cash_account_id ?? null,
+        // Two bookings of one provider feed under different ids are never
+        // twins (crm#1271).
+        external_id: tx.external_id ?? null,
+        import_source: tx.import_source ?? null,
+        bank_connection_id: tx.bank_connection_id ?? null,
       },
       exclusions,
     )

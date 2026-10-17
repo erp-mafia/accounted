@@ -43,7 +43,15 @@ type MockConfig = {
   priorActivity?: boolean
   /** compute_prior_opening_balances rows: the balance carried to the file year's first day. */
   carried?: Array<{ account_number: string; debit: number; credit: number }>
+  /** The company year containing the file's dates (precheckFiscalPeriod); null when none does. */
+  period?: Record<string, unknown> | null
+  /** The year's posted IB verifikat, read by the continuity check. */
+  bookedIbEntry?: Record<string, unknown> | null
+  /** sie_import_admission_refusal's answer: the import's own admission rule (crm#1272). */
+  admission?: Record<string, unknown> | null
 }
+
+const rpcCalls: Array<[string, unknown]> = []
 
 function mockSupabase(config: MockConfig = {}) {
   const makeChain = (table: string) => {
@@ -74,10 +82,20 @@ function mockSupabase(config: MockConfig = {}) {
                 }
               } else if (table === 'sie_account_mappings') {
                 resolve({ data: config.storedMappings ?? [], error: null })
+              } else if (table === 'journal_entries' && called.includes('maybeSingle')) {
+                resolve({ data: config.bookedIbEntry ?? null, error: null })
               } else if (table === 'journal_entries') {
                 resolve({ data: config.priorActivity ? [{ id: 'entry-1' }] : [], error: null })
+              } else if (table === 'fiscal_periods' && 'period' in config) {
+                const period = config.period ?? null
+                if (called.includes('single')) resolve({ data: period, error: null })
+                else if (called.includes('maybeSingle')) {
+                  resolve({ data: period ? { opening_balance_entry_id: period.opening_balance_entry_id ?? null } : null, error: null })
+                } else resolve({ data: [], error: null })
               } else if (table === 'rpc:compute_prior_opening_balances') {
                 resolve({ data: config.carried ?? [], error: null })
+              } else if (table === 'rpc:sie_import_admission_refusal') {
+                resolve({ data: config.admission ?? null, error: null })
               } else {
                 resolve({ data: [], error: null })
               }
@@ -92,7 +110,13 @@ function mockSupabase(config: MockConfig = {}) {
     )
     return chain
   }
-  return { from: (table: string) => makeChain(table), rpc: (fn: string) => makeChain(`rpc:${fn}`) }
+  return {
+    from: (table: string) => makeChain(table),
+    rpc: (fn: string, args?: unknown) => {
+      rpcCalls.push([fn, args])
+      return makeChain(`rpc:${fn}`)
+    },
+  }
 }
 
 async function run(args: Record<string, unknown>, config?: MockConfig) {
@@ -107,6 +131,7 @@ async function run(args: Record<string, unknown>, config?: MockConfig) {
 describe('gnubok_sie_preflight', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    rpcCalls.length = 0
   })
 
   it('is a read-only tool that stages nothing', () => {
@@ -323,5 +348,80 @@ describe('gnubok_create_sie_upload', () => {
     await expect(
       uploadTool.execute({ filename: 'export.xlsx' }, COMPANY_ID, 'user-1', {} as never)
     ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+  })
+})
+
+// crm#1272: the preflight answered ok for a year whose ingående balans was
+// booked by hand, and the import was refused after approval. It now reads the
+// import's own admission rule, so it refuses or warns exactly where the
+// import refuses.
+describe('gnubok_sie_preflight: the import\'s admission rule', () => {
+  const OPEN_YEAR = {
+    id: 'fp-year', name: `Räkenskapsår ${YEAR}`, period_start: `${YEAR}-01-01`, period_end: `${YEAR}-12-31`,
+    is_closed: false, locked_at: null, closed_externally: false, closing_entry_id: null,
+    opening_balance_entry_id: 'je-ib',
+  }
+
+  beforeEach(() => {
+    rpcCalls.length = 0
+  })
+
+  it('asks the rule for the year the import would use, with the import\'s default options', async () => {
+    await run({ file_content: VALID_SIE }, { period: OPEN_YEAR })
+    expect(rpcCalls).toContainEqual(['sie_import_admission_refusal', {
+      p_company_id: COMPANY_ID, p_period_id: 'fp-year', p_period_start: `${YEAR}-01-01`, p_period_end: `${YEAR}-12-31`,
+      p_supersedes_import_id: null, p_import_opening_balances: true,
+    }])
+  })
+
+  it('a year with a hand-booked IB: importable without the file\'s IB, and says so', async () => {
+    const result = await run({ file_content: VALID_SIE }, {
+      period: OPEN_YEAR,
+      bookedIbEntry: { id: 'je-ib', voucher_series: 'A', voucher_number: 1, status: 'posted', import_batch_id: null },
+      admission: {
+        reason: 'opening_balance', entry_id: 'je-ib', voucher: 'A1', entry_date: `${YEAR}-01-01`,
+        message: 'Räkenskapsåret har redan en bokförd ingående balans (verifikation A1).',
+      },
+    })
+
+    expect(result.verdict).toBe('ok_with_warnings')
+    expect(result.duplicate).toBeNull()
+    expect(result.import_opening_balances).toBe(false)
+    const notices = (result.validation as { notices: Array<{ code: string; text: string }> }).notices
+    expect(notices.find((n) => n.code === 'sie_period_has_opening_balance')?.text).toContain('verifikation A1')
+    expect(result.instructions).toContain('import_opening_balances=false')
+    expect(result.instructions).toContain('gnubok_correct_opening_balances')
+  })
+
+  it('a year the rule admits as is: ok, and no import_opening_balances hint', async () => {
+    const result = await run({ file_content: VALID_SIE }, { period: { ...OPEN_YEAR, opening_balance_entry_id: null } })
+    expect(result.verdict).toBe('ok')
+    expect(result).not.toHaveProperty('import_opening_balances')
+  })
+
+  it('another import of the company is not finished: blocked, naming it', async () => {
+    const result = await run({ file_content: VALID_SIE }, {
+      period: OPEN_YEAR,
+      admission: { reason: 'unfinished_import', import_id: 'imp-running' },
+    })
+    expect(result.verdict).toBe('blocked')
+    expect(result.instructions).toContain('imp-running')
+    expect(result.instructions).toContain('gnubok_sie_import_status')
+  })
+
+  it('an import the overlap test cannot see (its verifikat in the year): duplicate', async () => {
+    const result = await run({ file_content: VALID_SIE }, {
+      period: OPEN_YEAR,
+      admission: { reason: 'existing_import', import_id: 'imp-legacy' },
+    })
+    expect(result.verdict).toBe('duplicate')
+    expect(result.duplicate).toEqual({ kind: 'period', import_id: 'imp-legacy' })
+  })
+
+  it('a locked year: blocked with the fiscal-year refusal, and the rule is not read', async () => {
+    const result = await run({ file_content: VALID_SIE }, { period: { ...OPEN_YEAR, locked_at: `${YEAR}-06-30T00:00:00Z` } })
+    expect(result.verdict).toBe('blocked')
+    expect(result.instructions).toContain('låst')
+    expect(rpcCalls.map(([fn]) => fn)).not.toContain('sie_import_admission_refusal')
   })
 })

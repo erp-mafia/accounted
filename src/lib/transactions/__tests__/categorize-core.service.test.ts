@@ -383,6 +383,22 @@ describe('categorizeTransaction: the decision record', () => {
     vi.mocked(detectBookingDuplicate).mockResolvedValue(null)
   })
 
+  it('hands the row\'s provider identity to the duplicate guard (crm#1271)', async () => {
+    const stripeRow = { external_id: 'stripe_acct_A_txn_1_fee', import_source: 'stripe', bank_connection_id: null }
+    const { supabase } = ledger({
+      transactions: [{ data: row(stripeRow), error: null }, { data: [row({ ...stripeRow, journal_entry_id: 'je-1' })], error: null }],
+    })
+
+    await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, business, live)
+
+    expect(detectBookingDuplicate).toHaveBeenCalledWith(
+      supabase,
+      COMPANY_ID,
+      expect.objectContaining({ id: TX_ID, ...stripeRow }),
+      undefined,
+    )
+  })
+
   it("records an agent's allow_duplicate: a warning when it bypassed a candidate, a pass when there was none", async () => {
     vi.mocked(detectBookingDuplicate).mockResolvedValue({ transaction_id: 'tx-twin', journal_entry_id: null } as never)
     await categorizeTransaction(ledger().supabase as never, 'user-1', COMPANY_ID, TX_ID, { ...business, allow_duplicate: true }, { onBooked: 'refuse' })

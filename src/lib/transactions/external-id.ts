@@ -254,3 +254,55 @@ export function descriptionsBridge(
   if (x === '' || y === '') return x === y
   return x.startsWith(y) || y.startsWith(x)
 }
+
+/**
+ * Import feeds whose STORED `transactions.external_id` is the provider's own
+ * per-booking reference: the same booking always carries the same id, and a
+ * different id is a different booking.
+ *
+ * This is the per-ROW form of `IngestOptions.stableExternalIds`, which a feed
+ * states per batch at ingest and which is not stored on the row. Code that
+ * meets the row later (the booking-time duplicate guard) reads the statement
+ * from here instead. A feed belongs here only when its ingest call passes
+ * `stableExternalIds: true`; ids derived from content or position never
+ * qualify (the Enable Banking / Open Payments occurrence index from
+ * buildStableExternalIds, bank-file row hashes, ids an agent typed into
+ * create_transactions), because the same booking can come back under another
+ * one of those.
+ *
+ * - 'stripe': `stripe_{account}_{balance_txn}` and its `_fee` row
+ *   (extensions/general/stripe/lib/transaction-sync.ts). A Stripe balance
+ *   transaction id names one movement on the Stripe balance for good.
+ */
+export const PROVIDER_BOOKING_ID_SOURCES: ReadonlySet<string> = new Set(['stripe'])
+
+/** The `transactions` columns that say which feed a row came from and under which id. */
+export interface TransactionIdentity {
+  external_id?: string | null
+  import_source?: string | null
+  bank_connection_id?: string | null
+}
+
+/**
+ * True when the ids ALONE prove two rows are different bookings: both rows
+ * come from the same provider feed whose ids are per-booking references (same
+ * import_source in PROVIDER_BOOKING_ID_SOURCES, same bank connection), both
+ * carry an id, and the ids differ.
+ *
+ * False whenever the ids cannot speak: a missing id on either side, rows from
+ * two different feeds (a bank file and the feed, a hand-entered row), or a
+ * feed whose ids are derived. Callers then judge on content, as before.
+ * Mirrors the ingest-time identity guard (isOtherBookingOfSameFeed in
+ * lib/transactions/ingest.ts), so a row the ingest kept apart from its
+ * look-alike is not called that look-alike's copy at booking time.
+ */
+export function idsProveDistinctBookings(a: TransactionIdentity, b: TransactionIdentity): boolean {
+  const source = a.import_source ?? null
+  if (source === null || !PROVIDER_BOOKING_ID_SOURCES.has(source)) return false
+  if ((b.import_source ?? null) !== source) return false
+  if ((a.bank_connection_id ?? null) !== (b.bank_connection_id ?? null)) return false
+  const idA = a.external_id ?? null
+  const idB = b.external_id ?? null
+  if (!idA || !idB) return false
+  return idA !== idB
+}

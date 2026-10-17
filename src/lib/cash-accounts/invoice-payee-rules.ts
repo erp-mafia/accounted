@@ -8,7 +8,9 @@ import type { CashAccount, CashAccountPayeeFields, Currency, InvoicePaymentAccou
 import {
   hasUsableInvoicePaymentAccount,
   normalizeInvoicePaymentAccount,
+  summarizeInvoicePaymentAccount,
 } from '@/lib/invoices/payment-accounts'
+import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 
 /** A cash account's payee columns: the InvoicePaymentAccount keys, with the printed IBAN in payee_iban. */
 export type CashAccountPayeeSource = Omit<CashAccountPayeeFields, 'iban'> & { payee_iban: string | null }
@@ -43,6 +45,47 @@ export function isUsableInvoicePayee(account: CashAccount, currency: Currency): 
     && hasUsableInvoicePaymentAccount(cashAccountPayee(account), currency)
 }
 
+/** An account a foreign-currency invoice can be paid to once someone picks it. */
+export interface InvoicePayeeCandidate {
+  account: CashAccount
+  /**
+   * The IBAN the bank connection knows for the account while it prints none
+   * (payee_iban empty): picking the account also prints this one. Null when
+   * the account is usable as it stands.
+   */
+  bankIban: string | null
+}
+
+const IBAN_SHAPE = /^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/
+
+/**
+ * The accounts that could carry a foreign-currency invoice when the currency
+ * has no default account yet (crm#1273). The account does not have to be in
+ * that currency: a foreign payer pays to an IBAN, and a SEK account receives
+ * the payment there (its bank converts). Usable accounts come first, then
+ * enabled bank accounts whose connection knows the IBAN but which print none
+ * yet. The ledger currency (SEK) gets none: its invoice falls back to the
+ * company's own details, and its domestic payee (bankgiro, clearing and
+ * account number) is typed in the settings, not taken from a bank connection.
+ */
+export function foreignInvoicePayeeCandidates(
+  accounts: readonly CashAccount[],
+  currency: Currency,
+): InvoicePayeeCandidate[] {
+  if (isLedgerCurrency(currency)) return []
+  const usable = accounts
+    .filter((account) => isUsableInvoicePayee(account, currency))
+    .map((account) => ({ account, bankIban: null }))
+  const withBankIban = accounts.flatMap((account) => {
+    if (!account.enabled || !isBankCashAccount(account) || account.payee_iban?.trim()) return []
+    const bankIban = account.iban?.replace(/\s/g, '').toUpperCase() ?? ''
+    if (!IBAN_SHAPE.test(bankIban)) return []
+    const payee = { ...cashAccountPayee(account), iban: bankIban }
+    return hasUsableInvoicePaymentAccount(payee, currency) ? [{ account, bankIban }] : []
+  })
+  return [...usable, ...withBankIban]
+}
+
 /**
  * Bank-type rows only: Stripe (1686), Woo (1680) and Shopify (1584) also live
  * in cash_accounts, and so may a till (1910 Kassa, 1911-1919). A customer is
@@ -50,4 +93,24 @@ export function isUsableInvoicePayee(account: CashAccount, currency: Currency): 
  */
 export function isBankCashAccount(account: Pick<CashAccount, 'ledger_account'>): boolean {
   return /^19[2-9]\d$/.test(account.ledger_account)
+}
+
+/**
+ * The account the payment settings fill in first when the user adds a bank
+ * account: the company's primary bank account while it prints nothing.
+ * Every company is seeded with one (1930), so someone adding "their bank
+ * account" there means that account. Creating a second row instead gave the
+ * same money a second 19xx ledger, and the IBAN typed on it then blocked the
+ * real account (crm#1270). Null when the primary already prints something:
+ * a new account is then what the user asked for. No currency test: only an
+ * account in the company's own currency can be made primary
+ * (make_cash_account_primary).
+ */
+export function blankPrimaryPayeeAccount(accounts: readonly CashAccount[]): CashAccount | null {
+  return accounts.find((account) =>
+    account.is_primary
+    && account.enabled
+    && isBankCashAccount(account)
+    && !summarizeInvoicePaymentAccount(cashAccountPayee(account)),
+  ) ?? null
 }

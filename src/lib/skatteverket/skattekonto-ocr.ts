@@ -107,3 +107,28 @@ async function readReportedOcr(
 
   return luhnValidate(digits) ? digits : null
 }
+
+/**
+ * The saldo Skatteverket last reported for the skattekonto (positive = money
+ * on the account), from the same snapshot, with when it was fetched; null
+ * without a snapshot or a readable saldo. Information for a person deciding
+ * what to pay in: nothing is netted against it.
+ */
+export async function readReportedSkattekontoSaldo(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<{ saldo: number; fetched_at: string | null } | null> {
+  const { data, error } = await supabase
+    .from('extension_data')
+    .select('value')
+    .eq('company_id', companyId)
+    .eq('extension_id', SKATTEVERKET_EXTENSION_ID)
+    .eq('key', BALANCE_SNAPSHOT_KEY)
+    .maybeSingle()
+  if (error || !data?.value) return null
+  const value = data.value as { saldo?: { saldoSkatteverket?: unknown }; fetchedAt?: unknown }
+  const saldo = Number(value.saldo?.saldoSkatteverket)
+  if (value.saldo?.saldoSkatteverket === null || value.saldo?.saldoSkatteverket === undefined || !Number.isFinite(saldo)) return null
+  const fetchedAt = typeof value.fetchedAt === 'number' ? new Date(value.fetchedAt).toISOString() : null
+  return { saldo, fetched_at: fetchedAt }
+}

@@ -125,6 +125,22 @@ describe('durable SIE HTTP boundaries',()=>{
     expect(response.status).toBe(409)
     expect((await response.json()).error.code).toBe('SIE_IMPORT_PERIOD_ALREADY_IMPORTED')
   })
+  // crm#1272: a hand-booked IB in the target year, with the IB toggle on.
+  it('answers a year with a booked IB with its own 409 code and the sentence naming the verifikat', async () => {
+    const { jobDatabaseError } = await import('@/lib/import/sie-jobs')
+    const sentence = 'Räkenskapsåret 2026-01-01 till 2026-12-31 har redan en bokförd ingående balans (verifikation A1, 2026-01-01), ' +
+      'och importen skulle bokföra filens ingående balans en gång till. Importera filen utan ingående balanser, så läggs verifikationerna ovanpå den bokförda.'
+    submit.mockRejectedValueOnce(jobDatabaseError({ code: '55000', message: `SIE_IMPORT_PERIOD_HAS_OPENING_BALANCE: ${sentence}` }))
+    const form = new FormData()
+    form.set('file', new File(['#SIETYP 4\n#RAR 0 20260101 20261231'], 'ib.se'))
+    form.set('mappings', '[]')
+    const response = await routes.execute(new Request('https://example.test/api/import/sie/execute', { method: 'POST', body: form }))
+    expect(response.status).toBe(409)
+    const { error } = await response.json()
+    expect(error.code).toBe('SIE_IMPORT_PERIOD_HAS_OPENING_BALANCE')
+    expect(error.message).toBe(sentence)
+    expect(error.remediation).toMatchObject({ tool: 'gnubok_import_sie', args: { import_opening_balances: false } })
+  })
   it('answers a klarmarkerat target year with the reopen sentence as a 400, not a generic 500', async () => {
     // ensureFiscalPeriod throws a plain Error marked user-facing, which the
     // route hands to errorResponse (it is not a SIEJobValidationError).

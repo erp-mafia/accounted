@@ -377,6 +377,56 @@ export async function markVatPeriodFiled(
   return { ok: true, record, created: true, changed: true }
 }
 
+/** The period placed in time, with the day it is due and whether it is on record as filed. */
+export interface VatPeriodDeadline extends VatFilingPeriodPlacement {
+  /**
+   * YYYY-MM-DD the declaration is due, which is also the day its payment
+   * must be on the skattekonto (62 kap. 3 § SFL): the period's deadline row
+   * when there is one (the date the deadline list shows), else the date the
+   * generator would give it. Null when no date can be placed (a yearly
+   * period without the company's legal form or filing profile).
+   */
+  due_date: string | null
+  /** The period's moms deadline is completed: filed through the connection or marked by hand. */
+  filed: boolean
+}
+
+/** The period's due date and filing state, read the way the filing record reads them. */
+export async function vatPeriodDeadline(
+  supabase: SupabaseClient,
+  companyId: string,
+  input: VatFilingPeriodInput,
+): Promise<VatPeriodDeadline> {
+  const settings = await loadFilingSettings(supabase, companyId)
+  const row = await findPeriodRow(supabase, companyId, input, settings.fiscalYearEndMonth)
+  return {
+    ...placement(input, settings.fiscalYearEndMonth),
+    due_date: row?.due_date ?? generatedDueDate(input, settings)?.dueDate ?? null,
+    filed: row?.is_completed === true,
+  }
+}
+
+/**
+ * The period's statutory day as the generator places it (lib/tax/deadline-config.ts),
+ * moved to the next banking day; null when it cannot be placed.
+ */
+function generatedDueDate(
+  input: VatFilingPeriodInput,
+  settings: FilingSettings,
+): { instance: NonNullable<ReturnType<typeof getVatDeadlineForPeriod>>; dueDate: string } | null {
+  const row = settings.row
+  const instance = getVatDeadlineForPeriod(input.periodType, input.year, input.period, {
+    vat_taxable_base_over_40m: row?.vat_taxable_base_over_40m === true,
+    entity_type: (row?.entity_type ?? null) as VatDeadlineCalculationSettings['entity_type'],
+    fiscal_year_start_month: row?.fiscal_year_start_month ?? null,
+    vat_has_eu_trade: row?.vat_has_eu_trade ?? null,
+    vat_filing_method: (row?.vat_filing_method ?? null) as VatDeadlineCalculationSettings['vat_filing_method'],
+  })
+  if (!instance) return null
+  const dueDate = formatDateISO(adjustDeadlineToNextBankingDay(new Date(instance.year, instance.month, instance.day)))
+  return { instance, dueDate }
+}
+
 /**
  * Insert the period's moms deadline row, already completed, the way the
  * generator would build it (same title, due date, tax_period and linked
@@ -397,21 +447,12 @@ async function insertCompletedPeriodRow(
     userId: string | null
   },
 ): Promise<DeadlineRow> {
-  const row = settings.row
-  const instance = getVatDeadlineForPeriod(input.periodType, input.year, input.period, {
-    vat_taxable_base_over_40m: row?.vat_taxable_base_over_40m === true,
-    entity_type: (row?.entity_type ?? null) as VatDeadlineCalculationSettings['entity_type'],
-    fiscal_year_start_month: row?.fiscal_year_start_month ?? null,
-    vat_has_eu_trade: row?.vat_has_eu_trade ?? null,
-    vat_filing_method: (row?.vat_filing_method ?? null) as VatDeadlineCalculationSettings['vat_filing_method'],
-  })
+  const placed = generatedDueDate(input, settings)
   // Only a yearly period can land here: its due date needs the company's
   // legal form and filing profile, and a company without a settings row has
   // neither (none in production on 2026-09-27).
-  if (!instance) throw new Error('vat filing: no deadline instance for the VAT period')
-  const dueDate = formatDateISO(
-    adjustDeadlineToNextBankingDay(new Date(instance.year, instance.month, instance.day)),
-  )
+  if (!placed) throw new Error('vat filing: no deadline instance for the VAT period')
+  const { instance, dueDate } = placed
   const deadlineType = vatFilingDeadlineType(input.periodType)
   const { data, error } = await supabase
     .from('deadlines')

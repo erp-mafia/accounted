@@ -64,6 +64,7 @@ describe('gnubok_bulk_book_transactions: staged from the operation', () => {
     }) // chart_of_accounts names
     enqueue({ data: null, error: null }) // resolvePeriodStatusForDate: 2 layers
     enqueue({ data: null, error: null })
+    enqueue({ data: [], error: null }) // open operations on these rows: none (crm#1264)
     enqueue({ data: { id: 'op-bulk-tpl' }, error: null }) // pending_operations insert
 
     const result = (await bulkBook.execute(
@@ -106,6 +107,7 @@ describe('gnubok_bulk_book_transactions: staged from the operation', () => {
     enqueue({ data: { id: JE, status: 'posted', entry_date: '2026-06-02' }, error: null }) // link target
     enqueue({ data: null, error: null }) // resolvePeriodStatusForDate: 2 layers
     enqueue({ data: null, error: null })
+    enqueue({ data: [], error: null }) // open operations on these rows: none (crm#1264)
     enqueue({ data: { id: 'op-bulk-link' }, error: null }) // pending_operations insert
 
     await bulkBook.execute(
@@ -132,6 +134,7 @@ describe('gnubok_bulk_book_transactions: staged from the operation', () => {
     enqueue({ data: { id: JE, status: 'posted', entry_date: '2026-09-30' }, error: null }) // link target
     enqueue({ data: null, error: null }) // resolvePeriodStatusForDate: 2 layers
     enqueue({ data: null, error: null })
+    enqueue({ data: [], error: null }) // open operations on these rows: none (crm#1264)
     enqueue({ data: { id: 'op-bulk-link-month' }, error: null }) // pending_operations insert
 
     const result = (await bulkBook.execute(

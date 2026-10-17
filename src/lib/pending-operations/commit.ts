@@ -154,7 +154,8 @@ import { classifyError, isPeriodLockRefusal } from '@/lib/errors/get-structured-
 import { requiresWebApproval } from '@/lib/pending-operations/risk-tiers'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { createDimensionValue } from '@/lib/dimensions/registry-service'
-import { submitSIEJob } from '@/lib/import/sie-jobs'
+import { SIEJobDatabaseError, submitSIEJob } from '@/lib/import/sie-jobs'
+import { userFacingCode } from '@/lib/errors/user-facing'
 import type { AccountMapping } from '@/lib/import/types'
 import { AccountsNotInChartError, isBookkeepingError, ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
 import { extensionRegistry } from '@/lib/extensions/registry'
@@ -200,6 +201,7 @@ import {
   reserveInvoiceDelivery,
   sendTrackedInvoiceEmail,
 } from '@/lib/invoices/invoice-deliveries'
+import { linkInvoiceAttachments, loadInvoiceEmailAttachments } from '@/lib/invoices/invoice-attachments'
 import { createLogger } from '@/lib/logger'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { createSupplier } from '@/lib/suppliers/create-supplier'
@@ -2743,6 +2745,24 @@ async function commitSendInvoice(
     }
   }
 
+  // The files the invoice carries (crm#1269): documents named at staging are
+  // attached now, then the whole set is read before a number is allocated or
+  // anything is issued, so a missing or oversized file stops the send while
+  // nothing irreversible has happened.
+  const attachmentFailure = (code: string): ExecutorResult => {
+    const entry = getErrorEntry(code)
+    return { error: entry?.message_sv ?? code, errorCode: code, status: entry?.httpStatus ?? 400 }
+  }
+  const requestedAttachments = Array.isArray(params.attachment_document_ids)
+    ? (params.attachment_document_ids as unknown[]).filter((id): id is string => typeof id === 'string')
+    : []
+  if (requestedAttachments.length > 0) {
+    const linked = await linkInvoiceAttachments(supabase, companyId, invoiceId, requestedAttachments)
+    if (!linked.ok) return attachmentFailure(linked.code)
+  }
+  const extraAttachments = await loadInvoiceEmailAttachments(supabase, companyId, invoiceId)
+  if (!extraAttachments.ok) return attachmentFailure(extraAttachments.code)
+
   let deliveryId: string
   try {
     deliveryId = await reserveInvoiceDelivery({
@@ -2895,6 +2915,7 @@ async function commitSendInvoice(
       from: await resolveInvoiceSender(supabase, companyId, company.company_name),
       filename,
       pdfBuffer,
+      extraAttachments: extraAttachments.value,
     })
   } catch (err) {
     log.error('failed to persist invoice delivery snapshot before agent send', err as Error, {
@@ -5143,10 +5164,29 @@ async function commitImportSie(
     return { error: 'file_content, filename, and mappings are required', status: 400 }
   }
 
-  const job = await submitSIEJob(supabase,companyId,userId,fileContent,mappings,{
-    filename,createFiscalPeriod,importOpeningBalances,importTransactions,voucherSeries,openingBalanceSeries,updateAccountNames,
-    confirmOrgNumberMismatch,
-  })
+  let job: Awaited<ReturnType<typeof submitSIEJob>>
+  try {
+    job = await submitSIEJob(supabase,companyId,userId,fileContent,mappings,{
+      filename,createFiscalPeriod,importOpeningBalances,importTransactions,voucherSeries,openingBalanceSeries,updateAccountNames,
+      confirmOrgNumberMismatch,
+    })
+  } catch (err) {
+    // A refusal the job RPC raised rolled back: nothing started. It answers
+    // with its code, the reader's sentence and the registry's remediation,
+    // not the database's English: an agent that read "Existing SIE import
+    // requires reviewed replacement or reconciliation" had nothing to act on
+    // (crm#1272).
+    const entry = err instanceof SIEJobDatabaseError && err.code?.startsWith('SIE_') ? getErrorEntry(err.code) : undefined
+    if (entry && err instanceof SIEJobDatabaseError) {
+      return {
+        error: userFacingCode(err) ? err.message : entry.message_sv,
+        status: entry.httpStatus,
+        errorCode: err.code,
+        ...(entry.remediation ? { data: { remediation: entry.remediation } } : {}),
+      }
+    }
+    throw err
+  }
   // The approval commits submission. The durable execution has its own status.
   return {data:{import_id:job.id,operation_id:job.id,state:job.job_state,accepted:true,
     status_tool:'gnubok_sie_import_status',fiscal_period_id:job.fiscal_period_id}}
