@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { NextRequest } from 'next/server'
 
 // The email_change branch returns before any of the invite/team/landing
 // machinery runs; these mocks only keep the module importable in the test
@@ -26,28 +25,29 @@ vi.mock('@supabase/ssr', () => ({
   }),
 }))
 
-import { GET } from '../route'
+import { clickEmailLink } from './click-email-link'
 
-function makeRequest(params: Record<string, string>) {
+/** Open the hook-built link with these params and press the confirm button. */
+function click(params: Record<string, string>) {
   const url = new URL('https://app.testbrand.example/auth/callback')
   for (const [key, value] of Object.entries(params)) {
     url.searchParams.set(key, value)
   }
-  return new NextRequest(url)
+  return clickEmailLink(url)
 }
 
 beforeEach(() => {
   vi.clearAllMocks()
 })
 
-describe('GET /auth/callback type=email_change', () => {
+describe('/auth/callback type=email_change', () => {
   it('redirects a first confirmation (no session) to the partial status page', async () => {
     verifyOtp.mockResolvedValue({
       data: { user: null, session: null },
       error: null,
     })
 
-    const res = await GET(makeRequest({ token_hash: 'th', type: 'email_change' }))
+    const res = await click({ token_hash: 'th', type: 'email_change' })
 
     expect(res.headers.get('location')).toBe(
       'https://app.testbrand.example/auth/email-change?status=partial',
@@ -64,7 +64,7 @@ describe('GET /auth/callback type=email_change', () => {
       error: null,
     })
 
-    const res = await GET(makeRequest({ token_hash: 'th', type: 'email_change' }))
+    const res = await click({ token_hash: 'th', type: 'email_change' })
 
     expect(res.headers.get('location')).toBe(
       'https://app.testbrand.example/auth/email-change?status=done',
@@ -77,7 +77,7 @@ describe('GET /auth/callback type=email_change', () => {
       error: { message: 'Email link is invalid or has expired' },
     })
 
-    const res = await GET(makeRequest({ token_hash: 'th', type: 'email_change' }))
+    const res = await click({ token_hash: 'th', type: 'email_change' })
 
     expect(res.headers.get('location')).toBe(
       'https://app.testbrand.example/auth/email-change?status=failed',
@@ -90,7 +90,7 @@ describe('GET /auth/callback type=email_change', () => {
       error: { message: 'Email link is invalid or has expired' },
     })
 
-    const res = await GET(makeRequest({ token_hash: 'th', type: 'signup' }))
+    const res = await click({ token_hash: 'th', type: 'signup' })
 
     const location = res.headers.get('location') ?? ''
     expect(location).toContain('/login?error=auth_error')

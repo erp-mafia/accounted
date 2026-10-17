@@ -647,6 +647,19 @@ describe('updateSession redirect destinations', () => {
       expect(locationOf(response)).toBeNull()
     })
 
+    // The callback holds a hook-built link's token and sends the browser to
+    // /auth/confirm, whose button posts back to the callback with the same
+    // query: both legs must pass for a signed-in user too.
+    it('lets an authenticated email-change link reach the confirm page and post its click', async () => {
+      for (const response of [
+        await run('/auth/confirm?flow=email_change&type=email_change'),
+        await run('/auth/callback?flow=email_change&type=email_change', { method: 'POST' }),
+      ]) {
+        expect(response.status).not.toBe(307)
+        expect(locationOf(response)).toBeNull()
+      }
+    })
+
     // Stock GoTrue links (no Send Email hook) come back through redirect_to
     // with only the flow=email_change marker: ?message= after the first of
     // the two confirmations, ?code= after the completing one, ?error= for a
@@ -674,6 +687,7 @@ describe('updateSession redirect destinations', () => {
       expect(locationOf(await run('/auth/callback?token_hash=abc&type=signup'))).toBe(
         `${ORIGIN}/`,
       )
+      expect(locationOf(await run('/auth/confirm?type=signup'))).toBe(`${ORIGIN}/`)
     })
   })
 

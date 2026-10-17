@@ -1614,6 +1614,25 @@
     "link_invalid_description": "The link is invalid or has already been used. Enter the one-time code from the email instead, or request a new reset.",
     "code_invalid_description": "The code is invalid or has expired. Check the code or request a new reset from the login page."
   },
+  "auth_confirm": {
+    "recovery_title": "Choose a new password",
+    "recovery_subtitle": "Confirm to continue to the password reset.",
+    "recovery_button": "Continue",
+    "signup_title": "Confirm your email address",
+    "signup_subtitle": "Confirm to activate your account.",
+    "signup_button": "Confirm email address",
+    "invite_title": "Accept the invitation",
+    "invite_subtitle": "Confirm to accept the invitation and choose a password.",
+    "invite_button": "Continue",
+    "email_change_title": "Confirm your new email address",
+    "email_change_subtitle": "Confirm to continue with the email address change.",
+    "email_change_button": "Confirm",
+    "other_title": "Confirm the link",
+    "other_subtitle": "Confirm to continue.",
+    "other_button": "Continue",
+    "verifying": "Verifying...",
+    "hint": "For security, the link is only used when you click the button."
+  },
   "customer_detail": {
     "back": "Back to customers",
     "edit": "Edit",

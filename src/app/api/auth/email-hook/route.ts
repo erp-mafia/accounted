@@ -75,9 +75,10 @@ interface SendEmailHookPayload {
 /**
  * Build the verify URL on the ORIGINATING host using the token_hash +
  * verifyOtp pattern (browser- and host-independent, per the WL-05 research):
- * /auth/callback consumes token_hash + type server-side and then honors the
- * `next` path. If redirect_to already points at /auth/callback (our client
- * flows do), its query (e.g. next=/reset-password) is preserved.
+ * /auth/callback holds token_hash until the user clicks on /auth/confirm
+ * (lib/auth/confirm-link.ts), verifies it server-side with type and then
+ * honors the `next` path. If redirect_to already points at /auth/callback
+ * (our client flows do), its query (e.g. next=/reset-password) is preserved.
  *
  * `origin` is the already-trusted application origin; `redirectUrl` is the
  * requested redirect_to only when it sits on that origin, else null (the
