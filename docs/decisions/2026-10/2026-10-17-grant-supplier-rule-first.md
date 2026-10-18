@@ -1,0 +1,1 @@
+[2026-10-17] For a supplier invoice the claim reads the supplier's rule before any other check, so an agent hears a refusal reason only when a rule for that supplier exists; bank lines keep the slice 1 order unchanged.

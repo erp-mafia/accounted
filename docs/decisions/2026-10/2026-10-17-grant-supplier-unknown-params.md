@@ -1,0 +1,1 @@
+[2026-10-17] The supplier-invoice claim refuses any staged field it does not know (unsupported_params): whatever a later tool version adds, an accrual period or a ROT/RUT field, waits for a person until a grant is taught it.

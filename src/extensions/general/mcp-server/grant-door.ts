@@ -7,8 +7,10 @@
  * staging tool still only stages (__tests__/staging-behaviour.test.ts), and
  * whether the staged row may go through without a person is the company's
  * rule, decided at the door for every staging tool a grant can cover. Today
- * that is gnubok_categorize_transaction, directly or carried by
- * gnubok_stage_tool. Never fails the call: the staging already happened, and
+ * that is gnubok_categorize_transaction (a bank line) and
+ * gnubok_create_supplier_invoice_from_inbox (a known supplier's invoice),
+ * directly or carried by gnubok_stage_tool. Never fails the call: the
+ * staging already happened, and
  * any failure here answers the staged result unchanged, waiting for a person.
  * With GRANT_SUGGESTIONS off (the master switch) it does nothing at all.
  */
@@ -30,16 +32,21 @@ export interface GrantDoorActor {
 }
 
 /** Staging tools whose operation a grant can cover. */
-export const GRANTABLE_STAGING_TOOLS: ReadonlySet<string> = new Set(['gnubok_categorize_transaction'])
+export const GRANTABLE_STAGING_TOOLS: ReadonlySet<string> = new Set([
+  'gnubok_categorize_transaction',
+  'gnubok_create_supplier_invoice_from_inbox',
+])
 
 /** Whether this call stages an operation a grant can cover. */
 export function isGrantableCall(toolName: string, toolArgs: Record<string, unknown> | undefined): boolean {
-  if (GRANTABLE_STAGING_TOOLS.has(toolName)) return true
-  if (toolName === 'gnubok_stage_tool') {
-    const inner = toolArgs?.tool
-    return typeof inner === 'string' && GRANTABLE_STAGING_TOOLS.has(toCanonicalToolName(inner))
-  }
-  return false
+  return grantableOperationType(toolName, toolArgs) !== undefined
+}
+
+/** The staged operation type a grantable call stages, or undefined for any other call. */
+export function grantableOperationType(toolName: string, toolArgs: Record<string, unknown> | undefined): string | undefined {
+  const inner = toolName === 'gnubok_stage_tool' && typeof toolArgs?.tool === 'string' ? toCanonicalToolName(toolArgs.tool) : toolName
+  if (!GRANTABLE_STAGING_TOOLS.has(inner)) return undefined
+  return inner === 'gnubok_create_supplier_invoice_from_inbox' ? 'create_supplier_invoice_from_inbox' : 'categorize_transaction'
 }
 
 /** What the agent is told when a rule for the counterparty exists but did not apply. */
@@ -64,6 +71,21 @@ const REFUSAL_NOTES: Record<string, string> = {
   above_unattended_limit: "the amount is above this key's own unattended ceiling",
   above_monthly_limit: "this month's postings under the rule would exceed its monthly limit",
   claim_failed: 'the rule could not be checked',
+  // A supplier invoice from the inbox.
+  register_booked: 'it registers an invoice whose verifikat already exists',
+  unsupported_params: 'it carries a field the rule does not cover',
+  foreign_currency: 'the invoice is not in SEK',
+  special_payroll_tax: 'a line is flagged for särskild löneskatt',
+  credit_note: 'the item is a credit note',
+  negative_line: 'a line is below zero (a discount or a deduction such as ROT/RUT)',
+  payment_details: 'the invoice states bank details the supplier card lacks or does not have',
+  preview_warning: 'the staging warned about the amounts',
+  underlag_missing: "the invoice's document is missing from the archive",
+  inbox_item_not_found: 'the inbox item was not found',
+  inbox_item_already_booked: 'the inbox item is already a supplier invoice',
+  inbox_item_already_claimed: 'another booking of this inbox item is in progress',
+  duplicate_invoice_number: "the supplier's invoice number is already registered",
+  registration_not_booked: 'the company does not book supplier invoices when they are registered',
 }
 
 function commitActorType(actor: GrantDoorActor): GrantCredential['actorType'] {
@@ -71,17 +93,27 @@ function commitActorType(actor: GrantDoorActor): GrantCredential['actorType'] {
   return actor.oauthKey === true ? 'mcp_oauth' : 'api_key'
 }
 
+/** Who a rule is for, as the agent is told: a bank line's counterparty, or a supplier. */
+function ruleSubject(operationType: string | undefined): string {
+  return operationType === 'create_supplier_invoice_from_inbox' ? 'supplier' : 'counterparty'
+}
+
 /** The staged answer, told what the grant did. */
-export function withGrantOutcome(result: Record<string, unknown>, outcome: GrantOutcome): Record<string, unknown> {
+export function withGrantOutcome(
+  result: Record<string, unknown>,
+  outcome: GrantOutcome,
+  operationType?: string,
+): Record<string, unknown> {
   if (!outcome.applied) {
     if (SILENT_GRANT_REFUSALS.has(outcome.reason) || outcome.reason === 'not_in_database') return result
     const note = REFUSAL_NOTES[outcome.reason] ?? outcome.reason
     return {
       ...result,
       grant: { applied: false, reason: outcome.reason, ...(outcome.detail ?? {}) },
-      message: `${String(result.message ?? '')} A company rule for this counterparty did not apply (${note}), so it waits for approval as usual.`.trim(),
+      message: `${String(result.message ?? '')} A company rule for this ${ruleSubject(operationType)} did not apply (${note}), so it waits for approval as usual.`.trim(),
     }
   }
+  const supplierInvoice = outcome.grant.operation_type === 'create_supplier_invoice_from_inbox'
   const grant = {
     grant_id: outcome.grant.grant_id,
     grant_version: outcome.grant.grant_version,
@@ -99,9 +131,11 @@ export function withGrantOutcome(result: Record<string, unknown>, outcome: Grant
         journal_entry_id: outcome.journalEntryId,
         ...(outcome.patternVerified === false ? { pattern_verified: false } : {}),
       },
-      message:
-        `Booked without approval under the company's rule for this counterparty (grant ${grant.grant_id}, version ${grant.grant_version}): ` +
-        'nothing to approve. Tell the user it was booked under their rule; they review it afterwards in Att göra under "Bokfört enligt regel" and can undo it there.',
+      message: supplierInvoice
+        ? `Registered and booked without approval under the company's rule for this supplier (grant ${grant.grant_id}, version ${grant.grant_version}): ` +
+          'nothing to approve. Tell the user it was booked under their rule; they review it afterwards in Att göra under "Bokfört enligt regel", where the invoice opens to correct or credit it.'
+        : `Booked without approval under the company's rule for this counterparty (grant ${grant.grant_id}, version ${grant.grant_version}): ` +
+          'nothing to approve. Tell the user it was booked under their rule; they review it afterwards in Att göra under "Bokfört enligt regel" and can undo it there.',
     }
   }
   const operationStatus = outcome.result.operation_status
@@ -158,7 +192,7 @@ export async function applyGrantDoor(
       },
       log: ctx.log,
     })
-    return withGrantOutcome(staged, outcome)
+    return withGrantOutcome(staged, outcome, grantableOperationType(ctx.toolName, ctx.toolArgs))
   } catch (err) {
     ctx.log.warn('grant door failed; the staged operation waits for approval', {
       operationId: staged.operation_id,

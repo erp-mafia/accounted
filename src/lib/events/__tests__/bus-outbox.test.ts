@@ -109,6 +109,7 @@ describe('EVENT_OUTBOX_MODE shadow', () => {
       { consumerId: 'supplier-invoice-retro-match', inline: 'not_subscribed' },
       { consumerId: 'attest-notify', inline: 'failed' },
       { consumerId: 'webhooks', inline: 'ok' },
+      { consumerId: 'suggestion-detectors', inline: 'not_subscribed' },
     ])
     // The handler failure is still logged as before.
     expect(logMock.error).toHaveBeenCalledWith('handler failed', expect.any(Error), expect.objectContaining({ handler: 'attest-notify' }))
@@ -120,6 +121,7 @@ describe('EVENT_OUTBOX_MODE shadow', () => {
       { consumerId: 'supplier-invoice-retro-match', inline: 'not_subscribed' },
       { consumerId: 'attest-notify', inline: 'not_subscribed' },
       { consumerId: 'webhooks', inline: 'not_subscribed' },
+      { consumerId: 'suggestion-detectors', inline: 'not_subscribed' },
     ])
   })
 
@@ -142,7 +144,7 @@ describe('EVENT_OUTBOX_MODE shadow', () => {
 
     expect(logMock.warn).toHaveBeenCalledWith('event outbox shadow enqueue failed', {
       eventType: 'supplier_invoice.registered',
-      consumers: ['supplier-invoice-retro-match', 'attest-notify', 'webhooks'],
+      consumers: ['supplier-invoice-retro-match', 'attest-notify', 'webhooks', 'suggestion-detectors'],
       error: 'event outbox enqueue failed: relation does not exist (42P01)',
     })
   })

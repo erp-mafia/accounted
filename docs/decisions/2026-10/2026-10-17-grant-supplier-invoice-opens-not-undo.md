@@ -1,0 +1,1 @@
+[2026-10-17] Bokfört enligt regel opens a supplier invoice a rule booked instead of offering Ångra: a booked leverantörsfaktura is corrected or credited on the invoice (BFL 5 kap. 5 §), and register-and-book has no single undo.

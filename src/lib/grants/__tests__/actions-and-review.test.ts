@@ -8,7 +8,7 @@ vi.mock('@/lib/pending-operations/stage', () => ({
 
 import { markGrantPostingsReviewed, setGrantsPaused, stageGrantRevocation } from '../actions'
 import { loadGrantReview } from '../review'
-import { createGrantFromOperation, revokeGrantFromOperation } from '../commit'
+import { createGrantArgs, createGrantFromOperation, revokeGrantFromOperation } from '../commit'
 import { CreateGrantParamsSchema, grantPolicyVersion, parseGrantPolicyVersion } from '../types'
 
 const COMPANY = '11111111-1111-4111-8111-111111111111'
@@ -45,6 +45,78 @@ describe('CreateGrantParamsSchema', () => {
     expect(CreateGrantParamsSchema.safeParse({ ...valid, pattern: { ...valid.pattern, category: 'private' } }).success).toBe(false)
     expect(CreateGrantParamsSchema.safeParse({ ...valid, amount_limit_sek: 0 }).success).toBe(false)
     expect(CreateGrantParamsSchema.safeParse({ ...valid, credential: { kind: 'api_key' } }).success).toBe(false)
+  })
+})
+
+describe('CreateGrantParamsSchema for a supplier invoice', () => {
+  const SUPPLIER = '44444444-4444-4444-8444-444444444444'
+  const valid = {
+    operation_type: 'create_supplier_invoice_from_inbox',
+    supplier_id: SUPPLIER,
+    counterparty_label: 'Telia Sverige AB',
+    pattern: { vat_treatment: 'standard_25', reverse_charge_kind: null, item_lines: ['6212:25'], line_accounts: ['2440', '2641', '6212'] },
+    amount_limit_sek: 1500,
+    credential: { kind: 'any' },
+  }
+  it('accepts a supplier rule by id and refuses one no grant may carry', () => {
+    expect(CreateGrantParamsSchema.safeParse(valid).success).toBe(true)
+    const refused: Array<[string, Record<string, unknown>]> = [
+      ['no supplier id', { ...valid, supplier_id: 'Telia' }],
+      ['a bank text key instead', { ...valid, counterparty_key: 'telia' }],
+      ['a rate that is not Swedish', { ...valid, pattern: { ...valid.pattern, item_lines: ['6212:19'] } }],
+      ['a line without its rate', { ...valid, pattern: { ...valid.pattern, item_lines: ['6212'] } }],
+      ['a line account outside the verifikat', { ...valid, pattern: { ...valid.pattern, line_accounts: ['2440', '2641', '6211'] } }],
+      ['reverse charge without its kind', { ...valid, pattern: { ...valid.pattern, vat_treatment: 'reverse_charge' } }],
+      ['a kind without reverse charge', { ...valid, pattern: { ...valid.pattern, reverse_charge_kind: 'eu_services' } }],
+      ['a category', { ...valid, pattern: { ...valid.pattern, category: 'expense_software' } }],
+      ['a monthly limit below the limit', { ...valid, monthly_limit_sek: 100 }],
+    ]
+    for (const [why, params] of refused) expect(CreateGrantParamsSchema.safeParse(params).success, why).toBe(false)
+  })
+
+  it('sends the supplier and the lines to the new overload, and a bank-line rule exactly the slice 1 arguments', () => {
+    const decision = { companyId: COMPANY, userId: USER, pendingOperationId: 'op-1', actor: { type: 'user', label: 'anna@example.se' } }
+    expect(createGrantArgs({ ...decision, params: CreateGrantParamsSchema.parse(valid) })).toEqual({
+      p_company_id: COMPANY,
+      p_decided_by: USER,
+      p_actor_type: 'user',
+      p_actor_label: 'anna@example.se',
+      p_pending_operation_id: 'op-1',
+      p_operation_type: 'create_supplier_invoice_from_inbox',
+      p_counterparty_key: `supplier:${SUPPLIER}`,
+      p_counterparty_label: 'Telia Sverige AB',
+      p_direction: 'out',
+      p_category: null,
+      p_vat_treatment: 'standard_25',
+      p_reverse_charge_kind: null,
+      p_account_number: null,
+      p_line_accounts: ['2440', '2641', '6212'],
+      p_amount_limit_sek: 1500,
+      p_monthly_limit_sek: null,
+      p_credential_scope: 'any',
+      p_credential_id: null,
+      p_evidence: {},
+      p_supplier_id: SUPPLIER,
+      p_item_lines: ['6212:25'],
+    })
+    const bankLine = createGrantArgs({
+      ...decision,
+      params: CreateGrantParamsSchema.parse({
+        operation_type: 'categorize_transaction',
+        counterparty_key: 'spotify',
+        counterparty_label: 'Spotify AB',
+        pattern: { direction: 'out', category: 'expense_software', vat_treatment: 'standard_25', reverse_charge_kind: null, account_number: '5420', line_accounts: ['1930', '2641', '5420'] },
+        amount_limit_sek: 200,
+        credential: { kind: 'any' },
+      }),
+    })
+    expect(Object.keys(bankLine).sort()).toEqual(
+      [
+        'p_company_id', 'p_decided_by', 'p_actor_type', 'p_actor_label', 'p_pending_operation_id', 'p_operation_type', 'p_counterparty_key',
+        'p_counterparty_label', 'p_direction', 'p_category', 'p_vat_treatment', 'p_reverse_charge_kind', 'p_account_number', 'p_line_accounts',
+        'p_amount_limit_sek', 'p_monthly_limit_sek', 'p_credential_scope', 'p_credential_id', 'p_evidence',
+      ].sort(),
+    )
   })
 })
 
@@ -160,7 +232,38 @@ describe('loadGrantReview', () => {
     expect(review).toEqual({
       paused: true,
       has_active_grants: true,
-      postings: [expect.objectContaining({ use_id: 'u1', amount_sek: 149, amount_limit_sek: 200, voucher: 'A12', pattern_verified: true })],
+      postings: [
+        expect.objectContaining({
+          use_id: 'u1', amount_sek: 149, amount_limit_sek: 200, voucher: 'A12', pattern_verified: true,
+          // A row from before migration 20261018100200 reads as a bank line's.
+          operation_type: 'categorize_transaction', item_lines: [], supplier_invoice_id: null, inbox_item_id: null,
+        }),
+      ],
     })
+  })
+
+  it("lists a supplier invoice a rule booked with its invoice, inbox item and the rule's line bookings", async () => {
+    const mock = createTableMockSupabase({
+      company_grants: [{ data: [{ id: GRANT }] }, { data: null, count: 1 }],
+      'rpc:list_company_grant_postings': {
+        data: [
+          {
+            use_id: 'u2', grant_id: GRANT, grant_version: 1, counterparty_label: 'Telia Sverige AB', account_number: null,
+            amount_limit_sek: '1500.00', grant_accepted_at: '2026-10-16T10:00:00Z', grant_revoked_at: null, pending_operation_id: 'op-2',
+            transaction_id: null, journal_entry_id: 'je-2', voucher: 'A13', entry_status: 'posted', entry_date: '2026-06-03',
+            amount_sek: '1249.00', pattern_verified: true, committed_at: '2026-10-16T11:00:00Z', reviewed_at: null,
+            operation_type: 'create_supplier_invoice_from_inbox', item_lines: ['6212:25'], supplier_invoice_id: 'si-1', inbox_item_id: 'in-1',
+          },
+        ],
+      },
+      company_grant_settings: { data: null },
+    })
+    const review = await loadGrantReview(mock.supabase as never, COMPANY)
+    expect(review.postings).toEqual([
+      expect.objectContaining({
+        operation_type: 'create_supplier_invoice_from_inbox', account_number: '', item_lines: ['6212:25'],
+        supplier_invoice_id: 'si-1', inbox_item_id: 'in-1', transaction_id: null, amount_sek: 1249,
+      }),
+    ])
   })
 })

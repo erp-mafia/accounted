@@ -739,10 +739,11 @@ describe('grants (Profiles and Suggestions, step 4)', () => {
       has_active_grants: true,
       postings: [
         {
-          use_id: 'u-1', grant_id: 'g-1', grant_version: 2, counterparty_label: 'Spotify AB', account_number: '5420',
-          amount_limit_sek: 200, grant_accepted_at: '2026-10-12T10:00:00Z', grant_revoked_at: null, pending_operation_id: 'op-1',
-          transaction_id: 't-1', journal_entry_id: 'je-1', voucher: 'A12', entry_status: 'reversed', entry_date: '2026-10-14',
-          amount_sek: 149, pattern_verified: true, committed_at: '2026-10-14T08:00:00Z', reviewed_at: null,
+          use_id: 'u-1', grant_id: 'g-1', grant_version: 2, operation_type: 'categorize_transaction', counterparty_label: 'Spotify AB',
+          account_number: '5420', item_lines: [], amount_limit_sek: 200, grant_accepted_at: '2026-10-12T10:00:00Z', grant_revoked_at: null,
+          pending_operation_id: 'op-1', transaction_id: 't-1', supplier_invoice_id: null, inbox_item_id: null, journal_entry_id: 'je-1',
+          voucher: 'A12', entry_status: 'reversed', entry_date: '2026-10-14', amount_sek: 149, pattern_verified: true,
+          committed_at: '2026-10-14T08:00:00Z', reviewed_at: null,
         },
       ],
     })
@@ -758,6 +759,37 @@ describe('grants (Profiles and Suggestions, step 4)', () => {
       ],
       how: expect.stringContaining('Bokfört enligt regel'),
     })
+    expect(JSON.stringify(result.grants).length).toBeLessThan(900)
+    vi.unstubAllEnvs()
+  })
+
+  it("names a supplier invoice a rule booked, with the invoice, and says how supplier invoices qualify", async () => {
+    vi.stubEnv('GRANT_SUGGESTIONS', 'true')
+    const { loadGrantReview } = await import('@/lib/grants/review')
+    vi.mocked(loadGrantReview).mockResolvedValueOnce({
+      paused: false,
+      has_active_grants: true,
+      postings: [
+        {
+          use_id: 'u-2', grant_id: 'g-2', grant_version: 1, operation_type: 'create_supplier_invoice_from_inbox',
+          counterparty_label: 'Telia Sverige AB', account_number: '', item_lines: ['6212:25'], amount_limit_sek: 1500,
+          grant_accepted_at: '2026-10-12T10:00:00Z', grant_revoked_at: null, pending_operation_id: 'op-2', transaction_id: null,
+          supplier_invoice_id: 'si-1', inbox_item_id: 'in-1', journal_entry_id: 'je-2', voucher: 'A13', entry_status: 'posted',
+          entry_date: '2026-10-15', amount_sek: 1249, pattern_verified: true, committed_at: '2026-10-15T08:00:00Z', reviewed_at: null,
+        },
+      ],
+    })
+    const supabase = mockSupabase({ profile: null })
+    const result = (await tool().execute({}, COMPANY, 'user-1', supabase as never, { type: 'api_key' })) as {
+      grants?: { posted_since_review: unknown[]; how: string }
+    }
+    expect(result.grants?.posted_since_review).toEqual([
+      {
+        journal_entry_id: 'je-2', voucher: 'A13', entry_date: '2026-10-15', amount_sek: 1249, counterparty: 'Telia Sverige AB',
+        grant_id: 'g-2', grant_version: 1, kind: 'supplier_invoice', supplier_invoice_id: 'si-1', inbox_item_id: 'in-1',
+      },
+    ])
+    expect(result.grants?.how).toContain('gnubok_create_supplier_invoice_from_inbox')
     expect(JSON.stringify(result.grants).length).toBeLessThan(900)
     vi.unstubAllEnvs()
   })

@@ -6380,6 +6380,12 @@ const GRANT: Record<string, StructuredErrorEntry> = {
     message_en: 'The bank text does not identify a counterparty, so it cannot be booked automatically.',
     retryable: false,
   },
+  GRANT_UNKNOWN_SUPPLIER: {
+    httpStatus: 400,
+    message_sv: 'Leverantören i regeln finns inte i företaget, så dess fakturor kan inte bokföras automatiskt.',
+    message_en: 'The supplier the rule names is not in the company, so its invoices cannot be booked automatically.',
+    retryable: false,
+  },
   GRANT_ACCOUNT_INACTIVE: {
     httpStatus: 409,
     message_sv: 'Kontot i regeln är inte aktivt i kontoplanen. Aktivera kontot eller avvisa förslaget.',

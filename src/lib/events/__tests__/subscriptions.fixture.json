@@ -184,7 +184,8 @@
     "supplier-invoice-retro-match",
     "attest-notify",
     "event-log",
-    "webhooks"
+    "webhooks",
+    "suggestion-detectors"
   ],
   "supplier_invoice.uncredited": [
     "event-log",

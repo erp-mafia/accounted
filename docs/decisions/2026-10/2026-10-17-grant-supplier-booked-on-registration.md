@@ -1,0 +1,1 @@
+[2026-10-17] A supplier-invoice grant applies only where registering posts the verifikat (faktureringsmetoden without deferred booking): under kontantmetoden or deferral nothing is posted that a rule can verify or a person review.

@@ -3,13 +3,21 @@
  * bank lines without waiting for a person, within limits, reviewed after
  * (Profiles and Suggestions, step 4; migrations 20261017100000-100500).
  *
- * A grant is a versioned rule (company_grants): the operation it covers
- * (today only categorize_transaction, a bank line booked by category), the
- * counterparty as the system keys it (grant_counterparty_key), the booking
- * pattern the company approved (direction, category, VAT treatment, the
- * business account and every account the posting touches), the limits (SEK
- * per posting, optionally per month), who may use it (any key credential, or
- * one named API key or service account), and who accepted it when. It is
+ * A grant is a versioned rule (company_grants): the operation it covers, the
+ * counterparty, the booking pattern the company approved, the limits (SEK per
+ * posting, optionally per month), who may use it (any key credential, or one
+ * named API key or service account), and who accepted it when. Two
+ * operations today:
+ *   - categorize_transaction, a bank line booked by category: keyed by the
+ *     counterparty as the bank text names it (grant_counterparty_key), the
+ *     pattern is the direction, category, VAT treatment, the business
+ *     account and every account the posting touches;
+ *   - create_supplier_invoice_from_inbox, a known supplier's invoice from the
+ *     inbox registered and booked in one commit (slice 2, migrations
+ *     20261018100000-100300): keyed by the supplier's id, the pattern is the
+ *     VAT treatment, the reverse-charge kind, every invoice line's account
+ *     and VAT rate, and every account the registration verifikat touches.
+ * It is
  * created only by an approved create_grant operation and revoked only by an
  * approved revoke_grant, so each change has a receipt, an audit row and a
  * dated line in behandlingshistorik (BFNAR 2013:2 p. 9.16).
@@ -19,8 +27,11 @@
 import { z } from 'zod'
 
 /** The operations a grant can cover today. */
-export const GRANT_OPERATION_TYPES = ['categorize_transaction'] as const
+export const GRANT_OPERATION_TYPES = ['categorize_transaction', 'create_supplier_invoice_from_inbox'] as const
 export type GrantOperationType = (typeof GRANT_OPERATION_TYPES)[number]
+
+/** The supplier-invoice grant's operation: a known supplier's invoice from the inbox. */
+export const SUPPLIER_INVOICE_GRANT_OPERATION = 'create_supplier_invoice_from_inbox' as const
 
 /**
  * Bump when the rule a grant decision is made under changes on purpose (the
@@ -69,35 +80,94 @@ export const GrantPatternSchema = z
   .refine((p) => p.line_accounts.includes(p.account_number), { message: 'line_accounts must include account_number' })
 export type GrantPattern = z.infer<typeof GrantPatternSchema>
 
-/** pending_operations.params of create_grant. */
-export const CreateGrantParamsSchema = z
+/** The VAT treatments a supplier invoice is registered under (gnubok_create_supplier_invoice_from_inbox). */
+export const SUPPLIER_INVOICE_VAT_TREATMENTS = ['standard_25', 'reduced_12', 'reduced_6', 'reverse_charge', 'export', 'exempt'] as const
+
+/** The reverse-charge kind a supplier's type books (reverseChargeKindForSupplierType). */
+export const SUPPLIER_REVERSE_CHARGE_KINDS = ['eu_services', 'non_eu_services', 'domestic_services'] as const
+
+/** One invoice line's booking: '<account>:<VAT %>', e.g. '6212:25'. */
+export const GRANT_ITEM_LINE = /^(\d{4}):(0|6|12|25)$/
+
+/** The booking pattern a supplier-invoice grant permits: exactly this, nothing near it. */
+export const SupplierInvoiceGrantPatternSchema = z
   .object({
-    operation_type: z.enum(GRANT_OPERATION_TYPES),
+    vat_treatment: z.enum(SUPPLIER_INVOICE_VAT_TREATMENTS),
+    reverse_charge_kind: z.enum(SUPPLIER_REVERSE_CHARGE_KINDS).nullable(),
+    // Which accounts a line may use (cost accounts, never representation or
+    // a balance account) and that the verifikat credits the supplier debt
+    // are the database's to decide: create_company_grant and
+    // grant_item_account_allowed (migration 20261018100100) refuse the rest.
+    item_lines: z.array(z.string().regex(GRANT_ITEM_LINE)).min(1).max(12),
+    line_accounts: z.array(ACCOUNT).min(2).max(16),
+  })
+  .strict()
+  .refine((p) => (p.reverse_charge_kind !== null) === (p.vat_treatment === 'reverse_charge'), {
+    message: 'a reverse-charge kind exactly under reverse charge',
+    path: ['reverse_charge_kind'],
+  })
+  .refine((p) => p.item_lines.every((l) => p.line_accounts.includes(l.split(':')[0])), {
+    message: 'line_accounts must include every line account',
+    path: ['line_accounts'],
+  })
+export type SupplierInvoiceGrantPattern = z.infer<typeof SupplierInvoiceGrantPatternSchema>
+
+const GrantLimitsShape = {
+  amount_limit_sek: z.number().positive().max(10_000_000),
+  monthly_limit_sek: z.number().positive().max(100_000_000).nullable().optional(),
+  credential: GrantCredentialSchema,
+  evidence: z
+    .object({
+      booking_count: z.number().int().nonnegative(),
+      max_amount_sek: z.number().nonnegative().nullable(),
+      last_booked: z.string().nullable(),
+    })
+    .partial()
+    .optional(),
+  /** suggestion: the grant-suggestion detector proposed it. */
+  source: z.enum(['suggestion']).optional(),
+  /** Set by stage_company_suggestion on every suggestion. */
+  suggestion_key: z.string().optional(),
+}
+
+const monthlyAtLeastLimit = {
+  check: (p: { amount_limit_sek: number; monthly_limit_sek?: number | null }) =>
+    p.monthly_limit_sek == null || p.monthly_limit_sek >= p.amount_limit_sek,
+  message: { message: 'monthly_limit_sek must be at least amount_limit_sek', path: ['monthly_limit_sek'] },
+}
+
+/** create_grant for a bank line booked by category (slice 1). */
+export const CategorizeGrantParamsSchema = z
+  .object({
+    operation_type: z.literal('categorize_transaction'),
     counterparty_key: z.string().min(2).max(200),
     counterparty_label: z.string().min(1).max(200),
     pattern: GrantPatternSchema,
-    amount_limit_sek: z.number().positive().max(10_000_000),
-    monthly_limit_sek: z.number().positive().max(100_000_000).nullable().optional(),
-    credential: GrantCredentialSchema,
-    evidence: z
-      .object({
-        booking_count: z.number().int().nonnegative(),
-        max_amount_sek: z.number().nonnegative().nullable(),
-        last_booked: z.string().nullable(),
-      })
-      .partial()
-      .optional(),
-    /** suggestion: the grant-suggestion detector proposed it. */
-    source: z.enum(['suggestion']).optional(),
-    /** Set by stage_company_suggestion on every suggestion. */
-    suggestion_key: z.string().optional(),
+    ...GrantLimitsShape,
   })
   .strict()
-  .refine((p) => p.monthly_limit_sek == null || p.monthly_limit_sek >= p.amount_limit_sek, {
-    message: 'monthly_limit_sek must be at least amount_limit_sek',
-    path: ['monthly_limit_sek'],
+  .refine(monthlyAtLeastLimit.check, monthlyAtLeastLimit.message)
+
+/** create_grant for a known supplier's invoices from the inbox (slice 2). */
+export const SupplierInvoiceGrantParamsSchema = z
+  .object({
+    operation_type: z.literal(SUPPLIER_INVOICE_GRANT_OPERATION),
+    supplier_id: z.string().uuid(),
+    counterparty_label: z.string().min(1).max(200),
+    pattern: SupplierInvoiceGrantPatternSchema,
+    ...GrantLimitsShape,
   })
+  .strict()
+  .refine(monthlyAtLeastLimit.check, monthlyAtLeastLimit.message)
+
+/** pending_operations.params of create_grant: one of the two shapes, by operation_type. */
+export const CreateGrantParamsSchema = z.discriminatedUnion('operation_type', [
+  CategorizeGrantParamsSchema,
+  SupplierInvoiceGrantParamsSchema,
+])
 export type CreateGrantParams = z.infer<typeof CreateGrantParamsSchema>
+export type CategorizeGrantParams = z.infer<typeof CategorizeGrantParamsSchema>
+export type SupplierInvoiceGrantParams = z.infer<typeof SupplierInvoiceGrantParamsSchema>
 
 /** pending_operations.params of revoke_grant. */
 export const RevokeGrantParamsSchema = z
@@ -140,6 +210,22 @@ export const GRANT_REFUSAL_REASONS = [
   'above_limit',
   'above_unattended_limit',
   'above_monthly_limit',
+  // A supplier invoice from the inbox (slice 2).
+  'unknown_supplier',
+  'register_booked',
+  'unsupported_params',
+  'foreign_currency',
+  'special_payroll_tax',
+  'credit_note',
+  'negative_line',
+  'payment_details',
+  'preview_warning',
+  'underlag_missing',
+  'inbox_item_not_found',
+  'inbox_item_already_booked',
+  'inbox_item_already_claimed',
+  'duplicate_invoice_number',
+  'registration_not_booked',
 ] as const
 export type GrantRefusalReason = (typeof GRANT_REFUSAL_REASONS)[number]
 
@@ -158,6 +244,8 @@ export const SILENT_GRANT_REFUSALS: ReadonlySet<string> = new Set([
   'not_a_key_credential',
   'unknown_counterparty',
   'no_grant_for_counterparty',
+  // No rule for the supplier the staged invoice names.
+  'unknown_supplier',
 ])
 
 /** One posting a grant let through, as Att göra and the agent briefing list it. */
@@ -165,13 +253,22 @@ export interface GrantPosting {
   use_id: string
   grant_id: string
   grant_version: number
+  /** The operation the rule covers; categorize_transaction before migration 20261018100200. */
+  operation_type: GrantOperationType
   counterparty_label: string
+  /** A bank-line rule's business account; empty for a supplier-invoice rule (see item_lines). */
   account_number: string
+  /** A supplier-invoice rule's line bookings ('6212:25'); empty for a bank-line rule. */
+  item_lines: string[]
   amount_limit_sek: number
   grant_accepted_at: string
   grant_revoked_at: string | null
   pending_operation_id: string | null
   transaction_id: string | null
+  /** The supplier invoice a supplier-invoice rule registered; null for a bank line. */
+  supplier_invoice_id: string | null
+  /** The inbox item a supplier-invoice rule booked; null for a bank line. */
+  inbox_item_id: string | null
   journal_entry_id: string | null
   voucher: string | null
   entry_status: string | null

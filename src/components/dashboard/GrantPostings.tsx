@@ -20,7 +20,10 @@ import type { GrantPosting, GrantReview } from '@/lib/grants/types'
  *
  * Per posting: the date, the counterparty, the verifikat, the amount, and
  * Ångra, which is the bank line's own undo (a storno through the engine,
- * the row goes back to Att bokföra; nothing is deleted). Per rule: what it
+ * the row goes back to Att bokföra; nothing is deleted). A supplier invoice
+ * a rule registered and booked (grants slice 2) opens instead: a booked
+ * leverantörsfaktura is corrected or credited on the invoice itself (BFL 5
+ * kap. 5 §), never undone by deleting it. Per rule: what it
  * permits and Återkalla, which stages revoke_grant and approves it through
  * the commit door every staged operation has (an owner or admin decides; for
  * anyone else it waits in Granskning). For the whole section: Markera som
@@ -30,11 +33,18 @@ import type { GrantPosting, GrantReview } from '@/lib/grants/types'
 interface RuleSummary {
   grant_id: string
   grant_version: number
+  operation_type: GrantPosting['operation_type']
   counterparty_label: string
   amount_limit_sek: number
   account_number: string
+  item_lines: string[]
   grant_accepted_at: string
   revoked: boolean
+}
+
+/** "6211, 6212": the accounts a supplier-invoice rule books its lines on. */
+function itemAccounts(itemLines: string[]): string {
+  return [...new Set(itemLines.map((l) => l.split(':')[0]))].join(', ')
 }
 
 function rulesOf(postings: GrantPosting[]): RuleSummary[] {
@@ -44,9 +54,11 @@ function rulesOf(postings: GrantPosting[]): RuleSummary[] {
     byId.set(p.grant_id, {
       grant_id: p.grant_id,
       grant_version: p.grant_version,
+      operation_type: p.operation_type,
       counterparty_label: p.counterparty_label,
       amount_limit_sek: p.amount_limit_sek,
       account_number: p.account_number,
+      item_lines: p.item_lines,
       grant_accepted_at: p.grant_accepted_at,
       revoked: !!p.grant_revoked_at,
     })
@@ -161,6 +173,11 @@ export function GrantPostings({ review, onChanged }: { review: GrantReview; onCh
                   {t('grant_undo')}
                 </Button>
               )}
+              {p.supplier_invoice_id && (
+                <Button size="sm" variant="outline" asChild>
+                  <Link href={`/supplier-invoices/${p.supplier_invoice_id}`}>{t('grant_open_invoice')}</Link>
+                </Button>
+              )}
             </div>
           )
         })}
@@ -170,13 +187,21 @@ export function GrantPostings({ review, onChanged }: { review: GrantReview; onCh
           {rules.map((rule) => (
             <div key={rule.grant_id} className="flex flex-wrap items-center gap-2 py-1 text-xs text-muted-foreground">
               <span className="min-w-0 flex-1">
-                {t('grant_rule_line', {
-                  counterparty: rule.counterparty_label,
-                  limit: formatCurrency(rule.amount_limit_sek),
-                  account: rule.account_number,
-                  version: rule.grant_version,
-                  date: formatDate(rule.grant_accepted_at),
-                })}
+                {rule.operation_type === 'create_supplier_invoice_from_inbox'
+                  ? t('grant_rule_line_supplier', {
+                      counterparty: rule.counterparty_label,
+                      limit: formatCurrency(rule.amount_limit_sek),
+                      accounts: itemAccounts(rule.item_lines),
+                      version: rule.grant_version,
+                      date: formatDate(rule.grant_accepted_at),
+                    })
+                  : t('grant_rule_line', {
+                      counterparty: rule.counterparty_label,
+                      limit: formatCurrency(rule.amount_limit_sek),
+                      account: rule.account_number,
+                      version: rule.grant_version,
+                      date: formatDate(rule.grant_accepted_at),
+                    })}
                 {rule.revoked && ` ${t('grant_rule_revoked')}`}
               </span>
               {!rule.revoked && (

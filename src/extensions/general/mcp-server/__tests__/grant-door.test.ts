@@ -10,7 +10,8 @@ vi.mock('@/lib/grants/enforce', () => ({
   applyCompanyGrant: (...args: unknown[]) => applyMock(...args),
 }))
 
-import { applyGrantDoor, isGrantableCall, withGrantOutcome } from '../grant-door'
+import { GRANT_REFUSAL_REASONS } from '@/lib/grants/types'
+import { applyGrantDoor, grantableOperationType, isGrantableCall, withGrantOutcome } from '../grant-door'
 
 const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: vi.fn() } as never
 const KEY = '44444444-4444-4444-8444-444444444444'
@@ -24,7 +25,15 @@ const staged = {
   approve: { tool: 'gnubok_approve_pending_operation', args: { operation_id: 'op-1' } },
   preview: { amount: 149 },
 }
-const GRANT = { grant_id: 'g-1', grant_version: 2, use_id: 'u-1', amount_sek: 149, counterparty_label: 'Spotify AB', accepted_at: null }
+const GRANT = {
+  operation_type: 'categorize_transaction',
+  grant_id: 'g-1',
+  grant_version: 2,
+  use_id: 'u-1',
+  amount_sek: 149,
+  counterparty_label: 'Spotify AB',
+  accepted_at: null,
+}
 
 function ctx(overrides: Record<string, unknown> = {}) {
   return {
@@ -54,6 +63,23 @@ describe('isGrantableCall', () => {
     expect(isGrantableCall('gnubok_stage_tool', { tool: 'gnubok_create_voucher' })).toBe(false)
     expect(isGrantableCall('gnubok_create_voucher', {})).toBe(false)
     expect(isGrantableCall('gnubok_bulk_book_transactions', {})).toBe(false)
+  })
+
+  it('covers a supplier invoice from the inbox, and none of the other supplier-invoice writes', () => {
+    expect(isGrantableCall('gnubok_create_supplier_invoice_from_inbox', {})).toBe(true)
+    expect(isGrantableCall('gnubok_stage_tool', { tool: 'accounted_create_supplier_invoice_from_inbox' })).toBe(true)
+    expect(grantableOperationType('gnubok_create_supplier_invoice_from_inbox', {})).toBe('create_supplier_invoice_from_inbox')
+    expect(grantableOperationType('gnubok_categorize_transaction', {})).toBe('categorize_transaction')
+    for (const tool of [
+      'gnubok_register_booked_supplier_invoice',
+      'gnubok_bulk_book_inbox_items',
+      'gnubok_book_supplier_invoice',
+      'gnubok_approve_supplier_invoice',
+      'gnubok_credit_supplier_invoice',
+    ]) {
+      expect(isGrantableCall(tool, {}), tool).toBe(false)
+      expect(isGrantableCall('gnubok_stage_tool', { tool }), tool).toBe(false)
+    }
   })
 })
 
@@ -139,6 +165,44 @@ describe('withGrantOutcome', () => {
       grant: { applied: true, status: 'committed', grant_id: 'g-1', grant_version: 2, amount_sek: 149, journal_entry_id: 'je-1' },
       message: expect.stringContaining('Bokfört enligt regel'),
     })
+  })
+
+  it('says supplier for a supplier invoice, and where to correct or credit what a rule booked', () => {
+    const refused = withGrantOutcome(staged, { applied: false, reason: 'payment_details', detail: { grant_id: 'g-2' } }, 'create_supplier_invoice_from_inbox')
+    expect(refused).toMatchObject({
+      approve: staged.approve,
+      grant: { applied: false, reason: 'payment_details', grant_id: 'g-2' },
+      message: expect.stringContaining('A company rule for this supplier did not apply (the invoice states bank details'),
+    })
+    for (const reason of ['unknown_supplier', 'no_grant_for_counterparty']) {
+      expect(withGrantOutcome(staged, { applied: false, reason }, 'create_supplier_invoice_from_inbox')).toBe(staged)
+    }
+    const booked = withGrantOutcome(staged, {
+      applied: true,
+      committed: true,
+      grant: { ...GRANT, operation_type: 'create_supplier_invoice_from_inbox' },
+      journalEntryId: 'je-2',
+      patternVerified: true,
+      result: { status: 'committed' },
+    })
+    expect(booked).not.toHaveProperty('approve')
+    expect(booked).toMatchObject({
+      operation_status: 'committed',
+      grant: { applied: true, status: 'committed', journal_entry_id: 'je-2' },
+      message: expect.stringMatching(/^Registered and booked without approval under the company's rule for this supplier.*correct or credit it/),
+    })
+  })
+
+  it('names every refusal the gate answers, in words the agent can relay', () => {
+    const silent = new Set(['no_grant', 'operation_not_found', 'operation_not_pending', 'operation_type_not_granted', 'not_a_key_credential', 'unknown_counterparty', 'no_grant_for_counterparty', 'unknown_supplier'])
+    for (const reason of GRANT_REFUSAL_REASONS) {
+      const result = withGrantOutcome(staged, { applied: false, reason }, 'create_supplier_invoice_from_inbox')
+      if (silent.has(reason)) {
+        expect(result, reason).toBe(staged)
+      } else {
+        expect(String(result.message), reason).not.toContain(`(${reason})`)
+      }
+    }
   })
 
   it('reports a refused commit under a rule, keeping the approval hint only while the operation is still pending', () => {

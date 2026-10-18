@@ -4379,8 +4379,9 @@ async function briefUnexplained(supabase: SupabaseClient, companyId: string): Pr
  * risk_level high: approving it needs confirmed=true after the user's yes.
  */
 const GRANTS_HOW =
-  'A bank line you stage with gnubok_categorize_transaction that matches one of these company rules exactly (counterparty, accounts, VAT, within the limit) is booked at once, without approval; anything else waits for approval. ' +
-  'Tell the user what was booked under a rule; they review it, and can undo it, in Att göra under "Bokfört enligt regel". Only the person accepts a new rule, in Att göra.'
+  'A write you stage that matches one of these company rules exactly (counterparty or supplier, accounts, VAT, within the limit) is booked at once, without approval: ' +
+  'a bank line via gnubok_categorize_transaction, a supplier invoice via gnubok_create_supplier_invoice_from_inbox (SEK, with its document). Anything else waits for approval. ' +
+  'Tell the user what was booked under a rule; they review it in Att göra under "Bokfört enligt regel". Only the person accepts a new rule, in Att göra.'
 const GRANTS_SWITCHED_OFF_HOW =
   'Rules for automatic booking are switched off on this installation: every write you stage waits for approval. The postings listed were booked under a rule earlier; the user can still review and undo them in Att göra.'
 
@@ -7163,6 +7164,10 @@ export const tools: McpTool[] = [
                   counterparty: p.counterparty_label,
                   grant_id: p.grant_id,
                   grant_version: p.grant_version,
+                  // A known supplier's invoice from the inbox (grants slice 2).
+                  ...(p.operation_type === 'create_supplier_invoice_from_inbox'
+                    ? { kind: 'supplier_invoice', supplier_invoice_id: p.supplier_invoice_id, inbox_item_id: p.inbox_item_id }
+                    : {}),
                   ...(p.entry_status === 'reversed' ? { undone: true } : {}),
                 })),
                 ...(grantsEnabled() ? {} : { switched_off: true }),
