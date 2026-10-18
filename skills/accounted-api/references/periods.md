@@ -2894,6 +2894,7 @@ Books the corrected IB verifikat from the lines given (the complete IB, not a di
 - A company lock date on or after the year's start answers 409 OB_COMPANY_LOCK_DATE.
 - If the storno or relink fails the new IB is stornoed again and 500 OB_CORRECT_FAILED names both entry ids: the year keeps its old IB.
 - cascade is best effort per later year: read cascade.skipped in the response and correct those years by hand.
+- Owner or admin only: a member key gets 403 FORBIDDEN before anything is booked.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

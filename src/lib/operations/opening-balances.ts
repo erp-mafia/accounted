@@ -206,6 +206,7 @@ export const openingBalancesCorrect = defineOperation({
       'A company lock date on or after the year\'s start answers 409 OB_COMPANY_LOCK_DATE.',
       'If the storno or relink fails the new IB is stornoed again and 500 OB_CORRECT_FAILED names both entry ids: the year keeps its old IB.',
       'cascade is best effort per later year: read cascade.skipped in the response and correct those years by hand.',
+      'Owner or admin only: a member key gets 403 FORBIDDEN before anything is booked.',
     ],
     example: {
       request: { lines: LINES_EXAMPLE, cascade: true },
@@ -256,6 +257,7 @@ export const openingBalancesCorrect = defineOperation({
     'OB_CORRECT_YEAR_END_EXISTS',
     ...LINE_ERRORS,
     'OB_CORRECT_FAILED',
+    'FORBIDDEN',
   ],
   http: {
     method: 'POST',

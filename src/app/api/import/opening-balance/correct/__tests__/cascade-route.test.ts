@@ -17,6 +17,8 @@ vi.mock('@/lib/init', () => ({
 
 vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
+  // The service's owner/admin gate (requireCompanyAdmin): the caller is an owner.
+  getCompanyRole: vi.fn().mockResolvedValue({ ok: true, role: 'owner', companyId: 'company-1' }),
 }))
 
 vi.mock('@/lib/company/context', () => ({

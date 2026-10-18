@@ -2284,9 +2284,9 @@ export async function reverseEntry(
   // UPDATE that changes opening_balance_entry_id while OLD.opening_balances_set
   // is still true, so the flag must fall first (same order, and same reason, as
   // the replace_period_opening_balance_link RPC). Both are scoped to this
-  // entryId, so a period already pointing elsewhere is untouched and callers
-  // that storno an old IB then relink a fresh one (opening-balance/correct)
-  // still win: they relink after this returns.
+  // entryId, so a period already pointing elsewhere is untouched: callers
+  // that relink a fresh IB before stornoing the old one
+  // (opening-balance/correct) keep their new link.
   if (original.source_type === 'opening_balance') {
     const { error: obFlagError } = await supabase
       .from('fiscal_periods')
