@@ -65,8 +65,9 @@ export const POSTING_SURFACE = {
     // Drafts and commits a planenlig avskrivning. No caller outside the engine.
     'createAssetDepreciationEntry',
     // The SQL posting wrappers: each drafts or commits a verifikat in one
-    // database transaction. Step 2 leaves them on SQL until each RPC takes an
-    // event id; their callers then move behind the ledger adapter.
+    // database transaction. Port: commitSqlPosting (the events from
+    // recordEventsForSql, or the asset door's draft, travel in the wrapper's
+    // own arguments).
     'commitAssetDepreciation', // commit_asset_depreciation
     'commitAssetDisposal', // commit_asset_disposal
     'replaceOpeningBalanceEntry', // commit_opening_balance_replacement
@@ -150,9 +151,9 @@ export const PERMANENT_ALLOWLIST = {
 export const POSTING_PORT_BYPASS_HINT = [
   'post through the posting port instead: postingPort from @/lib/posting (postJournalEntry,',
   'draftJournalEntry + commitJournalEntry, reverseJournalEntry, correctJournalEntry, postJournalEntrySet,',
-  'recordEvent), which records the business event and hands your input to the engine unchanged through',
-  'lib/posting/ledger-adapter.ts. An SQL posting wrapper with no port door yet gets one in the ledger',
-  'adapter. A caller that must stay off the port goes in PERMANENT_ALLOWLIST in',
+  'recordEvent, recordEventsForSql + commitSqlPosting), which records the business event and hands your',
+  'input to the engine unchanged through lib/posting/ledger-adapter.ts. A new SQL posting wrapper gets its',
+  'case in commitSqlPosting (SqlPostingDoors). A caller that must stay off the port goes in PERMANENT_ALLOWLIST in',
   'scripts/checks/posting-port-bypass.mjs with its reason, never in the baseline.',
 ]
 

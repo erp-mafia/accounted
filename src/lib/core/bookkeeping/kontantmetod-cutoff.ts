@@ -91,7 +91,7 @@ import {
 } from '@/lib/bookkeeping/vat-entries'
 import { chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
 import type { ChartVatTreatments } from '@/lib/bookkeeping/vat-entries'
-import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
+import { correctionBusinessEvents } from '@/lib/bookkeeping/ledger-business-events'
 import { anchorCustomerInvoiceDocument } from '@/lib/core/documents/customer-invoice-underlag'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { invoiceCustomerOutstanding, invoiceCustomerShare } from '@/lib/invoices/customer-share'
@@ -99,6 +99,7 @@ import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { createLogger } from '@/lib/logger'
 import { ORE_TOLERANCE, roundOre } from '@/lib/money'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { mappingVersion } from '@/lib/posting/mapping-version'
 import { postingPort } from '@/lib/posting/port'
 import type { BusinessEventTaxAmount } from '@/lib/posting/store'
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
@@ -3170,6 +3171,18 @@ export interface FailedCorrection {
  * Correct one cash verifikat E against its carry with correctEntry (BFL 5 kap
  * 5 §: storno plus rättelse, both on E's own date). Returns null when E is no
  * longer posted: it was corrected already, so there is nothing to do.
+ *
+ * Through the posting port's correctJournalEntry, which hands correctEntry
+ * its arguments unchanged and, while POSTING_EVENTS is shadow or strict,
+ * records the rättelse's two events as every rättelse does (step 2i):
+ * ledger.storno of E linked to its storno (role reversal) and
+ * ledger.correction of E linked to the corrected verifikat (role
+ * correction), dated the day they are made, both recorded before the storno
+ * is drafted. The correction's lines are this rule's
+ * (buildPaidBeforePostingCorrectionLines), so it names the cut-off's rule
+ * version; the basis is the door's (`posting`), as for the carries: the
+ * correction is part of what the cut-off was asked to post, not a
+ * compensation.
  */
 async function correctPaidBeforePosting(
   supabase: SupabaseClient,
@@ -3177,6 +3190,7 @@ async function correctPaidBeforePosting(
   userId: string,
   item: PaidBeforePosting,
   carryEntryId: string,
+  posting: (() => YearEndPostingContext) | undefined,
 ): Promise<{ stornoEntryId: string; correctionEntryId: string } | null> {
   const { data: original, error } = await supabase
     .from('journal_entries')
@@ -3201,17 +3215,26 @@ async function correctPaidBeforePosting(
   const voucher = carry.voucher_number != null
     ? `${carry.voucher_series ?? ''}${carry.voucher_number}`
     : carry.id
-  const { reversal, corrected } = await correctEntry(
+  const { reversal, corrected } = await postingPort.correctJournalEntry({
     supabase,
     companyId,
     userId,
-    item.entryId,
-    correctedLines,
-    {
-      preloadedOriginal: original as unknown as JournalEntry & { lines?: JournalEntryLine[] | null },
-      description: paidBeforePostingCorrectionDescription(voucher),
+    entryId: item.entryId,
+    // Built only while the port is on: off, correctEntry gets the call it always did.
+    ...correctionBusinessEvents({
+      entryId: item.entryId,
+      occurredOn: todayIsoStockholm,
+      linkBasis: () => posting?.().linkBasis,
+      mappingVersion: () => mappingVersion('kontantmetodCutoff'),
+    }),
+    correction: {
+      lines: correctedLines,
+      options: {
+        preloadedOriginal: original as unknown as JournalEntry & { lines?: JournalEntryLine[] | null },
+        description: paidBeforePostingCorrectionDescription(voucher),
+      },
     },
-  )
+  })
   return { stornoEntryId: reversal.id, correctionEntryId: corrected.id }
 }
 
@@ -3338,8 +3361,10 @@ export function carryBusinessEventFacts(
  * Posting port (step 2g): each carry records its own business event
  * (year_end.closing, carryBusinessEventFacts) and each compensating storno
  * ledger.storno (system_derived), only while POSTING_EVENTS is on.
- * `opts.posting` is what the door saw (its link basis). The correction stays
- * on correctEntry (storno-service), which has no port path yet.
+ * `opts.posting` is what the door saw (its link basis). The correction of a
+ * cash verifikat goes through the port's correctJournalEntry (step 3) and
+ * records ledger.storno and ledger.correction of that verifikat, as every
+ * rättelse does (correctPaidBeforePosting).
  *
  * A run is resumable by construction: a linked invoice drops out of the next
  * collection. A failure to post stops the run; whatever already posted stays
@@ -3537,7 +3562,7 @@ export async function postKontantmetodCutoff(
     const carryEntryId = item.carryEntryId ?? carriedNow.get(`${item.side}:${item.invoiceId}`) ?? null
     if (!carryEntryId) continue
     try {
-      const done = await correctPaidBeforePosting(supabase, companyId, userId, item, carryEntryId)
+      const done = await correctPaidBeforePosting(supabase, companyId, userId, item, carryEntryId, opts.posting)
       if (!done) continue
       result.corrected.push({
         side: item.side,

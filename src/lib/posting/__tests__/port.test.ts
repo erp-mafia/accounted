@@ -70,6 +70,7 @@ type DraftArgs = Parameters<PostingAdapter['createDraftEntry']>[0]
 type CommitArgs = Parameters<PostingAdapter['commitEntry']>[0]
 type ReverseArgs = Parameters<PostingAdapter['reverseEntry']>[0]
 type CorrectArgs = Parameters<PostingAdapter['correctEntry']>[0]
+type SqlArgs = Parameters<PostingAdapter['commitSqlPosting']>[0]
 
 function fakeAdapter() {
   const entry = { id: 'je-1' } as JournalEntry
@@ -81,6 +82,8 @@ function fakeAdapter() {
     commitEntry: vi.fn(async (_args: CommitArgs) => entry),
     reverseEntry: vi.fn(async (_args: ReverseArgs) => entry),
     correctEntry: vi.fn(async (_args: CorrectArgs) => ({ reversal: { id: 'je-storno' } as JournalEntry, corrected: { id: 'je-correction' } as JournalEntry })),
+    // The wrapper's answer, whatever the function: a test reads only what it was handed.
+    commitSqlPosting: vi.fn(async (_args: SqlArgs) => ({ data: { ok: true }, error: null }) as never),
   } satisfies PostingAdapter
   return adapter
 }
@@ -521,6 +524,42 @@ describe('posting port: the events a SQL posting function links itself (recordEv
     const link = await wavePort.recordEventsForSql({ supabase, companyId: COMPANY, events: () => many.map(() => EVENT) })
     expect(link?.ids).toEqual(many)
     expect(inserted).toHaveLength(23)
+  })
+})
+
+describe('posting port: a SQL posting function through its engine wrapper (commitSqlPosting)', () => {
+  const LINK = { ids: ['66666666-6666-4666-8666-000000000001', null], mode: 'shadow' as const }
+
+  it.each<PostingEventsMode>(['off', 'shadow', 'strict'])(
+    '%s: hands the adapter the producer\'s arguments as the same objects and records nothing',
+    async (mode) => {
+      const adapter = fakeAdapter()
+      const { supabase, from } = fakeSupabase(() => ({ error: null }))
+      const input = { txIds: [TX], existingJournalEntryId: null, newEntry: { description: 'Bankavgifter', lines: [] }, businessEvents: LINK }
+      const answer = await port(mode, adapter).commitSqlPosting({
+        supabase, companyId: COMPANY, userId: 'user-1', fn: 'bulk_book_transactions', args: [input],
+      })
+      expect(answer).toEqual({ data: { ok: true }, error: null })
+      expect(from).not.toHaveBeenCalled()
+      expect(adapter.commitSqlPosting).toHaveBeenCalledTimes(1)
+      const args = callArgs(adapter.commitSqlPosting, 0)
+      expect(args).toEqual({ supabase, companyId: COMPANY, userId: 'user-1', fn: 'bulk_book_transactions', args: [input] })
+      expect((args.args as unknown[])[0]).toBe(input)
+      expect(adapter.createJournalEntry).not.toHaveBeenCalled()
+      expect(adapter.createDraftEntry).not.toHaveBeenCalled()
+    },
+  )
+
+  it('keeps the number of arguments the producer passed (an omitted optional one stays omitted)', async () => {
+    const adapter = fakeAdapter()
+    const { supabase } = fakeSupabase(() => ({ error: null }))
+    const p = port('shadow', adapter)
+    await p.commitSqlPosting({ supabase, companyId: COMPANY, userId: 'u', fn: 'commit_opening_balance_replacement', args: ['je-old', INPUT] })
+    await p.commitSqlPosting({
+      supabase, companyId: COMPANY, userId: 'u', fn: 'commit_opening_balance_replacement', args: ['je-old', INPUT, { businessEvents: LINK }],
+    })
+    expect(callArgs(adapter.commitSqlPosting, 0).args).toEqual(['je-old', INPUT])
+    expect(callArgs(adapter.commitSqlPosting, 1).args).toEqual(['je-old', INPUT, { businessEvents: LINK }])
   })
 })
 

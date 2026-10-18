@@ -487,7 +487,7 @@ historical repair, `year_end.result_appropriated`); the bokslutsdispositioner
 route and the kontantmetod cut-off (`postKontantmetodCutoff`, one event per
 invoice carried, #3440) record `year_end.closing` too, and every storno a
 failed close or cut-off makes of its own verifikat `ledger.storno` (the
-cut-off's correction of a cash verifikat stays on `correctEntry`). The
+cut-off's correction of a cash verifikat moved onto the port in step 3). The
 subject is the fiscal period. These producers are kernel code (`lib/core`), which may not read the
 approval scope, so their doors (the year-end and opening-balances routes, the
 staged executors) hand their link basis down as a function the port calls
@@ -614,13 +614,27 @@ and the draft upkeep that numbers nothing (`findFiscalPeriod`,
 neither list. The SIE import job's chunk writers (`commitSIEImportChunk`,
 `reverseSIEImportChunk` in `lib/import/sie-job-worker.ts`) are allowed for
 good, with the reason, in `PERMANENT_ALLOWLIST`: the job is one
-`recordEvent`, its verifikat are written in SQL. What still bypasses the port
-is `postingPortBypass` in `scripts/checks/antipatterns-baseline.json`, as
-(file, name) edges: the callers of the SQL wrappers (bulk booking, the match
-batch, both voucher links, the utlägg payout batch, the opening balance
-cascade, the asset depreciation and disposal commits) and two scripts. A new
-edge fails; a caller that moves behind the ledger adapter passes and is
-reported, and `node scripts/checks/no-new-antipatterns.mjs --update` locks the
-drop in and never adds an edge. The guard reads imports, not database calls:
-a direct `.rpc()` of a posting function is outside it. The engine's reversal
-hooks becoming a registry, the other half of step 3, is not part of it.
+`recordEvent`, its verifikat are written in SQL. The baseline,
+`postingPortBypass` in `scripts/checks/antipatterns-baseline.json`, is empty
+(it held 11 edges when the guard landed): every SQL posting function is
+called through the port's `commitSqlPosting` (`SqlPostingDoors` names each
+function's engine wrapper; the ledger adapter hands it the producer's own
+arguments, spread, and nothing is recorded there, so each function gets the
+request it got before in every mode, pinned by
+`lib/posting/__tests__/sql-posting-doors.rpc-input.test.ts` and its fixture
+taken before the move); the kontantmetod cut-off's correction of a cash
+verifikat goes through `correctJournalEntry` and records `ledger.storno` and
+`ledger.correction` of that verifikat as every rättelse does (its
+engine-input fixture unchanged, the events asserted there and in
+`tests/pg/posting-parity-year-end.pg.test.ts`); and the two scripts post
+through the port (`scripts/undo-year-end-closing.ts` with the in-app
+reopen's `ledger.storno`, `scripts/sie-import/acceptance-manual-review.ts`
+with a `ledger.opening_balance`). A new edge fails, and `--update` never adds
+one. The guard reads imports, not database calls: a direct `.rpc()` of a
+posting function is outside it. The other half of step 3, the engine's
+reversal hooks as a registry, landed before it (`lib/bookkeeping/reversal-hooks.ts`
+and `lib/composition/reversal-hooks.ts`, !533); `reverseEntry` still runs
+its own mirrors beside it, by hand (for `year_end` the kontantmetod carry's
+storno guard and the asset register's release; for any storno the release
+of its bank lines and of a period's IB link), and `correctEntry` runs no
+hook. Moving those is not part of this step.

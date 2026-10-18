@@ -61,7 +61,12 @@ import type { BusinessEventDraft, CorrectJournalEntryResult, PostingAdapter, Pos
  * function, which links each draft it writes before commit_journal_entry
  * draws the number (public.link_business_events_to_draft). A refused link is
  * logged by the function under shadow and fails it under strict, before any
- * number; a refused event write is the port's, as for any posting.
+ * number; a refused event write is the port's, as for any posting. The
+ * producer then calls the function through commitSqlPosting, which hands its
+ * engine wrapper the producer's own arguments (the ids among them) and
+ * records nothing, in any mode; so does the commit of an asset door's draft
+ * (commit_asset_depreciation, commit_asset_disposal), whose event the draft
+ * linked already.
  *
  * Kept free of the event bus and lib/init (the antipattern guard counts
  * lib/init's reach); the engine announces the posting as it always has.
@@ -258,6 +263,14 @@ export function createPostingPort(deps: PostingPortDeps = {}): PostingPort {
       // Nothing recorded (a missing table, every write refused under shadow):
       // the function is called as before.
       return ids.some((id) => id !== null) ? { ids, mode } : undefined
+    },
+
+    commitSqlPosting(request) {
+      const { supabase, companyId, userId, fn, args } = request
+      // The events were recorded before (recordEventsForSql, or the asset
+      // door's draft) and travel in the wrapper's own arguments: nothing to
+      // record here.
+      return adapter.commitSqlPosting({ supabase, companyId, userId, fn, args })
     },
   }
 }

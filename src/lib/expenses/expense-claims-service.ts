@@ -26,7 +26,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Currency } from '@/types'
 import type { CreateJournalEntryInput, CreateJournalEntryLineInput } from '@/types'
-import { commitExpensePayoutBatch, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import {
   claimInboxItemForEntry,
@@ -919,8 +919,9 @@ interface PayoutRpcRow {
  * Reimburse N registered claims for one claimant in one bank transfer.
  *
  * Everything happens inside the create_expense_payout_batch RPC (migration
- * 20260904171000), called through the engine door commitExpensePayoutBatch,
- * which also emits journal_entry.committed for the verifikat. The RPC locks
+ * 20260904171000), called through the engine door commitExpensePayoutBatch
+ * (reached through the posting port's commitSqlPosting), which also emits
+ * journal_entry.committed for the verifikat. The RPC locks
  * the claims FOR UPDATE, and the liability -> cash
  * verifikat is posted through commit_journal_entry, the batch is linked and
  * the claims are marked paid, all in one transaction. A concurrent or
@@ -956,13 +957,21 @@ export async function createPayoutBatch(
     return { ok: false, code: 'BATCH_INSERT_FAILED', detail: err instanceof Error ? err.message : String(err), error: err }
   }
 
-  const { data, error } = await commitExpensePayoutBatch(supabase, companyId, userId, {
-    claimIds,
-    payoutDate: input.payout_date,
-    cashAccount: input.cash_account,
-    notes: input.notes ?? null,
-    transactionId: input.transaction_id ?? null,
-    ...(businessEvents ? { businessEvents } : {}),
+  const { data, error } = await postingPort.commitSqlPosting({
+    supabase,
+    companyId,
+    userId,
+    fn: 'create_expense_payout_batch',
+    args: [
+      {
+        claimIds,
+        payoutDate: input.payout_date,
+        cashAccount: input.cash_account,
+        notes: input.notes ?? null,
+        transactionId: input.transaction_id ?? null,
+        ...(businessEvents ? { businessEvents } : {}),
+      },
+    ],
   })
   if (error) {
     // Period-lock and lock-date triggers surface here as Postgres errors;

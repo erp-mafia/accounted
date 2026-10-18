@@ -2,8 +2,9 @@
  * Allocate one bank transaction across N customer OR N supplier invoices:
  * one combined verifikat (samlingsverifikation) and N payment rows, built
  * atomically by the match_batch_allocate RPC behind the engine door
- * commitMatchBatchAllocation (lib/bookkeeping/engine.ts), which also emits
- * journal_entry.committed for the verifikat.
+ * commitMatchBatchAllocation (lib/bookkeeping/engine.ts, reached through the
+ * posting port's commitSqlPosting), which also emits journal_entry.committed
+ * for the verifikat.
  *
  * One implementation behind the dashboard route
  * (POST /api/transactions/[id]/match-batch) and the operation
@@ -46,7 +47,6 @@ import {
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
-import { commitMatchBatchAllocation } from '@/lib/bookkeeping/engine'
 import type { SqlBusinessEventLink } from '@/lib/bookkeeping/business-event-link'
 import { batchAllocationBusinessEvent, type BatchAllocationFacts } from '@/lib/bookkeeping/sql-posting-business-events'
 import { linkBasisColumns } from '@/lib/links/stamp'
@@ -226,12 +226,15 @@ export async function matchTransactionBatch(
     return { ok: false, code: 'BATCH_RPC_FAILED', details: { message: getUserErrorMessage(err) } }
   }
 
-  // 4. The RPC is the atomicity boundary, behind the engine door that also
-  // announces its verifikat with journal_entry.committed.
-  const { data, error } = await commitMatchBatchAllocation(supabase, companyId, userId, {
-    transactionId,
-    allocations,
-    ...(businessEvents ? { businessEvents } : {}),
+  // 4. The RPC is the atomicity boundary, behind the engine door (through
+  // the posting port) that also announces its verifikat with
+  // journal_entry.committed.
+  const { data, error } = await postingPort.commitSqlPosting({
+    supabase,
+    companyId,
+    userId,
+    fn: 'match_batch_allocate',
+    args: [{ transactionId, allocations, ...(businessEvents ? { businessEvents } : {}) }],
   })
   if (error) {
     txLog.error('match_batch_allocate RPC error', error)

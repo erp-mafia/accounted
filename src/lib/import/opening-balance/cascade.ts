@@ -2,7 +2,6 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
 import type { CreateJournalEntryLineInput } from '@/types'
 import { roundOre } from '@/lib/money'
-import { replaceOpeningBalanceEntry } from '@/lib/bookkeeping/engine'
 import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -22,7 +21,8 @@ import {
  * therefore leaves every later year's linked IB verifikat carrying the stale
  * figures. This module applies the same per-account delta (corrected minus
  * original) to each subsequent period's IB the BFL-compliant way, via the
- * atomic replaceOpeningBalanceEntry engine primitive (one DB transaction owns
+ * atomic replaceOpeningBalanceEntry engine primitive, through the posting
+ * port's commitSqlPosting (one DB transaction owns
  * the storno, the corrected voucher, and the period pointer swap, with a CAS
  * on the expected old entry id), so a failure leaves the period untouched.
  *
@@ -408,9 +408,13 @@ export async function cascadeOpeningBalanceCorrection(
         voucher_series: 'A',
         lines,
       }
-      const replacement = businessEvents
-        ? await replaceOpeningBalanceEntry(supabase, companyId, userId, oldEntryId, replacementInput, { businessEvents })
-        : await replaceOpeningBalanceEntry(supabase, companyId, userId, oldEntryId, replacementInput)
+      const replacement = await postingPort.commitSqlPosting({
+        supabase,
+        companyId,
+        userId,
+        fn: 'commit_opening_balance_replacement',
+        args: businessEvents ? [oldEntryId, replacementInput, { businessEvents }] : [oldEntryId, replacementInput],
+      })
 
       result.corrected.push({
         fiscal_period_id: period.id,

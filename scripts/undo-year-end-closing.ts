@@ -5,7 +5,11 @@
  * Restores a company to the state just before "Verkställ bokslut" so the
  * dispositions/preview step can be re-run, WITHOUT violating verifikat
  * immutability: every journal change is a storno posted through the
- * bookkeeping engine (BFL 5 kap 5 §). Nothing is edited or deleted.
+ * bookkeeping engine (BFL 5 kap 5 §), reached through the posting port as
+ * the owner's in-app reopen (lib/core/bookkeeping/fiscal-year-reopen.ts)
+ * reaches it: while POSTING_EVENTS is shadow or strict each storno records
+ * the same ledger.storno event, the year reopened as its subject, the
+ * owner's request (user_created) as its basis. Nothing is edited or deleted.
  *
  * What it does, in order:
  *   1. Preconditions: the period has a closing entry; the årsredovisning
@@ -71,7 +75,11 @@ function arg(name: string): string | undefined {
 config({ path: arg('env-file') ?? '.env.local' })
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import { getSwedishLocalDate, reverseEntry } from '../src/lib/bookkeeping/engine'
+import { getSwedishLocalDate } from '../src/lib/bookkeeping/engine'
+import { reopenStornoBusinessEvent } from '../src/lib/core/bookkeeping/fiscal-year-reopen'
+import { todayIsoStockholm } from '../src/lib/dates/iso'
+import { linkBasisColumns } from '../src/lib/links/stamp'
+import { postingPort } from '../src/lib/posting/port'
 import { evaluateYearEndUndoGate } from './lib/year-end-undo-gate'
 import { registerScriptInitLoader } from './lib/register-init-loader'
 
@@ -131,6 +139,23 @@ type EntryRow = {
   description: string
   source_type: string
   status: string
+}
+
+/**
+ * The storno of one verifikat through the posting port: reverseEntry gets the
+ * call it always got, and while POSTING_EVENTS is on the storno's event is
+ * linked before its number, as the in-app reopen records it.
+ */
+function reverseThroughPort(userId: string, entryId: string) {
+  return postingPort.reverseJournalEntry({
+    supabase,
+    companyId: COMPANY_ID!,
+    userId,
+    entryId,
+    event: () =>
+      reopenStornoBusinessEvent({ periodId: PERIOD_ID!, occurredOn: todayIsoStockholm(), linkBasis: linkBasisColumns('user_created') }),
+    role: 'reversal',
+  })
 }
 
 function label(e: EntryRow): string {
@@ -380,13 +405,13 @@ async function main() {
 
   if (appropriationEntry) {
     console.log('Reversing result appropriation entry…')
-    const storno = await reverseEntry(supabase, COMPANY_ID!, userId!, appropriationEntry.id)
+    const storno = await reverseThroughPort(userId!, appropriationEntry.id)
     console.log(`  posted storno ${storno.voucher_series}${storno.voucher_number}`)
   }
 
   if (ibEntry) {
     console.log('Reversing opening balance entry…')
-    const storno = await reverseEntry(supabase, COMPANY_ID!, userId!, ibEntry.id)
+    const storno = await reverseThroughPort(userId!, ibEntry.id)
     console.log(`  posted storno ${storno.voucher_series}${storno.voucher_number}`)
   }
 
@@ -421,7 +446,7 @@ async function main() {
   let closingStornoLabel = 'already reversed (resume)'
   if (closingEntry.status === 'posted') {
     console.log('Reversing closing entry…')
-    const closingStorno = await reverseEntry(supabase, COMPANY_ID!, userId!, closingEntry.id)
+    const closingStorno = await reverseThroughPort(userId!, closingEntry.id)
     closingStornoLabel = `${closingStorno.voucher_series}${closingStorno.voucher_number}`
     console.log(`  posted storno ${closingStornoLabel}`)
   } else {

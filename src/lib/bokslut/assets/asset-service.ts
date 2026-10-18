@@ -1,5 +1,4 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { commitAssetDisposal } from '@/lib/bookkeeping/engine'
 import type { LinkBasisColumns } from '@/lib/links/link-basis'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { mappingVersion } from '@/lib/posting/mapping-version'
@@ -1080,30 +1079,33 @@ export async function disposeAsset(
 
   let disposalEntry: JournalEntry | null
   try {
-    disposalEntry = await commitAssetDisposal(
+    disposalEntry = await postingPort.commitSqlPosting({
       supabase,
       companyId,
       userId,
-      draft?.id ?? null,
-      {
-        asset_id: assetId,
-        fiscal_period_id: input.fiscal_period_id,
-        disposal_type: input.disposal_type,
-        disposed_at: input.disposed_at,
-        disposed_proceeds: plan.proceedsGross,
-        proceeds_vat: plan.proceedsVat,
-        vat_treatment: plan.vatTreatment,
-        current_depreciation: plan.currentDepreciation,
-        jamkning_amount: plan.jamkning.amount,
-        jamkning_direction: plan.jamkning.direction,
-        jamkning_remaining_years: plan.jamkning.remainingYears ?? null,
-        jamkning_total_years: plan.jamkning.totalYears || null,
-        jamkning_original_input_vat: input.jamkning_original_input_vat ?? null,
-        jamkning_original_deduction_percent:
-          input.jamkning_original_deduction_percent ?? null,
-        jamkning_new_deduction_percent: plan.jamkning.newDeductionPercent,
-      },
-    )
+      fn: 'commit_asset_disposal',
+      args: [
+        draft?.id ?? null,
+        {
+          asset_id: assetId,
+          fiscal_period_id: input.fiscal_period_id,
+          disposal_type: input.disposal_type,
+          disposed_at: input.disposed_at,
+          disposed_proceeds: plan.proceedsGross,
+          proceeds_vat: plan.proceedsVat,
+          vat_treatment: plan.vatTreatment,
+          current_depreciation: plan.currentDepreciation,
+          jamkning_amount: plan.jamkning.amount,
+          jamkning_direction: plan.jamkning.direction,
+          jamkning_remaining_years: plan.jamkning.remainingYears ?? null,
+          jamkning_total_years: plan.jamkning.totalYears || null,
+          jamkning_original_input_vat: input.jamkning_original_input_vat ?? null,
+          jamkning_original_deduction_percent:
+            input.jamkning_original_deduction_percent ?? null,
+          jamkning_new_deduction_percent: plan.jamkning.newDeductionPercent,
+        },
+      ],
+    })
   } catch (error) {
     if (draft) {
       await supabase

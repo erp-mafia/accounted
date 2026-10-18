@@ -10,6 +10,14 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
   createDraftEntry: vi.fn(async () => ({ id: 'je-3' })),
   commitEntry: vi.fn(async () => ({ id: 'je-3' })),
   reverseEntry: vi.fn(async () => ({ id: 'je-2' })),
+  commitBulkBooking: vi.fn(async () => ({ data: 'bulk_book_transactions', error: null })),
+  commitMatchBatchAllocation: vi.fn(async () => ({ data: 'match_batch_allocate', error: null })),
+  commitInvoiceVoucherLink: vi.fn(async () => ({ data: 'link_invoice_to_voucher', error: null })),
+  commitSupplierInvoiceVoucherLink: vi.fn(async () => ({ data: 'link_supplier_invoice_to_voucher', error: null })),
+  commitExpensePayoutBatch: vi.fn(async () => ({ data: 'create_expense_payout_batch', error: null })),
+  replaceOpeningBalanceEntry: vi.fn(async () => ({ newEntryId: 'commit_opening_balance_replacement' })),
+  commitAssetDepreciation: vi.fn(async () => ({ entry: { id: 'commit_asset_depreciation' }, scheduleId: 's-1' })),
+  commitAssetDisposal: vi.fn(async () => ({ id: 'commit_asset_disposal' })),
 }))
 vi.mock('@/lib/bookkeeping/journal-entry-batch', () => ({
   createJournalEntries: vi.fn(async () => [{ id: 'je-4' }, { id: 'je-5' }]),
@@ -19,7 +27,8 @@ vi.mock('@/lib/core/bookkeeping/storno-service', () => ({
   recordateEntry: vi.fn(async () => ({ reversal: { id: 'je-8' }, corrected: { id: 'je-9' } })),
 }))
 
-const { commitEntry, createDraftEntry, createJournalEntry, reverseEntry } = await import('@/lib/bookkeeping/engine')
+const engine = await import('@/lib/bookkeeping/engine')
+const { commitEntry, createDraftEntry, createJournalEntry, reverseEntry } = engine
 const { createJournalEntries } = await import('@/lib/bookkeeping/journal-entry-batch')
 const { correctEntry, recordateEntry } = await import('@/lib/core/bookkeeping/storno-service')
 const { ledgerAdapter } = await import('../ledger-adapter')
@@ -125,5 +134,37 @@ describe('ledger adapter', () => {
     })
     expect(vi.mocked(recordateEntry).mock.calls[2]).toEqual(['sb', 'c', 'u', 'je-1', '2025-01-02', { businessEvents: links }])
     expect(correctEntry).not.toHaveBeenCalled()
+  })
+})
+
+describe('ledger adapter: the SQL posting functions (commitSqlPosting)', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  const LINK_IDS = { ids: ['ev-1'], mode: 'shadow' as const }
+  const CASES = [
+    { fn: 'bulk_book_transactions', wrapper: 'commitBulkBooking', args: [{ txIds: ['tx-1'], existingJournalEntryId: null, newEntry: null }] },
+    { fn: 'match_batch_allocate', wrapper: 'commitMatchBatchAllocation', args: [{ transactionId: 'tx-1', allocations: [], businessEvents: LINK_IDS }] },
+    { fn: 'link_invoice_to_voucher', wrapper: 'commitInvoiceVoucherLink', args: [{ invoiceId: 'i-1', journalEntryId: 'je-1', notes: null }] },
+    { fn: 'link_supplier_invoice_to_voucher', wrapper: 'commitSupplierInvoiceVoucherLink', args: [{ supplierInvoiceId: 's-1', journalEntryId: 'je-1', notes: null, amount: 40 }] },
+    { fn: 'create_expense_payout_batch', wrapper: 'commitExpensePayoutBatch', args: [{ claimIds: ['c-1'], payoutDate: '2026-06-10', cashAccount: '1930', notes: null, transactionId: null }] },
+    { fn: 'commit_opening_balance_replacement', wrapper: 'replaceOpeningBalanceEntry', args: ['je-old', INPUT] },
+    { fn: 'commit_opening_balance_replacement', wrapper: 'replaceOpeningBalanceEntry', args: ['je-old', INPUT, { businessEvents: LINK_IDS }] },
+    { fn: 'commit_asset_depreciation', wrapper: 'commitAssetDepreciation', args: [{ id: 'je-draft', fiscal_period_id: 'p' }, { asset_id: 'a-1' }] },
+    { fn: 'commit_asset_disposal', wrapper: 'commitAssetDisposal', args: [null, { asset_id: 'a-1' }] },
+  ] as const
+
+  it.each(CASES)('$fn: calls $wrapper with the producer\'s arguments, the same objects in the same number', async ({ fn, wrapper, args }) => {
+    const answer = await ledgerAdapter.commitSqlPosting({ supabase: 'sb' as never, companyId: 'c', userId: 'u', fn, args: args as never })
+    const mock = vi.mocked(engine[wrapper] as (...a: unknown[]) => unknown)
+    expect(mock).toHaveBeenCalledTimes(1)
+    const call = mock.mock.calls[0]!
+    expect(call).toHaveLength(3 + args.length)
+    expect(call).toEqual(['sb', 'c', 'u', ...args])
+    args.forEach((arg, i) => expect(call[3 + i]).toBe(arg))
+    expect(answer).toEqual(await (mock.mock.results[0]!.value as Promise<unknown>))
+    // No other wrapper is called.
+    for (const other of new Set(CASES.map((c) => c.wrapper))) {
+      if (other !== wrapper) expect(engine[other], other).not.toHaveBeenCalled()
+    }
   })
 })
