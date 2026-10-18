@@ -359,6 +359,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
           expect.objectContaining({ account_number: '3960' }),
         ]),
       }),
+      undefined,
+      undefined,
     )
     // The auto path records the rate provenance as 'riksbanken' (vs 'manual').
     expect(logMatchEvent).toHaveBeenCalledWith(
@@ -571,6 +573,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
           expect.objectContaining({ account_number: '1510', credit_amount: 12500 }),
         ]),
       }),
+      undefined,
+      undefined,
     )
   })
 
@@ -629,6 +633,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
           expect.objectContaining({ account_number: '3740', credit_amount: 0.4 }),
         ]),
       }),
+      undefined,
+      undefined,
     )
     expect(findCalls('invoices', 'update').at(-1)?.[0]).toMatchObject({
       status: 'paid',
@@ -934,7 +940,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(mockFindUnresolvableAccounts.mock.calls[0][2]).toContain('3740')
     expect(mockCreateInvoiceCashEntry).toHaveBeenCalledWith(
       expect.anything(), 'company-1', 'user-1', expect.anything(), '2024-06-15',
-      'enskild_firma', undefined, '1930', tx, undefined,
+      'enskild_firma', undefined, '1930', tx, undefined, expect.any(Function),
     )
     expect(findCalls('invoices', 'update').at(-1)?.[0]).toMatchObject({
       status: 'paid',
@@ -1052,6 +1058,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
             expect.objectContaining({ account_number: '1510', credit_amount: 12500 }),
           ]),
         }),
+        undefined,
+        undefined,
       )
       // The primary bank account must NOT appear on this verifikat.
       const call = mockCreateJournalEntry.mock.calls[0][3] as { lines: Array<{ account_number: string }> }
@@ -1107,6 +1115,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
         '1940',
         tx,
         undefined, // no overpayment account
+        expect.any(Function), // the posting port's context, read only while POSTING_EVENTS is on
       )
     })
 
@@ -1158,6 +1167,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
             expect.objectContaining({ account_number: '1930', debit_amount: 12500 }),
           ]),
         }),
+        undefined,
+        undefined,
       )
     })
 

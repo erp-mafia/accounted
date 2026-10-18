@@ -223,7 +223,9 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
       undefined,
       expect.anything(),
       undefined, // paymentAmount: full settle
-      '1930' // settlementAccountNumber: no chosen payee account, so the default
+      '1930', // settlementAccountNumber: no chosen payee account, so the default
+      undefined, // bankTransaction: no bank row
+      expect.any(Function), // the posting port's context, read only while POSTING_EVENTS is on
     )
   })
 
@@ -294,7 +296,10 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
       expect.any(String),
       'enskild_firma',
       expect.anything(),
-      '1930' // settlementAccountNumber: no chosen payee account, so the default
+      '1930', // settlementAccountNumber: no chosen payee account, so the default
+      undefined, // bankTransaction: no bank row
+      undefined, // overpaymentAccount
+      expect.any(Function), // the posting port's context, read only while POSTING_EVENTS is on
     )
   })
 
@@ -362,7 +367,9 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
         entry_date: '2025-03-17',
         source_type: 'invoice_paid',
         lines: customLines,
-      })
+      }),
+      undefined,
+      undefined,
     )
   })
 
@@ -707,6 +714,8 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
       'company-1',
       'user-1',
       expect.objectContaining({ lines: rotCashLines }),
+      undefined,
+      undefined,
     )
   })
 

@@ -1,0 +1,1 @@
+[2026-10-18] A customer invoice payment records sale.payment_received (1510 clearing and kontantmetoden alike) with the invoice as subject, the customer as party, the debt settled and the kronor that arrived; moms only when the verifikat books the sale at payment (invoice_cash_payment).

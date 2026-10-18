@@ -272,7 +272,7 @@ describe('reclaimRotRutRefusal', () => {
       deductionType: 'rut',
       bookingDate: '2026-08-21',
       legs: [{ invoiceId: INVOICE_B, invoiceNumber: '2026-002', amount: 2000 }],
-    })
+    }, expect.any(Function))
 
     // Request CAS on reclaim_journal_entry_id IS NULL.
     const requestUpdate = findCall('rot_rut_payout_requests', 'update')?.[0] as Record<string, unknown>

@@ -289,6 +289,8 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
           expect.objectContaining({ account_number: '3740', credit_amount: 0.4 }),
         ]),
       }),
+      undefined,
+      undefined,
     )
     const invoiceUpdate = calls.find(
       (call) => call.table === 'invoices' && call.method === 'update',

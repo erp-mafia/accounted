@@ -48,6 +48,7 @@ import { createRotRutReclaimEntry, type RotRutReclaimLeg } from '@/lib/bookkeepi
 import { roundOre } from '@/lib/money'
 import { createLogger } from '@/lib/logger'
 import { computeRefusedShares, type RefusedShare } from '@/lib/invoices/rot-rut-refused-shares'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 const log = createLogger('invoices/rot-rut-reclaim')
 
@@ -324,17 +325,25 @@ export async function reclaimRotRutRefusal(
   } else {
     // The voucher is the accounting record: engine failure must block.
     try {
-      const entry = await createRotRutReclaimEntry(supabase, companyId, userId, {
-        requestId: req.id,
-        requestName: req.name,
-        deductionType: req.deduction_type,
-        bookingDate: params.bookingDate,
-        legs: legs.map((leg) => ({
-          invoiceId: leg.invoiceId,
-          invoiceNumber: leg.invoiceNumber,
-          amount: leg.amount,
-        })),
-      })
+      const entry = await createRotRutReclaimEntry(
+        supabase,
+        companyId,
+        userId,
+        {
+          requestId: req.id,
+          requestName: req.name,
+          deductionType: req.deduction_type,
+          bookingDate: params.bookingDate,
+          legs: legs.map((leg) => ({
+            invoiceId: leg.invoiceId,
+            invoiceNumber: leg.invoiceNumber,
+            amount: leg.amount,
+          })),
+        },
+        // The posting port's event, while POSTING_EVENTS is on: the person
+        // (or the approved operation) booked the refused share back.
+        () => ({ linkBasis: linkBasisColumns('user_created') }),
+      )
       journalEntryId = entry.id
     } catch (engineError) {
       return { ok: false, kind: 'error', error: engineError, stage: 'book' }

@@ -32,6 +32,7 @@ import {
   createRotRutPayoutEntry,
   createRotRutPayoutSetEntry,
 } from '@/lib/bookkeeping/rot-rut-entries'
+import type { RotRutPostingContext } from '@/lib/bookkeeping/rot-rut-business-events'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
@@ -229,6 +230,18 @@ async function linkTransactionToSettlement(
   return true
 }
 
+/**
+ * What the settle saw, for the posting port's event (read only while
+ * POSTING_EVENTS is on): a payout matched from a bank row names that row (the
+ * caller named it as the payout, as the row's own link records), a headless
+ * settle is the person's statement that Skatteverket paid.
+ */
+function payoutPostingContext(transactionId: string | undefined): RotRutPostingContext {
+  return transactionId
+    ? { linkBasis: linkBasisColumns('user_confirmed'), bankLine: true }
+    : { linkBasis: linkBasisColumns('user_created'), bankLine: false }
+}
+
 /** A fully paid begäran mirrors requested_amount onto every item's decided_amount. */
 async function mirrorDecidedAmounts(supabase: SupabaseClient, requestId: string): Promise<void> {
   const { data: items, error: itemsFetchError } = await supabase
@@ -333,16 +346,22 @@ export async function settleRotRutPayoutRequest(
   // The voucher is the accounting record: engine failure must block.
   let journalEntryId: string
   try {
-    const entry = await createRotRutPayoutEntry(supabase, companyId, userId, {
-      requestId: payoutRequest.id,
-      requestName: payoutRequest.name,
-      deductionType: payoutRequest.deduction_type,
-      paymentDate: params.paymentDate,
-      amount,
-      oreRounding: oreRounding.rounding,
-      invoiceCount: oreRounding.invoiceCount,
-      bankAccount: params.bankAccount,
-    })
+    const entry = await createRotRutPayoutEntry(
+      supabase,
+      companyId,
+      userId,
+      {
+        requestId: payoutRequest.id,
+        requestName: payoutRequest.name,
+        deductionType: payoutRequest.deduction_type,
+        paymentDate: params.paymentDate,
+        amount,
+        oreRounding: oreRounding.rounding,
+        invoiceCount: oreRounding.invoiceCount,
+        bankAccount: params.bankAccount,
+      },
+      () => payoutPostingContext(params.transactionId),
+    )
     journalEntryId = entry.id
   } catch (engineError) {
     return { ok: false, kind: 'error', error: engineError, stage: 'book' }
@@ -550,18 +569,24 @@ export async function settleRotRutPayoutRequestSet(
   // The voucher is the accounting record: engine failure must block.
   let journalEntryId: string
   try {
-    const entry = await createRotRutPayoutSetEntry(supabase, companyId, userId, {
-      paymentDate: params.paymentDate,
-      bankAccount: params.bankAccount,
-      legs: legs.map((leg, i) => ({
-        requestId: leg.request.id,
-        requestName: leg.request.name,
-        deductionType: leg.request.deduction_type,
-        amount: leg.amount,
-        oreRounding: oreRoundings[i].rounding,
-        invoiceCount: oreRoundings[i].invoiceCount,
-      })),
-    })
+    const entry = await createRotRutPayoutSetEntry(
+      supabase,
+      companyId,
+      userId,
+      {
+        paymentDate: params.paymentDate,
+        bankAccount: params.bankAccount,
+        legs: legs.map((leg, i) => ({
+          requestId: leg.request.id,
+          requestName: leg.request.name,
+          deductionType: leg.request.deduction_type,
+          amount: leg.amount,
+          oreRounding: oreRoundings[i].rounding,
+          invoiceCount: oreRoundings[i].invoiceCount,
+        })),
+      },
+      () => payoutPostingContext(params.transactionId),
+    )
     journalEntryId = entry.id
   } catch (engineError) {
     return { ok: false, kind: 'error', error: engineError, stage: 'book' }

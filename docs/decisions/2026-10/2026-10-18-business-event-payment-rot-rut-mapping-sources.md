@@ -1,0 +1,1 @@
+[2026-10-18] mapping_version names se.customer-payment-lines (the 1510 clearing, the kontantmetoden payment, the bank match clearing) and se.rot-rut-lines (payout, reclaim, reclassification), versioned by the build; a person's own payment rows name none.

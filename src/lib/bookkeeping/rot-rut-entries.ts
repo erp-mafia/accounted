@@ -2,7 +2,14 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CreateJournalEntryInput, DeductionType, JournalEntry } from '@/types'
 import { ORE_ROUNDING_ACCOUNT, ORE_ROUNDING_SETTLEMENT_MAX, roundOre } from '@/lib/money'
 import { DEDUCTION_TYPE_LABELS } from '@/lib/invoices/rot-rut-rules'
-import { createJournalEntry, findFiscalPeriod } from './engine'
+import { postingPort } from '@/lib/posting/port'
+import { findFiscalPeriod } from './engine'
+import {
+  rotRutPayoutBusinessEvent,
+  rotRutReclaimBusinessEvent,
+  rotRutReclassificationBusinessEvent,
+  type RotRutPostingContext,
+} from './rot-rut-business-events'
 
 /**
  * Settlement voucher for a rot/rut payout from Skatteverket.
@@ -35,6 +42,14 @@ import { createJournalEntry, findFiscalPeriod } from './engine'
  * remainder stays on 1513 until the user corrects it (kundfordran/kundförlust
  * depending on the outcome with the buyer): deliberately manual, never
  * guessed.
+ *
+ * Posting port (step 2f-2): the three generators here post through
+ * lib/posting, which hands `input` to the engine unchanged and, while
+ * POSTING_EVENTS is shadow or strict, records the business event first
+ * (./rot-rut-business-events.ts) and has the engine link it to the draft
+ * before a voucher number is drawn. Each takes `posting`, what the door saw
+ * (its link basis, whether a bank line carried the payout), called only while
+ * the port is on: off, the engine gets the call it always did.
  */
 export interface RotRutPayoutLeg {
   requestId: string
@@ -83,6 +98,7 @@ export async function createRotRutPayoutSetEntry(
     /** One leg per begäran the transfer settles; at least one. */
     legs: RotRutPayoutLeg[]
   },
+  posting?: () => RotRutPostingContext,
 ): Promise<JournalEntry> {
   if (params.legs.length === 0) {
     throw new Error('A rot/rut payout voucher needs at least one begäran')
@@ -151,7 +167,13 @@ export async function createRotRutPayoutSetEntry(
     ],
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  return postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    event: () => rotRutPayoutBusinessEvent({ paymentDate: params.paymentDate, amount: total }, posting?.()),
+    input,
+  })
 }
 
 /** One begäran: the bundle voucher with a single 1513 leg. */
@@ -172,21 +194,28 @@ export async function createRotRutPayoutEntry(
     /** BAS 19xx account the payout landed on. Defaults to 1930. */
     bankAccount?: string
   },
+  posting?: () => RotRutPostingContext,
 ): Promise<JournalEntry> {
-  return createRotRutPayoutSetEntry(supabase, companyId, userId, {
-    paymentDate: params.paymentDate,
-    bankAccount: params.bankAccount,
-    legs: [
-      {
-        requestId: params.requestId,
-        requestName: params.requestName,
-        deductionType: params.deductionType,
-        amount: params.amount,
-        oreRounding: params.oreRounding,
-        invoiceCount: params.invoiceCount,
-      },
-    ],
-  })
+  return createRotRutPayoutSetEntry(
+    supabase,
+    companyId,
+    userId,
+    {
+      paymentDate: params.paymentDate,
+      bankAccount: params.bankAccount,
+      legs: [
+        {
+          requestId: params.requestId,
+          requestName: params.requestName,
+          deductionType: params.deductionType,
+          amount: params.amount,
+          oreRounding: params.oreRounding,
+          invoiceCount: params.invoiceCount,
+        },
+      ],
+    },
+    posting,
+  )
 }
 
 /**
@@ -222,6 +251,7 @@ export async function createRotRutReclaimEntry(
     /** One leg per invoice with a refused share; at least one, all > 0. */
     legs: RotRutReclaimLeg[]
   },
+  posting?: () => RotRutPostingContext,
 ): Promise<JournalEntry> {
   const legs = params.legs
     .map((leg) => ({ ...leg, amount: roundOre(leg.amount) }))
@@ -262,7 +292,14 @@ export async function createRotRutReclaimEntry(
     ],
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  const refusedTotal = roundOre(legs.reduce((sum, leg) => sum + leg.amount, 0))
+  return postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    event: () => rotRutReclaimBusinessEvent({ bookingDate: params.bookingDate, amount: refusedTotal }, posting?.()),
+    input,
+  })
 }
 
 /**
@@ -290,6 +327,7 @@ export async function createMigratedDeductionEntry(
     amount: number
     bookingDate: string
   },
+  posting?: () => RotRutPostingContext,
 ): Promise<JournalEntry> {
   const amount = roundOre(params.amount)
   if (!(amount > 0)) {
@@ -316,5 +354,12 @@ export async function createMigratedDeductionEntry(
     ],
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  return postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    event: () =>
+      rotRutReclassificationBusinessEvent({ invoiceId: params.invoiceId, bookingDate: params.bookingDate, amount }, posting?.()),
+    input,
+  })
 }
