@@ -1,0 +1,1 @@
+[2026-10-18] The posting-port ratchet allows the SIE worker's two chunk writers for good by a named allowlist, not a port door: a job is one recordEvent and its verifikat are SQL's. --update only drops baseline edges, so a new bypass is never grandfathered.

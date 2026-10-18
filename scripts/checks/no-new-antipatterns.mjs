@@ -215,6 +215,14 @@
  *      script posted with each event reaching no handler; the helper now
  *      stops it at start. No allowlist. Implementation and rationale in
  *      script-init-condition.mjs.
+ *   26. posting-port-bypass: code outside src/lib/posting (and the engine's
+ *      own files) that imports one of the engine's or the storno service's
+ *      posting functions, so its verifikat records no business event (step 3
+ *      of the posting port). Tracked as (file, name) edges; a new edge fails,
+ *      and --update only ever drops edges. The SIE import job's writers are
+ *      allowed for good, with their reason, in PERMANENT_ALLOWLIST.
+ *      Implementation, the classified surface and rationale in
+ *      posting-port-bypass.mjs.
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -264,6 +272,13 @@ import {
   compareFileCounts,
   compareFileEdges,
 } from './jurisdiction-welds.mjs'
+import {
+  findPostingPortBypasses,
+  countEdges,
+  frozenBypassBaseline,
+  PERMANENT_ALLOWLIST,
+  POSTING_PORT_BYPASS_HINT,
+} from './posting-port-bypass.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const SOURCE_ROOT = path.join(ROOT, 'src')
@@ -1276,6 +1291,7 @@ const current = {
   decisionLog: findDecisionLogFindings(ROOT),
   scriptInitCondition: findScriptInitConditionFindings(ROOT).findings,
   jurisdictionWelds: findJurisdictionWelds(SOURCE_ROOT),
+  postingPort: findPostingPortBypasses(ROOT),
 }
 
 const dialogOverflowFiles = [...new Set(current.dialogOverflowRisk.map((f) => f.file))].sort()
@@ -1285,6 +1301,8 @@ const basLiteralCounts = countByFile(current.jurisdictionWelds.basAccountLiteral
 const sekLiteralCounts = countByFile(current.jurisdictionWelds.sekLiteral)
 const kernelImportEdges = current.jurisdictionWelds.kernelImports
 const kernelImportEdgeCount = Object.values(kernelImportEdges).reduce((n, mods) => n + mods.length, 0)
+const postingBypassEdges = current.postingPort.bypasses
+const postingBypassEdgeCount = countEdges(postingBypassEdges)
 
 const isUpdate = process.argv.includes('--update')
 
@@ -1305,6 +1323,11 @@ if (isUpdate) {
     frozenLazyInit && lazyInitNow.length > frozenLazyInit.count
       ? frozenLazyInit
       : { count: lazyInitNow.length, files: lazyInitNow }
+  // posting-port-bypass is frozen the same way: --update keeps only the edges
+  // the previous baseline already had, so it can drop a moved caller and can
+  // never grandfather a new one (a permanent exception goes in
+  // PERMANENT_ALLOWLIST with its reason instead).
+  const postingBypassFiles = frozenBypassBaseline(frozenBaseline.postingPortBypass?.files, postingBypassEdges)
   const baseline = {
     _comment:
       'Ratchet baseline for scripts/checks/no-new-antipatterns.mjs. These counts may only decrease. Re-run with --update after a migration lowers them. Goal: both reach 0 (A1 route-auth campaign, D1 rounding codemod).',
@@ -1348,6 +1371,10 @@ if (isUpdate) {
     kernelImports: {
       count: kernelImportEdgeCount,
       files: kernelImportEdges,
+    },
+    postingPortBypass: {
+      count: countEdges(postingBypassFiles),
+      files: postingBypassFiles,
     },
   }
   // The jurisdiction-weld ratchets may only be raised with a decision file
@@ -2098,6 +2125,28 @@ if (baseline.kernelImports && kernelImportRatchet.added.length) {
   )
 }
 
+// 1k. posting-port-bypass: (file, name) edges from posting-port-bypass.mjs.
+// An edge the baseline does not list is a new direct call of the engine's
+// posting surface: its verifikat would record no business event. A missing
+// baseline key counts as empty, so the guard fails closed.
+const postingBypassBaseline = baseline.postingPortBypass?.files ?? {}
+const postingBypassRatchet = compareFileEdges(postingBypassBaseline, postingBypassEdges)
+if (postingBypassRatchet.added.length) {
+  failed = true
+  console.error(
+    `\n✗ posting-port-bypass: ${postingBypassRatchet.added.length} new call(s) of the engine's posting ` +
+      'functions outside src/lib/posting:',
+  )
+  postingBypassRatchet.added.forEach((e) =>
+    console.error(`    ${e.file}: ${e.module === '*' ? '* (the whole module, through a namespace or import())' : e.module}`),
+  )
+  POSTING_PORT_BYPASS_HINT.forEach((l, i) => console.error(`  ${i === 0 ? '→' : ' '} ${l}`))
+  console.error('    --update cannot add an edge to the baseline.')
+}
+const stalePermanentAllowlist = Object.entries(PERMANENT_ALLOWLIST).flatMap(([file, { names }]) =>
+  names.filter((n) => !(current.postingPort.allowlisted[file] ?? []).includes(n)).map((n) => `${file}: ${n}`),
+)
+
 // 2. naive-ore-round: count may not increase.
 if (current.naiveOreRound > baseline.naiveOreRound.count) {
   failed = true
@@ -2119,6 +2168,7 @@ if (
   basLiteralRatchet.shrunk.length ||
   sekLiteralRatchet.shrunk.length ||
   kernelImportRatchet.removed.length ||
+  postingBypassRatchet.removed.length ||
   current.naiveOreRound < baseline.naiveOreRound.count ||
   current.literalLegalForm.length < literalLegalFormBaseline
 ) {
@@ -2134,6 +2184,12 @@ if (
     )
   if (kernelImportRatchet.removed.length)
     console.log(`    kernel-import: -${kernelImportRatchet.removed.length} import edge(s)`)
+  if (postingBypassRatchet.removed.length) {
+    console.log(
+      `    posting-port-bypass: -${postingBypassRatchet.removed.length} edge(s), now through the posting port or gone:`,
+    )
+    postingBypassRatchet.removed.forEach((e) => console.log(`        ${e.file}: ${e.module}`))
+  }
   if (current.literalLegalForm.length < literalLegalFormBaseline)
     console.log(
       `    literal-legal-form: -${literalLegalFormBaseline - current.literalLegalForm.length} site(s)`,
@@ -2193,10 +2249,18 @@ if (sharedSinceBaseline.length) {
   sharedSinceBaseline.forEach((f) => console.log(`    ${f}`))
 }
 
+if (stalePermanentAllowlist.length) {
+  console.log(
+    `\n✓ posting-port-bypass: ${stalePermanentAllowlist.length} permanently allowlisted call(s) no longer found.` +
+      ' Remove them from PERMANENT_ALLOWLIST in scripts/checks/posting-port-bypass.mjs to lock it in:',
+  )
+  stalePermanentAllowlist.forEach((f) => console.log(`    ${f}`))
+}
+
 if (failed) {
   console.error('\nAntipattern guard failed: see above.')
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, hand-written-sie-extensions: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, static-init-import: 0, lazy-init-reach: ${current.lazyInitEntries.length}/${lazyInitBaseline?.count ?? 'no baseline'}, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, client-server-only: ${current.clientServerOnly.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), unsigned-provider-names: ${current.unsignedProviderNames.skipped ? 'skipped' : current.unsignedProviderNames.findings.length}, table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), functiondef-patch: ${functiondefPatchFiles.length}/${functiondefPatchBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s), utc-today: ${current.utcToday.length} in ${UTC_TODAY_ALLOWED.size} allowlisted file(s), bas-account-literal: ${current.jurisdictionWelds.basAccountLiteral.length} in ${Object.keys(basLiteralCounts).length} file(s), sek-literal: ${current.jurisdictionWelds.sekLiteral.length} in ${Object.keys(sekLiteralCounts).length} file(s), kernel-import: ${kernelImportEdgeCount} edge(s), decision-log: 0, script-init-condition: 0).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, hand-written-sie-extensions: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, static-init-import: 0, lazy-init-reach: ${current.lazyInitEntries.length}/${lazyInitBaseline?.count ?? 'no baseline'}, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, client-server-only: ${current.clientServerOnly.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), unsigned-provider-names: ${current.unsignedProviderNames.skipped ? 'skipped' : current.unsignedProviderNames.findings.length}, table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), functiondef-patch: ${functiondefPatchFiles.length}/${functiondefPatchBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s), utc-today: ${current.utcToday.length} in ${UTC_TODAY_ALLOWED.size} allowlisted file(s), bas-account-literal: ${current.jurisdictionWelds.basAccountLiteral.length} in ${Object.keys(basLiteralCounts).length} file(s), sek-literal: ${current.jurisdictionWelds.sekLiteral.length} in ${Object.keys(sekLiteralCounts).length} file(s), kernel-import: ${kernelImportEdgeCount} edge(s), posting-port-bypass: ${postingBypassEdgeCount}/${countEdges(postingBypassBaseline)} baselined edge(s) + ${countEdges(current.postingPort.allowlisted)} permanent, decision-log: 0, script-init-condition: 0).`,
 )

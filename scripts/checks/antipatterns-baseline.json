@@ -694,5 +694,43 @@
         "lib/documents/upload-types"
       ]
     }
+  },
+  "postingPortBypass": {
+    "count": 11,
+    "files": {
+      "lib/bokslut/assets/asset-service.ts": [
+        "commitAssetDisposal"
+      ],
+      "lib/bokslut/assets/depreciation-engine.ts": [
+        "commitAssetDepreciation"
+      ],
+      "lib/core/bookkeeping/kontantmetod-cutoff.ts": [
+        "correctEntry"
+      ],
+      "lib/expenses/expense-claims-service.ts": [
+        "commitExpensePayoutBatch"
+      ],
+      "lib/import/opening-balance/cascade.ts": [
+        "replaceOpeningBalanceEntry"
+      ],
+      "lib/invoices/supplier-voucher-matching.ts": [
+        "commitSupplierInvoiceVoucherLink"
+      ],
+      "lib/invoices/voucher-matching.ts": [
+        "commitInvoiceVoucherLink"
+      ],
+      "lib/transactions/bulk-book.ts": [
+        "commitBulkBooking"
+      ],
+      "lib/transactions/match-batch.ts": [
+        "commitMatchBatchAllocation"
+      ],
+      "scripts/sie-import/acceptance-manual-review.ts": [
+        "createJournalEntry"
+      ],
+      "scripts/undo-year-end-closing.ts": [
+        "reverseEntry"
+      ]
+    }
   }
 }
