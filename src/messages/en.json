@@ -2263,7 +2263,7 @@
     "reset_reason_label": "Why does the migration need to be redone?",
     "reset_reason_placeholder": "Describe what went wrong in the previous migration...",
     "reset_reason_help": "{count}/1,000 characters, minimum 20",
-    "reset_confirm_no_filings": "I confirm that no tax returns, control statements, ROT/RUT requests, or annual reports have been filed for this company, through {appName} or otherwise.",
+    "reset_confirm_no_filings": "I confirm that no tax returns, control statements, ROT/RUT requests, or annual reports have been filed on the basis of the bookkeeping in {appName}, through {appName} or otherwise.",
     "reset_confirm_archive": "I understand that the old company copy is retained as a locked archive for traceability and statutory retention, and is not deleted.",
     "reset_confirm_name": "Type <strong>{companyName}</strong> to confirm",
     "reset_submit": "Archive and start over",
