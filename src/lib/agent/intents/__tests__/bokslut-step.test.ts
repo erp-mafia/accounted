@@ -192,20 +192,19 @@ describe('bokslut.step prompt template', () => {
     expect(missingOut).not.toContain('status: öppen')
   })
 
-  // #3440 interim block: the prompt must not send the agent to stage the
-  // cut-off, nor let it book one by hand. The fix PR deletes this case with
-  // the suspension module.
-  it('says the kontantmetoden cut-off is temporarily suspended instead of pointing to staging it', async () => {
+  // #3440: the cut-off is årsomföring per invoice. The prompt sends the agent
+  // to the staging tool, never to a vändning, and forbids booking it by hand.
+  it('points the kontantmetoden cut-off at the staging tool, per invoice and without vändning', async () => {
     const { captured } = await capture({
       fiscal_periods: { data: periodRow(), error: null },
       companies: { data: { entity_type: 'ab' }, error: null },
     })
     const out = render(captured)
 
-    expect(out).toContain('tillfälligt avstängd')
-    expect(out).toContain('KONTANTMETOD_CUTOFF_SUSPENDED')
-    expect(out).toContain('bokför aldrig kundfordringarna, leverantörsskulderna eller deras moms manuellt')
-    expect(out).not.toContain('använd gnubok_post_kontantmetod_cutoff, visa alla föreslagna verifikat')
+    expect(out).toContain('använd gnubok_post_kontantmetod_cutoff')
+    expect(out).toContain('egen verifikation på balansdagen (ingen vändning)')
+    expect(out).toContain('Bokför aldrig avgränsningen manuellt')
+    expect(out).not.toMatch(/tillfälligt avstängd|KONTANTMETOD_CUTOFF_SUSPENDED|visa alla föreslagna verifikat och vändningar/)
   })
 
   it('exposes gnubok_list_fiscal_periods so the fail-closed instruction is actionable', () => {

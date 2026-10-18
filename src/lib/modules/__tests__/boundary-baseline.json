@@ -14,7 +14,7 @@
     "ledger -> skatteverket": 5,
     "ledger -> supplier-invoices": 6,
     "ledger -> transactions": 22,
-    "ledger -> vat": 24,
+    "ledger -> vat": 25,
     "ledger -> year-end": 10,
     "platform -> payroll": 1
   },
@@ -63,7 +63,7 @@
     "transactions -> collections": 1,
     "transactions -> deadlines": 1,
     "transactions -> inbox": 1,
-    "transactions -> invoicing": 29,
+    "transactions -> invoicing": 30,
     "transactions -> skatteverket": 9,
     "vat -> parties": 1,
     "year-end -> import": 2,

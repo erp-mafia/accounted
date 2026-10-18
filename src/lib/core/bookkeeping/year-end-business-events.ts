@@ -14,13 +14,14 @@ import type { BusinessEventDraft } from '@/lib/posting/types'
  *
  * Each closes, opens or carries a fiscal year, so the subject is that fiscal
  * period (the typed handle fiscal_period): the year closed for the
- * bokslutsverifikation, the cut-off and its vändning (whose verifikat name
- * it as source_id), the year opened for the ingående balans and the omföring.
- * No party: a year-end act has no counterparty. No category: none of these
- * says what money was spent on. Amounts are SEK magnitudes: årets resultat
- * moved to the closing account, the result carried by the omföring, the
- * fordringar or skulder a cut-off puts on the balance sheet; the ingående
- * balans carries balances, not an amount.
+ * bokslutsverifikation and each kontantmetod carry (whose verifikat name it
+ * as source_id), the year opened for the ingående balans and the omföring.
+ * No party: a year-end act has no counterparty (a carry's invoice, and with
+ * it the party, is named by the invoice's own link to the verifikat). No
+ * category: none of these says what money was spent on. Amounts are SEK
+ * magnitudes: årets resultat moved to the closing account, the result
+ * carried by the omföring, the fordran or skuld a carry puts on the balance
+ * sheet; the ingående balans carries balances, not an amount.
  */
 
 /**
@@ -121,19 +122,21 @@ export function resultAppropriationBusinessEvent(args: {
 }
 
 /**
- * A kontantmetod cut-off verifikat or its vändning (kind year_end.closing),
- * the cut-off dated the year's last day and the vändning the next year's
- * first. Its amount is the fordringar (or skulder) put on the balance sheet,
- * moms included. Only the cut-off carries the moms: under bokslutsmetoden the
- * moms on the unpaid invoices is declared in the year's last VAT period,
- * while the vändning is kept out of the declaration (the VAT functions
- * exclude it), so it states none.
+ * One kontantmetod carry verifikat (kind year_end.closing): the årsomföring
+ * of one invoice open at the year end, dated the year's last day (#3440, one
+ * verifikat per invoice, no vändning). Its amount is the fordran (1510) or
+ * skuld (2440) the carry puts on the balance sheet, moms included, and its
+ * tax amounts the moms the carry books: under bokslutsmetoden the moms on an
+ * invoice unpaid at the year end is declared in the year's last VAT period,
+ * once (the year-2 payment only clears 1510 / 2440). A manual carry
+ * (`manualLines`: lines the accountant wrote) names no rule version.
  */
 export function kontantmetodCutoffBusinessEvent(args: {
   fiscalPeriodId: string
   occurredOn: string
   amount: number
   taxAmounts: BusinessEventTaxAmount[]
+  manualLines?: boolean
   linkBasis?: LinkBasisColumns
 }): BusinessEventDraft {
   return {
@@ -146,7 +149,7 @@ export function kontantmetodCutoffBusinessEvent(args: {
     amountSek: args.amount,
     taxAmounts: args.taxAmounts,
     ...postingEvidence(args.linkBasis),
-    mappingVersion: mappingVersion('kontantmetodCutoff'),
+    mappingVersion: args.manualLines ? null : mappingVersion('kontantmetodCutoff'),
     jurisdiction: 'SE',
   }
 }

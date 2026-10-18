@@ -13,9 +13,11 @@ import {
   CannotReverseNonPostedError,
   CannotReverseStornoError,
   CorrectionChainTooDeepError,
+  CutoffCarryReversalDateError,
   EntryAlreadyReversedError,
   EntryDateOutsideFiscalPeriodError,
   FiscalPeriodNotFoundError,
+  KontantmetodCarryHasSettlementsError,
   JournalEntryNotBalancedError,
   JournalLineNegativeAmountError,
   JournalLineBothSidesNonZeroError,
@@ -46,6 +48,10 @@ import { REVERSAL_HOOKS } from '@/lib/composition/reversal-hooks'
 import { defaultCommitMethod, getActor } from '@/lib/bookkeeping/actor-context'
 import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
 import { linkBusinessEventToDraft, type BusinessEventLink } from '@/lib/bookkeeping/business-event-link'
+import {
+  findKontantmetodCarry,
+  kontantmetodCarryHasSettlements,
+} from '@/lib/bookkeeping/kontantmetod-carry-guard'
 import type {
   AssetDisposalType,
   AssetJamkningDirection,
@@ -1952,6 +1958,27 @@ export async function reverseEntry(
   // backstop against a direct API call.
   if (original.source_type === 'storno') {
     throw new CannotReverseStornoError(original.source_type)
+  }
+
+  // A kontantmetod year-end carry (#3440) is stornoed only on its own date,
+  // so its moms leaves the VAT period it was declared in, and only while
+  // nothing has settled the invoice since. The database refuses both
+  // (kontantmetod_carry_on_reversal) and releases the invoice link on a
+  // storno it allows; refusing here first keeps the answer readable, since a
+  // refusal at the compare-and-set below can only say "already reversed".
+  if (original.source_type === 'year_end') {
+    const carry = await findKontantmetodCarry(supabase, companyId, entryId)
+    if (carry) {
+      const carryReversalDate = reversalDate ?? original.entry_date
+      if (carryReversalDate !== original.entry_date) {
+        throw new CutoffCarryReversalDateError(original.entry_date, carryReversalDate)
+      }
+      if (await kontantmetodCarryHasSettlements(supabase, companyId, carry, original.entry_date)) {
+        throw new KontantmetodCarryHasSettlementsError(
+          (carry.invoiceId ?? carry.supplierInvoiceId) as string,
+        )
+      }
+    }
   }
 
   // Chain-depth guard: a storno on an entry already deep in a rättelse chain

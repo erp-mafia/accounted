@@ -4,6 +4,7 @@ import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 import { postingPort } from '@/lib/posting/port'
 import { roundOre, ORE_TOLERANCE } from '@/lib/bokslut/rounding'
 import { createLogger } from '@/lib/logger'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 
 const log = createLogger('year-end-service')
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
@@ -28,11 +29,12 @@ import {
   executeCurrencyRevaluation,
 } from '@/lib/bookkeeping/currency-revaluation'
 import { validateBalanceContinuity } from '@/lib/reports/continuity-check'
-import { assessKontantmetodCutoff, undatedSettlementsNote } from './kontantmetod-cutoff'
 import {
-  isKontantmetodCutoffSuspended,
-  kontantmetodCutoffSuspendedMessageSv,
-} from './kontantmetod-cutoff-suspension'
+  assessKontantmetodCutoff,
+  legacyKontantmetodVandningWarning,
+  undatedSettlementsNote,
+  type KontantmetodCutoffAssessment,
+} from './kontantmetod-cutoff'
 import { ENTITY_TYPES, resolveCompanyEntityType, resultClosingAccounts } from '@/lib/company/entity-type'
 import { formatCurrency } from '@/lib/utils'
 import { overDisposedAmount, resultAccountLeftover, resultAccountResidual } from './prior-result-guard'
@@ -64,6 +66,81 @@ import type {
   SequenceMismatch,
 } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+
+/** At most this many invoice references are named in one readiness message. */
+const CUTOFF_REFERENCES_NAMED = 10
+
+function namedReferences(references: readonly string[]): string {
+  const shown = references.slice(0, CUTOFF_REFERENCES_NAMED).join(', ')
+  const rest = references.length - Math.min(references.length, CUTOFF_REFERENCES_NAMED)
+  return rest > 0 ? `${shown} och ${rest} till` : shown
+}
+
+/**
+ * The year-end blockers of a kontantmetoden cut-off (BFL 5 kap 2 §), one per
+ * thing left to do, all under KONTANTMETOD_CUTOFF_REQUIRED (the readiness
+ * tool's kind contract). Per invoice (#3440) there is no next-period
+ * requirement and no vändning; a legacy period (aggregate cut-off with
+ * vändning, self-hosted only) keeps its own messages. Pure.
+ */
+export function kontantmetodCutoffBlockers(
+  assessment: Pick<KontantmetodCutoffAssessment, 'mode' | 'complete' | 'collection' | 'plans'>,
+  opts: { hasNextPeriod: boolean },
+): YearEndBlocker[] {
+  const { collection } = assessment
+  const blockers: YearEndBlocker[] = []
+  const push = (message: string) => blockers.push({ code: 'KONTANTMETOD_CUTOFF_REQUIRED', message })
+
+  const invalidCount = collection.unknownVatTreatment.length + collection.strayVatOnZeroRate.length
+  if (invalidCount > 0) {
+    push(
+      `${invalidCount} fakturor kan inte tas med i kontantmetodens bokslutsavgränsning på grund av saknad eller oförenlig momsinställning. ` +
+        'Rätta fakturorna och bokför avgränsningen innan bokslut.',
+    )
+    return blockers
+  }
+  if (assessment.complete) return blockers
+
+  if (assessment.mode === 'legacy') {
+    if (!opts.hasNextPeriod) {
+      push(
+        'Perioden har en äldre kontantmetodavgränsning med vändning, och den kan inte bedömas förrän nästa räkenskapsår är upplagt. Skapa nästa period innan bokslut.',
+      )
+    } else {
+      push(
+        'En tidigare kontantmetodavgränsning stämmer inte längre med reskontran. Kontrollera och rätta verifikaten innan bokslut.',
+      )
+    }
+    return blockers
+  }
+
+  if (assessment.plans.length > 0) {
+    push(
+      `${assessment.plans.length} fakturor var obetalda vid periodens slut och ska årsomföras: kontantmetodens bokslutsavgränsning bokför en verifikation per faktura på räkenskapsårets sista dag (BFL 5 kap 2 §). ` +
+        'Förhandsgranska och bokför avgränsningen innan bokslut.',
+    )
+  }
+  if (collection.paidBeforePosting.length > 0) {
+    const refs = [...new Set(collection.paidBeforePosting.map((p) => p.reference))]
+    push(
+      `${refs.length} fakturor som var obetalda vid periodens slut har betalats efter det med en kontantverifikation som bokförde intäkt eller kostnad och moms: ${namedReferences(refs)}. ` +
+        'Bokslutsavgränsningen rättar dem (storno och rättelse mot kund- eller leverantörsreskontran). ' +
+        'Kör avgränsningen igen.',
+    )
+  }
+  if (collection.paidBeforePostingManual.length > 0) {
+    const refs = [...new Set(collection.paidBeforePostingManual.map((p) => p.reference))]
+    push(`${getErrorEntry('KONTANTMETOD_CUTOFF_PAID_BEFORE_POSTING_MANUAL')?.message_sv ?? ''} Fakturor: ${namedReferences(refs)}.`.trim())
+  }
+  if (collection.rotPartialManual.length > 0) {
+    push(`${getErrorEntry('KONTANTMETOD_CUTOFF_ROT_PARTIAL_MANUAL')?.message_sv ?? ''} Fakturor: ${namedReferences(collection.rotPartialManual)}.`.trim())
+  }
+  if (collection.legacyCovered.length > 0) {
+    const refs = collection.legacyCovered.map((c) => c.reference)
+    push(`${getErrorEntry('KONTANTMETOD_LEGACY_COVERED')?.message_sv ?? ''} Fakturor: ${namedReferences(refs)}.`.trim())
+  }
+  return blockers
+}
 
 /**
  * Validate whether a fiscal period is ready for year-end closing.
@@ -473,59 +550,36 @@ export async function validateYearEndReadiness(
       if (settingsError) throw settingsError
 
       if (settings?.accounting_method === 'cash') {
-        // #3440: while the cut-off is suspended the blocker stays (BFL 5 kap
-        // 2 § still applies), but no message may send the user to preview
-        // and post it: each says it is temporarily unavailable instead.
-        const suspended = isKontantmetodCutoffSuspended()
-        if (!nextPeriod) {
-          blockers.push({
-            code: 'KONTANTMETOD_CUTOFF_REQUIRED',
-            message: suspended
-              ? `Kontantmetodens bokslutsavgränsning kan inte bedömas förrän nästa räkenskapsår är upplagt. ${kontantmetodCutoffSuspendedMessageSv()}`
-              : 'Kontantmetodens bokslutsavgränsning kan inte bokföras förrän nästa räkenskapsår är upplagt. Skapa nästa period, förhandsgranska och bokför avgränsningen innan bokslut.',
-          })
-        } else {
-          const assessment = await assessKontantmetodCutoff(
-            supabase,
-            companyId,
-            period,
-            nextPeriod.id,
-            await resolveCompanyEntityType(supabase, companyId, settings.entity_type),
-          )
-          const invalidCount =
-            assessment.collection.unknownVatTreatment.length +
-            assessment.collection.strayVatOnZeroRate.length
-          const outstandingCount =
-            assessment.collection.receivables.length + assessment.collection.payables.length
-
-          // A warning, never a blocker: the assumption is the reskontra's own
-          // as-of rule, and nothing in the books can date what the previous
-          // system never recorded. The user can, against the bank.
-          const undatedNote = undatedSettlementsNote(
-            assessment.collection.undatedSettlements.length,
-            period.period_end,
-          )
-          if (undatedNote) warnings.push(undatedNote)
-
-          if (invalidCount > 0) {
-            blockers.push({
-              code: 'KONTANTMETOD_CUTOFF_REQUIRED',
-              message: suspended
-                ? `${invalidCount} fakturor kan inte tas med i kontantmetodens bokslutsavgränsning på grund av saknad eller oförenlig momsinställning. Rätta fakturorna. ${kontantmetodCutoffSuspendedMessageSv()}`
-                : `${invalidCount} fakturor kan inte tas med i kontantmetodens bokslutsavgränsning på grund av saknad eller oförenlig momsinställning. Rätta fakturorna och bokför avgränsningen innan bokslut.`,
-            })
-          } else if (!assessment.postings.complete) {
-            blockers.push({
-              code: 'KONTANTMETOD_CUTOFF_REQUIRED',
-              message:
-                outstandingCount > 0
-                  ? suspended
-                    ? `${outstandingCount} obetalda fakturor var utestående vid periodens slut och ska tas med i kontantmetodens bokslutsavgränsning (BFL 5 kap 2 §). ${kontantmetodCutoffSuspendedMessageSv()}`
-                    : `${outstandingCount} obetalda fakturor var utestående vid periodens slut. Förhandsgranska och bokför kontantmetodens bokslutsavgränsning med vändningar innan bokslut (BFL 5 kap 2 §).`
-                  : 'En tidigare kontantmetodavgränsning stämmer inte längre med reskontran. Kontrollera och rätta verifikaten innan bokslut.',
-            })
-          }
+        const assessment = await assessKontantmetodCutoff(
+          supabase,
+          companyId,
+          period,
+          nextPeriod?.id ?? null,
+          await resolveCompanyEntityType(supabase, companyId, settings.entity_type),
+        )
+        for (const blocker of kontantmetodCutoffBlockers(assessment, {
+          hasNextPeriod: Boolean(nextPeriod),
+        })) {
+          blockers.push(blocker)
         }
+
+        // A warning, never a blocker: the assumption is the reskontra's own
+        // as-of rule, and nothing in the books can date what the previous
+        // system never recorded. The user can, against the bank.
+        const undatedNote = undatedSettlementsNote(
+          assessment.collection.undatedSettlements.length,
+          period.period_end,
+        )
+        if (undatedNote) warnings.push(undatedNote)
+
+        // An earlier year end (or this one) closed with a legacy cut-off with
+        // vändning: its figures stand, and its vändningar must not be stornoed.
+        const legacyWarning = legacyKontantmetodVandningWarning(
+          assessment.mode === 'legacy'
+            ? [...assessment.legacyCutoffs, { periodEnd: period.period_end }]
+            : assessment.legacyCutoffs,
+        )
+        if (legacyWarning) warnings.push(legacyWarning)
       }
     } catch (err) {
       log.warn('kontantmetoden cut-off readiness check failed', err as Error)

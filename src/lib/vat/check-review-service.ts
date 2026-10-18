@@ -14,6 +14,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { calculateVatDeclaration, resolvePeriodDates } from '@/lib/reports/vat-declaration'
 import { vatFilingVerdict } from '@/lib/reports/vat-close-check'
+import { fetchKontantmetodCutoffVatFacts } from './kontantmetod-cutoff-vat-facts'
 import type { VatCheckReviewMark } from '@/lib/reports/vat-declaration-checks'
 import { isReviewableVatCheck, vatCheckFingerprint } from './check-reviews'
 import { insertVatCheckReviewRow, listVatCheckReviews, type VatCheckReviewPeriod } from './check-review-store'
@@ -56,7 +57,15 @@ export async function previewVatCheckReview(
     supabase, companyId, target.periodType, target.year, target.period,
     { fiscalPeriodId: target.fiscalPeriodId },
   )
-  const verdict = await vatFilingVerdict(supabase, companyId, declaration, { fiscalPeriodId: target.fiscalPeriodId })
+  // The same findings the reporters show, the kontantmetoden cut-off
+  // WARNINGs included (#3440), so a person can review the one they saw.
+  const kontantmetodCutoff = await fetchKontantmetodCutoffVatFacts(
+    supabase, companyId, declaration.period.start, declaration.period.end,
+  )
+  const verdict = await vatFilingVerdict(supabase, companyId, declaration, {
+    fiscalPeriodId: target.fiscalPeriodId,
+    kontantmetodCutoff,
+  })
   const inputs = { declaration, gaps: verdict.gaps }
   const findings = verdict.checks.filter((check) => check.code === target.checkCode)
   if (findings.length === 0) return { ok: false, code: 'VAT_CHECK_NOT_FOUND' }

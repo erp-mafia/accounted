@@ -703,3 +703,49 @@ describe('REVENUE_ACCOUNT_WITHOUT_RUTA', () => {
     expect(codes).toEqual(['TAXABLE_SALES_WITHOUT_OUTPUT', 'REVENUE_ACCOUNT_WITHOUT_RUTA'])
   })
 })
+
+// #3440: under kontantmetoden the moms on invoices unpaid at the fiscal year
+// end belongs to the VAT period containing the year end. A WARNING while the
+// cut-off is incomplete, never a gate (founder decision 2026-10-03).
+describe('KONTANTMETOD_CUTOFF_INCOMPLETE and LEGACY_KONTANTMETOD_VANDNING', () => {
+  const facts = (over: Partial<{
+    incompleteYearEnds: Array<{ fiscal_period_id: string; period_end: string }>
+    legacyCutoffPeriodEnds: string[]
+    unavailable: boolean
+  }> = {}) => ({ incompleteYearEnds: [], legacyCutoffPeriodEnds: [], ...over })
+
+  it('stays silent without facts (not a cash company, or not checked) and when the cut-off is complete', () => {
+    expect(runVatDeclarationChecks(emptyRutor)).toEqual([])
+    expect(runVatDeclarationChecks(emptyRutor, undefined, { kontantmetodCutoff: facts() })).toEqual([])
+  })
+
+  it('warns for each fiscal year ending inside the period whose cut-off is incomplete, without blocking', () => {
+    const checks = runVatDeclarationChecks(emptyRutor, undefined, {
+      kontantmetodCutoff: facts({ incompleteYearEnds: [{ fiscal_period_id: 'fp-1', period_end: '2026-12-31' }] }),
+    })
+    expect(checks).toEqual([expect.objectContaining({
+      code: 'KONTANTMETOD_CUTOFF_INCOMPLETE',
+      status: 'WARNING',
+      message: expect.stringContaining('2026-12-31'),
+    })])
+    expect(isFilingBlocked(checks)).toBe(false)
+  })
+
+  it('says so when the check could not run, rather than passing for complete', () => {
+    const checks = runVatDeclarationChecks(emptyRutor, undefined, { kontantmetodCutoff: facts({ unavailable: true }) })
+    expect(checks).toEqual([expect.objectContaining({ code: 'KONTANTMETOD_CUTOFF_INCOMPLETE', status: 'WARNING' })])
+    expect(checks[0]!.message).toMatch(/kunde inte köras/)
+  })
+
+  it('warns not to storno legacy vändningar in a period holding a legacy cut-off', () => {
+    const checks = runVatDeclarationChecks(emptyRutor, undefined, {
+      kontantmetodCutoff: facts({ legacyCutoffPeriodEnds: ['2025-12-31'] }),
+    })
+    expect(checks).toEqual([expect.objectContaining({
+      code: 'LEGACY_KONTANTMETOD_VANDNING',
+      status: 'WARNING',
+      message: expect.stringContaining('Makulera inte vändningarna'),
+    })])
+    expect(isFilingBlocked(checks)).toBe(false)
+  })
+})

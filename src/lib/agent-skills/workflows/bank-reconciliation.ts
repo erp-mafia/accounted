@@ -43,7 +43,11 @@ kontantmetoden; null defaults to accrual):
   kundfordran **1510**. Payment **credits 1510** and debits the bank (19xx). The
   link/match tools settle 1510.
 - **Kontantmetoden (cash):** no receivable was raised at invoice time. Payment
-  **debits 19xx** and books the revenue + moms now.
+  **debits 19xx** and books the revenue + moms now. Exception: an invoice still
+  open at a year end is carried over it (årsomföring) and linked to that
+  verifikat; its payment credits 1510 (or debits 2440) with no moms, exactly
+  like faktureringsmetoden. A 1510 clearing in the preview of such an invoice is
+  correct, revenue and moms would declare the moms twice.
 
 You usually don't pass the method explicitly: the tools resolve it from company
 settings, but knowing it lets you sanity-check the staged preview's accounts

@@ -10,6 +10,11 @@ import {
 } from '@/tests/helpers'
 import { eventBus } from '@/lib/events/bus'
 
+// invoice_settlement_side rows (supabase.rpc consumes a queue slot like a
+// table read). The rule itself is pinned in invoice-settlement-side tests.
+const AR_CREDIT_ROW = { settlement_side: 'ar_credit', account_prefix: '151', entry_side: 'credit' }
+const BANK_DEBIT_ROW = { settlement_side: 'bank_debit', account_prefix: '19', entry_side: 'debit' }
+
 // Issue #1259: settling the invoice retires the suggestion pointers at it.
 // Mocked so it consumes no slot in the queued Supabase mock; the helper's own
 // query shape is pinned by ./clear-settled-invoice-suggestions.test.ts.
@@ -58,7 +63,7 @@ describe('validateVoucherForInvoiceLink', () => {
   it('rejects when the voucher is missing', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const invoice = setup()
-    enqueue({ data: { accounting_method: 'accrual' } }) // resolveAccountingMethod
+    enqueue({ data: AR_CREDIT_ROW }) // invoice_settlement_side
     enqueue({ data: null, error: null }) // journal_entries.maybeSingle → null
     const result = await validateVoucherForInvoiceLink(
       supabase as never,
@@ -73,7 +78,7 @@ describe('validateVoucherForInvoiceLink', () => {
   it('rejects when the voucher is not posted', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const invoice = setup()
-    enqueue({ data: { accounting_method: 'accrual' } }) // resolveAccountingMethod
+    enqueue({ data: AR_CREDIT_ROW }) // invoice_settlement_side
     enqueue({
       data: {
         id: 'je-1',
@@ -100,7 +105,7 @@ describe('validateVoucherForInvoiceLink', () => {
   it('rejects when the voucher has no AR credit (accrual)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const invoice = setup()
-    enqueue({ data: { accounting_method: 'accrual' } }) // resolveAccountingMethod
+    enqueue({ data: AR_CREDIT_ROW }) // invoice_settlement_side
     enqueue({
       data: {
         id: 'je-1',
@@ -135,7 +140,7 @@ describe('validateVoucherForInvoiceLink', () => {
     // the matcher keys on the bank/cash debit instead of an AR credit.
     const { supabase, enqueue } = createQueuedMockSupabase()
     const invoice = setup()
-    enqueue({ data: { accounting_method: 'cash' } }) // resolveAccountingMethod
+    enqueue({ data: BANK_DEBIT_ROW }) // invoice_settlement_side
     enqueue({
       data: {
         id: 'je-1',
@@ -173,7 +178,7 @@ describe('validateVoucherForInvoiceLink', () => {
   it('cash method: rejects when the voucher has no bank/cash debit', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const invoice = setup()
-    enqueue({ data: { accounting_method: 'cash' } }) // resolveAccountingMethod
+    enqueue({ data: BANK_DEBIT_ROW }) // invoice_settlement_side
     enqueue({
       data: {
         id: 'je-1',
@@ -208,7 +213,7 @@ describe('validateVoucherForInvoiceLink', () => {
   it('rejects when the voucher amount exceeds the remaining', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const invoice = setup()
-    enqueue({ data: { accounting_method: 'accrual' } }) // resolveAccountingMethod
+    enqueue({ data: AR_CREDIT_ROW }) // invoice_settlement_side
     enqueue({
       data: {
         id: 'je-1',
@@ -241,7 +246,7 @@ describe('validateVoucherForInvoiceLink', () => {
   it('rejects when the line currency does not match the invoice', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const invoice = setup(makeInvoice({ remaining_amount: 1000, total: 1000, currency: 'EUR' }))
-    enqueue({ data: { accounting_method: 'accrual' } }) // resolveAccountingMethod
+    enqueue({ data: AR_CREDIT_ROW }) // invoice_settlement_side
     enqueue({
       data: {
         id: 'je-1',
@@ -273,7 +278,7 @@ describe('validateVoucherForInvoiceLink', () => {
   it('rejects when the voucher is already linked to this invoice', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const invoice = setup()
-    enqueue({ data: { accounting_method: 'accrual' } }) // resolveAccountingMethod
+    enqueue({ data: AR_CREDIT_ROW }) // invoice_settlement_side
     enqueue({
       data: {
         id: 'je-1',
@@ -306,7 +311,7 @@ describe('validateVoucherForInvoiceLink', () => {
   it('returns ok=true with full-pay flag when amount equals remaining', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const invoice = setup()
-    enqueue({ data: { accounting_method: 'accrual' } }) // resolveAccountingMethod
+    enqueue({ data: AR_CREDIT_ROW }) // invoice_settlement_side
     enqueue({
       data: {
         id: 'je-1',
@@ -345,7 +350,7 @@ describe('validateVoucherForInvoiceLink', () => {
   it('returns ok=true with partial-pay flag when amount is less than remaining', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const invoice = setup(makeInvoice({ remaining_amount: 1000, total: 1000, currency: 'SEK' }))
-    enqueue({ data: { accounting_method: 'accrual' } }) // resolveAccountingMethod
+    enqueue({ data: AR_CREDIT_ROW }) // invoice_settlement_side
     enqueue({
       data: {
         id: 'je-1',
@@ -424,7 +429,7 @@ describe('findMatchingVouchersForInvoice', () => {
       total: 1000,
       due_date: '2026-05-01',
     })
-    enqueue({ data: { accounting_method: 'accrual' } }) // resolveAccountingMethod
+    enqueue({ data: AR_CREDIT_ROW }) // invoice_settlement_side
     enqueue({ data: null, error: { message: 'db error' } })
     const result = await findMatchingVouchersForInvoice(
       supabase as never,
@@ -443,7 +448,7 @@ describe('findMatchingVouchersForInvoice', () => {
       due_date: '2026-05-01',
       invoice_number: 'F-1',
     })
-    enqueue({ data: { accounting_method: 'cash' } }) // resolveAccountingMethod
+    enqueue({ data: BANK_DEBIT_ROW }) // invoice_settlement_side
     // the voucher search (kontantmetoden: 19xx debit > 0)
     enqueueVouchers(enqueue, [
         {
@@ -507,7 +512,7 @@ describe('findMatchingVouchersForInvoice', () => {
       due_date: '2026-05-01',
       invoice_number: 'F-1',
     })
-    enqueue({ data: { accounting_method: 'cash' } })
+    enqueue({ data: BANK_DEBIT_ROW }) // invoice_settlement_side
     enqueueVouchers(enqueue, [cashVoucher(description, debit)])
     enqueue({ data: [] })
     enqueue({ data: [] })
@@ -577,7 +582,7 @@ function enqueueSingleAccrualCandidate(
   enqueue: (r: QueuedResult) => void,
   periodLookup: QueuedResult,
 ) {
-  enqueue({ data: { accounting_method: 'accrual' } }) // resolveAccountingMethod
+  enqueue({ data: AR_CREDIT_ROW }) // invoice_settlement_side
   enqueueVouchers(enqueue, [
       {
         id: 'je-1',

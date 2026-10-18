@@ -237,6 +237,10 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       }),
       error: null,
     })
+    // invoice_settlement_side: a booked invoice settles on the 151x credit
+    enqueue({ data: { settlement_side: 'ar_credit', account_prefix: '151', entry_side: 'credit' }, error: null })
+    // the voucher's lines on that side: the 1510 credit
+    enqueue({ data: [{ account_number: '1510', debit_amount: 0, credit_amount: 1000 }], error: null })
     // Update transaction
     enqueue({ data: [{ id: TX_UUID }], error: null })
     // Update invoice (optimistic lock returns updated row)
@@ -349,6 +353,10 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       }),
       error: null,
     })
+    // invoice_settlement_side: a booked invoice settles on the 151x credit
+    enqueue({ data: { settlement_side: 'ar_credit', account_prefix: '151', entry_side: 'credit' }, error: null })
+    // the voucher's lines on that side: the 1510 credit
+    enqueue({ data: [{ account_number: '1510', debit_amount: 0, credit_amount: 1000 }], error: null })
     enqueue({ data: [{ id: TX_UUID }], error: null }) // update transaction
     enqueue({ data: [{ id: INV_UUID }], error: null }) // update invoice
     enqueue({ data: { id: 'ip-1' }, error: null }) // insert invoice_payments
@@ -487,6 +495,10 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       data: makeInvoice({ id: INV_UUID, status: 'sent', total: 1000, remaining_amount: 1000 }),
       error: null,
     })
+    // invoice_settlement_side: a booked invoice settles on the 151x credit
+    enqueue({ data: { settlement_side: 'ar_credit', account_prefix: '151', entry_side: 'credit' }, error: null })
+    // the voucher's lines on that side: the 1510 credit
+    enqueue({ data: [{ account_number: '1510', debit_amount: 0, credit_amount: 1000 }], error: null })
     // Update transaction succeeds
     enqueue({ data: [{ id: TX_UUID }], error: null })
     // Optimistic invoice update returns 0 rows
@@ -530,6 +542,10 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       }),
       error: null,
     })
+    // invoice_settlement_side: a booked invoice settles on the 151x credit
+    enqueue({ data: { settlement_side: 'ar_credit', account_prefix: '151', entry_side: 'credit' }, error: null })
+    // the voucher's lines on that side: the 1510 credit
+    enqueue({ data: [{ account_number: '1510', debit_amount: 0, credit_amount: 1000 }], error: null })
     // Update transaction succeeds
     enqueue({ data: [{ id: TX_UUID }], error: null })
     // Optimistic invoice update succeeds

@@ -44,6 +44,9 @@ export const TARGET_PERIOD_CLOSED = 'TARGET_PERIOD_CLOSED' as const
 export const TARGET_PERIOD_LOCKED = 'TARGET_PERIOD_LOCKED' as const
 export const SI_ACCRUED_COST_PERIOD_INVALID = 'SI_ACCRUED_COST_PERIOD_INVALID' as const
 export const SI_ACCRUED_COST_PERIOD_LOCKED = 'SI_ACCRUED_COST_PERIOD_LOCKED' as const
+export const CUTOFF_CARRY_REVERSAL_DATE = 'CUTOFF_CARRY_REVERSAL_DATE' as const
+export const KONTANTMETOD_CARRY_HAS_SETTLEMENTS = 'KONTANTMETOD_CARRY_HAS_SETTLEMENTS' as const
+export const CUTOFF_CARRY_CORRECTION_REFUSED = 'CUTOFF_CARRY_CORRECTION_REFUSED' as const
 
 // ============================================================================
 // AccountsNotInChartError: kept for back-compat (many existing call sites)
@@ -463,6 +466,52 @@ export class AccruedCostPeriodLockedError extends Error {
   }
 }
 
+/**
+ * A kontantmetod year-end carry (årsomföring, #3440) may only be stornoed on
+ * its own date: the moms it declared in the closed year's final VAT period
+ * must leave that same period. The database refuses the same thing
+ * (kontantmetod_carry_on_reversal, 20261018131100); this is the readable
+ * refusal before any write.
+ */
+export class CutoffCarryReversalDateError extends Error {
+  readonly code = CUTOFF_CARRY_REVERSAL_DATE
+  constructor(
+    public readonly carryDate: string,
+    public readonly reversalDate: string,
+  ) {
+    super(
+      `A kontantmetod year-end carry dated ${carryDate} can only be reversed on that date, not ${reversalDate}`
+    )
+    this.name = 'CutoffCarryReversalDateError'
+  }
+}
+
+/**
+ * A kontantmetod year-end carry whose invoice has been paid or credited since
+ * cannot be stornoed: the payment or credit note cleared the 1510 / 2440 the
+ * carry booked, and would be left stranded. Undo those first.
+ */
+export class KontantmetodCarryHasSettlementsError extends Error {
+  readonly code = KONTANTMETOD_CARRY_HAS_SETTLEMENTS
+  constructor(public readonly invoiceId: string) {
+    super('The carried invoice has payments or a booked credit note: undo them before reversing the carry')
+    this.name = 'KontantmetodCarryHasSettlementsError'
+  }
+}
+
+/**
+ * A kontantmetod year-end carry is never corrected in place (storno plus
+ * rättelse): it is stornoed on its own date and the cut-off is run again,
+ * which rebuilds it from the invoice.
+ */
+export class CutoffCarryCorrectionRefusedError extends Error {
+  readonly code = CUTOFF_CARRY_CORRECTION_REFUSED
+  constructor() {
+    super('A kontantmetod year-end carry cannot be corrected: reverse it on its own date and run the cut-off again')
+    this.name = 'CutoffCarryCorrectionRefusedError'
+  }
+}
+
 export class InvalidMappingResultError extends Error {
   readonly code = INVALID_MAPPING_RESULT
   constructor(
@@ -621,6 +670,9 @@ export function isBookkeepingError(err: unknown): boolean {
     err instanceof TargetPeriodLockedError ||
     err instanceof AccruedCostPeriodInvalidError ||
     err instanceof AccruedCostPeriodLockedError ||
+    err instanceof CutoffCarryReversalDateError ||
+    err instanceof KontantmetodCarryHasSettlementsError ||
+    err instanceof CutoffCarryCorrectionRefusedError ||
     err instanceof DimensionValidationError ||
     err instanceof MandatoryDimensionMissingError
   )
@@ -937,6 +989,39 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
           details: { date: err.date, lockDate: err.lockDate },
         },
       },
+      { status: 409 }
+    )
+  }
+
+  if (err instanceof CutoffCarryReversalDateError) {
+    return NextResponse.json(
+      {
+        error: {
+          code: err.code,
+          message: err.message,
+          details: { carryDate: err.carryDate, reversalDate: err.reversalDate },
+        },
+      },
+      { status: 409 }
+    )
+  }
+
+  if (err instanceof KontantmetodCarryHasSettlementsError) {
+    return NextResponse.json(
+      {
+        error: {
+          code: err.code,
+          message: err.message,
+          details: { invoiceId: err.invoiceId },
+        },
+      },
+      { status: 409 }
+    )
+  }
+
+  if (err instanceof CutoffCarryCorrectionRefusedError) {
+    return NextResponse.json(
+      { error: { code: err.code, message: err.message } },
       { status: 409 }
     )
   }

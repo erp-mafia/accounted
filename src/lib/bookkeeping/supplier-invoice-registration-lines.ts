@@ -327,6 +327,11 @@ export function isSupplierInvoiceReverseCharge(
     header.reverse_charge === true
 }
 
+export interface SupplierInvoiceRegistrationLinesOptions {
+  /** See supplierInvoiceRowLines. Default true. */
+  deferAccruals?: boolean
+}
+
 /**
  * Every line the registration books for the invoice's rows, all but the skuld
  * on 2440: cost per (account, dimensions), ingående moms per rate or the
@@ -337,6 +342,12 @@ export function isSupplierInvoiceReverseCharge(
  * öresavrundning downwards, the output side of a reverse charge) included.
  * `chart` (the company's momskoder) is read only for a reverse-charge
  * invoice; pass undefined otherwise.
+ *
+ * `options.deferAccruals` (default true) books a periodiserad row on its
+ * 17xx / 29xx interim account. Only a caller that also creates the accrual
+ * schedule may leave it on. The kontantmetoden year-end carry passes false:
+ * no schedule exists under kontantmetoden, so the cost goes to the row's own
+ * account, as the kontantmetoden payment entry books it.
  */
 export function supplierInvoiceRowLines(
   header: SupplierInvoiceRegistrationHeader,
@@ -344,8 +355,13 @@ export function supplierInvoiceRowLines(
   supplierType: string | null | undefined,
   desc: string,
   chart: ChartVatTreatments | undefined,
+  options: SupplierInvoiceRegistrationLinesOptions = {},
 ): CreateJournalEntryLineInput[] {
   const lines: CreateJournalEntryLineInput[] = []
+  const bookingAccount = (item: SupplierInvoiceBookingItem): string =>
+    (options.deferAccruals ?? true)
+      ? resolveBookingAccount('expense', item, item.account_number)
+      : item.account_number
   // Dimensions PR7: expense lines carry item bags merged over the invoice
   // default; every other line (VAT, RC/basis, 2440) carries the default only.
   const defaultDimensions = coerceDimensionsBag(header.default_dimensions)
@@ -356,7 +372,7 @@ export function supplierInvoiceRowLines(
   // moms is never deferred (redovisas på fakturadatum).
   const expenseBuckets = groupExpenseBuckets(
     items,
-    (item) => resolveBookingAccount('expense', item, item.account_number),
+    bookingAccount,
     (item) => toSekOrThrow(item.line_total, header.currency, header.exchange_rate),
     defaultDimensions
   )
@@ -401,7 +417,7 @@ export function supplierInvoiceRowLines(
       throw new Error('supplierInvoiceRowLines: a reverse-charge invoice needs the company momskoder (fetchChartVatTreatments)')
     }
     const rcByRate = groupReverseChargeByRate(
-      items, chart, (item) => resolveBookingAccount('expense', item, item.account_number),
+      items, chart, bookingAccount,
       header.currency, header.exchange_rate,
     )
     const rcSupplierType = supplierType as 'eu_business' | 'non_eu_business' | 'swedish_business'
@@ -454,8 +470,9 @@ export function supplierInvoiceRegistrationLines(
   supplierType: string | null | undefined,
   desc: string,
   chart: ChartVatTreatments | undefined,
+  options: SupplierInvoiceRegistrationLinesOptions = {},
 ): CreateJournalEntryLineInput[] {
-  const lines = supplierInvoiceRowLines(header, items, supplierType, desc, chart)
+  const lines = supplierInvoiceRowLines(header, items, supplierType, desc, chart, options)
   const totalDebits = lines.reduce((sum, l) => sum + l.debit_amount, 0)
   const totalCredits = lines.reduce((sum, l) => sum + l.credit_amount, 0)
   const isForeign = header.currency !== 'SEK'

@@ -116,6 +116,9 @@ describe('gnubok_link_transaction_to_journal_entry: staged from the operation', 
     enqueue({ data: postedEntry, error: null })
     enqueueBankLinkLeg(enqueue)
     enqueue({ data: openInvoice, error: null })
+    // invoice_settlement_side (#3440), then the voucher's lines on that side.
+    enqueue({ data: { settlement_side: 'ar_credit', account_prefix: '151', entry_side: 'credit' }, error: null })
+    enqueue({ data: [{ account_number: '1510', debit_amount: 0, credit_amount: 1250 }], error: null })
     enqueueStage(enqueue)
 
     const result = (await link.execute(

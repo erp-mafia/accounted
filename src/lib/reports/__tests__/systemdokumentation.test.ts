@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildSystemdokumentation, loadSystemdokumentationFacts, type SystemdokumentationFacts } from '../systemdokumentation'
-import { SUPPLIER_INVOICE_ROUNDING_RULES, VOUCHER_SERIES_RULES } from '../system-rules'
+import { KONTANTMETOD_CUTOFF_RULES, SUPPLIER_INVOICE_ROUNDING_RULES, VOUCHER_SERIES_RULES } from '../system-rules'
 
 vi.mock('@/lib/branding/service', () => ({
   getBranding: () => ({ appName: 'Accounted', appUrl: 'https://app.accounted.se' }),
@@ -162,6 +162,9 @@ describe('buildSystemdokumentation', () => {
     const byTitle = Object.fromEntries(r.behandlingsregler.map((x) => [x.rubrik, x.text]))
     expect(byTitle['Öresavrundning på leverantörsfakturor']).toBe(SUPPLIER_INVOICE_ROUNDING_RULES.val)
     expect(byTitle['Öresavrundning på kundfakturor']).toContain('avstängd')
+    // #3440: the kontantmetoden year end is årsomföring per invoice, no vändning.
+    expect(byTitle['Bokslut enligt kontantmetoden']).toBe(KONTANTMETOD_CUTOFF_RULES)
+    expect(byTitle['Bokslut enligt kontantmetoden']).toContain('Ingen vändning bokförs.')
     expect(byTitle['Automatisk låsning']).toBeUndefined()
     expect(r.rattelse_och_las.lock_date).toBe('2026-03-31')
 

@@ -258,6 +258,7 @@ vi.mock('../prior-result-carry', async (importOriginal) => ({
 }))
 
 import {
+  kontantmetodCutoffBlockers,
   validateYearEndReadiness,
   previewYearEndClosing,
   executeYearEndClosing,
@@ -278,8 +279,11 @@ import {
   buildCutoffLines,
   KONTANTMETOD_CUTOFF_DESCRIPTIONS,
   reverseLines,
+  type CutoffCollection,
+  type KontantmetodCarryPlan,
+  type KontantmetodCutoffAssessment,
 } from '../kontantmetod-cutoff'
-import { kontantmetodCutoffSuspendedMessageSv } from '../kontantmetod-cutoff-suspension'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -1166,11 +1170,14 @@ describe('validateYearEndReadiness: kontantmetoden cut-off gate', () => {
     id: 'fp-2', period_start: '2025-01-01', period_end: '2025-12-31',
     is_closed: false, locked_at: null, opening_balance_entry_id: null,
   }
+  // A complete row: the per-invoice carry (#3440) builds this invoice's own
+  // registration verifikat from it (header amounts, no items).
   const openInvoice = {
     id: 'inv-1', company_id: 'company-1', invoice_number: 'F-1',
-    invoice_date: '2024-12-15', status: 'sent', total: 1250, total_sek: 1250,
+    invoice_date: '2024-12-15', status: 'sent', currency: 'SEK', exchange_rate: null,
+    subtotal: 1000, total: 1250, total_sek: 1250,
     vat_amount: 250, vat_amount_sek: 250, vat_treatment: 'standard_25',
-    credited_invoice_id: null, document_type: 'invoice',
+    credited_invoice_id: null, document_type: 'invoice', journal_entry_id: null,
   }
 
   beforeEach(() => {
@@ -1240,33 +1247,36 @@ describe('validateYearEndReadiness: kontantmetoden cut-off gate', () => {
       blocker.code === 'KONTANTMETOD_CUTOFF_CHECK_FAILED',
     )).toBe(false)
     expect(result.ready).toBe(true)
+    // A legacy cut-off (self-hosted): its figures stand, its vändningar must
+    // never be stornoed (LEGACY_KONTANTMETOD_VANDNING).
+    expect(result.warnings).toContainEqual(expect.stringContaining('Makulera inte vändningarna'))
   })
 
-  // #3440 interim block: the blocker stays, but while the cut-off is
-  // suspended no message may send the user to preview and post it. The fix PR
-  // deletes these two cases with the suspension module.
-  it('keeps the blocker but says the cut-off is temporarily unavailable while #3440 is fixed', async () => {
+  // #3440: the interim block is lifted, so the blocker sends the user to
+  // preview and post the per-invoice cut-off.
+  it('blocks and sends the user to preview and post the cut-off', async () => {
     const result = await validateYearEndReadiness(
       makeFilteringClient(cashTables()) as never,
       'company-1', 'user-1', 'fp-1',
     )
     const blocker = result.blockers.find((b) => b.code === 'KONTANTMETOD_CUTOFF_REQUIRED')
     expect(result.ready).toBe(false)
-    expect(blocker?.message).toMatch(/^1 obetalda fakturor var utestående vid periodens slut/)
-    expect(blocker?.message).toContain(kontantmetodCutoffSuspendedMessageSv())
-    expect(blocker?.message).not.toMatch(/Förhandsgranska och bokför/)
+    expect(blocker?.message).toMatch(/^1 fakturor var obetalda vid periodens slut och ska årsomföras/)
+    expect(blocker?.message).toMatch(/Förhandsgranska och bokför avgränsningen innan bokslut\.$/)
+    expect(blocker?.message).not.toMatch(/tillfälligt|vändning/)
   })
 
-  it('says the same when the next fiscal year is missing', async () => {
+  // Per invoice (#3440) there is no vändning, so the cut-off no longer waits
+  // for the next fiscal year.
+  it('needs no next fiscal year: the blocker names the invoices to carry', async () => {
     vi.mocked(findNextPeriod).mockResolvedValue(null as never)
     const result = await validateYearEndReadiness(
       makeFilteringClient(cashTables()) as never,
       'company-1', 'user-1', 'fp-1',
     )
     const blocker = result.blockers.find((b) => b.code === 'KONTANTMETOD_CUTOFF_REQUIRED')
-    expect(blocker?.message).toMatch(/^Kontantmetodens bokslutsavgränsning kan inte bedömas förrän nästa räkenskapsår är upplagt\./)
-    expect(blocker?.message).toContain(kontantmetodCutoffSuspendedMessageSv())
-    expect(blocker?.message).not.toMatch(/förhandsgranska och bokför/i)
+    expect(blocker?.message).toMatch(/^1 fakturor var obetalda vid periodens slut/)
+    expect(blocker?.message).not.toMatch(/nästa räkenskapsår/)
   })
 
   it('fails closed when the cut-off query cannot run', async () => {
@@ -1890,5 +1900,83 @@ describe('previewYearEndClosing: the omföring it discloses', () => {
     })
     expect(inClose.resultAppropriation).toBeNull()
     expect(findNextPeriod).not.toHaveBeenCalled()
+  })
+})
+
+describe('kontantmetodCutoffBlockers (year-end readiness texts, #3440)', () => {
+  const EMPTY: CutoffCollection = {
+    receivables: [], payables: [], unknownVatTreatment: [], strayVatOnZeroRate: [],
+    undatedSettlements: [], carries: [], rotPartialManual: [], rotPartialManualInvoices: [], paidBeforePosting: [],
+    paidBeforePostingManual: [], legacyCovered: [],
+  }
+  const plan = { side: 'customer', invoiceId: 'inv-1' } as KontantmetodCarryPlan
+  const assessment = (
+    over: Partial<Pick<KontantmetodCutoffAssessment, 'mode' | 'complete' | 'plans'>> & { collection?: Partial<CutoffCollection> } = {},
+  ) => ({
+    mode: 'per_invoice' as const,
+    complete: false,
+    plans: [] as KontantmetodCarryPlan[],
+    ...over,
+    collection: { ...EMPTY, ...over.collection },
+  })
+  const open = { hasNextPeriod: false }
+
+  it('has nothing to say about a complete cut-off', () => {
+    expect(kontantmetodCutoffBlockers(assessment({ complete: true }), open)).toEqual([])
+  })
+
+  it('asks to post the carries, with no vändning and no next-period requirement', () => {
+    const [blocker, ...rest] = kontantmetodCutoffBlockers(assessment({ plans: [plan, plan] }), open)
+    expect(rest).toEqual([])
+    expect(blocker).toEqual({
+      code: 'KONTANTMETOD_CUTOFF_REQUIRED',
+      message: expect.stringMatching(/^2 fakturor var obetalda vid periodens slut och ska årsomföras: .*BFL 5 kap 2 §.*Förhandsgranska och bokför avgränsningen innan bokslut\.$/),
+    })
+    expect(blocker!.message).not.toMatch(/vändning|nästa räkenskapsår/)
+  })
+
+  it('names the payments it will correct, and every list a person must handle', () => {
+    const blockers = kontantmetodCutoffBlockers(assessment({
+      collection: {
+        paidBeforePosting: [{
+          side: 'customer', invoiceId: 'inv-2', reference: 'F-2', entryId: 'je-cash', entryDate: '2027-01-14',
+          paymentRowId: 'p', paymentAmount: 1250, carryEntryId: 'je-carry',
+        }],
+        paidBeforePostingManual: [{
+          side: 'supplier', invoiceId: 'si-9', reference: 'L-9', entryId: 'je-batch', entryDate: '2027-01-10',
+          paymentRowId: 'sp', reason: 'shared_verifikat',
+        }],
+        rotPartialManual: ['F-ROT'],
+        legacyCovered: [{ side: 'customer', invoiceId: 'inv-old', reference: 'F-OLD', legacyPeriodEnd: '2025-12-31' }],
+      },
+    }), open)
+    expect(blockers.map((b) => b.code)).toEqual(Array(4).fill('KONTANTMETOD_CUTOFF_REQUIRED'))
+    expect(blockers[0]!.message).toMatch(/^1 fakturor .*betalats efter det .*F-2.*storno och rättelse.*Kör avgränsningen igen\.$/)
+    expect(blockers[1]!.message).toBe(`${getErrorEntry('KONTANTMETOD_CUTOFF_PAID_BEFORE_POSTING_MANUAL')!.message_sv} Fakturor: L-9.`)
+    expect(blockers[2]!.message).toBe(`${getErrorEntry('KONTANTMETOD_CUTOFF_ROT_PARTIAL_MANUAL')!.message_sv} Fakturor: F-ROT.`)
+    expect(blockers[3]!.message).toBe(`${getErrorEntry('KONTANTMETOD_LEGACY_COVERED')!.message_sv} Fakturor: F-OLD.`)
+  })
+
+  it('names at most ten invoices', () => {
+    const refs = Array.from({ length: 12 }, (_, i) => `F-${i + 1}`)
+    const [blocker] = kontantmetodCutoffBlockers(assessment({ collection: { rotPartialManual: refs } }), open)
+    expect(blocker!.message).toMatch(/F-10 och 2 till\.$/)
+  })
+
+  it('says only what to fix when an invoice has an unusable moms setting', () => {
+    const blockers = kontantmetodCutoffBlockers(assessment({
+      plans: [plan], collection: { unknownVatTreatment: ['F-9'], rotPartialManual: ['F-ROT'] },
+    }), open)
+    expect(blockers).toEqual([{
+      code: 'KONTANTMETOD_CUTOFF_REQUIRED',
+      message: expect.stringMatching(/^1 fakturor kan inte tas med .*momsinställning/),
+    }])
+  })
+
+  it('keeps the legacy messages for a legacy period', () => {
+    const [noNext] = kontantmetodCutoffBlockers(assessment({ mode: 'legacy' }), open)
+    expect(noNext!.message).toMatch(/äldre kontantmetodavgränsning med vändning.*nästa räkenskapsår/)
+    const [stale] = kontantmetodCutoffBlockers(assessment({ mode: 'legacy' }), { ...open, hasNextPeriod: true })
+    expect(stale!.message).toMatch(/^En tidigare kontantmetodavgränsning stämmer inte längre med reskontran/)
   })
 })

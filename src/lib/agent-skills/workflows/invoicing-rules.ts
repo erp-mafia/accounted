@@ -132,7 +132,7 @@ If the customer requires an e-invoice (public sector, or a buyer asking for Pepp
 ### What happens after sending
 
 - **Faktureringsmetoden** (\`accrual\`): the verifikat is posted on the invoice date (1510 kundfordran against revenue and utgående moms). The moms belongs to the period of the invoice date, paid or not. If the company has deferred invoice booking switched on, the invoice is booked later from the invoice page instead.
-- **Kontantmetoden** (\`cash\`): nothing is booked at send. Revenue and moms are booked when the payment is registered.
+- **Kontantmetoden** (\`cash\`): nothing is booked at send. Revenue and moms are booked when the payment is registered, except for an invoice still unpaid at the year end: the bokslut carries it into that year (årsomföring), and its later payment clears 1510 with no moms.
 - Either way the invoice is now locked: corrections go through a kreditfaktura only.
 
 ### Step 5: Record payment

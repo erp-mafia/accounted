@@ -871,6 +871,7 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
     ? withRcBasisGapFindings(
         runVatDeclarationChecks(data.rutor, rcInputTotalsFromDeclaration(data), {
           revenueAccountsWithoutRuta: data.revenueAccountsWithoutRuta,
+          kontantmetodCutoff: data.kontantmetodCutoff,
         }),
         rcBasisScan,
         data.rcBasisByRate

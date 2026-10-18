@@ -25,6 +25,7 @@ import { findRcBasisGaps, type RcBasisGap } from '@/lib/reports/rc-basis-gaps'
 import { computeVatDeclaration, type MomsredovisningDetection, rcInputTotalsFromDeclaration, VAT_SETTLEMENT_NET_ACCOUNTS, type VatPeriodSource, type VatSettlementShapedEntry } from '@/lib/reports/vat-declaration'
 import { revenueAccountWithoutRutaFinding, runVatDeclarationChecks, selfAssessedVatWithoutAnyInputVat, type VatCheckReviewMark, type VatDeclarationCheck, type VatDeclarationCheckStatus } from '@/lib/reports/vat-declaration-checks'
 import { listVatCheckReviews } from '@/lib/vat/check-review-store'
+import { fetchKontantmetodCutoffVatFacts } from '@/lib/vat/kontantmetod-cutoff-vat-facts'
 import { applyVatCheckReviews, isReviewableVatCheck, type VatCheckReview, type VatCheckReviewInputs } from '@/lib/vat/check-reviews'
 import { isFilingBlocked, type RcBasisGapScan, withRcBasisGapFindings } from '@/lib/reports/vat-filing-gate'
 import { buildFiledAmounts } from '@/lib/reports/vat-manual-filing'
@@ -35,7 +36,7 @@ import { getVatDeadlineForPeriod, type VatDeadlineCalculationSettings } from '@/
 import { adjustDeadlineToNextBankingDay } from '@/lib/tax/swedish-holidays'
 import { formatVoucherLabel } from '@/lib/transactions/link-journal-entry'
 import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
-import type { VatDeclaration, VatDeclarationRutor } from '@/types'
+import type { KontantmetodCutoffVatFacts, VatDeclaration, VatDeclarationRutor } from '@/types'
 import { createLogger } from '@/lib/logger'
 import { parseVatPeriodArgs } from './vat-period-args'
 
@@ -355,6 +356,12 @@ async function computeVatReportWithRutor(
  *
  * `fiscalPeriodId` scans the räkenskapsår the declaration was computed for
  * (helårsmoms on a broken fiscal year); pass what the declaration got.
+ *
+ * `kontantmetodCutoff` (fetchKontantmetodCutoffVatFacts) feeds the
+ * kontantmetoden year-end cut-off WARNINGs (#3440) the web view shows. The
+ * readers that report findings to someone pass it (vatFilingVerdictWithReviews,
+ * the review service); the filing paths do not pay for the read, since a
+ * WARNING never changes `blocked`.
  */
 export interface VatFilingVerdict {
   checks: VatDeclarationCheck[]
@@ -371,7 +378,7 @@ export async function vatFilingVerdict(
   supabase: SupabaseClient,
   companyId: string,
   declaration: VatDeclaration,
-  options: { fiscalPeriodId?: string } = {},
+  options: { fiscalPeriodId?: string; kontantmetodCutoff?: KontantmetodCutoffVatFacts } = {},
 ): Promise<VatFilingVerdict> {
   const { type: periodType, year, period } = declaration.period
   let scan: RcBasisGapScan
@@ -387,6 +394,7 @@ export async function vatFilingVerdict(
   const checks = withRcBasisGapFindings(
     runVatDeclarationChecks(declaration.rutor, rcInputTotalsFromDeclaration(declaration), {
       revenueAccountsWithoutRuta: declaration.revenueAccountsWithoutRuta,
+      kontantmetodCutoff: options.kontantmetodCutoff ?? declaration.kontantmetodCutoff,
     }),
     scan,
     declaration.rcBasisByRate
@@ -411,7 +419,12 @@ export async function vatFilingVerdictWithReviews(
   declaration: VatDeclaration,
   options: { fiscalPeriodId?: string } = {},
 ): Promise<VatFilingVerdict & { inputs: VatCheckReviewInputs }> {
-  const verdict = await vatFilingVerdict(supabase, companyId, declaration, options)
+  // The kontantmetoden cut-off WARNINGs the web view shows (#3440). Never
+  // throws: a failed read is its own warning.
+  const kontantmetodCutoff = await fetchKontantmetodCutoffVatFacts(
+    supabase, companyId, declaration.period.start, declaration.period.end,
+  )
+  const verdict = await vatFilingVerdict(supabase, companyId, declaration, { ...options, kontantmetodCutoff })
   const inputs: VatCheckReviewInputs = { declaration, gaps: verdict.gaps }
   if (!verdict.checks.some((check) => isReviewableVatCheck(check, inputs))) return { ...verdict, inputs }
   let reviews: VatCheckReview[] = []

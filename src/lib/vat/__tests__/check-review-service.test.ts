@@ -16,6 +16,12 @@ const store = vi.hoisted(() => ({
 }))
 vi.mock('@/lib/vat/check-review-store', () => store)
 
+// The kontantmetoden cut-off facts (#3440) have their own tests
+// (kontantmetod-cutoff-vat-facts.test.ts): not a cash company here.
+vi.mock('@/lib/vat/kontantmetod-cutoff-vat-facts', () => ({
+  fetchKontantmetodCutoffVatFacts: vi.fn(async () => undefined),
+}))
+
 import { markVatCheckReviewed, previewVatCheckReview, withdrawVatCheckReview } from '../check-review-service'
 import { vatCheckFingerprint } from '../check-reviews'
 

@@ -17,6 +17,7 @@ import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import { assertStornoTarget } from '@/lib/core/bookkeeping/storno-target'
 import { postedLineAsInput } from '@/lib/core/bookkeeping/posted-line-input'
+import { findKontantmetodCarry } from '@/lib/bookkeeping/kontantmetod-carry-guard'
 import {
   correctionChainDepth,
   CORRECTION_CHAIN_GUARD_DEPTH,
@@ -26,6 +27,7 @@ import {
   BookkeepingDatabaseError,
   CannotCorrectNonPostedError,
   CorrectionChainTooDeepError,
+  CutoffCarryCorrectionRefusedError,
   EntryAlreadyReversedError,
   EntryDateOutsideFiscalPeriodError,
   FiscalPeriodNotFoundError,
@@ -245,6 +247,18 @@ export async function correctEntry(
 
   if (original.status !== 'posted') {
     throw new CannotCorrectNonPostedError(original.status)
+  }
+
+  // A kontantmetod year-end carry (#3440) is never corrected in place: it is
+  // stornoed on its own date and the cut-off is run again, which rebuilds it
+  // from the invoice. The database refuses the same (kontantmetod_carry_on_
+  // reversal), but only after this function has posted both of its entries,
+  // and the refusal then reads as "already reversed".
+  if (
+    original.source_type === 'year_end' &&
+    (await findKontantmetodCarry(supabase, companyId, original.id))
+  ) {
+    throw new CutoffCarryCorrectionRefusedError()
   }
 
   // Chain-depth guard: stop corrections stacking on corrections. Agents have

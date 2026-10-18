@@ -56,7 +56,9 @@ import { currentAppVersion } from '@/lib/reports/app-version'
  * form's closing account), the ingående balans (generateOpeningBalances: the
  * balance sheet's UB with its project split), the omföring of föregående års
  * resultat (result-appropriation-service.ts, also behind its historical
- * repair), the kontantmetod cut-off (buildCutoffLines), the balansdagen
+ * repair), the kontantmetod carry per invoice (buildKontantmetodCarryLines:
+ * the invoice's own registration lines, scaled to the part still open; a
+ * manual carry's lines name no rule), the balansdagen
  * revaluation (lib/bookkeeping/currency-revaluation.ts), the
  * bokslutsdispositioner (lib/bokslut's calculators), the accrual schedules'
  * monthly dissolutions (lib/bookkeeping/accruals/service.ts) and the year-end

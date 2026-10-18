@@ -488,6 +488,226 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
       tool: 'gnubok_query_journal',
     },
   },
+  // Kontantmetod year-end carry (årsomföring, #3440): a storno or rättelse
+  // of a carry verifikat. The engine refuses by name before any write
+  // (lib/bookkeeping/kontantmetod-carry-guard.ts); the database refuses the
+  // same in kontantmetod_carry_on_reversal (20261018131100).
+  CUTOFF_CARRY_REVERSAL_DATE: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikatet är kontantmetodens årsomföring av en obetald faktura och kan bara makuleras på sitt eget datum (räkenskapsårets sista dag), så att momsen lämnar samma momsperiod som den redovisades i.',
+    message_en:
+      'This verifikat carries an unpaid invoice over the kontantmetod year end and can only be reversed on its own date (the last day of the fiscal year), so its moms leaves the VAT period it was declared in.',
+    remediation: {
+      description:
+        'Reverse the carry with reversal_date equal to its entry_date, then run the kontantmetod cut-off again.',
+    },
+  },
+  KONTANTMETOD_CARRY_HAS_SETTLEMENTS: {
+    httpStatus: 409,
+    message_sv:
+      'Fakturan som årsomföringen avser har betalningar efter bokslutsdagen eller en bokförd kreditfaktura. Makulera dem först: annars blir kundfordran eller leverantörsskulden kvar utan motpost.',
+    message_en:
+      'The invoice this year-end carry books has payments after the year end or a booked credit note. Undo those first, or the receivable or payable they cleared is left without its counterpart.',
+    remediation: {
+      description:
+        'Reverse the payment and credit note verifikat of the invoice first, then reverse the carry on its own date.',
+    },
+  },
+  CUTOFF_CARRY_CORRECTION_REFUSED: {
+    httpStatus: 409,
+    message_sv:
+      'Kontantmetodens årsomföring av en faktura rättas inte med rättelseverifikat. Makulera den på sitt eget datum och kör bokslutsavgränsningen igen, så byggs den om från fakturan.',
+    message_en:
+      'A kontantmetod year-end carry is not corrected with a rättelse. Reverse it on its own date and run the cut-off again, which rebuilds it from the invoice.',
+    remediation: {
+      description:
+        'Fix the invoice if it is wrong, reverse the carry with reversal_date equal to its entry_date, then stage the kontantmetod cut-off again.',
+    },
+  },
+  KONTANTMETOD_CARRY_CANCEL_REFUSED: {
+    httpStatus: 409,
+    message_sv:
+      'Kontantmetodens årsomföring av en faktura kan inte annulleras. Makulera den på sitt eget datum i stället.',
+    message_en:
+      'A kontantmetod year-end carry cannot be cancelled. Reverse it on its own date instead.',
+  },
+  // The integrity of a carry's link (20261018131120): a posted carry is never
+  // deleted, its invoice link is never moved by hand, an invoice has at most
+  // one posted carry, and a carry is restored only together with its link.
+  KONTANTMETOD_CARRY_DELETE_REFUSED: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikatet är kontantmetodens årsomföring av en faktura och kan inte raderas: fakturan är kopplad till det och momsen kan redan vara redovisad. Makulera årsomföringen på sitt eget datum i stället.',
+    message_en:
+      'This verifikat is a kontantmetod year-end carry and cannot be deleted: the invoice is linked to it and its moms may already be declared. Reverse the carry on its own date instead.',
+    remediation: {
+      description:
+        'Reverse the carry with reversal_date equal to its entry_date (refused while the invoice has later payments or a booked credit note), then run the cut-off again if the invoice is still open.',
+    },
+  },
+  KONTANTMETOD_CARRY_LINK_LOCKED: {
+    httpStatus: 409,
+    message_sv:
+      'Fakturan är kopplad till sin årsomföring vid kontantmetodens bokslut. Kopplingen styr hur betalningen bokförs och kan bara släppas genom att årsomföringen makuleras på sitt eget datum.',
+    message_en:
+      'The invoice is linked to its kontantmetod year-end carry. The link decides how the payment is booked and is released only by reversing the carry on its own date.',
+    remediation: {
+      description:
+        'Do not change invoices.journal_entry_id / supplier_invoices.registration_journal_entry_id of a carried invoice. Reverse the carry with reversal_date equal to its entry_date instead.',
+    },
+  },
+  KONTANTMETOD_CARRY_ALREADY_LIVE: {
+    httpStatus: 409,
+    message_sv:
+      'Fakturan har redan en bokförd årsomföring. En faktura årsomförs bara en gång, annars redovisas momsen två gånger.',
+    message_en:
+      'The invoice already has a posted year-end carry. An invoice is carried once; a second carry would declare its moms twice.',
+  },
+  KONTANTMETOD_CARRY_RESTORE_REFUSED: {
+    httpStatus: 409,
+    message_sv:
+      'Makuleringen av årsomföringen kan inte tas bort: fakturan har efter makuleringen fått betalningar, en kreditfaktura eller en ny årsomföring, och årsomföringen skulle då redovisa momsen en gång till.',
+    message_en:
+      'The storno of this year-end carry cannot be removed: since it, the invoice has received payments, a credit note or a new carry, and restoring the carry would declare its moms again.',
+    remediation: {
+      description:
+        'Leave the storno in place. If the invoice is still open, run the kontantmetod cut-off again; it carries the invoice afresh.',
+    },
+  },
+  // The database backstops of a carry (20261018131100): a payment row dated on
+  // or before the carry, and a kontantmetod cash verifikat for a carried
+  // invoice. Both raise with the code as the exception message (23514), which
+  // getErrorMessage maps through this registry.
+  KONTANTMETOD_CARRIED_PAYMENT_BEFORE_CUTOFF: {
+    httpStatus: 409,
+    message_sv:
+      'Fakturan är årsomförd som obetald vid bokslutet, så en betalning daterad på eller före bokslutsdagen kan inte registreras. Makulera årsomföringen på sitt eget datum först och bokför sedan betalningen.',
+    message_en:
+      'The invoice was carried as unpaid over the kontantmetod year end, so a payment dated on or before that date cannot be registered. Reverse the carry on its own date first, then book the payment.',
+    remediation: {
+      description:
+        'Check the payment date. If the invoice really was paid before the year end, reverse its carry verifikat with reversal_date equal to the carry entry_date, then book the payment and run the cut-off again.',
+    },
+  },
+  KONTANTMETOD_CARRIED_INVOICE_CASH_ENTRY: {
+    httpStatus: 409,
+    message_sv:
+      'Fakturan är årsomförd vid bokslutet och ligger på kund- eller leverantörsreskontran. Betalningen bokförs mot 1510 eller 2440 utan moms, inte som en kontantbetalning med intäkt eller kostnad.',
+    message_en:
+      'The invoice was carried over the kontantmetod year end and sits on 1510 / 2440. Its payment is a clearing against 1510 / 2440 with no moms, never a cash payment that books revenue or cost again.',
+    remediation: {
+      description:
+        'Register the payment through the invoice payment or bank match flow, which clears 1510 / 2440 for a carried invoice.',
+    },
+  },
+  // Pre-flight of the cut-off (lib/vat/kontantmetod-cutoff-preflight.ts), at
+  // staging and again at approval, before any write.
+  KONTANTMETOD_CUTOFF_PERIOD_LOCKED: {
+    httpStatus: 409,
+    message_sv:
+      'Kontantmetodens bokslutsavgränsning behöver bokföra på ett datum som är låst. Flytta tillbaka låsdatumet för bokföringen eller lås upp perioden och försök igen.',
+    message_en:
+      'The kontantmetoden cut-off has to book on a date that is locked (the period end, or the date of a payment verifikat it corrects).',
+    remediation: {
+      description:
+        'Move the company lock date back (company settings; the settings ask you to acknowledge any filed VAT period it reopens) or unlock the fiscal period, then stage the cut-off again. Only with the user: it is an accountant decision.',
+    },
+  },
+  KONTANTMETOD_CUTOFF_VAT_PERIOD_FILED: {
+    httpStatus: 409,
+    message_sv:
+      'Kontantmetodens bokslutsavgränsning ändrar momsen i en momsperiod som redan är deklarerad. Bekräfta perioden för att bokföra ändå och lämna sedan en rättad momsdeklaration för perioden.',
+    message_en:
+      'The kontantmetoden cut-off changes the moms of a VAT period already filed. The moms belongs to that period, so it is not moved; a corrected momsdeklaration is needed.',
+    remediation: {
+      description:
+        'Tell the user which tax periods are affected and that a corrected momsdeklaration must be filed for each (voluntarily and before Skatteverket finds it, without skattetillägg). With their agreement, stage again with acknowledge_filed_vat_periods listing those tax_period labels; the result lists amended_vat_periods_required. If the momsredovisning verifikat of such a period is already booked, the added moms also needs a supplementary momsredovisning dated in that period that moves it to 2650.',
+      tool: 'gnubok_post_kontantmetod_cutoff',
+    },
+  },
+  // What the cut-off cannot do by rule: a person decides (#3440).
+  KONTANTMETOD_CUTOFF_ROT_PARTIAL_MANUAL: {
+    httpStatus: 409,
+    message_sv:
+      'En ROT-, RUT- eller grön teknik-faktura var delvis betald eller fick avdraget återkrävt före bokslutet och kan inte årsomföras automatiskt: momsen och Skatteverkets andel för den betalda delen är redan bokförda. Redovisningsbyrån skriver årsomföringen av den obetalda delen, och bokslutsavgränsningen bokför och kopplar den till fakturan per bokslutsdagen.',
+    message_en:
+      'A ROT/RUT or green-technology invoice was partly paid (or its deduction reclaimed) before the year end and cannot be carried by rule: the moms and the Skatteverket share of the paid part were booked at payment. The accountant writes the carry of the open part, and the cut-off posts it on the period end and links it to the invoice.',
+    remediation: {
+      description:
+        'Have the accountant write the carry of the open part: exactly the open customer share on 151x, exactly Skatteverket\'s share of the open part on 1513, and the revenue (3xxx) and output moms (261x to 263x) behind both. Stage gnubok_post_kontantmetod_cutoff again with manual_carries [{ invoice_id, lines }]; it posts the carry on the period end and links it to the invoice, then re-run year-end readiness. Never book it as a separate manual voucher: an unlinked voucher leaves the invoice open and its payment books the moms again.',
+      tool: 'gnubok_post_kontantmetod_cutoff',
+    },
+  },
+  KONTANTMETOD_MANUAL_CARRY_INVALID: {
+    httpStatus: 409,
+    message_sv:
+      'Den manuella årsomföringen kan inte bokföras: raderna måste balansera, sätta exakt den obetalda kunddelen på 151x och exakt Skatteverkets andel av den obetalda delen på 1513, motbokas med intäkt (3xxx) och, när den obetalda delen har moms, utgående moms (261x till 263x), och inga pengar på 19xx, och fakturan måste vänta på en manuell årsomföring.',
+    message_en:
+      'The manual carry cannot be posted: its lines must balance, put exactly the open customer share on 151x and exactly Skatteverket\'s share of the open part on 1513, book the revenue (3xxx) and, when the open part carries moms, the output moms (261x to 263x) against them, and nothing on 19xx; the invoice must be one listed as KONTANTMETOD_CUTOFF_ROT_PARTIAL_MANUAL.',
+    remediation: {
+      description:
+        'Fix the lines named in the message and stage gnubok_post_kontantmetod_cutoff again with the corrected manual_carries.',
+      tool: 'gnubok_post_kontantmetod_cutoff',
+    },
+  },
+  KONTANTMETOD_MANUAL_CARRY_DEDUCTION_MISMATCH: {
+    httpStatus: 409,
+    message_sv:
+      'Den manuella årsomföringen kan inte bokföras: 1513 ska vara exakt Skatteverkets andel av fakturans obetalda del, varken mer eller mindre. Bokförs mindre nollställer Skatteverkets utbetalning 1513 utan moms, så momsen på mellanskillnaden redovisas aldrig och 1513 blir negativt. Andelen för den betalda delen bokfördes redan vid betalningen.',
+    message_en:
+      'The manual carry cannot be posted: 1513 must equal Skatteverket\'s share of the invoice\'s open part exactly, neither more nor less. With less, Skatteverket\'s payout clears 1513 with no moms, so the moms on the difference is never declared and 1513 goes negative. The share of the part paid before the year end was booked at that payment.',
+    remediation: {
+      description:
+        'Put exactly the amount named in the message on 1513 (debit; credit for a credit note), with the matching revenue and moms against it, and stage gnubok_post_kontantmetod_cutoff again with the corrected manual_carries.',
+      tool: 'gnubok_post_kontantmetod_cutoff',
+    },
+  },
+  KONTANTMETOD_CUTOFF_PAID_BEFORE_POSTING_MANUAL: {
+    httpStatus: 409,
+    message_sv:
+      'En faktura som var obetald vid bokslutet har betalats efter det med en verifikation som inte kan rättas automatiskt (ett samlingsverifikat, ett manuellt eller importerat verifikat, eller en betalning utan verifikat). Rätta verifikationen manuellt så att betalningen bokförs mot kund- eller leverantörsreskontran utan intäkt, kostnad eller moms.',
+    message_en:
+      'An invoice unpaid at the year end was paid after it through a verifikat that cannot be corrected by rule (shared by several invoices, manual or imported, or a payment without a verifikat). Correct it by hand so the payment clears 1510 / 2440 with no revenue, cost or moms, after the carry is posted.',
+    remediation: {
+      description:
+        'After the cut-off has carried the invoice, correct the payment verifikat with gnubok_correct_entry: keep the bank leg and replace the revenue or cost and moms lines with one line clearing 1510 (customer) or 2440 (supplier). A payment with no verifikat (reason no_verifikat): undo that payment registration and register the payment again through the invoice payment or bank match flow, which books the clearing. Each corrected verifikat dated in a VAT period already filed needs a corrected momsdeklaration (amended_vat_periods_required). Then re-run year-end readiness.',
+      tool: 'gnubok_correct_entry',
+    },
+  },
+  KONTANTMETOD_LEGACY_COVERED: {
+    httpStatus: 409,
+    message_sv:
+      'Fakturan omfattades redan av en äldre kontantmetodavgränsning med vändning vid ett tidigare bokslut och årsomförs därför inte automatiskt: momsen kan redan vara redovisad. Redovisningsbyrån avgör om den ska årsomföras.',
+    message_en:
+      'The invoice was already covered by an earlier legacy kontantmetod cut-off with vändning, so it is withheld from the automatic carry: its moms may already have been declared. The accountant decides.',
+    remediation: {
+      description:
+        'Ask the accountant. To carry it anyway, stage the cut-off again with acknowledge_legacy_invoice_ids listing the invoice ids.',
+      tool: 'gnubok_post_kontantmetod_cutoff',
+    },
+  },
+  // Momsdeklaration findings (lib/reports/vat-declaration-checks.ts). WARNING
+  // tier: they never gate a filing, and manual filing stays ungated.
+  KONTANTMETOD_CUTOFF_INCOMPLETE: {
+    httpStatus: 409,
+    message_sv:
+      'Momsperioden innehåller slutet på ett räkenskapsår med kontantmetoden, men bokslutsavgränsningen är inte klar. Momsen på fakturor som var obetalda vid årets slut hör till den här perioden.',
+    message_en:
+      'The VAT period contains the end of a kontantmetoden fiscal year whose year-end cut-off is not complete. The moms on invoices unpaid at the year end belongs to this period.',
+    remediation: {
+      description:
+        'Run gnubok_year_end_readiness for the fiscal year and post the cut-off with gnubok_post_kontantmetod_cutoff before filing this period.',
+      tool: 'gnubok_year_end_readiness',
+    },
+  },
+  LEGACY_KONTANTMETOD_VANDNING: {
+    httpStatus: 409,
+    message_sv:
+      'Ett räkenskapsår stängdes med en äldre kontantmetodavgränsning med vändning. Makulera inte vändningarna: de bokförda och redovisade beloppen ska stå kvar.',
+    message_en:
+      'A fiscal year was closed with a legacy kontantmetod cut-off with a day-one vändning. Never reverse those vändningar: the posted and declared figures stand. Invoices it covered and that were paid the year after may have had their moms declared twice; the accountant decides on a corrected momsdeklaration.',
+  },
   // ── Wave 3: journal-entry actions (lib/core/bookkeeping/journal-entry-corrections.ts,
   // lib/core/bookkeeping/journal-entry-edits.ts, lib/bookkeeping/no-doc-required.ts) ──
   JOURNAL_RATTELSE_REFUSED: {
@@ -1121,6 +1341,21 @@ const LINK_TX_JE: Record<string, StructuredErrorEntry> = {
       'Transaktionens och fakturans valuta måste vara samma för att länka till en befintlig verifikation. Använd matchningsdialogen för valutaomräkning.',
     message_en:
       'Transaction and invoice currency must match to link to an existing voucher. Use the match-invoice flow for cross-currency settlement.',
+  },
+  // The verifikat does not settle the invoice on the invoice's own side
+  // (invoice_settlement_side): a kontantmetod invoice never booked settles on
+  // the 19xx debit, every other invoice, a carried one included (#3440), on
+  // the 151x credit.
+  LINK_TX_INVOICE_SETTLEMENT_SIDE: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen reglerar inte fakturan: en faktura som är bokförd (eller årsomförd vid kontantmetodens bokslut) betalas mot kundfordran 1510, och en obokförd faktura under kontantmetoden mot bankkontot. Välj den verifikation som bokför betalningen på rätt sida, eller matcha transaktionen mot fakturan så bokförs betalningen rätt.',
+    message_en:
+      'The verifikat does not settle this invoice: a booked invoice (or one carried over the kontantmetod year end) is settled by a 151x credit, an unbooked kontantmetod invoice by a 19xx debit. Pick the verifikat that books the payment on that side, or match the transaction to the invoice so the payment is booked correctly.',
+    remediation: {
+      description:
+        'details.accountPrefix and details.entrySide name the line the verifikat must have. Link a verifikat with that line, or settle the invoice through the bank match (gnubok_match_transaction_to_invoice), which books the right shape.',
+    },
   },
   // Raw database failure on the transaction or invoice UPDATE. The service
   // puts the Postgres message in details.reason; callers append it so the
@@ -3236,13 +3471,10 @@ const YEAR_END: Record<string, StructuredErrorEntry> = {
       'The fiscal period has no posted activity, so no year-end voucher can be created. Post or import the period activity before running year-end closing.',
     retryable: false,
   },
-  // Interim block (#3440): the kontantmetoden cut-off as built declares the
-  // moms on invoices unpaid at year end a second time when they are paid in
-  // the next year. Both doors refuse while isKontantmetodCutoffSuspended()
-  // (lib/core/bookkeeping/kontantmetod-cutoff-suspension.ts) is true: staging
-  // (gnubok_post_kontantmetod_cutoff) and approval (commitPendingOperation,
-  // before the claim, so a staged operation stays pending). The code stays
-  // registered after the fix ships: agents pattern-match on codes.
+  // Interim block (#3442), lifted when the per-invoice cut-off (årsomföring,
+  // #3440) shipped: nothing raises it any more. The code stays registered:
+  // agents pattern-match on codes, and a cut-off operation staged while it
+  // was suspended may still have recorded it.
   KONTANTMETOD_CUTOFF_SUSPENDED: {
     httpStatus: 409,
     message_sv:

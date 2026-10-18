@@ -276,6 +276,7 @@ export const transactionsLinkJournalEntry = defineOperation({
       'A row already linked to a posted verifikat returns 409 LINK_TX_TX_ALREADY_LINKED; a pointer left by a storno does not count.',
       'The verifikat must be posted: LINK_TX_JE_NOT_POSTED otherwise.',
       'invoice_id: the invoice must be open (sent, overdue, partially_paid), not a credit note, and in the transaction currency (LINK_TX_INVOICE_CURRENCY_MISMATCH); cross-currency payments go through match-invoice.',
+      'invoice_id: the verifikat must settle the invoice on its own side (LINK_TX_INVOICE_SETTLEMENT_SIDE): a 151x credit for a booked invoice, including a kontantmetod invoice carried over the year end, a 19xx debit for a kontantmetod invoice never booked.',
     ],
     example: {
       request: { journal_entry_id: '4d2a…' },
@@ -304,6 +305,7 @@ export const transactionsLinkJournalEntry = defineOperation({
     'LINK_TX_INVOICE_NOT_OPEN',
     'LINK_TX_INVOICE_CREDIT_NOTE',
     'LINK_TX_INVOICE_CURRENCY_MISMATCH',
+    'LINK_TX_INVOICE_SETTLEMENT_SIDE',
     'LINK_TX_INVOICE_RACE',
     'MATCH_INVOICE_RECORD_PAYMENT_FAILED',
     'BANK_BOOKING_CURRENCY_MISMATCH',

@@ -404,11 +404,17 @@ export type InvoiceRegistrationLinesSource = InvoiceCashLinesSource
  *
  * numberOverride replaces the invoice number in the line texts (self-billing
  * received books under the counterparty's external number).
+ *
+ * options.deferAccruals (default true) lets periodiserade lines credit their
+ * 29xx interim account. Only a caller that also creates the accrual schedule
+ * may leave it on. The kontantmetoden year-end carry passes false: no schedule
+ * exists under kontantmetoden, so a 29xx balance would never dissolve.
  */
 export function buildInvoiceRegistrationLines(
   invoice: InvoiceRegistrationLinesSource,
   entityType: EntityType,
   numberOverride?: string | null,
+  options: { deferAccruals?: boolean } = {},
 ): CreateJournalEntryLineInput[] {
   const lines: CreateJournalEntryLineInput[] = []
   const isForeign = invoice.currency !== 'SEK'
@@ -425,8 +431,8 @@ export function buildInvoiceRegistrationLines(
       invoice.items, invoice.vat_treatment, entityType, tag,
       invoice.currency, invoice.exchange_rate,
       // Schedules are created right after this entry commits (send/mark-sent
-      // flows), so deferring to 29xx here is safe.
-      { deferAccruals: true, defaultDimensions, goodsDeliveryCountry: invoice.delivery_country }
+      // flows), so deferring to 29xx here is safe; the year-end carry opts out.
+      { deferAccruals: options.deferAccruals ?? true, defaultDimensions, goodsDeliveryCountry: invoice.delivery_country }
     ))
   } else {
     // Fallback: no items available, use invoice-level amounts. Strict
@@ -514,11 +520,15 @@ export function buildInvoiceRegistrationLines(
  *
  * originalVoucherRef (e.g. "A-42") is embedded in the line texts: BFL 5 kap.
  * 5 § requires a correction to point back to the corrected verifikation.
+ *
+ * options.deferAccruals: as on buildInvoiceRegistrationLines (default true;
+ * the kontantmetoden year-end carry passes false).
  */
 export function buildCreditNoteLines(
   creditNote: InvoiceRegistrationLinesSource,
   entityType: EntityType,
   originalVoucherRef?: string,
+  options: { deferAccruals?: boolean } = {},
 ): CreateJournalEntryLineInput[] {
   const lines: CreateJournalEntryLineInput[] = []
   const tag = invoiceTag(creditNote)
@@ -539,7 +549,7 @@ export function buildCreditNoteLines(
       // hits the same 29xx interim account; the original's schedule is
       // cancelled/stornoed by the credit flow. delivery_country is copied
       // from the original too, so goods revenue reverses on 3105 / 3108.
-      { deferAccruals: true, defaultDimensions, goodsDeliveryCountry: creditNote.delivery_country }
+      { deferAccruals: options.deferAccruals ?? true, defaultDimensions, goodsDeliveryCountry: creditNote.delivery_country }
     )
     // Every caller hands us items negated with -Math.abs (build-credit-note-
     // item.ts), so generatePerRateLines lands every line on the debit side

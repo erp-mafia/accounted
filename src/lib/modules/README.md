@@ -484,10 +484,11 @@ the bokslutsverifikation (`year_end.closing`), the ingående balans
 (`generateOpeningBalances`, `ledger.opening_balance`, one event across its
 per-account retry) and the omföring (`generateResultAppropriation`, and its
 historical repair, `year_end.result_appropriated`); the bokslutsdispositioner
-route, the kontantmetod cut-off and its vändningar (`postKontantmetodCutoff`)
-record `year_end.closing` too, and every storno a failed close or cut-off
-makes of its own verifikat `ledger.storno`. The subject is the fiscal
-period. These producers are kernel code (`lib/core`), which may not read the
+route and the kontantmetod cut-off (`postKontantmetodCutoff`, one event per
+invoice carried, #3440) record `year_end.closing` too, and every storno a
+failed close or cut-off makes of its own verifikat `ledger.storno` (the
+cut-off's correction of a cash verifikat stays on `correctEntry`). The
+subject is the fiscal period. These producers are kernel code (`lib/core`), which may not read the
 approval scope, so their doors (the year-end and opening-balances routes, the
 staged executors) hand their link basis down as a function the port calls
 only while it is on; `lib/posting` counts as a kernel inner module. The

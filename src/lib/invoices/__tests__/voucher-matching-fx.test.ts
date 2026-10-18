@@ -27,13 +27,16 @@ import {
   validateVoucherForSupplierInvoiceLink,
 } from '../supplier-voucher-matching'
 import { makeInvoice, makeSupplierInvoice, createQueuedMockSupabase } from '@/tests/helpers'
+import { invoiceSettlementSideFor } from '../invoice-settlement-side'
 
 // Which voucher line settles the invoice is a DB function
 // (supplier_invoice_settlement_side, read through supplier-settlement-side.ts).
 // Stubbed so the lookup takes no slot in the queued Supabase mock. Every test
 // in this file is the 244x-debit side and is unchanged by issue #2854; the
 // 19xx-credit side is in supplier-voucher-matching-kontantmetod.test.ts. The
-// customer-side matcher in this file does not use it.
+// customer-side matcher asks invoice_settlement_side through supabase.rpc,
+// which the filtering mock below answers with the TypeScript twin (pinned to
+// the SQL function by invoice-settlement-side.pg.test.ts).
 vi.mock('@/lib/invoices/supplier-settlement-side', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../supplier-settlement-side')>()
   return { ...actual, resolveSupplierSettlementSide: async () => actual.AP_DEBIT_SIDE }
@@ -170,6 +173,8 @@ function applyEntryFilters(entries: FixtureEntry[], filters: AnyRecordedFilter[]
 
 interface FilteringMockConfig {
   accountingMethod?: 'accrual' | 'cash'
+  /** The customer invoice's booking verifikat (journal_entry_id), if any. */
+  invoiceJournalEntryId?: string | null
   entries: FixtureEntry[]
   /** Rows returned by the invoice_payments / supplier_invoice_payments dedup. */
   existingLinks?: { journal_entry_id: string }[]
@@ -315,7 +320,19 @@ function createFilteringSupabase(config: FilteringMockConfig) {
   }
 
   return {
-    supabase: { from: vi.fn((table: string) => chainFor(table)), rpc: vi.fn() },
+    supabase: {
+      from: vi.fn((table: string) => chainFor(table)),
+      // invoice_settlement_side, answered by the twin of the SQL rule.
+      rpc: vi.fn((fn: string) => {
+        const side = fn === 'invoice_settlement_side'
+          ? invoiceSettlementSideFor(config.accountingMethod, config.invoiceJournalEntryId)
+          : null
+        const row = side
+          ? { settlement_side: side.side, account_prefix: side.accountPrefix, entry_side: side.entrySide }
+          : null
+        return { maybeSingle: () => Promise.resolve({ data: row, error: null }) }
+      }),
+    },
     queries,
   }
 }
@@ -1051,10 +1068,12 @@ describe('validateVoucherForInvoiceLink: foreign-currency invoices', () => {
     expect(result.ok).toBe(true)
   })
 
-  it('refuses on kontantmetoden when the invoice was booked at issue', async () => {
-    // journal_entry_id means a 1510 balance at the invoice rate: a kronor
-    // settlement leaves a kursdifferens the cash path never books, so the
-    // validator refuses exactly where the RPC does.
+  it('settles a kontantmetod invoice booked at issue (or carried) on its 1510 credit', async () => {
+    // journal_entry_id means a 1510 balance at the invoice rate. Since
+    // #3440 the side follows the invoice, not the method: such an invoice is
+    // read on its 151x credit, and a plain-SEK clearing settles it in full
+    // with the FX residual booked by the RPC, exactly as on
+    // faktureringsmetoden (link-voucher-fx-residual.pg.test.ts).
     const cashVoucher = entry('je-cash-booked', 22, 'Inbetalning', [
       {
         id: 'l-booked-bank',
@@ -1073,6 +1092,7 @@ describe('validateVoucherForInvoiceLink: foreign-currency invoices', () => {
     ])
     const { supabase } = createFilteringSupabase({
       accountingMethod: 'cash',
+      invoiceJournalEntryId: 'je-registration',
       entries: [cashVoucher],
     })
 
@@ -1083,9 +1103,10 @@ describe('validateVoucherForInvoiceLink: foreign-currency invoices', () => {
       'je-cash-booked'
     )
 
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    expect(result.code).toBe('LINK_VOUCHER_CURRENCY_MISMATCH')
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.paymentAmount).toBe(1000)
+    expect(result.isFullyPaid).toBe(true)
   })
 
   it('still refuses the wrong voucher on kontantmetoden', async () => {

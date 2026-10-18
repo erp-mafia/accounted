@@ -1,12 +1,8 @@
 import type { Skill } from '../types'
-import { isKontantmetodCutoffSuspended } from '@/lib/core/bookkeeping/kontantmetod-cutoff-suspension'
-
-// #3440: while the kontantmetoden cut-off is suspended it cannot have been
-// done, so the skill says so instead of asking. The fix PR deletes the
-// suspension module and keeps the second branch.
-const YEAR_END_CUTOFF_NOTE = isKontantmetodCutoffSuspended()
-  ? 'If this period contains the fiscal year-end, the year-end cut-off from `year-end-close` is temporarily suspended (#3440), so the moms on invoices unpaid at year end is not in this declaration yet. Say so to the user before they file, and never book that moms or the receivables and payables by hand as a workaround.'
-  : 'If this period contains the fiscal year-end, ask whether the year-end cut-off from `year-end-close` has been done before filing.'
+// Kontantmetoden (#3440): the year-end cut-off declares the moms of invoices
+// unpaid at year end in the VAT period that holds balansdagen.
+const YEAR_END_CUTOFF_NOTE =
+  'If this period contains the fiscal year-end, the year-end cut-off from `year-end-close` must be posted before filing: it declares the moms on invoices unpaid at balansdagen in this period, and the payments next year then book no moms. While it is missing, `gnubok_vat_close_check` warns `KONTANTMETOD_CUTOFF_INCOMPLETE`; tell the user before they file, and never book that moms or the receivables and payables by hand instead. A warning `LEGACY_KONTANTMETOD_VANDNING` means an older cut-off with vändning exists: its figures stand, never storno its vändningar.'
 
 const body = `# Quarterly VAT Review (Momsdeklaration): Accounted
 
