@@ -261,6 +261,10 @@ describe('commitPendingOperation: link_transaction_journal_entry', () => {
       }),
       error: null,
     })
+    // invoice_settlement_side: a booked invoice settles on the 151x credit
+    enqueue({ data: { settlement_side: 'ar_credit', account_prefix: '151', entry_side: 'credit' }, error: null })
+    // the voucher's lines on that side: the 1510 credit
+    enqueue({ data: [{ account_number: '1510', debit_amount: 0, credit_amount: 1000 }], error: null })
     enqueue({ data: [{ id: TX_UUID }], error: null }) // tx UPDATE
     enqueue({ data: [{ id: INV_UUID }], error: null }) // optimistic-lock invoice UPDATE
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments INSERT

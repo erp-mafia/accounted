@@ -28,6 +28,12 @@ import {
   insertPostedBankJournalEntry,
   insertTransaction,
 } from './fixtures'
+import {
+  carryCustomerInvoice,
+  insertCustomerInvoice,
+  seedCashCompany,
+  stornoEntry,
+} from './kontantmetod-carry-fixtures'
 
 // Mirrors the TS call site (lib/reports/vat-declaration.ts): a small
 // representative slice of ACCOUNT_RUTA is enough since the full list is a
@@ -434,6 +440,25 @@ describe('get_vat_declaration_totals RPC', () => {
 
     const payload = await callRpc(ctx.companyId)
     expect(totalsByAccount(payload).get('2618')).toMatchObject({ debit: 250, credit: 0 })
+  })
+
+  it('counts a per-invoice kontantmetod carry, and its storno nets it out (#3440)', async () => {
+    // årsomföring (20261018131100): the carry is the invoice's booking in the
+    // final period of the closed year, so its moms IS the figure; nothing in
+    // a per-invoice marker excludes it. A storno on the carry's own date
+    // takes it back out of the same period.
+    const company = await seedCashCompany()
+    const kept = await insertCustomerInvoice(company)
+    await carryCustomerInvoice(company, kept)
+    const totals = totalsByAccount(await callRpc(company.companyId))
+    expect(totals.get('3001')).toMatchObject({ debit: 0, credit: 1000 })
+    expect(totals.get('2611')).toMatchObject({ debit: 0, credit: 250 })
+
+    const undone = await insertCustomerInvoice(company)
+    const carry = await carryCustomerInvoice(company, undone)
+    await stornoEntry(company, carry)
+    const after = totalsByAccount(await callRpc(company.companyId))
+    expect(after.get('2611')).toMatchObject({ debit: 250, credit: 500 })
   })
 
   it('scopes everything to the requested company', async () => {

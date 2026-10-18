@@ -19,6 +19,13 @@ vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: vi.fn(),
 }))
 
+// The kontantmetoden cut-off facts (#3440) are read by their own helper,
+// tested in lib/vat/__tests__/kontantmetod-cutoff-vat-facts.test.ts. Mocked
+// here so the declaration's own reads stay pinned below.
+vi.mock('@/lib/vat/kontantmetod-cutoff-vat-facts', () => ({
+  fetchKontantmetodCutoffVatFacts: vi.fn(),
+}))
+
 // Deliberately NOT mocking @/lib/reports/vat-declaration: the test drives the
 // real calculateVatDeclaration -> fetchVatAccountTotals path off the rpc mock,
 // so the ruta assertions below prove the öre-exact projection end to end.
@@ -27,6 +34,7 @@ import { GET } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { rcInputTotalsFromDeclaration } from '@/lib/reports/vat-declaration'
 import { runVatDeclarationChecks } from '@/lib/reports/vat-declaration-checks'
+import { fetchKontantmetodCutoffVatFacts } from '@/lib/vat/kontantmetod-cutoff-vat-facts'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 
@@ -71,6 +79,7 @@ describe('GET /api/reports/vat-declaration', () => {
     })
     mockSupabase.rpc.mockResolvedValue({ data: rpcPayload(), error: null })
     mockSupabase.from.mockImplementation(() => chartBuilder())
+    vi.mocked(fetchKontantmetodCutoffVatFacts).mockResolvedValue(undefined)
   })
 
   it('returns 401 when not authenticated', async () => {
@@ -159,6 +168,39 @@ describe('GET /api/reports/vat-declaration', () => {
         p_end: '2026-09-30',
       }),
     )
+  })
+
+  // #3440: the momsdeklaration view warns while the kontantmetoden cut-off of
+  // a fiscal year ending inside the period is incomplete. The facts travel on
+  // the response; a company that does not use kontantmetoden gets no field.
+  describe('kontantmetodCutoff travels with the response', () => {
+    it('is absent for a company that does not use kontantmetoden', async () => {
+      const res = await GET(makeRequest('?periodType=quarterly&year=2026&period=4'), { params: Promise.resolve({}) })
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.data).not.toHaveProperty('kontantmetodCutoff')
+      expect(fetchKontantmetodCutoffVatFacts).toHaveBeenCalledWith(
+        mockSupabase, 'company-1', '2026-10-01', '2026-12-31',
+      )
+    })
+
+    it('carries the facts, and the client check turns them into a WARNING', async () => {
+      const facts = {
+        incompleteYearEnds: [{ fiscal_period_id: 'fp-2026', period_end: '2026-12-31' }],
+        legacyCutoffPeriodEnds: [],
+      }
+      vi.mocked(fetchKontantmetodCutoffVatFacts).mockResolvedValue(facts)
+      const res = await GET(makeRequest('?periodType=quarterly&year=2026&period=4'), { params: Promise.resolve({}) })
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.data.kontantmetodCutoff).toEqual(facts)
+      const checks = runVatDeclarationChecks(body.data.rutor, rcInputTotalsFromDeclaration(body.data), {
+        kontantmetodCutoff: body.data.kontantmetodCutoff,
+      })
+      expect(checks).toContainEqual(expect.objectContaining({
+        code: 'KONTANTMETOD_CUTOFF_INCOMPLETE', status: 'WARNING',
+      }))
+    })
   })
 
   it('happy path monthly: no period lookup, one RPC', async () => {

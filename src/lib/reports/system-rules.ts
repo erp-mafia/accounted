@@ -73,6 +73,13 @@ export const SUPPLIER_PAYMENT_RULES = {
     'Äldre bankmatchningar med öresavrundning kan ha sparat utbetalt belopp i stället för reglerad skuld. Historiska reskontror och återföringar som använder dessa rader kan därför avvika med den tidigare avrundningen. Rättningen ändrar inte äldre betalningsrader eller redan avvikande fakturasaldon. Vid granskning jämförs raden med det ursprungliga betalningsverifikatet och banktransaktionen. Äldre delbetalningar utan avrundning har samma belopp enligt båda reglerna.',
 } as const
 
+/**
+ * The kontantmetoden year-end cut-off (#3440): årsomföring per invoice, no
+ * vändning. Shown in the systemdokumentation as a behandlingsregel.
+ */
+export const KONTANTMETOD_CUTOFF_RULES =
+  'Enligt kontantmetoden bokförs kund- och leverantörsfakturor som är obetalda vid räkenskapsårets utgång (BFL 5 kap 2 §) genom årsomföring: en verifikation per faktura, daterad räkenskapsårets sista dag och bokförd som fakturans registrering enligt faktureringsmetoden (intäkt eller kostnad, moms på de ordinarie momskontona, kundfordran på 1510 eller leverantörsskuld på 2440 och för ROT/RUT Skatteverkets del på 1513). Verifikationen kopplas till fakturan, så betalningen nästa år bokförs mot 1510 eller 2440 utan intäkt, kostnad eller moms, och momsen redovisas en gång, i den momsperiod som innehåller räkenskapsårets sista dag. Ingen vändning bokförs. En faktura som betalades efter årsskiftet men innan årsomföringen bokfördes rättas genom storno och rättelse av betalningsverifikationen på dess eget datum. En årsomföring kan bara ångras genom storno daterad samma dag, och bara så länge fakturan saknar betalningar och krediteringar. Äldre bokslutsavgränsningar med vändning ändras inte. Regeln infördes med ärende #3440; programversion och driftsättning framgår av behandlingshistoriken.'
+
 /** Retention and integrity of the stored räkenskapsinformation. */
 export const ARCHIVE_RULES = {
   lagringsregel: 'Till och med utgången av det sjunde kalenderåret efter det kalenderår då räkenskapsåret avslutades',

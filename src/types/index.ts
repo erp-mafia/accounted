@@ -3422,6 +3422,16 @@ export interface VatDeclarationRutor {
  * momsdeklaration. `amount` is the net credit balance (credit minus debit),
  * rounded to öre: negative for a net debit such as a lämnad rabatt.
  */
+/** See VatDeclaration.kontantmetodCutoff. */
+export interface KontantmetodCutoffVatFacts {
+  /** Fiscal years ending inside the VAT period whose cut-off is not complete. */
+  incompleteYearEnds: Array<{ fiscal_period_id: string; period_end: string }>
+  /** Period ends of legacy cut-offs (with vändning) that have verifikat inside the VAT period. */
+  legacyCutoffPeriodEnds: string[]
+  /** True when the check could not run: never read as "complete". */
+  unavailable?: boolean
+}
+
 export interface VatRevenueAccountWithoutRuta {
   account_number: string
   account_name: string
@@ -3485,6 +3495,16 @@ export interface VatDeclaration {
    * older deploy, and then the check stays silent rather than guessing.
    */
   revenueAccountsWithoutRuta?: VatRevenueAccountWithoutRuta[]
+  /**
+   * The kontantmetoden year-end cut-off facts for this VAT period (#3440):
+   * fiscal years of a cash company ending inside it whose cut-off is not
+   * complete, and legacy cut-offs with vändning booked inside it. Feeds the
+   * KONTANTMETOD_CUTOFF_INCOMPLETE and LEGACY_KONTANTMETOD_VANDNING warnings.
+   * Produced by `fetchKontantmetodCutoffVatFacts()`
+   * (lib/vat/kontantmetod-cutoff-vat-facts.ts), only by the routes that serve
+   * the declaration for review; absent means "not checked", never "complete".
+   */
+  kontantmetodCutoff?: KontantmetodCutoffVatFacts
   // Supporting data
   invoiceCount: number
   transactionCount: number

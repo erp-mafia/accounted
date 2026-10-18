@@ -24,6 +24,7 @@ import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { roundOre } from '@/lib/money'
 import { recordInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
+import { resolveInvoiceSettlementSide } from '@/lib/invoices/invoice-settlement-side'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import {
@@ -57,6 +58,7 @@ export type LinkTransactionJournalEntryErrorCode =
   | 'LINK_TX_INVOICE_NOT_OPEN'
   | 'LINK_TX_INVOICE_CREDIT_NOTE'
   | 'LINK_TX_INVOICE_CURRENCY_MISMATCH'
+  | 'LINK_TX_INVOICE_SETTLEMENT_SIDE'
   | 'LINK_TX_INVOICE_RACE'
   | 'MATCH_INVOICE_RECORD_PAYMENT_FAILED'
   | 'BANK_BOOKING_CURRENCY_MISMATCH'
@@ -255,6 +257,43 @@ export async function linkTransactionToJournalEntry(
         details: {
           transactionCurrency: transaction.currency as string,
           invoiceCurrency: invoice.currency,
+        },
+      }
+    }
+
+    // The verifikat must settle the invoice on the invoice's own side, the
+    // rule link_invoice_to_voucher reads (invoice_settlement_side,
+    // 20261018131110): the 19xx debit for a kontantmetod invoice never
+    // booked, the 151x credit for every other one, including a kontantmetod
+    // invoice carried over the year end (#3440). Linking a carried invoice
+    // to a voucher that books revenue and moms would declare its moms a
+    // second time and leave 1510 open, and no database guard sees it.
+    const side = await resolveInvoiceSettlementSide(supabase, companyId, invoiceId)
+    const { data: voucherLines, error: voucherLinesError } = await supabase
+      .from('journal_entry_lines')
+      .select('account_number, debit_amount, credit_amount')
+      .eq('journal_entry_id', journalEntryId)
+      .like('account_number', `${side.accountPrefix}%`)
+    if (voucherLinesError) {
+      return { ok: false, code: 'LINK_TX_DB_ERROR', details: { reason: voucherLinesError.message } }
+    }
+    const settlesOnSide = ((voucherLines ?? []) as Array<{
+      account_number: string | null
+      debit_amount: number | string | null
+      credit_amount: number | string | null
+    }>).some(
+      (line) =>
+        String(line.account_number ?? '').startsWith(side.accountPrefix) &&
+        Number((side.entrySide === 'debit' ? line.debit_amount : line.credit_amount) ?? 0) > 0,
+    )
+    if (!settlesOnSide) {
+      return {
+        ok: false,
+        code: 'LINK_TX_INVOICE_SETTLEMENT_SIDE',
+        details: {
+          settlementSide: side.side,
+          accountPrefix: side.accountPrefix,
+          entrySide: side.entrySide,
         },
       }
     }

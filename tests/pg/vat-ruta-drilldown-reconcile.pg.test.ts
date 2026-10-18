@@ -25,6 +25,11 @@ import {
   insertFiscalPeriod,
   insertPostedJournalEntry,
 } from './fixtures'
+import {
+  carryCustomerInvoice,
+  insertCustomerInvoice,
+  stornoEntry,
+} from './kontantmetod-carry-fixtures'
 
 // Mirrors the TS call site: a representative slice of ACCOUNT_RUTA. The full
 // list is a parameter, never baked into the SQL.
@@ -120,6 +125,7 @@ describe('VAT ruta drill-down reconciles with the declaration figure', () => {
   let companyId: string
   let fiscalPeriodId: string
   let plainEntryId: string
+  let carryEntryId: string
 
   beforeAll(async () => {
     userId = await insertAuthUser()
@@ -267,6 +273,17 @@ describe('VAT ruta drill-down reconciles with the declaration figure', () => {
         { account: '1630', debit: 0, credit: 60 },
       ],
     })
+
+    // 8. A per-invoice kontantmetod carry (#3440, 20261018131100), and a
+    //    second one stornoed on its own date. Nothing in a per-invoice marker
+    //    is excluded: both carries and the storno count in the figure and in
+    //    the drill-down alike, so the stornoed pair nets to zero.
+    const carryCompany = { userId, companyId, fiscalPeriodId, nextPeriodId: fiscalPeriodId }
+    const carriedInvoice = await insertCustomerInvoice(carryCompany)
+    carryEntryId = await carryCustomerInvoice(carryCompany, carriedInvoice)
+    const stornoedInvoice = await insertCustomerInvoice(carryCompany)
+    const stornoedCarry = await carryCustomerInvoice(carryCompany, stornoedInvoice)
+    await stornoEntry(carryCompany, stornoedCarry)
   }, 60_000)
 
   it('sums identically to the figure, for every account', async () => {
@@ -298,7 +315,8 @@ describe('VAT ruta drill-down reconciles with the declaration figure', () => {
     const lines = await drillDown(companyId, ['2611'])
     expect(lines.length).toBeGreaterThan(0)
     expect(lines.map((l) => l.journal_entry_id)).toContain(plainEntryId)
-    expect(sumOf(lines).credit).toBe(200)
+    // The sale's own lines: the per-invoice carries (8.) also credit 2611.
+    expect(sumOf(lines.filter((l) => l.journal_entry_id === plainEntryId)).credit).toBe(200)
   }, 30_000)
 
   it('excludes tagged settlements, shaped settlements, marked kontantmetod reversals and closing entries', async () => {
@@ -313,6 +331,11 @@ describe('VAT ruta drill-down reconciles with the declaration figure', () => {
     // The cut-offs themselves stay in: only the vändningar are excluded.
     expect(descriptions).toContain('Leverantörsskulder vid bokslut (kontantmetoden)')
     expect(descriptions).toContain('Omformulerad avgränsning 2026')
+  }, 30_000)
+
+  it('counts a per-invoice carry, which no marker kind excludes', async () => {
+    const lines = await drillDown(companyId, ['2611'])
+    expect(lines.map((l) => l.journal_entry_id)).toContain(carryEntryId)
   }, 30_000)
 
   it('keeps an unmarked entry that merely carries the old vändning wording', async () => {

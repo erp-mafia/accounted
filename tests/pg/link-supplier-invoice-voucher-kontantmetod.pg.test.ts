@@ -31,6 +31,11 @@ import {
   type PostedJournalEntryLine,
 } from './fixtures'
 import { roundOre } from '@/lib/money'
+import {
+  carrySupplierInvoice,
+  insertSupplierInvoice,
+  seedCashCompany,
+} from './kontantmetod-carry-fixtures'
 
 let arrivalSeq = 0
 
@@ -773,5 +778,34 @@ describe('link_supplier_invoice_to_voucher: the 244x debit side is unchanged', (
       details: { ap_debit: 1250, already_linked: 1250 },
     })
     expect((await invoiceState(b)).status).toBe('registered')
+  })
+})
+
+describe('a supplier invoice carried over the kontantmetod year end (#3440)', () => {
+  it('reads the 244x debit and links a Dr 2440 / Cr 1930 payout in the new year', async () => {
+    // The per-invoice carry (20261018131100) links the invoice through
+    // registration_journal_entry_id, which is exactly what this side rule
+    // reads: the payout clears the skuld the carry booked, with no moms.
+    const carried = await seedCashCompany()
+    const invoiceId = await insertSupplierInvoice(carried)
+    await carrySupplierInvoice(carried, invoiceId)
+
+    expect(await side(carried.companyId, invoiceId)).toEqual([
+      { settlement_side: 'ap_debit', account_prefix: '244', entry_side: 'debit' },
+    ])
+
+    const voucherId = await insertPostedJournalEntry({
+      userId: carried.userId,
+      companyId: carried.companyId,
+      fiscalPeriodId: carried.nextPeriodId,
+      voucherNumber: Math.floor(Math.random() * 1_000_000),
+      entryDate: '2027-02-10',
+      description: 'Betalning leverantör',
+      lines: accrualPaymentLines(500),
+    })
+    const { rows } = await getPool().query<{ result: LinkResult }>(LINK, [
+      invoiceId, voucherId, carried.userId, carried.companyId,
+    ])
+    expect(rows[0].result).toMatchObject({ ok: true, settlement_side: 'ap_debit' })
   })
 })

@@ -80,6 +80,9 @@ export const SE_PACK_TERRITORY = [
   'lib/salary/agi/',
   // Kontrolluppgifter (SFL 17 kap.): which BAS postings oblige a KU filing.
   'lib/tax/ku-signal.ts',
+  // The kontantmetoden (bokslutsmetoden) year-end cut-off, BFL 5 kap 2 §: the
+  // per-invoice carry onto 1510 / 1513 / 2440 and its ordinary 26xx moms.
+  'lib/core/bookkeeping/kontantmetod-cutoff.ts',
 ]
 
 /**

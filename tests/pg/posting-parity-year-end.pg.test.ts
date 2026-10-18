@@ -10,14 +10,16 @@
  * bolagsskatt, then the year-end route revalues an open EUR receivable at the
  * balansdagen rate, books the bokslutsverifikation into 2099, the ingående
  * balans of 2026 and the omföring 2099 to 2098); an enskild firma on
- * kontantmetoden closes 2025 from staged operations (the cut-off of its
- * unpaid customer and supplier invoices with their vändningar on the first
- * day of 2026, then the close into 2010, which books no omföring); and a
+ * kontantmetoden closes 2025 from staged operations (the cut-off carries
+ * each of its unpaid customer and supplier invoices by its own verifikat on
+ * 31 December, linked to the invoice (#3440, årsomföring per invoice, no
+ * vändning), then the close into 2010, which books no omföring); and a
  * migrated aktiebolag gets the historical omföring repair of the 2099 its
  * imported ingående balans still carries. Every verifikat a flow writes is
  * dumped normalised (series, number, date, description, source type, status,
  * notes and every line) together with the fiscal periods, the cut-off
- * markers and the staged operations the doors write beside them, and the
+ * markers, the invoices' links to their carries and the staged operations
+ * the doors write beside them, and the
  * dump is compared with the committed fixture
  * (posting-parity-year-end.fixture.json), which was taken before these
  * producers went through the port.
@@ -29,8 +31,8 @@
  *   2. the dump with POSTING_EVENTS=shadow equals the dump with it off, and
  *      every verifikat a door wrote has exactly ONE event linked, one per
  *      verifikat as the close posts them one by one: year_end.closing for
- *      the bokslutsverifikation, a bokslutsdisposition and a cut-off or its
- *      vändning, ledger.opening_balance for the ingående balans,
+ *      the bokslutsverifikation, a bokslutsdisposition and each carry of the
+ *      cut-off, ledger.opening_balance for the ingående balans,
  *      year_end.result_appropriated for the omföring and its repair, and
  *      ledger.currency_revaluation for the balansdagen revaluation, the
  *      fiscal period as subject, the link basis the door saw (the staged
@@ -40,20 +42,22 @@
  *      the dispositions, the close, the cut-off and the repair each stop
  *      before a voucher number is drawn; a link refused on a later verifikat
  *      fails that step exactly as any failure there did before the port (the
- *      cut-off's vändning: the cut-off stornoed; the ingående balans: the
- *      close fails after the year is closed, and the IB is booked again
- *      through its own door); and detect_voucher_gaps finds no gap.
+ *      cut-off's second carry: the first stands, linked, and the operation
+ *      ends failed_partial until a new one carries the rest; the ingående
+ *      balans: the close fails after the year is closed, and the IB is
+ *      booked again through its own door); and detect_voucher_gaps finds no
+ *      gap.
  *
- * Regenerate the fixture only on purpose, from the code before the move:
- *   UPDATE_POSTING_PARITY_FIXTURE=1 npx vitest run --project pg-real tests/pg/posting-parity-year-end.pg.test.ts
+ * Regenerate the fixture only on purpose, from the code before the move (for
+ * the cut-off: the per-invoice carry calling the engine itself, 7f9db962e):
+ *   UPDATE_POSTING_PARITY_FIXTURE=1 npx vitest run --project pg-real tests/pg/posting-parity-year-end.pg.test.ts -t 'exactly as before'
  *
  * What is not real: the HTTP hop to PostgREST, replaced by
  * tests/pg/postgrest-over-pg.ts exactly as in posting-parity.pg.test.ts
  * (every request must stay inside the shim's grammar, asserted after each
  * test); the routes' auth wrapper (withRouteContext), replaced by the
- * context it hands a signed-in owner's request; the Riksbanken closing rate,
- * fixed at 11.50 SEK per EUR; and the kontantmetod cut-off's suspension
- * (#3440, marker i3440-suspension), lifted so its staged door can run.
+ * context it hands a signed-in owner's request; and the Riksbanken closing
+ * rate, fixed at 11.50 SEK per EUR.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -62,7 +66,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
-import { assessKontantmetodCutoff, cutoffPreviewFingerprint } from '@/lib/core/bookkeeping/kontantmetod-cutoff'
+import {
+  assessKontantmetodCutoff,
+  cutoffPreviewFingerprint,
+  previewPaidBeforePostingCorrections,
+} from '@/lib/core/bookkeeping/kontantmetod-cutoff'
 import { postHistoricalResultRepair } from '@/lib/core/bookkeeping/result-appropriation-repair'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
 import type { PendingOperation } from '@/types'
@@ -127,12 +135,6 @@ vi.mock('@/lib/currency/riksbanken', async (importOriginal) => ({
     date: (date ?? new Date()).toISOString().slice(0, 10),
   }),
 }))
-// i3440-suspension: the staged cut-off door runs only with the suspension lifted.
-vi.mock('@/lib/core/bookkeeping/kontantmetod-cutoff-suspension', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/core/bookkeeping/kontantmetod-cutoff-suspension')>()),
-  isKontantmetodCutoffSuspended: () => false,
-}))
-
 afterEach(() => {
   vi.unstubAllEnvs()
   const unsupported = shim.rest?.unsupported.splice(0) ?? []
@@ -255,25 +257,41 @@ async function approve(seed: Seed, companyId: string, op: PendingOperation): Pro
   return (result as { data?: Record<string, unknown> }).data ?? {}
 }
 
-/** The kontantmetod cut-off as the MCP preview stages it: the reskontra's fingerprint at staging. */
+/**
+ * The kontantmetod cut-off as the MCP preview stages it (gnubok_post_kontantmetod_cutoff):
+ * the carries and corrections it would post, fingerprinted at staging.
+ */
 async function stageCutoff(seed: Seed, company: Company): Promise<PendingOperation> {
   const assessment = await assessKontantmetodCutoff(
     seed.supabase,
     company.companyId,
     { id: company.closing, period_start: '2025-01-01', period_end: '2025-12-31' },
-    company.next,
+    null,
     'enskild_firma',
+  )
+  const { corrections, refusals } = await previewPaidBeforePostingCorrections(
+    seed.supabase,
+    company.companyId,
+    assessment.collection.paidBeforePosting,
+    assessment.plans,
   )
   return stageOperation(seed, company.companyId, 'post_kontantmetod_cutoff', {
     fiscal_period_id: company.closing,
-    next_fiscal_period_id: company.next,
     period_end: '2025-12-31',
     entity_type: 'enskild_firma',
+    acknowledge_filed_vat_periods: [],
+    acknowledge_legacy_invoice_ids: [],
+    manual_carries: [],
     preview_fingerprint: cutoffPreviewFingerprint({
       collection: assessment.collection,
       lines: assessment.lines,
       entityType: 'enskild_firma',
       periodEnd: '2025-12-31',
+      plans: assessment.plans,
+      corrections,
+      correctionRefusals: refusals,
+      acknowledgedFiledVatPeriods: [],
+      acknowledgedLegacyInvoiceIds: [],
     }),
   })
 }
@@ -368,15 +386,16 @@ const FLOWS: Flow[] = [
     ],
   },
   {
-    name: 'enskild firma: the kontantmetod cut-off approved from a staged operation (fordringar and skulder with their vändningar)',
+    name: 'enskild firma: the kontantmetod cut-off approved from a staged operation (one carry per unpaid invoice, linked to it)',
     run: async (seed) => {
       const data = await approve(seed, seed.ef.companyId, await stageCutoff(seed, seed.ef))
-      expect(Object.values(data).every((id) => typeof id === 'string')).toBe(true)
+      expect(data, JSON.stringify(data)).toMatchObject({ compensated: [], corrected: [], correction_failed: [], remaining: 0 })
+      expect((data.posted as unknown[]).length).toBe(2)
       return { companyId: seed.ef.companyId }
     },
     events: [
       {
-        entry: 'Kundfordringar vid bokslut (kontantmetoden)',
+        entry: 'Kundfaktura F-10: obetald vid bokslut (kontantmetoden)',
         kind: 'year_end.closing',
         role: 'produced',
         category: null,
@@ -388,19 +407,7 @@ const FLOWS: Flow[] = [
         mappingSource: 'se.kontantmetod-cutoff',
       },
       {
-        entry: 'Vändning kundfordringar bokslut (kontantmetoden)',
-        kind: 'year_end.closing',
-        role: 'produced',
-        category: null,
-        occurred_on: '2026-01-01',
-        subject: (seed) => seed.ef.closing,
-        amount: 10000,
-        tax_amounts: [],
-        link_basis: STAGED,
-        mappingSource: 'se.kontantmetod-cutoff',
-      },
-      {
-        entry: 'Leverantörsskulder vid bokslut (kontantmetoden)',
+        entry: 'Leverantörsfaktura L-1: obetald vid bokslut (kontantmetoden)',
         kind: 'year_end.closing',
         role: 'produced',
         category: null,
@@ -408,18 +415,6 @@ const FLOWS: Flow[] = [
         subject: (seed) => seed.ef.closing,
         amount: 2500,
         tax_amounts: [{ tax: 'vat', treatment: null, amount_sek: 500 }],
-        link_basis: STAGED,
-        mappingSource: 'se.kontantmetod-cutoff',
-      },
-      {
-        entry: 'Vändning leverantörsskulder bokslut (kontantmetoden)',
-        kind: 'year_end.closing',
-        role: 'produced',
-        category: null,
-        occurred_on: '2026-01-01',
-        subject: (seed) => seed.ef.closing,
-        amount: 2500,
-        tax_amounts: [],
         link_basis: STAGED,
         mappingSource: 'se.kontantmetod-cutoff',
       },
@@ -548,11 +543,14 @@ async function dumpEntries(companyId: string, entryIds: string[]): Promise<Array
   return rows
 }
 
-/** The fiscal periods, the cut-off markers and the staged operations, which the doors write with the verifikat. */
+/**
+ * The fiscal periods, the cut-off markers, the invoices' links to their
+ * carries and the staged operations, which the doors write with the verifikat.
+ */
 async function registerOf(seed: Seed): Promise<unknown> {
   const companies = [seed.ab.companyId, seed.ef.companyId, seed.migrated.companyId]
   const label = `CASE p.company_id WHEN $1::uuid THEN 'aktiebolag' WHEN $2::uuid THEN 'enskild firma' ELSE 'migrated' END`
-  const [periods, markers, operations] = await Promise.all([
+  const [periods, markers, links, operations] = await Promise.all([
     getPool().query(
       `SELECT ${label} AS company, p.name, p.is_closed, p.locked_at IS NOT NULL AS locked, p.continuity_verified,
               c.voucher_series || c.voucher_number AS closing_voucher, o.voucher_series || o.voucher_number AS opening_voucher
@@ -572,11 +570,24 @@ async function registerOf(seed: Seed): Promise<unknown> {
       [seed.ef.companyId],
     ),
     getPool().query(
+      `SELECT 'customer' AS side, i.invoice_number AS reference, je.voucher_series || je.voucher_number AS voucher
+         FROM public.invoices i
+         LEFT JOIN public.journal_entries je ON je.id = i.journal_entry_id
+        WHERE i.company_id = $1
+       UNION ALL
+       SELECT 'supplier', s.supplier_invoice_number, je.voucher_series || je.voucher_number
+         FROM public.supplier_invoices s
+         LEFT JOIN public.journal_entries je ON je.id = s.registration_journal_entry_id
+        WHERE s.company_id = $1
+        ORDER BY 1, 2`,
+      [seed.ef.companyId],
+    ),
+    getPool().query(
       `SELECT operation_type, status FROM public.pending_operations WHERE company_id = ANY($1::uuid[]) ORDER BY created_at`,
       [companies],
     ),
   ])
-  return { periods: periods.rows, cutoffMarkers: markers.rows, operations: operations.rows }
+  return { periods: periods.rows, cutoffMarkers: markers.rows, invoiceLinks: links.rows, operations: operations.rows }
 }
 
 async function insertPeriods(userId: string, companyId: string): Promise<Company> {
@@ -967,7 +978,7 @@ describe('posting port parity, year-end (pg)', () => {
           const before = await Promise.all(companiesOf(seed).map(lastVoucherNumber))
           for (const flow of FLOWS) await runWithActor({ type: 'user' }, () => flow.run(seed))
           const after = await Promise.all(companiesOf(seed).map(lastVoucherNumber))
-          expect(after.map((n, i) => n - before[i]!), table).toEqual([6, 6, 1])
+          expect(after.map((n, i) => n - before[i]!), table).toEqual([6, 4, 1])
           for (const companyId of companiesOf(seed)) {
             expect((await linkCounts([companyId])).filter((e) => e.links > 0), table).toEqual([])
           }
@@ -1002,13 +1013,14 @@ describe('posting port parity, year-end (pg)', () => {
       }
 
       // A link refused on a LATER verifikat under strict fails that step as
-      // any failure there did before the port. The cut-off's vändning: the
-      // vändning draws no number, the cut-off is stornoed (the storno with its
-      // ledger.storno event) and the operation ends failed_partial.
+      // any failure there did before the port. The cut-off's second carry:
+      // it draws no number, the first carry stands posted and linked to its
+      // invoice, and the operation ends failed_partial; the supplier invoice
+      // stays open for the next run.
       {
         vi.stubEnv('POSTING_EVENTS', 'strict')
         const seed = await seedAll()
-        const restore = await failInserts('business_event_entries', 'Vändning kundfordringar%')
+        const restore = await failInserts('business_event_entries', 'Leverantörsfaktura L-1:%')
         let result: Awaited<ReturnType<typeof commitPendingOperation>>
         try {
           const op = await stageCutoff(seed, seed.ef)
@@ -1021,9 +1033,47 @@ describe('posting port parity, year-end (pg)', () => {
         }
         expect(result, JSON.stringify(result)).toMatchObject({ status: 'failed', operation_status: 'failed_partial' })
         const entries = await entriesOf(seed.ef.companyId)
-        const cut = entries.find((e) => e.description === 'Kundfordringar vid bokslut (kontantmetoden)')!
-        expect(cut.status).toBe('reversed')
-        expect(entries.find((e) => e.description === 'Vändning kundfordringar bokslut (kontantmetoden)')!.status).toBe('cancelled')
+        const customerCarry = entries.find((e) => e.description === 'Kundfaktura F-10: obetald vid bokslut (kontantmetoden)')!
+        expect(customerCarry.status).toBe('posted')
+        expect(entries.filter((e) => e.description === 'Leverantörsfaktura L-1: obetald vid bokslut (kontantmetoden)').map((e) => e.status))
+          .toEqual(['cancelled'])
+        const register = (await registerOf(seed)) as { invoiceLinks: Array<{ side: string; voucher: string | null }> }
+        expect(register.invoiceLinks.map((l) => [l.side, l.voucher !== null])).toEqual([['customer', true], ['supplier', false]])
+        const links = await eventLinks([seed.ef.companyId])
+        expect(links.find((l) => l.journal_entry_id === customerCarry.id)).toMatchObject({ kind: 'year_end.closing', role: 'produced' })
+        await expectNoVoucherGaps([seed.ef.companyId])
+      }
+
+      // A carry the database refuses to link to its invoice (here the marker
+      // insert, as when the invoice was linked meanwhile) is stornoed on the
+      // year end through the port: its ledger.storno event, system_derived and
+      // naming the operation, is linked as the reversal, and the operation
+      // commits with the carry reported as compensated.
+      {
+        vi.stubEnv('POSTING_EVENTS', 'strict')
+        const seed = await seedAll()
+        await getPool().query(`
+          CREATE OR REPLACE FUNCTION public.pg_test_year_end_fail_carry_marker() RETURNS trigger LANGUAGE plpgsql AS $$
+          BEGIN
+            IF NEW.supplier_invoice_id IS NOT NULL THEN RAISE EXCEPTION 'pg-test: carry marker refused'; END IF;
+            RETURN NEW;
+          END; $$;
+          CREATE TRIGGER pg_test_year_end_fail_carry_marker BEFORE INSERT ON public.kontantmetod_cutoff_entries
+            FOR EACH ROW EXECUTE FUNCTION public.pg_test_year_end_fail_carry_marker();`)
+        let data: Record<string, unknown>
+        try {
+          data = await approve(seed, seed.ef.companyId, await stageCutoff(seed, seed.ef))
+        } finally {
+          await getPool().query(`
+            DROP TRIGGER IF EXISTS pg_test_year_end_fail_carry_marker ON public.kontantmetod_cutoff_entries;
+            DROP FUNCTION IF EXISTS public.pg_test_year_end_fail_carry_marker();`)
+        }
+        expect(data.compensated, JSON.stringify(data)).toEqual([
+          expect.objectContaining({ side: 'supplier', storno_entry_id: expect.any(String) }),
+        ])
+        const entries = await entriesOf(seed.ef.companyId)
+        const carry = entries.find((e) => e.description === 'Leverantörsfaktura L-1: obetald vid bokslut (kontantmetoden)')!
+        expect(carry.status).toBe('reversed')
         const links = await eventLinks([seed.ef.companyId])
         const storno = links.find((l) => l.kind === 'ledger.storno')!
         expect(storno).toMatchObject({
@@ -1033,7 +1083,8 @@ describe('posting port parity, year-end (pg)', () => {
           entry_status: 'posted',
           evidence: { link_basis: 'system_derived', link_evidence: { pending_operation_id: storno.pending_operation_id } },
         })
-        expect(links.find((l) => l.journal_entry_id === cut.id)).toMatchObject({ kind: 'year_end.closing', role: 'produced' })
+        expect(storno.pending_operation_id).toMatch(/^[0-9a-f-]{36}$/)
+        expect(links.find((l) => l.journal_entry_id === carry.id)).toMatchObject({ kind: 'year_end.closing', role: 'produced' })
         await expectNoVoucherGaps([seed.ef.companyId])
       }
 

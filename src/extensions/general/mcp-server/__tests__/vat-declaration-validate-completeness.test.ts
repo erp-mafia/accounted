@@ -52,6 +52,14 @@ vi.mock('@/lib/reports/rc-basis-gaps', () => ({
   findRcBasisGaps: (...args: unknown[]) => mockFindRcBasisGaps(...args),
 }))
 
+// The kontantmetoden cut-off facts (#3440) have their own tests
+// (lib/vat/__tests__/kontantmetod-cutoff-vat-facts.test.ts): not a cash
+// company unless a case says otherwise.
+const mockCutoffFacts = vi.fn()
+vi.mock('@/lib/vat/kontantmetod-cutoff-vat-facts', () => ({
+  fetchKontantmetodCutoffVatFacts: (...args: unknown[]) => mockCutoffFacts(...args),
+}))
+
 import { tools } from '../server'
 import { vatCheckFingerprint } from '@/lib/vat/check-reviews'
 import { runVatDeclarationChecks } from '@/lib/reports/vat-declaration-checks'
@@ -162,6 +170,24 @@ describe('gnubok_vat_declaration_validate', () => {
     // The summary must not let a green SKV result read as an all-clear.
     expect(result.summary).toMatch(/Skatteverket/)
     expect(result.summary).toMatch(/ofullständig/)
+  })
+
+  // #3440: the same KONTANTMETOD_CUTOFF_INCOMPLETE finding the web view shows.
+  // A WARNING: it never makes the declaration incomplete for filing.
+  it('warns, without blocking, while the kontantmetoden cut-off of a year ending in the period is incomplete', async () => {
+    setDeclaration(CLEAN)
+    skvOk()
+    mockCutoffFacts.mockResolvedValueOnce({
+      incompleteYearEnds: [{ fiscal_period_id: 'fp-2026', period_end: '2026-12-31' }],
+      legacyCutoffPeriodEnds: [],
+    })
+
+    const result = await run()
+
+    expect(result.completeness_ok).toBe(true)
+    expect(result.completeness_checks).toEqual([expect.objectContaining({
+      code: 'KONTANTMETOD_CUTOFF_INCOMPLETE', status: 'WARNING',
+    })])
   })
 
   it('reports both green on a clean period, and still calls only /kontrollera', async () => {

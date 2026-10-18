@@ -3861,6 +3861,7 @@ Anchors the row to an existing POSTED journal entry: the row counts as booked an
 - A row already linked to a posted verifikat returns 409 LINK_TX_TX_ALREADY_LINKED; a pointer left by a storno does not count.
 - The verifikat must be posted: LINK_TX_JE_NOT_POSTED otherwise.
 - invoice_id: the invoice must be open (sent, overdue, partially_paid), not a credit note, and in the transaction currency (LINK_TX_INVOICE_CURRENCY_MISMATCH); cross-currency payments go through match-invoice.
+- invoice_id: the verifikat must settle the invoice on its own side (LINK_TX_INVOICE_SETTLEMENT_SIDE): a 151x credit for a booked invoice, including a kontantmetod invoice carried over the year end, a 19xx debit for a kontantmetod invoice never booked.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

@@ -1,5 +1,6 @@
-import type { VatDeclarationRutor, VatRevenueAccountWithoutRuta } from '@/types'
+import type { KontantmetodCutoffVatFacts, VatDeclarationRutor, VatRevenueAccountWithoutRuta } from '@/types'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
+import { legacyKontantmetodVandningWarning } from '@/lib/core/bookkeeping/kontantmetod-cutoff-texts'
 
 /**
  * Local pre-flight checks for the momsdeklaration, run BEFORE the SKV
@@ -52,6 +53,8 @@ export interface VatDeclarationCheck {
     | 'OUTPUT_VAT_WITHOUT_SALES_BASE'
     | 'SALES_OUTPUT_VAT_SHORTFALL'
     | 'REVENUE_ACCOUNT_WITHOUT_RUTA'
+    | 'KONTANTMETOD_CUTOFF_INCOMPLETE'
+    | 'LEGACY_KONTANTMETOD_VANDNING'
   status: VatDeclarationCheckStatus
   /** Swedish user-facing message; safe to render directly in the UI. */
   message: string
@@ -128,6 +131,13 @@ export interface VatDeclarationCheckContext {
    * `VatDeclaration.revenueAccountsWithoutRuta` carries them over HTTP.
    */
   revenueAccountsWithoutRuta?: readonly VatRevenueAccountWithoutRuta[]
+  /**
+   * The kontantmetoden year-end cut-off facts of the period
+   * (`fetchKontantmetodCutoffVatFacts()`, or `VatDeclaration.kontantmetodCutoff`
+   * over HTTP). Feeds KONTANTMETOD_CUTOFF_INCOMPLETE and
+   * LEGACY_KONTANTMETOD_VANDNING; absent keeps both silent.
+   */
+  kontantmetodCutoff?: KontantmetodCutoffVatFacts
 }
 
 /** How many accounts REVENUE_ACCOUNT_WITHOUT_RUTA names before summarising the rest. */
@@ -142,6 +152,57 @@ function describeRevenueAccount(account: VatRevenueAccountWithoutRuta): string {
     ? `${account.account_number} ${account.account_name}`
     : account.account_number
   return `${label} (${formatOre(account.amount)} kr)`
+}
+
+/**
+ * KONTANTMETOD_CUTOFF_INCOMPLETE and LEGACY_KONTANTMETOD_VANDNING (#3440).
+ *
+ * Under kontantmetoden the moms on invoices unpaid at the fiscal year end
+ * belongs to the VAT period that contains the year end (BFL 5 kap 2 §: they
+ * are booked at räkenskapsårets utgång). Filed before the cut-off is posted,
+ * that moms is missing from the declaration and a rättad momsdeklaration is
+ * needed afterwards. WARNING, never ERROR (founder decision 2026-10-03):
+ * there is no cut-off door in the dashboard yet, and manual filing stays
+ * ungated whatever the tier.
+ */
+export function kontantmetodCutoffFindings(facts: KontantmetodCutoffVatFacts | undefined): VatDeclarationCheck[] {
+  if (!facts) return []
+  const findings: VatDeclarationCheck[] = []
+  const rutor: Array<keyof VatDeclarationRutor> = ['ruta05', 'ruta10', 'ruta11', 'ruta12', 'ruta48']
+  if (facts.unavailable) {
+    findings.push({
+      code: 'KONTANTMETOD_CUTOFF_INCOMPLETE',
+      status: 'WARNING',
+      message:
+        'Kontrollen av kontantmetodens bokslutsavgränsning kunde inte köras, så vi vet inte om ' +
+        'momsen på fakturor som var obetalda vid räkenskapsårets slut finns med i perioden. ' +
+        'Ladda om sidan för att försöka igen.',
+      rutor,
+    })
+  }
+  for (const yearEnd of facts.incompleteYearEnds) {
+    findings.push({
+      code: 'KONTANTMETOD_CUTOFF_INCOMPLETE',
+      status: 'WARNING',
+      message:
+        `Perioden innehåller räkenskapsårets slut ${yearEnd.period_end}, och kontantmetodens ` +
+        'bokslutsavgränsning för året är inte klar. Momsen på kund- och leverantörsfakturor som ' +
+        'var obetalda vid årets slut ska redovisas i den här perioden. Bokför avgränsningen före ' +
+        'inlämning; bokförs den efteråt behöver en rättad momsdeklaration lämnas för perioden.',
+      detail:
+        'Med kontantmetoden (bokslutsmetoden) bokförs obetalda fakturor vid räkenskapsårets utgång ' +
+        '(BFL 5 kap 2 §), och momsen på dem hör till den sista momsperioden det året. ' +
+        'Varningen hindrar inte inlämning.',
+      rutor,
+    })
+  }
+  const legacy = legacyKontantmetodVandningWarning(
+    facts.legacyCutoffPeriodEnds.map((periodEnd) => ({ periodEnd })),
+  )
+  if (legacy) {
+    findings.push({ code: 'LEGACY_KONTANTMETOD_VANDNING', status: 'WARNING', message: legacy, rutor })
+  }
+  return findings
 }
 
 /**
@@ -228,9 +289,9 @@ function reverseChargeInputVat(accountTotals: VatCheckAccountTotals): number {
  * the check compares the reverse-charge output against the reverse-charge INPUT
  * accounts, without it against the ruta 48 aggregate (see there).
  *
- * `context` is optional and only feeds `REVENUE_ACCOUNT_WITHOUT_RUTA`, which
- * needs account-level facts the rutor cannot carry. Every other check reads
- * the rutor alone.
+ * `context` is optional and only feeds `REVENUE_ACCOUNT_WITHOUT_RUTA` and the
+ * kontantmetoden cut-off findings, which need facts the rutor cannot carry.
+ * Every other check reads the rutor alone.
  *
  * Returns an empty array when the declaration looks consistent. Order
  * within the returned array is stable so the UI can rely on it for
@@ -463,6 +524,8 @@ export function runVatDeclarationChecks(
   if (revenueWithoutRuta.length > 0) {
     findings.push(revenueAccountWithoutRutaFinding(revenueWithoutRuta))
   }
+
+  findings.push(...kontantmetodCutoffFindings(context.kontantmetodCutoff))
 
   // SKV §4.1.1.4 rules 5 and 6: import base and import output VAT require each
   // other. Compared PROPORTIONALLY, not by presence, for the same reason the

@@ -1,15 +1,19 @@
 /**
  * Link an existing posted verifikat to a customer invoice as its payment row.
  *
- * The matching is accounting-method aware (company_settings.accounting_method):
- *   • Faktureringsmetoden (accrual): match verifikat that CREDIT an AR account
- *     (default 1510, covers 151x): e.g. a SIE-imported payment voucher or a
- *     manually-entered receipt that clears the receivable.
- *   • Kontantmetoden (cash): no 1510 is ever booked (revenue is recognised at
- *     payment: debit 19xx / credit 30xx+26xx), so instead match verifikat that
- *     DEBIT a liquid-funds account (BAS class 19: kassa/bank, covers
- *     1910/1920/1930/1940…). That voucher IS the payment the user already
- *     booked; linking just marks the invoice paid without a duplicate entry.
+ * The matched side follows the INVOICE's own booking, read from
+ * invoice_settlement_side() (./invoice-settlement-side.ts), the same function
+ * the link_invoice_to_voucher RPC reads:
+ *   • the 151x credit (ar_credit) for an invoice that sits on kundfordringar:
+ *     faktureringsmetoden, an invoice booked at issue before a switch to
+ *     kontantmetoden, and a kontantmetod invoice carried over the year end
+ *     (#3440). E.g. a SIE-imported payment voucher or a manually-entered
+ *     receipt that clears the receivable;
+ *   • the 19xx debit (bank_debit) for a kontantmetod invoice that was never
+ *     booked: revenue is recognised at payment (debit 19xx / credit
+ *     30xx+26xx), so the verifikat that DEBITS a liquid-funds account (BAS
+ *     class 19: 1910/1920/1930/1940…) IS the payment the user already booked;
+ *     linking just marks the invoice paid without a duplicate entry.
  *
  * No new journal entry is created in either case. Only an invoice_payments row
  * is inserted pointing at the existing journal_entry_id, plus the invoice's
@@ -44,44 +48,9 @@ import {
   type VoucherScoreContext,
 } from './voucher-matching-shared'
 import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
+import { resolveInvoiceSettlementSide } from './invoice-settlement-side'
 
 const log = createLogger('voucher-matching')
-
-/** AR account range. Default 1510 (Kundfordringar): covers all 151x. Used on
- *  faktureringsmetoden, where the issuance verifikat books the receivable. */
-const AR_ACCOUNT_PREFIX = '151'
-
-/** Liquid-funds range (Kassa och bank, BAS class 19: 1910/1920/1930/1940…).
- *  Used on kontantmetoden, where the payment verifikat debits a bank/cash
- *  account instead of crediting 1510. */
-const CASH_ACCOUNT_PREFIX = '19'
-
-/**
- * Read the company's accounting method. Defaults to 'accrual' when the settings
- * row or column is absent: mirrors mark-paid / propose-payment-lines.
- */
-async function resolveAccountingMethod(
-  supabase: SupabaseClient,
-  companyId: string
-): Promise<'accrual' | 'cash'> {
-  const { data, error } = await supabase
-    .from('company_settings')
-    .select('accounting_method')
-    .eq('company_id', companyId)
-    .maybeSingle()
-  if (error) {
-    // A transient failure here would silently flip a cash company to the
-    // accrual (151x) search and render an empty candidate list: make the
-    // fallback visible so an intermittent empty state is diagnosable.
-    log.warn('accounting_method lookup failed; falling back to accrual', {
-      companyId,
-      message: error.message,
-    })
-  }
-  return (data as { accounting_method?: string } | null)?.accounting_method === 'cash'
-    ? 'cash'
-    : 'accrual'
-}
 
 export interface VoucherCandidate {
   journal_entry_id: string
@@ -89,8 +58,9 @@ export interface VoucherCandidate {
   voucher_number: number | null
   entry_date: string
   description: string
-  /** Matched amount on this voucher, always positive: the AR credit (151x) on
-   *  faktureringsmetoden, or the liquid-funds debit (19xx) on kontantmetoden.
+  /** Matched amount on this voucher, always positive: the AR credit (151x),
+   *  or the liquid-funds debit (19xx) for a never-booked kontantmetod invoice
+   *  (invoice_settlement_side).
    *  Expressed in `currency` below (the INVOICE's currency), never in the raw
    *  SEK ledger column: see ledgerLineSideAmountIn.
    *  Kept under this name for API/UI back-compat across both methods. */
@@ -109,9 +79,9 @@ export interface VoucherCandidate {
 
 /**
  * Find posted journal entries that could plausibly be the payment for this
- * invoice and return up to `limit` ranked candidates. On faktureringsmetoden
- * those are vouchers crediting an AR account (151x); on kontantmetoden they are
- * vouchers debiting a liquid-funds account (19xx): see the module header.
+ * invoice and return up to `limit` ranked candidates: vouchers crediting an
+ * AR account (151x), or debiting a liquid-funds account (19xx) for a
+ * kontantmetod invoice that was never booked: see the module header.
  *
  * The search and the ranking are the shared voucher-link matcher
  * (voucher-matching-shared.ts), the same one the supplier side runs: every
@@ -131,22 +101,25 @@ export async function findMatchingVouchersForInvoice(
   const remainingAmount = computeRemaining(invoice)
   if (remainingAmount <= AMOUNT_TOLERANCE) return []
 
-  // Cash method: match the bank/cash DEBIT (19xx). Accrual: match the AR
-  // CREDIT (151x). The account prefix + side both switch on the method.
-  const isCash = (await resolveAccountingMethod(supabase, companyId)) === 'cash'
+  // The bank/cash DEBIT (19xx) for a never-booked kontantmetod invoice, the
+  // AR CREDIT (151x) for every other one: the RPC's own rule, by invoice id.
+  const settlement = await resolveInvoiceSettlementSide(supabase, companyId, invoice.id)
   const logContext = { companyId, invoiceId: invoice.id }
   const byEntry = await collectSettlementVouchers({
     supabase,
     companyId,
     invoice,
     remainingAmount,
-    side: isCash
-      ? { accountPrefix: CASH_ACCOUNT_PREFIX, entrySide: 'debit', bankSide: true }
-      : { accountPrefix: AR_ACCOUNT_PREFIX, entrySide: 'credit', bankSide: false },
+    side: {
+      accountPrefix: settlement.accountPrefix,
+      entrySide: settlement.entrySide,
+      bankSide: settlement.side === 'bank_debit',
+    },
     windowDays,
-    // As the validator: kontantmetoden settles in kronor only an invoice
-    // never booked at issue (20260919144500).
-    sekBookedAllowed: !isCash || !invoice.journal_entry_id,
+    // As the validator and the RPC: both sides settle in kronor. The 151x
+    // side books the kursdifferens, the 19xx side has no receivable to book
+    // one against (20261018131110).
+    sekBookedAllowed: true,
     log,
     logContext,
   })
@@ -246,9 +219,10 @@ export async function validateVoucherForInvoiceLink(
     return { ok: false, code: 'LINK_VOUCHER_INVOICE_FULLY_PAID' }
   }
 
-  // Match the bank/cash debit (cash) or the AR credit (accrual): see header.
-  const isCash = (await resolveAccountingMethod(supabase, companyId)) === 'cash'
-  const accountPrefix = isCash ? CASH_ACCOUNT_PREFIX : AR_ACCOUNT_PREFIX
+  // Match the bank/cash debit or the AR credit, as invoice_settlement_side()
+  // decides for THIS invoice: see the header.
+  const settlement = await resolveInvoiceSettlementSide(supabase, companyId, invoice.id)
+  const accountPrefix = settlement.accountPrefix
 
   const { data: voucher, error: voucherError } = await supabase
     .from('journal_entries')
@@ -285,7 +259,7 @@ export async function validateVoucherForInvoiceLink(
   // below still compares the RAW invoice.currency, so a NULL row is rejected
   // exactly as it was before, rather than newly failing as "unconvertible".
   const invoiceCurrency = documentCurrency(invoice.currency)
-  const matchedSide: 'debit' | 'credit' = isCash ? 'debit' : 'credit'
+  const matchedSide: 'debit' | 'credit' = settlement.entrySide
   let arCreditTotal = 0
   let lineCurrency: string | null = null
   // A matched-side line on the right account that carries no amount in the
@@ -305,7 +279,7 @@ export async function validateVoucherForInvoiceLink(
     if (!line.account_number?.startsWith(accountPrefix)) continue
     // Only a line that actually moves on the matched side counts as evidence
     // of a settlement; the opposite leg is irrelevant.
-    const rawSide = Number(isCash ? line.debit_amount : line.credit_amount) || 0
+    const rawSide = Number(matchedSide === 'debit' ? line.debit_amount : line.credit_amount) || 0
     if (rawSide > 0) {
       sideLines.push({ currency: line.currency, amount_in_currency: line.amount_in_currency, sideSek: rawSide })
     }
@@ -327,18 +301,15 @@ export async function validateVoucherForInvoiceLink(
     // shared with the supplier side and the candidate search): zero readable
     // lines, every unreadable line SEK-booked, a sane invoice exchange_rate,
     // and the voucher's SEK total within 10% of remaining * rate. The RPC
-    // settles the full remaining; on accrual it also books the FX residual to
-    // 7960/3960. Kontantmetoden takes the same road since 20260919110000: with
-    // no receivable there is no residual to book, only an invoice to mark paid
-    // against the verifikat that holds the money. That holds only for an
-    // invoice never booked at issue (20260919144500): one that carries
-    // journal_entry_id has a 1510 balance at the invoice rate, a kronor
-    // settlement leaves a kursdifferens on it, and the cash path books none,
-    // so it stays refused.
-    const fallback =
-      !isCash || !invoice.journal_entry_id
-        ? sekBookedSettlement(sideLines, invoiceCurrency, invoice.exchange_rate, remainingAmount)
-        : ({ eligible: false, reason: 'not_eligible' } as const)
+    // settles the full remaining. On the 151x side it also books the FX
+    // residual to 7960/3960: the invoice holds a 1510 balance at the invoice
+    // rate (faktureringsmetoden, or a kontantmetod carry, #3440). On the 19xx
+    // side there is no receivable and so no residual, only an invoice to mark
+    // paid against the verifikat that holds the money. Since the side follows
+    // the invoice's own booking (20261018131110), both sides are eligible;
+    // the old "kontantmetoden AND booked" refusal is gone, because such an
+    // invoice now reads the 151x side.
+    const fallback = sekBookedSettlement(sideLines, invoiceCurrency, invoice.exchange_rate, remainingAmount)
     if (!fallback.eligible) {
       return {
         ok: false,

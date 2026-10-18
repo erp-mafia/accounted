@@ -100,15 +100,17 @@ import {
 import {
   assessKontantmetodCutoff,
   cutoffPreviewFingerprint,
-  hasIncompleteKontantmetodCutoffPair,
   KontantmetodCutoffPartialError,
+  KontantmetodManualCarryError,
   postKontantmetodCutoff,
+  previewPaidBeforePostingCorrections,
+  resolveKontantmetodManualCarries,
+  type KontantmetodCarryPlan,
 } from '@/lib/core/bookkeeping/kontantmetod-cutoff'
 import {
-  isKontantmetodCutoffSuspended,
-  KONTANTMETOD_CUTOFF_SUSPENDED_CODE,
-  kontantmetodCutoffSuspendedMessageSv,
-} from '@/lib/core/bookkeeping/kontantmetod-cutoff-suspension'
+  kontantmetodCutoffPreflight,
+  kontantmetodCutoffWriteDates,
+} from '@/lib/vat/kontantmetod-cutoff-preflight'
 import { executeCurrencyRevaluation } from '@/lib/bookkeeping/currency-revaluation'
 import {
   AssetCorrectionBlockedError,
@@ -4035,9 +4037,10 @@ async function commitRunYearEnd(
   }
 }
 
-// Unreachable while isKontantmetodCutoffSuspended() is true (#3440): the
-// dispatcher refuses post_kontantmetod_cutoff before the claim, so a refused
-// op stays pending. A refusal in here would run after the claim and consume it.
+// Per invoice (#3440): re-assesses the period, recomputes every carry and every
+// correction of a cash verifikat booked before the cut-off, and posts only when
+// the fingerprint the approver saw (acknowledgements included) still matches.
+// The pre-flight (locks, filed VAT periods) runs again here, before any write.
 async function commitPostKontantmetodCutoff(
   supabase: SupabaseClient,
   userId: string,
@@ -4045,13 +4048,20 @@ async function commitPostKontantmetodCutoff(
   params: Record<string, unknown>,
 ): Promise<ExecutorResult> {
   const fiscalPeriodId = params.fiscal_period_id as string
-  const nextFiscalPeriodId = params.next_fiscal_period_id as string
   const stagedPeriodEnd = params.period_end as string
   const stagedEntityType = params.entity_type as EntityType
   const stagedFingerprint = params.preview_fingerprint as string
+  const stringList = (value: unknown): string[] | null =>
+    value === undefined || value === null
+      ? []
+      : Array.isArray(value) && value.every((v) => typeof v === 'string')
+        ? (value as string[])
+        : null
+  const acknowledgedFiledVatPeriods = stringList(params.acknowledge_filed_vat_periods)
+  const acknowledgedLegacyInvoiceIds = stringList(params.acknowledge_legacy_invoice_ids)
   if (
-    !fiscalPeriodId || !nextFiscalPeriodId ||
-    !stagedPeriodEnd || !stagedEntityType || !stagedFingerprint
+    !fiscalPeriodId || !stagedPeriodEnd || !stagedEntityType || !stagedFingerprint ||
+    !acknowledgedFiledVatPeriods || !acknowledgedLegacyInvoiceIds
   ) {
     return { error: 'Invalid staged kontantmetod cut-off parameters', status: 400 }
   }
@@ -4084,38 +4094,63 @@ async function commitPostKontantmetodCutoff(
     return { error: 'Företaget använder inte kontantmetoden', status: 409 }
   }
 
-  const { data: nextPeriod } = await supabase
-    .from('fiscal_periods')
-    .select('id, period_start, period_end, is_closed, locked_at')
-    .eq('id', nextFiscalPeriodId)
-    .eq('company_id', companyId)
-    .maybeSingle()
-  if (!nextPeriod) return { error: 'Nästa räkenskapsår hittades inte', status: 409 }
-
   try {
+    const entityType = parseEntityType(settings.entity_type)
     const assessment = await assessKontantmetodCutoff(
       supabase,
       companyId,
       period,
-      nextFiscalPeriodId,
-      parseEntityType(settings.entity_type),
+      null,
+      entityType,
+      { acknowledgedLegacyInvoiceIds },
     )
 
-    if (assessment.postings.complete || hasIncompleteKontantmetodCutoffPair(
-      assessment.postings,
-      assessment.lines,
-    )) {
+    // A legacy period (aggregate cut-off with vändning) takes no new posting:
+    // its cut-off stands or is corrected by hand. Per invoice, nothing to
+    // carry and nothing to correct means nothing to post.
+    if (assessment.mode === 'legacy') {
       return {
         error:
-          'Kontantmetodens bokslutsavgränsning är redan bokförd eller delvis bokförd för perioden',
+          'Perioden har redan en äldre bokslutsavgränsning med vändning. Den bedöms som tidigare och inget nytt bokförs i den.',
         status: 409,
       }
     }
+    let manualPlans: KontantmetodCarryPlan[]
+    try {
+      manualPlans = resolveKontantmetodManualCarries(assessment.collection, params.manual_carries)
+    } catch (err) {
+      if (err instanceof KontantmetodManualCarryError) {
+        return { error: err.message, errorCode: err.code, status: 409 }
+      }
+      throw err
+    }
+    const allPlans = [...assessment.plans, ...manualPlans]
+
+    if (allPlans.length === 0 && assessment.collection.paidBeforePosting.length === 0) {
+      return {
+        error: assessment.complete
+          ? 'Kontantmetodens bokslutsavgränsning är redan bokförd för perioden'
+          : 'Det finns inget att bokföra automatiskt: de fakturor som återstår måste hanteras manuellt',
+        status: 409,
+      }
+    }
+
+    const { corrections, refusals } = await previewPaidBeforePostingCorrections(
+      supabase,
+      companyId,
+      assessment.collection.paidBeforePosting,
+      assessment.plans,
+    )
     const currentFingerprint = cutoffPreviewFingerprint({
       collection: assessment.collection,
       lines: assessment.lines,
-      entityType: parseEntityType(settings.entity_type),
+      entityType,
       periodEnd: period.period_end,
+      plans: allPlans,
+      corrections,
+      correctionRefusals: refusals,
+      acknowledgedFiledVatPeriods,
+      acknowledgedLegacyInvoiceIds,
     })
     if (currentFingerprint !== stagedFingerprint) {
       return {
@@ -4125,13 +4160,34 @@ async function commitPostKontantmetodCutoff(
       }
     }
 
+    const preflight = await kontantmetodCutoffPreflight(supabase, companyId, {
+      dates: kontantmetodCutoffWriteDates(
+        period.period_end,
+        allPlans,
+        corrections,
+      ),
+      acknowledgedFiledVatPeriods,
+      manualCorrectionDates: [
+        ...assessment.collection.paidBeforePostingManual.map((m) => m.entryDate),
+        ...refusals.map((r) => r.entryDate),
+      ].filter((date): date is string => !!date),
+    })
+    if (!preflight.ok) {
+      return {
+        error: preflight.message_sv,
+        errorCode: preflight.code,
+        status: getErrorEntry(preflight.code)?.httpStatus ?? 409,
+      }
+    }
+
+    const correctable = new Set(corrections.map((c) => `${c.side}:${c.invoiceId}:${c.entryId}`))
     const result = await postKontantmetodCutoff(supabase, companyId, userId, {
       fiscalPeriodId,
-      nextFiscalPeriodId,
       periodEnd: period.period_end,
-      receivables: assessment.collection.receivables,
-      payables: assessment.collection.payables,
-      entityType: parseEntityType(settings.entity_type),
+      plans: allPlans,
+      paidBeforePosting: assessment.collection.paidBeforePosting.filter((item) =>
+        correctable.has(`${item.side}:${item.invoiceId}:${item.entryId}`),
+      ),
       unknownVatTreatment: assessment.collection.unknownVatTreatment,
       strayVatOnZeroRate: assessment.collection.strayVatOnZeroRate,
       // The posting port's events, while POSTING_EVENTS is on: the cut-off
@@ -4141,10 +4197,47 @@ async function commitPostKontantmetodCutoff(
 
     return {
       data: {
-        receivable_entry_id: result.receivableEntry?.id ?? null,
-        receivable_reversal_entry_id: result.receivableReversal?.id ?? null,
-        payable_entry_id: result.payableEntry?.id ?? null,
-        payable_reversal_entry_id: result.payableReversal?.id ?? null,
+        posted: result.posted.map((carry) => ({
+          side: carry.side,
+          invoice_id: carry.invoiceId,
+          reference: carry.reference,
+          journal_entry_id: carry.entryId,
+        })),
+        compensated: result.compensated.map((carry) => ({
+          side: carry.side,
+          invoice_id: carry.invoiceId,
+          reference: carry.reference,
+          journal_entry_id: carry.entryId,
+          storno_entry_id: carry.stornoEntryId,
+          code: carry.code,
+        })),
+        corrected: result.corrected.map((c) => ({
+          side: c.side,
+          invoice_id: c.invoiceId,
+          reference: c.reference,
+          cash_entry_id: c.entryId,
+          storno_entry_id: c.stornoEntryId,
+          correction_entry_id: c.correctionEntryId,
+        })),
+        correction_failed: result.correctionFailed.map((c) => ({
+          side: c.side,
+          invoice_id: c.invoiceId,
+          reference: c.reference,
+          cash_entry_id: c.entryId,
+          code: c.code,
+          message: c.message,
+        })),
+        manual_corrections: refusals.map((r) => ({
+          side: r.side,
+          invoice_id: r.invoiceId,
+          reference: r.reference,
+          cash_entry_id: r.entryId,
+          entry_date: r.entryDate,
+          reason: r.reason,
+          code: 'KONTANTMETOD_CUTOFF_PAID_BEFORE_POSTING_MANUAL',
+        })),
+        amended_vat_periods_required: preflight.amendedVatPeriodsRequired,
+        remaining: result.remaining,
       },
     }
   } catch (err) {
@@ -6926,25 +7019,6 @@ async function commitPendingOperationInner(
   pendingOp: PendingOperation,
   opts: CommitOptions = {}
 ): Promise<CommitResult> {
-  // ── Kontantmetoden cut-off suspension (#3440). The cut-off as built declares
-  //    unpaid-invoice moms a second time when the invoice is paid next year.
-  //    Refused HERE, before the atomic claim and before any read or write, for
-  //    the same reason as the gates below: a refused op must stay 'pending'
-  //    (not consumed), so it is still there when the fix decides what to do
-  //    with it. The staging door reads the same switch.
-  if (
-    pendingOp.operation_type === 'post_kontantmetod_cutoff' &&
-    isKontantmetodCutoffSuspended()
-  ) {
-    return {
-      status: 'failed',
-      error: kontantmetodCutoffSuspendedMessageSv(),
-      http_status: getErrorEntry(KONTANTMETOD_CUTOFF_SUSPENDED_CODE)?.httpStatus ?? 409,
-      code: KONTANTMETOD_CUTOFF_SUSPENDED_CODE,
-      operation_status: 'pending',
-    }
-  }
-
   // ── Web-only approvals (collections). Handing an invoice over and
   //    escalating a case rest on a person's own word (attestations, the
   //    bank check they saw); an agent may stage them but only a person

@@ -319,16 +319,16 @@
       ]
     },
     {
-      "flow": "enskild firma: the kontantmetod cut-off approved from a staged operation (fordringar and skulder with their vändningar)",
+      "flow": "enskild firma: the kontantmetod cut-off approved from a staged operation (one carry per unpaid invoice, linked to it)",
       "entries": [
         {
           "voucher_series": "I",
           "voucher_number": 1,
           "entry_date": "2025-12-31",
-          "description": "Kundfordringar vid bokslut (kontantmetoden)",
+          "description": "Kundfaktura F-10: obetald vid bokslut (kontantmetoden)",
           "source_type": "year_end",
           "status": "posted",
-          "notes": "Kundfordringar (1 st): F-10",
+          "notes": "Årsomföring kontantmetoden, BFL 5 kap 2 §, faktura F-10",
           "lines": [
             {
               "currency": "SEK",
@@ -338,7 +338,7 @@
               "credit_amount": "0",
               "exchange_rate": null,
               "account_number": "1510",
-              "line_description": "Kundfordringar vid räkenskapsårets utgång (kontantmetoden)",
+              "line_description": "Faktura F-10",
               "amount_in_currency": null
             },
             {
@@ -348,8 +348,8 @@
               "debit_amount": "0",
               "credit_amount": "2000",
               "exchange_rate": null,
-              "account_number": "2618",
-              "line_description": "Utgående moms på obetald faktura vid bokslut",
+              "account_number": "2611",
+              "line_description": "Utgående moms 25%",
               "amount_in_currency": null
             },
             {
@@ -360,51 +360,7 @@
               "credit_amount": "8000",
               "exchange_rate": null,
               "account_number": "3001",
-              "line_description": "Obetalda kundfakturor vid bokslut",
-              "amount_in_currency": null
-            }
-          ]
-        },
-        {
-          "voucher_series": "I",
-          "voucher_number": 1,
-          "entry_date": "2026-01-01",
-          "description": "Vändning kundfordringar bokslut (kontantmetoden)",
-          "source_type": "year_end",
-          "status": "posted",
-          "notes": "Vändning kundfordringar (1 st): F-10",
-          "lines": [
-            {
-              "currency": "SEK",
-              "tax_code": null,
-              "dimensions": {},
-              "debit_amount": "0",
-              "credit_amount": "10000",
-              "exchange_rate": null,
-              "account_number": "1510",
-              "line_description": "Vändning: Kundfordringar vid räkenskapsårets utgång (kontantmetoden)",
-              "amount_in_currency": null
-            },
-            {
-              "currency": "SEK",
-              "tax_code": null,
-              "dimensions": {},
-              "debit_amount": "2000",
-              "credit_amount": "0",
-              "exchange_rate": null,
-              "account_number": "2618",
-              "line_description": "Vändning: Utgående moms på obetald faktura vid bokslut",
-              "amount_in_currency": null
-            },
-            {
-              "currency": "SEK",
-              "tax_code": null,
-              "dimensions": {},
-              "debit_amount": "8000",
-              "credit_amount": "0",
-              "exchange_rate": null,
-              "account_number": "3001",
-              "line_description": "Vändning: Obetalda kundfakturor vid bokslut",
+              "line_description": "Försäljning faktura F-10",
               "amount_in_currency": null
             }
           ]
@@ -413,10 +369,10 @@
           "voucher_series": "I",
           "voucher_number": 2,
           "entry_date": "2025-12-31",
-          "description": "Leverantörsskulder vid bokslut (kontantmetoden)",
+          "description": "Leverantörsfaktura L-1: obetald vid bokslut (kontantmetoden)",
           "source_type": "year_end",
           "status": "posted",
-          "notes": "Leverantörsskulder (1 st): L-1",
+          "notes": "Årsomföring kontantmetoden, BFL 5 kap 2 §, faktura L-1",
           "lines": [
             {
               "currency": "SEK",
@@ -426,7 +382,7 @@
               "credit_amount": "2500",
               "exchange_rate": null,
               "account_number": "2440",
-              "line_description": "Leverantörsskulder vid räkenskapsårets utgång (kontantmetoden)",
+              "line_description": "Leverantörsfaktura L-1 (ankomstnr 1)",
               "amount_in_currency": null
             },
             {
@@ -436,8 +392,8 @@
               "debit_amount": "500",
               "credit_amount": "0",
               "exchange_rate": null,
-              "account_number": "2648",
-              "line_description": "Ingående moms på obetald faktura vid bokslut",
+              "account_number": "2641",
+              "line_description": "Ingående moms 25% Leverantörsfaktura L-1 (ankomstnr 1)",
               "amount_in_currency": null
             },
             {
@@ -448,51 +404,7 @@
               "credit_amount": "0",
               "exchange_rate": null,
               "account_number": "4010",
-              "line_description": "Obetalda leverantörsfakturor vid bokslut",
-              "amount_in_currency": null
-            }
-          ]
-        },
-        {
-          "voucher_series": "I",
-          "voucher_number": 2,
-          "entry_date": "2026-01-01",
-          "description": "Vändning leverantörsskulder bokslut (kontantmetoden)",
-          "source_type": "year_end",
-          "status": "posted",
-          "notes": "Vändning leverantörsskulder (1 st): L-1",
-          "lines": [
-            {
-              "currency": "SEK",
-              "tax_code": null,
-              "dimensions": {},
-              "debit_amount": "2500",
-              "credit_amount": "0",
-              "exchange_rate": null,
-              "account_number": "2440",
-              "line_description": "Vändning: Leverantörsskulder vid räkenskapsårets utgång (kontantmetoden)",
-              "amount_in_currency": null
-            },
-            {
-              "currency": "SEK",
-              "tax_code": null,
-              "dimensions": {},
-              "debit_amount": "0",
-              "credit_amount": "500",
-              "exchange_rate": null,
-              "account_number": "2648",
-              "line_description": "Vändning: Ingående moms på obetald faktura vid bokslut",
-              "amount_in_currency": null
-            },
-            {
-              "currency": "SEK",
-              "tax_code": null,
-              "dimensions": {},
-              "debit_amount": "0",
-              "credit_amount": "2000",
-              "exchange_rate": null,
-              "account_number": "4010",
-              "line_description": "Vändning: Obetalda leverantörsfakturor vid bokslut",
+              "line_description": "Leverantörsfaktura L-1 (ankomstnr 1)",
               "amount_in_currency": null
             }
           ]
@@ -560,7 +472,7 @@
               "tax_code": null,
               "dimensions": {},
               "debit_amount": "0",
-              "credit_amount": "2500",
+              "credit_amount": "4500",
               "exchange_rate": null,
               "account_number": "2611",
               "line_description": "Ingående balans: Utgående moms på försäljning inom Sverige, 25 %",
@@ -570,33 +482,11 @@
               "currency": "SEK",
               "tax_code": null,
               "dimensions": {},
-              "debit_amount": "0",
-              "credit_amount": "2000",
-              "exchange_rate": null,
-              "account_number": "2618",
-              "line_description": "Ingående balans: Vilande utgående moms, 25 %",
-              "amount_in_currency": null
-            },
-            {
-              "currency": "SEK",
-              "tax_code": null,
-              "dimensions": {},
-              "debit_amount": "1000",
+              "debit_amount": "1500",
               "credit_amount": "0",
               "exchange_rate": null,
               "account_number": "2641",
               "line_description": "Ingående balans: Debiterad ingående moms",
-              "amount_in_currency": null
-            },
-            {
-              "currency": "SEK",
-              "tax_code": null,
-              "dimensions": {},
-              "debit_amount": "500",
-              "credit_amount": "0",
-              "exchange_rate": null,
-              "account_number": "2648",
-              "line_description": "Ingående balans: Vilande ingående moms",
               "amount_in_currency": null
             }
           ]
@@ -736,24 +626,26 @@
     ],
     "cutoffMarkers": [
       {
-        "kind": "payable",
+        "kind": "payable_invoice",
         "voucher": "I2",
         "status": "posted"
       },
       {
-        "kind": "payable_reversal",
-        "voucher": "I2",
-        "status": "posted"
-      },
-      {
-        "kind": "receivable",
+        "kind": "receivable_invoice",
         "voucher": "I1",
         "status": "posted"
+      }
+    ],
+    "invoiceLinks": [
+      {
+        "side": "customer",
+        "reference": "F-10",
+        "voucher": "I1"
       },
       {
-        "kind": "receivable_reversal",
-        "voucher": "I1",
-        "status": "posted"
+        "side": "supplier",
+        "reference": "L-1",
+        "voucher": "I2"
       }
     ],
     "operations": [

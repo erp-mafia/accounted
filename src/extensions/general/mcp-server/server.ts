@@ -492,23 +492,27 @@ import {
 } from '@/lib/invoices/supplier-voucher-matching'
 import { resolveSupplierSettlementSide } from '@/lib/invoices/supplier-settlement-side'
 import { findFiscalPeriod, getSwedishLocalDate, validateBalance } from '@/lib/bookkeeping/engine'
-import { countUnbookedInPeriod, findNextPeriod, lockPeriod, resolvePeriodStatusForDate, type PeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
+import { countUnbookedInPeriod, lockPeriod, resolvePeriodStatusForDate, type PeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { assertNoUnfinishedSieImport } from '@/lib/core/bookkeeping/sie-import-hold'
 import { validateYearEndReadiness, previewYearEndClosing } from '@/lib/core/bookkeeping/year-end-service'
 import {
   assessKontantmetodCutoff,
   cutoffPreviewFingerprint,
-  hasIncompleteKontantmetodCutoffPair,
-  KONTANTMETOD_CUTOFF_DESCRIPTIONS,
+  KontantmetodManualCarryError,
+  legacyKontantmetodVandningWarning,
+  manualCarryInputOf,
   nextDay,
-  reverseLines,
+  previewPaidBeforePostingCorrections,
+  resolveKontantmetodManualCarries,
   undatedSettlementsNote,
 } from '@/lib/core/bookkeeping/kontantmetod-cutoff'
+import { fetchKontantmetodCutoffVatFacts } from '@/lib/vat/kontantmetod-cutoff-vat-facts'
 import {
-  isKontantmetodCutoffSuspended,
-  KONTANTMETOD_CUTOFF_SUSPENDED_CODE,
-} from '@/lib/core/bookkeeping/kontantmetod-cutoff-suspension'
+  describeFiledVatPeriodsSv,
+  kontantmetodCutoffPreflight,
+  kontantmetodCutoffWriteDates,
+} from '@/lib/vat/kontantmetod-cutoff-preflight'
 import { applyUnbookedFilter } from '@/lib/transactions/unbooked'
 import { previewIngestDedup } from '@/lib/transactions/dedup-preview'
 import { batchAllocationsFromParts } from '@/lib/transactions/parts-read'
@@ -6637,7 +6641,7 @@ export const tools: McpTool[] = [
             accounting_method: {
               type: ['string', 'null'],
               enum: ['accrual', 'cash', null],
-              description: 'accrual = faktureringsmetoden: payment debits 19xx AND credits 1510 (both sides). cash = kontantmetoden: payment debits 19xx and books revenue + moms. Drives the settlement posting. Null defaults to accrual.',
+              description: 'accrual = faktureringsmetoden: payment debits 19xx AND credits 1510 (both sides). cash = kontantmetoden: payment debits 19xx and books revenue + moms (an invoice carried over the year end clears 1510, no moms). Drives the settlement posting. Null defaults to accrual.',
             },
           },
           required: ['id', 'company_id'],
@@ -13283,7 +13287,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_find_voucher_candidates_for_invoice',
     keywords: ['verifikat', 'kundfaktura', 'koppla faktura'],
     title: 'Find Voucher Candidates (Invoice)',
-    description: "List posted verifikat that could be this invoice's payment (faktureringsmetoden: credit 1510; kontantmetoden: debit 19xx). Call before gnubok_link_invoice_to_voucher to mark the faktura paid (no new bokföring).",
+    description: "List posted verifikat that could be this invoice's payment (credit 1510; a kontantmetod invoice never booked: debit 19xx). Call before gnubok_link_invoice_to_voucher to mark the faktura paid (no new bokföring).",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -13349,7 +13353,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_link_invoice_to_voucher',
     keywords: ['koppla faktura', 'verifikat', 'kundfaktura'],
     title: 'Link Invoice to Voucher',
-    description: 'Markera en faktura som betald via länk till en befintlig verifikation (faktureringsmetoden: krediterar 1510; kontantmetoden: debiterar 19xx). Kör gnubok_find_voucher_candidates_for_invoice först. Stages for approval.',
+    description: 'Markera en faktura som betald via länk till en befintlig verifikation (krediterar 1510; en obokförd faktura under kontantmetoden: debiterar 19xx). Kör gnubok_find_voucher_candidates_for_invoice först. Stages for approval.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -20912,22 +20916,10 @@ export const tools: McpTool[] = [
       // The `kind` strings are this tool's public contract: never rename one.
       // A blocker with no mapped code falls back to the wording heuristic
       // (which also catches legacy English messages), then to 'other'.
-      // #3440: while the cut-off is suspended, its blocker carries the
-      // suspension code and remediation, so an agent stops instead of
-      // reaching for gnubok_post_kontantmetod_cutoff or a manual voucher.
-      const cutoffSuspension = isKontantmetodCutoffSuspended()
-        ? getErrorEntry(KONTANTMETOD_CUTOFF_SUSPENDED_CODE)
-        : undefined
       const blockers = validation.blockers.map(({ code, message }) => ({
         kind: YEAR_END_BLOCKER_KIND[code] ?? classifyYearEndBlockerMessage(message),
         severity: 'high' as const,
         message,
-        ...(cutoffSuspension && code === 'KONTANTMETOD_CUTOFF_REQUIRED'
-          ? {
-              error_code: KONTANTMETOD_CUTOFF_SUSPENDED_CODE,
-              ...(cutoffSuspension.remediation ? { remediation: cutoffSuspension.remediation } : {}),
-            }
-          : {}),
         ...(code === 'DRAFT_ENTRIES'
           ? {
               remediation: {
@@ -20982,14 +20974,10 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_post_kontantmetod_cutoff',
-    keywords: ['kontantmetoden', 'bokslutsmetod', 'brytdag'],
+    keywords: ['kontantmetoden', 'bokslutsmetod', 'brytdag', 'årsomföring'],
     title: 'Post Cash-Method Year-End Cut-Off',
-    // While isKontantmetodCutoffSuspended() is true (#3440) the description
-    // leads with the suspension, so an agent planning from tools/list or
-    // search does not promise the user a cut-off it cannot stage.
-    description: isKontantmetodCutoffSuspended()
-      ? 'TEMPORARILY SUSPENDED (#3440): refuses with KONTANTMETOD_CUTOFF_SUSPENDED. Never book the year-end receivables or payables by hand instead; the close waits. Normally stages the kontantmetoden year-end cut-off and next-period reversals for approval.'
-      : 'Stage the exact year-end receivable/payable cut-off and next-period reversals required for kontantmetoden. Review all proposed lines, then approve with confirmed=true.',
+    description:
+      'Stage the kontantmetoden year-end cut-off: one verifikat per invoice unpaid at period end (årsomföring, no reversal) and the rättelse of any payment already booked as cash. Review every line, then approve.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -20997,6 +20985,45 @@ export const tools: McpTool[] = [
         fiscal_period_id: {
           type: 'string',
           description: 'UUID of the cash-method fiscal period being closed',
+        },
+        acknowledge_filed_vat_periods: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'tax_period labels of already filed VAT periods the cut-off changes (KONTANTMETOD_CUTOFF_VAT_PERIOD_FILED). Pass only after the user agreed to file a corrected momsdeklaration for each.',
+        },
+        acknowledge_legacy_invoice_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Invoice ids withheld as KONTANTMETOD_LEGACY_COVERED that the accountant decided to carry anyway.',
+        },
+        manual_carries: {
+          type: 'array',
+          description:
+            'Carries the accountant wrote for ROT/RUT invoices listed as KONTANTMETOD_CUTOFF_ROT_PARTIAL_MANUAL: the open customer share on 151x (exactly), Skatteverket\'s share of the open part on 1513 (exactly), and the revenue (3xxx) and output moms (261x to 263x) behind both. Posted on period_end and linked to the invoice like every carry.',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              invoice_id: { type: 'string', description: 'UUID of the customer invoice' },
+              lines: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    account_number: { type: 'string', description: 'BAS account, four digits, as a string' },
+                    debit_amount: { type: 'number' },
+                    credit_amount: { type: 'number' },
+                    line_description: { type: 'string' },
+                  },
+                  required: ['account_number', 'debit_amount', 'credit_amount'],
+                },
+              },
+            },
+            required: ['invoice_id', 'lines'],
+          },
         },
         idempotency_key: STAGING_ARGS_PROPERTIES.idempotency_key,
       },
@@ -21012,15 +21039,16 @@ export const tools: McpTool[] = [
       const fiscalPeriodId = args.fiscal_period_id as string
       if (!fiscalPeriodId) throw badArgument('fiscal_period_id', 'fiscal_period_id is required')
 
-      // #3440: refuse before any read, so nothing is assessed or staged. The
-      // approval door (commitPendingOperation) reads the same switch for an
-      // operation staged before the suspension.
-      if (isKontantmetodCutoffSuspended()) {
-        throw codedRefusal(
-          KONTANTMETOD_CUTOFF_SUSPENDED_CODE,
-          'The kontantmetoden year-end cut-off is temporarily suspended while a VAT defect is fixed (erp-mafia/accounted#3440): as built, it would declare the moms on invoices unpaid at year end a second time when they are paid in the next year. Nothing was staged. Do not book the year-end receivables, payables or their moms by hand as a workaround; tell the user the year-end close of this period waits until the cut-off is back.',
-        )
+      const stringList = (field: string): string[] => {
+        const value = args[field]
+        if (value === undefined || value === null) return []
+        if (!Array.isArray(value) || !value.every((v) => typeof v === 'string')) {
+          throw new Error(`${field} must be an array of strings`)
+        }
+        return [...new Set(value as string[])]
       }
+      const acknowledgedFiledVatPeriods = stringList('acknowledge_filed_vat_periods')
+      const acknowledgedLegacyInvoiceIds = stringList('acknowledge_legacy_invoice_ids')
 
       const [{ data: period }, { data: settings }] = await Promise.all([
         supabase
@@ -21047,110 +21075,176 @@ export const tools: McpTool[] = [
         throw new Error('Företaget använder inte kontantmetoden')
       }
 
-      const nextPeriod = await findNextPeriod(supabase, companyId, fiscalPeriodId)
-      if (!nextPeriod) {
-        throw new Error(
-          'Kontantmetodens bokslutsavgränsning kräver att nästa räkenskapsår är upplagt: vändningarna bokas första dagen på det nya året.',
-        )
-      }
-      if (nextPeriod.is_closed || nextPeriod.locked_at) {
-        throw new Error(
-          'Nästa räkenskapsår är stängt eller låst: vändningarna kan inte bokföras. Lås upp perioden och försök igen.',
-        )
-      }
-
+      const entityType = parseEntityType(settings.entity_type)
+      // Per invoice (#3440) the cut-off needs no next period: there is no
+      // vändning, every carry is dated on this period's end.
       const assessment = await assessKontantmetodCutoff(
         supabase,
         companyId,
         period,
-        nextPeriod.id,
-        parseEntityType(settings.entity_type),
+        null,
+        entityType,
+        { acknowledgedLegacyInvoiceIds },
       )
-      if (assessment.collection.unknownVatTreatment.length > 0) {
+      if (assessment.mode === 'legacy') {
         throw new Error(
-          `${assessment.collection.unknownVatTreatment.length} fakturor saknar momsinställning: ` +
-            `${assessment.collection.unknownVatTreatment.slice(0, 10).join(', ')}. Komplettera dem och försök igen.`,
+          'Perioden har redan en äldre bokslutsavgränsning med vändning. Den bedöms som tidigare och inget nytt bokförs i den; rätta den manuellt om reskontran har ändrats.',
         )
       }
-      if (assessment.collection.strayVatOnZeroRate.length > 0) {
+      const { collection } = assessment
+      if (collection.unknownVatTreatment.length > 0) {
         throw new Error(
-          `${assessment.collection.strayVatOnZeroRate.length} fakturor har moms trots en momsfri momsinställning: ` +
-          `${assessment.collection.strayVatOnZeroRate.slice(0, 10).join(', ')}. Rätta dem och försök igen.`,
+          `${collection.unknownVatTreatment.length} fakturor saknar momsinställning: ` +
+            `${collection.unknownVatTreatment.slice(0, 10).join(', ')}. Komplettera dem och försök igen.`,
+        )
+      }
+      if (collection.strayVatOnZeroRate.length > 0) {
+        throw new Error(
+          `${collection.strayVatOnZeroRate.length} fakturor har moms trots en momsfri momsinställning: ` +
+          `${collection.strayVatOnZeroRate.slice(0, 10).join(', ')}. Rätta dem och försök igen.`,
         )
       }
       // Disclosed wherever the cut-off is shown, including when the
       // assumption leaves nothing to post: that answer rests on it too.
-      const undatedNote = undatedSettlementsNote(
-        assessment.collection.undatedSettlements.length,
-        period.period_end,
+      const undatedNote = undatedSettlementsNote(collection.undatedSettlements.length, period.period_end)
+
+      let manualPlans
+      try {
+        manualPlans = resolveKontantmetodManualCarries(collection, args.manual_carries)
+      } catch (err) {
+        if (err instanceof KontantmetodManualCarryError) {
+          throw codedRefusal(err.code, `The manual carry was refused, nothing was staged: ${err.message}`)
+        }
+        throw err
+      }
+      const manuallyCarried = new Set(manualPlans.map((plan) => plan.invoiceId))
+      const rotPartialLeft = collection.rotPartialManualInvoices
+        .filter((item) => !manuallyCarried.has(item.invoiceId))
+        .map((item) => item.reference)
+      const allPlans = [...assessment.plans, ...manualPlans]
+
+      const { corrections, refusals } = await previewPaidBeforePostingCorrections(
+        supabase,
+        companyId,
+        collection.paidBeforePosting,
+        assessment.plans,
       )
-      if (
-        assessment.lines.receivableLines.length === 0 &&
-        assessment.lines.payableLines.length === 0
-      ) {
+      const manualPayments = [
+        ...collection.paidBeforePostingManual.map((m) => ({
+          side: m.side,
+          invoice_id: m.invoiceId,
+          reference: m.reference,
+          cash_entry_id: m.entryId,
+          entry_date: m.entryDate,
+          reason: m.reason,
+        })),
+        ...refusals.map((r) => ({
+          side: r.side,
+          invoice_id: r.invoiceId,
+          reference: r.reference,
+          cash_entry_id: r.entryId,
+          entry_date: r.entryDate,
+          reason: r.reason,
+        })),
+      ]
+
+      if (allPlans.length === 0 && corrections.length === 0) {
+        // Nothing automatic left. What remains (if anything) needs a person;
+        // name the first kind by its code so the agent can branch on it.
+        const legacyRefs = collection.legacyCovered.map((c) => c.reference)
+        if (legacyRefs.length > 0) {
+          throw codedRefusal(
+            'KONTANTMETOD_LEGACY_COVERED',
+            `${legacyRefs.length} invoices were already covered by an earlier legacy cut-off with vändning: ${legacyRefs.slice(0, 10).join(', ')}. Nothing was staged. Ask the accountant whether to carry them; if so, stage again with acknowledge_legacy_invoice_ids.`,
+          )
+        }
+        if (rotPartialLeft.length > 0) {
+          throw codedRefusal(
+            'KONTANTMETOD_CUTOFF_ROT_PARTIAL_MANUAL',
+            `${rotPartialLeft.length} ROT/RUT invoices were partly paid in the closed year and cannot be carried by rule: ${rotPartialLeft.slice(0, 10).join(', ')}. Nothing was staged. Have the accountant write each open part and stage again with manual_carries.`,
+          )
+        }
+        if (manualPayments.length > 0) {
+          // Nothing is written, but a manual verifikat dated in a filed VAT
+          // period still needs a corrected momsdeklaration: name it here as
+          // the staged result would, or a re-run hides it.
+          const manualPreflight = await kontantmetodCutoffPreflight(supabase, companyId, {
+            dates: [],
+            manualCorrectionDates: manualPayments
+              .map((m) => m.entry_date)
+              .filter((date): date is string => !!date),
+          })
+          const amendedVatPeriodsRequired = manualPreflight.ok ? manualPreflight.amendedVatPeriodsRequired : []
+          const amendedNote = amendedVatPeriodsRequired.length > 0
+            ? ` A corrected momsdeklaration is required for the filed VAT periods these verifikat fall in (amended_vat_periods_required): ${amendedVatPeriodsRequired.map((p) => `${p.tax_period} (filed ${p.filed_on})`).join(', ')}.`
+            : ''
+          throw Object.assign(
+            codedRefusal(
+              'KONTANTMETOD_CUTOFF_PAID_BEFORE_POSTING_MANUAL',
+              `${manualPayments.length} payments after period end cannot be corrected by rule: ${manualPayments.slice(0, 10).map((m) => `${m.reference} (${m.reason})`).join(', ')}. Nothing was staged.${amendedNote}`,
+            ),
+            { amended_vat_periods_required: amendedVatPeriodsRequired },
+          )
+        }
+        if (assessment.postings.hasAny) {
+          throw new Error(
+            'Kontantmetodens bokslutsavgränsning är redan bokförd för perioden: inga fler fakturor att årsomföra.',
+          )
+        }
         throw new Error(
           undatedNote
             ? `Inga obetalda kund- eller leverantörsfakturor finns vid periodens slut. ${undatedNote}`
             : 'Inga obetalda kund- eller leverantörsfakturor finns vid periodens slut',
         )
       }
-      if (
-        assessment.postings.complete ||
-        hasIncompleteKontantmetodCutoffPair(assessment.postings, assessment.lines)
-      ) {
-        throw new Error(
-          'Kontantmetodens bokslutsavgränsning är redan bokförd eller delvis bokförd för perioden. Kontrollera verifikaten innan du försöker igen.',
-        )
+
+      const preflight = await kontantmetodCutoffPreflight(supabase, companyId, {
+        dates: kontantmetodCutoffWriteDates(period.period_end, allPlans, corrections),
+        acknowledgedFiledVatPeriods,
+        manualCorrectionDates: manualPayments
+          .map((m) => m.entry_date)
+          .filter((date): date is string => !!date),
+      })
+      if (!preflight.ok) {
+        throw codedRefusal(preflight.code, preflight.message_en)
       }
 
-      const reversalDate = nextDay(period.period_end)
-      const entityType = parseEntityType(settings.entity_type)
-      const entries = [
-        ...(assessment.lines.receivableLines.length > 0 &&
-        !assessment.postings.receivableEntryId &&
-        !assessment.postings.receivableReversalId
-          ? [
-              {
-                kind: 'receivable_cutoff',
-                fiscal_period_id: fiscalPeriodId,
-                entry_date: period.period_end,
-                description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable,
-                total: assessment.lines.receivableTotal,
-                lines: assessment.lines.receivableLines,
-              },
-              {
-                kind: 'receivable_reversal',
-                fiscal_period_id: nextPeriod.id,
-                entry_date: reversalDate,
-                description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivableReversal,
-                total: assessment.lines.receivableTotal,
-                lines: reverseLines(assessment.lines.receivableLines),
-              },
-            ]
-          : []),
-        ...(assessment.lines.payableLines.length > 0 &&
-        !assessment.postings.payableEntryId &&
-        !assessment.postings.payableReversalId
-          ? [
-              {
-                kind: 'payable_cutoff',
-                fiscal_period_id: fiscalPeriodId,
-                entry_date: period.period_end,
-                description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.payable,
-                total: assessment.lines.payableTotal,
-                lines: assessment.lines.payableLines,
-              },
-              {
-                kind: 'payable_reversal',
-                fiscal_period_id: nextPeriod.id,
-                entry_date: reversalDate,
-                description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.payableReversal,
-                total: assessment.lines.payableTotal,
-                lines: reverseLines(assessment.lines.payableLines),
-              },
-            ]
-          : []),
-      ]
+      const entries = allPlans.map((plan) => ({
+        kind: plan.mode === 'manual' ? 'manual_carry' : 'carry',
+        side: plan.side,
+        invoice_id: plan.invoiceId,
+        reference: plan.reference,
+        credit_note: plan.creditNote,
+        mode: plan.mode,
+        fiscal_period_id: fiscalPeriodId,
+        entry_date: period.period_end,
+        description: plan.description,
+        notes: plan.notes,
+        total: plan.total,
+        lines: plan.lines,
+      }))
+      const correctionPreviews = corrections.map((c) => ({
+        side: c.side,
+        invoice_id: c.invoiceId,
+        reference: c.reference,
+        cash_entry_id: c.entryId,
+        entry_date: c.entryDate,
+        carry_entry_id: c.carryEntryId,
+        storno_lines: c.stornoLines,
+        corrected_lines: c.correctedLines,
+      }))
+      const legacyWarning = legacyKontantmetodVandningWarning(assessment.legacyCutoffs)
+      const amendedNote = preflight.amendedVatPeriodsRequired.length > 0
+        ? `Momsdeklarationen är redan inlämnad för ${describeFiledVatPeriodsSv(preflight.amendedVatPeriodsRequired)}. ` +
+          'Efter bokföringen ska en rättad momsdeklaration lämnas för perioden. ' +
+          'Är periodens momsredovisning redan bokförd, för den tillkommande momsen till 2650 med en kompletterande momsredovisning daterad i perioden.'
+        : null
+      const manualNote = rotPartialLeft.length + manualPayments.length + collection.legacyCovered.length > 0
+        ? 'Fakturor som inte kan hanteras automatiskt finns kvar (se manual i förhandsgranskningen): bokslutet blockeras tills de är hanterade.'
+        : null
+      const complianceNote = [undatedNote, amendedNote, legacyWarning, manualNote]
+        .filter((note): note is string => !!note)
+        .join(' ')
 
       return stage({
         supabase,
@@ -21160,28 +21254,53 @@ export const tools: McpTool[] = [
         title: `Kontantmetodens bokslutsavgränsning: ${period.name}`,
         params: {
           fiscal_period_id: fiscalPeriodId,
-          next_fiscal_period_id: nextPeriod.id,
           period_end: period.period_end,
           entity_type: entityType,
+          acknowledge_filed_vat_periods: acknowledgedFiledVatPeriods,
+          acknowledge_legacy_invoice_ids: acknowledgedLegacyInvoiceIds,
+          manual_carries: manualPlans.map(manualCarryInputOf),
           preview_fingerprint: cutoffPreviewFingerprint({
-            collection: assessment.collection,
+            collection,
             lines: assessment.lines,
             entityType,
             periodEnd: period.period_end,
+            plans: allPlans,
+            corrections,
+            correctionRefusals: refusals,
+            acknowledgedFiledVatPeriods,
+            acknowledgedLegacyInvoiceIds,
           }),
         },
         preview: {
           fiscal_period_id: fiscalPeriodId,
-          next_fiscal_period_id: nextPeriod.id,
-          receivable_count: assessment.collection.receivables.length,
-          payable_count: assessment.collection.payables.length,
-          undated_settlement_count: assessment.collection.undatedSettlements.length,
-          undated_settlements_sample: assessment.collection.undatedSettlements.slice(0, 10),
+          period_end: period.period_end,
+          carry_count: entries.length,
+          correction_count: correctionPreviews.length,
           entries,
+          corrections: correctionPreviews,
+          manual: {
+            rot_partial: rotPartialLeft,
+            paid_before_posting: manualPayments,
+            legacy_covered: collection.legacyCovered.map((c) => ({
+              side: c.side,
+              invoice_id: c.invoiceId,
+              reference: c.reference,
+              legacy_period_end: c.legacyPeriodEnd,
+            })),
+          },
+          legacy_cutoffs: assessment.legacyCutoffs.map((c) => ({
+            fiscal_period_id: c.fiscalPeriodId,
+            period_end: c.periodEnd,
+          })),
+          amended_vat_periods_required: preflight.amendedVatPeriodsRequired,
+          acknowledged_filed_vat_periods: acknowledgedFiledVatPeriods,
+          acknowledged_legacy_invoice_ids: acknowledgedLegacyInvoiceIds,
+          undated_settlement_count: collection.undatedSettlements.length,
+          undated_settlements_sample: collection.undatedSettlements.slice(0, 10),
         },
         actor,
         next: {
-          description: 'Re-run year-end readiness after the cut-off and all reversals are posted.',
+          description: 'Re-run year-end readiness after the cut-off is posted.',
           tool: 'gnubok_year_end_readiness',
           args: { fiscal_period_id: fiscalPeriodId },
         },
@@ -21190,7 +21309,7 @@ export const tools: McpTool[] = [
         dateForPeriodCheck: period.period_end,
         // The approval guidance for this high-risk operation tells the
         // agent to surface compliance_warning and get it acknowledged.
-        ...(undatedNote ? { complianceNote: undatedNote } : {}),
+        ...(complianceNote ? { complianceNote } : {}),
       })
     },
   },
@@ -26860,11 +26979,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             '• Reporting: gnubok_get_trial_balance / _income_statement / _balance_sheet / _kpi_report, plus _ar_ledger / _supplier_ledger through gnubok_call_tool: all default to the most recent fiscal period. For account roll-ups use gnubok_get_general_ledger; for ad-hoc line queries (free-text, amount/date/source filters) use gnubok_query_journal.',
             '• Trust in figures: gnubok_get_trial_balance, _income_statement, _balance_sheet, _kpi_report and _general_ledger return data_status (company-wide for the range, also on filtered reports). When data_status.preliminary is true, say the figures are preliminary and mention the caveats that bear on the question; do not recite them all. When data_status.unavailable is true, say the completeness of the figures could not be checked.',
             `• Interactive review UIs (claude.ai / Claude Desktop only): gnubok_get_vat_report(render_ui=true) renders the VAT widget, gnubok_receipt_matcher opens the receipt↔transaction matcher, and gnubok_list_pending_operations(render_ui=true) ${canApprove ? 'opens the approval queue where the user approves/rejects with a click' : 'shows the queue of agent proposals (read-only on this connection: the user approves them in Accounted)'}. All also return structured data; other clients ignore the UI and use the data.`,
-            // #3440: while the cut-off is suspended, the briefing must not send
-            // an agent to the staging tool.
-            isKontantmetodCutoffSuspended()
-              ? '• Year-end: run gnubok_year_end_readiness first. For kontantmetoden, kontantmetod_cutoff_required cannot be resolved right now: the cut-off is temporarily suspended (#3440, KONTANTMETOD_CUTOFF_SUSPENDED). Tell the user the close of that period waits, and never book the year-end receivables or payables by hand instead. Once readiness is clear, gnubok_run_year_end on the OPEN period (never gnubok_lock_period first): it posts the closing entry, locks and closes the period and seeds the next period\'s opening balances in one step; gnubok_set_opening_balances, gnubok_close_period and gnubok_lock_period are manual-flow tools, not follow-ups. Verify with gnubok_list_fiscal_periods. Each write stages for human approval; closing is irreversible per BFL.'
-              : '• Year-end: run gnubok_year_end_readiness first. For kontantmetoden, resolve kontantmetod_cutoff_required with the searchable gnubok_post_kontantmetod_cutoff tool. Then gnubok_run_year_end on the OPEN period (never gnubok_lock_period first): it posts the closing entry, locks and closes the period and seeds the next period\'s opening balances in one step; gnubok_set_opening_balances, gnubok_close_period and gnubok_lock_period are manual-flow tools, not follow-ups. Verify with gnubok_list_fiscal_periods. Each write stages for human approval; closing is irreversible per BFL.',
+            '• Year-end: run gnubok_year_end_readiness first. For kontantmetoden, resolve kontantmetod_cutoff_required with the searchable gnubok_post_kontantmetod_cutoff tool (one year-end verifikat per open invoice, no reversal; never book the cut-off by hand). Then gnubok_run_year_end on the OPEN period (never gnubok_lock_period first): it posts the closing entry, locks and closes the period and seeds the next period\'s opening balances in one step; gnubok_set_opening_balances, gnubok_close_period and gnubok_lock_period are manual-flow tools, not follow-ups. Verify with gnubok_list_fiscal_periods. Each write stages for human approval; closing is irreversible per BFL.',
             '• Payroll: gnubok_create_salary_run → gnubok_calculate_salary_run → gnubok_book_salary_run → gnubok_generate_agi.',
             ...(canApprove
               ? [
