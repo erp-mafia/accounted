@@ -27,7 +27,8 @@ import type {
  * account. In either method it books one verifikat, Debit 19xx, Credit
  * 30xx/26xx, with no 1510 leg, and the invoice ends paid. Refused for
  * anything but a plain faktura (paidAtIssueBlockReason) and together with
- * custom issuance lines.
+ * custom issuance lines, by issueAndBookInvoice: v1 mark-sent and the MCP
+ * mark_invoice_sent approval issue it through that same function.
  *
  * The non-credit-note core lives in lib/invoices/issue-and-book-invoice.ts,
  * shared with POST /api/invoices/bulk-book; the credit-note issue step in
@@ -101,15 +102,14 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     )
   }
   const paidAtIssue = paidAtIssueResult.data.paid_at_issue
-  if (paidAtIssue) {
-    // Custom lines are the registration verifikat a kontantfaktura never has.
-    const reason = customLines ? 'custom_lines' : paidAtIssueBlockReason(invoice)
-    if (reason) {
-      return errorResponseFromCode('INVOICE_PAID_AT_ISSUE_NOT_ALLOWED', log, {
-        requestId,
-        details: { reason },
-      })
-    }
+  // issueAndBookInvoice refuses every document it cannot issue paid, for
+  // every door; a kreditfaktura never reaches it, so it is refused here by
+  // the same rule.
+  if (paidAtIssue && isCreditNote) {
+    return errorResponseFromCode('INVOICE_PAID_AT_ISSUE_NOT_ALLOWED', log, {
+      requestId,
+      details: { reason: paidAtIssueBlockReason(invoice, { customLines }) },
+    })
   }
 
   // Fetch full company settings for PDF rendering and accounting method

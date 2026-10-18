@@ -31,6 +31,7 @@ import {
   supplierInvoiceLinesInclVat,
   supplierInvoiceTotalsGap,
 } from '@/lib/supplier-invoices/line-totals'
+import { resolveSupplierInvoiceReverseCharge } from '@/lib/supplier-invoices/create'
 import { matchPairs, setItemIgnored, unmatchLink } from '@/lib/reconciliation/actions'
 import { signOffAccount } from '@/lib/reconciliation/signoff'
 import { bookResidualAndLink, ReconciliationResidualError } from '@/lib/reconciliation/residual'
@@ -96,7 +97,7 @@ import {
 } from '@/lib/import/opening-balance/existing'
 import { linkOpeningBalance, OpeningBalanceExistsError } from '@/lib/import/opening-balance/existing'
 import { saveVoucherGapExplanation, voucherGapExplanationFromParams } from '@/lib/core/bookkeeping/voucher-gaps'
-import { SIEImportFlagsSchema } from '@/lib/api/schemas'
+import { MarkInvoiceSentPaidAtIssueSchema, SIEImportFlagsSchema } from '@/lib/api/schemas'
 import { closePeriod, lockPeriod, resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import {
   executeYearEndClosing,
@@ -3064,6 +3065,13 @@ async function commitMarkInvoiceSent(
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
   const invoiceId = params.invoice_id as string
+  // The kontantfaktura (crm#1281), staged by gnubok_mark_invoice_as_sent with
+  // paid_at_issue_account: the dashboard mark-sent body, the same schema.
+  const paidAtIssueParse = MarkInvoiceSentPaidAtIssueSchema.safeParse({ paid_at_issue: params.paid_at_issue })
+  if (!paidAtIssueParse.success) {
+    return { error: 'Betalkontot måste vara ett 19xx-konto (kassa, bank eller Swish).', status: 400 }
+  }
+  const paidAtIssue = paidAtIssueParse.data.paid_at_issue ?? null
 
   const { data: invoice, error: invoiceError } = await supabase
     .from('invoices')
@@ -3097,7 +3105,9 @@ async function commitMarkInvoiceSent(
   // (fail closed: a refused verifikat, such as a required dimension, an
   // archived dimension value or a locked period, leaves the invoice in draft),
   // then the PDF archived as underlag, the manual delivery recorded and
-  // invoice.sent emitted.
+  // invoice.sent emitted. A kontantfaktura is refused there for anything but
+  // a plain faktura (INVOICE_PAID_AT_ISSUE_NOT_ALLOWED), and otherwise booked
+  // as one cash verifikat with the invoice ending paid.
   const issued = await issueAndBookInvoice({
     supabase,
     companyId,
@@ -3105,6 +3115,7 @@ async function commitMarkInvoiceSent(
     invoice: invoice as IssuableInvoice,
     settings: settings as CompanySettings,
     log,
+    paidAtIssue: paidAtIssue ? { settlementAccountNumber: paidAtIssue.account_number } : null,
   })
   if (!issued.ok) {
     switch (issued.errorCode) {
@@ -3155,7 +3166,7 @@ async function commitMarkInvoiceSent(
   const warnings = issued.partialFailures.map((failure) => failure.reason)
   return {
     data: {
-      status: 'sent',
+      status: paidAtIssue ? 'paid' : 'sent',
       journal_entry_id: issued.journalEntryId,
       ...(warnings.length > 0 ? { warning: warnings.join(' ') } : {}),
     },
@@ -4534,7 +4545,6 @@ async function commitCreateSupplierInvoiceFromInbox(
   const invoiceDate = params.invoice_date as string
   const dueDate = (params.due_date as string | null) ?? null
   const currency = (params.currency as string) || 'SEK'
-  const vatTreatment = (params.vat_treatment as string) || 'standard_25'
   const notes = (params.notes as string | null) ?? null
   // Absent on ops staged before the MCP door carried it: null, as before.
   const paymentReference =
@@ -4704,7 +4714,19 @@ async function commitCreateSupplierInvoiceFromInbox(
     .eq('company_id', companyId)
     .single()
 
-  const reverseCharge = vatTreatment === 'reverse_charge'
+  // The treatment and the reverse-charge flag, resolved by the function the
+  // dashboard and v1 doors use (accounted#58: this executor defaulted a
+  // missing treatment to standard_25 whatever the supplier). The staged
+  // treatment is what the approver saw and the caller's word, as an explicit
+  // reverse_charge flag is on those doors, so the flag follows it and can
+  // never disagree with it; an op without one gets the supplier's default,
+  // omvänd skattskyldighet for an EU or non-EU supplier.
+  const stagedTreatment =
+    typeof params.vat_treatment === 'string' && params.vat_treatment ? params.vat_treatment : undefined
+  const { reverseCharge, vatTreatment } = resolveSupplierInvoiceReverseCharge(
+    supplier.supplier_type as string | null,
+    stagedTreatment ? { reverse_charge: stagedTreatment === 'reverse_charge', vat_treatment: stagedTreatment } : {},
+  )
   // Icke momsregistrerad (feedback seq 708521): the seller's moms is part of
   // the cost, never 2641. Staging folds it into the lines; an op staged
   // before that fix (net lines plus 25 %) or a tampered one is folded here

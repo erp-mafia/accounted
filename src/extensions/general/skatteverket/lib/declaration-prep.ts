@@ -176,9 +176,10 @@ function epochOf(value: string | null | undefined): number | null {
 /**
  * Whether the run's declaration is already filed. The run's own kvittens
  * stamp (agi_submitted_at) is authoritative. Without it, a receipt on the row
- * counts only when it is not older than the run's XML: a correction run
- * regenerates over the original's filed row, which keeps that original's
- * status and kvittens, and its own declaration is still unfiled.
+ * counts only when it is not older than the run's XML: a correction run that
+ * took over the original's filed row before the generator reset its filing
+ * state kept that original's status and kvittens, and its own declaration is
+ * still unfiled.
  */
 function agiFiledForRun(
   run: { agi_submitted_at: string | null; agi_generated_at: string | null },

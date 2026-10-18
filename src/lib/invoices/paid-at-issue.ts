@@ -26,7 +26,11 @@ export function isPaidAtIssueAccount(accountNumber: string | null | undefined): 
 
 /**
  * Why this document cannot be issued as already paid, or null when it can.
+ * The one rule every door applies (the dashboard and v1 mark-sent, the MCP
+ * tool at staging, issueAndBookInvoice at commit), so they cannot drift.
  *
+ * - custom_lines: user-edited issuance lines are the registration verifikat
+ *   a kontantfaktura never has.
  * - not_invoice: an offert, proforma or följesedel asks for no payment.
  * - credit_note: a kreditfaktura settles against its original.
  * - self_billed: a mottagen självfaktura is registered from the buyer's
@@ -36,17 +40,26 @@ export function isPaidAtIssueAccount(accountNumber: string | null | undefined): 
  *   revenue directly, so the periodisering would be lost. Such an invoice is
  *   sent as usual and its payment registered afterwards.
  */
-export type PaidAtIssueBlockReason = 'not_invoice' | 'credit_note' | 'self_billed' | 'periodisering'
+export type PaidAtIssueBlockReason =
+  | 'custom_lines'
+  | 'not_invoice'
+  | 'credit_note'
+  | 'self_billed'
+  | 'periodisering'
 
-export function paidAtIssueBlockReason(invoice: {
-  document_type?: InvoiceDocumentType | string | null
-  credited_invoice_id?: string | null
-  is_self_billed?: boolean | null
-  items?: ReadonlyArray<{
-    accrual_period_start?: string | null
-    accrual_period_end?: string | null
-  }> | null
-}): PaidAtIssueBlockReason | null {
+export function paidAtIssueBlockReason(
+  invoice: {
+    document_type?: InvoiceDocumentType | string | null
+    credited_invoice_id?: string | null
+    is_self_billed?: boolean | null
+    items?: ReadonlyArray<{
+      accrual_period_start?: string | null
+      accrual_period_end?: string | null
+    }> | null
+  },
+  request: { customLines?: ReadonlyArray<unknown> | null } = {},
+): PaidAtIssueBlockReason | null {
+  if (request.customLines) return 'custom_lines'
   if (invoice.document_type && invoice.document_type !== 'invoice') return 'not_invoice'
   if (invoice.credited_invoice_id) return 'credit_note'
   if (invoice.is_self_billed) return 'self_billed'

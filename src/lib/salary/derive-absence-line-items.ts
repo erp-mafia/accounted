@@ -34,10 +34,29 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
  *
  * For VAB and parental leave, days are aggregated within the pay period and
  * priced by calculateVabDeduction / calculateParentalLeaveDeduction below.
- * The 120-date semestergrundande cap (SemL 17 § for VAB, 17 a § for
- * parental leave) is applied per date: when the 120th date falls inside the
- * period, the dates up to and including it form one row that is
+ * The 120-date semestergrundande cap (SemL 17 a § första stycket 1 for VAB,
+ * 3 for parental leave) is applied per date: when the 120th date falls inside
+ * the period, the dates up to and including it form one row that is
  * semestergrundande and the dates after it a second row that is not.
+ *
+ * Semesterlönegrundande frånvaro and the procentregeln base (SemL 16 b §
+ * andra and tredje stycket): the pay for a day of semesterlönegrundande
+ * absence (17-17 b §§) is left out of the base, which instead gets the income
+ * the employee would have had working that day. Absence that is not
+ * semesterlönegrundande is pay never earned, so it lowers the base.
+ * is_vacation_basis on a row says whether its amount enters the base:
+ *   - a deduction for qualifying absence (sick days, VAB and parental leave
+ *     within the cap) is false: a monthly salary already holds the pay the
+ *     employee would have had, so the base stays whole;
+ *   - a deduction for absence that does not qualify (unpaid leave, VAB or
+ *     parental leave past the cap) is true: the base drops with the pay;
+ *   - hourly pay's positive sjuklön row is false: sick pay is the pay for a
+ *     qualifying day, and timlön never held the hours, so the base gets the
+ *     hours the employee would have worked at timlön instead
+ *     (DeriveResult.qualifyingAbsenceHours, priced by the engine).
+ * Sick days count as qualifying throughout: the 180-day cap of 17 § is not
+ * tracked (it counts calendar days of the whole absence, including days the
+ * employee would not have worked, and arbetsskada has no cap).
  *
  * Hourly pay (salaryType 'hourly') has no full salary to deduct from: the
  * hours a sick employee would have worked were never in base pay, which is
@@ -97,6 +116,14 @@ export interface DeriveResult {
   flagFkReporting: boolean
   /** At least one segment passed day 8 in the period (läkarintyg expected). */
   flagLakarintyg: boolean
+  /**
+   * Hourly pay only (0 otherwise): the hours of semesterlönegrundande absence
+   * in the period, i.e. the hours the employee would have worked on the sick
+   * days and on the VAB and parental days within the cap. The procentregeln
+   * and semesterersättning base adds timlön × these hours (SemL 16 b § tredje
+   * stycket). A monthly salary already holds that pay.
+   */
+  qualifyingAbsenceHours: number
 }
 
 interface SjukloneperiodSegment {
@@ -112,8 +139,10 @@ interface SjukloneperiodSegment {
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000
 
-/** SemL 17 § (VAB) and 17 a § (parental leave): calendar dates per
- *  intjänandeår, respectively per pregnancy, that stay semesterlönegrundande. */
+/** SemL 17 a § första stycket: calendar dates that stay semesterlönegrundande,
+ *  per intjänandeår for VAB (1) and per child for parental leave (3), the
+ *  latter counted per intjänandeår here (best effort: no child identity).
+ *  The 180 dates of an ensamstående förälder are not modelled. */
 const VACATION_BASIS_CAP_DATES = 120
 
 interface VacationBasisPart {
@@ -236,7 +265,8 @@ export interface AbsenceStep {
 /**
  * Calculate VAB (vård av barn) deduction.
  * Full daily rate deduction: Försäkringskassan compensates the parent.
- * Semesterlönegrundande for first 120 days (180 for sole custody) per §17b.
+ * Semesterlönegrundande for the first 120 days of the intjänandeår (180 for
+ * an ensamstående förälder) per SemL 17 a § första stycket 1.
  */
 export function calculateVabDeduction(
   monthlySalary: number,
@@ -263,7 +293,8 @@ export function calculateVabDeduction(
 
 /**
  * Calculate parental leave deduction.
- * Semesterlönegrundande for first 120 days per pregnancy per §17a.
+ * Semesterlönegrundande for the first 120 days per child per SemL 17 a §
+ * första stycket 3.
  */
 export function calculateParentalLeaveDeduction(
   monthlySalary: number,
@@ -326,10 +357,10 @@ export interface DeriveInput {
   /** Scheduled hours per working day (hours_per_week / workdays_per_week).
    *  Defaults to 8. Absence hours above it count as one full day. */
   hoursPerDay?: number
-  /** Year-to-date VAB days for this employee, excluding the current period. */
+  /** VAB dates in the intjänandeår before the current period. */
   vabDaysYtd: number
-  /** Parental leave days in the current pregnancy window (best-effort:
-   *  defaults to calendar-year aggregate). */
+  /** Parental leave dates per child before the current period (best effort:
+   *  the intjänandeår's dates, as no child identity is recorded). */
   parentalDaysPregnancyYtd: number
   /** Cutover state (payroll gap-closure 2.2): karens periods in the 12
    *  months before cutover NOT represented by imported salary_absence_days
@@ -379,6 +410,21 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
   // quantities where they are written, so 1/8 of a day does not become 0.13
   // before it is priced.
   const sumDays = (rows: AbsenceDay[]) => rows.reduce((sum, d) => sum + dayShare(d), 0)
+
+  const hourlyPay = input.salaryType === 'hourly'
+  // Hourly pay: the hours of semesterlönegrundande absence the base is topped
+  // up with (SemL 16 b § tredje stycket). A row's hours are the hours the
+  // employee would have worked that day; the table requires them, and the
+  // scheduled day stands in for a caller that passes none (the statute's
+  // "uppskattas" when the income cannot be established).
+  let qualifyingAbsenceHours = 0
+  const addQualifyingHours = (rows: AbsenceDay[]) => {
+    if (!hourlyPay) return
+    for (const d of rows) {
+      const hours = Number(d.hours)
+      qualifyingAbsenceHours += Number.isFinite(hours) && hours > 0 ? hours : hoursPerDay
+    }
+  }
 
   const periodSickRows = periodDays.filter(d => d.absence_type === 'sick')
   const periodSickDates = periodSickRows.map(d => d.absence_date)
@@ -438,7 +484,6 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
 
     // Hourly pay prices each sick row by its own hours. Without a timlön or
     // without the hours the sjuklön would silently be 0 kr, so refuse.
-    const hourlyPay = input.salaryType === 'hourly'
     const hourlyWage = hourlyPay ? Number(input.hourlyRate) : 0
     if (hourlyPay && !(Number.isFinite(hourlyWage) && hourlyWage > 0)) {
       throw new AbsenceInputError(
@@ -459,6 +504,9 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
       return hours
     }
     const sumSickUnits = (rows: AbsenceDay[]) => rows.reduce((sum, d) => sum + sickUnits(d), 0)
+    // Every sick day is semesterlönegrundande (SemL 17 §; the 180-day cap is
+    // not tracked, see the module comment), day 15+ included.
+    addQualifyingHours(periodSickRows)
 
     // Build segments over (lookback ∪ period). Segments may straddle the
     // boundary; we need the full picture to classify each period day's
@@ -613,7 +661,9 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
         amount: sickPayFor(day2_14CountTotal),
         is_taxable: true,
         is_avgift_basis: true,
-        is_vacation_basis: true,
+        // Pay for qualifying days stays out of the base, which gets the
+        // hours at full timlön instead (qualifyingAbsenceHours).
+        is_vacation_basis: false,
         is_gross_deduction: true,
       })
     } else if (day2_14CountTotal > 0) {
@@ -629,7 +679,9 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
         amount: -r(lostPay - sjuklon),
         is_taxable: true,
         is_avgift_basis: true,
-        is_vacation_basis: true,
+        // Qualifying sick days: the base keeps the full monthly salary, the
+        // income the employee would have had (SemL 16 b § tredje stycket).
+        is_vacation_basis: false,
         is_gross_deduction: true,
       })
     }
@@ -680,13 +732,15 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
   const vacationBasisSuffix = (qualifies: boolean) => (qualifies ? '' : ', ej semestergrundande')
 
   // ── VAB ────────────────────────────────────────────────────────────────
-  // SemL 17 §: 120 calendar dates per intjänandeår are semestergrundande;
-  // the split is by date, the deduction by weighted hours.
+  // SemL 17 a § första stycket 1: 120 calendar dates per intjänandeår are
+  // semestergrundande; the split is by date, the deduction by weighted hours.
+  // The deduction enters the base only past the cap (module comment).
   const vabCount = vabDays.length
   if (vabCount > 0) {
     for (const part of splitAtVacationBasisCap(vabDays, input.vabDaysYtd)) {
       const vabEquivalentDays = sumDays(part.rows)
       const vab = calculateVabDeduction(monthlySalary, vabEquivalentDays, input.vabDaysYtd, input.dailyDivisor)
+      if (part.qualifies) addQualifyingHours(part.rows)
       lineItems.push({
         item_type: 'vab',
         description: `VAB (${part.rows.length} dagar${vacationBasisSuffix(part.qualifies)})`,
@@ -694,14 +748,15 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
         amount: -vab.deduction,
         is_taxable: true,
         is_avgift_basis: true,
-        is_vacation_basis: part.qualifies,
+        is_vacation_basis: !part.qualifies,
         is_gross_deduction: true,
       })
     }
   }
 
   // ── Parental leave ─────────────────────────────────────────────────────
-  // SemL 17 a §: 120 calendar dates per pregnancy, split as above. Under the
+  // SemL 17 a § första stycket 3: 120 calendar dates per child, split as
+  // above and entering the base only past the cap. Under the
   // calendar convention the episode is priced as a whole (the split is about
   // semesterunderlag, not about how long the leave is) and the total is
   // shared over the parts by their weighted days.
@@ -719,6 +774,7 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
         input.parentalDaysPregnancyYtd,
         input.dailyDivisor,
       )
+      if (part.qualifies) addQualifyingHours(part.rows)
       lineItems.push({
         item_type: 'parental_leave',
         description: `Föräldraledighet (${part.rows.length} dagar${vacationBasisSuffix(part.qualifies)})`,
@@ -726,7 +782,7 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
         amount: -(calendarParental ? calendarParental[idx] : parental.deduction),
         is_taxable: true,
         is_avgift_basis: true,
-        is_vacation_basis: part.qualifies,
+        is_vacation_basis: !part.qualifies,
         is_gross_deduction: true,
       })
     }
@@ -734,8 +790,9 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
 
   // ── Unpaid leave (tjänstledighet utan lön) ─────────────────────────────
   // Each day reduces gross pay by one daily rate (monthlySalary / 21: same
-  // convention used elsewhere in the engine). Not semestergrundande per SemL
-  // 17 § (only paid leave types accrue vacation).
+  // convention used elsewhere in the engine). Not semesterlönegrundande (it is
+  // none of the absence 17-17 b §§ list), so the pay never earned lowers the
+  // procentregeln base: is_vacation_basis true.
   //
   // is_gross_deduction is deliberately false: the engine's Step 3 absence
   // sum already subtracts items whose item_type is 'unpaid_leave', so setting
@@ -754,7 +811,7 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
       amount: -deduction,
       is_taxable: true,
       is_avgift_basis: true,
-      is_vacation_basis: false,
+      is_vacation_basis: true,
       is_gross_deduction: false,
     })
   }
@@ -769,6 +826,7 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
     },
     flagFkReporting,
     flagLakarintyg,
+    qualifyingAbsenceHours: r(qualifyingAbsenceHours),
   }
 }
 
@@ -780,9 +838,9 @@ export interface EmployeeAbsenceRows {
   contextDays: AbsenceDay[]
   /** Sick rows in the 365 days before the window. */
   lookbackSickDays: AbsenceDay[]
-  /** VAB dates from 1 January to the window start. */
+  /** VAB dates from the start of the intjänandeår to the window start. */
   vabDaysYtd: number
-  /** Parental leave dates from 1 January to the window start. */
+  /** Parental leave dates from the start of the intjänandeår to the window start. */
   parentalDaysPregnancyYtd: number
 }
 
@@ -803,9 +861,10 @@ function absenceDay(row: AbsenceDay): AbsenceDay {
  * Load the absence rows of every employee on a salary run in three reads,
  * whatever the roster size: the deviation window (widened by a month either
  * side under the calendar convention, which reads those rows as context),
- * the 365-day sick lookback, and this year's VAB and parental dates before
- * the window. Paginated: a roster's year of sick days passes PostgREST's
- * 1000-row cap long before an employer is large.
+ * the 365-day sick lookback, and the intjänandeår's VAB and parental dates
+ * before the window (SemL 17 a §: the 120-date cap counts within it).
+ * Paginated: a roster's year of sick days passes PostgREST's 1000-row cap
+ * long before an employer is large.
  *
  * A failed window or lookback read throws: a calculation without them would
  * pay sick leave as if none was registered. A failed year-to-date read counts
@@ -820,6 +879,10 @@ export async function loadRunAbsence(
     periodEnd: string
     /** Read the surrounding month too (long_leave = calendar_after_five_workdays). */
     withContext: boolean
+    /** First day of the intjänandeår the window falls in (getVacationYearStart
+     *  under the company's basis): where the VAB and parental date count
+     *  starts. Omitted = 1 January of the window's year, the calendar basis. */
+    earningYearStart?: string
   },
 ): Promise<Map<string, EmployeeAbsenceRows>> {
   const { companyId, employeeIds, periodStart, periodEnd, withContext } = params
@@ -847,7 +910,7 @@ export async function loadRunAbsence(
       throw new Error(`${label}: ${err instanceof Error ? err.message : String(err)}`)
     })
 
-  const yearStart = `${periodStart.slice(0, 4)}-01-01`
+  const yearStart = params.earningYearStart ?? `${periodStart.slice(0, 4)}-01-01`
   const [windowRows, lookbackRows, ytdRows] = await Promise.all([
     read('Failed to load absence days', ({ from, to }) =>
       supabase

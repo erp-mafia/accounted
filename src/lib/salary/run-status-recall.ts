@@ -17,7 +17,8 @@
  * A paid or booked run is never unapproved: it is corrected through the
  * correction flow. On success it clears the approver, the AGI generation
  * stamp and the payment-file tracking, and deletes a generated but unfiled
- * (generated/exported) AGI declaration, which now carries stale amounts.
+ * (generated/exported) AGI declaration, which now carries stale amounts
+ * (a correction run's is kept: it is the period's row).
  *
  * A dry run reads and checks and answers what would change; it writes
  * nothing (it is also the MCP staging preview).
@@ -115,7 +116,7 @@ export async function unapproveSalaryRun(
 
   const { data: run, error: runError } = await supabase
     .from('salary_runs')
-    .select('id, status, agi_submitted_at, agi_generated_at, payment_file_format, payment_file_generated_at')
+    .select('id, status, is_correction, agi_submitted_at, agi_generated_at, payment_file_format, payment_file_generated_at')
     .eq('id', salaryRunId)
     .eq('company_id', companyId)
     .single()
@@ -123,6 +124,7 @@ export async function unapproveSalaryRun(
   if (runError || !run) return { ok: false, code: 'SALARY_RUN_NOT_FOUND' }
   const runRow = run as {
     status: string
+    is_correction?: boolean | null
     agi_submitted_at: string | null
     agi_generated_at: string | null
     payment_file_format: string | null
@@ -149,7 +151,11 @@ export async function unapproveSalaryRun(
     }
   }
 
-  const staleAgi = agi && AGI_STALE_STATUSES.includes(agi.status) ? agi : null
+  // A correction run's declaration is the period's one row, taken over from
+  // the run it corrects (generate-declaration.ts): it carries the period's
+  // tax payment tracking and stays. Its XML goes stale like any other, but the
+  // cleared agi_generated_at makes the panel and the submit regenerate it.
+  const staleAgi = agi && AGI_STALE_STATUSES.includes(agi.status) && !runRow.is_correction ? agi : null
 
   if (options.dryRun) {
     // Payslips already emailed are not recalled by this; the approver should

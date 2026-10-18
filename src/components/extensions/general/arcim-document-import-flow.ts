@@ -235,6 +235,28 @@ export type ArcimDocumentImportAction =
   | { type: 'import-succeeded'; result: ArcimDocumentImportResult }
   | { type: 'import-failed'; problem: ArcimDocumentImportProblem }
   | { type: 'reconnect-started' }
+  /** The login closed or was refused: back to the state the reconnect started from. */
+  | { type: 'reconnect-cancelled'; phase: ArcimDocumentImportPhase }
+
+/**
+ * What "Koppla om Fortnox" leads to, by where it was pressed. A failed import
+ * picks the import up again. Anywhere else (a failed discovery, or the note
+ * about supplier-invoice files under an offer, an empty result or a finished
+ * import) looks again once Fortnox answers, so the files the permission held
+ * back are counted before anything is fetched. From a note nothing has
+ * failed, so a closed or refused login returns the panel to where it was
+ * instead of showing an error (`returnTo`); from an error state the error
+ * stays (`returnTo` null).
+ */
+export function arcimDocumentReconnectPlan(phase: ArcimDocumentImportPhase): {
+  resume: ArcimDocumentOAuthResumeAction
+  returnTo: ArcimDocumentImportPhase | null
+} {
+  return {
+    resume: phase === 'import-error' ? 'import' : 'discover',
+    returnTo: phase === 'offered' || phase === 'empty' || phase === 'complete' ? phase : null,
+  }
+}
 
 /**
  * The completed preview is the authoritative provider source. The selected
@@ -315,6 +337,10 @@ export function arcimDocumentImportReducer(
       return { ...state, phase: 'import-error', problem: action.problem }
     case 'reconnect-started':
       return { ...state, phase: 'reconnecting' }
+    case 'reconnect-cancelled':
+      // The reconnect kept the counts it started from, so only the phase
+      // comes back. A late success may already have moved on: leave it.
+      return state.phase === 'reconnecting' ? { ...state, phase: action.phase } : state
   }
 }
 

@@ -5,6 +5,7 @@ import {
   prorateBaseSalaryForPeriod,
 } from '../calculation-engine'
 import { recurringLineFlags } from '../recurring-lines'
+import { deriveAbsenceLineItems, type AbsenceDay, type DeriveInput } from '../derive-absence-line-items'
 import { dailyDivisor } from '../work-schedule'
 import { roundOre } from '@/lib/money'
 import type { PayrollConfig } from '../payroll-config'
@@ -2229,5 +2230,208 @@ describe('förhöjt skatteavdrag (SFL 11 kap. 22 §)', () => {
     expect(r.grossSalary).toBe(0)
     expect(r.taxWithheld).toBe(0)
     expect(r.extraTaxWithheld).toBe(0)
+  })
+})
+
+// ============================================================
+// Semesterlönegrundande frånvaro in the procentregeln base (#60 part C)
+//
+// Semesterlagen 16 b § andra och tredje stycket: the pay for a day of
+// semesterlönegrundande absence (17-17 b §§) is left out of the base, which
+// instead gets the income the employee would have had working. Absence that
+// does not qualify is pay never earned and lowers the base. The real absence
+// derivation feeds the engine here, as run-calculation does.
+// ============================================================
+
+describe('procentregeln base with absence (Semesterlagen 16 b §, #60 C)', () => {
+  const deriveFor = (over: Partial<DeriveInput>) =>
+    deriveAbsenceLineItems({
+      monthlySalary: 30000,
+      payrollConfig: config2026,
+      periodDays: [],
+      lookbackSickDates: [],
+      vabDaysYtd: 0,
+      parentalDaysPregnancyYtd: 0,
+      ...over,
+    })
+  const toEngineLines = (lines: ReturnType<typeof deriveFor>['lineItems']) =>
+    lines.map((li) => ({
+      itemType: li.item_type,
+      amount: li.amount,
+      isTaxable: li.is_taxable,
+      isAvgiftBasis: li.is_avgift_basis,
+      isVacationBasis: li.is_vacation_basis,
+      isGrossDeduction: li.is_gross_deduction,
+      isNetDeduction: false,
+    }))
+  const day = (absence_date: string, absence_type: AbsenceDay['absence_type'], hours = 8): AbsenceDay => ({
+    absence_date,
+    absence_type,
+    hours,
+  })
+
+  describe('monthly pay (30 000 kr)', () => {
+    /** Runs one month with the given absence; the accrual and its base. */
+    const month = (
+      periodDays: AbsenceDay[],
+      over: Partial<DeriveInput> = {},
+      vacationRule: 'procentregeln' | 'semesterersattning' = 'procentregeln',
+    ) => {
+      const derived = deriveFor({ periodDays, ...over })
+      const result = calculateSalary(
+        makeBasicInput({
+          monthlySalary: 30000,
+          vacationRule,
+          lineItems: [baseLineItem(30000), ...toEngineLines(derived.lineItems)],
+          qualifyingAbsenceHours: derived.qualifyingAbsenceHours || undefined,
+        }),
+        config2026, emptyTaxRates,
+      )
+      return { result, derived }
+    }
+
+    it('keeps the full salary in the base for VAB within the cap (the issue probe: was 3 428,57)', () => {
+      const { result } = month([day('2026-04-10', 'vab')], { vabDaysYtd: 10 })
+      expect(result.grossSalary).toBe(28571.43)
+      expect(result.vacationAccrual).toBe(3600)
+      expect(result.steps.find((s) => s.label.startsWith('Semesteravsättning'))!.input).toMatchObject({ vacation_basis: 30000 })
+    })
+
+    it('lowers the base for VAB past the cap (the issue probe: was 3 600)', () => {
+      const { result } = month([day('2026-04-10', 'vab')], { vabDaysYtd: 120 })
+      expect(result.vacationAccrual).toBe(roundOre(28571.43 * 0.12))
+    })
+
+    it('lowers the base for unpaid leave (the issue probe: was 3 600)', () => {
+      const { result } = month([day('2026-04-10', 'unpaid_leave')])
+      expect(result.grossSalary).toBe(28571.43)
+      expect(result.vacationAccrual).toBe(roundOre(28571.43 * 0.12))
+    })
+
+    it('keeps the full salary in the base for sick days, karens and day 15+ included', () => {
+      const sick = Array.from({ length: 16 }, (_, i) => day(`2026-04-${String(6 + i).padStart(2, '0')}`, 'sick'))
+      const { result } = month(sick)
+      expect(result.grossSalary).toBeLessThan(30000)
+      expect(result.vacationAccrual).toBe(3600)
+    })
+
+    it('keeps parental leave within the cap and lowers the base for the dates past it', () => {
+      const within = month([day('2026-04-10', 'parental')], { parentalDaysPregnancyYtd: 0 })
+      const past = month([day('2026-04-10', 'parental')], { parentalDaysPregnancyYtd: 120 })
+      expect(within.result.vacationAccrual).toBe(3600)
+      expect(past.result.vacationAccrual).toBe(roundOre(28571.43 * 0.12))
+    })
+
+    it('gives semesterersättning the same base', () => {
+      const vab = month([day('2026-04-10', 'vab')], {}, 'semesterersattning')
+      const unpaid = month([day('2026-04-10', 'unpaid_leave')], {}, 'semesterersattning')
+      expect(vab.result.vacationCompensation).toBe(3600)
+      expect(unpaid.result.vacationCompensation).toBe(roundOre(28571.43 * 0.12))
+      expect(vab.result.vacationAccrual).toBe(0)
+    })
+
+    it('adds no breakdown step: the monthly salary already is the income the employee would have had', () => {
+      const { result } = month([day('2026-04-10', 'vab')])
+      expect(result.steps.some((s) => s.label.startsWith('Semesterlönegrundande frånvaro'))).toBe(false)
+      // A caller passing hours for monthly pay changes nothing either.
+      const withHours = calculateSalary(
+        makeBasicInput({ monthlySalary: 30000, lineItems: [baseLineItem(30000)], qualifyingAbsenceHours: 40 }),
+        config2026, emptyTaxRates,
+      )
+      expect(withHours.vacationAccrual).toBe(3600)
+      expect(withHours.steps.some((s) => s.label.startsWith('Semesterlönegrundande frånvaro'))).toBe(false)
+    })
+  })
+
+  describe('hourly pay (200 kr/h, 120 worked hours = 24 000 kr)', () => {
+    const month = (
+      periodDays: AbsenceDay[],
+      over: Partial<DeriveInput> = {},
+      vacationRule: 'procentregeln' | 'semesterersattning' | 'sammaloneregeln' | 'none' = 'procentregeln',
+    ) => {
+      const derived = deriveFor({
+        monthlySalary: 0,
+        salaryType: 'hourly',
+        hourlyRate: 200,
+        hoursPerDay: 8,
+        hoursPerWeek: 40,
+        workdaysPerWeek: 5,
+        periodDays,
+        ...over,
+      })
+      const result = calculateSalary(
+        makeBasicInput({
+          salaryType: 'hourly' as const,
+          monthlySalary: 0,
+          hourlyRate: 200,
+          hoursWorked: 120,
+          vacationRule,
+          lineItems: [baseLineItem(24000, 'hourly_salary'), ...toEngineLines(derived.lineItems)],
+          qualifyingAbsenceHours: derived.qualifyingAbsenceHours || undefined,
+        }),
+        config2026, emptyTaxRates,
+      )
+      return { result, derived }
+    }
+    const sick3 = [day('2026-04-06', 'sick'), day('2026-04-07', 'sick'), day('2026-04-08', 'sick')]
+
+    it('puts the hours the employee would have worked at full timlön in the base, not the 80 % sjuklön', () => {
+      const { result } = month(sick3)
+      // Paid: 24 000 + 3 840 sjuklön - 1 280 karens. Base: 24 000 + 24 h x 200.
+      expect(result.grossSalary).toBe(26560)
+      expect(result.vacationAccrual).toBe(roundOre(28800 * 0.12))
+      const step = result.steps.find((s) => s.label === 'Semesterlönegrundande frånvaro (Semesterlagen 16 b §)')
+      expect(step).toMatchObject({ input: { hourly_rate: 200, hours: 24 }, output: 4800 })
+      // Before #60 C the base held the 3 840 sjuklön: 27 840 x 12 %.
+      expect(result.vacationAccrual).not.toBe(roundOre(27840 * 0.12))
+    })
+
+    it('adds the VAB hours within the cap and nothing past it', () => {
+      expect(month([day('2026-04-10', 'vab', 6)]).result.vacationAccrual).toBe(roundOre(25200 * 0.12))
+      expect(month([day('2026-04-10', 'vab', 6)], { vabDaysYtd: 120 }).result.vacationAccrual).toBe(2880)
+    })
+
+    it('adds the parental hours within the cap', () => {
+      expect(month([day('2026-04-10', 'parental')]).result.vacationAccrual).toBe(roundOre(25600 * 0.12))
+    })
+
+    it('adds nothing for unpaid leave', () => {
+      const { result } = month([day('2026-04-10', 'unpaid_leave')])
+      expect(result.vacationAccrual).toBe(2880)
+      expect(result.steps.some((s) => s.label.startsWith('Semesterlönegrundande frånvaro'))).toBe(false)
+    })
+
+    it('gives semesterersättning the same base, with the step before it', () => {
+      const { result } = month(sick3, {}, 'semesterersattning')
+      expect(result.vacationCompensation).toBe(roundOre(28800 * 0.12))
+      const labels = result.steps.map((s) => s.label)
+      expect(labels.indexOf('Semesterlönegrundande frånvaro (Semesterlagen 16 b §)')).toBe(
+        labels.findIndex((l) => l.startsWith('Semesterersättning (')) - 1,
+      )
+    })
+
+    it('leaves sammalöneregeln and no vacation rule untouched', () => {
+      const none = month(sick3, {}, 'none').result
+      expect(none.vacationAccrual).toBe(0)
+      expect(none.steps.some((s) => s.label.startsWith('Semesterlönegrundande frånvaro'))).toBe(false)
+      const samma = month(sick3, {}, 'sammaloneregeln').result
+      expect(samma.steps.some((s) => s.label.startsWith('Semesterlönegrundande frånvaro'))).toBe(false)
+    })
+
+    it('reads exactly as before without absence', () => {
+      const without = month([]).result
+      const omitted = calculateSalary(
+        makeBasicInput({
+          salaryType: 'hourly' as const,
+          monthlySalary: 0,
+          hourlyRate: 200,
+          hoursWorked: 120,
+          lineItems: [baseLineItem(24000, 'hourly_salary')],
+        }),
+        config2026, emptyTaxRates,
+      )
+      expect(without).toEqual(omitted)
+      expect(without.vacationAccrual).toBe(2880)
+    })
   })
 })

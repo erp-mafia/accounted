@@ -87,6 +87,9 @@ export function invoicePartySourceId(provider: string, resource: MigrationResour
 
 function mappedParty(job: ProviderMigrationJob, resource: MigrationResource, dto: InvoiceDto): Record<string, unknown> {
   const party: PartyDto = resource === 'salesInvoices' ? (dto as SalesInvoiceDto).customer : (dto as SupplierInvoiceDto).supplier
+  // No `type`: the invoice does not say private or company, so a
+  // personnummer-shaped number makes the stub a privatperson with the number
+  // encrypted, never plaintext in org_number (isUntypedPrivatePerson).
   if (resource === 'salesInvoices') return mapCustomer({ id: '', customerNumber: '', active: true, party }, job.user_id, job.company_id)
   return mapSupplier({ id: '', supplierNumber: '', active: true, party }, job.user_id, job.company_id)
 }

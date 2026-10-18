@@ -199,12 +199,20 @@ export function singleActionWarning(operationType: string, params?: Record<strin
   }
   const ledger = registerBookedLedgerOf(operationType, params)
   if (ledger) return REGISTER_BOOKED_SENTENCES[ledger]
+  // A kontantfaktura (crm#1281): issued already paid, not merely sent.
+  if (operationType === 'mark_invoice_sent' && params?.paid_at_issue) {
+    return PAID_AT_ISSUE_SENTENCE
+  }
   // A rule for a supplier's invoices from the inbox (grants slice 2), not a bank line's.
   if (operationType === 'create_grant' && params?.operation_type === 'create_supplier_invoice_from_inbox') {
     return SUPPLIER_INVOICE_GRANT_SENTENCE
   }
   return singleActionWarnings[operationType] ?? ''
 }
+
+/** What approving a mark_invoice_sent staged with paid_at_issue_account does (crm#1281). */
+const PAID_AT_ISSUE_SENTENCE =
+  'Genom att klicka godkänn så får fakturan sitt nummer och utfärdas som redan betald (kontantfaktura): en verifikation bokförs på fakturadatumet med betalningen på det valda kontot mot försäljning och moms, utan kundfordran, och fakturan markeras som betald.'
 
 /** The consent sentence of a rule for a known supplier's invoices from the inbox. */
 const SUPPLIER_INVOICE_GRANT_SENTENCE =

@@ -783,9 +783,9 @@ Example response `200`:
 **Transition a draft invoice to sent (without emailing).**
 `scope:invoices:write · risk:medium · idempotent · dry-run`
 
-Marks a draft invoice as sent: for invoices delivered outside Accounted (an external e-invoice provider, postal, manual email). Not needed after a successful Peppol send (POST /invoices/{id}/send-peppol, gnubok_send_invoice_peppol or the dashboard): that flow issues the invoice itself. If a Peppol send reports that the invoice was sent but could not be marked as sent (issuance.ok=false with warning PEPPOL_SENT_NOT_ISSUED, invoice still in draft), :mark-sent is the documented recovery and completes the issuance; a number already allocated is reused, never consumed twice. Peppol sending needs a per-company access grant (POST /peppol/access-request, or Inställningar > Kopplingar > E-faktura via Peppol (Settings > Connections > E-invoicing via Peppol) in the dashboard; check an invoice with GET /invoices/{id}/peppol): senders whose org number is not a personnummer (every legal form except enskild firma), standard invoices only, Swedish org-number buyers whose org number is not a personnummer, SEK with taxable Swedish VAT at 6/12/25 % only, no ROT/RUT deductions. Allocates the F-series invoice_number atomically (ML 17 kap 24§ p.2). When the company books at issue (faktureringsmetoden without defer_invoice_booking), also posts the invoice journal entry (Debit AR 1510 / Credit revenue + output VAT); under defer_invoice_booking the invoice is marked sent without a verifikat and is booked afterwards with POST /invoices/{id}/book. Emits invoice.sent. Idempotent and dry-runnable. The companion :send action (PR-B-2b-3) adds PDF rendering and email delivery on top of this same flow.
+Marks a draft invoice as sent: for invoices delivered outside Accounted (an external e-invoice provider, postal, manual email). Not needed after a successful Peppol send (POST /invoices/{id}/send-peppol, gnubok_send_invoice_peppol or the dashboard): that flow issues the invoice itself. If a Peppol send reports that the invoice was sent but could not be marked as sent (issuance.ok=false with warning PEPPOL_SENT_NOT_ISSUED, invoice still in draft), :mark-sent is the documented recovery and completes the issuance; a number already allocated is reused, never consumed twice. Peppol sending needs a per-company access grant (POST /peppol/access-request, or Inställningar > Kopplingar > E-faktura via Peppol (Settings > Connections > E-invoicing via Peppol) in the dashboard; check an invoice with GET /invoices/{id}/peppol): senders whose org number is not a personnummer (every legal form except enskild firma), standard invoices only, Swedish org-number buyers whose org number is not a personnummer, SEK with taxable Swedish VAT at 6/12/25 % only, no ROT/RUT deductions. Allocates the F-series invoice_number atomically (ML 17 kap 24§ p.2). When the company books at issue (faktureringsmetoden without defer_invoice_booking), also posts the invoice journal entry (Debit AR 1510 / Credit revenue + output VAT); under defer_invoice_booking the invoice is marked sent without a verifikat and is booked afterwards with POST /invoices/{id}/book. With body paid_at_issue: { account_number } (a 19xx kassa, bank or Swish account) the invoice is issued already paid, a kontantfaktura: one verifikat on the invoice date, Debit that account / Credit revenue + output VAT, no 1510 leg, in either accounting method, and status ends paid (no :mark-paid afterwards). Emits invoice.sent. Idempotent and dry-runnable. The companion :send action (PR-B-2b-3) adds PDF rendering and email delivery on top of this same flow.
 
-**Use when:** You delivered the invoice through a channel other than Accounted's email or Peppol send (an external e-invoice provider, postal, your own SMTP) and need to record it as sent so the F-series number is allocated and the journal entry is posted; or a Peppol send was accepted by the network but reported that the invoice could not be marked as sent.
+**Use when:** You delivered the invoice through a channel other than Accounted's email or Peppol send (an external e-invoice provider, postal, your own SMTP) and need to record it as sent so the F-series number is allocated and the journal entry is posted; or a Peppol send was accepted by the network but reported that the invoice could not be marked as sent. With paid_at_issue: the customer paid when the invoice was issued (Swish, card, cash at the counter) and the invoice is also the receipt.
 **Do not use for:** Sending the invoice via Accounted email: use :send (PR-B-2b-3) for that. Marking an already-sent invoice as paid: use :mark-paid (PR-B-2b-2).
 
 **Pitfalls:**
@@ -794,12 +794,27 @@ Marks a draft invoice as sent: for invoices delivered outside Accounted (an exte
 - Delivery notes (document_type=delivery_note) don't transition to sent: they were never drafts in the f-series sense. This endpoint will reject them with 400 VALIDATION_ERROR.
 - Idempotency-Key is mandatory. A retried mark-sent with the same key replays the cached response.
 - Fails closed: when the invoice's verifikat cannot be posted (no open or a locked period, a required dimension, an account outside the chart) the invoice stays a draft, keeps any number already allocated, and the request fails with the engine's code or 500 INVOICE_MARK_SENT_BOOK_FAILED (details.reason in Swedish). Fix the cause and retry.
+- paid_at_issue is only for a plain faktura: a proforma or quote (details.reason not_invoice), a självfaktura (self_billed) or an invoice with periodised lines (periodisering) returns 400 INVOICE_PAID_AT_ISSUE_NOT_ALLOWED before anything changes; issue it without paid_at_issue and record the payment with :mark-paid. account_number must be a 19xx account (400 VALIDATION_ERROR otherwise) that exists in the chart. It always settles the full amount on the invoice date: for a partial or later payment, issue without it and use :mark-paid.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ paid_at_issue?: { account_number: string } }
+```
+
+Example request:
+```json
+{
+  "paid_at_issue": {
+    "account_number": "1930"
+  }
+}
+```
 
 Response `200`:
 ```ts
@@ -808,7 +823,7 @@ Response `200`:
     id: string,
     handle?: string,
     invoice_number: string,
-    status: "sent",
+    status: "sent" | "paid",
     total: number,
     journal_entry_id: string | null,
     warnings?: { code: string, message: string }[]

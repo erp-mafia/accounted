@@ -404,7 +404,9 @@ export function AGIPanel(props: AGIPanelProps) {
       }
       setKvittensUnavailable(false)
       const json = await res.json()
-      const signed = !!json.data?.kvittenser?.[0]?.uuidKvittens
+      // The current declaration's own receipt: the raw list also holds earlier
+      // filings' (a correction awaiting signature lists only the original's).
+      const signed = !!json.data?.declarationKvittens
       onRefreshSubmission()
       if (signed) {
         // Replace any lingering "Granskningsunderlag klart…" / stale error
@@ -836,8 +838,7 @@ export function AGIPanel(props: AGIPanelProps) {
         return
       }
       setKvittensUnavailable(false)
-      const kvittens = json.data?.kvittenser?.[0]
-      if (kvittens?.uuidKvittens) {
+      if (json.data?.declarationKvittens) {
         setSuccess(t('signed_success'))
       } else {
         setSuccess(t('no_kvittens_yet'))

@@ -29,8 +29,9 @@ export interface MissingUnderlagFilters {
 
 /**
  * The candidate columns carried through resolution: enough for the caller to
- * sort the full missing set without a second round-trip. total_amount is the
- * computed column from migration 20260811100000 (sum of debit lines).
+ * sort the full missing set without a second round-trip. display_amount is the
+ * computed column from migration 20261018135300: the amount the verifikat
+ * list shows, which its amount sort orders by (crm#1280).
  */
 export interface MissingUnderlagEntry {
   id: string
@@ -39,7 +40,7 @@ export interface MissingUnderlagEntry {
   voucher_series?: string | null
   voucher_number?: number | null
   description?: string | null
-  total_amount?: number | null
+  display_amount?: number | null
 }
 
 /**
@@ -72,7 +73,7 @@ const LOOKUP_CHUNK = 150
  * missing set (bounded by the tenant's ledger size), ordered by id for
  * stability; callers sort/page as needed.
  *
- * `idOnly` skips the sort columns, notably total_amount, a computed column
+ * `idOnly` skips the sort columns, notably display_amount, a computed column
  * evaluated per candidate row. The bulk-exempt route (built for post-import
  * floods of thousands of entries) doesn't sort, so it must not pay that
  * per-row aggregate on its full candidate scan.
@@ -111,7 +112,7 @@ export async function resolveMissingUnderlagEntries(
       : (supabase
           .from('journal_entries')
           .select(
-            'id, entry_date, voucher_series, voucher_number, description, total_amount',
+            'id, entry_date, voucher_series, voucher_number, description, display_amount',
           ) as unknown as ReturnType<typeof idSelect>)
     q = q
       .eq('company_id', companyId)

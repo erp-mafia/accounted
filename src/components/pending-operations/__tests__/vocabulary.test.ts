@@ -33,6 +33,16 @@ describe('singleActionWarning: rules for automatic booking', () => {
 })
 
 describe('singleActionWarning', () => {
+  // crm#1281: a kontantfaktura staged by gnubok_mark_invoice_as_sent ends
+  // paid, with one cash verifikat; the plain mark-sent keeps its sentence.
+  it('says a mark_invoice_sent with paid_at_issue issues the invoice already paid', () => {
+    const sentence = singleActionWarning('mark_invoice_sent', { invoice_id: 'i-1', paid_at_issue: { account_number: '1930' } })
+    expect(sentence).toContain('redan betald')
+    expect(sentence).toContain('utan kundfordran')
+    expect(sentence).not.toMatch(/[\u2013\u2014]/)
+    expect(singleActionWarning('mark_invoice_sent', { invoice_id: 'i-1' })).toBe(singleActionWarnings.mark_invoice_sent)
+  })
+
   it('promises a faktura with F-number for convert_invoice without a target (and with target invoice)', () => {
     expect(singleActionWarning('convert_invoice')).toContain('F-nummer')
     expect(singleActionWarning('convert_invoice', { invoice_id: 'q-1' })).toContain('F-nummer')

@@ -380,10 +380,10 @@ describe('deriveAbsenceLineItems: karens cap, carry and partial days', () => {
     )
     const vab = result.lineItems.filter(li => li.item_type === 'vab')
     expect(vab).toHaveLength(2)
-    expect(vab[0]).toMatchObject({ quantity: 0.5, is_vacation_basis: true, description: 'VAB (1 dagar)' })
+    expect(vab[0]).toMatchObject({ quantity: 0.5, is_vacation_basis: false, description: 'VAB (1 dagar)' })
     expect(vab[1]).toMatchObject({
       quantity: 0.5,
-      is_vacation_basis: false,
+      is_vacation_basis: true,
       description: 'VAB (1 dagar, ej semestergrundande)',
     })
     expect(r2(vab[0].amount + vab[1].amount)).toBe(-1428.58) // 2 x r(714.285), one öre off the whole day
@@ -419,7 +419,7 @@ describe('deriveAbsenceLineItems: VAB', () => {
     expect(vab[0].quantity).toBe(2)
     expect(vab[0].amount).toBe(-2857.14)
     expect(vab[0].description).toBe('VAB (2 dagar)')
-    expect(vab[0].is_vacation_basis).toBe(true) // ≤120 days YTD
+    expect(vab[0].is_vacation_basis).toBe(false) // ≤120 days YTD: the base keeps the pay
     expect(result.aggregated.vabDays).toBe(2)
   })
 
@@ -432,14 +432,16 @@ describe('deriveAbsenceLineItems: VAB', () => {
     )
     const vab = result.lineItems.filter(li => li.item_type === 'vab')
     expect(vab).toHaveLength(1)
-    expect(vab[0].is_vacation_basis).toBe(false)
+    expect(vab[0].is_vacation_basis).toBe(true) // past the cap: the deduction lowers the base
     expect(vab[0].quantity).toBe(1)
     expect(vab[0].description).toBe('VAB (1 dagar, ej semestergrundande)')
   })
 })
 
-// SemL 17 § (VAB) and 17 a § (parental leave): 120 calendar dates. The same
-// split rule serves both; the table carries what differs.
+// SemL 17 a § första stycket 1 (VAB) and 3 (parental leave): 120 calendar
+// dates. The same split rule serves both; the table carries what differs. A
+// qualifying row stays out of the procentregeln base (is_vacation_basis
+// false), a row past the cap lowers it (true): SemL 16 b §.
 const capCases = [
   {
     label: 'VAB',
@@ -475,7 +477,7 @@ describe.each(capCases)('deriveAbsenceLineItems: 120-date cap split ($label)', (
       amount: -1428.57,
       is_taxable: true,
       is_avgift_basis: true,
-      is_vacation_basis: true,
+      is_vacation_basis: false,
       is_gross_deduction: true,
     })
     expect(rows[1]).toEqual({
@@ -485,7 +487,7 @@ describe.each(capCases)('deriveAbsenceLineItems: 120-date cap split ($label)', (
       amount: -1428.57,
       is_taxable: true,
       is_avgift_basis: true,
-      is_vacation_basis: false,
+      is_vacation_basis: true,
       is_gross_deduction: true,
     })
     const wholeRows = whole.lineItems.filter(li => li.item_type === item_type)
@@ -509,7 +511,7 @@ describe.each(capCases)('deriveAbsenceLineItems: 120-date cap split ($label)', (
     const rows = result.lineItems.filter(li => li.item_type === item_type)
     expect(rows).toHaveLength(1)
     expect(rows[0].quantity).toBe(1)
-    expect(rows[0].is_vacation_basis).toBe(true)
+    expect(rows[0].is_vacation_basis).toBe(false)
     expect(rows[0].description).toBe(`${label} (2 dagar)`)
   })
 
@@ -521,7 +523,7 @@ describe.each(capCases)('deriveAbsenceLineItems: 120-date cap split ($label)', (
     expect(rows).toHaveLength(1)
     expect(rows[0].quantity).toBe(1)
     expect(rows[0].amount).toBe(-1428.57)
-    expect(rows[0].is_vacation_basis).toBe(false)
+    expect(rows[0].is_vacation_basis).toBe(true)
     expect(rows[0].description).toBe(`${label} (1 dagar, ej semestergrundande)`)
   })
 
@@ -539,8 +541,8 @@ describe.each(capCases)('deriveAbsenceLineItems: 120-date cap split ($label)', (
     )
     const rows = result.lineItems.filter(li => li.item_type === item_type)
     expect(rows).toHaveLength(2)
-    expect(rows[0]).toMatchObject({ quantity: 0.5, is_vacation_basis: true })
-    expect(rows[1]).toMatchObject({ quantity: 1, is_vacation_basis: false })
+    expect(rows[0]).toMatchObject({ quantity: 0.5, is_vacation_basis: false })
+    expect(rows[1]).toMatchObject({ quantity: 1, is_vacation_basis: true })
   })
 
   it('does not disturb the other absence rows', () => {
@@ -594,7 +596,7 @@ describe('deriveAbsenceLineItems: unpaid_leave', () => {
     // false: engine's Step 3 absence sum already subtracts unpaid_leave;
     // setting the flag would double-count in Step 4 totalGrossDeductions.
     expect(unpaid!.is_gross_deduction).toBe(false)
-    expect(unpaid!.is_vacation_basis).toBe(false)
+    expect(unpaid!.is_vacation_basis).toBe(true) // not semesterlönegrundande: lowers the base
     expect(result.aggregated.unpaidLeaveDays).toBe(2)
   })
 })
@@ -773,9 +775,9 @@ describe('deriveAbsenceLineItems: long_leave = calendar_after_five_workdays', ()
     // 30 000 kr: five calendar days at 986,30 = 4 931,50 in all.
     const parental = result.lineItems.filter(li => li.item_type === 'parental_leave')
     expect(parental).toHaveLength(2)
-    expect(parental[0].is_vacation_basis).toBe(true)
+    expect(parental[0].is_vacation_basis).toBe(false)
     expect(parental[0].amount).toBe(-1972.6)
-    expect(parental[1].is_vacation_basis).toBe(false)
+    expect(parental[1].is_vacation_basis).toBe(true)
     expect(parental[1].amount).toBe(-2958.9)
     expect(Math.round((parental[0].amount + parental[1].amount) * 100) / 100).toBe(-4931.5)
   })
@@ -964,7 +966,7 @@ describe('deriveAbsenceLineItems: hourly pay', () => {
     expect(sjuklon.amount).toBe(3840)
     expect(sjuklon.quantity).toBe(24)
     expect(sjuklon.description).toBe('Sjuklön dag 1-14 (3 dagar, 24 tim)')
-    expect(sjuklon).toMatchObject({ is_taxable: true, is_avgift_basis: true, is_vacation_basis: true })
+    expect(sjuklon).toMatchObject({ is_taxable: true, is_avgift_basis: true, is_vacation_basis: false })
     expect(karens.amount).toBe(-1280)
     expect(karens.description).toBe('Karensavdrag (2026-04-06, 40 tim/vecka)')
     expect(total(result.lineItems)).toBe(2560)
@@ -1095,5 +1097,153 @@ describe('deriveAbsenceLineItems: monthly pay is unchanged by the hourly model',
     expect(omitted.lineItems.find(li => li.item_type === 'sick_karens')!.amount).toBe(-1107.69)
     expect(omitted.lineItems.find(li => li.item_type === 'sick_day2_14')!.amount).toBeLessThan(0)
     expect(omitted.lineItems.find(li => li.item_type === 'sick_day15_plus')!.amount).toBeLessThan(0)
+  })
+})
+
+// ============================================================
+// The procentregeln base (#60 part C, SemL 16 b § andra och tredje stycket,
+// 17-17 a §§): which absence rows enter the base, and the hours of
+// semesterlönegrundande absence hourly pay adds to it
+// ============================================================
+
+describe('deriveAbsenceLineItems: semesterlönegrundande frånvaro (#60 C)', () => {
+  /** is_vacation_basis per item_type; a split type lists its rows in order. */
+  const flags = (lines: { item_type: string; is_vacation_basis: boolean }[]) =>
+    lines.reduce<Record<string, boolean[]>>((acc, li) => {
+      ;(acc[li.item_type] ??= []).push(li.is_vacation_basis)
+      return acc
+    }, {})
+
+  describe('monthly pay: a qualifying deduction stays out of the base, one that does not qualify enters it', () => {
+    it('sick days 1-14, the karensavdrag and day 15+ all keep the base whole (17 §)', () => {
+      const periodDays = Array.from({ length: 16 }, (_, i): AbsenceDay => ({
+        absence_date: `2026-04-${String(6 + i).padStart(2, '0')}`,
+        absence_type: 'sick',
+        hours: 8,
+      }))
+      const result = deriveAbsenceLineItems(baseInput({ periodDays }))
+      expect(flags(result.lineItems)).toEqual({
+        sick_karens: [false],
+        sick_day2_14: [false],
+        sick_day15_plus: [false],
+      })
+      expect(result.qualifyingAbsenceHours).toBe(0)
+    })
+
+    it('VAB within the 120 dates keeps the base whole, past them lowers it (17 a § 1 p.)', () => {
+      const within = deriveAbsenceLineItems(baseInput({ vabDaysYtd: 10, periodDays: days([['2026-04-10', 'vab']]) }))
+      const past = deriveAbsenceLineItems(baseInput({ vabDaysYtd: 120, periodDays: days([['2026-04-10', 'vab']]) }))
+      expect(flags(within.lineItems)).toEqual({ vab: [false] })
+      expect(flags(past.lineItems)).toEqual({ vab: [true] })
+    })
+
+    it('parental leave within the 120 dates keeps the base whole, past them lowers it (17 a § 3 p.)', () => {
+      const split = deriveAbsenceLineItems(
+        baseInput({
+          parentalDaysPregnancyYtd: 119,
+          periodDays: days([['2026-04-09', 'parental'], ['2026-04-10', 'parental']]),
+        }),
+      )
+      expect(flags(split.lineItems)).toEqual({ parental_leave: [false, true] })
+    })
+
+    it('unpaid leave is never semesterlönegrundande: it lowers the base', () => {
+      const result = deriveAbsenceLineItems(baseInput({ periodDays: days([['2026-04-10', 'unpaid_leave']]) }))
+      expect(flags(result.lineItems)).toEqual({ unpaid_leave: [true] })
+    })
+
+    it('reports no qualifying hours: the monthly salary already holds the pay', () => {
+      const result = deriveAbsenceLineItems(
+        baseInput({
+          periodDays: days([
+            ['2026-04-06', 'sick'],
+            ['2026-04-07', 'vab'],
+            ['2026-04-08', 'parental'],
+            ['2026-04-09', 'unpaid_leave'],
+          ]),
+        }),
+      )
+      expect(result.qualifyingAbsenceHours).toBe(0)
+    })
+  })
+
+  describe('hourly pay: the hours the employee would have worked on qualifying days', () => {
+    const hourlyInput = (over: Partial<DeriveInput> = {}): DeriveInput =>
+      baseInput({
+        monthlySalary: 0,
+        salaryType: 'hourly',
+        hourlyRate: 200,
+        hoursPerDay: 8,
+        hoursPerWeek: 40,
+        workdaysPerWeek: 5,
+        ...over,
+      })
+
+    it('counts every sick hour, karens day and day 15+ included, and keeps the 80 % sjuklön out of the base', () => {
+      const periodDays: AbsenceDay[] = Array.from({ length: 16 }, (_, i): AbsenceDay => ({
+        absence_date: `2026-04-${String(6 + i).padStart(2, '0')}`,
+        absence_type: 'sick',
+        hours: i === 0 ? 6 : 8,
+      }))
+      const result = deriveAbsenceLineItems(hourlyInput({ periodDays }))
+      // 6 + 15 x 8 = 126 hours; the sjuklön row is pay for qualifying days.
+      expect(result.qualifyingAbsenceHours).toBe(126)
+      expect(flags(result.lineItems)).toEqual({ sick_karens: [false], sick_day2_14: [false] })
+    })
+
+    it('counts VAB hours within the 120 dates only', () => {
+      const result = deriveAbsenceLineItems(
+        hourlyInput({
+          vabDaysYtd: 119,
+          periodDays: [
+            { absence_date: '2026-04-09', absence_type: 'vab', hours: 5 },
+            { absence_date: '2026-04-10', absence_type: 'vab', hours: 8 },
+          ],
+        }),
+      )
+      expect(result.qualifyingAbsenceHours).toBe(5)
+    })
+
+    it('counts parental hours within the 120 dates only', () => {
+      const within = deriveAbsenceLineItems(
+        hourlyInput({ periodDays: [{ absence_date: '2026-04-10', absence_type: 'parental', hours: 7.5 }] }),
+      )
+      const past = deriveAbsenceLineItems(
+        hourlyInput({
+          parentalDaysPregnancyYtd: 120,
+          periodDays: [{ absence_date: '2026-04-10', absence_type: 'parental', hours: 7.5 }],
+        }),
+      )
+      expect(within.qualifyingAbsenceHours).toBe(7.5)
+      expect(past.qualifyingAbsenceHours).toBe(0)
+    })
+
+    it('counts nothing for unpaid leave: those hours were never earned', () => {
+      const result = deriveAbsenceLineItems(
+        hourlyInput({ periodDays: [{ absence_date: '2026-04-10', absence_type: 'unpaid_leave', hours: 8 }] }),
+      )
+      expect(result.qualifyingAbsenceHours).toBe(0)
+    })
+
+    it('sums the qualifying types together', () => {
+      const result = deriveAbsenceLineItems(
+        hourlyInput({
+          periodDays: [
+            { absence_date: '2026-04-06', absence_type: 'sick', hours: 8 },
+            { absence_date: '2026-04-08', absence_type: 'vab', hours: 4 },
+            { absence_date: '2026-04-09', absence_type: 'parental', hours: 8 },
+            { absence_date: '2026-04-10', absence_type: 'unpaid_leave', hours: 8 },
+          ],
+        }),
+      )
+      expect(result.qualifyingAbsenceHours).toBe(20)
+    })
+  })
+
+  it('reports no qualifying hours without absence', () => {
+    expect(deriveAbsenceLineItems(baseInput()).qualifyingAbsenceHours).toBe(0)
+    expect(
+      deriveAbsenceLineItems(baseInput({ monthlySalary: 0, salaryType: 'hourly', hourlyRate: 200 })).qualifyingAbsenceHours,
+    ).toBe(0)
   })
 })

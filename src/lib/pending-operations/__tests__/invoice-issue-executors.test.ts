@@ -52,6 +52,13 @@ const mocks = vi.hoisted(() => ({
   linkToJournalEntry: vi.fn(),
   linkInvoiceAttachments: vi.fn(),
   loadInvoiceEmailAttachments: vi.fn(),
+  settleInvoicePayment: vi.fn(),
+}))
+
+// The kontantfaktura's payment at issue (crm#1281).
+vi.mock('@/lib/invoices/settle-invoice-payment', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/invoices/settle-invoice-payment')>()),
+  settleInvoicePayment: mocks.settleInvoicePayment,
 }))
 
 vi.mock('@/lib/invoices/invoice-attachments', () => ({
@@ -343,6 +350,80 @@ describe('commitPendingOperation: mark_invoice_sent issues fail closed', () => {
     expect(result.error).toContain('Konto 3001 kräver Projekt')
     expect(findCalls('invoices', 'update')).toEqual([[{ status: 'sent' }], [{ status: 'draft' }]])
     expect(mocks.recordManualInvoiceDelivery).not.toHaveBeenCalled()
+  })
+})
+
+// crm#1281: a mark_invoice_sent staged with paid_at_issue_account is approved
+// through the dashboard's issue step: one cash verifikat, the invoice paid.
+describe('commitPendingOperation: mark_invoice_sent with paid_at_issue (crm#1281)', () => {
+  function paidOp(paidAtIssue: unknown = { account_number: '1930' }): PendingOperation {
+    return { ...op('mark_invoice_sent'), params: { invoice_id: 'invoice-1', paid_at_issue: paidAtIssue } }
+  }
+  const paidDraft = () => ({ ...draftInvoice(), invoice_date: '2026-10-17', total: 500, remaining_amount: 500, paid_amount: null })
+
+  it('issues the invoice paid with the payment at issue, no registration verifikat', async () => {
+    mocks.settleInvoicePayment.mockResolvedValue({
+      ok: true,
+      newStatus: 'paid',
+      newPaidAmount: 500,
+      newRemaining: 0,
+      journalEntryId: 'je-cash',
+      paidAt: '2026-10-17T12:00:00.000Z',
+    })
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: paidDraft(), error: null })
+    enqueue({ data: SETTINGS, error: null })
+    enqueue({ data: [{ id: 'invoice-1' }], error: null }) // status flip draft -> sent
+    enqueue({ data: null, error: null }) // dispatcher finalize
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', paidOp())
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ status: 'paid', journal_entry_id: 'je-cash' })
+    expect(mocks.createInvoiceJournalEntry).not.toHaveBeenCalled()
+    expect(mocks.settleInvoicePayment).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      'user-1',
+      expect.objectContaining({
+        paymentAmountInInvoiceCurrency: 500,
+        paymentDate: '2026-10-17',
+        settlementAccountNumber: '1930',
+        recognizeSaleAtPayment: true,
+      }),
+    )
+    expect(findCalls('invoices', 'update')).toEqual([[{ status: 'sent' }]])
+    expect(mocks.recordManualInvoiceDelivery).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses a document that cannot be issued paid before anything changes', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { ...paidDraft(), document_type: 'proforma' }, error: null })
+    enqueue({ data: SETTINGS, error: null })
+    enqueue({ data: null, error: null }) // dispatcher reject
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', paidOp())
+
+    expect(result.status).not.toBe('committed')
+    expect(result.code).toBe('INVOICE_PAID_AT_ISSUE_NOT_ALLOWED')
+    expect(ensureInvoiceNumber).not.toHaveBeenCalled()
+    expect(mocks.settleInvoicePayment).not.toHaveBeenCalled()
+    expect(findCalls('invoices', 'update')).toEqual([])
+  })
+
+  it('refuses a staged account outside 19xx without reading the invoice', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher reject
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', paidOp({ account_number: '1510' }))
+
+    expect(result.status).not.toBe('committed')
+    expect(result.http_status).toBe(400)
+    expect(findCalls('invoices', 'select')).toEqual([])
+    expect(mocks.settleInvoicePayment).not.toHaveBeenCalled()
   })
 })
 

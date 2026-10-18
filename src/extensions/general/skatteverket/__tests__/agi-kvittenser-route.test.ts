@@ -45,13 +45,22 @@ function findRoute() {
  * Supabase stub: records updates per table and the receipts written to
  * agi_kvittenser; the declaration lookup resolves to `latest`.
  */
-function makeContext(latest: Record<string, unknown> | null, opts: { historyError?: { message: string } } = {}) {
+function makeContext(
+  latest: Record<string, unknown> | null,
+  opts: {
+    historyError?: { message: string }
+    /** The declaration's run, read for its payroll month; absent reads as no row. */
+    run?: { period_year: number; period_month: number }
+    /** Other runs of that month already filed. */
+    filedRuns?: Array<{ agi_submitted_at: string }>
+  } = {},
+) {
   const updates: Array<{ table: string; values: unknown }> = []
   const recorded: Array<{ rows: unknown[]; options: unknown }> = []
   const supabase = {
     from: vi.fn((table: string) => {
       const chain: any = {}
-      for (const method of ['select', 'eq', 'in', 'order', 'limit']) {
+      for (const method of ['select', 'eq', 'neq', 'not', 'in', 'order', 'limit']) {
         chain[method] = vi.fn(() => chain)
       }
       chain.update = vi.fn((values: unknown) => {
@@ -63,11 +72,14 @@ function makeContext(latest: Record<string, unknown> | null, opts: { historyErro
         return chain
       })
       chain.maybeSingle = vi.fn().mockResolvedValue({
-        data: table === 'agi_declarations' ? latest : null,
+        data: table === 'agi_declarations' ? latest : table === 'salary_runs' ? opts.run ?? null : null,
         error: null,
       })
       chain.then = (resolve: (v: unknown) => void) =>
-        resolve({ data: null, error: table === 'agi_kvittenser' ? opts.historyError ?? null : null })
+        resolve({
+          data: table === 'salary_runs' ? opts.filedRuns ?? [] : null,
+          error: table === 'agi_kvittenser' ? opts.historyError ?? null : null,
+        })
       return chain
     }),
   }
@@ -154,7 +166,7 @@ describe('GET /agi/kvittenser', () => {
     const res = await findRoute().handler(request(), ctx)
 
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ data: { kvittenser: [] } })
+    expect(await res.json()).toEqual({ data: { kvittenser: [], declarationKvittens: null } })
     expect(mockPromote).not.toHaveBeenCalled()
     expect(updates).toEqual([])
     expect(settingsSet).not.toHaveBeenCalled()
@@ -185,6 +197,8 @@ describe('GET /agi/kvittenser', () => {
     // re-creates the in-flight cache the promotion deletes.
     expect(updates).toEqual([])
     expect(settingsSet).not.toHaveBeenCalled()
+    // The panel reads the declaration's own receipt from here.
+    expect((await res.json()).data.declarationKvittens).toBe('uuid-1')
   })
 
   it('still answers 200 when the cron won the claim a moment earlier', async () => {
@@ -241,5 +255,68 @@ describe('GET /agi/kvittenser', () => {
     expect(res.status).toBe(200)
     expect(updates).toEqual([])
     expect(ctx.log.warn).toHaveBeenCalledWith('kvittenser read but not recorded', expect.objectContaining({ message: 'connection reset' }))
+  })
+})
+
+/**
+ * A correction run's declaration is the period's row (taken over from the run
+ * it corrects, status reset to unfiled). The panel polls this route right
+ * after the correction's signing link is created, when Skatteverket still
+ * lists only the original's kvittens: that receipt must not be written onto
+ * the correction, nor reported to the panel as its signature.
+ */
+describe('GET /agi/kvittenser: a correction is signed only by its own kvittens', () => {
+  const ORIGINAL = { ...KVITTENS, uuidKvittens: 'uuid-original', signeradTid: '2026-10-09T08:00:00Z' }
+  const CORRECTION = { ...KVITTENS, uuidKvittens: 'uuid-correction', signeradTid: '2026-10-12T09:30:00Z' }
+  const SEPTEMBER = { period_year: 2026, period_month: 9 }
+  const ORIGINAL_FILED = [{ agi_submitted_at: '2026-10-09T08:00:00+00:00' }]
+  const CORRECTION_DECLARATION = { id: 'decl-1', salary_run_id: 'run-corr', status: 'pending_signature' }
+
+  it('keeps the receipt but promotes nothing while only the original is listed', async () => {
+    mockAgiGetKvittenser.mockResolvedValueOnce({ ok: true, status: 200, data: { kvittenser: [ORIGINAL] } } as any)
+    const { ctx, updates, recorded, settingsSet } = makeContext(CORRECTION_DECLARATION, {
+      run: SEPTEMBER,
+      filedRuns: ORIGINAL_FILED,
+    })
+
+    const res = await findRoute().handler(request(), ctx)
+
+    expect(res.status).toBe(200)
+    expect(recorded).toHaveLength(1)
+    expect(mockPromote).not.toHaveBeenCalled()
+    expect(updates).toEqual([])
+    expect(settingsSet).not.toHaveBeenCalled()
+    const body = await res.json()
+    // Skatteverket's list is returned as read; the declaration has no receipt yet.
+    expect(body.data.kvittenser).toEqual([ORIGINAL])
+    expect(body.data.declarationKvittens).toBeNull()
+  })
+
+  it("promotes the correction on its own kvittens, whatever the list's order", async () => {
+    mockAgiGetKvittenser.mockResolvedValueOnce({ ok: true, status: 200, data: { kvittenser: [ORIGINAL, CORRECTION] } } as any)
+    mockPromote.mockResolvedValueOnce({ status: 'signed', kvittensnummer: 'uuid-correction' })
+    const { ctx } = makeContext(CORRECTION_DECLARATION, { run: SEPTEMBER, filedRuns: ORIGINAL_FILED })
+
+    const res = await findRoute().handler(request(), ctx)
+
+    expect(mockPromote).toHaveBeenCalledTimes(1)
+    expect(mockPromote.mock.calls[0][1]).toMatchObject({ id: 'decl-1', salary_run_id: 'run-corr' })
+    expect(mockPromote.mock.calls[0][2]).toBe(CORRECTION)
+    expect((await res.json()).data.declarationKvittens).toBe('uuid-correction')
+  })
+
+  it('never writes the original\'s receipt onto a correction Skatteverket rejected at kontroll', async () => {
+    mockAgiGetKvittenser.mockResolvedValueOnce({ ok: true, status: 200, data: { kvittenser: [ORIGINAL] } } as any)
+    const { ctx, updates, settingsSet } = makeContext(
+      { ...CORRECTION_DECLARATION, status: 'rejected' },
+      { run: SEPTEMBER, filedRuns: ORIGINAL_FILED },
+    )
+
+    const res = await findRoute().handler(request(), ctx)
+
+    expect(res.status).toBe(200)
+    expect(mockPromote).not.toHaveBeenCalled()
+    expect(updates).toEqual([])
+    expect(settingsSet).not.toHaveBeenCalled()
   })
 })

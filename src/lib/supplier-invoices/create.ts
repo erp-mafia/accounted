@@ -164,28 +164,32 @@ function invalid(reason: string): CreateSupplierInvoiceFailure {
 }
 
 // ── The reverse-charge rules of a supplier invoice ──────────────────────
-// Shared by every door that registers one from a request body: this module
-// and the inbox convert (lib/documents/inbox-convert.ts). The convert used to
-// carry a copy without the reverse-charge leg, so a reverse-charge invoice
-// converted from the inbox registered net + 25 % as the payable while the
-// registration verifikat credited 2440 with the net.
+// Shared by every door that registers one: this module, the inbox convert
+// (lib/documents/inbox-convert.ts), and the MCP inbox staging with its commit
+// executor (lib/pending-operations/commit.ts). The convert used to carry a
+// copy without the reverse-charge leg, so a reverse-charge invoice converted
+// from the inbox registered net + 25 % as the payable while the registration
+// verifikat credited 2440 with the net. The MCP door defaulted every invoice
+// to standard_25, so a foreign supplier's invoice posted no fiktiv moms (accounted#58).
 
 /**
  * The invoice's reverse-charge flag and vat_treatment. The treatment is a
  * booking contract, not metadata: the engine reads `reverse_charge` for the
  * fiktiv-moms route and `vat_treatment` for whether any ingående moms may be
  * deducted at all (#2553), and it decides the rate a line that omits vat_rate
- * falls back to. An EU or non-EU supplier defaults to reverse charge when the
- * caller does not say, and `vat_treatment` is forced to follow the resolved
- * flag so the two can never disagree (the engine books on one, the
- * momsdeklaration reads the other).
+ * falls back to. When the caller sets no flag, an EU or non-EU supplier
+ * defaults to reverse charge (omvänd skattskyldighet, ML 16 kap 6 §;
+ * swedish-vat skill 2.1-2.3) and so does a stated treatment of
+ * reverse_charge, and `vat_treatment` is forced to follow the resolved flag
+ * so the two can never disagree (the engine books on one, the momsdeklaration
+ * reads the other).
  */
 export function resolveSupplierInvoiceReverseCharge(
   supplierType: string | null | undefined,
   body: { reverse_charge?: boolean; vat_treatment?: string },
 ): { reverseCharge: boolean; vatTreatment: string } {
   const foreignSupplier = supplierType === 'eu_business' || supplierType === 'non_eu_business'
-  const reverseCharge = body.reverse_charge ?? foreignSupplier
+  const reverseCharge = body.reverse_charge ?? (foreignSupplier || body.vat_treatment === 'reverse_charge')
   return { reverseCharge, vatTreatment: reverseCharge ? 'reverse_charge' : (body.vat_treatment ?? 'standard_25') }
 }
 

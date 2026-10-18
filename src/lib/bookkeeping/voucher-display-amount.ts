@@ -29,9 +29,12 @@
  *     line is a balance and never the amount.
  *   - A zero money line falls back too.
  *
- * Display only. Stored data, reports, SIE export and the amount sort (which
- * orders by the total_amount computed column, the omslutning) are untouched;
- * `debitTotal` is returned so a caller can keep the omslutning visible.
+ * Display only: stored data, reports and SIE export are untouched. The list's
+ * amount sort orders by the display_amount computed column (migration
+ * 20261018135300), the SQL mirror of this rule, so a change here must change
+ * it too: the shapes in __tests__/voucher-display-amount.shapes.ts are checked
+ * against both. `debitTotal` is returned so a caller can keep the omslutning
+ * visible.
  */
 
 import { isCashLedger } from '@/lib/bookkeeping/bank-leg'

@@ -837,6 +837,7 @@ describe('POST /api/invoices/[id]/mark-sent: kontantfaktura, paid at issue (crm#
     ],
   ])('refuses a kontantfaktura when %s', async (reason, row, body) => {
     enqueue({ data: row, error: null })
+    enqueue({ data: company, error: null }) // settings: the refusal is issueAndBookInvoice's
 
     const response = await post(body)
     const parsed = await parseJsonResponse<{ error: { code: string; details?: { reason?: string } } }>(response)
@@ -844,6 +845,22 @@ describe('POST /api/invoices/[id]/mark-sent: kontantfaktura, paid at issue (crm#
     expect(parsed.status).toBe(400)
     expect(parsed.body.error.code).toBe('INVOICE_PAID_AT_ISSUE_NOT_ALLOWED')
     expect(parsed.body.error.details?.reason).toBe(reason)
+    expect(mockSettleInvoicePayment).not.toHaveBeenCalled()
+    expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
+  })
+
+  // A kreditfaktura never reaches issueAndBookInvoice: the route refuses it
+  // by the same rule, before anything changes.
+  it('refuses a kontantfaktura for a credit note', async () => {
+    enqueue({ data: { ...draft(), credited_invoice_id: 'inv-0' }, error: null })
+
+    const response = await post(paidBody)
+    const parsed = await parseJsonResponse<{ error: { code: string; details?: { reason?: string } } }>(response)
+
+    expect(parsed.status).toBe(400)
+    expect(parsed.body.error.code).toBe('INVOICE_PAID_AT_ISSUE_NOT_ALLOWED')
+    expect(parsed.body.error.details?.reason).toBe('credit_note')
+    expect(mockIssueCreditNote).not.toHaveBeenCalled()
     expect(mockSettleInvoicePayment).not.toHaveBeenCalled()
     expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
   })

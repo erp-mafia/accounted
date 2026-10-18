@@ -14,13 +14,19 @@
  *     (ensureInvoiceNumber), and it is booked at issue only under
  *     faktureringsmetoden without deferred booking (booksInvoicesOnIssue).
  *     The number it will most likely get is peeked, never reserved.
+ *   - mark sent, paid at issue (crm#1281, the kontantfaktura): refused by the
+ *     rule issueAndBookInvoice applies (paidAtIssueBlockReason), else one cash
+ *     verifikat on the invoice date, the buildInvoiceCashLines lines the
+ *     payment at issue books, in either accounting method.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import { buildInvoiceCashLines, buildInvoicePaymentLines } from '@/lib/bookkeeping/invoice-entries'
 import { resolveInvoicePaymentSourceType } from '@/lib/bookkeeping/propose-payment-lines'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
+import { dbError } from '@/lib/errors/db-error'
 import { resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
+import { paidAtIssueBlockReason, type PaidAtIssueBlockReason } from '@/lib/invoices/paid-at-issue'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { formatAmount } from '@/lib/utils'
@@ -32,6 +38,7 @@ const log = createLogger('mcp-invoice-stage-preview')
 export interface StagedInvoiceRow {
   id: string
   invoice_number: string | null
+  invoice_date?: string | null
   status?: string | null
   document_type?: string | null
   credited_invoice_id?: string | null
@@ -76,6 +83,21 @@ export interface MarkPaidPreview {
   } | null
   /** The next.description for the staged operation. */
   next_description: string
+}
+
+/** The lines a staged payment shows, rounded to öre, with their sums. */
+function entryPreviewOf(lines: CreateJournalEntryLineInput[]): NonNullable<MarkPaidPreview['journal_entry_preview']> {
+  const previewLines = lines.map((line) => ({
+    account_number: line.account_number,
+    debit_amount: roundOre(Number(line.debit_amount) || 0),
+    credit_amount: roundOre(Number(line.credit_amount) || 0),
+    line_description: line.line_description ?? '',
+  }))
+  return {
+    lines: previewLines,
+    total_debit: roundOre(previewLines.reduce((sum, l) => sum + l.debit_amount, 0)),
+    total_credit: roundOre(previewLines.reduce((sum, l) => sum + l.credit_amount, 0)),
+  }
 }
 
 /** "debit 1930 / credit 3001, 2611": the accounts an entry touches, read off its lines. */
@@ -136,17 +158,7 @@ export async function buildMarkPaidPreview(
     } else {
       lines = buildInvoicePaymentLines(invoice as unknown as Invoice, customerName, settlementAccount).lines
     }
-    const previewLines = lines.map((line) => ({
-      account_number: line.account_number,
-      debit_amount: roundOre(Number(line.debit_amount) || 0),
-      credit_amount: roundOre(Number(line.credit_amount) || 0),
-      line_description: line.line_description ?? '',
-    }))
-    journalEntryPreview = {
-      lines: previewLines,
-      total_debit: roundOre(previewLines.reduce((sum, l) => sum + l.debit_amount, 0)),
-      total_credit: roundOre(previewLines.reduce((sum, l) => sum + l.credit_amount, 0)),
-    }
+    journalEntryPreview = entryPreviewOf(lines)
   } catch (err) {
     // A preview is advisory: the executor builds the same entry and refuses
     // with its own error (a foreign invoice without a rate, say).
@@ -170,6 +182,75 @@ export async function buildMarkPaidPreview(
     source_type: sourceType,
     journal_entry_preview: journalEntryPreview,
     next_description,
+  }
+}
+
+export interface PaidAtIssuePreview {
+  /** Why the draft cannot be issued paid (paidAtIssueBlockReason), null when it can. */
+  block_reason: PaidAtIssueBlockReason | null
+  /** null when refused, or when the lines could not be built (the approval then refuses on its own terms). */
+  journal_entry_preview: MarkPaidPreview['journal_entry_preview']
+  /** The next.description for the staged operation. */
+  next_description: string
+}
+
+/**
+ * What gnubok_mark_invoice_as_sent with paid_at_issue_account (crm#1281, the
+ * kontantfaktura) will do on approval. The refusal is paidAtIssueBlockReason
+ * over the draft's items, the rule issueAndBookInvoice applies at commit; the
+ * lines are buildInvoiceCashLines to the chosen account, what the payment at
+ * issue books (settleInvoicePayment with recognizeSaleAtPayment), whatever
+ * the company's accounting method.
+ */
+export async function buildPaidAtIssuePreview(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoice: StagedInvoiceRow,
+  accountNumber: string,
+): Promise<PaidAtIssuePreview> {
+  const { data: rows, error } = await supabase
+    .from('invoice_items')
+    .select('*')
+    .eq('invoice_id', invoice.id)
+    .order('sort_order', { ascending: true })
+  if (error) throw dbError(error)
+  const items = (rows ?? []) as InvoiceItem[]
+
+  const blockReason = paidAtIssueBlockReason({ ...invoice, items })
+  if (blockReason) return { block_reason: blockReason, journal_entry_preview: null, next_description: '' }
+
+  let journalEntryPreview: PaidAtIssuePreview['journal_entry_preview'] = null
+  try {
+    const { data: settings } = await supabase
+      .from('company_settings')
+      .select('entity_type')
+      .eq('company_id', companyId)
+      .maybeSingle()
+    const entityType = await resolveCompanyEntityType(
+      supabase,
+      companyId,
+      (settings as { entity_type?: unknown } | null)?.entity_type,
+    )
+    const withItems = { ...invoice, items } as unknown as Invoice
+    journalEntryPreview = entryPreviewOf(
+      buildInvoiceCashLines(withItems, entityType, invoice.customer?.name ?? undefined, accountNumber).lines,
+    )
+  } catch (err) {
+    // Advisory, as for mark paid: the approval builds the same entry and
+    // refuses with its own error (a foreign invoice without a rate, say).
+    log.warn('paid-at-issue journal entry preview unavailable', {
+      invoiceId: invoice.id,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+
+  const accounts = journalEntryPreview ? `: ${describeAccounts(journalEntryPreview.lines)}` : ''
+  return {
+    block_reason: null,
+    journal_entry_preview: journalEntryPreview,
+    next_description:
+      `Once approved, the invoice is numbered and issued already paid: one verifikat on the invoice date${accounts}, ` +
+      'no receivable on 1510, and its status is paid. Use gnubok_get_ar_ledger to confirm nothing is left open.',
   }
 }
 

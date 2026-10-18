@@ -30,7 +30,12 @@ vi.mock('@/lib/deadlines/complete-tax-deadline', () => ({
   completeTaxDeadline: vi.fn().mockResolvedValue(undefined),
 }))
 
-import { reconcileAgiDeclaration, promoteAgiDeclaration } from '../lib/agi-kvittens-reconcile'
+import {
+  declarationKvittens,
+  newestAgiKvittens,
+  reconcileAgiDeclaration,
+  promoteAgiDeclaration,
+} from '../lib/agi-kvittens-reconcile'
 import { SkatteverketAuthError } from '../lib/api-client'
 import { agiGetKvittenser } from '../lib/agi-client'
 import { resolveReadAuth } from '../lib/resolve-auth'
@@ -61,30 +66,44 @@ function makeSupabase(opts: {
   claim?: { data?: unknown[] | null; error?: { message: string } | null }
   salaryRunError?: { message: string } | null
   historyError?: { message: string } | null
+  /** The declaration's run (declarationKvittens reads its payroll month); absent reads as no row. */
+  run?: { period_year: number; period_month: number } | null
+  runReadError?: { message: string } | null
+  /** Other runs of that month already filed (their agi_submitted_at). */
+  filedRuns?: Array<{ agi_submitted_at: string }>
 } = {}) {
   const mutatedTables: string[] = []
   const claimStatuses: unknown[] = []
   const recorded: Array<{ rows: unknown[]; options: unknown }> = []
+  const updates: Array<{ table: string; values: any }> = []
   return {
     claimStatuses,
     recorded,
+    updates,
     supabase: {
       from(table: string) {
         let op: 'read' | 'mutate' = 'read'
         const chain: any = {}
-        for (const method of ['select', 'eq', 'order', 'limit']) {
+        for (const method of ['select', 'eq', 'neq', 'not', 'order', 'limit']) {
           chain[method] = vi.fn(() => chain)
         }
+        chain.maybeSingle = vi.fn(async () => ({
+          data: table === 'salary_runs' ? opts.run ?? null : null,
+          error: table === 'salary_runs' ? opts.runReadError ?? null : null,
+        }))
         chain.in = vi.fn((column: string, values: unknown) => {
           if (table === 'agi_declarations' && column === 'status') claimStatuses.push(values)
           return chain
         })
-        for (const method of ['update', 'delete']) {
-          chain[method] = vi.fn(() => {
-            op = 'mutate'
-            return chain
-          })
-        }
+        chain.update = vi.fn((values: unknown) => {
+          op = 'mutate'
+          updates.push({ table, values })
+          return chain
+        })
+        chain.delete = vi.fn(() => {
+          op = 'mutate'
+          return chain
+        })
         chain.upsert = vi.fn((rows: unknown[], options: unknown) => {
           op = 'mutate'
           recorded.push({ rows, options })
@@ -104,6 +123,9 @@ function makeSupabase(opts: {
               data: opts.claim && 'data' in opts.claim ? opts.claim.data : [{ id: DECL.id }],
               error: opts.claim?.error ?? null,
             })
+          }
+          if (table === 'salary_runs' && op === 'read') {
+            return resolve({ data: opts.filedRuns ?? [], error: null })
           }
           if (table === 'salary_runs') {
             return resolve({ error: opts.salaryRunError ?? null })
@@ -434,5 +456,113 @@ describe('promoteAgiDeclaration: the interactive check shares the claim', () => 
 
     expect(outcome).toMatchObject({ status: 'error' })
     expect(mutatedTables).toEqual([])
+  })
+})
+
+/**
+ * A correction run's declaration (the period's row, taken over from the run it
+ * corrects) is promoted on its OWN kvittens. Skatteverket lists every kvittens
+ * of the redovisningsperiod, so until the correction is signed the list holds
+ * only the original's, and that one must never be claimed for the correction.
+ */
+describe('declarationKvittens: a correction is promoted on its own kvittens', () => {
+  // The original filing of May, stamped on the run it was filed for.
+  const ORIGINAL = { uuidKvittens: 'k-original', signeradAv: '191212121212', signeradTid: '2026-06-10T09:00:00Z' }
+  const CORRECTION = { uuidKvittens: 'k-correction', signeradAv: '191212121212', signeradTid: '2026-06-20T14:00:00Z' }
+  const MAY = { period_year: 2026, period_month: 5 }
+  const ORIGINAL_FILED = [{ agi_submitted_at: '2026-06-10T09:00:00+00:00' }]
+
+  const listing = (...kvittenser: unknown[]) => ({ ok: true, status: 200, data: { kvittenser } }) as any
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.useFakeTimers({ now: new Date('2026-06-20T14:05:00Z'), toFake: ['Date'] })
+    mockResolveReadAuth.mockResolvedValue({
+      ok: true,
+      auth: { mode: 'user' } as any,
+      source: 'user',
+      tokenUserId: 'user-1',
+    })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('keeps the correction pending while the period lists only the original\'s kvittens', async () => {
+    mockAgiGetKvittenser.mockResolvedValueOnce(listing(ORIGINAL))
+    const { supabase, mutatedTables, recorded } = makeSupabase({ run: MAY, filedRuns: ORIGINAL_FILED })
+
+    const outcome = await reconcileAgiDeclaration(supabase, DECL, { reconciledBy: 'cron' })
+
+    expect(outcome).toEqual({ status: 'still_pending' })
+    // The receipt is kept, nothing else moves: no claim, no run stamp, no deadline.
+    expect(recorded).toHaveLength(1)
+    expect(mutatedTables).toEqual(['agi_kvittenser'])
+    expect(mockCompleteTaxDeadline).not.toHaveBeenCalled()
+    expect(mockSendKvittensNotification).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['oldest first', [ORIGINAL, CORRECTION]],
+    ['newest first', [CORRECTION, ORIGINAL]],
+  ])('promotes the correction on its own kvittens once signed (%s)', async (_order, kvittenser) => {
+    mockAgiGetKvittenser.mockResolvedValueOnce(listing(...kvittenser))
+    const { supabase, updates } = makeSupabase({ run: MAY, filedRuns: ORIGINAL_FILED })
+
+    const outcome = await reconcileAgiDeclaration(supabase, DECL, { reconciledBy: 'cron' })
+
+    expect(outcome).toEqual({ status: 'signed', kvittensnummer: 'k-correction' })
+    expect(updates.find((u) => u.table === 'agi_declarations')?.values).toMatchObject({
+      status: 'submitted',
+      kvittensnummer: 'k-correction',
+      submitted_at: CORRECTION.signeradTid,
+    })
+    // The correction run gets the correction's signing moment, never the original's.
+    expect(updates.find((u) => u.table === 'salary_runs')?.values).toEqual({ agi_submitted_at: CORRECTION.signeradTid })
+  })
+
+  it('a month without another filing takes the newest kvittens whatever the list order', async () => {
+    const older = { uuidKvittens: 'k-older', signeradTid: '2026-06-01T08:00:00Z' }
+    const newer = { uuidKvittens: 'k-newer', signeradTid: '2026-06-02T08:00:00Z' }
+    const { supabase } = makeSupabase({ run: MAY, filedRuns: [] })
+
+    const own = await declarationKvittens(supabase, 'comp-1', 'run-1', [older, newer] as any)
+
+    expect(own).toEqual({ ok: true, kvittens: newer })
+  })
+
+  it('answers an error, not still_pending, when the month\'s runs cannot be read', async () => {
+    mockAgiGetKvittenser.mockResolvedValueOnce(listing(ORIGINAL, CORRECTION))
+    const { supabase, mutatedTables } = makeSupabase({ runReadError: { message: 'connection reset' } })
+
+    const outcome = await reconcileAgiDeclaration(supabase, DECL, { reconciledBy: 'cron' })
+
+    expect(outcome).toMatchObject({ status: 'error' })
+    expect((outcome as { error: string }).error).toContain('connection reset')
+    expect(mutatedTables).toEqual(['agi_kvittenser'])
+  })
+
+  it('refuses a kvittens without a signing time when the month has an earlier filing', async () => {
+    const { supabase } = makeSupabase({ run: MAY, filedRuns: ORIGINAL_FILED })
+
+    const own = await declarationKvittens(supabase, 'comp-1', 'run-1', [{ uuidKvittens: 'k-untimed' }] as any)
+
+    expect(own).toEqual({ ok: true, kvittens: null })
+  })
+})
+
+describe('newestAgiKvittens', () => {
+  it('picks the latest signing time, skips entries without a number, and falls back to list order', () => {
+    const a = { uuidKvittens: 'a', signeradTid: '2026-06-01T08:00:00Z' }
+    const b = { uuidKvittens: 'b', signeradTid: '2026-06-03T08:00:00Z' }
+    const unnumbered = { signeradTid: '2026-06-09T08:00:00Z' }
+    const untimed = { uuidKvittens: 'c' }
+
+    expect(newestAgiKvittens([a, unnumbered, b] as any)).toBe(b)
+    expect(newestAgiKvittens([untimed, a] as any)).toBe(a)
+    expect(newestAgiKvittens([untimed, { uuidKvittens: 'd' }] as any)).toBe(untimed)
+    expect(newestAgiKvittens([unnumbered] as any)).toBeNull()
+    expect(newestAgiKvittens(undefined)).toBeNull()
   })
 })

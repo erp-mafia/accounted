@@ -57,6 +57,15 @@ export interface SalaryCalculationInput {
    *  procentregeln and semesterersättning, and under sammalöneregeln for the
    *  rörliga lönedelar only (lib/salary/vacation-pay-rate). */
   vacationPayRate?: number | null
+  /**
+   * Hourly pay only: the hours of semesterlönegrundande frånvaro in the
+   * period (sick days, VAB and parental leave within the cap), from
+   * derive-absence-line-items. The procentregeln and semesterersättning base
+   * adds timlön × these hours, the income the employee would have had
+   * (Semesterlagen 16 b § tredje stycket). Omitted = none. A monthly salary
+   * already holds that pay, so the field is ignored for monthly pay.
+   */
+  qualifyingAbsenceHours?: number
   /** Work-schedule daily-rate divisor (arbetsschema-lite). Defaults to the
    *  legacy 21 (5-day week); callers with a part-time schedule pass
    *  dailyDivisor(workdays_per_week) from lib/salary/work-schedule. Feeds the
@@ -228,6 +237,31 @@ function vacationBasisAdditions(lineItems: CalculationLineItem[]): number {
     .filter(li => li.itemType !== 'monthly_salary' && li.itemType !== 'hourly_salary')
     .filter(li => li.itemType !== 'semesterersattning')
     .reduce((sum, li) => sum + li.amount, 0)
+}
+
+/**
+ * Semesterlönegrundande frånvaro for hourly pay (Semesterlagen 16 b § tredje
+ * stycket): for each day of absence that 17-17 b §§ make
+ * semesterlönegrundande the base gets the income the employee would have had
+ * working, here timlön × the hours they would have worked. The sick pay for
+ * those days is not in the base (its row is not vacation basis). null when
+ * there is nothing to add, which leaves the base and the breakdown exactly as
+ * they were. Monthly pay never gets a step: the deduction rows of qualifying
+ * absence stay out of the base, so the monthly salary is the income the
+ * employee would have had.
+ */
+function absenceVacationBasisStep(input: SalaryCalculationInput): CalculationStep | null {
+  if (input.salaryType !== 'hourly') return null
+  const hours = input.qualifyingAbsenceHours ?? 0
+  const rate = input.hourlyRate || 0
+  const amount = roundOre(rate * hours)
+  if (!(amount > 0)) return null
+  return {
+    label: 'Semesterlönegrundande frånvaro (Semesterlagen 16 b §)',
+    formula: 'timlön × timmar den anställde skulle ha arbetat (sjukdom, VAB och föräldraledighet inom taket)',
+    input: { hourly_rate: rate, hours },
+    output: amount,
+  }
 }
 
 /**
@@ -523,10 +557,15 @@ export function calculateSalary(
   // for 30+ days, or the kollektivavtal rate) on top of each paycheck instead
   // of accruing semesterlöneskuld. It's part of bruttolön and counts for both
   // tax and avgifter basis.
+  // Hourly pay's semesterlönegrundande frånvaro, added to the base under both
+  // rules that pay a percentage of it (Step 4b and Step 9).
+  const absenceBasisStep = absenceVacationBasisStep(input)
+  const absenceBasis = absenceBasisStep?.output ?? 0
   let vacationCompensation = 0
   if (input.vacationRule === 'semesterersattning') {
     const rate = resolveVacationPayRate(input.vacationDaysPerYear, input.vacationPayRate)
-    const compensationBasis = r(baseSalary + vacationBasisAdditions(input.lineItems))
+    if (absenceBasisStep) steps.push(absenceBasisStep)
+    const compensationBasis = r(baseSalary + vacationBasisAdditions(input.lineItems) + absenceBasis)
     vacationCompensation = r(compensationBasis * rate)
     steps.push({
       label: `Semesterersättning (${fmtPct(rate)})`,
@@ -802,7 +841,8 @@ export function calculateSalary(
   // vacation-basis line items (overtime, bonus, etc). We must NOT add
   // monthly_salary/hourly_salary line items here: those are auto-created at
   // employee-add time and represent the same baseSalary already accounted for.
-  const vacationBasis = r(baseSalary + vacationBasisAdditions(input.lineItems))
+  // Hourly pay adds its semesterlönegrundande frånvaro (absenceBasis above).
+  const vacationBasis = r(baseSalary + vacationBasisAdditions(input.lineItems) + absenceBasis)
   let vacationAccrual: number
   if (input.vacationRule === 'none') {
     vacationAccrual = 0
@@ -822,6 +862,7 @@ export function calculateSalary(
     })
   } else if (input.vacationRule === 'procentregeln') {
     const rate = resolveVacationPayRate(input.vacationDaysPerYear, input.vacationPayRate)
+    if (absenceBasisStep) steps.push(absenceBasisStep)
     vacationAccrual = r(vacationBasis * rate)
     steps.push({
       label: `Semesteravsättning (procentregeln ${fmtPct(rate)})`,

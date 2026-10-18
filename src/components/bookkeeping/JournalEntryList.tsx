@@ -1498,7 +1498,7 @@ export default function JournalEntryList({
                 // The money line when the verifikat records one payment, else
                 // the omslutning (sum of the debit side); see
                 // lib/bookkeeping/voucher-display-amount.ts. The amount sort
-                // still orders by the omslutning (total_amount).
+                // orders by its SQL mirror (the display_amount column).
                 const displayAmount = voucherDisplayAmount(entry, extraMoneyAccounts)
                 const selectable = canWrite && isEligibleForExempt(entry)
                 // A makulerad verifikat should read as struck out, the way

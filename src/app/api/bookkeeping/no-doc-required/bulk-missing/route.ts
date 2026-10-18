@@ -73,7 +73,7 @@ export const POST = withRouteContext(
           dateTo: validation.data.date_to ?? null,
           search: validation.data.search ?? null,
         },
-        // No sorting here, so skip the per-row total_amount computed column
+        // No sorting here, so skip the per-row display_amount computed column
         // on what can be a full post-import candidate scan.
         { idOnly: true },
       )

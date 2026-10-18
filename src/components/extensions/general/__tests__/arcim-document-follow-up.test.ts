@@ -240,6 +240,90 @@ describe('DocumentImportFollowUp, one way forward per state', () => {
   })
 })
 
+/** The note about supplier-invoice files, as its own `<li>`, so its action is counted alone. */
+function supplierFilesNote(html: string, sentence: string): string {
+  const at = html.indexOf(sentence)
+  expect(at).toBeGreaterThan(-1)
+  return html.slice(html.lastIndexOf('<li', at), html.indexOf('</li>', at) + '</li>'.length)
+}
+
+describe('the supplier-invoice files note', () => {
+  const permissionSentence = ext.ext_arcim_documents_supplier_files_permission.replace(
+    '{scope}',
+    ext.ext_arcim_documents_scope_supplierinvoice,
+  )
+
+  it.each(['offered', 'empty', 'completeWithExceptions'])(
+    'gives a missing Fortnox permission one way forward in %s: the reconnect the approval state uses',
+    (name) => {
+      const note = supplierFilesNote(render(STATES[name]!), permissionSentence)
+      expect(note.match(/<button/g)).toHaveLength(1)
+      expect(note).toContain(ext.ext_arcim_documents_reconnect_action)
+      // Neutral: an outline button and muted text, never the failure colour
+      // or a second primary next to the state's own action.
+      expect(note).toContain('border-input')
+      expect(note).not.toContain('bg-primary')
+      expect(note).not.toContain('text-destructive')
+      // Named as Fortnox shows it, never by API scope id.
+      expect(note).not.toMatch(/\b(?:archive|connectfile|supplierinvoice)\b/)
+    },
+  )
+
+  it('says the panel looks again after the reconnect, instead of sending the user back to fetch', () => {
+    const note = supplierFilesNote(render(STATES.offered!), permissionSentence)
+    expect(note).toContain('Sedan letar vi igen direkt.')
+    expect(note).not.toContain('Hämta sedan underlag igen')
+  })
+
+  it('offers one reconnect when Fortnox refused two permissions', () => {
+    const html = render(
+      state({
+        phase: 'complete',
+        found: 214,
+        result: result({
+          linked: 151,
+          dryRun: false,
+          unreachableSources: [
+            { source: 'supplier_invoice_files', scope: 'connectfile', reason: 'permission', providerMessage: null },
+            ...SUPPLIER_FILES_REFUSED,
+          ],
+        }),
+      }),
+    )
+    expect(html.split(ext.ext_arcim_documents_reconnect_action)).toHaveLength(2)
+  })
+
+  it.each(['license', 'error'] as const)('offers no reconnect for a %s note: a new login cannot change it', (reason) => {
+    const html = render(
+      state({
+        phase: 'complete',
+        found: 214,
+        result: result({
+          linked: 151,
+          dryRun: false,
+          unreachableSources: [{ ...SUPPLIER_FILES_REFUSED[0]!, reason }],
+        }),
+      }),
+    )
+    expect(html).not.toContain(ext.ext_arcim_documents_reconnect_action)
+    expect(html).not.toContain('<button')
+  })
+
+  it('renders the note and its action in English with no missing key', () => {
+    const html = render(STATES.completeWithExceptions!, { locale: 'en' })
+    const note = supplierFilesNote(
+      html,
+      en.extensions.ext_arcim_documents_supplier_files_permission.replace(
+        '{scope}',
+        en.extensions.ext_arcim_documents_scope_supplierinvoice,
+      ),
+    )
+    expect(note).toContain(en.extensions.ext_arcim_documents_reconnect_action)
+    expect(note).toContain('Then we look again right away.')
+    expect(note).not.toContain('ext_arcim_')
+  })
+})
+
 describe('the standalone documents page', () => {
   it('offers the way on to the vouchers only once the import is done', () => {
     expect(renderPage(STATES.completeWithExceptions!)).toContain(ext.ext_arcim_documents_view_entries)
