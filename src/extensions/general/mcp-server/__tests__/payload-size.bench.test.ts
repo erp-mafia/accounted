@@ -3,7 +3,7 @@ import { tools, deriveToolMeta, isDefaultCatalogTool } from '../server'
 import { isMultiCompanyOnlyTool, projectToolInputSchema } from '../company-routing'
 
 // Ceiling for the catalog a single-company key is served (see the second case).
-const SIMPLE_CATALOG_CEILING = 61_300
+const SIMPLE_CATALOG_CEILING = 61_400
 import { projectToolReferences } from '../tool-namespace'
 
 // Mirror the real tools/list serializer, including the derived staging _meta
@@ -803,6 +803,12 @@ describe('tools/list payload size guard', () => {
     // 61 006 but tell an agent nothing about the id's shape (the ten
     // fiscal-period tools traded a "UUID of" note for that format).
     // Measured 61 224.
+    // 61 300 to 61 400 on 2026-10-18, the support-queue landings: gnubok_agi_submit
+    // says approval rebuilds an unfiled underlag (#69), the kontantmetod payment
+    // notes name the year-end carry (#3440) and gnubok_mark_invoice_as_sent gains
+    // paid_at_issue_account (crm#1281). Each fitted alone; together they measured
+    // 61 317 on main. The prose was trimmed first (to 61 301); what remains is the
+    // new argument and the two payment rules an agent needs.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 
