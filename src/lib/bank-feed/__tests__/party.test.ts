@@ -112,6 +112,37 @@ describe('buildBankFeedParty', () => {
     expect(result.ok && result.party).toMatchObject({ orgNumber: '1212121212', accountContext: 'private' })
   })
 
+  it('names the owner of an enskild firma\'s private account as the PSU, not the consultant who starts the connection (crm#1298)', async () => {
+    // The consultant's own BankID login is on file; the owner scans the QR.
+    mocks.onFile.mockResolvedValue('198001019879')
+    const soleTrader = () =>
+      createTableMockSupabase({
+        company_settings: { data: { org_number: '900101-1239' }, error: null },
+        companies: { data: { entity_type: 'enskild_firma' }, error: null },
+      }).supabase as never
+    const start = await buildBankFeedParty(soleTrader(), { ...base, psuType: 'personal', signer: { personalNumber: null, ipAddress: '203.0.113.1', userAgent: 'UA' }, userId: 'consultant-1', requireSigner: true })
+    expect(start).toMatchObject({ ok: true, source: 'on_file', party: { orgNumber: '9001011239', accountContext: 'private', personalNumber: '199001011239' } })
+    expect(mocks.onFile).not.toHaveBeenCalled()
+
+    // A typed number and the number the consent was created with still lead; a co-signer carries their own.
+    const typed = await buildBankFeedParty(soleTrader(), { ...base, psuType: 'personal', signer: { personalNumber: '800101-9879', ipAddress: null, userAgent: null }, userId: 'consultant-1' })
+    expect(typed.ok && typed.party.personalNumber).toBe('198001019879')
+    mocks.stored.mockResolvedValue({ personalNumber: '198001019879', source: 'typed' })
+    const stored = await buildBankFeedParty(soleTrader(), { ...base, psuType: 'personal', signer: UNATTENDED_SIGNER, userId: 'consultant-1', connectionId: 'conn-1' })
+    expect(stored.ok && stored.party.personalNumber).toBe('198001019879')
+    const coSigner = await buildBankFeedParty(soleTrader(), { ...base, psuType: 'personal', signer: UNATTENDED_SIGNER, userId: 'co-1', connectionId: 'conn-1', coSigner: true })
+    expect(coSigner.ok && coSigner.party.personalNumber).toBe('198001019879')
+    expect(mocks.onFile).toHaveBeenCalledWith('co-1')
+
+    // The firm's corporate agreement, and an aktiebolag, keep the person's own number.
+    mocks.stored.mockResolvedValue(null)
+    const corporate = await buildBankFeedParty(soleTrader(), { ...base, psuType: 'business', signer: UNATTENDED_SIGNER, userId: 'consultant-1' })
+    expect(corporate.ok && corporate.party.personalNumber).toBe('198001019879')
+    const ab = createTableMockSupabase({ company_settings: { data: { org_number: '559538-6219' }, error: null }, companies: { data: { entity_type: 'aktiebolag' }, error: null } }).supabase as never
+    const abPrivate = await buildBankFeedParty(ab, { ...base, psuType: 'personal', signer: UNATTENDED_SIGNER, userId: 'consultant-1' })
+    expect(abPrivate.ok && abPrivate.party.personalNumber).toBe('198001019879')
+  })
+
   it('names the missing organisationsnummer, never the generic validation error, when the stored one is no number', async () => {
     const junk = createTableMockSupabase({ company_settings: { data: { org_number: '11223344556' }, error: null }, companies: { data: { org_number: null }, error: null } }).supabase as never
     const result = await buildBankFeedParty(junk, { ...base, signer: UNATTENDED_SIGNER, requireSigner: true })

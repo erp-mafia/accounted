@@ -1,0 +1,1 @@
+[2026-10-18] An enskild firma's private-account bank consent names its owner as PSU (the personnummer that is its organisationsnummer) unless a number was typed or the consent holds one (crm#1298): the bank waits for the holder's BankID, and a consultant's own number named the wrong person.
