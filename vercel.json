@@ -163,6 +163,10 @@
       "schedule": "5,20,35,50 * * * *"
     },
     {
+      "path": "/api/peppol/daily-report/cron",
+      "schedule": "0 5 * * *"
+    },
+    {
       "path": "/api/payments/orders/status/cron",
       "schedule": "*/15 * * * *"
     },

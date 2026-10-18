@@ -126,6 +126,9 @@ const SELLER = { ...makeCompanySettings({
 const COMPANY_SETTINGS = { data: SELLER, error: null }
 const ACCESS = { data: { company_id: COMPANY_ID, status: 'enabled', max_sends: 50, receive_enabled: false }, error: null }
 const SENT_COUNT = { data: null, error: null, count: 3 }
+/** countPeppolSends reads twice: sends stamped this month, then unstamped ones created this month. */
+const UNSTAMPED_COUNT = { data: null, error: null, count: 0 }
+const SENT_COUNTS = [SENT_COUNT, UNSTAMPED_COUNT]
 
 function invoiceRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -252,7 +255,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send-peppol', () => {
       company_members: MEMBER,
       company_settings: COMPANY_SETTINGS,
       peppol_access: ACCESS,
-      peppol_deliveries: SENT_COUNT,
+      peppol_deliveries: SENT_COUNTS,
       invoices: { data: invoiceRow(), error: null },
       'rpc:stage_peppol_delivery_as_actor': { data: delivery, error: null },
       'rpc:record_peppol_delivery_event': [
@@ -324,7 +327,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send-peppol', () => {
   })
 
   it('409 PEPPOL_SEND_LIMIT_REACHED once the sending cap is used', async () => {
-    mockServiceClient.mockReturnValue(sendClient({ peppol_deliveries: { data: null, error: null, count: 50 } }))
+    mockServiceClient.mockReturnValue(sendClient({ peppol_deliveries: [{ data: null, error: null, count: 50 }, UNSTAMPED_COUNT] }))
     const res = await send()
     expect(res.status).toBe(409)
     const body = await res.json()
@@ -550,7 +553,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send-peppol', () => {
     /** The staging RPC's answer to a resend: a new delivery of the same document. */
     const resend = { ...delivery, id: 'ffffffff-ffff-4fff-8fff-ffffffffffff', idempotency_key: '99999999-9999-4999-8999-999999999999' }
     /** The send count, then the invoice's latest submission to the recipient. */
-    const latestSubmission = (latest: Record<string, unknown> | null) => [SENT_COUNT, { data: latest, error: null }]
+    const latestSubmission = (latest: Record<string, unknown> | null) => [SENT_COUNT, UNSTAMPED_COUNT, { data: latest, error: null }]
     const submitted = () => (transport.submit as ReturnType<typeof vi.fn>).mock.calls[0][0] as Record<string, unknown>
 
     it('resends as a new delivery that replaces the failed submission', async () => {
@@ -708,7 +711,7 @@ describe('GET /api/v1/companies/:companyId/invoices/:id/peppol', () => {
       company_members: MEMBER,
       company_settings: COMPANY_SETTINGS,
       peppol_access: ACCESS,
-      peppol_deliveries: SENT_COUNT,
+      peppol_deliveries: SENT_COUNTS,
       invoices: { data: invoiceRow(), error: null },
     })
     mockServiceClient.mockReturnValue(client)
@@ -750,7 +753,7 @@ describe('GET /api/v1/companies/:companyId/invoices/:id/peppol', () => {
       company_members: MEMBER,
       company_settings: COMPANY_SETTINGS,
       peppol_access: ACCESS,
-      peppol_deliveries: SENT_COUNT,
+      peppol_deliveries: SENT_COUNTS,
       invoices: { data: invoiceRow({ credited_invoice_id: JE_ID }), error: null },
     }))
     const body = await (await readiness()).json()

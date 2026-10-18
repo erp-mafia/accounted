@@ -47,9 +47,9 @@ const Access = z.object({
   status: z.enum(['none', 'requested', 'enabled', 'disabled']),
   send_enabled: z.boolean(),
   receive_enabled: z.boolean().optional(),
-  max_sends: z.number().nullable(),
-  sent_count: z.number(),
-  remaining_sends: z.number().nullable(),
+  max_sends: z.number().nullable().describe('Cap on sends per calendar month (Europe/Stockholm); null means no cap.'),
+  sent_count: z.number().describe('Sends this calendar month.'),
+  remaining_sends: z.number().nullable().describe('Sends left this calendar month; the cap resets on the 1st.'),
 })
 
 function toAccess(summary: PeppolAccessSummary) {
