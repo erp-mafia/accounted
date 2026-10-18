@@ -19,6 +19,7 @@ import { ownsFiscalPeriod } from '@/lib/api/v1/owns-fiscal-period'
 import { generateOpeningBalances } from '@/lib/core/bookkeeping/year-end-service'
 import { OpeningBalanceExistsError } from '@/lib/import/opening-balance/existing'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 const Body = z.object({ next_period_id: z.string().uuid() }).strict()
 
@@ -109,6 +110,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       const entry = await generateOpeningBalances(
         ctx.supabase, ctx.companyId!, ctx.userId,
         idParse.data, parsed.data.next_period_id,
+        // The posting port's event, while POSTING_EVENTS is on: the client booked the IB.
+        () => ({ linkBasis: linkBasisColumns('user_created') }),
       )
       return ok(
         {

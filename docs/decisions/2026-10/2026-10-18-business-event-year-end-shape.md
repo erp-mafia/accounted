@@ -1,0 +1,1 @@
+[2026-10-18] Year-end events add no kind: the close, a disposition (se.closing.appropriations, SLP expense.personnel) and a kontantmetod cut-off are year_end.closing, one event per verifikat as posted, subject the fiscal period; moms on the cut-off only, never its vändning.

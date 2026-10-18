@@ -1,0 +1,662 @@
+[
+  {
+    "name": "aktiebolag: the bokslutsverifikation into 2099 and the ingående balans with its project split",
+    "calls": [
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Årsbokslut 2025",
+          "source_type": "year_end",
+          "voucher_series": "A",
+          "lines": [
+            {
+              "account_number": "3001",
+              "debit_amount": 111000,
+              "credit_amount": 0,
+              "line_description": "Closing: Försäljning tjänster 25 %"
+            },
+            {
+              "account_number": "5010",
+              "debit_amount": 0,
+              "credit_amount": 30000,
+              "line_description": "Closing: Lokalhyra"
+            },
+            {
+              "account_number": "2099",
+              "debit_amount": 0,
+              "credit_amount": 81000,
+              "line_description": "Årets resultat → Årets resultat"
+            }
+          ]
+        }
+      ],
+      [
+        "createJournalEntry",
+        7,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f002",
+          "entry_date": "2026-01-01",
+          "description": "Ingående balans 2026",
+          "source_type": "opening_balance",
+          "voucher_series": "A",
+          "lines": [
+            {
+              "account_number": "1470",
+              "debit_amount": 3000,
+              "credit_amount": 0,
+              "line_description": "Ingående balans: Pågående arbeten",
+              "dimensions": {
+                "6": "P-100"
+              }
+            },
+            {
+              "account_number": "1470",
+              "debit_amount": 2000,
+              "credit_amount": 0,
+              "line_description": "Ingående balans: Pågående arbeten"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 11000,
+              "credit_amount": 0,
+              "line_description": "Ingående balans: Kundfordringar"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 112500,
+              "credit_amount": 0,
+              "line_description": "Ingående balans: Företagskonto"
+            },
+            {
+              "account_number": "2081",
+              "debit_amount": 0,
+              "credit_amount": 25000,
+              "line_description": "Ingående balans: Aktiekapital"
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 5000,
+              "line_description": "Ingående balans: Leverantörsskulder"
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 25000,
+              "line_description": "Ingående balans: Utgående moms 25 %"
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 7500,
+              "credit_amount": 0,
+              "line_description": "Ingående balans: Ingående moms"
+            },
+            {
+              "account_number": "2099",
+              "debit_amount": 0,
+              "credit_amount": 81000,
+              "line_description": "Ingående balans: Årets resultat"
+            }
+          ]
+        },
+        "<undefined>",
+        "<undefined>",
+        {
+          "replayDimensions": true
+        }
+      ]
+    ]
+  },
+  {
+    "name": "enskild firma: the bokslutsverifikation into 2010 and the ingående balans",
+    "calls": [
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Årsbokslut 2025",
+          "source_type": "year_end",
+          "voucher_series": "A",
+          "lines": [
+            {
+              "account_number": "3001",
+              "debit_amount": 111000,
+              "credit_amount": 0,
+              "line_description": "Closing: Försäljning tjänster 25 %"
+            },
+            {
+              "account_number": "5010",
+              "debit_amount": 0,
+              "credit_amount": 30000,
+              "line_description": "Closing: Lokalhyra"
+            },
+            {
+              "account_number": "2010",
+              "debit_amount": 0,
+              "credit_amount": 81000,
+              "line_description": "Årets resultat → Eget kapital"
+            }
+          ]
+        }
+      ],
+      [
+        "createJournalEntry",
+        7,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f002",
+          "entry_date": "2026-01-01",
+          "description": "Ingående balans 2026",
+          "source_type": "opening_balance",
+          "voucher_series": "A",
+          "lines": [
+            {
+              "account_number": "1470",
+              "debit_amount": 5000,
+              "credit_amount": 0,
+              "line_description": "Ingående balans: Pågående arbeten"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 11000,
+              "credit_amount": 0,
+              "line_description": "Ingående balans: Kundfordringar"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 112500,
+              "credit_amount": 0,
+              "line_description": "Ingående balans: Företagskonto"
+            },
+            {
+              "account_number": "2081",
+              "debit_amount": 0,
+              "credit_amount": 25000,
+              "line_description": "Ingående balans: Aktiekapital"
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 5000,
+              "line_description": "Ingående balans: Leverantörsskulder"
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 25000,
+              "line_description": "Ingående balans: Utgående moms 25 %"
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 7500,
+              "credit_amount": 0,
+              "line_description": "Ingående balans: Ingående moms"
+            },
+            {
+              "account_number": "2010",
+              "debit_amount": 0,
+              "credit_amount": 81000,
+              "line_description": "Ingående balans: Eget kapital"
+            }
+          ]
+        },
+        "<undefined>",
+        "<undefined>",
+        {
+          "replayDimensions": true
+        }
+      ]
+    ]
+  },
+  {
+    "name": "the split ingående balans refused before posting: booked again, one line per account",
+    "calls": [
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Årsbokslut 2025",
+          "source_type": "year_end",
+          "voucher_series": "A",
+          "lines": [
+            {
+              "account_number": "3001",
+              "debit_amount": 111000,
+              "credit_amount": 0,
+              "line_description": "Closing: Försäljning tjänster 25 %"
+            },
+            {
+              "account_number": "5010",
+              "debit_amount": 0,
+              "credit_amount": 30000,
+              "line_description": "Closing: Lokalhyra"
+            },
+            {
+              "account_number": "2099",
+              "debit_amount": 0,
+              "credit_amount": 81000,
+              "line_description": "Årets resultat → Årets resultat"
+            }
+          ]
+        }
+      ],
+      [
+        "createJournalEntry",
+        7,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f002",
+          "entry_date": "2026-01-01",
+          "description": "Ingående balans 2026",
+          "source_type": "opening_balance",
+          "voucher_series": "A",
+          "lines": [
+            {
+              "account_number": "1470",
+              "debit_amount": 3000,
+              "credit_amount": 0,
+              "line_description": "Ingående balans: Pågående arbeten",
+              "dimensions": {
+                "6": "P-100"
+              }
+            },
+            {
+              "account_number": "1470",
+              "debit_amount": 2000,
+              "credit_amount": 0,
+              "line_description": "Ingående balans: Pågående arbeten"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 11000,
+              "credit_amount": 0,
+              "line_description": "Ingående balans: Kundfordringar"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 112500,
+              "credit_amount": 0,
+              "line_description": "Ingående balans: Företagskonto"
+            },
+            {
+              "account_number": "2081",
+              "debit_amount": 0,
+              "credit_amount": 25000,
+              "line_description": "Ingående balans: Aktiekapital"
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 5000,
+              "line_description": "Ingående balans: Leverantörsskulder"
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 25000,
+              "line_description": "Ingående balans: Utgående moms 25 %"
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 7500,
+              "credit_amount": 0,
+              "line_description": "Ingående balans: Ingående moms"
+            },
+            {
+              "account_number": "2099",
+              "debit_amount": 0,
+              "credit_amount": 81000,
+              "line_description": "Ingående balans: Årets resultat"
+            }
+          ]
+        },
+        "<undefined>",
+        "<undefined>",
+        {
+          "replayDimensions": true
+        }
+      ],
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f002",
+          "entry_date": "2026-01-01",
+          "description": "Ingående balans 2026",
+          "source_type": "opening_balance",
+          "voucher_series": "A",
+          "lines": [
+            {
+              "account_number": "1470",
+              "debit_amount": 5000,
+              "credit_amount": 0,
+              "line_description": "Ingående balans: Pågående arbeten"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 11000,
+              "credit_amount": 0,
+              "line_description": "Ingående balans: Kundfordringar"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 112500,
+              "credit_amount": 0,
+              "line_description": "Ingående balans: Företagskonto"
+            },
+            {
+              "account_number": "2081",
+              "debit_amount": 0,
+              "credit_amount": 25000,
+              "line_description": "Ingående balans: Aktiekapital"
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 5000,
+              "line_description": "Ingående balans: Leverantörsskulder"
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 25000,
+              "line_description": "Ingående balans: Utgående moms 25 %"
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 7500,
+              "credit_amount": 0,
+              "line_description": "Ingående balans: Ingående moms"
+            },
+            {
+              "account_number": "2099",
+              "debit_amount": 0,
+              "credit_amount": 81000,
+              "line_description": "Ingående balans: Årets resultat"
+            }
+          ]
+        }
+      ]
+    ]
+  },
+  {
+    "name": "the result accounts do not zero after the close: the bokslutsverifikation stornoed",
+    "calls": [
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Årsbokslut 2025",
+          "source_type": "year_end",
+          "voucher_series": "A",
+          "lines": [
+            {
+              "account_number": "3001",
+              "debit_amount": 111000,
+              "credit_amount": 0,
+              "line_description": "Closing: Försäljning tjänster 25 %"
+            },
+            {
+              "account_number": "5010",
+              "debit_amount": 0,
+              "credit_amount": 30000,
+              "line_description": "Closing: Lokalhyra"
+            },
+            {
+              "account_number": "2099",
+              "debit_amount": 0,
+              "credit_amount": 81000,
+              "line_description": "Årets resultat → Årets resultat"
+            }
+          ]
+        }
+      ],
+      [
+        "reverseEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-1"
+      ]
+    ]
+  },
+  {
+    "name": "the IB/UB continuity fails: the ingående balans and the bokslutsverifikation stornoed",
+    "calls": [
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Årsbokslut 2025",
+          "source_type": "year_end",
+          "voucher_series": "A",
+          "lines": [
+            {
+              "account_number": "3001",
+              "debit_amount": 111000,
+              "credit_amount": 0,
+              "line_description": "Closing: Försäljning tjänster 25 %"
+            },
+            {
+              "account_number": "5010",
+              "debit_amount": 0,
+              "credit_amount": 30000,
+              "line_description": "Closing: Lokalhyra"
+            },
+            {
+              "account_number": "2099",
+              "debit_amount": 0,
+              "credit_amount": 81000,
+              "line_description": "Årets resultat → Årets resultat"
+            }
+          ]
+        }
+      ],
+      [
+        "createJournalEntry",
+        7,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f002",
+          "entry_date": "2026-01-01",
+          "description": "Ingående balans 2026",
+          "source_type": "opening_balance",
+          "voucher_series": "A",
+          "lines": [
+            {
+              "account_number": "1470",
+              "debit_amount": 5000,
+              "credit_amount": 0,
+              "line_description": "Ingående balans: Pågående arbeten"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 11000,
+              "credit_amount": 0,
+              "line_description": "Ingående balans: Kundfordringar"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 112500,
+              "credit_amount": 0,
+              "line_description": "Ingående balans: Företagskonto"
+            },
+            {
+              "account_number": "2081",
+              "debit_amount": 0,
+              "credit_amount": 25000,
+              "line_description": "Ingående balans: Aktiekapital"
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 5000,
+              "line_description": "Ingående balans: Leverantörsskulder"
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 25000,
+              "line_description": "Ingående balans: Utgående moms 25 %"
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 7500,
+              "credit_amount": 0,
+              "line_description": "Ingående balans: Ingående moms"
+            },
+            {
+              "account_number": "2099",
+              "debit_amount": 0,
+              "credit_amount": 81000,
+              "line_description": "Ingående balans: Årets resultat"
+            }
+          ]
+        },
+        "<undefined>",
+        "<undefined>",
+        {
+          "replayDimensions": true
+        }
+      ],
+      [
+        "reverseEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-2"
+      ],
+      [
+        "reverseEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-1"
+      ]
+    ]
+  },
+  {
+    "name": "the ingående balans on its own, as the staged set_opening_balances door books it",
+    "calls": [
+      [
+        "createJournalEntry",
+        7,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f002",
+          "entry_date": "2026-01-01",
+          "description": "Ingående balans 2026",
+          "source_type": "opening_balance",
+          "voucher_series": "A",
+          "lines": [
+            {
+              "account_number": "1470",
+              "debit_amount": 3000,
+              "credit_amount": 0,
+              "line_description": "Ingående balans: Pågående arbeten",
+              "dimensions": {
+                "6": "P-100"
+              }
+            },
+            {
+              "account_number": "1470",
+              "debit_amount": 2000,
+              "credit_amount": 0,
+              "line_description": "Ingående balans: Pågående arbeten"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 11000,
+              "credit_amount": 0,
+              "line_description": "Ingående balans: Kundfordringar"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 112500,
+              "credit_amount": 0,
+              "line_description": "Ingående balans: Företagskonto"
+            },
+            {
+              "account_number": "2081",
+              "debit_amount": 0,
+              "credit_amount": 25000,
+              "line_description": "Ingående balans: Aktiekapital"
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 5000,
+              "line_description": "Ingående balans: Leverantörsskulder"
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 25000,
+              "line_description": "Ingående balans: Utgående moms 25 %"
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 7500,
+              "credit_amount": 0,
+              "line_description": "Ingående balans: Ingående moms"
+            },
+            {
+              "account_number": "2099",
+              "debit_amount": 0,
+              "credit_amount": 81000,
+              "line_description": "Ingående balans: Årets resultat"
+            }
+          ]
+        },
+        "<undefined>",
+        "<undefined>",
+        {
+          "replayDimensions": true
+        }
+      ]
+    ]
+  }
+]

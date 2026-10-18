@@ -165,6 +165,14 @@ describe('mapping_version', () => {
     expect(mappingVersion('supplierInvoice', 'r1')).toBe('se.supplier-invoice-lines@r1')
     expect(mappingVersion('customerInvoice', 'r1')).toBe('se.customer-invoice-lines@r1')
     expect(mappingVersion('supplierPayment', 'r1')).toBe('se.supplier-payment-lines@r1')
+    expect(mappingVersion('yearEndClosing', 'r1')).toBe('se.year-end-closing@r1')
+    expect(mappingVersion('openingBalance', 'r1')).toBe('se.opening-balance@r1')
+    expect(mappingVersion('resultAppropriation', 'r1')).toBe('se.result-appropriation@r1')
+    expect(mappingVersion('kontantmetodCutoff', 'r1')).toBe('se.kontantmetod-cutoff@r1')
+    expect(mappingVersion('currencyRevaluation', 'r1')).toBe('se.currency-revaluation@r1')
+    expect(mappingVersion('yearEndDispositions', 'r1')).toBe('se.year-end-dispositions@r1')
+    expect(mappingVersion('accrualSchedule', 'r1')).toBe('se.accrual-schedule@r1')
+    expect(mappingVersion('yearEndAccruals', 'r1')).toBe('se.year-end-accruals@r1')
     const before = { sha: process.env.VERCEL_GIT_COMMIT_SHA, build: process.env.NEXT_PUBLIC_BUILD_ID }
     try {
       process.env.VERCEL_GIT_COMMIT_SHA = 'abcdef1234567890'

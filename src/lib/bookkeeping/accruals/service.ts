@@ -12,7 +12,15 @@
  *   revenue:  Dr balance (29xx)      / Cr target (3xxx)
  *
  * All entries go through the engine (source_type 'accrual'): never direct
- * inserts. A deferral posts on max(period_month, posting_floor_date,
+ * inserts, and through the posting port (step 2g), which hands the engine
+ * each input unchanged and, while POSTING_EVENTS is shadow or strict, records
+ * one business event per verifikat (business-events.ts) and has the engine
+ * link it to the draft before a voucher number is drawn. Each month posts
+ * on its own, so each dissolution and each storno is its own event; the link
+ * basis is the request's (linkBasisColumns: a person, an approved operation,
+ * an API client, or the cron as system_derived).
+ *
+ * A deferral posts on max(period_month, posting_floor_date,
  * company lock date + 1) so catch-up months book correctly and the interim
  * account never goes negative. An upplupen kostnad (expense on 29xx) covers
  * months before the invoice and posts on the last day of each month, never
@@ -26,11 +34,7 @@ import type {
   AccrualScheduleInstallment,
   CreateJournalEntryLineInput,
 } from '@/types'
-import {
-  createJournalEntry,
-  findFiscalPeriod,
-  reverseEntry,
-} from '@/lib/bookkeeping/engine'
+import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import {
   CannotReverseNonPostedError,
   EntryAlreadyReversedError,
@@ -52,6 +56,9 @@ import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { roundOre, sumOre } from '@/lib/money'
 import { createLogger } from '@/lib/logger'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { postingPort } from '@/lib/posting/port'
+import { accrualDissolutionBusinessEvent, accrualStornoBusinessEvent } from './business-events'
 
 const log = createLogger('bookkeeping.accruals')
 
@@ -90,6 +97,33 @@ type InstallmentRow = AccrualScheduleInstallment & { schedule?: ScheduleRow | nu
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * Storno a dissolution through the posting port, recording ledger.storno of
+ * the schedule's invoice: system_derived when the service undoes its own
+ * duplicate after a lost or failed claim, user_created when the invoice was
+ * credited (the request's scope resolves who acted).
+ */
+function stornoDissolution(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  schedule: Pick<ScheduleRow, 'supplier_invoice_id' | 'invoice_id'>,
+  entryId: string,
+  basis: 'system_derived' | 'user_created',
+  reversalDate?: string,
+) {
+  return postingPort.reverseJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    entryId,
+    reversalDate,
+    event: () =>
+      accrualStornoBusinessEvent({ schedule, occurredOn: todayIsoStockholm(), linkBasis: linkBasisColumns(basis) }),
+    role: 'reversal',
+  })
 }
 
 async function fetchLockDateFloor(
@@ -408,11 +442,20 @@ export async function postDueInstallments(
         ? `Periodisering ${monthLabel}: ${schedule.description}`
         : `Periodisering ${monthLabel}`
 
-      const entry = await createJournalEntry(
+      const entry = await postingPort.postJournalEntry({
         supabase,
         companyId,
-        options.userId ?? schedule.user_id,
-        {
+        userId: options.userId ?? schedule.user_id,
+        // The month the share belongs to: its last day for an upplupen
+        // kostnad (its entry date, never moved), its first for a deferral.
+        event: () =>
+          accrualDissolutionBusinessEvent({
+            schedule,
+            occurredOn: isAccruedCostSchedule(schedule) ? entryDate : installment.period_month,
+            amount: installment.amount,
+            linkBasis: linkBasisColumns('user_created'),
+          }),
+        input: {
           fiscal_period_id: fiscalPeriodId,
           entry_date: entryDate,
           description,
@@ -420,7 +463,7 @@ export async function postDueInstallments(
           source_id: schedule.id,
           lines: dissolutionLines(schedule, installment.amount, description),
         },
-      )
+      })
 
       // CAS claim: only the runner that flips pending→posted keeps its entry.
       // A concurrent runner (cron + manual button) loses the race and stornos
@@ -445,12 +488,7 @@ export async function postDueInstallments(
         // writes last_error on the installment).
         let reversalNote = ''
         try {
-          await reverseEntry(
-            supabase,
-            companyId,
-            options.userId ?? schedule.user_id,
-            entry.id,
-          )
+          await stornoDissolution(supabase, companyId, options.userId ?? schedule.user_id, schedule, entry.id, 'system_derived')
         } catch (reversalError) {
           log.error('failed to reverse accrual entry after claim error', reversalError, {
             companyId,
@@ -471,12 +509,7 @@ export async function postDueInstallments(
           installmentId: installment.id,
           entryId: entry.id,
         })
-        await reverseEntry(
-          supabase,
-          companyId,
-          options.userId ?? schedule.user_id,
-          entry.id,
-        )
+        await stornoDissolution(supabase, companyId, options.userId ?? schedule.user_id, schedule, entry.id, 'system_derived')
         result.skipped++
         continue
       }
@@ -589,13 +622,21 @@ export async function dissolveScheduleNow(
     ? `Periodisering, slutupplösning: ${schedule.description}`
     : 'Periodisering, slutupplösning'
 
-  const entry = await createJournalEntry(supabase, companyId, userId, {
-    fiscal_period_id: fiscalPeriodId,
-    entry_date: entryDate,
-    description,
-    source_type: 'accrual',
-    source_id: schedule.id,
-    lines: dissolutionLines(schedule, amount, description),
+  const entry = await postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    // The rest dissolved by decision today.
+    event: () =>
+      accrualDissolutionBusinessEvent({ schedule, occurredOn: today, amount, linkBasis: linkBasisColumns('user_created') }),
+    input: {
+      fiscal_period_id: fiscalPeriodId,
+      entry_date: entryDate,
+      description,
+      source_type: 'accrual',
+      source_id: schedule.id,
+      lines: dissolutionLines(schedule, amount, description),
+    },
   })
 
   const pendingIds = pending.map((installment) => installment.id)
@@ -619,7 +660,7 @@ export async function dissolveScheduleNow(
     // both failures and pin the alert on the installments so the
     // periodiseringar UI shows the stuck state instead of nothing.
     try {
-      await reverseEntry(supabase, companyId, userId, entry.id)
+      await stornoDissolution(supabase, companyId, userId, schedule, entry.id, 'system_derived')
     } catch (reversalError) {
       const message = getErrorMessage(reversalError)
       log.error('failed to reverse combined dissolution entry after lost claim race', reversalError, {
@@ -739,13 +780,7 @@ export async function cancelSchedulesForSource(
           ? options.reversalDate
           : undefined
       try {
-        await reverseEntry(
-          supabase,
-          companyId,
-          userId,
-          installment.journal_entry_id,
-          reversalDate,
-        )
+        await stornoDissolution(supabase, companyId, userId, schedule, installment.journal_entry_id, 'user_created', reversalDate)
         reversedEntries++
       } catch (error) {
         // A dissolution stornoed by an earlier (partially failed) cancel run

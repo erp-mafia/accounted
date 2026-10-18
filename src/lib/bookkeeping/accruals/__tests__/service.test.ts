@@ -644,7 +644,8 @@ describe('cancelSchedulesForSource', () => {
     )
 
     expect(result).toEqual({ cancelledSchedules: 1, reversedEntries: 2, failedReversals: 0 })
-    expect(mockReverseEntry).toHaveBeenNthCalledWith(1, expect.anything(), COMPANY, USER, 'je-dec-2025', undefined)
+    // No reversal date: the posting port's ledger adapter passes none at all (storno-target dates it).
+    expect(mockReverseEntry).toHaveBeenNthCalledWith(1, expect.anything(), COMPANY, USER, 'je-dec-2025')
     expect(mockReverseEntry).toHaveBeenNthCalledWith(2, expect.anything(), COMPANY, USER, 'je-jan-2026', '2026-03-10')
   })
 

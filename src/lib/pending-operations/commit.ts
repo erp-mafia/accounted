@@ -3981,7 +3981,15 @@ async function commitRunYearEnd(
   if (!id) return { error: 'fiscal_period_id is required', status: 400 }
 
   try {
-    const result = await executeYearEndClosing(supabase, companyId, userId, id)
+    const result = await executeYearEndClosing(
+      supabase,
+      companyId,
+      userId,
+      id,
+      // The posting port's events, while POSTING_EVENTS is on: the close
+      // approved from this operation.
+      () => ({ linkBasis: linkBasisColumns('user_created') }),
+    )
     return {
       data: {
         closing_entry_id: result.closingEntry?.id ?? null,
@@ -4093,6 +4101,9 @@ async function commitPostKontantmetodCutoff(
       entityType: parseEntityType(settings.entity_type),
       unknownVatTreatment: assessment.collection.unknownVatTreatment,
       strayVatOnZeroRate: assessment.collection.strayVatOnZeroRate,
+      // The posting port's events, while POSTING_EVENTS is on: the cut-off
+      // approved from this operation.
+      posting: () => ({ linkBasis: linkBasisColumns('user_created') }),
     })
 
     return {
@@ -4122,7 +4133,16 @@ async function commitSetOpeningBalances(
   if (!closedId || !nextId) return { error: 'closed_period_id and next_period_id are required', status: 400 }
 
   try {
-    const entry = await generateOpeningBalances(supabase, companyId, userId, closedId, nextId)
+    const entry = await generateOpeningBalances(
+      supabase,
+      companyId,
+      userId,
+      closedId,
+      nextId,
+      // The posting port's event, while POSTING_EVENTS is on: the IB
+      // approved from this operation.
+      () => ({ linkBasis: linkBasisColumns('user_created') }),
+    )
     return { data: { opening_balance_entry_id: entry.id } }
   } catch (err) {
     // The year already has an IB: refused before anything was posted, so the

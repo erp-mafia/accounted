@@ -4,8 +4,10 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode, isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
 import { resolveCompanyEntityType, supportsCorporateTaxDispositions } from '@/lib/company/entity-type'
-import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
+import { yearEndDispositionBusinessEvent } from '@/lib/bokslut/dispositions-business-event'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { postingPort } from '@/lib/posting/port'
 import {
   calculateBolagsskatt,
   sumPostedYearEndDispositions,
@@ -249,14 +251,30 @@ export const POST = withRouteContext(
         const proposal = await computeProposal(item, supabase, companyId, period)
         if (!proposal) continue
 
-        const entry = await createJournalEntry(supabase, companyId, user.id, {
-          fiscal_period_id: id,
-          entry_date: period.period_end,
-          description: `Bokslutsdisposition: ${proposal.label}`,
-          source_type: 'year_end',
-          source_id: item.kind === 'bolagsskatt' ? id : undefined,
-          voucher_series: 'A',
-          lines: proposal.lines,
+        // Posting port (step 2g): the engine gets the input unchanged; while
+        // POSTING_EVENTS is on, the disposition's year_end.closing event is
+        // recorded first and linked to the draft before a number is drawn.
+        const entry = await postingPort.postJournalEntry({
+          supabase,
+          companyId,
+          userId: user.id,
+          event: () =>
+            yearEndDispositionBusinessEvent({
+              disposition: proposal.kind,
+              fiscalPeriodId: id,
+              periodEnd: period.period_end,
+              amount: proposal.amount,
+              linkBasis: linkBasisColumns('user_created'),
+            }),
+          input: {
+            fiscal_period_id: id,
+            entry_date: period.period_end,
+            description: `Bokslutsdisposition: ${proposal.label}`,
+            source_type: 'year_end',
+            source_id: item.kind === 'bolagsskatt' ? id : undefined,
+            voucher_series: 'A',
+            lines: proposal.lines,
+          },
         })
         created.push({ kind: item.kind, entry })
       }

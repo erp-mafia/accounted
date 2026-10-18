@@ -1,0 +1,541 @@
+[
+  {
+    "name": "fordringar and skulder, each cut off at the year end and reversed on the first day of the next",
+    "calls": [
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Kundfordringar vid bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "source_id": "00000000-0000-4000-8000-00000000f001",
+          "notes": "Kundfordringar (3 st): F-10, F-11, F-12",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 16120,
+              "credit_amount": 0,
+              "line_description": "Kundfordringar vid räkenskapsårets utgång (kontantmetoden)"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 8000,
+              "line_description": "Obetalda kundfakturor vid bokslut"
+            },
+            {
+              "account_number": "3002",
+              "debit_amount": 0,
+              "credit_amount": 1000,
+              "line_description": "Obetalda kundfakturor vid bokslut"
+            },
+            {
+              "account_number": "3305",
+              "debit_amount": 0,
+              "credit_amount": 5000,
+              "line_description": "Obetalda kundfakturor vid bokslut"
+            },
+            {
+              "account_number": "2618",
+              "debit_amount": 0,
+              "credit_amount": 2000,
+              "line_description": "Utgående moms på obetald faktura vid bokslut"
+            },
+            {
+              "account_number": "2628",
+              "debit_amount": 0,
+              "credit_amount": 120,
+              "line_description": "Utgående moms på obetald faktura vid bokslut"
+            }
+          ]
+        }
+      ],
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f002",
+          "entry_date": "2026-01-01",
+          "description": "Vändning kundfordringar bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "source_id": "00000000-0000-4000-8000-00000000f001",
+          "notes": "Vändning kundfordringar (3 st): F-10, F-11, F-12",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 0,
+              "credit_amount": 16120,
+              "line_description": "Vändning: Kundfordringar vid räkenskapsårets utgång (kontantmetoden)"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 8000,
+              "credit_amount": 0,
+              "line_description": "Vändning: Obetalda kundfakturor vid bokslut"
+            },
+            {
+              "account_number": "3002",
+              "debit_amount": 1000,
+              "credit_amount": 0,
+              "line_description": "Vändning: Obetalda kundfakturor vid bokslut"
+            },
+            {
+              "account_number": "3305",
+              "debit_amount": 5000,
+              "credit_amount": 0,
+              "line_description": "Vändning: Obetalda kundfakturor vid bokslut"
+            },
+            {
+              "account_number": "2618",
+              "debit_amount": 2000,
+              "credit_amount": 0,
+              "line_description": "Vändning: Utgående moms på obetald faktura vid bokslut"
+            },
+            {
+              "account_number": "2628",
+              "debit_amount": 120,
+              "credit_amount": 0,
+              "line_description": "Vändning: Utgående moms på obetald faktura vid bokslut"
+            }
+          ]
+        }
+      ],
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Leverantörsskulder vid bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "source_id": "00000000-0000-4000-8000-00000000f001",
+          "notes": "Leverantörsskulder (2 st): L-1, L-2",
+          "lines": [
+            {
+              "account_number": "4010",
+              "debit_amount": 2000,
+              "credit_amount": 0,
+              "line_description": "Obetalda leverantörsfakturor vid bokslut"
+            },
+            {
+              "account_number": "6540",
+              "debit_amount": 1000,
+              "credit_amount": 0,
+              "line_description": "Obetalda leverantörsfakturor vid bokslut"
+            },
+            {
+              "account_number": "2648",
+              "debit_amount": 500,
+              "credit_amount": 0,
+              "line_description": "Ingående moms på obetald faktura vid bokslut"
+            },
+            {
+              "account_number": "2645",
+              "debit_amount": 250,
+              "credit_amount": 0,
+              "line_description": "Fiktiv ingående moms 25% (omvänd skattskyldighet)"
+            },
+            {
+              "account_number": "2614",
+              "debit_amount": 0,
+              "credit_amount": 250,
+              "line_description": "Fiktiv utgående moms 25% (omvänd skattskyldighet)"
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 3500,
+              "line_description": "Leverantörsskulder vid räkenskapsårets utgång (kontantmetoden)"
+            }
+          ]
+        }
+      ],
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f002",
+          "entry_date": "2026-01-01",
+          "description": "Vändning leverantörsskulder bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "source_id": "00000000-0000-4000-8000-00000000f001",
+          "notes": "Vändning leverantörsskulder (2 st): L-1, L-2",
+          "lines": [
+            {
+              "account_number": "4010",
+              "debit_amount": 0,
+              "credit_amount": 2000,
+              "line_description": "Vändning: Obetalda leverantörsfakturor vid bokslut"
+            },
+            {
+              "account_number": "6540",
+              "debit_amount": 0,
+              "credit_amount": 1000,
+              "line_description": "Vändning: Obetalda leverantörsfakturor vid bokslut"
+            },
+            {
+              "account_number": "2648",
+              "debit_amount": 0,
+              "credit_amount": 500,
+              "line_description": "Vändning: Ingående moms på obetald faktura vid bokslut"
+            },
+            {
+              "account_number": "2645",
+              "debit_amount": 0,
+              "credit_amount": 250,
+              "line_description": "Vändning: Fiktiv ingående moms 25% (omvänd skattskyldighet)"
+            },
+            {
+              "account_number": "2614",
+              "debit_amount": 250,
+              "credit_amount": 0,
+              "line_description": "Vändning: Fiktiv utgående moms 25% (omvänd skattskyldighet)"
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 3500,
+              "credit_amount": 0,
+              "line_description": "Vändning: Leverantörsskulder vid räkenskapsårets utgång (kontantmetoden)"
+            }
+          ]
+        }
+      ]
+    ]
+  },
+  {
+    "name": "fordringar only, for an aktiebolag on kontantmetoden",
+    "calls": [
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Kundfordringar vid bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "source_id": "00000000-0000-4000-8000-00000000f001",
+          "notes": "Kundfordringar (1 st): F-10",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 10000,
+              "credit_amount": 0,
+              "line_description": "Kundfordringar vid räkenskapsårets utgång (kontantmetoden)"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 8000,
+              "line_description": "Obetalda kundfakturor vid bokslut"
+            },
+            {
+              "account_number": "2618",
+              "debit_amount": 0,
+              "credit_amount": 2000,
+              "line_description": "Utgående moms på obetald faktura vid bokslut"
+            }
+          ]
+        }
+      ],
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f002",
+          "entry_date": "2026-01-01",
+          "description": "Vändning kundfordringar bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "source_id": "00000000-0000-4000-8000-00000000f001",
+          "notes": "Vändning kundfordringar (1 st): F-10",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 0,
+              "credit_amount": 10000,
+              "line_description": "Vändning: Kundfordringar vid räkenskapsårets utgång (kontantmetoden)"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 8000,
+              "credit_amount": 0,
+              "line_description": "Vändning: Obetalda kundfakturor vid bokslut"
+            },
+            {
+              "account_number": "2618",
+              "debit_amount": 2000,
+              "credit_amount": 0,
+              "line_description": "Vändning: Utgående moms på obetald faktura vid bokslut"
+            }
+          ]
+        }
+      ]
+    ]
+  },
+  {
+    "name": "the vändning of the skulder refused: their cut-off stornoed on the year end, the fordringar pair stands",
+    "calls": [
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Kundfordringar vid bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "source_id": "00000000-0000-4000-8000-00000000f001",
+          "notes": "Kundfordringar (1 st): F-10",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 10000,
+              "credit_amount": 0,
+              "line_description": "Kundfordringar vid räkenskapsårets utgång (kontantmetoden)"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 8000,
+              "line_description": "Obetalda kundfakturor vid bokslut"
+            },
+            {
+              "account_number": "2618",
+              "debit_amount": 0,
+              "credit_amount": 2000,
+              "line_description": "Utgående moms på obetald faktura vid bokslut"
+            }
+          ]
+        }
+      ],
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f002",
+          "entry_date": "2026-01-01",
+          "description": "Vändning kundfordringar bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "source_id": "00000000-0000-4000-8000-00000000f001",
+          "notes": "Vändning kundfordringar (1 st): F-10",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 0,
+              "credit_amount": 10000,
+              "line_description": "Vändning: Kundfordringar vid räkenskapsårets utgång (kontantmetoden)"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 8000,
+              "credit_amount": 0,
+              "line_description": "Vändning: Obetalda kundfakturor vid bokslut"
+            },
+            {
+              "account_number": "2618",
+              "debit_amount": 2000,
+              "credit_amount": 0,
+              "line_description": "Vändning: Utgående moms på obetald faktura vid bokslut"
+            }
+          ]
+        }
+      ],
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Leverantörsskulder vid bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "source_id": "00000000-0000-4000-8000-00000000f001",
+          "notes": "Leverantörsskulder (1 st): L-1",
+          "lines": [
+            {
+              "account_number": "4010",
+              "debit_amount": 2000,
+              "credit_amount": 0,
+              "line_description": "Obetalda leverantörsfakturor vid bokslut"
+            },
+            {
+              "account_number": "2648",
+              "debit_amount": 500,
+              "credit_amount": 0,
+              "line_description": "Ingående moms på obetald faktura vid bokslut"
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 2500,
+              "line_description": "Leverantörsskulder vid räkenskapsårets utgång (kontantmetoden)"
+            }
+          ]
+        }
+      ],
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f002",
+          "entry_date": "2026-01-01",
+          "description": "Vändning leverantörsskulder bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "source_id": "00000000-0000-4000-8000-00000000f001",
+          "notes": "Vändning leverantörsskulder (1 st): L-1",
+          "lines": [
+            {
+              "account_number": "4010",
+              "debit_amount": 0,
+              "credit_amount": 2000,
+              "line_description": "Vändning: Obetalda leverantörsfakturor vid bokslut"
+            },
+            {
+              "account_number": "2648",
+              "debit_amount": 0,
+              "credit_amount": 500,
+              "line_description": "Vändning: Ingående moms på obetald faktura vid bokslut"
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 2500,
+              "credit_amount": 0,
+              "line_description": "Vändning: Leverantörsskulder vid räkenskapsårets utgång (kontantmetoden)"
+            }
+          ]
+        }
+      ],
+      [
+        "reverseEntry",
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-3",
+        "2025-12-31"
+      ]
+    ]
+  },
+  {
+    "name": "the vändning of the fordringar not marked: the vändning stornoed on its own date, then the cut-off",
+    "calls": [
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Kundfordringar vid bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "source_id": "00000000-0000-4000-8000-00000000f001",
+          "notes": "Kundfordringar (1 st): F-10",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 10000,
+              "credit_amount": 0,
+              "line_description": "Kundfordringar vid räkenskapsårets utgång (kontantmetoden)"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 8000,
+              "line_description": "Obetalda kundfakturor vid bokslut"
+            },
+            {
+              "account_number": "2618",
+              "debit_amount": 0,
+              "credit_amount": 2000,
+              "line_description": "Utgående moms på obetald faktura vid bokslut"
+            }
+          ]
+        }
+      ],
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f002",
+          "entry_date": "2026-01-01",
+          "description": "Vändning kundfordringar bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "source_id": "00000000-0000-4000-8000-00000000f001",
+          "notes": "Vändning kundfordringar (1 st): F-10",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 0,
+              "credit_amount": 10000,
+              "line_description": "Vändning: Kundfordringar vid räkenskapsårets utgång (kontantmetoden)"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 8000,
+              "credit_amount": 0,
+              "line_description": "Vändning: Obetalda kundfakturor vid bokslut"
+            },
+            {
+              "account_number": "2618",
+              "debit_amount": 2000,
+              "credit_amount": 0,
+              "line_description": "Vändning: Utgående moms på obetald faktura vid bokslut"
+            }
+          ]
+        }
+      ],
+      [
+        "reverseEntry",
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-2",
+        "2026-01-01"
+      ],
+      [
+        "reverseEntry",
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-1",
+        "2025-12-31"
+      ]
+    ]
+  }
+]

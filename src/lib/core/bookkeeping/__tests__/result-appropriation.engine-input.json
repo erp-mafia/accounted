@@ -1,0 +1,132 @@
+[
+  {
+    "name": "aktiebolag: a profit carried from 2099 to 2098",
+    "createJournalEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f002",
+          "entry_date": "2026-01-01",
+          "description": "Omföring av föregående års resultat (2099 → 2098)",
+          "source_type": "result_appropriation",
+          "voucher_series": "A",
+          "lines": [
+            {
+              "account_number": "2099",
+              "debit_amount": 48735,
+              "credit_amount": 0,
+              "line_description": "Omföring av föregående års resultat"
+            },
+            {
+              "account_number": "2098",
+              "debit_amount": 0,
+              "credit_amount": 48735,
+              "line_description": "Föregående års resultat"
+            }
+          ]
+        }
+      ]
+    ]
+  },
+  {
+    "name": "aktiebolag: a loss carried from 2099 to 2098",
+    "createJournalEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f002",
+          "entry_date": "2026-01-01",
+          "description": "Omföring av föregående års resultat (2099 → 2098)",
+          "source_type": "result_appropriation",
+          "voucher_series": "A",
+          "lines": [
+            {
+              "account_number": "2098",
+              "debit_amount": 12500.5,
+              "credit_amount": 0,
+              "line_description": "Föregående års resultat"
+            },
+            {
+              "account_number": "2099",
+              "debit_amount": 0,
+              "credit_amount": 12500.5,
+              "line_description": "Omföring av föregående års resultat"
+            }
+          ]
+        }
+      ]
+    ]
+  },
+  {
+    "name": "ideell förening: a surplus carried from 2069 to 2068",
+    "createJournalEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f002",
+          "entry_date": "2026-01-01",
+          "description": "Omföring av föregående års resultat (2069 → 2068)",
+          "source_type": "result_appropriation",
+          "voucher_series": "A",
+          "lines": [
+            {
+              "account_number": "2069",
+              "debit_amount": 7300,
+              "credit_amount": 0,
+              "line_description": "Omföring av föregående års resultat"
+            },
+            {
+              "account_number": "2068",
+              "debit_amount": 0,
+              "credit_amount": 7300,
+              "line_description": "Föregående års resultat"
+            }
+          ]
+        }
+      ]
+    ]
+  },
+  {
+    "name": "repair: the 2099 an imported ingående balans still carries",
+    "createJournalEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f002",
+          "entry_date": "2026-01-01",
+          "description": "Omföring av föregående års resultat (2099 → 2098)",
+          "source_type": "result_appropriation",
+          "source_id": "00000000-0000-4000-8000-0000000e0001",
+          "voucher_series": "A",
+          "notes": "Underlag: ingående balans, verifikat A1 (00000000-0000-4000-8000-0000000e0001). Historisk rättelse av kvarliggande föregående års resultat på 2099.",
+          "lines": [
+            {
+              "account_number": "2099",
+              "debit_amount": 25000,
+              "credit_amount": 0,
+              "line_description": "Omföring av föregående års resultat"
+            },
+            {
+              "account_number": "2098",
+              "debit_amount": 0,
+              "credit_amount": 25000,
+              "line_description": "Föregående års resultat"
+            }
+          ]
+        }
+      ]
+    ]
+  }
+]

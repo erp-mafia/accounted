@@ -448,3 +448,28 @@ voucher matching's kursdifferens verifikat), `bulk_book_transactions` and
 `match_batch_allocate`. Their proof is
 `tests/pg/posting-parity-supplier-payments.pg.test.ts` and the producers'
 `*.engine-input.test.ts`.
+
+Step 2g moves the year-end block and the periodiseringar. The close
+(`executeYearEndClosing`) posts its verifikat one by one with the lock and
+close between them, so each records its own event: the balansdagen
+revaluation (`executeCurrencyRevaluation`, `ledger.currency_revaluation`),
+the bokslutsverifikation (`year_end.closing`), the ingående balans
+(`generateOpeningBalances`, `ledger.opening_balance`, one event across its
+per-account retry) and the omföring (`generateResultAppropriation`, and its
+historical repair, `year_end.result_appropriated`); the bokslutsdispositioner
+route, the kontantmetod cut-off and its vändningar (`postKontantmetodCutoff`)
+record `year_end.closing` too, and every storno a failed close or cut-off
+makes of its own verifikat `ledger.storno`. The subject is the fiscal
+period. These producers are kernel code (`lib/core`), which may not read the
+approval scope, so their doors (the year-end and opening-balances routes, the
+staged executors) hand their link basis down as a function the port calls
+only while it is on; `lib/posting` counts as a kernel inner module. The
+accrual schedules (`lib/bookkeeping/accruals/service.ts`) record
+`ledger.accrual` per dissolution, subject the schedule's invoice, and
+`ledger.storno` per storno; the year-end wizard's periodiseringar route
+records `ledger.accrual` (the semesterlöneskuld
+`payroll.vacation_liability_adjusted`). No SQL posting function belongs to
+these producers, so nothing waits on an event id; their proof is
+`tests/pg/posting-parity-year-end.pg.test.ts`,
+`tests/pg/posting-parity-accruals.pg.test.ts` and the producers'
+`*.engine-input.test.ts`.

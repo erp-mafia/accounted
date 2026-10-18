@@ -1,0 +1,1 @@
+[2026-10-18] lib/posting is a kernel inner module for the kernel-import guard: it is the ledger's own write door and step 3 lets only it call the engine. The approval scope stays outside the kernel, so the year-end doors hand their link basis down.

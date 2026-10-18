@@ -23,6 +23,7 @@ import { ownsFiscalPeriod } from '@/lib/api/v1/owns-fiscal-period'
 import { startOperation, completeOperation, failOperation } from '@/lib/api/v1/operations'
 import { executeYearEndClosing } from '@/lib/core/bookkeeping/year-end-service'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 const YearEndAcceptedResponse = z.object({
   operation_id: z.string().uuid(),
@@ -120,6 +121,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         ctx.companyId!,
         ctx.userId,
         fiscalPeriodId,
+        // The posting port's events, while POSTING_EVENTS is on: the client closed the year.
+        () => ({ linkBasis: linkBasisColumns('user_created') }),
       )
       await completeOperation(
         ctx.supabase,

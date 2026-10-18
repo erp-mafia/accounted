@@ -45,10 +45,12 @@ import {
   reverseChargeOnAccount,
 } from '@/lib/bookkeeping/vat-entries'
 import { chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
-import { createJournalEntry, reverseEntry } from '@/lib/bookkeeping/engine'
 import { invoiceCustomerOutstanding, invoiceCustomerShare } from '@/lib/invoices/customer-share'
 import { createLogger } from '@/lib/logger'
-import { ORE_TOLERANCE, roundOre } from '@/lib/money'
+import { ORE_TOLERANCE, roundOre, sumOre } from '@/lib/money'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { postingPort } from '@/lib/posting/port'
+import type { BusinessEventTaxAmount } from '@/lib/posting/store'
 import {
   fetchCreditedAfter,
   fetchPaymentsAsOf,
@@ -56,6 +58,12 @@ import {
   type PaymentsAsOf,
 } from '@/lib/reports/reskontra-payments'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import {
+  kontantmetodCutoffBusinessEvent,
+  systemDerivedLinkBasis,
+  yearEndStornoBusinessEvent,
+  type YearEndPostingContext,
+} from './year-end-business-events'
 
 const log = createLogger('kontantmetod-cutoff')
 
@@ -1230,6 +1238,13 @@ async function assertReversalPeriodPostable(
  * stornoed through the sanctioned reverseEntry() path (BFL 5 kap 5 §: posted
  * entries are never edited or deleted) so the ledger is left consistent, and
  * the original error is rethrown.
+ *
+ * Posting port (step 2g): each of the four verifikat, and each compensating
+ * storno, goes through lib/posting as its own business event (they are posted
+ * one by one, with the markers between them), recorded only while
+ * POSTING_EVENTS is on: year_end.closing for a cut-off and its vändning,
+ * ledger.storno (system_derived) for a storno. `opts.posting` is what the
+ * door saw (its link basis).
  */
 export async function postKontantmetodCutoff(
   supabase: SupabaseClient,
@@ -1246,6 +1261,8 @@ export async function postKontantmetodCutoff(
     unknownVatTreatment?: string[]
     /** Refuse if any invoice carried moms on a zero-rate treatment. */
     strayVatOnZeroRate?: string[]
+    /** What the door saw, for the posting port; called only while POSTING_EVENTS is on. */
+    posting?: () => YearEndPostingContext
   },
 ): Promise<PostCutoffResult> {
   if (opts.unknownVatTreatment && opts.unknownVatTreatment.length > 0) {
@@ -1314,6 +1331,26 @@ export async function postKontantmetodCutoff(
   }
 
   /**
+   * Storno one of the writer's own verifikat after a later step failed,
+   * through the posting port (ledger.storno, system_derived: nobody chose it).
+   */
+  const stornoOwn = (entryId: string, reversalDate: string): Promise<JournalEntry> =>
+    postingPort.reverseJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      entryId,
+      reversalDate,
+      event: () =>
+        yearEndStornoBusinessEvent({
+          fiscalPeriodId: opts.fiscalPeriodId,
+          occurredOn: todayIsoStockholm(),
+          linkBasis: systemDerivedLinkBasis(opts.posting?.()),
+        }),
+      role: 'reversal',
+    })
+
+  /**
    * Post a cut-off/vändning pair, each verifikat marked as what it is.
    *
    * On reversal failure, or on a failure to record either marker, the cut-off
@@ -1326,6 +1363,8 @@ export async function postKontantmetodCutoff(
     lines: CreateJournalEntryLineInput[],
     label: string,
     references: string[],
+    /** The fordringar or skulder the cut-off puts on the balance sheet, and its moms, for the business events. */
+    booked: { amount: number; taxAmounts: () => BusinessEventTaxAmount[] },
   ): Promise<[JournalEntry, JournalEntry]> => {
     const isReceivable = label === 'Kundfordringar'
     const description = isReceivable
@@ -1339,27 +1378,54 @@ export async function postKontantmetodCutoff(
       ? 'receivable_reversal'
       : 'payable_reversal'
 
-    const entry = await createJournalEntry(supabase, companyId, userId, {
-      fiscal_period_id: opts.fiscalPeriodId,
-      entry_date: opts.periodEnd,
-      description,
-      source_type: 'year_end',
-      source_id: opts.fiscalPeriodId,
-      notes: buildCutoffNote(label, references),
-      lines,
+    const entry = await postingPort.postJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      event: () =>
+        kontantmetodCutoffBusinessEvent({
+          fiscalPeriodId: opts.fiscalPeriodId,
+          occurredOn: opts.periodEnd,
+          amount: booked.amount,
+          taxAmounts: booked.taxAmounts(),
+          linkBasis: opts.posting?.().linkBasis,
+        }),
+      input: {
+        fiscal_period_id: opts.fiscalPeriodId,
+        entry_date: opts.periodEnd,
+        description,
+        source_type: 'year_end',
+        source_id: opts.fiscalPeriodId,
+        notes: buildCutoffNote(label, references),
+        lines,
+      },
     })
 
     try {
       await recordCutoffMarker(supabase, companyId, opts.fiscalPeriodId, kind, entry.id)
 
-      const reversal = await createJournalEntry(supabase, companyId, userId, {
-        fiscal_period_id: opts.nextFiscalPeriodId,
-        entry_date: reversalDate,
-        description: reversalDescription,
-        source_type: 'year_end',
-        source_id: opts.fiscalPeriodId,
-        notes: buildCutoffNote(`Vändning ${label.toLowerCase()}`, references),
-        lines: reverseLines(lines),
+      // The vändning states no moms: it is kept out of the declaration.
+      const reversal = await postingPort.postJournalEntry({
+        supabase,
+        companyId,
+        userId,
+        event: () =>
+          kontantmetodCutoffBusinessEvent({
+            fiscalPeriodId: opts.fiscalPeriodId,
+            occurredOn: reversalDate,
+            amount: booked.amount,
+            taxAmounts: [],
+            linkBasis: opts.posting?.().linkBasis,
+          }),
+        input: {
+          fiscal_period_id: opts.nextFiscalPeriodId,
+          entry_date: reversalDate,
+          description: reversalDescription,
+          source_type: 'year_end',
+          source_id: opts.fiscalPeriodId,
+          notes: buildCutoffNote(`Vändning ${label.toLowerCase()}`, references),
+          lines: reverseLines(lines),
+        },
       })
 
       try {
@@ -1375,7 +1441,7 @@ export async function postKontantmetodCutoff(
         // functions would count it. Storno it here; the outer catch then
         // stornoes the cut-off, and both periods net back to zero.
         try {
-          await reverseEntry(supabase, companyId, userId, reversal.id, reversalDate)
+          await stornoOwn(reversal.id, reversalDate)
         } catch (stornoError) {
           log.error(
             'unmarked cut-off vändning could not be stornoed: it will be counted in the next momsdeklaration until corrected by hand',
@@ -1393,7 +1459,7 @@ export async function postKontantmetodCutoff(
       try {
         // Storno in the same period as the cut-off so the pair nets to zero
         // inside the year being closed.
-        const storno = await reverseEntry(supabase, companyId, userId, entry.id, opts.periodEnd)
+        const storno = await stornoOwn(entry.id, opts.periodEnd)
         stornoId = storno.id
       } catch (stornoError) {
         log.error(
@@ -1421,6 +1487,7 @@ export async function postKontantmetodCutoff(
       receivableLines,
       'Kundfordringar',
       opts.receivables.map((r) => r.reference),
+      cutoffBooked(opts.receivables, (r) => r.vatTreatment),
     )
     result.receivableEntry = entry
     result.receivableReversal = reversal
@@ -1432,6 +1499,13 @@ export async function postKontantmetodCutoff(
         payableLines,
         'Leverantörsskulder',
         opts.payables.map((p) => p.reference),
+        // One vilande ingående moms account for every rate (2648): no
+        // treatment. A reverse-charge payable states none (its pair stays in
+        // the lines), as buildCutoffLines books it.
+        cutoffBooked(
+          opts.payables.map((p) => (p.reverseCharge ? { ...p, vat: 0 } : p)),
+          () => null,
+        ),
       )
       result.payableEntry = entry
       result.payableReversal = reversal
@@ -1459,4 +1533,29 @@ export async function postKontantmetodCutoff(
   }
 
   return result
+}
+
+/**
+ * What a cut-off puts on the balance sheet, for its business event: the
+ * outstanding amounts with their moms (1510 or 2440, as buildCutoffLines
+ * books them) and the moms per treatment. Only the rows the lines carry
+ * count: one with nothing outstanding books nothing.
+ */
+function cutoffBooked<T extends { outstanding: number; vat: number }>(
+  rows: T[],
+  treatmentOf: (row: T) => string | null,
+): { amount: number; taxAmounts: () => BusinessEventTaxAmount[] } {
+  const booked = rows.filter((row) => toOre(row.outstanding) !== 0)
+  return {
+    amount: sumOre(booked.map((row) => row.outstanding)),
+    taxAmounts: () => {
+      const byTreatment = new Map<string | null, number[]>()
+      for (const row of booked) {
+        if (toOre(row.vat) === 0) continue
+        const treatment = treatmentOf(row)
+        byTreatment.set(treatment, [...(byTreatment.get(treatment) ?? []), row.vat])
+      }
+      return [...byTreatment].map(([treatment, vats]) => ({ tax: 'vat' as const, treatment, amount_sek: Math.abs(sumOre(vats)) }))
+    },
+  }
 }

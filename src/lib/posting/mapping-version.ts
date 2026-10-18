@@ -38,11 +38,20 @@ import { currentAppVersion } from '@/lib/reports/app-version'
  * kontantmetoden payment verifikat: buildSupplierInvoicePaymentLines and
  * buildSupplierInvoiceCashLines in lib/bookkeeping/supplier-invoice-entries.ts
  * and lib/bookkeeping/supplier-payment-lines.ts),
- * and the customer invoice's registration and
+ * the customer invoice's registration and
  * kreditfaktura lines (lib/bookkeeping/invoice-lines.ts: the revenue account
  * per VAT treatment and rate, utgående moms, the 1510 and 1513 split of a
  * ROT/RUT invoice and the 29xx deferral of a periodisering; lines a person
- * edited in the send dialog name no rule).
+ * edited in the send dialog name no rule), and the year-end block's: the
+ * bokslutsverifikation (previewYearEndClosing: every result account onto the
+ * form's closing account), the ingående balans (generateOpeningBalances: the
+ * balance sheet's UB with its project split), the omföring of föregående års
+ * resultat (result-appropriation-service.ts, also behind its historical
+ * repair), the kontantmetod cut-off (buildCutoffLines), the balansdagen
+ * revaluation (lib/bookkeeping/currency-revaluation.ts), the
+ * bokslutsdispositioner (lib/bokslut's calculators), the accrual schedules'
+ * monthly dissolutions (lib/bookkeeping/accruals/service.ts) and the year-end
+ * wizard's periodiseringar (lib/bokslut/accruals/accrual-detector.ts).
  *
  * The version is the rubric version the producer already records on the
  * verifikat (journal_entries.rubric_version: the proposal rule revision plus
@@ -70,6 +79,14 @@ export const MAPPING_SOURCES = {
   supplierInvoice: 'se.supplier-invoice-lines',
   customerInvoice: 'se.customer-invoice-lines',
   supplierPayment: 'se.supplier-payment-lines',
+  yearEndClosing: 'se.year-end-closing',
+  openingBalance: 'se.opening-balance',
+  resultAppropriation: 'se.result-appropriation',
+  kontantmetodCutoff: 'se.kontantmetod-cutoff',
+  currencyRevaluation: 'se.currency-revaluation',
+  yearEndDispositions: 'se.year-end-dispositions',
+  accrualSchedule: 'se.accrual-schedule',
+  yearEndAccruals: 'se.year-end-accruals',
 } as const
 
 export type MappingSource = keyof typeof MAPPING_SOURCES

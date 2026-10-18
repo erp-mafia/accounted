@@ -1,8 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
-import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { fxDifferenceLine } from '@/lib/bookkeeping/ore-rounding'
+import { postingEvidence } from '@/lib/core/bookkeeping/year-end-business-events'
+import type { LinkBasisColumns } from '@/lib/links/link-basis'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { mappingVersion } from '@/lib/posting/mapping-version'
+import { postingPort } from '@/lib/posting/port'
+import type { BusinessEventDraft } from '@/lib/posting/types'
 import {
   fetchPaymentsAsOf,
   outstandingAsOf,
@@ -539,8 +544,45 @@ export async function previewCurrencyRevaluation(
 }
 
 /**
+ * The business event of a balansdagen revaluation (kind
+ * ledger.currency_revaluation), for the posting port: recorded while
+ * POSTING_EVENTS is shadow or strict, never built while it is off. Pure.
+ * The subject is the fiscal period valued, dated balansdagen; the amount is
+ * the net effect on the result (unrealised gains on 3960 less losses on
+ * 7960), a SEK magnitude, filed under finance.banking (whose key names
+ * currency results). No party: one verifikat values every open receivable
+ * and payable.
+ */
+export function currencyRevaluationBusinessEvent(args: {
+  fiscalPeriodId: string
+  closingDate: string
+  netEffect: number
+  linkBasis: LinkBasisColumns
+}): BusinessEventDraft {
+  const amount = Math.abs(args.netEffect)
+  return {
+    kind: 'ledger.currency_revaluation',
+    category: 'finance.banking',
+    occurredOn: args.closingDate,
+    subject: { type: 'fiscal_period', id: args.fiscalPeriodId },
+    currency: 'SEK',
+    amount,
+    amountSek: amount,
+    ...postingEvidence(args.linkBasis),
+    mappingVersion: mappingVersion('currencyRevaluation'),
+    jurisdiction: 'SE',
+  }
+}
+
+/**
  * Execute currency revaluation for a fiscal period.
  * Creates a journal entry with source_type 'currency_revaluation'.
+ *
+ * Posting port (step 2g): the verifikat goes through lib/posting, which hands
+ * the engine its input unchanged and, while POSTING_EVENTS is on, records
+ * ledger.currency_revaluation first. Its link basis is the request's own
+ * (linkBasisColumns): a person, an approved operation, an API client or the
+ * year-end close that runs it as its step 2.
  *
  * Returns null if no foreign-currency items exist.
  * Throws if a revaluation entry already exists for this period (idempotency).
@@ -587,13 +629,25 @@ export async function executeCurrencyRevaluation(
     return null
   }
 
-  const entry = await createJournalEntry(supabase, companyId, userId ?? companyId, {
-    fiscal_period_id: fiscalPeriodId,
-    entry_date: closingDate,
-    description: `Omvärdering utländsk valuta ${closingDate}`,
-    source_type: 'currency_revaluation',
-    voucher_series: 'A',
-    lines: preview.lines,
+  const entry = await postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId: userId ?? companyId,
+    event: () =>
+      currencyRevaluationBusinessEvent({
+        fiscalPeriodId,
+        closingDate,
+        netEffect: preview.netEffect,
+        linkBasis: linkBasisColumns('user_created'),
+      }),
+    input: {
+      fiscal_period_id: fiscalPeriodId,
+      entry_date: closingDate,
+      description: `Omvärdering utländsk valuta ${closingDate}`,
+      source_type: 'currency_revaluation',
+      voucher_series: 'A',
+      lines: preview.lines,
+    },
   })
 
   return { entry, preview }

@@ -1,0 +1,1 @@
+[2026-10-18] An accrual dissolution records ledger.accrual with its schedule's invoice as subject (a schedule has no handle), dated the month it belongs to; the year-end wizard's periodiseringar, booked as manual, record ledger.accrual and the semesterlöneskuld payroll.vacation_liability_adjusted.
