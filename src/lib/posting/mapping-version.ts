@@ -42,7 +42,16 @@ import { currentAppVersion } from '@/lib/reports/app-version'
  * kreditfaktura lines (lib/bookkeeping/invoice-lines.ts: the revenue account
  * per VAT treatment and rate, utgående moms, the 1510 and 1513 split of a
  * ROT/RUT invoice and the 29xx deferral of a periodisering; lines a person
- * edited in the send dialog name no rule), and the year-end block's: the
+ * edited in the send dialog name no rule), the customer invoice's payment
+ * lines (the 1510 clearing with its kursdifferens, 3740 öresavrundning and
+ * 2420 advance, and the kontantmetoden payment verifikat that books the sale
+ * at payment: buildInvoicePaymentLines in lib/bookkeeping/invoice-entries.ts,
+ * buildInvoiceCashLines in lib/bookkeeping/invoice-lines.ts and
+ * buildInvoiceMatchClearingLines in lib/bookkeeping/invoice-payment-lines.ts;
+ * a person's own rows name no rule), the ROT/RUT verifikat (Skatteverket's
+ * payout against 1513 with its 3740 öre, the refused share back to 1510 and
+ * the migrated deduction moved from 1510 to 1513:
+ * lib/bookkeeping/rot-rut-entries.ts), and the year-end block's: the
  * bokslutsverifikation (previewYearEndClosing: every result account onto the
  * form's closing account), the ingående balans (generateOpeningBalances: the
  * balance sheet's UB with its project split), the omföring of föregående års
@@ -87,6 +96,8 @@ export const MAPPING_SOURCES = {
   yearEndDispositions: 'se.year-end-dispositions',
   accrualSchedule: 'se.accrual-schedule',
   yearEndAccruals: 'se.year-end-accruals',
+  customerPayment: 'se.customer-payment-lines',
+  rotRut: 'se.rot-rut-lines',
 } as const
 
 export type MappingSource = keyof typeof MAPPING_SOURCES

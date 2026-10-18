@@ -12,7 +12,14 @@ import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
-import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import {
+  invoicePaymentBusinessEvent,
+  matchedBankLineStornoBusinessEvent,
+  type InvoicePaymentPostingContext,
+} from '@/lib/bookkeeping/invoice-business-events'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { postingPort } from '@/lib/posting/port'
 import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -28,7 +35,7 @@ import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { roundOre } from '@/lib/money'
 import { eventBus } from '@/lib/events/bus'
-import type { CreateJournalEntryLineInput, Currency, Invoice, Transaction } from '@/types'
+import type { CreateJournalEntryInput, CreateJournalEntryLineInput, Currency, Invoice, Transaction } from '@/types'
 import { MATCHABLE_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
 import { linkBasisColumns } from '@/lib/links/stamp'
 
@@ -598,7 +605,17 @@ export const POST = withRouteContext(
     // auto-categorization JE first; if it fails, nothing has been written.
     if (transaction.journal_entry_id && !priorReconciliationLink) {
       try {
-        const reversal = await reverseEntry(supabase, companyId, user.id, transaction.journal_entry_id)
+        // Through the posting port: while POSTING_EVENTS is on, the storno
+        // records ledger.storno of the bank line (system_derived: the match
+        // replaces the booking, no one chose the storno itself).
+        const reversal = await postingPort.reverseJournalEntry({
+          supabase,
+          companyId: companyId!,
+          userId: user.id,
+          entryId: transaction.journal_entry_id,
+          event: () => matchedBankLineStornoBusinessEvent(transactionId, todayIsoStockholm(), linkBasisColumns('system_derived')),
+          role: 'reversal',
+        })
         postedIds.reversal_journal_entry_id = reversal.id
 
         const { error: clearJeError } = await supabase
@@ -622,6 +639,14 @@ export const POST = withRouteContext(
 
     let journalEntryId: string | null = null
 
+    // Posting port (step 2f-2): what this door saw, read only while
+    // POSTING_EVENTS is on: the person named this bank line for this invoice
+    // (the payment row's basis), and the debt the payment settles.
+    const posting = (): InvoicePaymentPostingContext => ({
+      linkBasis: linkBasisColumns('user_confirmed'),
+      settledAmount: roundOre(newPaidAmount - (invoice.paid_amount ?? 0)),
+    })
+
     try {
       if (useCashEntry && !customLines) {
         // The rows buildInvoiceCashLines produced above: the cash entry
@@ -629,14 +654,14 @@ export const POST = withRouteContext(
         const journalEntry = await createInvoiceCashEntry(
           supabase, companyId, user.id, invoice as Invoice, transaction.date,
           entityType, invoice.customer?.name, paymentAccount,
-          transaction, overpaymentAccount,
+          transaction, overpaymentAccount, posting,
         )
         journalEntryId = journalEntry?.id ?? null
       } else {
         // Custom rows keep their routing's source_type so downstream
         // payment-sync (which keys off invoice_paid / invoice_cash_payment)
         // keeps working; generated clearing rows are always invoice_paid.
-        const journalEntry = await createJournalEntry(supabase, companyId!, user.id, {
+        const input: CreateJournalEntryInput = {
           fiscal_period_id: fiscalPeriodId,
           entry_date: transaction.date,
           description,
@@ -644,6 +669,22 @@ export const POST = withRouteContext(
           source_id: invoice.id,
           bank_booking_context: [bankBookingContext(transaction, paymentAccount)],
           lines: paymentLines,
+        }
+        // Through the posting port: the generated clearing rows record their
+        // rule source and the kronor on the bank leg; the person's own rows
+        // neither.
+        const journalEntry = await postingPort.postJournalEntry({
+          supabase,
+          companyId: companyId!,
+          userId: user.id,
+          event: () =>
+            invoicePaymentBusinessEvent(
+              invoice as Invoice,
+              input,
+              { paymentAccount: customLines ? null : paymentAccount, generated: !customLines, bankLine: true },
+              posting(),
+            ),
+          input,
         })
         journalEntryId = journalEntry?.id ?? null
       }

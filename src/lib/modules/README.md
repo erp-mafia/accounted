@@ -424,6 +424,33 @@ is `tests/pg/posting-parity-invoices.pg.test.ts`, which also runs the payment
 sync and RUT reclaim reversal hooks on invoices booked through the port, and
 `invoice-entries.engine-input.test.ts`.
 
+Step 2f-2 moves the customer invoice payments, the bank matches against
+customer invoices and ROT/RUT. The payment generators
+(`createInvoicePaymentJournalEntry`, the 1510 clearing, and
+`createInvoiceCashEntry`, kontantmetoden and the kontantfaktura at issue)
+post through `postJournalEntry` and record `sale.payment_received`: the
+invoice as subject, the customer as party, the debt settled in the
+invoice's currency and the kronor that arrived on the payment account, the
+moms only when the verifikat books the sale at payment. Every door hands
+down its link basis and the debt settled: `settleInvoicePayment` (both
+mark-paid routes, the staged `mark_invoice_paid`, the kontantfaktura at
+issue; the person's own rows there record no rule source), the dashboard
+and v1 bank match routes and the staged `match_transaction_invoice`; each
+match door's storno of the row's earlier booking goes through
+`reverseJournalEntry` as `ledger.storno` of the bank line. The ROT/RUT
+generators (`createRotRutPayoutSetEntry`, `createRotRutReclaimEntry`,
+`createMigratedDeductionEntry`) record `se.rot_rut.payout_received` (one
+event for a transfer paying several begäran), `se.rot_rut.reclaimed` and
+`se.rot_rut.reclassified`; a begäran has no handle, so only the
+reclassification has a subject (the invoice). The engine's reversal hooks
+(the payment sync, the reclaim and the migrated deduction) run on stornos of
+these verifikat exactly as before. Still on SQL, waiting for an event id:
+`link_invoice_to_voucher` (the kursdifferens verifikat of customer voucher
+matching) and `match_batch_allocate`. Their proof is
+`tests/pg/posting-parity-invoice-payments.pg.test.ts`,
+`tests/pg/posting-parity-rot-rut.pg.test.ts` and the producers'
+`*.engine-input.test.ts`.
+
 Step 2e moves the supplier payments, the supplier bank matches, the single
 bank-line booking and the inbox book-direct. The payment generators
 (`createSupplierInvoicePaymentEntry`, the 2440 clearing, and

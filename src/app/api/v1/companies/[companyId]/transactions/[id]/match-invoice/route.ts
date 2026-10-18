@@ -40,7 +40,14 @@ import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
-import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import {
+  invoicePaymentBusinessEvent,
+  matchedBankLineStornoBusinessEvent,
+  type InvoicePaymentPostingContext,
+} from '@/lib/bookkeeping/invoice-business-events'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { postingPort } from '@/lib/posting/port'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -53,7 +60,7 @@ import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { roundOre } from '@/lib/money'
 import { eventBus } from '@/lib/events/bus'
-import type { Currency, EntityType, Invoice, Transaction } from '@/types'
+import type { CreateJournalEntryInput, Currency, EntityType, Invoice, Transaction } from '@/types'
 import { MATCHABLE_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
 import { linkBasisColumns } from '@/lib/links/stamp'
 
@@ -524,7 +531,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     if (transaction.journal_entry_id && !priorReconciliationLink) {
       try {
-        await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, transaction.journal_entry_id)
+        // Through the posting port: while POSTING_EVENTS is on, the storno
+        // records ledger.storno of the bank line (system_derived: the match
+        // replaces the booking, no one chose the storno itself).
+        await postingPort.reverseJournalEntry({
+          supabase: ctx.supabase,
+          companyId: ctx.companyId!,
+          userId: ctx.userId,
+          entryId: transaction.journal_entry_id,
+          event: () => matchedBankLineStornoBusinessEvent(txId, todayIsoStockholm(), linkBasisColumns('system_derived')),
+          role: 'reversal',
+        })
         const { error: clearErr } = await ctx.supabase
           .from('transactions')
           .update({ journal_entry_id: null })
@@ -551,10 +568,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // no UI, so a partial state (invoice marked paid, GL has no entry) is
     // strictly worse than a clean failure to retry.
     let journalEntryId: string | null = null
+    // Posting port (step 2f-2): what this door saw, read only while
+    // POSTING_EVENTS is on: the caller named this bank line for this invoice
+    // (the payment row's basis, client_asserted on an API key), and the debt
+    // the payment settles.
+    const posting = (): InvoicePaymentPostingContext => ({
+      linkBasis: linkBasisColumns('user_confirmed'),
+      settledAmount: roundOre(newPaidAmount - (invoice.paid_amount ?? 0)),
+    })
     try {
       if (customLines) {
         const sourceType = useCashEntry ? 'invoice_cash_payment' : 'invoice_paid'
-        const je = await createJournalEntry(ctx.supabase, ctx.companyId!, ctx.userId, {
+        const input: CreateJournalEntryInput = {
           fiscal_period_id: fiscalPeriodId,
           entry_date: transaction.date,
           description: invoiceMatchPaymentDescription(invoice),
@@ -562,6 +587,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           source_id: invoice.id,
           bank_booking_context: [bankBookingContext(transaction, paymentAccount)],
           lines: customLines,
+        }
+        // The caller's own rows: no rule made them and no payment account is
+        // named, so the event carries no rule version and no kronor.
+        const je = await postingPort.postJournalEntry({
+          supabase: ctx.supabase,
+          companyId: ctx.companyId!,
+          userId: ctx.userId,
+          event: () =>
+            invoicePaymentBusinessEvent(invoice as Invoice, input, { paymentAccount: null, generated: false, bankLine: true }, posting()),
+          input,
         })
         journalEntryId = je?.id ?? null
       } else if (useCashEntry) {
@@ -575,6 +610,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           invoice.customer?.name,
           paymentAccount,
           transaction,
+          undefined,
+          posting,
         )
         journalEntryId = je?.id ?? null
       } else {
@@ -607,7 +644,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           fx.required ? fx.paidInInvoiceCurrency : undefined,
           paymentAccount,
         )
-        const je = await createJournalEntry(ctx.supabase, ctx.companyId!, ctx.userId, {
+        const input: CreateJournalEntryInput = {
           fiscal_period_id: fiscalPeriodId,
           entry_date: transaction.date,
           description,
@@ -615,6 +652,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           source_id: invoice.id,
           bank_booking_context: [bankBookingContext(transaction, paymentAccount)],
           lines: clearingLines,
+        }
+        const je = await postingPort.postJournalEntry({
+          supabase: ctx.supabase,
+          companyId: ctx.companyId!,
+          userId: ctx.userId,
+          event: () =>
+            invoicePaymentBusinessEvent(invoice as Invoice, input, { paymentAccount, generated: true, bankLine: true }, posting()),
+          input,
         })
         journalEntryId = je?.id ?? null
       }

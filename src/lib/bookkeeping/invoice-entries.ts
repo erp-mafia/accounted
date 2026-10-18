@@ -1,5 +1,5 @@
 import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
-import { createJournalEntry, findFiscalPeriod } from './engine'
+import { findFiscalPeriod } from './engine'
 import { coerceDimensionsBag } from './dimension-resolver'
 import { fxDifferenceLine } from './ore-rounding'
 import { createLogger } from '@/lib/logger'
@@ -7,7 +7,9 @@ import { roundOre } from '@/lib/money'
 import { postingPort } from '@/lib/posting/port'
 import {
   creditNoteBusinessEvent,
+  invoicePaymentBusinessEvent,
   invoiceRegistrationBusinessEvent,
+  type InvoicePaymentPostingContext,
   type InvoicePostingContext,
 } from './invoice-business-events'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -304,6 +306,14 @@ export function buildInvoicePaymentLines(
  * somewhere other than the bank account: e.g. '1686' (Fordringar för
  * kontokort) when a Stripe payment settles into the PSP balance and only
  * reaches 1930 with the later payout.
+ *
+ * Posting port (step 2f-2): the verifikat goes through lib/posting, which
+ * hands `input` to the engine unchanged and, while POSTING_EVENTS is shadow
+ * or strict, records the sale.payment_received event first and has the
+ * engine link it to the draft before a voucher number is drawn. `posting` is
+ * what the door saw (its link basis and the debt the payment settles),
+ * called only while the port is on: off, the engine gets the call it always
+ * did.
  */
 export async function createInvoicePaymentJournalEntry(
   supabase: SupabaseClient,
@@ -315,7 +325,8 @@ export async function createInvoicePaymentJournalEntry(
   customerName?: string,
   paymentAmount?: number,
   settlementAccountNumber: string = '1930',
-  bankTransaction?: Pick<Transaction, 'id' | 'cash_account_id' | 'date' | 'amount' | 'currency'>
+  bankTransaction?: Pick<Transaction, 'id' | 'cash_account_id' | 'date' | 'amount' | 'currency'>,
+  posting?: () => InvoicePaymentPostingContext,
 ): Promise<JournalEntry | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
   if (!fiscalPeriodId) {
@@ -337,7 +348,19 @@ export async function createInvoicePaymentJournalEntry(
     lines,
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  return postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    event: () =>
+      invoicePaymentBusinessEvent(
+        invoice,
+        input,
+        { paymentAccount: settlementAccountNumber, generated: true, bankLine: !!bankTransaction },
+        posting?.(),
+      ),
+    input,
+  })
 }
 
 /**
@@ -405,6 +428,10 @@ export async function createCreditNoteJournalEntry(
  * (invoiceCashBankSek) and a sub-krona gap goes to 3740; the mark-paid doors
  * pass no row and book the customer share. `overpaymentAccount` books an
  * excess of a krona or more on that row (buildInvoiceCashLines).
+ *
+ * Posting port (step 2f-2), as createInvoicePaymentJournalEntry: the
+ * sale.payment_received event, with the moms the sale books at payment, is
+ * recorded and linked to the draft only while POSTING_EVENTS is on.
  */
 export async function createInvoiceCashEntry(
   supabase: SupabaseClient,
@@ -417,6 +444,7 @@ export async function createInvoiceCashEntry(
   settlementAccountNumber: string = '1930',
   bankTransaction?: Pick<Transaction, 'id' | 'cash_account_id' | 'date' | 'amount' | 'currency'>,
   overpaymentAccount?: string,
+  posting?: () => InvoicePaymentPostingContext,
 ): Promise<JournalEntry | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
   if (!fiscalPeriodId) {
@@ -443,6 +471,18 @@ export async function createInvoiceCashEntry(
     lines,
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  return postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    event: () =>
+      invoicePaymentBusinessEvent(
+        invoice,
+        input,
+        { paymentAccount: settlementAccountNumber, generated: true, bankLine: !!bankTransaction },
+        posting?.(),
+      ),
+    input,
+  })
 }
 

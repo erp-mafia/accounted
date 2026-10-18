@@ -57,6 +57,12 @@ import { booksInvoicesOnIssue, cashPartialBlockReason } from '@/lib/bookkeeping/
 import { ensureManualCashAccount, resolveDefaultCashAccount } from '@/lib/cash-accounts/service'
 import { ingestTransactions } from '@/lib/transactions/ingest'
 import { createJournalEntry, findFiscalPeriod, getSwedishLocalDate, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
+import {
+  invoicePaymentBusinessEvent,
+  matchedBankLineStornoBusinessEvent,
+  type InvoicePaymentPostingContext,
+} from '@/lib/bookkeeping/invoice-business-events'
+import { postingPort } from '@/lib/posting/port'
 import { approveSupplierInvoice } from '@/lib/supplier-invoices/attest-service'
 import { CreditSupplierInvoiceInputSchema, creditSupplierInvoice } from '@/lib/supplier-invoices/credit'
 import { resolveInboxKind } from '@/lib/documents/inbox-kind'
@@ -289,6 +295,7 @@ import type {
   InvoiceItem,
   InvoiceDocumentType,
   AccountingMethod,
+  CreateJournalEntryInput,
   CreateJournalEntryLineInput,
   JournalEntrySourceType,
   FiscalPeriod,
@@ -3334,17 +3341,35 @@ async function commitMatchTransactionInvoice(
   const postedIds: Record<string, string> = {}
 
   if (transaction.journal_entry_id) {
-    const reversal = await reverseEntry(supabase, companyId, userId, transaction.journal_entry_id)
+    // Through the posting port: while POSTING_EVENTS is on, the storno
+    // records ledger.storno of the bank line (system_derived, with this
+    // approval as evidence: the match replaces the booking).
+    const reversal = await postingPort.reverseJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      entryId: transaction.journal_entry_id,
+      event: () => matchedBankLineStornoBusinessEvent(transactionId, todayIsoStockholm(), linkBasisColumns('system_derived')),
+      role: 'reversal',
+    })
     postedIds.reversal_journal_entry_id = reversal.id
     await supabase.from('transactions').update({ journal_entry_id: null }).eq('id', transactionId)
   }
+
+  // Posting port (step 2f-2): what this executor saw, read only while
+  // POSTING_EVENTS is on: the staged pair (agent_proposed_user_approved inside
+  // this approval, as the payment row records it) and the debt settled.
+  const posting = (): InvoicePaymentPostingContext => ({
+    linkBasis: linkBasisColumns('user_confirmed'),
+    settledAmount: roundOre(newPaidAmount - (invoice.paid_amount ?? 0)),
+  })
 
   let journalEntryId: string | null = null
   try {
     if (useCashEntry) {
       const je = await createInvoiceCashEntry(
         supabase, companyId, userId, invoice as Invoice, transaction.date, entityType, invoice.customer?.name,
-        paymentAccount, transaction, overpaymentAccount,
+        paymentAccount, transaction, overpaymentAccount, posting,
       )
       journalEntryId = je?.id ?? null
     } else {
@@ -3379,7 +3404,7 @@ async function commitMatchTransactionInvoice(
         paymentAccount,
         overpaymentAccount,
       )
-      const je = await createJournalEntry(supabase, companyId, userId, {
+      const input: CreateJournalEntryInput = {
         fiscal_period_id: fiscalPeriodId,
         entry_date: transaction.date,
         description,
@@ -3387,6 +3412,14 @@ async function commitMatchTransactionInvoice(
         source_id: invoice.id,
         bank_booking_context: [bankBookingContext(transaction, paymentAccount)],
         lines: clearingLines,
+      }
+      const je = await postingPort.postJournalEntry({
+        supabase,
+        companyId,
+        userId,
+        event: () =>
+          invoicePaymentBusinessEvent(invoice as Invoice, input, { paymentAccount, generated: true, bankLine: true }, posting()),
+        input,
       })
       journalEntryId = je?.id ?? null
     }

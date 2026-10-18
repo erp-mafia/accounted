@@ -31,8 +31,11 @@
  *      registration sale.invoiced, the kreditfaktura sale.credited with the
  *      credit note as subject), with the customer as party, the total and its
  *      moms as magnitudes, the link basis (the staged ones naming their
- *      pending operation) as evidence, and the verifikat of the producers this
- *      step does not move (payments, the RUT reclaim, the stornos) carry none;
+ *      pending operation) as evidence; the payments and the RUT reclaim,
+ *      which step 2f-2 moved (their events are proven in
+ *      posting-parity-invoice-payments.pg.test.ts and
+ *      posting-parity-rot-rut.pg.test.ts), carry exactly one, and the
+ *      stornos made directly through the engine none;
  *      the reversal hooks put the paid invoice back to unpaid and hand the
  *      reclaimed RUT share back to Skatteverket's side, exactly as with the
  *      port off;
@@ -157,7 +160,11 @@ interface Posted {
 
 type CustomerKey = 'domestic' | 'eu' | 'private' | 'selfBilling'
 type EntryRole = 'invoice_created' | 'credit_note'
-/** The verifikat of producers this step does not move: they carry no event. */
+/**
+ * The verifikat of producers this step does not move. The payments and the
+ * RUT reclaim moved in step 2f-2 and carry one event each (proven by their
+ * own parity tests); the stornos made directly through the engine carry none.
+ */
 type UnmovedRole = 'invoice_paid' | 'invoice_cash_payment' | 'rot_rut_reclaim' | 'storno'
 
 /** One business event shadow mode records for a flow, and the verifikat it is linked to. */
@@ -821,6 +828,8 @@ async function failInserts(table: 'business_events' | 'business_event_entries'):
 
 const LIVE = new Set(['draft', 'posted', 'reversed'])
 const MOVED: ReadonlySet<string> = new Set<EntryRole>(['invoice_created', 'credit_note'])
+/** Moved in step 2f-2: one event each, whose content their own parity tests prove. */
+const MOVED_LATER: ReadonlySet<string> = new Set<UnmovedRole>(['invoice_paid', 'invoice_cash_payment', 'rot_rut_reclaim'])
 
 /** Every flow books on a fresh company: well past the default test timeout on a busy machine. */
 const FLOW_TIMEOUT = 300_000
@@ -857,15 +866,16 @@ describe('posting port parity, customer invoices (pg)', () => {
       expect({ dumps: shadow.dumps, register: shadow.register }).toEqual(JSON.parse(fs.readFileSync(FIXTURE, 'utf8')))
 
       const { companyId } = shadow.seed
-      // Every verifikat the moved producers wrote has exactly one link; the
-      // payments, the RUT reclaim and the stornos, which this step does not
-      // move, have none.
+      // Every verifikat the moved producers wrote has exactly one link, as
+      // have the payments and the RUT reclaim (moved in step 2f-2); the
+      // stornos made directly through the engine have none.
       const counts = await linkCounts(companyId)
-      expect(counts.filter((e) => e.links !== (MOVED.has(e.source_type) ? 1 : 0))).toEqual([])
+      expect(counts.filter((e) => e.links !== (MOVED.has(e.source_type) || MOVED_LATER.has(e.source_type) ? 1 : 0))).toEqual([])
       expect(counts).toHaveLength(shadow.posted.reduce((n, p) => n + p.entries.length, 0))
 
       const links = await eventLinks(companyId)
-      const eventIds = [...new Set(links.map((l) => l.id))]
+      const movedEntries = new Set(counts.filter((e) => MOVED.has(e.source_type)).map((e) => e.id))
+      const eventIds = [...new Set(links.filter((l) => movedEntries.has(l.journal_entry_id ?? '')).map((l) => l.id))]
       expect(eventIds).toHaveLength(FLOWS.reduce((n, f) => n + f.events.length, 0))
       const operations = new Set<string>()
       for (const [i, flow] of FLOWS.entries()) {

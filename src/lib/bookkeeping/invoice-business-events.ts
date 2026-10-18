@@ -1,15 +1,18 @@
 import { resolveSekAmountOrNull } from '@/lib/bookkeeping/currency-utils'
 import type { LinkBasisColumns } from '@/lib/links/link-basis'
+import { roundOre } from '@/lib/money'
 import { mappingVersion } from '@/lib/posting/mapping-version'
 import type { BusinessEventDraft } from '@/lib/posting/types'
-import type { Invoice } from '@/types'
+import type { CreateJournalEntryInput, Invoice } from '@/types'
 
 /**
  * The business events of a customer invoice's verifikat, for the posting
  * port (step 2f): its registration (sale.invoiced), booked when it is issued,
  * by the deferred Bokför step or when a received självfaktura is registered,
- * and its kreditfaktura (sale.credited). Pure: built only while
- * POSTING_EVENTS is shadow or strict, never while it is off.
+ * and its kreditfaktura (sale.credited); and (step 2f-2) its payments
+ * (sale.payment_received) and the storno a bank match makes of the row's
+ * earlier booking (ledger.storno). Pure: built only while POSTING_EVENTS is
+ * shadow or strict, never while it is off.
  *
  * The subject is the invoices row the verifikat books (a kreditfaktura is a
  * row of its own, which names the original in credited_invoice_id), the
@@ -111,5 +114,122 @@ export function creditNoteBusinessEvent(creditNote: EventInvoice, context: Invoi
     ...invoiceEvent(creditNote, context, true),
     kind: 'sale.credited',
     idempotencyKey: `sale.credited:invoice:${creditNote.id}`,
+  }
+}
+
+/** What a payment door saw when it posted an invoice's payment verifikat. */
+export interface InvoicePaymentPostingContext {
+  /** The door's link basis, resolved in its request (linkBasisColumns). */
+  linkBasis?: LinkBasisColumns
+  /**
+   * The debt the payment settles, in the invoice's currency: the amount
+   * applied to the invoice, as its invoice_payments row records it (an
+   * absorbed öre residual included, an excess booked on 2420 not).
+   */
+  settledAmount?: number | null
+}
+
+/** What the producer of the payment verifikat knows about its lines. */
+export interface InvoicePaymentLineFacts {
+  /** The account the payment leg debits; null when the door names none (a person's own rows). */
+  paymentAccount: string | null | undefined
+  /** The lines came from the payment generators (invoice-entries.ts, invoice-payment-lines.ts), not a person's own rows. */
+  generated: boolean
+  /** The verifikat books a matched bank line: money into the business. */
+  bankLine: boolean
+}
+
+type PaymentInvoice = Pick<
+  Invoice,
+  'id' | 'customer_id' | 'currency' | 'exchange_rate' | 'vat_amount' | 'vat_amount_sek' | 'vat_treatment'
+>
+
+/**
+ * The payment verifikat's event (sale.payment_received, for
+ * faktureringsmetoden's 1510 clearing and kontantmetoden's payment alike,
+ * the kontantfaktura paid at issue included), dated the payment: the
+ * verifikat's own date, the bank line's for a bank match. The subject is the
+ * invoice the payment settles, the party its customer.
+ *
+ * Amounts are magnitudes: the debt settled in the invoice's currency (as the
+ * payment row records it, from the door), and the kronor that arrived on the
+ * payment account, read off the verifikat's own payment leg (an advance
+ * booked on 2420 included, as on the bank line); none when the door names no
+ * payment account. Only a verifikat that books the sale at payment
+ * (invoice_cash_payment: kontantmetoden, a kontantfaktura) books utgående
+ * moms: its event carries the moms the invoice states under its
+ * vat_treatment, converted as the registration's is; a 1510 clearing carries
+ * none (the moms was the registration's). The generators' lines record their
+ * rule source; a person's own rows none.
+ */
+export function invoicePaymentBusinessEvent(
+  invoice: PaymentInvoice,
+  input: Pick<CreateJournalEntryInput, 'entry_date' | 'source_type' | 'lines'>,
+  facts: InvoicePaymentLineFacts,
+  context: InvoicePaymentPostingContext = {},
+): BusinessEventDraft {
+  const settled = context.settledAmount == null ? null : Math.abs(context.settledAmount)
+  const vatSek =
+    input.source_type === 'invoice_cash_payment'
+      ? (resolveSekAmountOrNull(
+          Math.abs(invoice.vat_amount ?? 0),
+          invoice.vat_amount_sek == null ? null : Math.abs(invoice.vat_amount_sek),
+          invoice.currency,
+          invoice.exchange_rate,
+        ) ?? 0)
+      : 0
+  const linkEvidence = context.linkBasis?.link_evidence ?? null
+  return {
+    kind: 'sale.payment_received',
+    category: null,
+    occurredOn: input.entry_date,
+    subject: { type: 'invoice', id: invoice.id },
+    party: { type: 'customer', id: invoice.customer_id },
+    currency: invoice.currency,
+    amount: settled,
+    amountSek: paidInto(input.lines, facts.paymentAccount),
+    taxAmounts: vatSek > 0 ? [{ tax: 'vat', treatment: invoice.vat_treatment ?? null, amount_sek: vatSek }] : [],
+    evidence: {
+      direction: facts.bankLine ? 'in' : undefined,
+      link_basis: context.linkBasis?.link_basis ?? undefined,
+      link_evidence: linkEvidence ?? undefined,
+    },
+    pendingOperationId: linkEvidence?.pending_operation_id ?? null,
+    mappingVersion: facts.generated ? mappingVersion('customerPayment') : null,
+    jurisdiction: 'SE',
+  }
+}
+
+/** The net debit on the payment account in the lines, or null without an account or a debit. */
+function paidInto(lines: CreateJournalEntryInput['lines'], paymentAccount: string | null | undefined): number | null {
+  if (!paymentAccount) return null
+  const net = roundOre(
+    lines
+      .filter((line) => line.account_number === paymentAccount)
+      .reduce((sum, line) => sum + (line.debit_amount ?? 0) - (line.credit_amount ?? 0), 0),
+  )
+  return net > 0 ? net : null
+}
+
+/**
+ * The event of the storno a bank match makes of the bank line's earlier
+ * booking (a categorization the match replaces; kind ledger.storno, linked
+ * with role reversal), dated the day it is made: the subject is the bank
+ * line whose booking is reversed. No party, no amount and no rule version: a
+ * storno mirrors its original's lines. No one chose it, so it records
+ * system_derived (inside an approval the operation rides along as evidence).
+ */
+export function matchedBankLineStornoBusinessEvent(
+  transactionId: string,
+  occurredOn: string,
+  linkBasis: LinkBasisColumns,
+): BusinessEventDraft {
+  return {
+    kind: 'ledger.storno',
+    occurredOn,
+    subject: { type: 'transaction', id: transactionId },
+    evidence: { link_basis: linkBasis.link_basis, link_evidence: linkBasis.link_evidence ?? undefined },
+    pendingOperationId: linkBasis.link_evidence?.pending_operation_id ?? null,
+    jurisdiction: 'SE',
   }
 }

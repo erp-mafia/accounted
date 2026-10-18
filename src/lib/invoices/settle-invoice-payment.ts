@@ -3,7 +3,8 @@ import {
   createInvoicePaymentJournalEntry,
   createInvoiceCashEntry,
 } from '@/lib/bookkeeping/invoice-entries'
-import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { invoicePaymentBusinessEvent, type InvoicePaymentPostingContext } from '@/lib/bookkeeping/invoice-business-events'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { resolveInvoicePaymentSourceType } from '@/lib/bookkeeping/propose-payment-lines'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
@@ -17,7 +18,9 @@ import {
 } from '@/lib/invoices/invoice-payment-row'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
-import type { LinkBasisInput } from '@/lib/links/stamp'
+import { linkBasisColumnsFor, type LinkBasisInput } from '@/lib/links/stamp'
+import { roundOre } from '@/lib/money'
+import { postingPort } from '@/lib/posting/port'
 import type { CreateJournalEntryInput, Customer, EntityType, Invoice } from '@/types'
 import { MATCHABLE_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
 
@@ -231,6 +234,15 @@ export async function settleInvoicePayment(
 
   let journalEntryId: string | null = null
 
+  // Posting port (step 2f-2): what this door saw, read only while
+  // POSTING_EVENTS is on. The link basis is the payment row's (a person's
+  // statement, or a payment sync's reference), and the debt settled is the
+  // amount the row records as applied to the invoice.
+  const posting = (): InvoicePaymentPostingContext => ({
+    linkBasis: linkBasisColumnsFor(settlementLinkBasis(paymentSource, externalRef)),
+    settledAmount: roundOre(newPaidAmount - (invoice.paid_amount ?? 0)),
+  })
+
   if (isRealInvoice) {
     try {
       if (customLines) {
@@ -268,7 +280,16 @@ export async function settleInvoicePayment(
           source_id: invoice.id,
           lines: customLines,
         }
-        const journalEntry = await createJournalEntry(supabase, companyId, userId, input)
+        // The person's own rows: no rule made them, and no payment account
+        // is named, so the event carries no rule version and no kronor.
+        const journalEntry = await postingPort.postJournalEntry({
+          supabase,
+          companyId,
+          userId,
+          event: () =>
+            invoicePaymentBusinessEvent(invoice, input, { paymentAccount: null, generated: false, bankLine: false }, posting()),
+          input,
+        })
         journalEntryId = journalEntry?.id ?? null
       } else if (useCashEntry) {
         // The entry helpers never read invoice.customer (the display name is
@@ -282,6 +303,9 @@ export async function settleInvoicePayment(
           entityType,
           invoice.customer?.name ?? undefined,
           settlementAccountNumber,
+          undefined,
+          undefined,
+          posting,
         )
         journalEntryId = journalEntry?.id ?? null
       } else {
@@ -295,6 +319,8 @@ export async function settleInvoicePayment(
           invoice.customer?.name ?? undefined,
           undefined,
           settlementAccountNumber,
+          undefined,
+          posting,
         )
         journalEntryId = journalEntry?.id ?? null
       }

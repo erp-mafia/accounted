@@ -29,6 +29,7 @@ import { createMigratedDeductionEntry } from '@/lib/bookkeeping/rot-rut-entries'
 import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 import { activateAccounts } from '@/lib/bookkeeping/chart-of-accounts-service'
 import { encryptPersonnummer, extractLast4 } from '@/lib/salary/personnummer'
+import { linkBasisColumns } from '@/lib/links/stamp'
 import { roundOre } from '@/lib/money'
 import type { MigratedDeductionPlan } from './migrated-deduction-plan'
 
@@ -188,13 +189,21 @@ export async function applyMigratedDeduction(
   let journalEntryId = plan.reuseVoucherId
   if (!journalEntryId) {
     try {
-      const entry = await createMigratedDeductionEntry(supabase, companyId, userId, {
-        invoiceId: plan.invoiceId,
-        invoiceNumber: options.invoiceNumber,
-        deductionType: plan.deductionType,
-        amount: plan.deductionTotal,
-        bookingDate: options.bookingDate,
-      })
+      const entry = await createMigratedDeductionEntry(
+        supabase,
+        companyId,
+        userId,
+        {
+          invoiceId: plan.invoiceId,
+          invoiceNumber: options.invoiceNumber,
+          deductionType: plan.deductionType,
+          amount: plan.deductionTotal,
+          bookingDate: options.bookingDate,
+        },
+        // The posting port's event, while POSTING_EVENTS is on: the deduction
+        // came over from the provider's records (the run's provider).
+        () => ({ linkBasis: linkBasisColumns('import_carried_over', { source_system: options.trail.provider }) }),
+      )
       journalEntryId = entry.id
     } catch (bookError) {
       if (!isDuplicateVoucher(bookError)) {

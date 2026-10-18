@@ -202,6 +202,8 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
           expect.objectContaining({ account_number: '1510', credit_amount: 12500 }),
         ]),
       }),
+      undefined,
+      undefined,
     )
     expect(mockCreateCashEntry).not.toHaveBeenCalled()
     const invoiceUpdate = findCalls('invoices', 'update').at(-1)?.[0]
@@ -356,6 +358,8 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
           expect.objectContaining({ account_number: '1510', credit_amount: 12500 }),
         ]),
       }),
+      undefined,
+      undefined,
     )
   })
 
@@ -462,6 +466,8 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
           expect.objectContaining({ account_number: '3740' }),
         ]),
       }),
+      undefined,
+      undefined,
     )
     const invoiceUpdate = findCalls('invoices', 'update').at(-1)?.[0]
     expect(invoiceUpdate).toMatchObject({
@@ -598,6 +604,8 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
           expect.objectContaining({ account_number: '3740', credit_amount: 0.4 }),
         ]),
       }),
+      undefined,
+      undefined,
     )
     expect(findCalls('invoices', 'update').at(-1)?.[0]).toMatchObject({
       status: 'paid',

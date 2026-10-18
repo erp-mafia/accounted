@@ -101,6 +101,8 @@ describe('settleInvoicePayment', () => {
       'Kund AB',
       undefined,
       '1686',
+      undefined,
+      expect.any(Function),
     )
   })
 
@@ -183,6 +185,9 @@ describe('settleInvoicePayment', () => {
       'aktiebolag',
       'Kund AB',
       '1686',
+      undefined,
+      undefined,
+      expect.any(Function),
     )
     expect(vi.mocked(createInvoicePaymentJournalEntry)).not.toHaveBeenCalled()
   })

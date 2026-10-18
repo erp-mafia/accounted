@@ -464,6 +464,7 @@ describe('POST /api/rot-rut/payout-requests/[id]/settle', () => {
       'user-1',
       // The öre the invoices carry beyond the requested kronor clears too.
       expect.objectContaining({ amount: 3000, paymentDate: '2026-07-10', oreRounding: 0.4 }),
+      expect.any(Function),
     )
   })
 
@@ -486,6 +487,7 @@ describe('POST /api/rot-rut/payout-requests/[id]/settle', () => {
       'company-1',
       'user-1',
       expect.objectContaining({ bankAccount: '1920' }),
+      expect.any(Function),
     )
   })
 

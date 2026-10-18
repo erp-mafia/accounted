@@ -197,6 +197,7 @@ describe('settleRotRutPayoutRequest', () => {
         paymentDate: '2026-07-10',
         bankAccount: '1920',
       }),
+      expect.any(Function),
     )
     const requestUpdate = findCall('rot_rut_payout_requests', 'update')?.[0] as Record<string, unknown>
     expect(requestUpdate).toMatchObject({
@@ -344,6 +345,7 @@ describe('settleRotRutPayoutRequest', () => {
       'company-1',
       'user-1',
       expect.objectContaining({ amount: 671, oreRounding: 0.25, invoiceCount: 1 }),
+      expect.any(Function),
     )
   })
 
@@ -365,6 +367,7 @@ describe('settleRotRutPayoutRequest', () => {
       'company-1',
       'user-1',
       expect.objectContaining({ amount: 2500, oreRounding: 0 }),
+      expect.any(Function),
     )
   })
 
@@ -479,7 +482,7 @@ describe('settleRotRutPayoutRequestSet', () => {
         { requestId: REQUEST_ID, requestName: 'ROT 2026-07', deductionType: 'rot', amount: 3000, oreRounding: 0, invoiceCount: 0 },
         { requestId: REQUEST_ID_2, requestName: 'RUT 2026-07', deductionType: 'rut', amount: 2250, oreRounding: 0, invoiceCount: 0 },
       ],
-    })
+    }, expect.any(Function))
     // The single-request writer is never used for a bundle.
     expect(mockCreatePayoutEntry).not.toHaveBeenCalled()
 
@@ -607,6 +610,7 @@ describe('settleRotRutPayoutRequestSet', () => {
           expect.objectContaining({ requestId: REQUEST_ID_2, amount: 2250 }),
         ],
       }),
+      expect.any(Function),
     )
     const requestUpdates = findCalls('rot_rut_payout_requests', 'update').map((c) => c[0])
     expect(requestUpdates).toEqual([
@@ -660,6 +664,7 @@ describe('settleRotRutPayoutRequestSet', () => {
           expect.objectContaining({ requestId: REQUEST_ID_2, amount: 2250, oreRounding: 0.75 }),
         ],
       }),
+      expect.any(Function),
     )
   })
 
