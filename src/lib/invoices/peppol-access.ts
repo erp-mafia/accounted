@@ -1,6 +1,7 @@
 /**
  * Peppol access per company: locked by default, requested by the company,
- * granted (with a sending cap, and separately receiving) by the operators.
+ * granted (with a monthly sending cap, and separately receiving) by the
+ * operators.
  *
  * Why a gate at all: every transmission through the Access Point is billed
  * per document and every receiving identifier consumes a contracted tenant
@@ -10,6 +11,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { stockholmWallTimeToUtc, todayIsoStockholm } from '@/lib/dates/iso'
 
 export type PeppolAccessStatus = 'requested' | 'enabled' | 'disabled'
 
@@ -29,7 +31,11 @@ export interface PeppolAccessRow {
   updated_at: string
 }
 
-/** What the product shows and gates on. `sent_count` counts real transmissions. */
+/**
+ * What the product shows and gates on. `max_sends` caps transmissions per
+ * calendar month in Europe/Stockholm; `sent_count` counts this month's real
+ * transmissions, so the cap resets on the 1st.
+ */
 export interface PeppolAccessSummary {
   status: PeppolAccessStatus | 'none'
   send_enabled: boolean
@@ -54,18 +60,38 @@ export async function getPeppolAccess(
   return (data as PeppolAccessRow | null) ?? null
 }
 
-/** Transmissions actually handed to the access point (a provider submission id exists). */
+/** The first instant of the current calendar month in Europe/Stockholm, as ISO. */
+export function peppolSendPeriodStart(now: Date = new Date()): string {
+  return stockholmWallTimeToUtc(`${todayIsoStockholm(now).slice(0, 8)}01`, '00:00').toISOString()
+}
+
+/**
+ * Transmissions actually handed to the access point (a provider submission id
+ * exists) this calendar month. `submitted_at` is set when the access point
+ * accepts the document; a row without it falls back to when it was created.
+ */
 export async function countPeppolSends(
   service: SupabaseClient,
   companyId: string,
+  now: Date = new Date(),
 ): Promise<number> {
-  const { count, error } = await service
+  const since = peppolSendPeriodStart(now)
+  const submitted = await service
     .from('peppol_deliveries')
     .select('id', { count: 'exact', head: true })
     .eq('company_id', companyId)
     .not('provider_submission_id', 'is', null)
-  if (error) throw new Error(`Failed to count Peppol sends: ${error.message}`)
-  return count ?? 0
+    .gte('submitted_at', since)
+  if (submitted.error) throw new Error(`Failed to count Peppol sends: ${submitted.error.message}`)
+  const unstamped = await service
+    .from('peppol_deliveries')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .not('provider_submission_id', 'is', null)
+    .is('submitted_at', null)
+    .gte('created_at', since)
+  if (unstamped.error) throw new Error(`Failed to count Peppol sends: ${unstamped.error.message}`)
+  return (submitted.count ?? 0) + (unstamped.count ?? 0)
 }
 
 export function summarizePeppolAccess(row: PeppolAccessRow | null, sentCount: number): PeppolAccessSummary {

@@ -2597,8 +2597,8 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   },
   PEPPOL_SEND_LIMIT_REACHED: {
     httpStatus: 409,
-    message_sv: 'Bolaget har använt sina Peppol-sändningar. Hör av dig till support för fler.',
-    message_en: 'The company has used its Peppol sends. Contact support for more.',
+    message_sv: 'Bolaget har nått månadens gräns för Peppol-fakturor. Gränsen nollställs den 1:a nästa månad.',
+    message_en: "The company has reached this month's Peppol invoice limit. It resets on the 1st of next month.",
   },
   PEPPOL_RECEIVING_NOT_ENABLED: {
     httpStatus: 403,

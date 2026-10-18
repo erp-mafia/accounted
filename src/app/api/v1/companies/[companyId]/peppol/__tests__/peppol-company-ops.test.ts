@@ -203,7 +203,8 @@ describe('GET /api/v1/companies/:companyId/peppol/registration', () => {
       peppol_registrations: { data: [registeredRow], error: null },
       company_settings: SETTINGS,
       peppol_access: { data: GRANT, error: null },
-      peppol_deliveries: { data: null, error: null, count: 2 },
+      // This month's sends: stamped, then unstamped.
+      peppol_deliveries: [{ data: null, error: null, count: 2 }, { data: null, error: null, count: 0 }],
     }))
     const res = await get()
     expect(res.status).toBe(200)

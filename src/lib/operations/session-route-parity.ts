@@ -647,6 +647,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'DELETE /api/skills/:id': gap('P3'),
 
   // ── Machine endpoints: crons, webhooks, connector proxies ──────────
+  'POST /api/peppol/daily-report/cron': machine(CRON),
   'POST /api/peppol/inbound/cron': machine(CRON),
   'POST /api/peppol/outbound/status/cron': machine(CRON),
   'POST /api/receipt-hunt/cron': machine(CRON),

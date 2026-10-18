@@ -1,0 +1,1 @@
+[2026-10-18] Peppol max_sends is a cap per calendar month (Europe/Stockholm), not a lifetime total: founders enable every paying requester at 10 sends a month while Qvalia reports no delivery status, and a daily report to the operators lists every send to check by hand.

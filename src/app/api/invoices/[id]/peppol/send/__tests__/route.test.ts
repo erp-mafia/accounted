@@ -172,10 +172,11 @@ const accessRow = {
 function realCompany(isSandbox = false) {
   enqueue({ data: { is_sandbox: isSandbox }, error: null })
 }
-/** Peppol access is per company: grant it (service reads access row, then the send count). */
+/** Peppol access is per company: grant it (service reads access row, then this month's two send counts). */
 function grantAccess(maxSends: number | null = 50, sent = 0) {
   serviceTables.enqueue({ data: { ...accessRow, max_sends: maxSends }, error: null })
   serviceTables.enqueue({ data: null, error: null, count: sent })
+  serviceTables.enqueue({ data: null, error: null, count: 0 })
 }
 /** The user-client reads a send makes once it is past the gates: invoice, company settings, stage RPC. */
 function stageInvoice(overrides: Partial<ReturnType<typeof makeInvoice>> = {}, delivery: Record<string, unknown> = stagedDelivery) {

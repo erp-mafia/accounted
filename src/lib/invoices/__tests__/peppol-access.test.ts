@@ -3,6 +3,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import {
   checkPeppolSendPermission,
+  countPeppolSends,
+  peppolSendPeriodStart,
   requestPeppolAccess,
   setPeppolAccess,
   summarizePeppolAccess,
@@ -65,17 +67,61 @@ describe('checkPeppolSendPermission', () => {
   it('allows an enabled company under its cap and refuses at the cap', async () => {
     enqueue({ data: row({ max_sends: 3 }), error: null })
     enqueue({ data: null, error: null, count: 2 })
+    enqueue({ data: null, error: null, count: 0 })
     expect(await checkPeppolSendPermission({ service, companyId: 'company-1' })).toEqual({ ok: true, remaining: 1 })
 
     enqueue({ data: row({ max_sends: 3 }), error: null })
-    enqueue({ data: null, error: null, count: 3 })
+    enqueue({ data: null, error: null, count: 2 })
+    enqueue({ data: null, error: null, count: 1 })
     expect(await checkPeppolSendPermission({ service, companyId: 'company-1' })).toMatchObject({ ok: false, code: 'PEPPOL_SEND_LIMIT_REACHED' })
   })
 
   it('treats a null cap as unlimited', async () => {
     enqueue({ data: row({ max_sends: null }), error: null })
     enqueue({ data: null, error: null, count: 999 })
+    enqueue({ data: null, error: null, count: 0 })
     expect(await checkPeppolSendPermission({ service, companyId: 'company-1' })).toEqual({ ok: true, remaining: null })
+  })
+})
+
+describe('peppolSendPeriodStart', () => {
+  it('starts the period at midnight on the 1st in Stockholm, summer and winter time', () => {
+    expect(peppolSendPeriodStart(new Date('2026-10-18T10:00:00Z'))).toBe('2026-09-30T22:00:00.000Z')
+    expect(peppolSendPeriodStart(new Date('2026-11-18T10:00:00Z'))).toBe('2026-10-31T23:00:00.000Z')
+  })
+
+  it('follows the Stockholm calendar near midnight on the 1st', () => {
+    // 23:30Z on 31 October is already 00:30 on 1 November in Stockholm.
+    expect(peppolSendPeriodStart(new Date('2026-10-31T23:30:00Z'))).toBe('2026-10-31T23:00:00.000Z')
+    // 22:30Z on 31 October is still October in Stockholm.
+    expect(peppolSendPeriodStart(new Date('2026-10-31T22:30:00Z'))).toBe('2026-09-30T22:00:00.000Z')
+  })
+})
+
+describe('countPeppolSends', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+  })
+
+  it('counts transmissions submitted this calendar month, plus unstamped ones created this month', async () => {
+    enqueue({ data: null, error: null, count: 4 })
+    enqueue({ data: null, error: null, count: 1 })
+    const count = await countPeppolSends(service, 'company-1', new Date('2026-10-18T10:00:00Z'))
+    expect(count).toBe(5)
+    const query = calls.filter((c) => c.table === 'peppol_deliveries')
+    expect(query.filter((c) => c.method === 'eq').map((c) => c.args)).toEqual([['company_id', 'company-1'], ['company_id', 'company-1']])
+    expect(query.filter((c) => c.method === 'not').map((c) => c.args)).toEqual([['provider_submission_id', 'is', null], ['provider_submission_id', 'is', null]])
+    expect(query.filter((c) => c.method === 'gte').map((c) => c.args)).toEqual([
+      ['submitted_at', '2026-09-30T22:00:00.000Z'],
+      ['created_at', '2026-09-30T22:00:00.000Z'],
+    ])
+    expect(query.find((c) => c.method === 'is')?.args).toEqual(['submitted_at', null])
+  })
+
+  it('throws when either count fails', async () => {
+    enqueue({ data: null, error: { message: 'boom' } })
+    await expect(countPeppolSends(service, 'company-1')).rejects.toThrow('boom')
   })
 })
 
