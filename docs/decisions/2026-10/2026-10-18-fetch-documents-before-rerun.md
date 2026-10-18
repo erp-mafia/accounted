@@ -1,0 +1,1 @@
+[2026-10-18] A connection leads with a filled "Hämta underlag", "Synka igen" becomes "Kör migreringen igen", and document states are red only for real failures: customers re-ran the migration to get files (PH 185, PH 180), and permissions and locked years read as errors.

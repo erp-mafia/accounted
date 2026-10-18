@@ -3,7 +3,7 @@
 import { SIEJobFailedError, waitForSIEJob } from '@/lib/import/sie-job-client'
 import InvoiceCompletionRecovery from './InvoiceCompletionRecovery'
 import { describeImportResponseFailure, formatImportFailure } from '@/lib/import/import-failure'
-import { useState, useCallback, useEffect, useReducer, useRef } from 'react'
+import { createContext, useState, useCallback, useContext, useEffect, useReducer, useRef } from 'react'
 import { useOAuthPopup } from '@/lib/hooks/use-oauth-popup'
 import { useAccounts } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
@@ -20,22 +20,28 @@ import { cn, formatDate } from '@/lib/utils'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { AttnLine } from '@/components/ui/attn-line'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
+import { HelpPopover } from '@/components/ui/help-popover'
 import Link from 'next/link'
 import { getBranding } from '@/lib/branding/service'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const branding = getBranding()
 import {
+  AlertCircle,
   ArrowLeft,
   ArrowRight,
   Check,
+  CheckCircle2,
   ChevronRight,
   ExternalLink,
+  Info,
   Loader2,
+  Lock,
   Paperclip,
   RefreshCw,
   RotateCcw,
   XCircle,
+  type LucideIcon,
 } from 'lucide-react'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
 import { supportsUnderlagImport } from '@/lib/providers/underlag-import'
@@ -781,8 +787,29 @@ export function ProviderStep({
                     )}
                   </div>
                   {/* Full width on a phone, so the buttons wrap under the name
-                      instead of squeezing the date into a column. */}
-                  <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto">
+                      instead of squeezing the date into a column; the
+                      disconnect icon then sits beside the name (order-1). */}
+                  <div className="order-2 flex w-full shrink-0 flex-wrap items-center gap-2 sm:order-none sm:w-auto sm:flex-nowrap">
+                    {/* The underlag offer used to live only in the result step
+                        of the run that just finished; closing or reloading
+                        lost it. From here it runs on its own, with the same
+                        consent, without repeating the migration. Not before
+                        a ledger import: underlag link to the imported
+                        verifikat by voucher number, so with none there every
+                        file comes back unmatched. It comes first and filled:
+                        customers re-ran the whole migration to get their
+                        files (PH 185, PH 180), so the safe way to get more
+                        from the source has to be the obvious one, and the
+                        re-run says plainly what it is. */}
+                    {hasSieImport && supportsUnderlagImport(consent.provider) && (
+                      <Button
+                        size="sm"
+                        onClick={() => onFetchDocuments(consent.id, consent.provider)}
+                      >
+                        <Paperclip className="mr-1.5 h-3.5 w-3.5" />
+                        {t('ext_arcim_documents_fetch_action')}
+                      </Button>
+                    )}
                     {continuesImport(consent.provider) ? (
                       <Button size="sm" onClick={() => onResync(consent.provider, consent.id)}>
                         {connectionAction(consent.provider)}
@@ -798,33 +825,16 @@ export function ProviderStep({
                         {connectionAction(consent.provider)}
                       </Button>
                     )}
-                    {/* The underlag offer used to live only in the result step
-                        of the run that just finished; closing or reloading
-                        lost it. From here it runs on its own, with the same
-                        consent, without repeating the migration. Not before
-                        a ledger import: underlag link to the imported
-                        verifikat by voucher number, so with none there every
-                        file comes back unmatched. */}
-                    {hasSieImport && supportsUnderlagImport(consent.provider) && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => onFetchDocuments(consent.id, consent.provider)}
-                      >
-                        <Paperclip className="mr-1.5 h-3.5 w-3.5" />
-                        {t('ext_arcim_documents_fetch_action')}
-                      </Button>
-                    )}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-muted-foreground hover:text-destructive"
-                      aria-label={`Koppla från ${providerInfo?.name ?? consent.provider}`}
-                      onClick={() => onDisconnect(consent.id)}
-                    >
-                      <XCircle className="h-3.5 w-3.5" />
-                    </Button>
                   </div>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="order-1 shrink-0 self-start text-muted-foreground hover:text-destructive sm:order-none sm:self-auto"
+                    aria-label={`Koppla från ${providerInfo?.name ?? consent.provider}`}
+                    onClick={() => onDisconnect(consent.id)}
+                  >
+                    <XCircle className="h-4 w-4" />
+                  </Button>
                 </div>
               )
             })}
@@ -889,8 +899,13 @@ export function ProviderStep({
                     )}
                   </div>
                   <p className="mt-0.5 text-xs text-muted-foreground">
+                    {/* Points at the row above, not at its re-run: that
+                        pointer is how customers ended up re-running the
+                        migration to fetch files. */}
                     {alreadyConnected
-                      ? t('ext_arcim_use_action_above', { action: connectionAction(provider.id) })
+                      ? continuesImport(provider.id)
+                        ? t('ext_arcim_use_action_above', { action: connectionAction(provider.id) })
+                        : t('ext_arcim_connected_above')
                       : needsSieFirst
                         ? 'Importera SIE-fil först'
                         : provider.authType === 'oauth'
@@ -2094,7 +2109,139 @@ function FiscalYearLine({ result, index }: { result: ImportResult; index: number
   )
 }
 
-function DocumentImportFollowUp({
+/**
+ * Where underlag go up as files: the way forward when the source system
+ * cannot hand them over (none attached there, or no file access yet).
+ */
+const UNDERLAG_UPLOAD_HREF = '/import?mode=underlag'
+
+/**
+ * A quiet note under a documents state: an icon and a short sentence, muted.
+ * Notes say why some underlag stay behind (locked years, a Fortnox
+ * permission); none of them is a failure, so none of them is red.
+ */
+function DocumentNote({ icon: Icon, children }: { icon: LucideIcon; children: React.ReactNode }) {
+  return (
+    <li className="flex gap-3">
+      <Icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+      <div className="min-w-0 space-y-1 text-[13px] leading-5 text-muted-foreground">{children}</div>
+    </li>
+  )
+}
+
+/**
+ * Detail that belongs one level down (the remedy for a Fortnox permission,
+ * what Fortnox answered, the request id for support): behind a disclosure, so
+ * the main line speaks to the user and the detail is still one click away.
+ */
+function DocumentDisclosure({ summary, children }: { summary: string; children: React.ReactNode }) {
+  return (
+    <details className="group text-[12.5px] leading-5 text-muted-foreground">
+      <summary className="inline-flex cursor-pointer list-none items-center gap-1 rounded-sm transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 [&::-webkit-details-marker]:hidden">
+        <ChevronRight
+          className="h-3 w-3 transition-transform duration-150 group-open:rotate-90"
+          aria-hidden="true"
+        />
+        {summary}
+      </summary>
+      <div className="mt-1 space-y-1 pl-4 [overflow-wrap:anywhere]">{children}</div>
+    </details>
+  )
+}
+
+/** The icon column of a documents state, aligned with the first line of its lead. */
+const DOCUMENT_STATE_ICON = 'mt-1 h-4 w-4 shrink-0'
+
+/** True on the standalone page, where states line up under the provider logo and title. */
+const DocumentStateAlignedContext = createContext(false)
+
+/**
+ * One documents state: an optional icon (spinner, check, failure), the lead
+ * sentence, a muted line under it, and whatever the state offers below, all
+ * on the lead's left edge.
+ */
+function DocumentState({
+  icon,
+  lead,
+  sub,
+  trailing,
+  children,
+}: {
+  icon?: React.ReactNode
+  lead: React.ReactNode
+  sub?: React.ReactNode
+  /** Right of the lead, on its line: the running count while importing. */
+  trailing?: React.ReactNode
+  children?: React.ReactNode
+}) {
+  // On the standalone page the state sits on the title's left edge, its icon
+  // in the provider logo's column; after a migration it starts at the
+  // section's edge like the sections around it.
+  const aligned = useContext(DocumentStateAlignedContext)
+  return (
+    <div className={cn('flex gap-3', aligned && 'sm:gap-4')}>
+      {(icon || aligned) && (
+        <div className={cn('shrink-0 justify-center', icon ? 'flex' : 'hidden sm:flex', aligned && 'sm:w-8')}>
+          {icon}
+        </div>
+      )}
+      <div className="min-w-0 flex-1 space-y-4">
+        <div className="space-y-1">
+          <div className="flex items-baseline gap-3">
+            <p className="min-w-0 flex-1 text-[15px] leading-6">{lead}</p>
+            {trailing}
+          </div>
+          {sub && <div className="text-[13px] leading-5 text-muted-foreground">{sub}</div>}
+        </div>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * One exception under a finished import, as a hairline row: the count, what
+ * it means, and the one thing to do about it. Only rows above zero render.
+ */
+function DocumentOutcomeRow({
+  count,
+  label,
+  hint,
+  tone = 'muted',
+  children,
+}: {
+  count: number
+  label: string
+  hint: string
+  /** `failed` is the one count that is a failure, so the one in the failure colour. */
+  tone?: 'muted' | 'failed'
+  children?: React.ReactNode
+}) {
+  return (
+    <li className="flex gap-4 py-3">
+      <span
+        className={cn(
+          'w-10 shrink-0 text-right text-[15px] leading-5 tabular-nums',
+          tone === 'failed' ? 'text-destructive' : 'text-foreground',
+        )}
+      >
+        {count.toLocaleString('sv-SE')}
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+        <div className="min-w-0 flex-1">
+          <p className="text-[13px] leading-5">{label}</p>
+          <p className="text-[12.5px] leading-5 text-muted-foreground">{hint}</p>
+        </div>
+        {children && <div className="flex shrink-0 flex-wrap items-center gap-2">{children}</div>}
+      </div>
+    </li>
+  )
+}
+
+/** The phases that wait on the source: the panel is busy for assistive tech. */
+const DOCUMENT_BUSY_PHASES = new Set<ArcimDocumentImportState['phase']>(['discovering', 'importing', 'reconnecting'])
+
+export function DocumentImportFollowUp({
   state,
   standalone = false,
   onDiscover,
@@ -2115,259 +2262,298 @@ function DocumentImportFollowUp({
   if (state.phase === 'hidden' || state.phase === 'dismissed') return null
 
   const provider = ARCIM_PROVIDERS.find(p => p.id === state.provider)?.name ?? state.provider ?? ''
-  const title = (
-    <SectionKicker>
-      {standalone
-        ? t('ext_arcim_documents_title_standalone', { provider })
-        : t('ext_arcim_documents_title', { provider })}
-    </SectionKicker>
-  )
 
   // Underlag whose verifikat sits in a klarmarkerat or locked year: the
   // database refuses those links, so a retry cannot help. Say which years and
   // where to reopen them, before the import (dry run) and after it (crm#251).
   const lockedCount = state.result?.locked ?? 0
   const lockedYears = (state.result?.lockedPeriods ?? []).join(', ')
-  const lockedYearsLine = (key: 'ext_arcim_documents_locked_offer' | 'ext_arcim_documents_locked_result') =>
-    lockedCount > 0 ? (
-      <p className="text-sm text-muted-foreground">
-        {t(key, { count: lockedCount, years: lockedYears })}{' '}
-        <Link href="/settings/bookkeeping" className="underline underline-offset-4 hover:text-foreground">
-          {t('ext_arcim_documents_locked_open_years')}
-        </Link>
-      </p>
-    ) : null
+  const openYearsLink = (
+    <Link
+      href="/settings/bookkeeping"
+      className="underline decoration-border underline-offset-4 transition-colors duration-150 hover:text-foreground"
+    >
+      {t('ext_arcim_documents_locked_open_years')}
+    </Link>
+  )
 
   // Files Fortnox keeps on supplier invoices come from a second register with
   // its own scope: when Fortnox refused it, the voucher files still ran, and
-  // the panel says which permission or licence held the rest back.
-  const unreachableSourcesNote = (state.result?.unreachableSources ?? []).map(
+  // the panel says which permission or licence held the rest back. The
+  // remedy and Fortnox's own answer sit one click down.
+  const unreachableNotes = (state.result?.unreachableSources ?? []).map(
     (entry: ArcimUnreachableDocumentSource) => {
       const scope = t(`ext_arcim_documents_scope_${entry.scope}`)
+      const answer = entry.providerMessage
+        ? t('ext_arcim_documents_provider_message', { provider: 'Fortnox', message: entry.providerMessage })
+        : null
       return (
-        <div key={entry.scope} className="space-y-1">
-          <p className="text-sm text-muted-foreground">
-            {t(`ext_arcim_documents_supplier_files_${entry.reason}`, { scope })}
-            {entry.reason === 'permission' && <>
-              {' '}{t(USER_RIGHT_REFUSAL_MESSAGE_KEY, { provider: 'Fortnox', what: scope })}
-            </>}
-          </p>
-          {entry.providerMessage && (
-            <p className="text-xs text-muted-foreground">
-              {t('ext_arcim_documents_provider_message', { message: entry.providerMessage })}
-            </p>
-          )}
-        </div>
+        <DocumentNote key={entry.scope} icon={Info}>
+          <p>{t(`ext_arcim_documents_supplier_files_${entry.reason}`, { scope })}</p>
+          {entry.reason === 'permission' ? (
+            <DocumentDisclosure summary={t('ext_arcim_documents_supplier_files_how')}>
+              <p>{t('ext_arcim_documents_supplier_files_remedy', { provider: 'Fortnox', scope })}</p>
+              {answer && <p>{answer}</p>}
+            </DocumentDisclosure>
+          ) : answer ? (
+            <DocumentDisclosure summary={t('ext_arcim_documents_technical_details')}>
+              <p>{answer}</p>
+            </DocumentDisclosure>
+          ) : null}
+        </DocumentNote>
       )
     },
   )
 
-  if (
-    state.phase === 'discovering' ||
-    state.phase === 'importing' ||
-    state.phase === 'reconnecting'
-  ) {
-    const label =
-      state.phase === 'discovering'
-        ? t('ext_arcim_documents_discovering', { provider })
-        : state.phase === 'importing'
-          ? t('ext_arcim_documents_importing')
-          : t('ext_arcim_documents_reconnecting')
+  const uploadInstead = (
+    <p className="text-[13px] leading-5 text-muted-foreground">
+      {t('ext_arcim_documents_upload_instead')}{' '}
+      <Link
+        href={UNDERLAG_UPLOAD_HREF}
+        className="underline decoration-border underline-offset-4 transition-colors duration-150 hover:text-foreground"
+      >
+        {t('ext_arcim_documents_upload_link')}
+      </Link>
+    </p>
+  )
 
-    const progress = documentImportProgress(state)
+  let body: React.ReactNode
 
-    return (
-      <section className="space-y-3" aria-live="polite">
-        {title}
-        <SpinnerLine>{label}</SpinnerLine>
-        {progress && (
-          <>
-            <Progress value={(progress.done / progress.total) * 100} className="h-1" />
-            <p className="text-sm tabular-nums text-muted-foreground">
-              {t('ext_arcim_documents_import_progress', progress)}
-            </p>
-          </>
-        )}
-      </section>
+  if (state.phase === 'discovering' || state.phase === 'reconnecting') {
+    body = (
+      <DocumentState
+        icon={<Loader2 className={cn(DOCUMENT_STATE_ICON, 'animate-spin text-muted-foreground')} aria-hidden="true" />}
+        lead={state.phase === 'discovering'
+          ? t('ext_arcim_documents_discovering', { provider })
+          : t('ext_arcim_documents_reconnecting', { provider })}
+        sub={state.phase === 'reconnecting' ? t('ext_arcim_documents_reconnecting_hint', { provider }) : undefined}
+      >
+        {/* The offer's button lands here: hold its place so the page does
+            not jump when the count arrives. */}
+        {state.phase === 'discovering' && <Skeleton className="h-9 w-40 rounded-full" />}
+      </DocumentState>
     )
-  }
-
-  if (state.phase === 'offered') {
-    return (
-      <section className="space-y-3" aria-live="polite">
-        {title}
-        <p className="text-sm text-muted-foreground">
-          {standalone
-            ? t('ext_arcim_documents_prompt_standalone', { count: state.found, provider })
-            : t('ext_arcim_documents_prompt', { count: state.found, provider })}
+  } else if (state.phase === 'importing') {
+    const progress = documentImportProgress(state)
+    body = (
+      <DocumentState
+        icon={<Loader2 className={cn(DOCUMENT_STATE_ICON, 'animate-spin text-muted-foreground')} aria-hidden="true" />}
+        lead={t('ext_arcim_documents_importing', { provider })}
+        trailing={progress ? (
+          <span className="shrink-0 text-[13px] tabular-nums text-muted-foreground">
+            {t('ext_arcim_documents_import_progress', progress)}
+          </span>
+        ) : undefined}
+      >
+        {progress && (
+          <Progress
+            value={(progress.done / progress.total) * 100}
+            className="h-1"
+            aria-label={t('ext_arcim_documents_importing', { provider })}
+          />
+        )}
+        <p className="text-[13px] leading-5 tabular-nums text-muted-foreground">
+          {t('ext_arcim_documents_import_hint', { linked: state.result?.linked ?? 0 })}
         </p>
-        {lockedYearsLine('ext_arcim_documents_locked_offer')}
-        {unreachableSourcesNote}
+      </DocumentState>
+    )
+  } else if (state.phase === 'offered') {
+    const notes = [
+      ...(lockedCount > 0
+        ? [
+            <DocumentNote key="locked" icon={Lock}>
+              <p>
+                {t('ext_arcim_documents_locked_offer', { count: lockedCount, years: lockedYears })}{' '}
+                {openYearsLink}
+              </p>
+            </DocumentNote>,
+          ]
+        : []),
+      ...unreachableNotes,
+    ]
+    // After a migration, say once that the files can come later on their
+    // own: re-running the migration for them is what this replaces.
+    body = (
+      <DocumentState
+        lead={standalone
+          ? t('ext_arcim_documents_prompt_standalone', { count: state.found, provider })
+          : t('ext_arcim_documents_prompt', { count: state.found, provider })}
+        sub={standalone ? undefined : t('ext_arcim_documents_prompt_later')}
+      >
+        {notes.length > 0 && <ul className="space-y-2">{notes}</ul>}
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <Button onClick={onImport}>
-            {t('ext_arcim_documents_import_action', { provider })}
+            <Paperclip className="mr-2 h-4 w-4" />
+            {t('ext_arcim_documents_import_action', { count: state.found })}
           </Button>
-          <Button variant="ghost" onClick={onDismiss}>
-            {t('ext_arcim_documents_not_now')}
+          {/* Standalone, "not now" is the page's own Tillbaka. */}
+          {!standalone && (
+            <Button variant="ghost" onClick={onDismiss}>
+              {t('ext_arcim_documents_not_now')}
+            </Button>
+          )}
+        </div>
+      </DocumentState>
+    )
+  } else if (state.phase === 'empty') {
+    body = (
+      <DocumentState lead={t('ext_arcim_documents_empty', { provider })} sub={uploadInstead}>
+        {unreachableNotes.length > 0 && <ul className="space-y-2">{unreachableNotes}</ul>}
+        <div>
+          <Button variant="outline" onClick={onDiscover}>
+            <RotateCcw className="mr-2 h-4 w-4" />
+            {t('ext_arcim_documents_retry_discovery')}
           </Button>
         </div>
-      </section>
+      </DocumentState>
     )
-  }
-
-  if (state.phase === 'empty') {
-    return (
-      <section className="space-y-3" aria-live="polite">
-        {title}
-        <p className="text-sm text-muted-foreground">{t('ext_arcim_documents_empty', { provider })}</p>
-        {unreachableSourcesNote}
-        <Button variant="outline" onClick={onDiscover}>
-          <RotateCcw className="mr-2 h-4 w-4" />
-          {t('ext_arcim_documents_retry_discovery')}
-        </Button>
-      </section>
-    )
-  }
-
-  if (state.phase === 'complete') {
+  } else if (state.phase === 'complete') {
     if (!state.result) {
-      return (
-        <section className="space-y-3" aria-live="polite">
-          {title}
-          <p className="text-sm text-muted-foreground">{t('ext_arcim_documents_result_description')}</p>
-        </section>
+      body = <DocumentState lead={t('ext_arcim_documents_result_description')} />
+    } else {
+      // The run is a success with exceptions, never a scoreboard: what landed
+      // leads, and only the counts above zero follow, each with its own way
+      // forward.
+      const { linked, skipped, unmatched, failed } = state.result
+      body = (
+        <DocumentState
+          icon={<CheckCircle2 className={cn(DOCUMENT_STATE_ICON, 'text-foreground')} aria-hidden="true" />}
+          lead={t('ext_arcim_documents_result_lead', { count: linked })}
+          sub={skipped > 0 ? t('ext_arcim_documents_result_skipped', { count: skipped }) : undefined}
+        >
+          {(failed > 0 || lockedCount > 0 || unmatched > 0) && (
+            <ul className="divide-y divide-border border-y border-border">
+              {failed > 0 && (
+                <DocumentOutcomeRow
+                  count={failed}
+                  tone="failed"
+                  label={t('ext_arcim_documents_failed')}
+                  hint={t('ext_arcim_documents_partial_failure')}
+                >
+                  <Button variant="outline" size="sm" onClick={onImport}>
+                    <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+                    {t('ext_arcim_documents_retry_import')}
+                  </Button>
+                </DocumentOutcomeRow>
+              )}
+              {lockedCount > 0 && (
+                <DocumentOutcomeRow
+                  count={lockedCount}
+                  label={t('ext_arcim_documents_locked', { years: lockedYears })}
+                  hint={t('ext_arcim_documents_locked_result')}
+                >
+                  <Button variant="ghost" size="sm" asChild>
+                    <Link href="/settings/bookkeeping">{t('ext_arcim_documents_locked_open_years')}</Link>
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={onDiscover}>
+                    <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+                    {t('ext_arcim_documents_retry_discovery')}
+                  </Button>
+                </DocumentOutcomeRow>
+              )}
+              {unmatched > 0 && (
+                <DocumentOutcomeRow
+                  count={unmatched}
+                  label={t('ext_arcim_documents_unmatched')}
+                  hint={t('ext_arcim_documents_unmatched_help')}
+                />
+              )}
+            </ul>
+          )}
+          {unreachableNotes.length > 0 && <ul className="space-y-2">{unreachableNotes}</ul>}
+        </DocumentState>
       )
     }
-
-    const { linked, skipped, unmatched, failed } = state.result
-    const outcomes = [
-      {
-        label: t('ext_arcim_documents_imported'),
-        value: linked,
-        valueClassName: 'text-foreground',
-      },
-      {
-        label: t('ext_arcim_documents_skipped'),
-        value: skipped,
-        valueClassName: 'text-foreground',
-      },
-      {
-        label: t('ext_arcim_documents_unmatched'),
-        value: unmatched,
-        valueClassName: 'text-foreground',
-      },
-      {
-        label: t('ext_arcim_documents_failed'),
-        value: failed,
-        valueClassName: failed > 0 ? 'text-destructive' : 'text-foreground',
-      },
-      ...(lockedCount > 0
-        ? [{
-            label: t('ext_arcim_documents_locked'),
-            value: lockedCount,
-            valueClassName: 'text-foreground',
-          }]
-        : []),
-    ]
-
-    return (
-      <section className="space-y-4" aria-live="polite">
-        {title}
-        <p className="text-sm text-muted-foreground">{t('ext_arcim_documents_result_description')}</p>
-        <dl className={cn('grid grid-cols-2 gap-4', outcomes.length > 4 ? 'sm:grid-cols-5' : 'sm:grid-cols-4')}>
-          {outcomes.map(({ label, value, valueClassName }) => (
-            <div key={label} className="flex flex-col">
-              <dt className="order-2 text-xs text-muted-foreground">{label}</dt>
-              <dd className={cn('order-1 font-display text-xl tabular-nums', valueClassName)}>
-                {value}
-              </dd>
-            </div>
-          ))}
-        </dl>
-        {unmatched > 0 && (
-          <p className="text-sm text-muted-foreground">
-            {t('ext_arcim_documents_unmatched_help')}
-          </p>
-        )}
-        {unreachableSourcesNote}
-        {lockedCount > 0 && (
-          <div className="space-y-3">
-            {lockedYearsLine('ext_arcim_documents_locked_result')}
-            <Button variant="outline" onClick={onDiscover}>
-              <RotateCcw className="mr-2 h-4 w-4" />
-              {t('ext_arcim_documents_retry_discovery')}
-            </Button>
-          </div>
-        )}
-        {failed > 0 && (
-          <div className="space-y-3">
-            <p className="text-sm text-destructive">
-              {t('ext_arcim_documents_partial_failure')}
-            </p>
-            <Button variant="outline" onClick={onImport}>
-              <RotateCcw className="mr-2 h-4 w-4" />
-              {t('ext_arcim_documents_retry_import')}
-            </Button>
-          </div>
-        )}
-      </section>
+  } else {
+    const reconnectRequired = state.problem?.reconnectRequired === true
+    const discoveryFailed = state.phase === 'discovery-error'
+    // Fortnox has not granted the file permissions to the integration itself, so
+    // neither reconnecting nor retrying can succeed: state it and offer nothing.
+    const scopesUnavailable =
+      state.problem?.code === PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE
+    // What the source answered and the request id are for support: one level
+    // down, never the main line.
+    const technical = [
+      state.problem?.providerMessage
+        ? t('ext_arcim_documents_provider_message', { provider, message: state.problem.providerMessage })
+        : null,
+      state.problem?.requestId
+        ? t('ext_arcim_documents_error_reference', { requestId: state.problem.requestId })
+        : null,
+    ].filter((line): line is string => line !== null)
+    const technicalDetails = technical.length > 0 && (
+      <DocumentDisclosure summary={t('ext_arcim_documents_technical_details')}>
+        {technical.map((line) => <p key={line}>{line}</p>)}
+      </DocumentDisclosure>
     )
-  }
 
-  const reconnectRequired = state.problem?.reconnectRequired === true
-  const discoveryFailed = state.phase === 'discovery-error'
-  // Fortnox has not granted the file permissions to the integration itself, so
-  // neither reconnecting nor retrying can succeed: state it and offer nothing.
-  const scopesUnavailable =
-    state.problem?.code === PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE
-  return (
-    <section className="space-y-3" aria-live="polite">
-      {title}
-      <p className="text-sm text-destructive">
-        {scopesUnavailable
-          ? t('ext_arcim_documents_scope_unavailable')
-          : state.problem?.message
-          ? state.problem.message
-          : reconnectRequired
-          ? t('ext_arcim_documents_scope_error')
-          : discoveryFailed
+    if (scopesUnavailable) {
+      // Waiting on Fortnox, not a fault: neutral, and the way forward
+      // meanwhile is the file upload.
+      body = (
+        <DocumentState
+          lead={t('ext_arcim_documents_scope_unavailable_title', { provider })}
+          sub={t('ext_arcim_documents_scope_unavailable', { provider })}
+        >
+          {uploadInstead}
+        </DocumentState>
+      )
+    } else if (reconnectRequired) {
+      // A permission to approve is a step to take, not an error.
+      body = (
+        <DocumentState
+          lead={t('ext_arcim_documents_scope_error_title', { provider })}
+          sub={state.problem?.message ?? t('ext_arcim_documents_scope_error', { provider })}
+        >
+          <div>
+            <Button onClick={onReconnect}>
+              <RefreshCw className="mr-2 h-4 w-4" />
+              {t('ext_arcim_documents_reconnect_action')}
+            </Button>
+          </div>
+          {technicalDetails}
+        </DocumentState>
+      )
+    } else {
+      // A real failure: the one place the failure colour appears, on the
+      // icon, with the sentence in ink and the retry right under it.
+      body = (
+        <DocumentState
+          icon={<AlertCircle className={cn(DOCUMENT_STATE_ICON, 'text-destructive')} aria-hidden="true" />}
+          lead={discoveryFailed
             ? standalone
               ? t('ext_arcim_documents_discovery_error_standalone', { provider })
               : t('ext_arcim_documents_discovery_error', { provider })
             : standalone
               ? t('ext_arcim_documents_import_error_standalone')
               : t('ext_arcim_documents_import_error')}
-      </p>
-      {state.problem?.providerMessage && (
-        <p className="text-xs text-muted-foreground">
-          {t('ext_arcim_documents_provider_message', {
-            message: state.problem.providerMessage,
-          })}
-        </p>
-      )}
-      {state.problem?.requestId && (
-        <p className="text-xs text-muted-foreground">
-          {t('ext_arcim_documents_error_reference', {
-            requestId: state.problem.requestId,
-          })}
-        </p>
-      )}
-      {!scopesUnavailable && (
-        <Button
-          onClick={reconnectRequired ? onReconnect : discoveryFailed ? onDiscover : onImport}
+          sub={state.problem?.message
+            ?? (discoveryFailed
+              ? t('ext_arcim_documents_discovery_error_hint')
+              : t('ext_arcim_documents_import_error_hint'))}
         >
-          {reconnectRequired ? (
-            <RefreshCw className="mr-2 h-4 w-4" />
-          ) : (
-            <RotateCcw className="mr-2 h-4 w-4" />
-          )}
-          {reconnectRequired
-            ? t('ext_arcim_documents_reconnect_action')
-            : discoveryFailed
-              ? t('ext_arcim_documents_retry_discovery')
-              : t('ext_arcim_documents_retry_import')}
-        </Button>
-      )}
+          <div>
+            <Button onClick={discoveryFailed ? onDiscover : onImport}>
+              <RotateCcw className="mr-2 h-4 w-4" />
+              {t('ext_arcim_documents_retry_import')}
+            </Button>
+          </div>
+          {technicalDetails}
+        </DocumentState>
+      )
+    }
+  }
+
+  return (
+    // A readable measure: the counts, their actions and the progress bar stay
+    // within reach of the sentence they belong to on a wide panel.
+    <section className="max-w-3xl space-y-3" aria-live="polite" aria-busy={DOCUMENT_BUSY_PHASES.has(state.phase) || undefined}>
+      {!standalone && <SectionKicker>{t('ext_arcim_documents_title', { provider })}</SectionKicker>}
+      {/* Keyed by phase: each new state fades in as one block, while the
+          running counts inside a phase update in place. */}
+      <div key={state.phase} className="animate-fade-in space-y-4">
+        <DocumentStateAlignedContext.Provider value={standalone}>{body}</DocumentStateAlignedContext.Provider>
+      </div>
     </section>
   )
 }
@@ -2387,7 +2573,7 @@ interface ProviderReviewResult {
   acceptedAt: string | null
 }
 
-function ResultStep({
+export function ResultStep({
   provider,
   results,
   sieResults,
@@ -2474,18 +2660,30 @@ function ResultStep({
     // the underlag flow is the whole page.
     const documentProvider =
       ARCIM_PROVIDERS.find(p => p.id === documentImportState.provider)?.name ?? documentImportState.provider ?? ''
+    const documentLogo = documentImportState.provider ? PROVIDER_LOGOS[documentImportState.provider] : null
+    // One title, one short promise (the bookkeeping does not change), the
+    // mechanics behind the "?": the page says what it does before the user
+    // presses anything.
     return (
       <div className="stagger-enter space-y-8">
-        <div>
-          <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-            {t('ext_arcim_documents_standalone_kicker')}
-          </p>
-          <h2 className="mt-2 font-display text-2xl leading-8 tracking-tight text-balance">
-            {t('ext_arcim_documents_title_standalone', { provider: documentProvider })}
-          </h2>
-          <p className="mt-3 text-[13px] text-muted-foreground">
-            {t('ext_arcim_documents_standalone_lede', { provider: documentProvider })}
-          </p>
+        <div className="flex items-start gap-4">
+          {documentLogo && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={documentLogo} alt="" className="mt-1 h-8 w-8 shrink-0 rounded-sm object-contain" />
+          )}
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h2 className="font-display text-2xl leading-8 tracking-tight text-balance">
+                {t('ext_arcim_documents_title_standalone', { provider: documentProvider })}
+              </h2>
+              <HelpPopover>
+                <p>{t('ext_arcim_documents_standalone_help', { provider: documentProvider })}</p>
+              </HelpPopover>
+            </div>
+            <p className="mt-1 text-[13px] leading-5 text-muted-foreground">
+              {t('ext_arcim_documents_standalone_lede', { provider: documentProvider })}
+            </p>
+          </div>
         </div>
         <DocumentImportFollowUp
           state={documentImportState}
@@ -2495,17 +2693,21 @@ function ResultStep({
           onDismiss={onDismissDocuments}
           onReconnect={onReconnectDocuments}
         />
+        {/* Tillbaka is always there; the way on to the vouchers only once
+            the files are on them, so no state has two primary actions. */}
         <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
           <Button variant="outline" onClick={onDone}>
             <ArrowLeft className="mr-2 h-4 w-4" />
             {t('ext_arcim_documents_standalone_back')}
           </Button>
-          <Button asChild>
-            <Link href="/bookkeeping">
-              Visa bokföring
-              <ExternalLink className="ml-2 h-4 w-4" />
-            </Link>
-          </Button>
+          {documentImportState.phase === 'complete' && (
+            <Button asChild>
+              <Link href="/bookkeeping">
+                {t('ext_arcim_documents_view_entries')}
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Link>
+            </Button>
+          )}
         </div>
       </div>
     )
