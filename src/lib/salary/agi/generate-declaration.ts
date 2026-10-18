@@ -5,7 +5,8 @@
  * and the v1 public route (`POST /api/v1/companies/{companyId}/salary-runs/{id}/generate-agi`)
  * call this helper. It loads the salary run + employees + per-day absence
  * records, builds the Skatteverket AGI XML, upserts the agi_declarations
- * row (correction-aware), updates `salary_runs.agi_generated_at`, emits
+ * row (correction-aware: a correction run taking over the period's row
+ * resets its filing state), updates `salary_runs.agi_generated_at`, emits
  * `agi.generated`, and auto-completes the `arbetsgivardeklaration` deadline
  * for the period.
  *
@@ -711,26 +712,56 @@ export async function generateAgiDeclaration(
   // 8. UPSERT agi_declarations.
   let agiDeclarationId: string
   if (existingAgi) {
-    const { error: updErr } = await supabase
-      .from('agi_declarations')
-      .update({
-        xml_content: xml,
-        individuppgifter,
-        total_gross: run.total_gross,
-        // Declared whole-krona totals, exactly as serialised into the XML
-        // (FK497/FK487): the amounts Skatteverket computes from the declared
-        // underlag and draws from the skattekonto (modulo the two documented
-        // krona-scale approximations in declared-avgifter.ts). This is what
-        // agi-tax-settlement matches the draw against. run.total_tax would
-        // drift: it keeps öre and includes removed rows.
-        total_tax: totals.totalTax,
-        total_avgifter_basis: totals.totalAvgifterBasis,
-        total_avgifter: totals.totalAvgifterAmount,
-        employee_count: employeeData.length,
-        is_correction: true,
-        salary_run_id: run.id,
-      })
-      .eq('id', existingAgi.id)
+    // The period's one row now takes another run's declaration: the run this
+    // one corrects (or a corrected one before it). That declaration's filing
+    // state does not carry over: this XML has not been sent, so the row
+    // starts unfiled, and the submit flips it to pending_signature and the
+    // kvittens reconciliation promotes it on the correction's OWN kvittens.
+    // Keeping 'submitted' left the correction unpromotable and showed the
+    // original's receipt as the period's. The original's receipt is not lost:
+    // agi_kvittenser keeps every kvittens and its run keeps agi_submitted_at.
+    const takesOverAnotherRun = existingAgi.salary_run_id !== run.id
+    const { error: updErr } = takesOverAnotherRun
+      ? await supabase
+          .from('agi_declarations')
+          .update({
+            xml_content: xml,
+            individuppgifter,
+            total_gross: run.total_gross,
+            // Declared whole-krona totals: see the update below.
+            total_tax: totals.totalTax,
+            total_avgifter_basis: totals.totalAvgifterBasis,
+            total_avgifter: totals.totalAvgifterAmount,
+            employee_count: employeeData.length,
+            is_correction: true,
+            salary_run_id: run.id,
+            status: 'generated',
+            kvittensnummer: null,
+            submitted_at: null,
+            submitted_by: null,
+            response_data: null,
+          })
+          .eq('id', existingAgi.id)
+      : await supabase
+          .from('agi_declarations')
+          .update({
+            xml_content: xml,
+            individuppgifter,
+            total_gross: run.total_gross,
+            // Declared whole-krona totals, exactly as serialised into the XML
+            // (FK497/FK487): the amounts Skatteverket computes from the declared
+            // underlag and draws from the skattekonto (modulo the two documented
+            // krona-scale approximations in declared-avgifter.ts). This is what
+            // agi-tax-settlement matches the draw against. run.total_tax would
+            // drift: it keeps öre and includes removed rows.
+            total_tax: totals.totalTax,
+            total_avgifter_basis: totals.totalAvgifterBasis,
+            total_avgifter: totals.totalAvgifterAmount,
+            employee_count: employeeData.length,
+            is_correction: true,
+            salary_run_id: run.id,
+          })
+          .eq('id', existingAgi.id)
     if (updErr) {
       return { ok: false, code: 'DATABASE_ERROR', details: updErr }
     }

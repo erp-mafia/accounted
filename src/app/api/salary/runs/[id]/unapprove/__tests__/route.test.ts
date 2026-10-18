@@ -203,4 +203,32 @@ describe('POST /api/salary/runs/[id]/unapprove', () => {
       }),
     )
   })
+
+  it("keeps a correction run's unfiled declaration: it is the period's row, taken over from the original", async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    authed(supabase)
+
+    enqueueMany([
+      { data: { ...approvedRun, is_correction: true } }, // salary_runs lookup
+      { data: { id: 'agi-1', status: 'generated' } },    // agi_declarations lookup
+      { data: { id: 'run-1', status: 'review' } },       // salary_runs update
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1/unapprove', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+    const { status, body } = await parseJsonResponse<{ data: { status: string } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.status).toBe('review')
+    // The row carries the period's tax payment tracking; the cleared
+    // agi_generated_at makes the panel and the submit regenerate its XML.
+    expect(findCall('agi_declarations', 'delete')).toBeUndefined()
+    expect(findCall('salary_runs', 'update')?.[0]).toMatchObject({ agi_generated_at: null })
+    expect(eventBus.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'salary_run.approval_reverted',
+        payload: expect.objectContaining({ deletedAgiDeclarationId: null }),
+      }),
+    )
+  })
 })

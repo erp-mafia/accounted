@@ -366,6 +366,43 @@ describe('issueAndBookInvoice: kontantfaktura, paid at issue (crm#1281)', () => 
     },
   )
 
+  // The one refusal every door gets (dashboard and v1 mark-sent, the MCP
+  // approval): checked before the payee is frozen or a number taken.
+  it.each([
+    ['not_invoice', { document_type: 'proforma' }, null],
+    ['credit_note', { credited_invoice_id: 'inv-0' }, null],
+    ['self_billed', { is_self_billed: true }, null],
+    ['periodisering', { items: [{ accrual_period_start: '2026-11-01', accrual_period_end: '2027-10-31' }] }, null],
+    [
+      'custom_lines',
+      {},
+      [
+        { account_number: '1510', debit_amount: 1250, credit_amount: 0 },
+        { account_number: '3001', debit_amount: 0, credit_amount: 1250 },
+      ],
+    ],
+  ])('refuses %s before anything changes', async (reason, overrides, customLines) => {
+    const result = await issueAndBookInvoice({
+      supabase: mockSupabase as never,
+      companyId: 'company-1',
+      userId: 'user-1',
+      invoice: { ...paidDraft(), ...overrides } as never,
+      settings,
+      log,
+      customLines: customLines as never,
+      paidAtIssue: { settlementAccountNumber: '1940' },
+    })
+
+    expect(result).toEqual({
+      ok: false,
+      errorCode: 'INVOICE_PAID_AT_ISSUE_NOT_ALLOWED',
+      details: { reason },
+    })
+    expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
+    expect(mockSettleInvoicePayment).not.toHaveBeenCalled()
+    expect(findCalls('invoices', 'update')).toEqual([])
+  })
+
   it('restores the draft and answers with the refusal when the payment cannot be booked', async () => {
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // CAS flip to sent
     mockSettleInvoicePayment.mockResolvedValue({

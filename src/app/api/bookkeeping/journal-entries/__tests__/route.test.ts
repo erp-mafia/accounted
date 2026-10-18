@@ -256,7 +256,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     expect(ilikeCalls[0][1]).toBe('%hyra, kvartal 1 (50\\%)%')
   })
 
-  it('orders by the total_amount computed column on amount sort, bypassing the RPC', async () => {
+  it('orders by the display_amount computed column on amount sort, bypassing the RPC', async () => {
     enqueue({ data: [], error: null, count: 0 })
 
     const request = createMockRequest('/api/bookkeeping/journal-entries', {
@@ -267,13 +267,14 @@ describe('GET /api/bookkeeping/journal-entries', () => {
 
     expect(status).toBe(200)
     // Amount sort orders by a PostgREST computed column (migration
-    // 20260811100000) that the include_related RPC can't express, so the
+    // 20261018135300) that the include_related RPC can't express, so the
     // route must fall through to the direct query (strict period view),
-    // exactly like voucher sort.
+    // exactly like voucher sort. It is display_amount, the amount the Belopp
+    // column shows, not total_amount, the omslutning (crm#1280).
     expect(mockSupabase.from).toHaveBeenCalledWith('journal_entries')
     expect(mockSupabase.rpc).not.toHaveBeenCalled()
     expect(findCalls('journal_entries', 'order')[0]).toEqual([
-      'total_amount',
+      'display_amount',
       { ascending: false },
     ])
   })
@@ -311,7 +312,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     // series+number repeat across fiscal years, so equal keys need a total
     // order for stable pagination.
     expect(findCalls('journal_entries', 'order')).toEqual([
-      ['total_amount', { ascending: false }],
+      ['display_amount', { ascending: false }],
       ['description', { ascending: true }],
       ['voucher_series', { ascending: true }],
       ['voucher_number', { ascending: true }],
@@ -341,7 +342,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       ['entry_date', { ascending: false }],
       ['voucher_series', { ascending: false }],
       ['voucher_number', { ascending: false }],
-      ['total_amount', { ascending: true }],
+      ['display_amount', { ascending: true }],
       ['id', { ascending: true }],
     ])
   })
@@ -437,7 +438,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       voucher_series: 'A',
       voucher_number: voucherNumber,
       description: 'test',
-      total_amount: 100,
+      display_amount: 100,
     })
 
     it('returns only entries without documents, exemption-aware, with the full-set count', async () => {
@@ -508,6 +509,42 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       // Page 2 of size 1 under voucher-asc = A2.
       expect(body.data.map((e) => e.id)).toEqual([E2])
       expect(body.count).toBe(3)
+    })
+
+    it('sorts by the amount the list shows (display_amount) on amount sort (crm#1280)', async () => {
+      // E1 has the largest omslutning but shows the smallest amount (a
+      // reverse-charge bank payment): the order follows display_amount.
+      enqueue({
+        data: [
+          { ...candidate(E1, 1), display_amount: 200 },
+          { ...candidate(E2, 2), display_amount: 900 },
+          { ...candidate(E3, 3), display_amount: 300 },
+        ],
+        error: null,
+      })
+      enqueue({ data: [], error: null }) // no documents
+      enqueue({ data: [], error: null }) // no SI references (registration FK)
+      enqueue({ data: [], error: null }) // no SI references (payment FK)
+      enqueue({ data: [], error: null }) // no SI payment-row references
+      enqueue({ data: [], error: null }) // no exemptions
+      enqueue({ data: [], error: null }) // no invoices pointing at the entries
+      enqueue({ data: [], error: null }) // no invoice payment rows
+      enqueue({
+        data: [makeJournalEntry({ id: E1 }), makeJournalEntry({ id: E2 }), makeJournalEntry({ id: E3 })],
+        error: null,
+      }) // page rows
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { missing_underlag: 'true', exclude_draft: 'true', sort_by: 'total_desc' },
+      })
+      const { status, body } = await parseJsonResponse<{ data: { id: string }[]; count: number }>(
+        await GET(request)
+      )
+
+      expect(status).toBe(200)
+      expect(body.data.map((e) => e.id)).toEqual([E2, E3, E1])
+      const candidateSelect = findCalls('journal_entries', 'select')[0]
+      expect(candidateSelect[0]).toContain('display_amount')
     })
 
     it('treats an anchored supplier-invoice reference as underlag (BFL 5 kap 7 §)', async () => {

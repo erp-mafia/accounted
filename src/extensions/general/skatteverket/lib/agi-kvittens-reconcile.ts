@@ -91,6 +91,93 @@ export type AgiPromotionOutcome = Extract<
  */
 const KVITTENS_NOTIFICATION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 
+/** A kvittens' signeradTid in epoch ms, or null when absent or unparseable. */
+function signedAtMs(kvittens: SkatteverketAGIKvittens): number | null {
+  if (!kvittens.signeradTid) return null
+  const ms = Date.parse(kvittens.signeradTid)
+  return Number.isNaN(ms) ? null : ms
+}
+
+/**
+ * The newest kvittens in a period's list: the latest signeradTid, or the
+ * first listed when none carries one. The list holds every filing of the
+ * redovisningsperiod (the original's and each correction's); nothing here
+ * relies on the order Skatteverket returns it in.
+ */
+export function newestAgiKvittens(
+  kvittenser: readonly SkatteverketAGIKvittens[] | null | undefined,
+): SkatteverketAGIKvittens | null {
+  let newest: SkatteverketAGIKvittens | null = null
+  let newestMs: number | null = null
+  for (const kvittens of kvittenser ?? []) {
+    if (!kvittens?.uuidKvittens) continue
+    const ms = signedAtMs(kvittens)
+    if (newest === null || (ms !== null && (newestMs === null || ms > newestMs))) {
+      newest = kvittens
+      newestMs = ms
+    }
+  }
+  return newest
+}
+
+export type DeclarationKvittensResult =
+  | { ok: true; kvittens: SkatteverketAGIKvittens | null }
+  | { ok: false; error: string }
+
+/**
+ * The kvittens the period's declaration may be promoted on, or null while its
+ * own filing has none yet.
+ *
+ * A correction is a complete replacement declaration for the same
+ * redovisningsperiod (same specifikationsnummer per IU) and gets its own
+ * kvittens, but the list Skatteverket returns also holds the earlier
+ * filing's. The candidate is the newest kvittens. When another run of the
+ * same payroll month is already filed (the run the declaration's run
+ * corrects: its agi_submitted_at is stamped from its own kvittens'
+ * signeradTid), the candidate must be signed after that filing; otherwise the
+ * list holds only earlier receipts, the correction is not signed yet, and
+ * promoting it would show it as filed with the original's kvittens. A month
+ * without another filing takes the newest kvittens, as it always has.
+ */
+export async function declarationKvittens(
+  supabase: SupabaseClient,
+  companyId: string,
+  salaryRunId: string | null,
+  kvittenser: readonly SkatteverketAGIKvittens[] | null | undefined,
+): Promise<DeclarationKvittensResult> {
+  const newest = newestAgiKvittens(kvittenser)
+  if (!newest || !salaryRunId) return { ok: true, kvittens: newest }
+
+  const { data: run, error: runError } = await supabase
+    .from('salary_runs')
+    .select('period_year, period_month')
+    .eq('id', salaryRunId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (runError) return { ok: false, error: `Kunde inte läsa lönekörningen: ${runError.message}` }
+  if (!run) return { ok: true, kvittens: newest }
+
+  const { data: filedRuns, error: filedError } = await supabase
+    .from('salary_runs')
+    .select('agi_submitted_at')
+    .eq('company_id', companyId)
+    .eq('period_year', run.period_year)
+    .eq('period_month', run.period_month)
+    .neq('id', salaryRunId)
+    .not('agi_submitted_at', 'is', null)
+  if (filedError) return { ok: false, error: `Kunde inte läsa månadens tidigare inlämningar: ${filedError.message}` }
+
+  let earlierFiling: number | null = null
+  for (const row of (filedRuns ?? []) as Array<{ agi_submitted_at: string | null }>) {
+    const ms = row.agi_submitted_at ? Date.parse(row.agi_submitted_at) : NaN
+    if (!Number.isNaN(ms) && (earlierFiling === null || ms > earlierFiling)) earlierFiling = ms
+  }
+  if (earlierFiling === null) return { ok: true, kvittens: newest }
+
+  const signed = signedAtMs(newest)
+  return { ok: true, kvittens: signed !== null && signed > earlierFiling ? newest : null }
+}
+
 export async function reconcileAgiDeclaration(
   supabase: SupabaseClient,
   decl: PendingAgiDeclaration,
@@ -174,8 +261,13 @@ export async function reconcileAgiDeclaration(
     return { status: 'error', error: `Kunde inte spara kvittensen: ${recorded.error}` }
   }
 
-  const kvittens = kvittRes.data.kvittenser?.[0]
-  if (!kvittens?.uuidKvittens) {
+  // The declaration's own receipt, never an earlier filing's of the month.
+  const own = await declarationKvittens(supabase, companyId, decl.salary_run_id, kvittRes.data.kvittenser)
+  if (!own.ok) {
+    return { status: 'error', error: own.error }
+  }
+  const kvittens = own.kvittens
+  if (!kvittens) {
     return { status: 'still_pending' }
   }
 

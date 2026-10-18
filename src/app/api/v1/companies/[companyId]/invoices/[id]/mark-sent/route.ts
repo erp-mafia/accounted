@@ -25,6 +25,14 @@
  *   4. The PDF is archived as underlag, the manual delivery recorded and
  *      invoice.sent emitted.
  *
+ * Optional body `paid_at_issue: { account_number }` (crm#1281, the
+ * kontantfaktura), the same schema and refusal as the dashboard mark-sent:
+ * the invoice is issued already paid, on its fakturadatum, to that 19xx
+ * account. Step 3 is then one cash verifikat (Dr 19xx, Cr revenue + output
+ * VAT, no 1510) in either accounting method, and the invoice ends paid.
+ * issueAndBookInvoice refuses anything but a plain faktura with
+ * INVOICE_PAID_AT_ISSUE_NOT_ALLOWED before anything changes.
+ *
  * Idempotent (mandatory Idempotency-Key). Dry-run shows the would-be
  * post-send state without allocating a number, posting a journal entry,
  * or emitting events.
@@ -35,7 +43,9 @@ import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
+import { MarkInvoiceSentPaidAtIssueSchema } from '@/lib/api/schemas'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import {
@@ -47,6 +57,7 @@ import {
   hasRequiredInvoicePaymentAccount,
 } from '@/lib/invoices/payment-accounts'
 import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
+import { paidAtIssueBlockReason } from '@/lib/invoices/paid-at-issue'
 import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
 import type { CompanySettings, Invoice } from '@/types'
 
@@ -59,7 +70,8 @@ const INVOICE_MARK_SENT_RESPONSE_COLUMNS =
 const InvoiceMarkSentResponse = z.object({
   id: z.string().uuid(),
   invoice_number: z.string(),
-  status: z.literal('sent'),
+  // paid when the body asked for paid_at_issue (a kontantfaktura).
+  status: z.enum(['sent', 'paid']),
   total: z.number(),
   journal_entry_id: z.string().uuid().nullable(),
   // Present only when the invoice was issued (and, when it books at issue,
@@ -84,9 +96,9 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices/:id/mark-sent',
   summary: 'Transition a draft invoice to sent (without emailing).',
   description:
-    'Marks a draft invoice as sent: for invoices delivered outside Accounted (an external e-invoice provider, postal, manual email). Not needed after a successful Peppol send (POST /invoices/{id}/send-peppol, gnubok_send_invoice_peppol or the dashboard): that flow issues the invoice itself. If a Peppol send reports that the invoice was sent but could not be marked as sent (issuance.ok=false with warning PEPPOL_SENT_NOT_ISSUED, invoice still in draft), :mark-sent is the documented recovery and completes the issuance; a number already allocated is reused, never consumed twice. Peppol sending needs a per-company access grant (POST /peppol/access-request, or Inställningar > Kopplingar > E-faktura via Peppol (Settings > Connections > E-invoicing via Peppol) in the dashboard; check an invoice with GET /invoices/{id}/peppol): senders whose org number is not a personnummer (every legal form except enskild firma), standard invoices only, Swedish org-number buyers whose org number is not a personnummer, SEK with taxable Swedish VAT at 6/12/25 % only, no ROT/RUT deductions. Allocates the F-series invoice_number atomically (ML 17 kap 24§ p.2). When the company books at issue (faktureringsmetoden without defer_invoice_booking), also posts the invoice journal entry (Debit AR 1510 / Credit revenue + output VAT); under defer_invoice_booking the invoice is marked sent without a verifikat and is booked afterwards with POST /invoices/{id}/book. Emits invoice.sent. Idempotent and dry-runnable. The companion :send action (PR-B-2b-3) adds PDF rendering and email delivery on top of this same flow.',
+    'Marks a draft invoice as sent: for invoices delivered outside Accounted (an external e-invoice provider, postal, manual email). Not needed after a successful Peppol send (POST /invoices/{id}/send-peppol, gnubok_send_invoice_peppol or the dashboard): that flow issues the invoice itself. If a Peppol send reports that the invoice was sent but could not be marked as sent (issuance.ok=false with warning PEPPOL_SENT_NOT_ISSUED, invoice still in draft), :mark-sent is the documented recovery and completes the issuance; a number already allocated is reused, never consumed twice. Peppol sending needs a per-company access grant (POST /peppol/access-request, or Inställningar > Kopplingar > E-faktura via Peppol (Settings > Connections > E-invoicing via Peppol) in the dashboard; check an invoice with GET /invoices/{id}/peppol): senders whose org number is not a personnummer (every legal form except enskild firma), standard invoices only, Swedish org-number buyers whose org number is not a personnummer, SEK with taxable Swedish VAT at 6/12/25 % only, no ROT/RUT deductions. Allocates the F-series invoice_number atomically (ML 17 kap 24§ p.2). When the company books at issue (faktureringsmetoden without defer_invoice_booking), also posts the invoice journal entry (Debit AR 1510 / Credit revenue + output VAT); under defer_invoice_booking the invoice is marked sent without a verifikat and is booked afterwards with POST /invoices/{id}/book. With body paid_at_issue: { account_number } (a 19xx kassa, bank or Swish account) the invoice is issued already paid, a kontantfaktura: one verifikat on the invoice date, Debit that account / Credit revenue + output VAT, no 1510 leg, in either accounting method, and status ends paid (no :mark-paid afterwards). Emits invoice.sent. Idempotent and dry-runnable. The companion :send action (PR-B-2b-3) adds PDF rendering and email delivery on top of this same flow.',
   useWhen:
-    'You delivered the invoice through a channel other than Accounted\'s email or Peppol send (an external e-invoice provider, postal, your own SMTP) and need to record it as sent so the F-series number is allocated and the journal entry is posted; or a Peppol send was accepted by the network but reported that the invoice could not be marked as sent.',
+    'You delivered the invoice through a channel other than Accounted\'s email or Peppol send (an external e-invoice provider, postal, your own SMTP) and need to record it as sent so the F-series number is allocated and the journal entry is posted; or a Peppol send was accepted by the network but reported that the invoice could not be marked as sent. With paid_at_issue: the customer paid when the invoice was issued (Swish, card, cash at the counter) and the invoice is also the receipt.',
   doNotUseFor:
     'Sending the invoice via Accounted email: use :send (PR-B-2b-3) for that. Marking an already-sent invoice as paid: use :mark-paid (PR-B-2b-2).',
   pitfalls: [
@@ -95,8 +107,10 @@ registerEndpoint({
     'Delivery notes (document_type=delivery_note) don\'t transition to sent: they were never drafts in the f-series sense. This endpoint will reject them with 400 VALIDATION_ERROR.',
     'Idempotency-Key is mandatory. A retried mark-sent with the same key replays the cached response.',
     'Fails closed: when the invoice\'s verifikat cannot be posted (no open or a locked period, a required dimension, an account outside the chart) the invoice stays a draft, keeps any number already allocated, and the request fails with the engine\'s code or 500 INVOICE_MARK_SENT_BOOK_FAILED (details.reason in Swedish). Fix the cause and retry.',
+    'paid_at_issue is only for a plain faktura: a proforma or quote (details.reason not_invoice), a självfaktura (self_billed) or an invoice with periodised lines (periodisering) returns 400 INVOICE_PAID_AT_ISSUE_NOT_ALLOWED before anything changes; issue it without paid_at_issue and record the payment with :mark-paid. account_number must be a 19xx account (400 VALIDATION_ERROR otherwise) that exists in the chart. It always settles the full amount on the invoice date: for a partial or later payment, issue without it and use :mark-paid.',
   ],
   example: {
+    request: { paid_at_issue: { account_number: resolveAccountRole(PINNED_JURISDICTION, 'bank') } },
     response: {
       data: {
         id: '0e9c…',
@@ -113,12 +127,13 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: true,
+  request: { body: MarkInvoiceSentPaidAtIssueSchema },
   response: { success: dataEnvelope(InvoiceMarkSentResponse) },
 })
 
 export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string }> }>(
   'invoices.mark-sent',
-  async (_request, ctx, params) => {
+  async (request, ctx, params) => {
     const { id } = await params.params
 
     const idParse = z.string().uuid().safeParse(id)
@@ -137,12 +152,29 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
+    // Body is optional: an empty POST issues the invoice as before. The only
+    // field is paid_at_issue, the dashboard mark-sent's schema.
+    let rawBody: unknown = null
+    try {
+      const text = await request.text()
+      if (text.trim()) rawBody = JSON.parse(text)
+    } catch {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { field: 'body', message: 'Body is not valid JSON.' },
+      })
+    }
+    const bodyParse = MarkInvoiceSentPaidAtIssueSchema.safeParse(rawBody ?? {})
+    if (!bodyParse.success) return v1ValidationError(ctx, bodyParse.error)
+    const paidAtIssue = bodyParse.data.paid_at_issue ?? null
+
     // Pre-flight: fetch the invoice (with items + customer for the journal-
-    // entry generator) and verify it's a draft.
+    // entry generator) and verify it's a draft. is_self_billed and the items'
+    // accrual period are what the dry run checks a paid_at_issue against.
     const { data: invoice, error: fetchErr } = await ctx.supabase
       .from('invoices')
       .select(
-        `${INVOICE_MARK_SENT_RESPONSE_COLUMNS}, customer:customers(id, name, customer_type, country), items:invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, revenue_account, dimensions)`,
+        `${INVOICE_MARK_SENT_RESPONSE_COLUMNS}, is_self_billed, customer:customers(id, name, customer_type, country), items:invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, revenue_account, dimensions, accrual_period_start, accrual_period_end)`,
       )
       .eq('company_id', ctx.companyId!)
       .eq('id', invoiceId)
@@ -242,8 +274,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const wouldCreateJournalEntry = isRealInvoice && booksInvoicesOnIssue(companySettings)
 
     if (ctx.dryRun) {
-      // The guards the commit runs before it takes a number, without
-      // persisting the payee snapshot.
+      // The guards the commit runs before it takes a number, in its order
+      // (issueAndBookInvoice), without persisting the payee snapshot.
+      if (paidAtIssue) {
+        const reason = paidAtIssueBlockReason(typed)
+        if (reason) {
+          return v1ErrorResponseFromCode('INVOICE_PAID_AT_ISSUE_NOT_ALLOWED', ctx.log, {
+            requestId: ctx.requestId,
+            details: { reason },
+          })
+        }
+      }
       const payeeSnapshot = await snapshotInvoicePayee(ctx.supabase, ctx.companyId!, typed, { persist: false })
       if (!payeeSnapshot.ok) {
         return v1ErrorResponseFromCode(payeeSnapshot.code, ctx.log, {
@@ -265,14 +306,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       }
       // Preview the post-send state. invoice_number can't be predicted
       // exactly (atomic sequence allocation); show a marker so the agent
-      // knows commit will assign one.
+      // knows commit will assign one. A kontantfaktura always books its one
+      // cash verifikat, whatever the method or deferral.
       return dryRunPreview(
         {
           ...typed,
-          status: 'sent' as const,
+          status: paidAtIssue ? ('paid' as const) : ('sent' as const),
           invoice_number: typed.invoice_number ?? '(allocated atomically on commit)',
-          would_create_journal_entry: wouldCreateJournalEntry,
+          would_create_journal_entry: paidAtIssue ? true : wouldCreateJournalEntry,
           accounting_method: accountingMethod,
+          ...(paidAtIssue
+            ? { paid_at_issue: { account_number: paidAtIssue.account_number, payment_date: typed.invoice_date } }
+            : {}),
         },
         { requestId: ctx.requestId, log: ctx.log },
       )
@@ -305,6 +350,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       invoice: bookingRow as IssuableInvoice,
       settings: companySettings,
       log: ctx.log,
+      // Refused there (INVOICE_PAID_AT_ISSUE_NOT_ALLOWED) for anything but a
+      // plain faktura, as on the dashboard; a refused payment answers below
+      // with settleInvoicePayment's own code.
+      paidAtIssue: paidAtIssue ? { settlementAccountNumber: paidAtIssue.account_number } : null,
     })
     if (!issued.ok) {
       switch (issued.errorCode) {
@@ -352,7 +401,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       .maybeSingle()
     const updated = stored ?? {
       ...typed,
-      status: 'sent' as const,
+      status: paidAtIssue ? ('paid' as const) : ('sent' as const),
       invoice_number: (bookingRow as Invoice).invoice_number,
     }
 
@@ -368,6 +417,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       userId: ctx.userId,
       invoiceNumber: (updated as { invoice_number?: string | null }).invoice_number,
       journalEntryId,
+      paidAtIssue: !!paidAtIssue,
       hadWarnings: warnings.length > 0,
     })
 

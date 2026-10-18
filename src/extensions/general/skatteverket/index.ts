@@ -83,7 +83,7 @@ import type { SkvActionFailure } from '@/lib/skatteverket/extension-actions'
 import { SKATTEKONTO_BALANCE_SNAPSHOT_KEY, SKATTEKONTO_LAST_SYNCED_AT_KEY } from './lib/skattekonto-sync'
 import { fetchDeclarationView, fetchVatDeclarationStatus } from './lib/declaration-status'
 import { runPostConnectRefresh } from './lib/post-connect-refresh'
-import { promoteAgiDeclaration } from './lib/agi-kvittens-reconcile'
+import { declarationKvittens, newestAgiKvittens, promoteAgiDeclaration } from './lib/agi-kvittens-reconcile'
 import { recordAgiKvittenser } from './lib/agi-kvittens-history'
 import { readAgiSubmissionStatus } from './lib/agi-submission-status'
 import {
@@ -1705,9 +1705,12 @@ export const skatteverketExtension: Extension = {
             )
           }
 
-          // Newest kvittens for the period drives the local state.
-          const kvittens = result.data.kvittenser?.[0]
-          if (kvittens?.uuidKvittens) {
+          // The receipt of the period's current declaration, once it has
+          // one; the panel reads it instead of the raw list, which also holds
+          // earlier filings' receipts (a correction awaiting signature lists
+          // only the original's).
+          let declarationKvittensnummer: string | null = null
+          if (newestAgiKvittens(result.data.kvittenser)) {
             const periodYear = parseInt(period.slice(0, 4))
             const periodMonth = parseInt(period.slice(4, 6))
 
@@ -1741,7 +1744,26 @@ export const skatteverketExtension: Extension = {
               .limit(1)
               .maybeSingle()
 
-            if (latest?.id && AGI_UNFILED_STATUSES.includes(latest.status as string)) {
+            // The declaration's own receipt, never an earlier filing's of the
+            // month (declarationKvittens): the same pick the cron makes.
+            const own = await declarationKvittens(
+              ctx.supabase,
+              ctx.companyId,
+              (latest?.salary_run_id as string | null) ?? null,
+              result.data.kvittenser,
+            )
+            if (!own.ok) {
+              ctx.log.warn('kvittenser read but the declaration\'s own could not be resolved', {
+                companyId: ctx.companyId, period, message: own.error,
+              })
+            }
+            const kvittens = own.ok ? own.kvittens : null
+            declarationKvittensnummer = kvittens?.uuidKvittens ?? null
+
+            if (!kvittens) {
+              // Every receipt listed belongs to an earlier filing of the month:
+              // the declaration is not signed yet, so nothing moves.
+            } else if (latest?.id && AGI_UNFILED_STATUSES.includes(latest.status as string)) {
               // First receipt for this declaration. This check is what fires
               // when the user comes back from signing, so it is usually the
               // FIRST observer of the kvittens, and it used to promote the row
@@ -1848,7 +1870,7 @@ export const skatteverketExtension: Extension = {
             }
           }
 
-          return NextResponse.json({ data: result.data })
+          return NextResponse.json({ data: { ...result.data, declarationKvittens: declarationKvittensnummer } })
         } catch (err) {
           if (isApigwClientRefusal(err)) {
             // Skatteverket's gateway refuses the APIGW client for the hantera

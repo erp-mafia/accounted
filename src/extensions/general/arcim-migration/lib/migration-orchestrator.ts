@@ -65,6 +65,9 @@ import {
   mapSupplierInvoice,
   mapCompanyInfo,
   inferTypeFromParty,
+  invoiceStubCustomerType,
+  customerIdentityColumns,
+  partyCountry,
   buildFxRateIndex,
   type FxUnresolved,
 } from './entity-mapper'
@@ -999,7 +1002,10 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           const key = (customerOrgNumber ?? `name:${inv.customer.name.toLowerCase()}`).trim()
           let stub = stubByKey.get(key)
           if (!stub) {
-            const customerType = inferTypeFromParty(inv.customer)
+            // The invoice does not say private or company: a personnummer
+            // makes the stub a privatperson, the number encrypted into
+            // personal_number and never plaintext in org_number.
+            const customerType = invoiceStubCustomerType(inv.customer)
             const minimalCustomer = {
               user_id: userId,
               company_id: companyId,
@@ -1007,10 +1013,10 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
               customer_type: customerType,
               default_payment_terms: 30,
               country:
-                inv.customer.postalAddress?.countryCode ||
-                (customerType === 'swedish_business' ? 'SE' : null),
+                partyCountry(inv.customer.postalAddress?.countryCode) ??
+                (customerType === 'swedish_business' || customerType === 'individual' ? 'SE' : null),
               vat_number_validated: false,
-              org_number: customerOrgNumber,
+              ...customerIdentityColumns(customerType, customerOrgNumber),
             }
             stub = { key, row: minimalCustomer, waitingInvoiceIndices: [] }
             stubByKey.set(key, stub)
@@ -1369,7 +1375,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
               default_payment_terms: 30,
               default_currency: 'SEK',
               country:
-                inv.supplier.postalAddress?.countryCode ||
+                partyCountry(inv.supplier.postalAddress?.countryCode) ??
                 (supplierType === 'swedish_business' ? 'SE' : null),
               org_number: supplierOrgNumber ? orgMapKey(supplierOrgNumber) : supplierOrgNumber,
             }

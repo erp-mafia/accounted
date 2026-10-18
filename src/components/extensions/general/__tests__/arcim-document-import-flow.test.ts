@@ -7,6 +7,7 @@ import {
   PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE,
   ArcimDocumentImportRequestError,
   arcimDocumentImportReducer,
+  arcimDocumentReconnectPlan,
   documentImportProgress,
   documentOAuthProblemFromReason,
   parseArcimDocumentResumeMarker,
@@ -177,6 +178,39 @@ describe('document follow-up state', () => {
     expect(complete).toMatchObject({ phase: 'complete', result: { linked: 7 } })
   })
 
+  it('returns a reconnect from the supplier-invoice files note to that note when the login closes', () => {
+    const complete = {
+      phase: 'complete' as const,
+      provider: 'fortnox' as const,
+      found: 7,
+      result: result({
+        dryRun: false,
+        unreachableSources: [
+          { source: 'supplier_invoice_files', scope: 'supplierinvoice', reason: 'permission', providerMessage: null },
+        ],
+      }),
+      problem: null,
+    }
+    const reconnecting = arcimDocumentImportReducer(complete, { type: 'reconnect-started' })
+    expect(reconnecting.phase).toBe('reconnecting')
+
+    // Nothing failed: the finished import and its note come back as they were.
+    expect(
+      arcimDocumentImportReducer(reconnecting, { type: 'reconnect-cancelled', phase: 'complete' }),
+    ).toEqual(complete)
+  })
+
+  it('lets a late login success win over the cancel', () => {
+    const discovering = arcimDocumentImportReducer(INITIAL_ARCIM_DOCUMENT_IMPORT_STATE, {
+      type: 'discovery-started',
+      provider: 'fortnox',
+      migrationSucceeded: true,
+    })
+    expect(
+      arcimDocumentImportReducer(discovering, { type: 'reconnect-cancelled', phase: 'offered' }),
+    ).toBe(discovering)
+  })
+
   it('marks the archive/connectfile scope error as reconnect-required', async () => {
     const fetcher = vi.fn().mockResolvedValue(
       new Response(
@@ -233,6 +267,19 @@ describe('document follow-up state', () => {
       requestId: 'req_unavailable',
       reconnectRequired: false,
     })
+  })
+})
+
+describe('what Koppla om Fortnox leads to', () => {
+  it('looks again after a reconnect from a supplier-invoice files note, and returns to it on a closed login', () => {
+    for (const phase of ['offered', 'empty', 'complete'] as const) {
+      expect(arcimDocumentReconnectPlan(phase)).toEqual({ resume: 'discover', returnTo: phase })
+    }
+  })
+
+  it('keeps the approval states as they were: discovery looks again, a failed import imports again', () => {
+    expect(arcimDocumentReconnectPlan('discovery-error')).toEqual({ resume: 'discover', returnTo: null })
+    expect(arcimDocumentReconnectPlan('import-error')).toEqual({ resume: 'import', returnTo: null })
   })
 })
 

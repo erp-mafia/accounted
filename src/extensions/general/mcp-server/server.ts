@@ -134,6 +134,7 @@ import { isUuid } from '@/lib/invariants/uuid'
 import {
   buildIssuePreview,
   buildMarkPaidPreview,
+  buildPaidAtIssuePreview,
   describeUnnumberedInvoice,
   expectedNumberSuffix,
 } from './invoice-stage-preview'
@@ -382,6 +383,7 @@ import { documentHeldElsewhereReasonEn } from '@/lib/documents/link-holder'
 import { checkDocumentLink } from '@/lib/documents/link-document'
 import { resolveInboxCreditTarget } from '@/lib/supplier-invoices/credit-target'
 import { CreditSupplierInvoiceInputSchema, creditSupplierInvoice } from '@/lib/supplier-invoices/credit'
+import { resolveSupplierInvoiceReverseCharge } from '@/lib/supplier-invoices/create'
 import { OperationError, throwOutcomeFailure } from '@/lib/operations/errors'
 import { requireCompanyAdmin } from '@/lib/operations/access'
 import { createSupplier } from '@/lib/suppliers/create-supplier'
@@ -470,6 +472,7 @@ import {
   CreateSupplierSchema,
   ConvertQuotePartSchema,
   CreateSalesOrderSchema,
+  MarkInvoiceSentPaidAtIssueSchema,
   RegisterSalesOrderDeliverySchema,
   RotRutBeslutFileSchema,
   SalesOrderTransitionSchema,
@@ -10628,14 +10631,18 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_mark_invoice_as_sent',
-    keywords: ['faktura skickad', 'kundfaktura'],
+    keywords: ['faktura skickad', 'kundfaktura', 'kontantfaktura', 'betald direkt', 'kvitto', 'swish', 'kortbetalning'],
     title: 'Mark Invoice as Sent',
-    description: 'Mark a draft invoice as sent without sending email (when delivered manually). Stages for approval. Status must be draft.',
+    description: 'Mark a draft invoice sent without emailing it. Stages for approval.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        invoice_id: { type: 'string', description: 'UUID of the draft invoice' },
+        invoice_id: { type: 'string' },
+        paid_at_issue_account: {
+          type: 'string',
+          description: 'Kontantfaktura: 19xx account paid at issue, no 1510.',
+        },
       },
       required: ['invoice_id'],
     },
@@ -10645,8 +10652,42 @@ export const tools: McpTool[] = [
       const invoiceId = args.invoice_id as string
       if (!invoiceId) throw badArgument('invoice_id', 'invoice_id is required')
 
+      // The kontantfaktura (crm#1281): the dashboard and v1 mark-sent body,
+      // validated by the same schema (a 19xx account).
+      let paidAtIssue: { account_number: string } | null = null
+      if (args.paid_at_issue_account !== undefined && args.paid_at_issue_account !== null) {
+        const parsed = MarkInvoiceSentPaidAtIssueSchema.safeParse({
+          paid_at_issue: { account_number: args.paid_at_issue_account },
+        })
+        if (!parsed.success || !parsed.data.paid_at_issue) {
+          throw badArgument(
+            'paid_at_issue_account',
+            'paid_at_issue_account must be a 19xx account (kassa, bank or Swish), such as 1930.',
+            'Betalkontot måste vara ett 19xx-konto (kassa, bank eller Swish).',
+          )
+        }
+        paidAtIssue = parsed.data.paid_at_issue
+      }
+
       const invoice = await fetchInvoiceWithCustomer(supabase, companyId, invoiceId)
       if (invoice.status !== 'draft') throw new Error('Only draft invoices can be marked as sent')
+
+      // Refused at staging by the rule the approval applies
+      // (issueAndBookInvoice), so nobody approves what cannot be booked.
+      const paid = paidAtIssue
+        ? await buildPaidAtIssuePreview(supabase, companyId, invoice, paidAtIssue.account_number)
+        : null
+      if (paid?.block_reason) {
+        throw codedRefusal(
+          'INVOICE_PAID_AT_ISSUE_NOT_ALLOWED',
+          `This invoice cannot be issued already paid (${paid.block_reason}): only a plain faktura without periodised lines can.`,
+          {
+            description: 'Mark it sent without paid_at_issue_account, then record the payment with gnubok_mark_invoice_as_paid.',
+            tool: 'gnubok_mark_invoice_as_sent',
+            args: { invoice_id: invoiceId },
+          },
+        )
+      }
 
       // A draft has no number until approval: name it by customer and amount
       // instead of printing "null", and say what approval will number and post.
@@ -10654,6 +10695,33 @@ export const tools: McpTool[] = [
       const sentLabel = invoice.invoice_number
         ? `${invoice.invoice_number} ${invoice.customer?.name || ''}`
         : `${describeUnnumberedInvoice(invoice, invoice.customer?.name || '')}${expectedNumberSuffix(invoice, issue)}`
+
+      if (paidAtIssue && paid) {
+        return stage({
+          supabase,
+          companyId,
+          userId,
+          type: 'mark_invoice_sent',
+          title: `Utfärda betald (${paidAtIssue.account_number}): ${sentLabel}`,
+          params: { invoice_id: invoiceId, paid_at_issue: paidAtIssue },
+          preview: {
+            invoice_number: invoice.invoice_number,
+            customer_name: invoice.customer?.name,
+            total: invoice.total,
+            currency: invoice.currency,
+            ...issue,
+            // The cash verifikat is posted in either method, never deferred.
+            will_post_journal_entry: true,
+            voucher_date: invoice.invoice_date,
+            will_be_fully_paid: true,
+            paid_at_issue_account: paidAtIssue.account_number,
+            journal_entry_preview: paid.journal_entry_preview,
+          },
+          actor,
+          next: { description: paid.next_description, tool: 'gnubok_get_ar_ledger' },
+          ...(invoice.invoice_date ? { dateForPeriodCheck: invoice.invoice_date as string } : {}),
+        })
+      }
 
       return stage({
         supabase,
@@ -15549,7 +15617,7 @@ export const tools: McpTool[] = [
       properties: {
         inbox_item_id: { type: 'string' },
         supplier_id_override: { type: 'string', description: 'Force this supplier UUID instead of the matched/extracted one' },
-        vat_treatment_override: { type: 'string', enum: ['standard_25', 'reduced_12', 'reduced_6', 'reverse_charge', 'export', 'exempt'], description: 'Override extracted VAT treatment' },
+        vat_treatment_override: { type: 'string', enum: ['standard_25', 'reduced_12', 'reduced_6', 'reverse_charge', 'export', 'exempt'], description: 'Default follows supplier type' },
         invoice_date_override: { type: 'string', description: 'Override extracted invoice date (YYYY-MM-DD). Use when OCR misses the date.' },
         due_date_override: { type: 'string', description: 'Override extracted due date (YYYY-MM-DD)' },
         exchange_rate_override: { type: 'number', description: 'SEK per 1 unit of invoice currency; skips the Riksbanken lookup.' },
@@ -15725,10 +15793,11 @@ export const tools: McpTool[] = [
       // Doubles as existence/tenancy validation: every resolution path (and
       // especially supplier_id_override, which the unresolved next-hint now
       // actively promotes) must point at a supplier in THIS company, or the
-      // staged operation would fail opaquely at commit time instead.
+      // staged operation would fail opaquely at commit time instead. Its
+      // supplier_type decides the default VAT treatment below.
       const { data: resolvedSupplier } = await supabase
         .from('suppliers')
-        .select('id, default_expense_account, default_payment_terms, bankgiro, plusgiro, iban, bic')
+        .select('id, supplier_type, default_expense_account, default_payment_terms, bankgiro, plusgiro, iban, bic')
         .eq('id', supplierId)
         .eq('company_id', companyId)
         .single()
@@ -15863,10 +15932,32 @@ export const tools: McpTool[] = [
       const total = rawTotal
       const subtotal = Number(totalsExt?.subtotal) || 0
 
-      // VAT treatment: explicit override wins, else heuristic from extracted data
-      const vatTreatment = (args.vat_treatment_override as string | undefined)
-        ?? (invoiceExt?.vatTreatment as string | undefined)
-        ?? 'standard_25'
+      // The VAT treatment and the reverse-charge flag, resolved by the same
+      // function as the dashboard and v1 doors (resolveSupplierInvoiceReverseCharge),
+      // so the doors cannot drift: this door used to default every invoice to
+      // standard_25, and a foreign supplier's posted no fiktiv moms
+      // (accounted#58). The override is the caller's explicit word, as the
+      // reverse_charge flag is on those doors. Without one an EU or non-EU
+      // supplier is omvänd skattskyldighet (ML 16 kap 6 §, swedish-vat skill
+      // 2.1-2.3), any other takes the extracted treatment, else standard_25.
+      // Only the treatment is staged (the flag follows from it, and the
+      // grant door refuses a param it does not know); the executor resolves
+      // it the same way.
+      const supplierType = (resolvedSupplier.supplier_type as string | null | undefined) ?? null
+      const vatTreatmentOverride = args.vat_treatment_override as string | undefined
+      const extractedTreatment = invoiceExt?.vatTreatment
+      const { reverseCharge, vatTreatment } = resolveSupplierInvoiceReverseCharge(
+        supplierType,
+        vatTreatmentOverride
+          ? { reverse_charge: vatTreatmentOverride === 'reverse_charge', vat_treatment: vatTreatmentOverride }
+          : { vat_treatment: typeof extractedTreatment === 'string' && extractedTreatment ? extractedTreatment : undefined },
+      )
+      // An override that turns omvänd skattskyldighet off for a foreign
+      // supplier is right only where the purchase falls outside it (an exempt
+      // financial or insurance service, passenger transport, a seller that
+      // charges Swedish moms). The approver is told (compliance note below).
+      const reverseChargeOverridden =
+        !reverseCharge && resolveSupplierInvoiceReverseCharge(supplierType, {}).reverseCharge
       // Omvänd skattskyldighet: the buyer self-assesses the VAT (2614/2645
       // in the registration entry) and the seller must not charge any. When
       // the underlag still carries VAT (feedback seq 366701: a foreign SaaS
@@ -15879,7 +15970,6 @@ export const tools: McpTool[] = [
       // net; the seller's VAT is surfaced in the preview, never booked.
       // Paying it anyway or asking for a corrected invoice is a decision
       // taken against the underlag, not one this tool makes.
-      const reverseCharge = vatTreatment === 'reverse_charge'
       // Icke momsregistrerad (feedback seq 708521): the extracted rates say
       // what the seller charged, not what this company may deduct. An ideell
       // förening got 2000 + 500 with the 500 on 2641, which it can never
@@ -16399,6 +16489,15 @@ export const tools: McpTool[] = [
             : 'register supplier invoice (status=registered) and attach the inbox document on confirm. No journal entry is posted now: under kontantmetoden the invoice is booked when it is paid',
       }
 
+      // What the approval card shows above the preview (preview.compliance_warning).
+      const complianceNotes = [
+        payeeAssessment.alert ? payeeAlertWarning(payeeAssessment.alert).message_sv : null,
+        reverseChargeOverridden
+          ? `Leverantören är ${supplierType === 'eu_business' ? 'ett företag i ett annat EU-land' : 'ett företag utanför EU'}, så köp från den bokförs normalt med omvänd skattskyldighet (beräknad moms på 2645 och 2614). `
+            + `Momsbehandlingen är ändå satt till ${vatTreatment}, vilket bara stämmer när köpet inte omfattas av omvänd skattskyldighet, till exempel en momsfri finansiell tjänst eller försäkring, en persontransport eller en leverantör som tar ut svensk moms.`
+          : null,
+      ].filter((note): note is string => note !== null)
+
       return stage({
         supabase,
         companyId,
@@ -16408,7 +16507,7 @@ export const tools: McpTool[] = [
         params,
         preview: previewData,
         actor,
-        ...(payeeAssessment.alert ? { complianceNote: payeeAlertWarning(payeeAssessment.alert).message_sv } : {}),
+        ...(complianceNotes.length > 0 ? { complianceNote: complianceNotes.join(' ') } : {}),
         next: {
           // Kontantmetoden has no attest step: pointing its agent at the
           // attest tool sent it after a step the app never shows (crm#1156).

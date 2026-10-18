@@ -7463,7 +7463,7 @@
     "ext_arcim_documents_supplier_files_license": "Underlag som ligger på leverantörsfakturor kommer inte med: Fortnox-företaget saknar licens för {scope}.",
     "ext_arcim_documents_supplier_files_error": "Underlag som ligger på leverantörsfakturor gick inte att nå just nu. Leta igen om en stund, det som redan kopplats hoppas över.",
     "ext_arcim_documents_supplier_files_how": "Så får du med dem",
-    "ext_arcim_documents_supplier_files_remedy": "{provider} delar bara det som användaren som kopplade {provider} själv får se. Koppla om {provider} och logga in som en användare med behörigheten {scope}, till exempel er redovisningsbyrå, eller ge användaren behörigheten en stund. Hämta sedan underlag igen.",
+    "ext_arcim_documents_supplier_files_remedy": "{provider} delar bara det som användaren som kopplade {provider} själv får se. Ge användaren behörigheten {scope} i {provider} först, eller logga in som någon som har den, till exempel er redovisningsbyrå, när du kopplar om. Sedan letar vi igen direkt.",
     "ext_arcim_documents_scope_archive": "Arkiv",
     "ext_arcim_documents_scope_connectfile": "Koppla fil",
     "ext_arcim_documents_scope_supplierinvoice": "Leverantörsfaktura",

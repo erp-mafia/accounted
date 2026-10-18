@@ -484,6 +484,9 @@ export async function runSalaryCalculation(
       periodStart: deviation.start,
       periodEnd: deviation.end,
       withContext: calculationPolicy.long_leave === 'calendar_after_five_workdays',
+      // The VAB and parental 120-date cap counts within the intjänandeår
+      // (Semesterlagen 17 a §), which follows the company's semesterår basis.
+      earningYearStart: getVacationYearStart(deviation.start, vacationYearBasis),
     }),
     workedDayEmployeeIds.length === 0
       ? Promise.resolve<WorkedDayRow[]>([])
@@ -1050,6 +1053,9 @@ export async function runSalaryCalculation(
         vacationDaysPerYear: emp.vacation_days_per_year,
         semestertillaggRate: emp.semestertillagg_rate,
         vacationPayRate: emp.vacation_pay_rate ?? null,
+        // Hourly pay's semesterlönegrundande frånvaro (Semesterlagen 16 b §);
+        // absent when there is none, so such an input reads as before.
+        qualifyingAbsenceHours: absenceResult.qualifyingAbsenceHours > 0 ? absenceResult.qualifyingAbsenceHours : undefined,
         dailyDivisor: dailyDivisor(emp.workdays_per_week),
         vaxaStodEligible: emp.vaxa_stod_eligible,
         vaxaStodStart: emp.vaxa_stod_start,

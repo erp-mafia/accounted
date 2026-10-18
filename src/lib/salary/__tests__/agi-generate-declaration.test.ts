@@ -280,6 +280,71 @@ describe('generateAgiDeclaration: redovisningsperiod follows the payout month (#
   })
 })
 
+describe('generateAgiDeclaration: a correction run starts its declaration unfiled', () => {
+  function enqueueOver(
+    enqueueMany: (results: { data?: unknown; error?: unknown }[]) => void,
+    run: Record<string, unknown>,
+    stored: Record<string, unknown>,
+  ) {
+    enqueueMany([
+      { data: run },
+      { data: COMPANY },
+      { data: SETTINGS },
+      { data: PROFILE },
+      { data: [REGULAR_ROW] },
+      { data: [] }, // salary_absence_days
+      { data: stored }, // agi_declarations for the period
+      { data: null }, // agi_declarations update
+      { data: null }, // salary_runs agi_generated_at stamp
+    ])
+  }
+
+  it("resets the filing state of the original's filed row it takes over: the correction is not filed yet", async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    // The period's row is the original's, filed: status submitted, its kvittens.
+    enqueueOver(enqueueMany, { ...RUN, status: 'booked', is_correction: true, corrects_run_id: 'run-0' }, {
+      id: 'agi-0',
+      salary_run_id: 'run-0',
+    })
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    // Same row, the correction's content, and unfiled: the submit flips it to
+    // pending_signature and the kvittens reconciliation promotes it on the
+    // correction's own kvittens. The original's receipt lives on in
+    // agi_kvittenser and on its run's agi_submitted_at.
+    expect(findCall('agi_declarations', 'update')).toEqual([
+      expect.objectContaining({
+        xml_content: result.xml,
+        salary_run_id: 'run-1',
+        is_correction: true,
+        status: 'generated',
+        kvittensnummer: null,
+        submitted_at: null,
+        submitted_by: null,
+        response_data: null,
+      }),
+    ])
+    expect(findCall('agi_declarations', 'insert')).toBeUndefined()
+  })
+
+  it("leaves the filing state alone when a run regenerates its own declaration", async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueOver(enqueueMany, RUN, { id: 'agi-1', salary_run_id: 'run-1' })
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    const update = findCall('agi_declarations', 'update')?.[0] as Record<string, unknown>
+    expect(update).toMatchObject({ salary_run_id: 'run-1' })
+    for (const column of ['status', 'kvittensnummer', 'submitted_at', 'submitted_by', 'response_data']) {
+      expect(update).not.toHaveProperty(column)
+    }
+  })
+})
+
 describe('generateAgiDeclaration: F-skatt payee (FK131 only, issue #315)', () => {
   it('reports F-skatt cash on FK131 only, never FK011, with FK001 as 0, in a mixed roster', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()

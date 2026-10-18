@@ -8,6 +8,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { encryptCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
+import { looksLikeSwedishPersonalNumber } from '@/lib/customers/personal-number-shape'
 import { normalizeVatRateToFraction } from '@/lib/vat/vat-rate-unit'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
 import { orgNumberKey } from '@/lib/invariants/org-number'
@@ -33,6 +34,26 @@ import { roundOre } from '@/lib/money'
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
+/**
+ * A party's country, read once for both the stored column and the type.
+ *
+ * customers.country and suppliers.country are ISO 3166-1 alpha-2, but the
+ * providers do not agree: Fortnox, Briox and Björn Lundén hand over a name
+ * ("Sverige", "Sweden"), Visma, Bokio and WINT mostly a code. The type used
+ * to be read from the raw value while the column got the normalised one, so
+ * a Swedish customer stored as SE was typed non_eu_business and invoiced as
+ * an export. normalizeCountryCode reads codes and the Swedish and English
+ * names and leaves alpha-3 out on purpose, so "SWE" is read here, the same
+ * rule as debtorCountryCode (lib/collections/eligibility). A value nothing
+ * maps is kept as written (still foreign to the type, and visible to the
+ * periodisk report); an empty one is no country at all.
+ */
+export function partyCountry(raw: string | null | undefined): string | null {
+  const trimmed = raw?.trim()
+  if (!trimmed) return null
+  return normalizeCountryCode(trimmed) ?? (trimmed.toUpperCase() === 'SWE' ? 'SE' : trimmed)
+}
+
 function formatAddress(addr?: PostalAddress): {
   address_line1: string | null
   address_line2: string | null
@@ -49,10 +70,7 @@ function formatAddress(addr?: PostalAddress): {
     address_line2: addr.additionalStreetName || null,
     postal_code: addr.postalZone || null,
     city: addr.cityName || null,
-    // customers.country is ISO 3166-1 alpha-2; some providers hand over a
-    // name (Fortnox's Country is "Sverige"), which is mapped when known and
-    // kept as-is otherwise so the periodisk report can point at it.
-    country: normalizeCountryCode(addr.countryCode) ?? addr.countryCode ?? null,
+    country: partyCountry(addr.countryCode),
   }
 }
 
@@ -171,8 +189,8 @@ function inferTypeFromVatOrCountry(
     return 'non_eu_business'
   }
 
-  // 2. Explicit country code
-  const country = countryCode?.toUpperCase()
+  // 2. Explicit country, normalised the way the column stores it
+  const country = partyCountry(countryCode)?.toUpperCase()
   if (country === 'SE') return 'swedish_business'
   if (country && EU_COUNTRIES.includes(country)) return 'eu_business'
   if (country) return 'non_eu_business'
@@ -202,8 +220,60 @@ function inferTypeFromVatOrCountry(
   return 'swedish_business'
 }
 
+/**
+ * Whether a customer the source did not type is a private person.
+ *
+ * Every provider's customer register says private or company. An invoice's
+ * customer does not: the migration builds its stub from the invoice alone, so
+ * the type has to come from the number. A legal person's organisationsnummer
+ * never has a calendar month in digits 3-4 (looksLikeSwedishPersonalNumber),
+ * so a personnummer-shaped number is a natural person: a privatperson, or the
+ * owner of an enskild firma, whose org number is the personnummer. With
+ * nothing else to tell the two apart, the stub is a privatperson, the same
+ * default the customer file import makes (lib/import/shared/classify.ts):
+ * the personnummer is then stored encrypted in personal_number, never in
+ * plaintext in org_number (crm#1294 follow-up). A VAT number, or a country
+ * other than Sweden, is a business signal and keeps the party a business.
+ */
+export function isUntypedPrivatePerson(party: PartyDto, vatNumber?: string | null): boolean {
+  const number = getOrgNumber(party)
+  if (!number || !looksLikeSwedishPersonalNumber(number)) return false
+  if (vatNumber?.trim()) return false
+  if (party.identifications?.some((i) => /(^|:)VAT$/i.test(i.schemeId ?? '') && i.id?.trim())) return false
+  // Fortnox writes the country by name ("Sverige"); an unknown name says nothing.
+  const country = normalizeCountryCode(party.postalAddress?.countryCode)
+  return country === null || country === 'SE'
+}
+
+/**
+ * The type of the customer stub the migration creates for an invoice's
+ * customer, which no register record typed (see isUntypedPrivatePerson).
+ */
+export function invoiceStubCustomerType(party: PartyDto, vatNumber?: string): CustomerType {
+  if (isUntypedPrivatePerson(party, vatNumber)) return 'individual'
+  return inferTypeFromParty(party, vatNumber)
+}
+
+/**
+ * Where a customer's identity number is stored. A business keeps it in
+ * org_number. A privatperson has no org number: the personnummer goes into
+ * personal_number, encrypted, since customers_personal_number_check (migration
+ * 20260726110000) accepts AES-256-GCM hex and nothing else. A value the
+ * column cannot hold (see fitsPersonalNumberColumn) is omitted, never written
+ * to a plaintext field.
+ */
+export function customerIdentityColumns(
+  customerType: CustomerType,
+  number: string | null,
+): { org_number: string | null; personal_number: string | null } {
+  if (customerType !== 'individual') return { org_number: number, personal_number: null }
+  const storable = number && fitsPersonalNumberColumn(number) ? number : null
+  return { org_number: null, personal_number: encryptCustomerPersonalNumber(storable) }
+}
+
 function inferCustomerType(dto: CustomerDto): CustomerType {
   if (dto.type === 'private') return 'individual'
+  if (dto.type === undefined && isUntypedPrivatePerson(dto.party, dto.vatNumber)) return 'individual'
   return inferTypeFromVatOrCountry(
     dto.vatNumber,
     dto.party.postalAddress?.countryCode,
@@ -637,7 +707,8 @@ export function mapCustomer(dto: CustomerDto, userId: string, companyId: string)
   // `org_number` (businesses). Route it to the column the type expects: else a
   // Privatperson's personnummer lands in org_number and is hidden by the
   // individual customer form, which renders personal_number for individuals.
-  const isIndividual = customerType === 'individual'
+  // See customerIdentityColumns.
+  //
   // personal_number is an encrypted column: customers_personal_number_check
   // (migration 20260726110000) accepts AES-256-GCM hex and nothing else, so
   // writing the identity number in plaintext here aborts the whole import with
@@ -652,9 +723,7 @@ export function mapCustomer(dto: CustomerDto, userId: string, companyId: string)
   // ever lands in plaintext. A value the column cannot hold (too short to be
   // a personnummer, or absurdly long) is omitted: the row still imports, and
   // an identity number is never written to a plaintext field.
-  const personalNumber = isIndividual ? number : null
-  const storablePersonalNumber =
-    personalNumber && fitsPersonalNumberColumn(personalNumber) ? personalNumber : null
+  const identity = customerIdentityColumns(customerType, number)
   return {
     user_id: userId,
     company_id: companyId,
@@ -666,8 +735,8 @@ export function mapCustomer(dto: CustomerDto, userId: string, companyId: string)
     invoice_email_cc_addresses: dto.invoiceEmailCcAddresses ?? null,
     invoice_email_bcc_addresses: dto.invoiceEmailBccAddresses ?? null,
     ...addr,
-    org_number: isIndividual ? null : number,
-    personal_number: encryptCustomerPersonalNumber(storablePersonalNumber),
+    org_number: identity.org_number,
+    personal_number: identity.personal_number,
     vat_number: dto.vatNumber || null,
     vat_number_validated: false,
     default_payment_terms: dto.defaultPaymentTermsDays || 30,

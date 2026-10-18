@@ -7463,7 +7463,7 @@
     "ext_arcim_documents_supplier_files_license": "Documents kept on supplier invoices are left out: the Fortnox company has no licence for {scope}.",
     "ext_arcim_documents_supplier_files_error": "Documents kept on supplier invoices could not be reached right now. Look again in a while; anything already attached is skipped.",
     "ext_arcim_documents_supplier_files_how": "How to include them",
-    "ext_arcim_documents_supplier_files_remedy": "{provider} only shares what the user who connected {provider} may see. Reconnect {provider} and sign in as a user with the {scope} permission, your accounting firm for example, or give the user the permission for a while. Then fetch documents again.",
+    "ext_arcim_documents_supplier_files_remedy": "{provider} only shares what the user who connected {provider} may see. Give the user the {scope} permission in {provider} first, or sign in as someone who has it, your accounting firm for example, when you reconnect. Then we look again right away.",
     "ext_arcim_documents_scope_archive": "Archive",
     "ext_arcim_documents_scope_connectfile": "Connect file",
     "ext_arcim_documents_scope_supplierinvoice": "Supplier invoice",

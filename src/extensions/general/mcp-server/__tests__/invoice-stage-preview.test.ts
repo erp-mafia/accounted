@@ -310,6 +310,79 @@ describe('gnubok_mark_invoice_as_sent / gnubok_send_invoice: a draft without a n
   })
 })
 
+// crm#1281: the kontantfaktura over MCP. paid_at_issue_account stages the
+// dashboard's "issued already paid": one cash verifikat on the invoice date in
+// either method, refused at staging by the rule the approval applies.
+describe('gnubok_mark_invoice_as_sent with paid_at_issue_account (crm#1281)', () => {
+  const draft = (overrides: Record<string, unknown> = {}) =>
+    sentInvoice({ status: 'draft', invoice_number: null, invoice_date: '2026-10-17', ...overrides })
+
+  it.each(['accrual', 'cash'])('%s: stages the paid issue with the cash verifikat it books, no 1510', async (method) => {
+    const { supabase, findCall } = setup({ accounting_method: method, defer_invoice_booking: false }, draft())
+
+    const result = (await markSent.execute(
+      { invoice_id: INVOICE_ID, paid_at_issue_account: '1930' },
+      'company-1', 'user-1', supabase as never, { type: 'api_key' } as never,
+    )) as { staged: boolean; preview: Record<string, unknown>; next?: { description: string; tool?: string } }
+
+    expect(result.staged).toBe(true)
+    const staged = stagedInsert(findCall) as { title: string; params: Record<string, unknown>; preview_data: Record<string, unknown> }
+    expect(staged.title).toBe(`Utfärda betald (1930): Testkund AB, ${formatAmount(12500)} SEK (förväntat nr F-1042)`)
+    expect(staged.params).toEqual({ invoice_id: INVOICE_ID, paid_at_issue: { account_number: '1930' } })
+
+    expect(result.preview).toMatchObject({
+      will_post_journal_entry: true,
+      will_be_fully_paid: true,
+      voucher_date: '2026-10-17',
+      paid_at_issue_account: '1930',
+    })
+    const entry = result.preview.journal_entry_preview as { lines: PreviewLine[]; total_debit: number; total_credit: number }
+    const byAccount = Object.fromEntries(entry.lines.map((l) => [l.account_number, l]))
+    expect(byAccount['1930']).toMatchObject({ debit_amount: 12500, credit_amount: 0 })
+    expect(byAccount['2611']).toMatchObject({ debit_amount: 0, credit_amount: 2500 })
+    expect(byAccount['1510']).toBeUndefined()
+    expect(entry.total_debit).toBe(entry.total_credit)
+    expect(result.next?.description).toContain('already paid')
+    expect(result.next?.tool).toBe('gnubok_get_ar_ledger')
+    // The verifikat's date is checked against the period, as for mark paid.
+    expect(result.preview.period_status).toBeDefined()
+  })
+
+  it.each(['1510', '3001', '19', 'abcd'])('refuses %s as the payment account before anything is read', async (account) => {
+    const { supabase, findCall } = setup({ accounting_method: 'accrual' }, draft())
+
+    await expect(
+      markSent.execute(
+        { invoice_id: INVOICE_ID, paid_at_issue_account: account },
+        'company-1', 'user-1', supabase as never, { type: 'api_key' } as never,
+      ),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+    expect(findCall('invoices', 'select')).toBeUndefined()
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+
+  it.each([
+    ['not_invoice', { document_type: 'proforma' }, [ITEM]],
+    ['self_billed', { is_self_billed: true }, [ITEM]],
+    ['periodisering', {}, [{ ...ITEM, accrual_period_start: '2026-11-01', accrual_period_end: '2027-10-31' }]],
+  ])('refuses %s at staging with INVOICE_PAID_AT_ISSUE_NOT_ALLOWED', async (reason, overrides, items) => {
+    const { supabase, setTable, findCall } = setup({ accounting_method: 'accrual' }, draft(overrides))
+    setTable('invoice_items', { data: items })
+
+    const error = (await markSent
+      .execute(
+        { invoice_id: INVOICE_ID, paid_at_issue_account: '1930' },
+        'company-1', 'user-1', supabase as never, { type: 'api_key' } as never,
+      )
+      .catch((err: unknown) => err)) as { code?: string; message?: string; remediation?: { tool?: string } } | undefined
+
+    expect(error).toMatchObject({ code: 'INVOICE_PAID_AT_ISSUE_NOT_ALLOWED' })
+    expect(error?.message).toContain(reason)
+    expect(error?.remediation?.tool).toBe('gnubok_mark_invoice_as_sent')
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+})
+
 // crm#1202: sending a quote sends the quote. It books nothing even under
 // faktureringsmetoden, and its next step is the customer's answer, never a
 // payment.

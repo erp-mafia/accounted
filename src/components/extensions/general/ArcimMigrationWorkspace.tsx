@@ -51,6 +51,7 @@ import {
   INITIAL_ARCIM_DOCUMENT_IMPORT_STATE,
   ArcimDocumentImportRequestError,
   arcimDocumentImportReducer,
+  arcimDocumentReconnectPlan,
   documentImportProgress,
   documentOAuthProblemFromReason,
   parseArcimDocumentResumeMarker,
@@ -60,6 +61,7 @@ import {
   resolveArcimDocumentFollowUpProvider,
   serializeArcimDocumentResumeMarker,
   watchArcimOAuthPopup,
+  type ArcimDocumentImportPhase,
   type ArcimDocumentImportProblem,
   type ArcimDocumentImportState,
   type ArcimUnreachableDocumentSource,
@@ -2118,13 +2120,25 @@ const UNDERLAG_UPLOAD_HREF = '/import?mode=underlag'
 /**
  * A quiet note under a documents state: an icon and a short sentence, muted.
  * Notes say why some underlag stay behind (locked years, a Fortnox
- * permission); none of them is a failure, so none of them is red.
+ * permission); none of them is a failure, so none of them is red. A note the
+ * user can resolve from here carries its one action under the text, in ink.
  */
-function DocumentNote({ icon: Icon, children }: { icon: LucideIcon; children: React.ReactNode }) {
+function DocumentNote({
+  icon: Icon,
+  action,
+  children,
+}: {
+  icon: LucideIcon
+  action?: React.ReactNode
+  children: React.ReactNode
+}) {
   return (
     <li className="flex gap-3">
       <Icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-      <div className="min-w-0 space-y-1 text-[13px] leading-5 text-muted-foreground">{children}</div>
+      <div className="min-w-0 space-y-2">
+        <div className="space-y-1 text-[13px] leading-5 text-muted-foreground">{children}</div>
+        {action && <div>{action}</div>}
+      </div>
     </li>
   )
 }
@@ -2280,15 +2294,32 @@ export function DocumentImportFollowUp({
   // Files Fortnox keeps on supplier invoices come from a second register with
   // its own scope: when Fortnox refused it, the voucher files still ran, and
   // the panel says which permission or licence held the rest back. The
-  // remedy and Fortnox's own answer sit one click down.
-  const unreachableNotes = (state.result?.unreachableSources ?? []).map(
+  // remedy and Fortnox's own answer sit one click down. A permission is the
+  // one refusal a reconnect can resolve (as a user who has it, or after the
+  // user was given it), so that note carries the same reconnect as the
+  // approval state; afterwards the panel looks again. A licence cannot be
+  // changed from here and an error needs a later look, not a new login, so
+  // those stay plain notes. One reconnect covers every refused scope: only
+  // the first permission note offers it.
+  const unreachableSources = state.result?.unreachableSources ?? []
+  const reconnectScope = unreachableSources.find((entry) => entry.reason === 'permission')?.scope
+  const unreachableNotes = unreachableSources.map(
     (entry: ArcimUnreachableDocumentSource) => {
       const scope = t(`ext_arcim_documents_scope_${entry.scope}`)
       const answer = entry.providerMessage
         ? t('ext_arcim_documents_provider_message', { provider: 'Fortnox', message: entry.providerMessage })
         : null
       return (
-        <DocumentNote key={entry.scope} icon={Info}>
+        <DocumentNote
+          key={entry.scope}
+          icon={Info}
+          action={entry.scope === reconnectScope ? (
+            <Button variant="outline" size="sm" onClick={onReconnect}>
+              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+              {t('ext_arcim_documents_reconnect_action')}
+            </Button>
+          ) : undefined}
+        >
           <p>{t(`ext_arcim_documents_supplier_files_${entry.reason}`, { scope })}</p>
           {entry.reason === 'permission' ? (
             <DocumentDisclosure summary={t('ext_arcim_documents_supplier_files_how')}>
@@ -3262,6 +3293,10 @@ export default function ArcimMigrationWorkspace({
   // an active Fortnox connection (no migration ran in this pass).
   const [documentsOnly, setDocumentsOnly] = useState(false)
   const documentReconnectActionRef = useRef<'discover' | 'import' | null>(null)
+  // Where a reconnect started from a note returns when the login fails (see
+  // arcimDocumentReconnectPlan); null when it started from an error state.
+  // Set and read together with documentReconnectActionRef.
+  const documentReconnectReturnRef = useRef<ArcimDocumentImportPhase | null>(null)
   const documentReconnectFailureCleanupRef = useRef<number | null>(null)
   const stopOAuthPopupWatchRef = useRef<(() => void) | null>(null)
   // Listen for postMessage from the OAuth popup: only the window this
@@ -3298,6 +3333,12 @@ export default function ArcimMigrationWorkspace({
       if (reconnectAction) {
         documentReconnectActionRef.current = null
         clearDocumentOAuthResume()
+        // Started from a note: nothing failed, the panel goes back to it.
+        const returnTo = documentReconnectReturnRef.current
+        if (returnTo) {
+          dispatchDocumentImport({ type: 'reconnect-cancelled', phase: returnTo })
+          return
+        }
         const problem = documentImportState.problem ?? {
           code: null,
           requestId: null,
@@ -3727,8 +3768,7 @@ export default function ArcimMigrationWorkspace({
   const handleDocumentReconnect = useCallback(() => {
     if (!consentId) return
     clearDocumentReconnectFailureCleanup()
-    const reconnectAction =
-      documentImportState.phase === 'discovery-error' ? 'discover' : 'import'
+    const { resume: reconnectAction, returnTo } = arcimDocumentReconnectPlan(documentImportState.phase)
     const priorProblem = documentImportState.problem ?? {
       code: null,
       requestId: null,
@@ -3736,6 +3776,7 @@ export default function ArcimMigrationWorkspace({
     }
 
     documentReconnectActionRef.current = reconnectAction
+    documentReconnectReturnRef.current = returnTo
     storeDocumentOAuthResume(reconnectAction, documentsOnly)
     dispatchDocumentImport({ type: 'reconnect-started' })
     void handleReconnect('fortnox', consentId, {
@@ -3744,9 +3785,11 @@ export default function ArcimMigrationWorkspace({
       documentScopes: true,
       onFailure: () => {
         dispatchDocumentImport(
-          reconnectAction === 'discover'
-            ? { type: 'discovery-failed', problem: priorProblem }
-            : { type: 'import-failed', problem: priorProblem },
+          returnTo
+            ? { type: 'reconnect-cancelled', phase: returnTo }
+            : reconnectAction === 'discover'
+              ? { type: 'discovery-failed', problem: priorProblem }
+              : { type: 'import-failed', problem: priorProblem },
         )
         // Keep the action briefly after the popup-close grace period. Some
         // browsers deliver the successful postMessage after reporting the

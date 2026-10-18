@@ -60,8 +60,10 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
   // tokens over date | voucher | total | description (single tokens, the old
   // format, stay valid). Unknown tokens are ignored, repeated columns are
   // deduped, and the list is capped at 3 keys to bound DB work. Amount keys
-  // order by the total_amount computed column (sum of debit lines, migration
-  // 20260811100000): PostgREST evaluates it per row, which the RPC path
+  // order by the display_amount computed column (migration 20261018135300):
+  // the amount the Belopp column shows (the single money line, else the
+  // omslutning; voucherDisplayAmount), so the sort follows the number on
+  // screen (crm#1280). PostgREST evaluates it per row, which the RPC path
   // below cannot express. sort_by overrides sort_date when present;
   // sort_date is kept for backwards compatibility with older clients.
   const SORT_TOKEN_RE = /^(date|voucher|total|description)_(asc|desc)$/
@@ -157,7 +159,7 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
         case 'voucher':
           return compareVoucher(a, b)
         case 'total':
-          return (a.total_amount ?? 0) - (b.total_amount ?? 0)
+          return (a.display_amount ?? 0) - (b.display_amount ?? 0)
         case 'description': {
           const descA = a.description ?? ''
           const descB = b.description ?? ''
@@ -262,8 +264,8 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
     .eq('company_id', companyId)
 
   if (sortKeys.length > 0) {
-    // Apply the priority list in order. total_amount is a computed column (a
-    // function on the row type), which PostgREST accepts in order=.
+    // Apply the priority list in order. display_amount is a computed column
+    // (a function on the row type), which PostgREST accepts in order=.
     for (const key of sortKeys) {
       switch (key.column) {
         case 'voucher':
@@ -275,7 +277,7 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
           query = query.order('entry_date', { ascending: key.ascending })
           break
         case 'total':
-          query = query.order('total_amount', { ascending: key.ascending })
+          query = query.order('display_amount', { ascending: key.ascending })
           break
         case 'description':
           query = query.order('description', { ascending: key.ascending })

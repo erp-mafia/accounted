@@ -6,6 +6,7 @@ import { createSchedulesForCustomerInvoice } from '@/lib/bookkeeping/accruals/fr
 import { eventBus } from '@/lib/events'
 import { ensureInvoiceNumber, invoiceNumberingFailure } from '@/lib/invoices/ensure-invoice-number'
 import type { CustomIssuanceLine } from '@/lib/invoices/issuance-custom-lines'
+import { paidAtIssueBlockReason } from '@/lib/invoices/paid-at-issue'
 import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
 import { recordManualInvoiceDelivery } from '@/lib/invoices/invoice-deliveries'
 import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
@@ -84,8 +85,11 @@ export interface IssueAndBookOptions {
    * The kontantfaktura (crm#1281, lib/invoices/paid-at-issue.ts): the invoice
    * is paid when it is issued, to this 19xx account on the fakturadatum.
    * The issue books no registration verifikat; the payment books the one
-   * cash verifikat, in either accounting method. The caller has already
-   * checked paidAtIssueBlockReason and refused custom lines.
+   * cash verifikat, in either accounting method. issueAndBookInvoice refuses
+   * it (INVOICE_PAID_AT_ISSUE_NOT_ALLOWED, paidAtIssueBlockReason) before
+   * anything changes; the account is a 19xx one (MarkInvoiceSentPaidAtIssueSchema,
+   * checked where the request is parsed). The dashboard and v1 mark-sent and
+   * the MCP mark_invoice_sent approval all pass it here.
    */
   paidAtIssue?: { settlementAccountNumber: string } | null
 }
@@ -506,6 +510,16 @@ export async function issueAndBookInvoice(
   // is refused while it is still unnumbered and deletable.
   if (invoiceLacksCustomer(invoice)) {
     return { ok: false, errorCode: 'INVOICE_CUSTOMER_MISSING' }
+  }
+
+  // A kontantfaktura (crm#1281) only for a plain faktura without custom
+  // lines: refused here, for every door, before the payee is frozen or a
+  // number taken, so nothing has changed when it refuses.
+  if (opts.paidAtIssue) {
+    const reason = paidAtIssueBlockReason(invoice, { customLines: opts.customLines })
+    if (reason) {
+      return { ok: false, errorCode: 'INVOICE_PAID_AT_ISSUE_NOT_ALLOWED', details: { reason } }
+    }
   }
 
   // An invoice that chose a bank account freezes that account's payee now,
