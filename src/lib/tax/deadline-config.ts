@@ -5,7 +5,7 @@
 
 import type { TaxDeadlineType, EntityType, MomsPeriod, TaxFilingMethod } from '@/types'
 import { filesIncomeReturn, fiscalYearLockedToCalendar, isEntityType, preparesForenklatArsbokslut } from '@/lib/company/entity-type'
-import { isBankingDay } from './swedish-holidays'
+import { getNextBankingDay, isBankingDay } from './swedish-holidays'
 
 // Condition function type for determining if a deadline applies
 export type DeadlineCondition = (settings: CompanySettingsForDeadlines) => boolean
@@ -1120,6 +1120,25 @@ export function getAgiPaymentDeadlineForPeriod(
   } as CompanySettingsForDeadlines
   const period = `${year}-${String(month).padStart(2, '0')}`
   return config.generateDates(year, generatorSettings).find((instance) => instance.period === period) ?? null
+}
+
+/**
+ * The day (YYYY-MM-DD) one AGI period's tax and employer contributions must be
+ * on the skattekonto: getAgiPaymentDeadlineForPeriod moved to the first
+ * banking day on or after it, as a förfallodag on a weekend or holiday moves
+ * to the next banking day. The one answer for every surface that shows or
+ * pays it (the run page's tax payment panel, Betala via banken).
+ */
+export function getAgiPaymentDueDate(
+  year: number,
+  month: number,
+  settings: { vat_registered: boolean; vat_taxable_base_over_40m: boolean },
+): string | null {
+  const instance = getAgiPaymentDeadlineForPeriod(year, month, settings)
+  if (!instance) return null
+  // Local noon: the day never shifts whatever the process time zone is.
+  const due = getNextBankingDay(new Date(instance.year, instance.month, instance.day, 12))
+  return `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, '0')}-${String(due.getDate()).padStart(2, '0')}`
 }
 
 /**

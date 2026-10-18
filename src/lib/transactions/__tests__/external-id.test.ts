@@ -4,6 +4,7 @@ import {
   buildStableExternalIds,
   contentBucketKey,
   descriptionsBridge,
+  dropRepeatedBankRows,
   normalizeImportedDescription,
   reconcileStableExternalIds,
   FALLBACK_DESCRIPTION,
@@ -272,6 +273,84 @@ describe('reconcileStableExternalIds', () => {
       [...stored, { externalId: 'csv_lunar_ab12cd34', desc: 'other' }],
     )
     expect(ids).toEqual(['csv_lunar_ab12cd34', 'eb_SE47_2026-09-22_20000_0'])
+  })
+})
+
+describe('dropRepeatedBankRows (crm#1295)', () => {
+  type Row = { ptid?: string | null; date: string; amount: number | string; description: string }
+  const swish = (ptid: string | null, description = `Swish ${ptid}`, amount: number | string = 250): Row =>
+    ({ ptid, date: '2026-06-15', amount, description })
+  const drop = (rows: Row[]) => dropRepeatedBankRows(rows, (r) => ({
+    providerTransactionId: r.ptid, date: r.date, amount: r.amount, description: r.description,
+  }))
+
+  it('drops a bank entry the response served twice, keeping the first copy in place', () => {
+    const rows = [swish('P1'), swish('P2'), swish('P1'), swish('P3'), swish('P2')]
+    expect(drop(rows)).toEqual([rows[0], rows[1], rows[3]])
+  })
+
+  it('keeps two equal payments on the same day: different bank ids are different entries', () => {
+    const rows = [swish('P1', 'Swish'), swish('P2', 'Swish')]
+    expect(drop(rows)).toEqual(rows)
+  })
+
+  it('never drops rows without a bank id, however alike', () => {
+    const rows = [swish(null, 'Kaffe'), swish(null, 'Kaffe'), swish('', 'Kaffe'), swish('  ', 'Kaffe')]
+    expect(drop(rows)).toEqual(rows)
+  })
+
+  it('keeps rows that share a bank id but differ in date, amount or description', () => {
+    const rows: Row[] = [
+      swish('2026-06-15.0', 'ICA'),
+      { ...swish('2026-06-15.0', 'ICA'), date: '2026-06-16' },
+      swish('2026-06-15.0', 'ICA', 500),
+      swish('2026-06-15.0', 'Coop'),
+    ]
+    expect(drop(rows)).toEqual(rows)
+  })
+
+  it('compares amounts in öre, so a numeric string and a number are the same amount', () => {
+    expect(drop([swish('P1', 'Swish', 250), swish('P1', 'Swish', '250.00')])).toHaveLength(1)
+  })
+
+  // The crm#1295 sequence on a small scale. Fetch 1 pages unstably: it serves
+  // 4 and 3 twice and leaves out 7 and 6. Fetch 2 is complete. Each fetch is
+  // mapped the way the bank syncs map it, the first one is stored, and the
+  // second one is re-keyed against it the way ingest does.
+  describe('a repeating fetch followed by a complete one', () => {
+    const entry = (n: number): Row => swish(`P${n}`, `Swish ref-${n}`)
+    const fetch1 = [8, 5, 4, 3, 4, 3, 2, 1].map(entry)
+    const fetch2 = [8, 7, 6, 5, 4, 3, 2, 1].map(entry)
+    const idsOf = (rows: Row[]) => buildStableExternalIds('eb', 'SE00', rows.map((r) => ({ date: r.date, amount: r.amount })))
+    const secondSync = (dropRepeats: boolean) => {
+      const first = dropRepeats ? drop(fetch1) : fetch1
+      const stored = idsOf(first).map((externalId, i) => ({ externalId, desc: first[i].description }))
+      const second = dropRepeats ? drop(fetch2) : fetch2
+      const incoming = idsOf(second).map((external_id, i) => ({ external_id, description: second[i].description }))
+      return { stored, ids: reconcileStableExternalIds(incoming, stored) }
+    }
+
+    it('stores each entry once and imports both rows the first fetch left out', () => {
+      const { stored, ids } = secondSync(true)
+      expect(stored).toHaveLength(6)
+      const storedIds = new Set(stored.map((s) => s.externalId))
+      const storedIdOf = (n: number) => stored.find((s) => s.desc === `Swish ref-${n}`)!.externalId
+      // 7 and 6 (positions 1 and 2) are new: ids no stored row holds.
+      expect(storedIds.has(ids[1])).toBe(false)
+      expect(storedIds.has(ids[2])).toBe(false)
+      expect(ids[1]).not.toBe(ids[2])
+      // Every other row is re-keyed onto its own stored row: a Layer-1 duplicate.
+      for (const [position, n] of [[0, 8], [3, 5], [4, 4], [5, 3], [6, 2], [7, 1]]) {
+        expect(ids[position]).toBe(storedIdOf(n))
+      }
+    })
+
+    it('without the drop, a stored copy swallows a row the first fetch left out', () => {
+      const { stored, ids } = secondSync(false)
+      expect(stored).toHaveLength(8)
+      // Row 6 takes the id of the second copy of 4 and Layer 1 would skip it.
+      expect(new Set(stored.map((s) => s.externalId)).has(ids[2])).toBe(true)
+    })
   })
 })
 

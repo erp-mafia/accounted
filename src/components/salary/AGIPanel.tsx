@@ -570,10 +570,12 @@ export function AGIPanel(props: AGIPanelProps) {
   }
 
   /**
-   * The XML must exist in agi_declarations before anything can be submitted.
-   * The internal xml route both generates and persists it (and stamps
-   * agi_generated_at); the response body, the downloadable file itself, is
-   * discarded here: "Ladda ner AGI-fil" remains the way to get a copy.
+   * The chain's visible "generate" step for a run without XML. The internal
+   * xml route both generates and persists it (and stamps agi_generated_at);
+   * the response body, the downloadable file itself, is discarded here:
+   * "Ladda ner AGI-fil" remains the way to get a copy. An existing XML is not
+   * trusted as is: the server regenerates an unfiled underlag from current
+   * data before every submit (refreshAgiUnderlag), so skipping here is safe.
    */
   async function ensureAgiGenerated(): Promise<boolean> {
     if (agiGeneratedAt) return true

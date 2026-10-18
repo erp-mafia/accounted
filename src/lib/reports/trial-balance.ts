@@ -348,6 +348,35 @@ export async function generateTrialBalance(
 }
 
 /**
+ * The closing balance (UB, debit minus credit) of a set of accounts at the end
+ * of a fiscal period, read exactly as the balance sheet reads it: the trial
+ * balance with every entry included, so the ingående balans is in it however
+ * the year got one (a linked IB verifikat, kept out of the period activity so
+ * it counts once, or earlier years' verifikat carried forward). A control that
+ * compares an account with its underlag reads the account here instead of
+ * summing the year's lines itself, which left out an IB carried forward
+ * (crm#1296). Accounts without IB or activity contribute 0.
+ */
+export async function closingBalanceOf(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+  accountNumbers: readonly string[],
+): Promise<number> {
+  const wanted = new Set(accountNumbers)
+  const { rows } = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
+    closingEntry: 'include',
+    // The chart only labels rows; the amounts never depend on it.
+    chart: [],
+  })
+  let balance = 0
+  for (const row of rows) {
+    if (wanted.has(row.account_number)) balance += row.closing_debit - row.closing_credit
+  }
+  return roundOre(balance)
+}
+
+/**
  * The trial balance rows from per-account IB and period activity: the merged
  * account set, `Konto <n>` and the first digit as class for an account missing
  * from the chart, öre rounding on all six amounts (IB + period = UB), sorted

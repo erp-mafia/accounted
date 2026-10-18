@@ -8,6 +8,7 @@ import { BokioApiError } from '@/lib/providers/bokio/client'
 import { mapBokioToSalesInvoice, mapBokioToSupplierInvoice } from '@/lib/providers/bokio/mapper'
 import { mapFortnoxToSupplierInvoice } from '@/lib/providers/fortnox/mapper'
 import { enrichBokioSupplierInvoice } from '@/lib/providers/bokio/supplier-evidence'
+import { encryptCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
 const mocks = vi.hoisted(() => ({ resolve: vi.fn(), page: vi.fn(), hydrate: vi.fn(), probe: vi.fn(), link: vi.fn(), reconcile: vi.fn(), warn: vi.fn() }))
 vi.mock('@/lib/logger', () => ({ createLogger: () => ({ info: vi.fn(), warn: mocks.warn, error: vi.fn() }) }))
 vi.mock('@/lib/auth/api-keys', () => ({ createServiceClientNoCookies: vi.fn() }))
@@ -32,6 +33,11 @@ function database(overrides: Partial<ProviderMigrationJob> = {}) {
     account_key: '5560000000', attempt: 0, failures: 0, fiscal_year_scope: null, ...overrides } as ProviderMigrationJob
   type Row = { id: string; resource: string; source_id: string; payload: string; state: string; target_id?: string; receipt?: unknown }
   const rows: Row[] = []
+  // The company's customer register and the job's source map, read by the
+  // customer match before each commit (crm#1294).
+  const register: { customers: Record<string, unknown>[]; migration_source_records: Record<string, unknown>[] } = {
+    customers: [], migration_source_records: [],
+  }
   // As the RPCs: a register's last page, or its refusal, moves the cursor to
   // the next register, and past the last one discovery ends.
   const nextRegister = () => {
@@ -55,6 +61,11 @@ function database(overrides: Partial<ProviderMigrationJob> = {}) {
       job.refused_resources = { ...job.refused_resources, [args.p_resource as string]: args.p_reason as 'license' | 'permission' }
       nextRegister()
     }
+    if (name === 'adopt_provider_migration_invoice_party') {
+      register.migration_source_records.push({ company_id: job.company_id, provider: job.provider, account_key: job.account_key,
+        resource: 'customers', source_id: args.p_source_id, target_id: args.p_customer })
+      return { data: args.p_customer, error: null }
+    }
     if (name === 'commit_provider_migration_records') {
       for (const r of args.p_records as { id: string; error?: string }[]) rows.find(row => row.id === r.id)!.state = r.error ? 'needs_attention' : 'done'
     }
@@ -73,16 +84,22 @@ function database(overrides: Partial<ProviderMigrationJob> = {}) {
   const supabase = { rpc, from: (table: string) => {
     let state: string | undefined; let limit = Infinity
     const filters: Record<string, unknown> = {}
+    const within: Record<string, unknown[]> = {}
+    const registerRows = () => (register[table as keyof typeof register] ?? []).filter(row =>
+      Object.entries(filters).every(([key, value]) => !(key in row) || row[key] === value)
+      && Object.entries(within).every(([key, values]) => values.includes(row[key])))
     const chain = { select: () => chain, eq: (key: string, value: unknown) => {
       filters[key] = value; if (key === 'state') state = value as string; return chain
     },
+      in: (key: string, values: unknown[]) => { within[key] = values; return chain }, is: () => chain, lt: () => chain, range: () => chain,
       order: () => chain, limit: (value: number) => { limit = value; return chain }, single: () => chain, maybeSingle: () => chain,
       then: (resolve: (data: unknown) => void) => resolve({ data: table === 'migration_jobs'
         ? Object.entries(filters).every(([key, value]) => job[key as keyof ProviderMigrationJob] === value) ? { ...job } : null
+        : table in register ? registerRows()
         : rows.filter(r => r.state === state).slice(0, limit), error: null }) }
     return chain
   } } as unknown as SupabaseClient
-  return { supabase, rpc, job, rows }
+  return { supabase, rpc, job, rows, register }
 }
 const customer = (id: number) => ({ id: `customer-${id}`, active: true, party: { name: `Customer ${id}` } })
 
@@ -1165,5 +1182,47 @@ describe('a number-less Bokio draft (crm#1084)', () => {
     const commit = db.rpc.mock.calls.find(([name]) => name === 'commit_provider_migration_records')!
     const [record] = (commit[1] as { p_records: { row: Record<string, unknown> }[] }).p_records
     expect(record.row.invoice_number).toBe(expected)
+  })
+})
+
+describe('an invoice-only import into a hand-made customer register (crm#1294)', () => {
+  // Skatteverket's published test personnummer. Fortnox puts a privatperson's
+  // personnummer in the invoice's OrganisationNumber field.
+  const invoice = (id: string) => ({ id, invoiceNumber: id, issueDate: '2026-02-01', currencyCode: 'SEK',
+    _raw: { CustomerNumber: '2329' },
+    customer: { name: 'Anna  Exempel ', identifications: [{ id: '19500118-2046', schemeId: 'SE:ORGNR' }] }, lines: [] })
+  const handMade = () => ({ id: 'hand-made', company_id: 'company', name: 'Anna Exempel', org_number: null,
+    personal_number: encryptCustomerPersonalNumber('195001182046'), vat_number: null, customer_number: '2329' })
+  function salesInvoiceJob(dto: ReturnType<typeof invoice>) {
+    const db = database({ phase: 'import', resources: ['salesInvoices'], provider: 'fortnox', created_at: '2026-10-18T08:32:56Z' })
+    mocks.resolve.mockResolvedValue({ accessToken: 'token', consent: { provider: 'fortnox', org_number: '556000-0000' } })
+    db.register.customers.push(handMade())
+    db.rows.push({ id: dto.id, source_id: dto.id, resource: 'salesInvoices', state: 'pending', ...sealMigrationPayload(dto) })
+    mocks.hydrate.mockResolvedValueOnce({ invoices: [dto], unhydratedIds: new Set(), hydration: {} })
+    return db
+  }
+
+  it('maps the invoice customer onto the hand-made card before the commit, instead of a stub', async () => {
+    const db = salesInvoiceJob(invoice('1001'))
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    const calls = db.rpc.mock.calls.map(([name]) => name)
+    expect(calls.indexOf('adopt_provider_migration_invoice_party')).toBeGreaterThan(-1)
+    expect(calls.indexOf('adopt_provider_migration_invoice_party')).toBeLessThan(calls.indexOf('commit_provider_migration_records'))
+    expect(db.rpc).toHaveBeenCalledWith('adopt_provider_migration_invoice_party',
+      { p_job_id: 'job', p_source_id: '2329', p_customer: 'hand-made' })
+    expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_records', expect.objectContaining({
+      p_records: [expect.objectContaining({ id: '1001', party_source_id: '2329' })],
+    }))
+  })
+
+  it('leaves an existing mapping as it is on a re-run', async () => {
+    const db = salesInvoiceJob(invoice('1002'))
+    db.register.migration_source_records.push({ company_id: 'company', provider: 'fortnox', account_key: '5560000000',
+      resource: 'customers', source_id: '2329', target_id: 'stub-from-an-earlier-run' })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.rpc.mock.calls.map(([name]) => name)).not.toContain('adopt_provider_migration_invoice_party')
+    expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_records', expect.objectContaining({
+      p_records: [expect.objectContaining({ id: '1002', party_source_id: '2329' })],
+    }))
   })
 })

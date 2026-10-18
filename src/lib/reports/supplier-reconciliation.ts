@@ -1,11 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
+import { closingBalanceOf } from './trial-balance'
 
 export interface ReconciliationResult {
   supplier_ledger_total: number
+  /** Closing balance (UB, ingående balans included) of 2440, credit minus debit, as the balance sheet shows it. */
   account_2440_balance: number
   difference: number
   is_reconciled: boolean
@@ -73,39 +74,19 @@ export async function generateReconciliation(
       return Math.round((sum + sek) * 100) / 100
     }, 0)
 
-  // Get account 2440 balance from the ledger in this period. We count posted
-  // AND reversed entries together: the SAME inclusion rule the trial balance /
-  // balance sheet use. A corrected supplier invoice flips its original
-  // registration to status='reversed' (storno-service.ts); that reversed credit
-  // on 2440 is cancelled by the posted storno's debit, so BOTH legs must be
-  // summed or the report double-counts the payment debit and shows a phantom
-  // debit balance. (This is exactly the false −41 121,25 kr "Ej avstämd" gap a
-  // fully-paid, fully-corrected company hit: posted-only = −41 121,25, but
-  // posted+reversed = 0, matching the leverantörsreskontra.)
-  // Fetched via the two-step entry-lines helper (entries first, then lines
-  // chunked by entry id, both paginated): see lib/bookkeeping/entry-lines.ts.
-  const journalLines = await fetchEntryLines<{
-    id: string
-    debit_amount: number | null
-    credit_amount: number | null
-  }>({
-    supabase,
-    lineColumns: 'id, debit_amount, credit_amount',
-    filterEntries: (q: EntryLinesQuery) =>
-      q
-        .eq('company_id', companyId)
-        .eq('fiscal_period_id', periodId)
-        .in('status', ['posted', 'reversed']),
-    filterLines: (q: EntryLinesQuery) => q.eq('account_number', resolveAccountRole(PINNED_JURISDICTION, 'accounts_payable')),
-    attachEntriesAs: null,
-  })
-
-  // Account 2440 is a liability: credit normal balance
-  // Balance = credits - debits
-  let account2440Balance = 0
-  for (const line of journalLines) {
-    account2440Balance = Math.round((account2440Balance + (Number(line.credit_amount) || 0) - (Number(line.debit_amount) || 0)) * 100) / 100
-  }
+  // The booked 2440 balance, read as the balance sheet reads it
+  // (closingBalanceOf: the trial balance's UB, ingående balans included,
+  // posted and reversed entries both counted so a corrected registration nets
+  // against its storno). The open invoices above are every open invoice of
+  // the register, whatever year it was booked in, so the ledger side must
+  // carry the opening balance too: summing only this fiscal year's verifikat
+  // left out an IB carried from earlier years' verifikat and showed that IB
+  // as a false difference (crm#1296). 2440 is a liability, credit-normal:
+  // balance = credits - debits (0 minus, so an empty account reads 0, not -0).
+  const debitMinusCredit = await closingBalanceOf(supabase, companyId, periodId, [
+    resolveAccountRole(PINNED_JURISDICTION, 'accounts_payable'),
+  ])
+  const account2440Balance = 0 - debitMinusCredit
 
   const difference = Math.round((supplierLedgerTotal - account2440Balance) * 100) / 100
 

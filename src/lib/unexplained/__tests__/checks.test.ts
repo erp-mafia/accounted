@@ -32,6 +32,7 @@ import {
   checkFixture,
   skvRow,
   unbookedRow,
+  withCarriedForwardIb,
   type CheckFixtureOptions,
 } from './fixtures'
 
@@ -160,6 +161,44 @@ describe('payables_vs_ledger equals the leverantörsreskontra reconciliation', (
       expect.objectContaining({ journal_entry_id: MANUAL_AP, part: 'ledger_without_invoice', amount: -1500 }),
     ])
     expect(e).toMatchObject({ residual: 0, reconciles: true })
+  })
+})
+
+describe('the reskontra checks read the control account as the balance sheet does, opening balance included (crm#1296)', () => {
+  async function booked(l: ReturnType<typeof ledger>, account: string) {
+    const bs = await generateBalanceSheet(l.supabase, CO, FP)
+    return [...bs.asset_sections, ...bs.equity_liability_sections].flatMap((s) => s.rows).find((r) => r.account_number === account)!.amount
+  }
+
+  it('an IB carried from earlier years\' verifikat (no IB verifikat) is in the ledger side', async () => {
+    // Without the carried IB the year's 1510 lines alone net to 500 and the
+    // check showed the omitted 12 000 IB as a 15 000 difference.
+    const l = createFakeLedger(withCarriedForwardIb(checkFixture()))
+    const result = (await check(l, 'receivables_vs_ledger')).results[0]
+    expect(result.sides.map((s) => s.amount)).toEqual([15500, 12500])
+    expect(result.sides[1].amount).toBe(await booked(l, '1510'))
+    expect(result).toMatchObject({ status: 'unexplained', difference: 3000 })
+    const e = await explain(l, 'receivables_vs_ledger')
+    expect(e).toMatchObject({ residual: 0, reconciles: true })
+  })
+
+  it('the same for payables: the carried 2440 IB is booked, the register ties out', async () => {
+    const l = createFakeLedger(withCarriedForwardIb(checkFixture()))
+    const result = (await check(l, 'payables_vs_ledger')).results[0]
+    expect(result).toMatchObject({ status: 'ok', difference: 0 })
+    expect(result.sides.map((s) => s.amount)).toEqual([10000, 10000])
+    expect(result.sides[1].amount).toBe(await booked(l, '2440'))
+  })
+
+  it('a linked IB verifikat in the year counts once', async () => {
+    // Base fixture: the IB verifikat sits in the year and is the period's
+    // opening_balance_entry_id: 1510 = IB 12 000 + 12 500 - 12 000, not 24 500.
+    const l = ledger()
+    const card = await generateARReconciliation(l.supabase, CO, FP)
+    expect(card.account_1510_balance).toBe(12500)
+    expect(card.account_1510_balance).toBe(await booked(l, '1510'))
+    const ap = await generateSupplierReconciliation(l.supabase, CO, FP)
+    expect(ap.account_2440_balance).toBe(10000)
   })
 })
 

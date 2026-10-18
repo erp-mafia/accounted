@@ -1035,3 +1035,107 @@ describe('generateAgiDeclaration: text rows never reach the declaration', () => 
     expect(iu).toContain('<gem:SkatteplBilformanUlagAG faltkod="013">2000</gem:SkatteplBilformanUlagAG>')
   })
 })
+
+describe('generateAgiDeclaration: writeOnlyIfChanged (submit-time regeneration, issue #69)', () => {
+  type OkResult = Extract<Awaited<ReturnType<typeof generateAgiDeclaration>>, { ok: true }>
+
+  async function firstGeneration(): Promise<OkResult> {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueHappyPath(enqueueMany, [REGULAR_ROW])
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+    if (!result.ok) throw new Error(`expected a generation, got ${result.code}`)
+    return result
+  }
+
+  /** The row the first generation stored, written at another moment (its own Skapad). */
+  function storedRow(first: OkResult, overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'agi-1',
+      salary_run_id: 'run-1',
+      xml_content: first.xml.replace(
+        /<gem:Skapad>[^<]*<\/gem:Skapad>/,
+        '<gem:Skapad>2026-07-01T08:00:00</gem:Skapad>',
+      ),
+      total_gross: RUN.total_gross,
+      total_tax: first.totals.totalTax,
+      total_avgifter_basis: first.totals.totalAvgifterBasis,
+      total_avgifter: first.totals.totalAvgifterAmount,
+      employee_count: first.employeeCount,
+      ...overrides,
+    }
+  }
+
+  async function regenerate(stored: unknown, writeOnlyIfChanged = true) {
+    const db = createQueuedMockSupabase()
+    db.enqueueMany([
+      { data: RUN },
+      { data: COMPANY },
+      { data: SETTINGS },
+      { data: PROFILE },
+      { data: [REGULAR_ROW] },
+      { data: [] }, // salary_absence_days
+      { data: stored }, // agi_declarations for the period
+      { data: null }, // agi_declarations update
+      { data: null }, // salary_runs agi_generated_at stamp
+    ])
+    const emitted: unknown[] = []
+    const off = eventBus.on('agi.generated', async (event) => {
+      emitted.push(event)
+    })
+    const result = await generateAgiDeclaration({ supabase: db.supabase as never, ...ARGS, writeOnlyIfChanged })
+    off()
+    return { result, db, emitted }
+  }
+
+  it('writes nothing when the stored declaration already says the same, its Skapad stamp aside', async () => {
+    const first = await firstGeneration()
+    const stored = storedRow(first)
+
+    const { result, db, emitted } = await regenerate(stored)
+
+    expect(result).toMatchObject({ ok: true, unchanged: true, agiDeclarationId: 'agi-1', xml: stored.xml_content })
+    expect(db.findCall('agi_declarations', 'update')).toBeUndefined()
+    expect(db.findCall('agi_declarations', 'insert')).toBeUndefined()
+    // agi_generated_at keeps its stamp: an open signing draft does not turn stale.
+    expect(db.findCall('salary_runs', 'update')).toBeUndefined()
+    expect(emitted).toHaveLength(0)
+    // The comparison needs the stored content, so it is read.
+    expect(db.findCall('agi_declarations', 'select')?.[0]).toContain('xml_content')
+  })
+
+  it('replaces a stored XML a generator fix has since changed (FK001 missing, crm#1265)', async () => {
+    const first = await firstGeneration()
+    const stored = storedRow(first)
+    stored.xml_content = (stored.xml_content as string).replace(/\s*<gem:AvdrPrelSkatt faltkod="001">[^<]*<\/gem:AvdrPrelSkatt>/, '')
+    expect(stored.xml_content).not.toContain('faltkod="001"')
+
+    const { result, db, emitted } = await regenerate(stored)
+
+    expect(result.ok).toBe(true)
+    expect(result.ok && result.unchanged).toBeFalsy()
+    const update = db.findCall('agi_declarations', 'update')?.[0] as { xml_content: string }
+    expect(update.xml_content).toContain('faltkod="001"')
+    expect(result.ok && result.xml).toBe(update.xml_content)
+    expect(db.findCall('salary_runs', 'update')?.[0]).toHaveProperty('agi_generated_at')
+    expect(emitted).toHaveLength(1)
+  })
+
+  it('rewrites a row whose stored totals differ from the fresh ones even when the XML matches', async () => {
+    const first = await firstGeneration()
+    const stored = storedRow(first, { total_tax: first.totals.totalTax + 0.4 })
+
+    const { result, db } = await regenerate(stored)
+
+    expect(result.ok && result.unchanged).toBeFalsy()
+    expect(db.findCall('agi_declarations', 'update')?.[0]).toMatchObject({ total_tax: first.totals.totalTax })
+  })
+
+  it('without the option writes as before, even when nothing changed', async () => {
+    const first = await firstGeneration()
+
+    const { result, db } = await regenerate(storedRow(first), false)
+
+    expect(result.ok && result.unchanged).toBeFalsy()
+    expect(db.findCall('agi_declarations', 'update')).toBeDefined()
+  })
+})

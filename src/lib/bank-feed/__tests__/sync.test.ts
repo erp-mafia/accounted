@@ -53,6 +53,16 @@ describe('mapBankFeedRows', () => {
     expect(mapped.maxBookingDate).toBe('2026-10-02')
   })
 
+  it('drops a bank entry the response served twice and keeps equal payments the bank tells apart (crm#1295)', () => {
+    const swish = (id: string, description: string) => row({ booking_date: '2026-06-15', amount: 250, description, provider_transaction_id: id })
+    const rows = [swish('T-1', 'Swish ref-1'), swish('T-2', 'Swish'), swish('T-1', 'Swish ref-1'), swish('T-3', 'Swish')]
+    const mapped = mapBankFeedRows({ rows, account, connectionId: 'conn-1', archivedPageIds: ['doc-1'] })
+    expect(mapped.repeatsDropped).toBe(1)
+    expect(mapped.rows.map((r) => r.provider_transaction_id)).toEqual(['T-1', 'T-2', 'T-3'])
+    expect(mapped.rows.map((r) => r.external_id)).toEqual(buildStableExternalIds('eb', 'SE8050000000052131234567',
+      [rows[0], rows[1], rows[3]].map((r) => ({ date: r.booking_date, amount: r.amount }))))
+  })
+
   it('carries what Open Payments reports: source, value date, end-to-end id, provider id, counterparty IBAN, the archived page', () => {
     const [mapped] = mapBankFeedRows({
       rows: [row({ value_date: '2026-10-02', end_to_end_id: 'E2E-1', provider_transaction_id: 'T-1', counterparty_iban: 'se45 5000 0000 0583 9825 7466', counterparty_account: '123456789', raw_page_index: 0, reference: '4711000000009' })],

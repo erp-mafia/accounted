@@ -12,7 +12,7 @@
  * Builders below add one discrepancy at a time.
  */
 import type { FakeEntry, FakeLedgerData } from '@/lib/measures/__tests__/fake-ledger'
-import { CO, FP, INV1, SINV1, fixtureData } from '@/lib/measures/__tests__/fixtures'
+import { CO, FP, INV1, OB, SINV1, fixtureData } from '@/lib/measures/__tests__/fixtures'
 
 export { CO, FP }
 
@@ -139,6 +139,38 @@ export const MANUAL_PAYABLE: FakeEntry = {
     { account_number: '6110', debit: 1500 },
     { account_number: '2440', credit: 1500 },
   ],
+}
+
+export const FP_2025 = 'f0000000-0000-4000-8000-000000002025'
+
+/**
+ * The same company without an ingående balans verifikat: the 2026 opening
+ * balance is carried from an ordinary 2025 verifikat (every year imported, no
+ * IB entry, crm#1296), so 2026 has no opening_balance_entry_id and the trial
+ * balance opens it from the earlier year's lines. The balances are the base
+ * fixture's, so every figure a check reads must be too.
+ */
+export function withCarriedForwardIb(data: FakeLedgerData): FakeLedgerData {
+  return {
+    ...data,
+    fiscalPeriods: [
+      {
+        id: FP_2025,
+        name: 'Räkenskapsår 2025',
+        period_start: '2025-01-01',
+        period_end: '2025-12-31',
+        is_closed: false,
+        locked_at: null,
+        closing_entry_id: null,
+        closed_externally: false,
+        opening_balance_entry_id: null,
+      },
+      ...data.fiscalPeriods.map((p) => (p.id === FP ? { ...p, opening_balance_entry_id: null } : p)),
+    ],
+    entries: data.entries.map((e) =>
+      e.id === OB ? { ...e, entry_date: '2025-12-31', voucher_series: 'A', source_type: 'import', fiscal_period_id: FP_2025 } : e,
+    ),
+  }
 }
 
 export function checkFixture(options: CheckFixtureOptions = {}): FakeLedgerData {

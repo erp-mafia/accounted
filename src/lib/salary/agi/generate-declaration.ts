@@ -110,6 +110,16 @@ export interface GenerateAgiDeclarationArgs {
   salaryRunId: string
   log: Logger
   requestId: string
+  /**
+   * Submit-time regeneration (refreshAgiUnderlag in the Skatteverket
+   * extension). When the run's stored declaration already says exactly what
+   * this generation says (same XML apart from its Skapad timestamp, same
+   * stored totals), nothing is written and the stored XML comes back with
+   * `unchanged: true`: a submit that changes nothing must not restamp
+   * agi_generated_at, which would mark an open signing draft as stale, or
+   * emit agi.generated again.
+   */
+  writeOnlyIfChanged?: boolean
 }
 
 export type GenerateAgiDeclarationResult =
@@ -123,6 +133,8 @@ export type GenerateAgiDeclarationResult =
       isCorrection: boolean
       totals: AGITotals
       orgNumber: string
+      /** writeOnlyIfChanged only: the stored declaration already matched, nothing was written. */
+      unchanged?: boolean
     }
   | {
       ok: false
@@ -161,10 +173,46 @@ function isFSkattRow(sre: SalaryRunEmployeeRow): boolean {
   return isFSkattStatus(sre.employee?.f_skatt_status)
 }
 
+/**
+ * The XML without its Avsandare/Skapad stamp, the one element two generations
+ * from the same data always disagree on.
+ */
+function agiXmlWithoutCreatedStamp(xml: string): string {
+  return xml.replace(/<gem:Skapad>[^<]*<\/gem:Skapad>/, '')
+}
+
+/** The stored row the writeOnlyIfChanged comparison reads. */
+interface StoredAgiDeclaration {
+  id: string
+  salary_run_id: string | null
+  xml_content?: string | null
+  total_gross?: number | string | null
+  total_tax?: number | string | null
+  total_avgifter_basis?: number | string | null
+  total_avgifter?: number | string | null
+  employee_count?: number | null
+}
+
+/** True when the stored row holds exactly what this generation would write. */
+function storedDeclarationMatches(
+  stored: StoredAgiDeclaration,
+  fresh: { xml: string; totals: AGITotals; employeeCount: number; totalGross: unknown },
+): boolean {
+  return (
+    typeof stored.xml_content === 'string' &&
+    agiXmlWithoutCreatedStamp(stored.xml_content) === agiXmlWithoutCreatedStamp(fresh.xml) &&
+    Number(stored.total_tax) === fresh.totals.totalTax &&
+    Number(stored.total_avgifter) === fresh.totals.totalAvgifterAmount &&
+    Number(stored.total_avgifter_basis) === fresh.totals.totalAvgifterBasis &&
+    Number(stored.employee_count) === fresh.employeeCount &&
+    Number(stored.total_gross) === Number(fresh.totalGross)
+  )
+}
+
 export async function generateAgiDeclaration(
   args: GenerateAgiDeclarationArgs,
 ): Promise<GenerateAgiDeclarationResult> {
-  const { supabase, companyId, userId, userEmail, salaryRunId, log, requestId } = args
+  const { supabase, companyId, userId, userEmail, salaryRunId, log, requestId, writeOnlyIfChanged } = args
   const opLog = log.child({ salaryRunId })
 
   // 1. Run + status precheck.
@@ -562,13 +610,15 @@ export async function generateAgiDeclaration(
   // because the lookup must tolerate the no-row case without throwing:
   // that's the FIRST-time generation path. `.single()` would surface a
   // PGRST116 row-not-found error and abort what should be a clean insert.
-  const { data: existingAgi } = await supabase
+  // The stored XML and totals are read too, for writeOnlyIfChanged to compare
+  // below (one literal select, so the column guard can check it).
+  const { data: existingAgi } = (await supabase
     .from('agi_declarations')
-    .select('id, salary_run_id')
+    .select('id, salary_run_id, xml_content, total_gross, total_tax, total_avgifter_basis, total_avgifter, employee_count')
     .eq('company_id', companyId)
     .eq('period_year', agiPeriod.periodYear)
     .eq('period_month', agiPeriod.periodMonth)
-    .maybeSingle()
+    .maybeSingle()) as { data: StoredAgiDeclaration | null }
 
   // Two runs may share a redovisningsperiod only when one corrects the
   // other (a correction replaces the month's declaration wholesale). Any
@@ -630,6 +680,33 @@ export async function generateAgiDeclaration(
     throw err
   }
   const individuppgifter = buildIndividuppgifterSnapshot(employeeData)
+
+  // 7b. Submit-time regeneration: the run's own stored declaration already
+  // says this, so leave it (and agi_generated_at) exactly as it is.
+  if (
+    writeOnlyIfChanged &&
+    existingAgi &&
+    existingAgi.salary_run_id === run.id &&
+    storedDeclarationMatches(existingAgi, {
+      xml,
+      totals,
+      employeeCount: employeeData.length,
+      totalGross: run.total_gross,
+    })
+  ) {
+    return {
+      ok: true,
+      xml: existingAgi.xml_content as string,
+      agiDeclarationId: existingAgi.id,
+      periodYear: agiPeriod.periodYear,
+      periodMonth: agiPeriod.periodMonth,
+      employeeCount: employeeData.length,
+      isCorrection,
+      totals,
+      orgNumber: companyData.orgNumber,
+      unchanged: true,
+    }
+  }
 
   // 8. UPSERT agi_declarations.
   let agiDeclarationId: string

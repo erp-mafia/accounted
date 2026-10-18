@@ -19,6 +19,7 @@ vi.mock('@/lib/utils', async (importOriginal) => ({
 vi.mock('../lib/declaration-prep', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/declaration-prep')>()),
   buildAgiUnderlag: vi.fn(),
+  refreshAgiUnderlag: vi.fn(),
 }))
 vi.mock('../lib/agi-client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/agi-client')>()),
@@ -33,7 +34,7 @@ vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => ({
 
 import type { ExtensionContext } from '@/lib/extensions/types'
 import { skatteverketExtension } from '../index'
-import { buildAgiUnderlag } from '../lib/declaration-prep'
+import { buildAgiUnderlag, refreshAgiUnderlag } from '../lib/declaration-prep'
 import { agiGetKontrollresultat, agiPostUnderlag, agiSkapaGranskningsunderlag } from '../lib/agi-client'
 
 const KONTROLL_WITH_WARNING = {
@@ -113,6 +114,7 @@ function settingsWrites(settings: { set: ReturnType<typeof vi.fn> }) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(refreshAgiUnderlag).mockResolvedValue({ ok: true, outcome: 'unchanged' })
   vi.mocked(buildAgiUnderlag).mockResolvedValue({
     arbetsgivare: '165560000000',
     period: '202606',
@@ -141,6 +143,50 @@ describe('AGI panel filing routes', () => {
       expect(agiSkapaGranskningsunderlag).not.toHaveBeenCalled()
     },
   )
+
+  // Issue #69: the panel's one-click chain and its advanced "Skicka in
+  // underlag" both regenerate an unfiled underlag before posting it, whatever
+  // agi_generated_at says; only the signing-link step posts nothing.
+  it.each(['/agi/send-for-signing', '/agi/submit'])(
+    '%s regenerates the run\'s underlag before posting it',
+    async (path) => {
+      const { ctx } = context()
+
+      const { status } = await call(path, { salaryRunId: 'run-1' }, ctx)
+
+      expect(status).toBe(200)
+      expect(refreshAgiUnderlag).toHaveBeenCalledWith(ctx.supabase, 'company-1', 'user-1', 'run-1')
+      expect(vi.mocked(refreshAgiUnderlag).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(agiPostUnderlag).mock.invocationCallOrder[0],
+      )
+    },
+  )
+
+  it('POST /agi/granskningsunderlag regenerates nothing: it locks what step 1 posted', async () => {
+    const { ctx } = context()
+
+    const { status } = await call('/agi/granskningsunderlag', { salaryRunId: 'run-1' }, ctx)
+
+    expect(status).toBe(200)
+    expect(refreshAgiUnderlag).not.toHaveBeenCalled()
+  })
+
+  it('POST /agi/send-for-signing answers a refused regeneration with its sentence and posts nothing', async () => {
+    const { ctx, db } = context()
+    vi.mocked(refreshAgiUnderlag).mockResolvedValue({
+      ok: false,
+      code: 'AGI_PERIOD_CONFLICT',
+      httpStatus: 409,
+      error: 'En annan lönekörning är redan deklarerad för samma redovisningsperiod.',
+    })
+
+    const { status, json } = await call('/agi/send-for-signing', { salaryRunId: 'run-1' }, ctx)
+
+    expect(status).toBe(409)
+    expect(json).toMatchObject({ code: 'AGI_PERIOD_CONFLICT', error: expect.stringContaining('redovisningsperiod') })
+    expect(agiPostUnderlag).not.toHaveBeenCalled()
+    expect(db.findCall('agi_declarations', 'update')).toBeUndefined()
+  })
 
   it('POST /agi/submit posts, waits for kontroll and returns the masked findings', async () => {
     const { ctx } = context()

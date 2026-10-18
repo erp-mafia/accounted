@@ -18,6 +18,7 @@ import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-
 import { mapCustomer, mapSupplier, mapSalesInvoice, mapSupplierInvoice, buildFxRateIndex } from './entity-mapper'
 import { bokioSupplierSource } from './bokio-supplier-source'
 import { invoiceWithinScope } from './invoice-scope'
+import { adoptExistingCustomers, customerRegisterFacts, salesInvoicePartyFacts, type PartyCandidate } from './customer-match'
 
 const log = createLogger('provider-migration-worker')
 const BATCH_SIZE = 10
@@ -90,13 +91,18 @@ function mappedParty(job: ProviderMigrationJob, resource: MigrationResource, dto
   return mapSupplier({ id: '', supplierNumber: '', active: true, party }, job.user_id, job.company_id)
 }
 
+/**
+ * `parties` collects the source customer behind each prepared record, keyed by
+ * chunk id, for adoptExistingCustomers to match before the commit.
+ */
 async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob, c: MigrationChunk,
-  connection: ResolvedConsent, deadline: number): Promise<Record<string, unknown>> {
+  connection: ResolvedConsent, deadline: number, parties: Map<string, PartyCandidate>): Promise<Record<string, unknown>> {
   const dto = openMigrationPayload<MigrationDto & { migrationError?: string }>(c.payload)
   if (dto.migrationError) return { id: c.id, error: dto.migrationError }
   if (!dto.id) return { id: c.id, error: 'MIGRATION_SOURCE_ID_MISSING' }
   if (c.resource === 'customers') {
     if (!(dto as CustomerDto).active) return { id: c.id, skip: 'inactive' }
+    parties.set(c.id, { sourceId: c.source_id, facts: customerRegisterFacts(job.provider, dto as CustomerDto) })
     return { id: c.id, row: mapCustomer(dto as CustomerDto, job.user_id, job.company_id) }
   }
   if (c.resource === 'suppliers') {
@@ -186,9 +192,13 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
       return { id: c.id, error: 'MIGRATION_ROWS_MISMATCH' }
     }
   }
+  const partySourceId = invoicePartySourceId(job.provider, c.resource, invoice)
+  if (c.resource === 'salesInvoices') {
+    parties.set(c.id, { sourceId: partySourceId, facts: salesInvoicePartyFacts(job.provider, invoice as SalesInvoiceDto) })
+  }
   return {
     id: c.id, row: mapped.invoice, items: mapped.items,
-    party_source_id: invoicePartySourceId(job.provider, c.resource, invoice), party: mappedParty(job, c.resource, invoice),
+    party_source_id: partySourceId, party: mappedParty(job, c.resource, invoice),
     link: { ...(provider === 'bokio' && c.resource === 'supplierInvoices'
       ? { bokioSource: bokioSupplierSource(invoice as SupplierInvoiceDto, placeholder) } : {}), kind: c.resource === 'salesInvoices' ? 'customer' : 'supplier', sourceVoucher: invoice.sourceVoucher ?? null,
       ...((invoice as SupplierInvoiceDto).supplierEvidence?.voucherKind === 'cash_purchase'
@@ -368,8 +378,16 @@ async function importBatch(supabase: SupabaseClient, job: ProviderMigrationJob, 
   connection: ResolvedConsent, deadline: number): Promise<void> {
   let batch: Record<string, unknown>[] = []
   let bytes = 0
+  const parties = new Map<string, PartyCandidate>()
   const commit = async () => {
     if (!batch.length) return
+    // A customer the company already has a card for is mapped onto that card
+    // first, so the commit reuses it instead of creating a stub (crm#1294).
+    const written = batch.flatMap(record => {
+      const party = record.row ? parties.get(record.id as string) : undefined
+      return party ? [party] : []
+    })
+    await adoptExistingCustomers(supabase, job, written, promise => withinMigrationDeadline(promise, deadline))
     await migrationRpc(supabase, job, 'commit_provider_migration_records', { p_records: batch }, deadline)
     batch = []; bytes = 0
   }
@@ -377,7 +395,7 @@ async function importBatch(supabase: SupabaseClient, job: ProviderMigrationJob, 
     for (const c of chunks) {
       if (Date.now() >= deadline - 5000) break
       let record: Record<string, unknown>
-      try { record = await prepareRecord(supabase, job, c, connection, deadline) }
+      try { record = await prepareRecord(supabase, job, c, connection, deadline, parties) }
       catch (error) {
         const code = failureCode(error)
         if (['MIGRATION_DEADLINE', 'PROVIDER_AUTH_EXPIRED'].includes(code)

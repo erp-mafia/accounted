@@ -6007,8 +6007,8 @@ const SALARY: Record<string, StructuredErrorEntry> = {
       tool: 'gnubok_book_salary_run',
     },
   },
-  // gnubok_agi_submit files the stored underlag; it never generates one, so a
-  // run without an agi_declarations row has nothing to send yet.
+  // gnubok_agi_submit stages only a run whose underlag has been generated (and
+  // so reviewed); approval regenerates it from current data before posting.
   AGI_SUBMIT_NOT_GENERATED: {
     httpStatus: 409,
     message_sv: 'AGI-underlaget saknas för lönekörningen. Generera AGI först och lämna sedan in.',

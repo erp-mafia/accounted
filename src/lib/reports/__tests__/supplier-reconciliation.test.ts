@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // ============================================================
-// Mock: sequential result queue
+// Mock: sequential result queue (the register side), and the booked
+// balance the balance sheet reads (closingBalanceOf, the ledger side)
 // ============================================================
 
 let resultIdx: number
@@ -28,7 +29,18 @@ function makeClient() {
   } as any
 }
 
+vi.mock('../trial-balance', () => ({
+  closingBalanceOf: vi.fn(),
+}))
+
+import { closingBalanceOf } from '../trial-balance'
 import { generateReconciliation } from '../supplier-reconciliation'
+
+/** The booked 2440 balance as credits minus debits (IB included). */
+function booked(credit: number, debit = 0) {
+  // closingBalanceOf answers debit minus credit, the trial balance's sign.
+  vi.mocked(closingBalanceOf).mockResolvedValue(Math.round((debit - credit) * 100) / 100)
+}
 
 let supabase: ReturnType<typeof makeClient>
 
@@ -38,6 +50,7 @@ beforeEach(() => {
   results = []
   calls = []
   supabase = makeClient()
+  booked(0)
 })
 
 describe('generateReconciliation', () => {
@@ -51,17 +64,8 @@ describe('generateReconciliation', () => {
         ],
         error: null,
       },
-      // 1: journal_entry_lines for account 2440
-      // journal_entries page for the two-step entry-lines fetch
-      { data: [{ id: 'entry-1' }], error: null },
-      {
-        data: [
-          { debit_amount: 0, credit_amount: 10000, journal_entry_id: 'e1' },
-          { debit_amount: 2000, credit_amount: 0, journal_entry_id: 'e2' },
-        ],
-        error: null,
-      },
     ]
+    booked(10000, 2000)
 
     const result = await generateReconciliation(supabase, 'company-1', 'period-1')
 
@@ -73,46 +77,42 @@ describe('generateReconciliation', () => {
     expect(result.is_reconciled).toBe(true)
   })
 
-  it('paginates the 2440 ledger query: sums >1000 lines instead of truncating at 1000', async () => {
-    // Regression guard for the silent PostgREST 1000-row cap: fetchAllRows must
-    // page through ALL ledger lines. A full first page (length === PAGE_SIZE)
-    // forces a second fetch.
-    // Unique ids so the dedupe-by-id safety net doesn't collapse rows.
-    const page1 = Array.from({ length: 1000 }, (_, i) => ({ id: `p1-${i}`, debit_amount: 0, credit_amount: 10 }))
-    const page2 = Array.from({ length: 500 }, (_, i) => ({ id: `p2-${i}`, debit_amount: 0, credit_amount: 10 }))
-    results = [
-      { data: [], error: null },     // 0: supplier_invoices, none open
-      // 1: journal_entries page for the two-step entry-lines fetch
-      { data: [{ id: 'entry-1' }], error: null },
-      { data: page1, error: null },  // 2: 2440 lines page 1 (full → triggers next page)
-      { data: page2, error: null },  // 3: 2440 lines page 2 (partial → stop)
-    ]
+  it('reads the booked side as the balance sheet does: 2440 of this fiscal year, IB included', async () => {
+    results = [{ data: [], error: null }]
+
+    await generateReconciliation(supabase, 'company-1', 'period-1')
+
+    // The accounts_payable role (2440 in the SE pack).
+    expect(closingBalanceOf).toHaveBeenCalledWith(supabase, 'company-1', 'period-1', ['2440'])
+  })
+
+  it('counts the opening balance carried from earlier years (crm#1296)', async () => {
+    // A supplier invoice still open from last year (6 000) and one from this
+    // year (2 000). 2440 opens at the 6 000 carried from last year's verifikat
+    // and the year's own lines add 2 000: the booked side is the account's UB,
+    // 8 000, not the year's 2 000.
+    results = [{ data: [{ remaining_amount: 6000 }, { remaining_amount: 2000 }], error: null }]
+    booked(8000)
 
     const result = await generateReconciliation(supabase, 'company-1', 'period-1')
 
-    // 1500 lines × 10 = 15 000. A 1000-row truncation would wrongly yield 10 000.
-    expect(result.account_2440_balance).toBe(15000)
+    expect(result.account_2440_balance).toBe(8000)
+    expect(result.difference).toBe(0)
+    expect(result.is_reconciled).toBe(true)
+  })
+
+  it('a failed balance read fails the reconciliation instead of reading 0', async () => {
+    results = [{ data: [{ remaining_amount: 1000 }], error: null }]
+    vi.mocked(closingBalanceOf).mockRejectedValue(new Error('get_trial_balance_aggregates failed'))
+
+    await expect(generateReconciliation(supabase, 'company-1', 'period-1')).rejects.toThrow(
+      'get_trial_balance_aggregates failed',
+    )
   })
 
   it('detects mismatch when difference != 0', async () => {
-    results = [
-      // 0: supplier_invoices, total 5000
-      {
-        data: [
-          { remaining_amount: 5000 },
-        ],
-        error: null,
-      },
-      // 1: journal_entry_lines, balance 7000
-      // journal_entries page for the two-step entry-lines fetch
-      { data: [{ id: 'entry-1' }], error: null },
-      {
-        data: [
-          { debit_amount: 0, credit_amount: 7000, journal_entry_id: 'e1' },
-        ],
-        error: null,
-      },
-    ]
+    results = [{ data: [{ remaining_amount: 5000 }], error: null }]
+    booked(7000)
 
     const result = await generateReconciliation(supabase, 'company-1', 'period-1')
 
@@ -123,10 +123,7 @@ describe('generateReconciliation', () => {
   })
 
   it('returns reconciled when both are zero/empty', async () => {
-    results = [
-      { data: [], error: null },
-      { data: [], error: null },
-    ]
+    results = [{ data: [], error: null }]
 
     const result = await generateReconciliation(supabase, 'company-1', 'period-1')
 
@@ -137,17 +134,8 @@ describe('generateReconciliation', () => {
   })
 
   it('handles null invoice data gracefully', async () => {
-    results = [
-      { data: null, error: null },
-      // journal_entries page for the two-step entry-lines fetch
-      { data: [{ id: 'entry-1' }], error: null },
-      {
-        data: [
-          { debit_amount: 0, credit_amount: 3000, journal_entry_id: 'e1' },
-        ],
-        error: null,
-      },
-    ]
+    results = [{ data: null, error: null }]
+    booked(3000)
 
     const result = await generateReconciliation(supabase, 'company-1', 'period-1')
 
@@ -158,23 +146,12 @@ describe('generateReconciliation', () => {
   })
 
   it('computes credit-normal balance for account 2440 (liability)', async () => {
-    results = [
-      { data: [], error: null },
-      // journal_entries page for the two-step entry-lines fetch
-      { data: [{ id: 'entry-1' }], error: null },
-      {
-        data: [
-          { debit_amount: 0, credit_amount: 15000, journal_entry_id: 'e1' },
-          { debit_amount: 5000, credit_amount: 0, journal_entry_id: 'e2' },
-          { debit_amount: 3000, credit_amount: 0, journal_entry_id: 'e3' },
-        ],
-        error: null,
-      },
-    ]
+    results = [{ data: [], error: null }]
+    booked(15000, 8000)
 
     const result = await generateReconciliation(supabase, 'company-1', 'period-1')
 
-    // Balance = credits - debits = 15000 - 5000 - 3000 = 7000
+    // Balance = credits - debits = 15000 - 8000 = 7000
     expect(result.account_2440_balance).toBe(7000)
   })
 
@@ -190,16 +167,9 @@ describe('generateReconciliation', () => {
         ],
         error: null,
       },
-      // 1: 2440 balance = 3 475 SEK (matches converted ledger total)
-      // journal_entries page for the two-step entry-lines fetch
-      { data: [{ id: 'entry-1' }], error: null },
-      {
-        data: [
-          { debit_amount: 0, credit_amount: 3475, journal_entry_id: 'e1' },
-        ],
-        error: null,
-      },
     ]
+    // 2440 balance = 3 475 SEK (matches converted ledger total)
+    booked(3475)
 
     const result = await generateReconciliation(supabase, 'company-1', 'period-1')
 
@@ -223,16 +193,9 @@ describe('generateReconciliation', () => {
         ],
         error: null,
       },
-      // 1: 2440 balance reflects only the SEK invoice
-      // journal_entries page for the two-step entry-lines fetch
-      { data: [{ id: 'entry-1' }], error: null },
-      {
-        data: [
-          { debit_amount: 0, credit_amount: 1000, journal_entry_id: 'e1' },
-        ],
-        error: null,
-      },
     ]
+    // 2440 balance reflects only the SEK invoice
+    booked(1000)
 
     const result = await generateReconciliation(supabase, 'company-1', 'period-1')
 
@@ -246,52 +209,6 @@ describe('generateReconciliation', () => {
     expect(result.is_reconciled).toBe(false)
   })
 
-  it('counts posted AND reversed 2440 lines (corrected invoice nets correctly)', async () => {
-    // Regression for the Arcim Technology AB false "Ej avstämd" gap: two supplier
-    // invoices were registered, corrected via the storno flow, and fully paid.
-    // The corrected registrations flip to status='reversed'. The leverantörs-
-    // reskontra shows 0 outstanding, and over posted+reversed the 2440 balance is
-    // 0 too, but a posted-only query saw only the storno + correction + payment
-    // legs and reported a phantom −41 121,25 kr debit. The query must include the
-    // reversed registration leg so both reconcile.
-    results = [
-      // 0: supplier_invoices, both paid, nothing outstanding
-      { data: [], error: null },
-      // 1: 2440 lines as returned by the posted+reversed query for one corrected,
-      //    paid invoice of 11 231,25: registration (reversed credit), storno
-      //    (debit), correction (credit), payment (debit). Net credit−debit = 0.
-      // journal_entries page for the two-step entry-lines fetch
-      { data: [{ id: 'entry-1' }], error: null },
-      {
-        data: [
-          { debit_amount: 0, credit_amount: 11231.25, journal_entry_id: 'reg-reversed' },
-          { debit_amount: 11231.25, credit_amount: 0, journal_entry_id: 'storno' },
-          { debit_amount: 0, credit_amount: 11231.25, journal_entry_id: 'correction' },
-          { debit_amount: 11231.25, credit_amount: 0, journal_entry_id: 'payment' },
-        ],
-        error: null,
-      },
-    ]
-
-    const result = await generateReconciliation(supabase, 'company-1', 'period-1')
-
-    expect(result.supplier_ledger_total).toBe(0)
-    expect(result.account_2440_balance).toBe(0)
-    expect(result.difference).toBe(0)
-    expect(result.is_reconciled).toBe(true)
-
-    // Guard the actual fix: the 2440 query must include reversed entries, not
-    // filter to posted-only (which excluded the reversed registration leg).
-    // The status filter now lives on the journal_entries query itself (the
-    // two-step entry-lines fetch), not on an embedded-side column. The open
-    // invoices query also filters .in('status', ...), so assert that ONE of
-    // the status filters is the posted+reversed ledger inclusion rule.
-    const statusFilters = calls.filter(
-      (c) => c.method === 'in' && c.args[0] === 'status',
-    )
-    expect(statusFilters.map((c) => c.args[1])).toContainEqual(['posted', 'reversed'])
-  })
-
   it('uses Math.round for monetary precision', async () => {
     results = [
       {
@@ -301,15 +218,8 @@ describe('generateReconciliation', () => {
         ],
         error: null,
       },
-      // journal_entries page for the two-step entry-lines fetch
-      { data: [{ id: 'entry-1' }], error: null },
-      {
-        data: [
-          { debit_amount: 0, credit_amount: 66.67, journal_entry_id: 'e1' },
-        ],
-        error: null,
-      },
     ]
+    booked(66.67)
 
     const result = await generateReconciliation(supabase, 'company-1', 'period-1')
 
