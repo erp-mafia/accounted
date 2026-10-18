@@ -21,6 +21,11 @@ export type EditorIntent =
   | { kind: 'save_changes' }
   /** Mottagen självfaktura: registered and booked at once. */
   | { kind: 'register_self_billed' }
+  /**
+   * Kontantfaktura (crm#1281): persist, then issue it already paid, as one
+   * cash verifikat, and hand the receipt over (through the confirm dialog).
+   */
+  | { kind: 'issue_paid' }
 
 /** i18n keys (namespace invoice_editor_shell) of the action labels. */
 export type EditorActionLabel =
@@ -34,6 +39,7 @@ export type EditorActionLabel =
   | 'action_register_self_billed'
   | 'action_create_without_sending'
   | 'action_save_as_draft'
+  | 'action_issue_paid'
   | 'channel_email'
   | 'channel_manual'
   | 'channel_peppol'
@@ -112,10 +118,11 @@ export interface MenuContext extends PrimaryContext {
 
 /**
  * The caret menu: the channels (picking one sends on it, through the
- * confirm dialog), then "Spara som utkast" (a new faktura only: quotes and
- * delivery notes are numbered at insert, so a "draft" of one would already
- * hold a number) and "Skapa utan att skicka" (create mode). A received
- * självfaktura has no menu.
+ * confirm dialog), then "Kontantfaktura (redan betald)" (a faktura, in either
+ * mode: a Fortnox user looks for it next to the send), "Spara som utkast" (a
+ * new faktura only: quotes and delivery notes are numbered at insert, so a
+ * "draft" of one would already hold a number) and "Skapa utan att skicka"
+ * (create mode). A received självfaktura has no menu.
  */
 export function resolveEditorMenu(ctx: MenuContext): EditorMenu | null {
   if (ctx.isSelfBilled) return null
@@ -134,6 +141,9 @@ export function resolveEditorMenu(ctx: MenuContext): EditorMenu | null {
     reason: option.reason,
   }))
   const actions: EditorAction[] = []
+  if (ctx.documentType === 'invoice') {
+    actions.push({ intent: { kind: 'issue_paid' }, label: 'action_issue_paid' })
+  }
   if (ctx.mode === 'create') {
     if (ctx.documentType === 'invoice') {
       actions.push({ intent: { kind: 'save_draft' }, label: 'action_save_as_draft' })

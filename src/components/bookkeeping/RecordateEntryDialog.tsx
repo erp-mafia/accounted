@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/badge'
 import RattelseExplainer from '@/components/bookkeeping/RattelseExplainer'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { AlertTriangle, Lock, ArrowRight } from 'lucide-react'
 import { formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
@@ -231,7 +232,10 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
 
               {!previewLoading && preview?.status === 'closed' && (
                 <span className="text-destructive">
-                  Räkenskapsåret är stängt (bokslut) och kan inte återöppnas. Bokför rättelsen i innevarande period istället.
+                  {/* The registry's answer, as the refused move would give it:
+                      not "kan inte återöppnas", which is untrue while the
+                      årsredovisning is unsigned (crm#1290). */}
+                  {getErrorEntry('TARGET_PERIOD_CLOSED')?.message_sv}
                 </span>
               )}
 

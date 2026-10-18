@@ -198,3 +198,63 @@ describe('buildSendBody', () => {
     expect(buildSendBody({ email_body: 'Hej' })).toEqual({ email_body: 'Hej' })
   })
 })
+
+describe('persistAndSend: kontantfaktura, paid at issue (crm#1281)', () => {
+  const paid = { account_number: '1930' }
+
+  it('creates, issues it paid, then mails the receipt', async () => {
+    const { fetchImpl, calls } = stubFetch([
+      { json: { data: { id: 'inv-1', invoice_number: '1043' } } },
+      { json: { success: true, status: 'paid', journal_entry_id: 'je-1' } },
+      { json: { success: true } },
+    ])
+    const result = await persistAndSend(input({ paidAtIssue: paid }), fetchImpl)
+    expect(calls.map((c) => [c.method, c.url])).toEqual([
+      ['POST', '/api/invoices'],
+      ['POST', '/api/invoices/inv-1/mark-sent'],
+      ['POST', '/api/invoices/inv-1/send-payment-confirmation'],
+    ])
+    // Never the send route: it would email an unpaid invoice.
+    expect(calls[1].body).toEqual({ paid_at_issue: { account_number: '1930' } })
+    expect(result).toEqual({
+      ok: true,
+      invoiceId: 'inv-1',
+      invoiceNumber: '1043',
+      partial: false,
+      message: null,
+      receiptFailed: false,
+    })
+  })
+
+  it('mails nothing when the user hands the receipt over', async () => {
+    const { fetchImpl, calls } = stubFetch([
+      { json: { data: { id: 'inv-1', invoice_number: '1043' } } },
+      { json: { success: true, status: 'paid' } },
+    ])
+    const result = await persistAndSend(input({ channel: 'manual', paidAtIssue: paid }), fetchImpl)
+    expect(calls.map((c) => c.url)).toEqual(['/api/invoices', '/api/invoices/inv-1/mark-sent'])
+    expect(result).toMatchObject({ ok: true, invoiceId: 'inv-1', partial: false })
+  })
+
+  it('reports a failed receipt mail without undoing the issued, booked invoice', async () => {
+    const { fetchImpl } = stubFetch([
+      { json: { data: { id: 'inv-1', invoice_number: '1043' } } },
+      { json: { success: true, status: 'paid' } },
+      { status: 503, json: { error: { code: 'INVOICE_SEND_EMAIL_NOT_CONFIGURED' } } },
+    ])
+    const result = await persistAndSend(input({ paidAtIssue: paid }), fetchImpl)
+    expect(result).toMatchObject({ ok: true, invoiceId: 'inv-1', receiptFailed: true })
+  })
+
+  it('stops at the issue when the payment cannot be booked (the draft stays)', async () => {
+    const refusal = { error: { code: 'INVOICE_PAID_NO_FISCAL_PERIOD' } }
+    const { fetchImpl, calls } = stubFetch([
+      { json: { data: { id: 'inv-1', invoice_number: '1043' } } },
+      { status: 400, json: refusal },
+    ])
+    const result = await persistAndSend(input({ paidAtIssue: paid }), fetchImpl)
+    expect(calls).toHaveLength(2)
+    expect(result).toEqual({ ok: false, stage: 'send', invoiceId: 'inv-1', status: 400, error: refusal })
+  })
+})
+

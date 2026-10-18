@@ -281,6 +281,11 @@ describe('verifikation.draft period lock gate', () => {
     // A closed period cannot be unlocked (period-service rejects it), so the
     // agent must not send the user to Räkenskapsår to try.
     expect(prompt).not.toContain('låsa upp perioden')
+    // Both lawful ways on (crm#1290): support reopens a year whose
+    // årsredovisning has no legal weight, otherwise a rättelse in the open year.
+    expect(prompt).toContain('årsredovisningen för året är undertecknad eller inskickad')
+    expect(prompt).toContain('kontakta supporten')
+    expect(prompt).toContain('rättelse i det öppna räkenskapsåret')
   })
 
   it('fails closed when the lock lookup errors', async () => {

@@ -164,7 +164,23 @@ describe('POST /sending-domain', () => {
   it('propagates the helper status code', async () => {
     claimMock.mockResolvedValue({ ok: false, status: 409, error: 'Domänen är redan registrerad.' })
     const res = await route.handler(request(), adminCtx())
-    expect(res.status).toBe(409)
+    const { status, body } = await parseJsonResponse<Record<string, unknown>>(res)
+    expect(status).toBe(409)
+    expect(body).toEqual({ error: 'Domänen är redan registrerad.' })
+  })
+
+  it('passes the provider-limit code through so the page can explain it (crm#1288)', async () => {
+    claimMock.mockResolvedValue({
+      ok: false,
+      status: 503,
+      code: 'SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT',
+      error: 'Det går inte att lägga till en egen avsändardomän just nu.',
+    })
+    const res = await route.handler(request(), adminCtx())
+    const { status, body } = await parseJsonResponse<{ error: string; code: string }>(res)
+    expect(status).toBe(503)
+    expect(body.code).toBe('SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT')
+    expect(body.error).toMatch(/egen avsändardomän/)
   })
 })
 

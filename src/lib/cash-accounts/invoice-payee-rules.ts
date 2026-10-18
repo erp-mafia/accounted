@@ -45,6 +45,12 @@ export function isUsableInvoicePayee(account: CashAccount, currency: Currency): 
     && hasUsableInvoicePaymentAccount(cashAccountPayee(account), currency)
 }
 
+/** "Företagskonto (1930)", or the bare ledger account when the row has no name. */
+export function invoicePayeeAccountLabel(account: Pick<CashAccount, 'name' | 'ledger_account'>): string {
+  const name = account.name?.trim()
+  return name ? `${name} (${account.ledger_account})` : account.ledger_account
+}
+
 /** An account a foreign-currency invoice can be paid to once someone picks it. */
 export interface InvoicePayeeCandidate {
   account: CashAccount

@@ -88,6 +88,15 @@ export interface SettleInvoicePaymentParams {
   paymentSource?: InvoicePaymentSource
   /** The payment's reference in the system it came from (invoice_payments.external_ref). */
   externalRef?: string | null
+  /**
+   * The kontantfaktura (crm#1281): the invoice is paid at the moment it is
+   * issued, so the sale and the payment are one affärshändelse and one
+   * verifikat (19xx debit, 30xx and 26xx credit), whatever the accounting
+   * method. An invoice that has no verifikat of its own then settles exactly
+   * as under kontantmetoden: the generated cash entry, full amount only.
+   * Ignored once the invoice is booked: its payment clears 1510 as always.
+   */
+  recognizeSaleAtPayment?: boolean
 }
 
 export type SettleInvoicePaymentResult =
@@ -140,6 +149,7 @@ export async function settleInvoicePayment(
     settlementAccountNumber,
     paymentSource,
     externalRef,
+    recognizeSaleAtPayment,
   } = params
 
   if (invoice.credited_invoice_id) {
@@ -158,7 +168,12 @@ export async function settleInvoicePayment(
   // revenue + VAT here.
   const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null })
     .journal_entry_id
-  const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash'
+  const useCashEntry =
+    !invoiceAlreadyBooked && (accountingMethod === 'cash' || recognizeSaleAtPayment === true)
+  // The method the generated entry follows: a kontantfaktura books the sale
+  // at payment like kontantmetoden, so the full-amount guard and the voucher
+  // series follow that shape too.
+  const bookingMethod = useCashEntry ? 'cash' : accountingMethod
 
   // Ledger math + overpayment guard. Runs BEFORE any journal entry is
   // created so a doomed overpayment never burns a voucher number.
@@ -197,7 +212,7 @@ export async function settleInvoicePayment(
   // would book the identical error under a user-shaped label.
   const cashBlock = cashPartialBlockReason({
     invoiceAlreadyBooked,
-    accountingMethod,
+    accountingMethod: bookingMethod,
     priorPaidAmount: invoice.paid_amount,
     paysRemainingInFull: newStatus === 'paid',
   })
@@ -241,7 +256,7 @@ export async function settleInvoicePayment(
           invoiceAlreadyBooked,
           // Settings store a raw string; anything but 'cash' books as accrual,
           // matching the useCashEntry check above.
-          accountingMethod: accountingMethod === 'cash' ? 'cash' : 'accrual',
+          accountingMethod: bookingMethod === 'cash' ? 'cash' : 'accrual',
         })
         const input: CreateJournalEntryInput = {
           fiscal_period_id: fiscalPeriodId,

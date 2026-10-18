@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   proposeCreditNoteSendLines,
+  proposeDraftCashLines,
   proposeDraftSendLines,
   type DraftVoucherInput,
 } from '@/lib/invoices/editor/voucher-preview'
@@ -92,6 +93,36 @@ describe('proposeDraftSendLines', () => {
   it('shows nothing without a priced row', () => {
     expect(proposeDraftSendLines(input({ items: [{ line_type: 'text' }] }))).toEqual([])
     expect(proposeDraftSendLines(input({ items: [] }))).toEqual([])
+  })
+})
+
+describe('proposeDraftCashLines (kontantfaktura, crm#1281)', () => {
+  function cash(lines: ReturnType<typeof proposeDraftCashLines>) {
+    return lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])
+  }
+
+  it('debits the chosen payment account against revenue and VAT: no 1510', () => {
+    expect(cash(proposeDraftCashLines(input(), '1940'))).toEqual([
+      ['1940', 3062.5, 0],
+      ['3001', 0, 2450],
+      ['2611', 0, 612.5],
+    ])
+  })
+
+  it('keeps the Skatteverket share of a ROT row on 1513; the customer share is what was paid', () => {
+    const lines = proposeDraftCashLines(
+      input({ items: [{ line_type: 'product', quantity: 1, unit_price: 1000, vat_rate: 25, deduction_type: 'rot', work_type: 'bygg' }] }),
+      '1930',
+    )
+    const byAccount = Object.fromEntries(lines.map((l) => [l.account_number, l]))
+    expect(byAccount['1510']).toBeUndefined()
+    expect(byAccount['1513'].debit_amount).toBeGreaterThan(0)
+    expect(byAccount['1930'].debit_amount + byAccount['1513'].debit_amount).toBe(1250)
+  })
+
+  it('shows nothing for a foreign currency or without a priced row', () => {
+    expect(proposeDraftCashLines(input({ currency: 'EUR' }), '1930')).toEqual([])
+    expect(proposeDraftCashLines(input({ items: [{ line_type: 'text' }] }), '1930')).toEqual([])
   })
 })
 

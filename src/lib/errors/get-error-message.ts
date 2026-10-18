@@ -799,9 +799,10 @@ export function getErrorMessage(
         return 'Det finns ingen räkenskapsperiod som täcker det valda datumet. Skapa eller öppna räkenskapsåret först.'
       }
 
-      if (structured.code === 'TARGET_PERIOD_CLOSED') {
-        return 'Räkenskapsåret för det valda datumet är stängt (bokslut) och kan inte återöppnas. Bokför rättelsen i innevarande period istället.'
-      }
+      // TARGET_PERIOD_CLOSED has no branch here: the registry's sentence (both
+      // locales) is the one answer. A copy here said the year "kan inte
+      // återöppnas", which sent a customer with an unsigned årsredovisning
+      // into a dead end (crm#1290).
 
       if (structured.code === 'TARGET_PERIOD_LOCKED') {
         const details = structured.details as { lockDate?: string } | undefined

@@ -6,12 +6,14 @@ import {
   looksLikeUserFacingSwedish,
 } from '../get-error-message'
 import { getErrorEntry, listErrorCodes } from '../structured-errors'
+import { errorResponse } from '../get-structured-error'
 import {
   AccountsNotInChartError,
   BookkeepingDatabaseError,
   CannotEditNonDraftError,
   CannotReverseStornoError,
   JournalEntryNotBalancedError,
+  TargetPeriodClosedError,
 } from '@/lib/bookkeeping/errors'
 
 describe('getErrorMessage: typed bookkeeping error codes', () => {
@@ -867,5 +869,57 @@ describe('getErrorMessage: fiscal-year refusals in an English UI', () => {
     const entry = getErrorEntry(code)
     expect(entry?.message_en).toBeTruthy()
     expect(entry?.message_en).not.toMatch(/details\.|period_start|period_end/)
+  })
+})
+
+// crm#1290: a storno or rättelse of a verifikat in a year closed with a
+// year-end closing. The dialog used to say the year "kan inte återöppnas",
+// which is untrue while the årsredovisning is unsigned, and gave no way on.
+// The registry sentence is now the one answer in both locales and names both
+// paths: support reopens an unsigned year, a signed or filed year is
+// corrected with a new verifikat in the open year.
+describe('getErrorMessage: TARGET_PERIOD_CLOSED (crm#1290)', () => {
+  async function routeBody() {
+    const res = errorResponse(new TargetPeriodClosedError('2026-04-21'), { error: () => {} })
+    expect(res.status).toBe(409)
+    return res.json()
+  }
+
+  it('the route answer reads as the registry sentence in Swedish, with both ways forward', async () => {
+    const msg = getErrorMessage(await routeBody(), { statusCode: 409, context: 'journal_entry' })
+    expect(msg).toBe(getErrorEntry('TARGET_PERIOD_CLOSED')?.message_sv)
+    expect(msg).toContain('inte undertecknad eller inskickad')
+    expect(msg).toContain('kontakta supporten')
+    expect(msg).toContain('nytt verifikat i det öppna räkenskapsåret')
+    expect(msg).not.toMatch(/kan inte (åter)?öppnas/)
+  })
+
+  it('the route answer reads as the registry sentence in English', async () => {
+    const msg = getErrorMessage(await routeBody(), { statusCode: 409, locale: 'en' })
+    expect(msg).toBe(getErrorEntry('TARGET_PERIOD_CLOSED')?.message_en)
+    expect(msg).toContain('contact support')
+    expect(msg).not.toMatch(/cannot be reopened/i)
+  })
+
+  it('the typed error itself resolves to the same sentence', () => {
+    expect(getErrorMessage(new TargetPeriodClosedError('2026-04-21'))).toBe(
+      getErrorEntry('TARGET_PERIOD_CLOSED')?.message_sv,
+    )
+  })
+
+  it('tells agents not to unlock and how to correct instead', () => {
+    const remediation = getErrorEntry('TARGET_PERIOD_CLOSED')?.remediation
+    expect(remediation?.tool).toBe('gnubok_create_voucher')
+    expect(remediation?.description).toMatch(/do not unlock/i)
+    expect(remediation?.description).toMatch(/signed or filed/)
+  })
+
+  it('the unlock and reopen refusals for a closed year name the same way on', () => {
+    for (const code of ['PERIOD_UNLOCK_CLOSED', 'PERIOD_REOPEN_NOT_EXTERNAL']) {
+      const entry = getErrorEntry(code)
+      expect(entry?.message_sv, code).toContain('supporten')
+      expect(entry?.message_sv, code).toContain('nya verifikat i det öppna räkenskapsåret')
+      expect(entry?.message_en, code).toContain('support')
+    }
   })
 })

@@ -7,6 +7,10 @@ import {
   normalizeDomainName,
   normalizeSenderLocalPart,
 } from '@/lib/email/domain-name'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('email-sending-domains')
 
 /**
  * Per-company outbound sending domains (opt-in): the Resend side of the
@@ -23,7 +27,46 @@ import {
 
 export type SendingDomainResult<T> =
   | { ok: true; data: T }
-  | { ok: false; status: number; error: string }
+  | { ok: false; status: number; error: string; code?: string }
+
+/**
+ * The shared Resend account has no domain left on its plan (crm#1288). Stable
+ * code (structured-errors registry): the settings page keys its explanation on
+ * it, and the founders' alert carries it.
+ */
+export const SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT = 'SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT'
+
+/** Resend's documented error body: { name, message, statusCode }. */
+interface ResendErrorShape {
+  name?: string
+  message?: string
+  statusCode?: number | null
+}
+
+export type DomainCreateRefusal = 'already_registered' | 'plan_limit' | 'other'
+
+/**
+ * Why Resend refused POST /domains, read from its documented error shape
+ * (resend.com/docs/api-reference/errors).
+ *
+ * - already_registered: the name is already held. Documented as a 403
+ *   validation_error "The example.com domain has been registered already"
+ *   (knowledge-base/domain-already-registered); "exist" is the wording this
+ *   check matched before and stays matched.
+ * - plan_limit: every domain the plan includes is in use (Pro: 10). Resend
+ *   answers a plan cap with a 403 validation_error (its inbox cap is
+ *   documented with exactly that shape), and the only other 403
+ *   validation_error POST /domains documents is already_registered above. The
+ *   cap's own wording is not documented, so it is recognised by that shape,
+ *   never by its text.
+ * - other: anything else (rate limit, outage, a request Resend found invalid).
+ */
+export function classifyDomainCreateError(error: ResendErrorShape | null | undefined): DomainCreateRefusal {
+  const message = error?.message ?? ''
+  if (/exist|registered already/i.test(message)) return 'already_registered'
+  if (error?.statusCode === 403 && error.name === 'validation_error') return 'plan_limit'
+  return 'other'
+}
 
 // Public mailbox providers a company can never own. DNS verification is the
 // real ownership gate: this list only fails fast with a clear message.
@@ -193,21 +236,50 @@ export async function claimSendingDomain(
 
     if (created.error || !created.data) {
       await rollback()
+      const refusal = classifyDomainCreateError(created.error)
       // No adoption path on purpose (see module comment): an existing name
       // is a conflict the operator resolves, never something a tenant binds.
-      const conflict = /exist/i.test(created.error?.message ?? '')
-      return conflict
-        ? {
-            ok: false,
-            status: 409,
-            error:
-              'Domänen finns redan hos e-postleverantören och kan inte läggas till automatiskt. Kontakta supporten.',
-          }
-        : {
-            ok: false,
-            status: 502,
-            error: `Kunde inte registrera domänen hos e-postleverantören: ${created.error?.message ?? 'okänt fel'}`,
-          }
+      if (refusal === 'already_registered') {
+        return {
+          ok: false,
+          status: 409,
+          error:
+            'Domänen finns redan hos e-postleverantören och kan inte läggas till automatiskt. Kontakta supporten.',
+        }
+      }
+      // Resend's own text is for us, never the customer: it is logged here
+      // and the customer gets our sentence.
+      const provider = {
+        operation: 'sending-domain.claim',
+        companyId,
+        providerError: created.error?.name ?? null,
+        providerStatus: created.error?.statusCode ?? null,
+        providerMessage: created.error?.message ?? null,
+      }
+      if (refusal === 'plan_limit') {
+        // Every company's domain lives in the one platform account, so this
+        // refuses every claim until the plan grows or domains are removed:
+        // the founders have to act, the customer cannot.
+        log.error('sending-domain claim refused: the Resend account has used every domain its plan includes', {
+          ...provider,
+          alert: true,
+          code: SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT,
+        })
+        const entry = getErrorEntry(SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT)
+        return {
+          ok: false,
+          status: entry?.httpStatus ?? 503,
+          code: SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT,
+          error: entry?.message_sv ?? 'Egen avsändardomän går inte att lägga till just nu. Försök igen senare.',
+        }
+      }
+      log.error('sending-domain claim refused by Resend', provider)
+      return {
+        ok: false,
+        status: 502,
+        error:
+          'Kunde inte registrera domänen hos e-postleverantören. Försök igen om en stund och kontakta supporten om felet kvarstår.',
+      }
     }
 
     const resendDomainId = created.data.id

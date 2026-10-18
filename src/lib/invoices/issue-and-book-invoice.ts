@@ -6,6 +6,7 @@ import { createSchedulesForCustomerInvoice } from '@/lib/bookkeeping/accruals/fr
 import { eventBus } from '@/lib/events'
 import { ensureInvoiceNumber, invoiceNumberingFailure } from '@/lib/invoices/ensure-invoice-number'
 import type { CustomIssuanceLine } from '@/lib/invoices/issuance-custom-lines'
+import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
 import { recordManualInvoiceDelivery } from '@/lib/invoices/invoice-deliveries'
 import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
 import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
@@ -18,6 +19,7 @@ import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { roundOre } from '@/lib/money'
 import type { Logger } from '@/lib/logger'
 import type {
   CompanySettings,
@@ -78,6 +80,14 @@ export interface IssueAndBookOptions {
    * generated lines book as-is.
    */
   customLines?: CustomIssuanceLine[] | null
+  /**
+   * The kontantfaktura (crm#1281, lib/invoices/paid-at-issue.ts): the invoice
+   * is paid when it is issued, to this 19xx account on the fakturadatum.
+   * The issue books no registration verifikat; the payment books the one
+   * cash verifikat, in either accounting method. The caller has already
+   * checked paidAtIssueBlockReason and refused custom lines.
+   */
+  paidAtIssue?: { settlementAccountNumber: string } | null
 }
 
 /**
@@ -105,7 +115,12 @@ export async function archiveIssuedInvoicePdf(args: {
     // The DB status flip already happened, but the in-memory `invoice` is
     // stale and still reads 'draft': override here so the archived underlag
     // isn't stamped "UTKAST".
-    const renderableInvoice = { ...(invoice as Invoice), status: 'sent' as const }
+    // A kontantfaktura (crm#1281) was settled at issue: its underlag is the
+    // paid receipt, BETALD with the date.
+    const renderableInvoice = {
+      ...(invoice as Invoice),
+      status: invoice.status === 'paid' ? ('paid' as const) : ('sent' as const),
+    }
     // The same render entry point as the send route, so the archived
     // underlag carries the same QR code as the document the customer holds
     // (and the preview): it used to archive no payment-link code at all.
@@ -168,6 +183,8 @@ export type MarkSentAndBookResult =
         | 'INVOICE_MARK_SENT_RACE'
         | 'INVOICE_MARK_SENT_BOOK_FAILED'
         | 'INVOICE_CUSTOMER_MISSING'
+        /** paidAtIssue only: the payment at issue was refused (settleInvoicePayment's code). */
+        | PaidAtIssueSettleFailureCode
       /**
        * INVOICE_MARK_SENT_BOOK_FAILED only: why no verifikat was posted, in
        * Swedish (the engine's refusal, such as a required dimension or an
@@ -178,6 +195,15 @@ export type MarkSentAndBookResult =
       /** INVOICE_MARK_SENT_BOOK_FAILED only: the engine's thrown refusal. */
       bookingError?: unknown
     }
+
+/** The settleInvoicePayment refusals a kontantfaktura's payment at issue can answer with. */
+export type PaidAtIssueSettleFailureCode =
+  | 'MATCH_AMOUNT_EXCEEDS_REMAINING'
+  | 'INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED'
+  | 'INVOICE_PAID_NO_FISCAL_PERIOD'
+  | 'INVOICE_PAID_BOOK_FAILED'
+  | 'INVOICE_PAID_NOT_PAYABLE'
+  | 'INVOICE_PAID_RACE'
 
 /**
  * The issue step every path runs BEFORE an invoice reaches anyone: compare-
@@ -225,6 +251,13 @@ export async function markInvoiceSentAndBook(
   }
   if (!updatedRows || updatedRows.length === 0) {
     return { ok: false, errorCode: 'INVOICE_MARK_SENT_RACE' }
+  }
+
+  // A kontantfaktura is paid at issue: its one verifikat is the payment's
+  // cash entry below, never a registration entry on 1510.
+  const paidAtIssue = opts.paidAtIssue ?? null
+  if (paidAtIssue) {
+    return settleAtIssue(opts, paidAtIssue.settlementAccountNumber, entityType)
   }
 
   // Only a faktura books at issue (not proformas, quotes or delivery notes):
@@ -348,6 +381,75 @@ export async function markInvoiceSentAndBook(
   }
 
   return { ok: true, journalEntryId, partialFailures }
+}
+
+/**
+ * The kontantfaktura's half of the issue step (crm#1281): the invoice was
+ * just flipped to 'sent' by the compare-and-set above, so settle it in full
+ * on its fakturadatum to the chosen account, booking the sale and the
+ * payment as one cash verifikat (settleInvoicePayment with
+ * recognizeSaleAtPayment: the kontantmetoden shape in either method).
+ *
+ * Fail closed like the registration path: when the payment is refused (a
+ * locked or missing period, an account outside the chart) the settlement has
+ * already cancelled anything it posted, nothing is booked, and the invoice
+ * goes back to draft so nobody delivers a receipt the ledger does not have.
+ * On success the in-memory row reads paid, so the archived PDF is the
+ * receipt the customer gets (BETALD with the date).
+ */
+async function settleAtIssue(
+  opts: IssueAndBookOptions,
+  settlementAccountNumber: string,
+  entityType: EntityType,
+): Promise<MarkSentAndBookResult> {
+  const { supabase, companyId, userId, invoice, settings, log } = opts
+  const remaining = invoice.remaining_amount ?? roundOre(invoice.total - (invoice.paid_amount ?? 0))
+
+  let settled: Awaited<ReturnType<typeof settleInvoicePayment>>
+  try {
+    settled = await settleInvoicePayment(supabase, companyId, userId, {
+      invoice: { ...(invoice as Invoice), status: 'sent' },
+      paymentAmountInInvoiceCurrency: remaining,
+      paymentDate: invoice.invoice_date,
+      accountingMethod: settings.accounting_method || 'accrual',
+      entityType,
+      settlementAccountNumber,
+      paymentSource: 'manual',
+      recognizeSaleAtPayment: true,
+    })
+  } catch (err) {
+    log.error('kontantfaktura: settlement at issue threw', err as Error)
+    await restoreUnbookedDraft(supabase, companyId, invoice.id, log)
+    return { ok: false, errorCode: 'INVOICE_MARK_SENT_BOOK_FAILED', reason: getErrorMessage(err), bookingError: err }
+  }
+
+  if (!settled.ok) {
+    await restoreUnbookedDraft(supabase, companyId, invoice.id, log)
+    switch (settled.code) {
+      case 'BOOKKEEPING_ERROR':
+        return {
+          ok: false,
+          errorCode: 'INVOICE_MARK_SENT_BOOK_FAILED',
+          reason: getErrorMessage(settled.error),
+          bookingError: settled.error,
+        }
+      case 'UPDATE_FAILED':
+      case 'INVOICE_PAID_LINES_UNBALANCED':
+        log.error('kontantfaktura: settlement at issue failed', settled.code === 'UPDATE_FAILED' ? settled.error as Error : undefined)
+        return { ok: false, errorCode: 'INVOICE_MARK_SENT_BOOK_FAILED' }
+      default:
+        return { ok: false, errorCode: settled.code }
+    }
+  }
+
+  // The issue's tail (archive, delivery, invoice.sent) renders from this row.
+  Object.assign(invoice, {
+    status: settled.newStatus,
+    paid_amount: settled.newPaidAmount,
+    remaining_amount: settled.newRemaining,
+    paid_at: settled.paidAt,
+  })
+  return { ok: true, journalEntryId: settled.journalEntryId, partialFailures: [] }
 }
 
 /**

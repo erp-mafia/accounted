@@ -21,6 +21,13 @@ import type { InvoiceDocumentType } from '@/types'
  *               caller downloads the archived PDF afterwards).
  *     - peppol: POST /api/invoices/{id}/peppol/send (the e-faktura through
  *               the company's access point; never a mark-sent).
+ *     Kontantfaktura (paidAtIssue, crm#1281): POST /mark-sent with
+ *     paid_at_issue whatever the channel, so the invoice is issued paid as
+ *     one cash verifikat; then
+ *  3. Receipt (email channel only): POST /send-payment-confirmation mails
+ *     the paid invoice (BETALD) as the customer's receipt. The invoice is
+ *     issued and booked by then, so a failure here is reported, not undone:
+ *     the detail page sends the receipt again.
  *
  * A failure after step 1 still reports the saved document's id: it exists
  * now, and a retry from the editor would create a second one. That holds for
@@ -55,6 +62,8 @@ export interface SendSequenceInput {
   payload: Record<string, unknown>
   channel: SendSequenceChannel
   email?: SendEmailOptions
+  /** Kontantfaktura: issue it already paid to this 19xx account (crm#1281). */
+  paidAtIssue?: { account_number: string } | null
 }
 
 export type SendSequenceStage = 'persist' | 'finalize' | 'send'
@@ -67,6 +76,8 @@ export type SendSequenceResult =
       /** The send went out but a follow-up (archive, periodisering, delivery history) failed. */
       partial: boolean
       message: string | null
+      /** Kontantfaktura by email: the invoice is issued paid, but the receipt mail failed. */
+      receiptFailed?: boolean
     }
   | {
       ok: false
@@ -173,6 +184,8 @@ export async function persistAndSend(
     invoiceNumber = data.invoice_number ?? null
   }
 
+  if (input.paidAtIssue) return issuePaid(fetchImpl, input, invoiceId, invoiceNumber, input.paidAtIssue)
+
   // 2. Send.
   const route = SEND_ROUTES[input.channel]
   const body = input.channel === 'email' ? buildSendBody(input.email) : null
@@ -191,4 +204,32 @@ export async function persistAndSend(
     partial: sent.json?.partial === true,
     message: typeof sent.json?.message === 'string' ? sent.json.message : null,
   }
+}
+
+/** Steps 2 and 3 of a kontantfaktura: issue it paid, then mail the receipt when the channel is email. */
+async function issuePaid(
+  fetchImpl: FetchLike,
+  input: SendSequenceInput,
+  invoiceId: string,
+  invoiceNumber: string | null,
+  paidAtIssue: { account_number: string },
+): Promise<SendSequenceResult> {
+  const issued = await step(
+    fetchImpl,
+    `/api/invoices/${encodeURIComponent(invoiceId)}/mark-sent`,
+    jsonInit('POST', { paid_at_issue: { account_number: paidAtIssue.account_number } }),
+  )
+  if (!issued.ok) {
+    return { ok: false, stage: 'send', invoiceId, status: issued.status, error: issued.error }
+  }
+  const partial = issued.json?.partial === true
+  if (input.channel !== 'email') {
+    return { ok: true, invoiceId, invoiceNumber, partial, message: null }
+  }
+  const receipt = await step(
+    fetchImpl,
+    `/api/invoices/${encodeURIComponent(invoiceId)}/send-payment-confirmation`,
+    { method: 'POST' },
+  )
+  return { ok: true, invoiceId, invoiceNumber, partial, message: null, receiptFailed: !receipt.ok }
 }

@@ -3,16 +3,20 @@ import {
   validateClaimableSendingDomain,
   mapResendSendingStatus,
   isSendingOnlyProfile,
+  classifyDomainCreateError,
   claimSendingDomain,
   checkSendingDomainVerification,
   updateSendingDomainSettings,
   removeSendingDomain,
   applySendingDomainStatusFromWebhook,
+  SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT,
 } from '@/extensions/general/email/lib/sending-domains'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
-const { domainsMock } = vi.hoisted(() => ({
+const { domainsMock, logMock } = vi.hoisted(() => ({
   domainsMock: {
     create: vi.fn(),
     get: vi.fn(),
@@ -20,6 +24,7 @@ const { domainsMock } = vi.hoisted(() => ({
     remove: vi.fn(),
     list: vi.fn(),
   },
+  logMock: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }))
 
 vi.mock('resend', () => ({
@@ -27,6 +32,25 @@ vi.mock('resend', () => ({
     domains = domainsMock
   },
 }))
+
+vi.mock('@/lib/logger', () => ({
+  createLogger: () => ({ ...logMock, child: () => logMock }),
+}))
+
+// Resend's 403 when the account has used every domain its plan includes. The
+// wording is not documented; only the shape (403 validation_error) is relied on.
+const PLAN_LIMIT_ERROR = {
+  name: 'validation_error',
+  statusCode: 403,
+  message: 'You have reached the maximum number of domains included in your plan.',
+}
+
+// Documented: resend.com/docs/knowledge-base/domain-already-registered
+const REGISTERED_ALREADY_ERROR = {
+  name: 'validation_error',
+  statusCode: 403,
+  message: 'The hansbolag.example domain has been registered already',
+}
 
 const DKIM_RECORD = {
   record: 'DKIM',
@@ -106,6 +130,36 @@ describe('isSendingOnlyProfile', () => {
     expect(isSendingOnlyProfile({ sending: 'enabled', receiving: 'enabled' })).toBe(false)
     expect(isSendingOnlyProfile({ sending: 'disabled', receiving: 'enabled' })).toBe(false)
     expect(isSendingOnlyProfile(null)).toBe(false)
+  })
+})
+
+describe('classifyDomainCreateError', () => {
+  it('reads a 403 validation_error as the plan cap, whatever its wording (crm#1288)', () => {
+    expect(classifyDomainCreateError(PLAN_LIMIT_ERROR)).toBe('plan_limit')
+    expect(classifyDomainCreateError({ ...PLAN_LIMIT_ERROR, message: 'Domain limit reached for the Pro plan (10).' })).toBe(
+      'plan_limit',
+    )
+  })
+
+  it("reads Resend's documented 'has been registered already' and the older 'already exists' as a conflict", () => {
+    expect(classifyDomainCreateError(REGISTERED_ALREADY_ERROR)).toBe('already_registered')
+    expect(classifyDomainCreateError({ message: 'Domain already exists' })).toBe('already_registered')
+  })
+
+  it('leaves every other refusal unclassified', () => {
+    expect(classifyDomainCreateError({ name: 'rate_limit_exceeded', statusCode: 429, message: 'Too many requests' })).toBe(
+      'other',
+    )
+    expect(classifyDomainCreateError({ name: 'invalid_api_key', statusCode: 403, message: 'API key is invalid' })).toBe(
+      'other',
+    )
+    expect(classifyDomainCreateError({ name: 'validation_error', statusCode: 422, message: 'Invalid domain name' })).toBe(
+      'other',
+    )
+    expect(classifyDomainCreateError({ name: 'application_error', statusCode: null, message: 'Unable to fetch data.' })).toBe(
+      'other',
+    )
+    expect(classifyDomainCreateError(null)).toBe('other')
   })
 })
 
@@ -193,6 +247,79 @@ describe('claimSendingDomain', () => {
     expect(result).toEqual({ ok: false, status: 409, error: expect.stringMatching(/finns redan/) })
     expect(domainsMock.list).not.toHaveBeenCalled()
     expect(findCalls('company_sending_domains', 'delete')).toHaveLength(1)
+  })
+
+  it("answers Resend's documented 'registered already' 403 with the same 409, not as a quota problem", async () => {
+    const { client, enqueue } = sb()
+    enqueue({ data: { ...ROW, resend_domain_id: null } }) // insert
+    enqueue({ data: null }) // rollback delete
+    domainsMock.create.mockResolvedValue({ data: null, error: REGISTERED_ALREADY_ERROR })
+
+    const result = await claimSendingDomain(client, client, 'company-1', 'hansbolag.example')
+    expect(result).toEqual({ ok: false, status: 409, error: expect.stringMatching(/finns redan/) })
+    expect(logMock.error).not.toHaveBeenCalled()
+  })
+
+  it('at the plan cap: rolls back, tells the customer in Swedish without the provider text, and alerts (crm#1288)', async () => {
+    const { client, enqueue, findCalls } = sb()
+    enqueue({ data: { ...ROW, resend_domain_id: null } }) // insert
+    enqueue({ data: null }) // rollback delete
+    domainsMock.create.mockResolvedValue({ data: null, error: PLAN_LIMIT_ERROR })
+
+    const result = await claimSendingDomain(client, client, 'company-1', 'hansbolag.example')
+
+    const entry = getErrorEntry(SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT)
+    expect(entry).toBeDefined()
+    expect(result).toEqual({
+      ok: false,
+      status: 503,
+      code: SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT,
+      error: entry?.message_sv,
+    })
+    if (result.ok) throw new Error('expected a refusal')
+    expect(result.error).toMatch(/från vår adress/)
+    expect(result.error).not.toContain(PLAN_LIMIT_ERROR.message)
+    // The row the claim inserted is gone again; nothing was created in Resend.
+    expect(findCalls('company_sending_domains', 'delete')).toHaveLength(1)
+    expect(domainsMock.get).not.toHaveBeenCalled()
+    expect(domainsMock.remove).not.toHaveBeenCalled()
+    // The founders hear about it: one alert-flagged error with a stable code
+    // and Resend's own text for them to read.
+    expect(logMock.error).toHaveBeenCalledTimes(1)
+    expect(logMock.error).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        alert: true,
+        code: SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT,
+        companyId: 'company-1',
+        providerError: 'validation_error',
+        providerStatus: 403,
+        providerMessage: PLAN_LIMIT_ERROR.message,
+      }),
+    )
+    // The settings toast maps the same sentence through the app's error
+    // mapping unchanged (it is already Swedish).
+    expect(getErrorMessage(new Error(result.error))).toBe(entry?.message_sv)
+  })
+
+  it('any other provider refusal: a 502 in Swedish without the provider text, logged without the alert flag', async () => {
+    const { client, enqueue } = sb()
+    enqueue({ data: { ...ROW, resend_domain_id: null } }) // insert
+    enqueue({ data: null }) // rollback delete
+    domainsMock.create.mockResolvedValue({
+      data: null,
+      error: { name: 'rate_limit_exceeded', statusCode: 429, message: 'Too many requests' },
+    })
+
+    const result = await claimSendingDomain(client, client, 'company-1', 'hansbolag.example')
+    expect(result).toEqual({ ok: false, status: 502, error: expect.stringMatching(/e-postleverantören/) })
+    if (result.ok) throw new Error('expected a refusal')
+    expect(result.error).not.toContain('Too many requests')
+    expect(logMock.error).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ providerStatus: 429, providerMessage: 'Too many requests' }),
+    )
+    expect(logMock.error.mock.calls[0][1]).not.toHaveProperty('alert')
   })
 
   it('removes the Resend domain it just created when persisting the DNS records fails', async () => {

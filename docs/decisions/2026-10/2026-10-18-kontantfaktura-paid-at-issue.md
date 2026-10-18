@@ -1,0 +1,1 @@
+[2026-10-18] A kontantfaktura (paid at issue, crm#1281) books one cash verifikat, 19xx against 30xx/26xx, in both accounting methods, via the kontantmetoden settle path; not a 1510 round trip, and not the triage's advice to switch the company to kontantmetoden.

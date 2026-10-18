@@ -1,6 +1,7 @@
-import type { CashAccount, CompanySettings, Currency, InvoicePaymentAccount, InvoiceQrMode } from '@/types'
+import type { CashAccount, CompanySettings, Currency, Invoice, InvoicePaymentAccount, InvoiceQrMode } from '@/types'
 import {
   companyWithInvoicePaymentAccount,
+  hasRequiredInvoicePaymentAccount,
   hasUsableInvoicePaymentAccount,
   normalizeInvoicePaymentAccount,
   resolveInvoicePaymentAccount,
@@ -290,7 +291,7 @@ export interface ForeignPayeeOption {
  * which the panel fixes).
  */
 export function foreignPayeeChoice(input: {
-  summary: EditorPaymentSummary | null
+  summary: Pick<EditorPaymentSummary, 'payeeMissing' | 'storedAccountUsable'> | null
   currency: Currency
   /** The company's cash accounts; null while they load. */
   accounts: readonly CashAccount[] | null
@@ -315,6 +316,37 @@ export function foreignPayeeChoice(input: {
       }
     })
   return { currency, options }
+}
+
+/**
+ * The same choice for a saved draft, in the send dialog the invoice page
+ * opens ("Skicka", "Markera som skickad och bokför"): a draft the send
+ * guard would refuse for want of a payee in its currency (PH 181). The
+ * editor offered the choice since crm#1273, but a draft sent from its own
+ * page only met the server's refusal and a detour to the settings. Same
+ * rule as the guard (hasRequiredInvoicePaymentAccount), so the dialog
+ * offers it exactly when the send would be refused. Null for an issued
+ * invoice, a credit note, a SEK invoice, or one with a usable payee.
+ */
+export function foreignPayeeChoiceForDraft(input: {
+  settings: CompanySettings | null
+  invoice: Pick<Invoice, 'status' | 'currency' | 'document_type' | 'credited_invoice_id'>
+    & Partial<Pick<Invoice, 'payment_details'>>
+  /** The company's cash accounts; null while they load. */
+  accounts: readonly CashAccount[] | null
+  canEditCompany: boolean
+  label: (account: CashAccount) => string
+}): { currency: Currency; options: ForeignPayeeOption[] } | null {
+  const { settings, invoice } = input
+  if (!settings || invoice.status !== 'draft') return null
+  if (hasRequiredInvoicePaymentAccount(settings, invoice)) return null
+  return foreignPayeeChoice({
+    summary: { payeeMissing: true, storedAccountUsable: false },
+    currency: invoice.currency,
+    accounts: input.accounts,
+    canEditCompany: input.canEditCompany,
+    label: input.label,
+  })
 }
 
 /**
