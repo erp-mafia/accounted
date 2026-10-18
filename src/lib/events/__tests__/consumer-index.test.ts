@@ -88,6 +88,7 @@ describe('event consumer index', () => {
       'supplier-invoice-retro-match',
       'attest-notify',
       'webhooks',
+      'suggestion-detectors',
     ])
     expect(outboxConsumerIds('transaction.synced')).toEqual([])
     expect(outboxConsumerIds('journal_entry.drafted')).toEqual([])

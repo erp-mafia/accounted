@@ -20,6 +20,18 @@ import {
   singleActionWarnings,
 } from '../vocabulary'
 
+describe('singleActionWarning: rules for automatic booking', () => {
+  it("says what a supplier's rule lets through, and keeps the bank-line sentence for a bank-line rule", () => {
+    const supplier = singleActionWarning('create_grant', { operation_type: 'create_supplier_invoice_from_inbox', supplier_id: 's-1' })
+    expect(supplier).toContain('leverantörens fakturor från inkorgen')
+    expect(supplier).toContain('en agent kan aldrig godkänna en regel')
+    expect(supplier).not.toMatch(/[\u2013\u2014]/)
+    expect(singleActionWarning('create_grant', { operation_type: 'categorize_transaction' })).toBe(singleActionWarnings.create_grant)
+    expect(rowConsentSentence({ operation_type: 'create_grant', status: 'pending', risk_level: 'high', params: { operation_type: 'create_supplier_invoice_from_inbox' } }))
+      .toBe(supplier)
+  })
+})
+
 describe('singleActionWarning', () => {
   it('promises a faktura with F-number for convert_invoice without a target (and with target invoice)', () => {
     expect(singleActionWarning('convert_invoice')).toContain('F-nummer')

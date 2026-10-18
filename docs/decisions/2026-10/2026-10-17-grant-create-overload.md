@@ -1,0 +1,1 @@
+[2026-10-17] create_company_grant gains an overload with p_supplier_id and p_item_lines and the slice 1 signature becomes a wrapper: bank-line callers keep working before and after the migration, and PostgREST picks each by argument names.

@@ -1,0 +1,1 @@
+[2026-10-17] An öresavrundning line (3740) counts in a supplier rule's line set like any line: exact match only, so an invoice that rounds when the rule's did not waits for a person, and the detector proposes only when all five agree.

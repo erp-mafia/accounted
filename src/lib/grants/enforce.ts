@@ -3,7 +3,8 @@
  * it matches one of the company's active grants exactly.
  *
  * Called by a staging door right after it staged an operation for a key
- * credential (today the MCP server, after gnubok_categorize_transaction).
+ * credential (today the MCP server, after gnubok_categorize_transaction and
+ * gnubok_create_supplier_invoice_from_inbox).
  * The door's own staging is untouched: this runs after it, on the staged
  * row, and never fails the staging.
  *
@@ -11,15 +12,20 @@
  *      a lock on the operation and the grant it checks, in SQL against what
  *      the database holds now, everything a grant requires: the kill switch,
  *      the key (live, not revoked, the one that staged it, still a writing
- *      member or an active service account), the plain booking (no duplicate
- *      override, no VAT amount, no dimensions), a bank line with a counterparty
- *      identity and nothing booked on it yet, an open unlocked period, an
- *      active grant for exactly that counterparty, the identical pattern
- *      (direction, category, VAT treatment, account and every account the
- *      posting touches), the named credential, the limit per posting, the
- *      key's own unattended ceiling (the stricter wins) and the monthly
- *      limit. A match is recorded as a claimed company_grant_uses row; any
- *      refusal changes nothing.
+ *      member or an active service account), then per operation type: for a
+ *      bank line the plain booking (no duplicate override, no VAT amount, no
+ *      dimensions), a line with a counterparty identity and nothing booked
+ *      on it yet, and the identical pattern (direction, category, VAT
+ *      treatment, account and every account the posting touches); for a
+ *      supplier invoice from the inbox an active rule for that supplier, a
+ *      plain registration (SEK, no dimensions, no SLP, no credit, no new bank
+ *      details, no staging warning, the underlag in the archive), an item
+ *      not yet booked, a company that books invoices when registered, and
+ *      the identical pattern (VAT treatment, reverse-charge kind, every
+ *      line's account and VAT rate). Then for both an open unlocked period,
+ *      the named credential, the limit per posting, the key's own unattended
+ *      ceiling (the stricter wins) and the monthly limit. A match is recorded
+ *      as a claimed company_grant_uses row; any refusal changes nothing.
  *   2. On a match the operation is committed through commitPendingOperation,
  *      the executor every approval door ends in, as the key credential that
  *      staged it (commit_method api_key, its unattended ceiling enforced
@@ -27,7 +33,9 @@
  *      result_data and the decision receipt name the grant and its version
  *      (policy grant.<revision>;grant_id=...;grant_version=..., band direct).
  *   3. The outcome is reported back: complete_company_grant_use records the
- *      verifikat and checks its posted lines against the grant; a refused
+ *      verifikat (a bank line's journal_entry_id, a supplier invoice's
+ *      registration_journal_entry_id) and checks its posted lines against
+ *      the grant; a refused
  *      commit releases the claim, and the operation is wherever the commit
  *      left it (pending for a person in every recoverable case).
  *
@@ -56,6 +64,8 @@ export interface GrantCredential {
 }
 
 export interface AppliedGrant {
+  /** The operation the rule covers (claim_company_grant answers it since migration 20261018100200). */
+  operation_type: string
   grant_id: string
   grant_version: number
   use_id: string
@@ -79,6 +89,7 @@ interface ClaimResult {
   matched: boolean
   reason?: string
   company_id?: string
+  operation_type?: string
   grant_id?: string
   grant_version?: number
   use_id?: string
@@ -86,6 +97,15 @@ interface ClaimResult {
   counterparty_label?: string
   accepted_at?: string
   [key: string]: unknown
+}
+
+/** The verifikat a committed operation posted, by the key its executor answers it under. */
+export function postedEntryId(data: Record<string, unknown> | undefined | null): string | null {
+  for (const key of ['journal_entry_id', 'registration_journal_entry_id']) {
+    const value = data?.[key]
+    if (typeof value === 'string' && value) return value
+  }
+  return null
 }
 
 function detailOf(claim: ClaimResult): Record<string, unknown> | undefined {
@@ -140,6 +160,7 @@ export async function applyCompanyGrant(
   }
 
   const grant: AppliedGrant = {
+    operation_type: typeof claim.operation_type === 'string' ? claim.operation_type : 'categorize_transaction',
     grant_id: claim.grant_id,
     grant_version: claim.grant_version,
     use_id: claim.use_id,
@@ -239,7 +260,9 @@ export async function applyCompanyGrant(
     return { applied: true, committed: false, grant, result }
   }
 
-  const journalEntryId = typeof result.data?.journal_entry_id === 'string' ? result.data.journal_entry_id : null
+  // The verifikat the commit posted: a bank line's journal_entry_id, a
+  // supplier invoice's registration_journal_entry_id.
+  const journalEntryId = postedEntryId(result.data)
   let patternVerified: boolean | null = null
   try {
     const { data, error } = await supabase.rpc('complete_company_grant_use', {

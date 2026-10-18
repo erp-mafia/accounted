@@ -1583,6 +1583,44 @@ describe('rules for automatic booking (grants)', () => {
     expect(auditRowToEvent(auditRow({ table_name: 'company_grants', action: 'UPDATE', old_state: grant, new_state: grant }))).toBeNull()
   })
 
+  it("dates a supplier's rule with its line bookings, its VAT treatment and what it covers", () => {
+    const supplierGrant = {
+      id: 'g-2', operation_type: 'create_supplier_invoice_from_inbox', counterparty_key: 'supplier:s-1', counterparty_label: 'Telia Sverige AB',
+      supplier_id: 's-1', version: 1, account_number: null, category: null, item_lines: ['3740:0', '6212:25'], vat_treatment: 'standard_25',
+      reverse_charge_kind: null, line_accounts: ['2440', '2641', '3740', '6212'], amount_limit_sek: 1500, monthly_limit_sek: null,
+      credential_scope: 'any', valid_from: '2026-10-17T08:00:00Z', revoked_at: null, revoked_reason: null,
+    }
+    const ev = auditRowToEvent(auditRow({ table_name: 'company_grants', action: 'INSERT', actor_type: 'user', new_state: supplierGrant }))
+    expect(ev).toMatchObject({
+      code: 'grant.accepted',
+      event: 'Regel för automatisk bokföring godkänd',
+      object: 'Regel för automatisk bokföring av leverantörsfakturor: Telia Sverige AB, upp till 1\u00a0500 kr inklusive moms',
+    })
+    expect(ev!.details).toEqual([
+      'Version: 1',
+      'Leverantör: Telia Sverige AB (s-1)',
+      'Fakturarader: konto 3740 utan moms, konto 6212 moms 25 %',
+      'Momsbehandling: moms 25 %',
+      'Gäller: fakturor från inkorgen i SEK med underlag, som bokförs när de registreras',
+      'Konton i verifikatet: 2440, 2641, 3740, 6212',
+      'Gäller: alla nycklar i företaget',
+      'Gäller från: 2026-10-17',
+    ])
+    const reverseCharge = auditRowToEvent(auditRow({
+      table_name: 'company_grants', action: 'INSERT',
+      new_state: { ...supplierGrant, item_lines: ['6540:0'], vat_treatment: 'reverse_charge', reverse_charge_kind: 'eu_services' },
+    }))
+    expect(reverseCharge!.details).toContain('Momsbehandling: omvänd betalningsskyldighet (tjänster från EU)')
+    const revoked = auditRowToEvent(auditRow({
+      table_name: 'company_grants', action: 'UPDATE', old_state: supplierGrant,
+      new_state: { ...supplierGrant, revoked_at: '2026-10-20T08:00:00Z', revoked_reason: 'revoked' },
+    }))
+    expect(revoked).toMatchObject({
+      code: 'grant.revoked',
+      object: 'Regel för automatisk bokföring av leverantörsfakturor: Telia Sverige AB, upp till 1\u00a0500 kr inklusive moms',
+    })
+  })
+
   it('dates the pause and the resumption of every rule', () => {
     expect(auditRowToEvent(auditRow({ table_name: 'company_grant_settings', action: 'INSERT', new_state: { paused: true } }))).toMatchObject({
       code: 'grants.paused',

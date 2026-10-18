@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTableMockSupabase } from '@/tests/helpers'
 import { createLogger } from '@/lib/logger'
 import type { CoreEvent } from '@/lib/events/types'
-import type { Transaction } from '@/types'
+import type { SupplierInvoice, Transaction } from '@/types'
 
 const clientMock = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/auth/api-keys', () => ({
@@ -15,8 +15,12 @@ import {
   grantProposal,
   grantSuggestionKey,
   grantSuggestionsEnabled,
+  describeSupplierInvoiceGrantPattern,
   suggestedGrantLimit,
+  supplierGrantSuggestionKey,
+  supplierInvoiceGrantProposal,
   type GrantCandidate,
+  type SupplierInvoiceGrantCandidate,
 } from '../detectors/grant-candidate'
 import { runEventDetectors } from '../handler'
 import { createDetectorContext, runDetector } from '../run'
@@ -159,9 +163,110 @@ describe('grantCandidateDetector', () => {
     }
   })
 
-  it('wakes on transaction.categorized only', async () => {
+  it('wakes on a bank line categorized and a supplier invoice registered, nothing else', async () => {
     const { ctx } = context({ data: CANDIDATE_ROW })
     expect(await grantCandidateDetector.subjects(ctx, { type: 'employee.created', payload: {} } as unknown as CoreEvent)).toEqual([])
-    expect(grantCandidateDetector.trigger).toEqual({ kind: 'event', eventTypes: ['transaction.categorized'] })
+    expect(grantCandidateDetector.trigger).toEqual({ kind: 'event', eventTypes: ['transaction.categorized', 'supplier_invoice.registered'] })
+  })
+})
+
+describe('the supplier-invoice suggestion (slice 2)', () => {
+  const SUPPLIER = '55555555-5555-4555-8555-555555555555'
+  const SUPPLIER_ROW = {
+    candidate: true,
+    supplier_id: SUPPLIER,
+    counterparty_label: 'Telia Sverige AB',
+    pattern: { vat_treatment: 'standard_25', reverse_charge_kind: null, item_lines: ['6212:25'], line_accounts: ['2440', '2641', '6212'] },
+    booking_count: 5,
+    max_amount_sek: 1349,
+    last_booked: '2026-05-03',
+  }
+  const registered: CoreEvent = {
+    type: 'supplier_invoice.registered',
+    payload: { supplierInvoice: { id: 'si-1', supplier_id: SUPPLIER, is_credit_note: false } as SupplierInvoice, userId: USER, companyId: COMPANY },
+  }
+  const supplierCandidate: SupplierInvoiceGrantCandidate = {
+    supplierId: SUPPLIER,
+    supplierLabel: 'Telia Sverige AB',
+    pattern: SUPPLIER_ROW.pattern as SupplierInvoiceGrantCandidate['pattern'],
+    bookingCount: 5,
+    maxAmountSek: 1349,
+    lastBooked: '2026-05-03',
+  }
+
+  function supplierContext(row: { data?: unknown; error?: unknown }) {
+    const mock = createTableMockSupabase({
+      'rpc:company_supplier_grant_candidate': row,
+      'rpc:stage_company_suggestion': { data: { staged: true, suggestion_id: 's1', pending_operation_id: 'p1' } },
+    })
+    return { mock, ctx: createDetectorContext({ supabase: mock.supabase as never, companyId: COMPANY, userId: USER, log: createLogger('test') }) }
+  }
+
+  it('asks "Godkänn <leverantör> automatiskt nästa gång, upp till X kr?" for exactly the lines seen, by the supplier\'s id', () => {
+    const proposal = supplierInvoiceGrantProposal(supplierCandidate)
+    expect(proposal).toMatchObject({
+      key: `create_grant:supplier-${SUPPLIER}`,
+      operationType: 'create_grant',
+      title: 'Godkänn Telia Sverige AB automatiskt nästa gång, upp till 1\u00a0500 kr?',
+      reason: expect.stringMatching(/^Samma leverantör bokförd på samma sätt 5 gånger \(konto 6212, moms 25 %\)\. .*inklusive moms/),
+      rank: 15,
+    })
+    expect(proposal.key).toBe(supplierGrantSuggestionKey(SUPPLIER.toUpperCase()))
+    expect(CreateGrantParamsSchema.parse(proposal.params)).toMatchObject({
+      operation_type: 'create_supplier_invoice_from_inbox',
+      supplier_id: SUPPLIER,
+      pattern: SUPPLIER_ROW.pattern,
+      amount_limit_sek: 1500,
+      monthly_limit_sek: null,
+      credential: { kind: 'any' },
+      evidence: { booking_count: 5, max_amount_sek: 1349, last_booked: '2026-05-03' },
+      source: 'suggestion',
+    })
+  })
+
+  it('says the lines plainly', () => {
+    expect(describeSupplierInvoiceGrantPattern({ item_lines: ['6212:25'], vat_treatment: 'standard_25' })).toBe('konto 6212, moms 25 %')
+    expect(describeSupplierInvoiceGrantPattern({ item_lines: ['3740:0', '6211:25', '6212:25'], vat_treatment: 'standard_25' })).toBe(
+      'konton 3740, 6211 och 6212, moms 25 %',
+    )
+    expect(describeSupplierInvoiceGrantPattern({ item_lines: ['6540:0'], vat_treatment: 'reverse_charge' })).toBe('konto 6540, omvänd betalningsskyldighet')
+  })
+
+  it('stages the suggestion when the candidate holds', async () => {
+    vi.stubEnv('GRANT_SUGGESTIONS', 'true')
+    const { mock, ctx } = supplierContext({ data: SUPPLIER_ROW })
+    const results = await runDetector(grantCandidateDetector, ctx, registered)
+    expect(results).toEqual([{ detector: 'grant-candidate', key: `create_grant:supplier-${SUPPLIER}`, outcome: { staged: true, suggestionId: 's1', pendingOperationId: 'p1' } }])
+    expect(mock.findCall('rpc:company_supplier_grant_candidate', 'rpc')?.[0]).toEqual({ p_company_id: COMPANY, p_supplier_id: SUPPLIER, p_min_count: 5 })
+    expect(mock.findCall('rpc:stage_company_suggestion', 'rpc')?.[0]).toMatchObject({ p_operation_type: 'create_grant', p_risk_level: 'high' })
+  })
+
+  it('stages nothing without a candidate, on an unreadable one, on a read error, before the function exists, or for a credit note', async () => {
+    vi.stubEnv('GRANT_SUGGESTIONS', 'true')
+    for (const row of [
+      { data: { candidate: false, reason: 'not_consistent', booking_count: 5 } },
+      { data: { ...SUPPLIER_ROW, pattern: { ...SUPPLIER_ROW.pattern, item_lines: ['6212:19'] } } },
+      { data: { ...SUPPLIER_ROW, pattern: { ...SUPPLIER_ROW.pattern, line_accounts: ['2440', '2641'] } } },
+      { data: { ...SUPPLIER_ROW, max_amount_sek: 0 } },
+      { error: { code: 'XX000', message: 'boom' } },
+      { error: { code: 'PGRST202', message: 'no function' } },
+    ]) {
+      const { mock, ctx } = supplierContext(row)
+      expect(await runDetector(grantCandidateDetector, ctx, registered)).toEqual([])
+      expect(mock.findCall('rpc:stage_company_suggestion', 'rpc')).toBeUndefined()
+    }
+    const { mock, ctx } = supplierContext({ data: SUPPLIER_ROW })
+    const creditNote: CoreEvent = {
+      type: 'supplier_invoice.registered',
+      payload: { supplierInvoice: { id: 'si-2', supplier_id: SUPPLIER, is_credit_note: true } as SupplierInvoice, userId: USER, companyId: COMPANY },
+    }
+    expect(await runDetector(grantCandidateDetector, ctx, creditNote)).toEqual([])
+    expect(mock.findCall('rpc:company_supplier_grant_candidate', 'rpc')).toBeUndefined()
+  })
+
+  it('switched off, a registration reads and stages nothing, and no client is even made', async () => {
+    vi.stubEnv('GRANT_SUGGESTIONS', 'false')
+    await runEventDetectors(registered, [grantCandidateDetector])
+    expect(clientMock).not.toHaveBeenCalled()
   })
 })

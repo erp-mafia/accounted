@@ -142,7 +142,16 @@ export function SuggestionCards({
         open={confirming !== null}
         onOpenChange={(open) => !open && setConfirming(null)}
         title={t('suggestion_grant_confirm_title')}
-        description={confirming ? `${confirming.title} ${t('suggestion_grant_confirm_description')}` : undefined}
+        description={
+          confirming
+            ? `${confirming.title} ${t(
+                // A rule for a supplier's invoices (create_grant:supplier-<id>) says what it books.
+                confirming.suggestion_key.startsWith('create_grant:supplier-')
+                  ? 'suggestion_grant_confirm_description_supplier'
+                  : 'suggestion_grant_confirm_description',
+              )}`
+            : undefined
+        }
         confirmLabel={t('suggestion_grant_confirm')}
         onConfirm={async () => {
           if (confirming) await answer(confirming, 'yes')

@@ -1,7 +1,8 @@
 /**
  * The commit side of create_grant and revoke_grant: what the two staged
  * operations run once an owner or admin approved them
- * (lib/pending-operations/commit.ts).
+ * (lib/pending-operations/commit.ts), for a bank-line rule and a
+ * supplier-invoice rule alike.
  *
  * create_company_grant and revoke_company_grant (migration 20261017100300)
  * are the authority: they re-check that the approver is an owner or admin,
@@ -44,6 +45,9 @@ export interface RevokedPosting {
   use_id: string
   journal_entry_id: string | null
   transaction_id: string | null
+  /** A supplier-invoice rule's posting: the inbox item and the supplier invoice (absent before migration 20261018100200). */
+  inbox_item_id?: string | null
+  supplier_invoice_id?: string | null
   voucher: string | null
   entry_status: string | null
   entry_date: string
@@ -58,6 +62,8 @@ export type RevokeGrantResult =
       data: {
         grant_id: string
         version: number
+        /** The operation the rule covered; categorize_transaction before migration 20261018100200. */
+        operation_type: string
         counterparty_label: string
         /** False when the grant was already revoked: nothing was written. */
         changed: boolean
@@ -91,33 +97,62 @@ function credentialArgs(credential: CreateGrantParams['credential']): { scope: s
   }
 }
 
-export async function createGrantFromOperation(
-  serviceClient: SupabaseClient,
-  input: GrantDecisionInput & { params: CreateGrantParams },
-): Promise<CreateGrantResult> {
+/**
+ * The create_company_grant arguments for a rule. A bank-line rule sends the
+ * slice 1 argument set exactly (that overload works before and after
+ * migration 20261018100100); a supplier-invoice rule sends the two more the
+ * new overload takes, the supplier and the line bookings, with no category
+ * and no business account.
+ */
+export function createGrantArgs(input: GrantDecisionInput & { params: CreateGrantParams }): Record<string, unknown> {
   const { params } = input
   const credential = credentialArgs(params.credential)
-  const { data, error } = await serviceClient.rpc('create_company_grant', {
+  const shared = {
     p_company_id: input.companyId,
     p_decided_by: input.userId,
     p_actor_type: input.actor.type,
     p_actor_label: input.actor.label ?? null,
     p_pending_operation_id: input.pendingOperationId,
     p_operation_type: params.operation_type,
-    p_counterparty_key: params.counterparty_key,
     p_counterparty_label: params.counterparty_label,
+    p_amount_limit_sek: params.amount_limit_sek,
+    p_monthly_limit_sek: params.monthly_limit_sek ?? null,
+    p_credential_scope: credential.scope,
+    p_credential_id: credential.id,
+    p_evidence: params.evidence ?? {},
+  }
+  if (params.operation_type === 'create_supplier_invoice_from_inbox') {
+    return {
+      ...shared,
+      p_counterparty_key: `supplier:${params.supplier_id}`,
+      p_direction: 'out',
+      p_category: null,
+      p_vat_treatment: params.pattern.vat_treatment,
+      p_reverse_charge_kind: params.pattern.reverse_charge_kind,
+      p_account_number: null,
+      p_line_accounts: params.pattern.line_accounts,
+      p_supplier_id: params.supplier_id,
+      p_item_lines: params.pattern.item_lines,
+    }
+  }
+  return {
+    ...shared,
+    p_counterparty_key: params.counterparty_key,
     p_direction: params.pattern.direction,
     p_category: params.pattern.category,
     p_vat_treatment: params.pattern.vat_treatment,
     p_reverse_charge_kind: params.pattern.reverse_charge_kind,
     p_account_number: params.pattern.account_number,
     p_line_accounts: params.pattern.line_accounts,
-    p_amount_limit_sek: params.amount_limit_sek,
-    p_monthly_limit_sek: params.monthly_limit_sek ?? null,
-    p_credential_scope: credential.scope,
-    p_credential_id: credential.id,
-    p_evidence: params.evidence ?? {},
-  })
+  }
+}
+
+export async function createGrantFromOperation(
+  serviceClient: SupabaseClient,
+  input: GrantDecisionInput & { params: CreateGrantParams },
+): Promise<CreateGrantResult> {
+  const { params } = input
+  const { data, error } = await serviceClient.rpc('create_company_grant', createGrantArgs(input))
   if (error) throw new Error(`Failed to create the grant: ${error.message}`)
   const result = (data ?? {}) as RpcResult
   if (!result.ok) return refusal(result.code ?? 'GRANT_INVALID', 400)
@@ -155,6 +190,7 @@ export async function revokeGrantFromOperation(
     data: {
       grant_id: String(result.grant_id),
       version: Number(result.version),
+      operation_type: typeof result.operation_type === 'string' ? result.operation_type : 'categorize_transaction',
       counterparty_label: String(result.counterparty_label ?? ''),
       changed: result.unchanged !== true,
       revoked_at: typeof result.revoked_at === 'string' ? result.revoked_at : null,

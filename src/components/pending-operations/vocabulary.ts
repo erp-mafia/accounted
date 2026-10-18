@@ -199,8 +199,16 @@ export function singleActionWarning(operationType: string, params?: Record<strin
   }
   const ledger = registerBookedLedgerOf(operationType, params)
   if (ledger) return REGISTER_BOOKED_SENTENCES[ledger]
+  // A rule for a supplier's invoices from the inbox (grants slice 2), not a bank line's.
+  if (operationType === 'create_grant' && params?.operation_type === 'create_supplier_invoice_from_inbox') {
+    return SUPPLIER_INVOICE_GRANT_SENTENCE
+  }
   return singleActionWarnings[operationType] ?? ''
 }
+
+/** The consent sentence of a rule for a known supplier's invoices from the inbox. */
+const SUPPLIER_INVOICE_GRANT_SENTENCE =
+  'Genom att klicka godkänn så får agenter registrera och bokföra den här leverantörens fakturor från inkorgen själva, med exakt de konton och den moms som visas och upp till beloppet inklusive moms, utan att fråga först. Allt som avviker väntar på godkännande som i dag: en ny leverantör, andra konton, utländsk valuta, en kreditfaktura, nya bankuppgifter eller ett saknat underlag. Du ser varje sådan bokföring under Bokfört enligt regel i Att göra och kan rätta eller kreditera fakturan eller återkalla regeln. Bara en ägare eller administratör kan godkänna, och bara här i Accounted: en agent kan aldrig godkänna en regel.'
 
 /**
  * The consent sentence a pending Granskning row shows before any click. High

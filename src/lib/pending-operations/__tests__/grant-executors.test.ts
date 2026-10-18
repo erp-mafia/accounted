@@ -182,6 +182,100 @@ describe('commitPendingOperation: create_grant', () => {
   })
 })
 
+describe('commitPendingOperation: create_grant for a supplier invoice from the inbox (slice 2)', () => {
+  const SUPPLIER_ID = '44444444-4444-4444-8444-444444444444'
+  const SUPPLIER_PARAMS = {
+    operation_type: 'create_supplier_invoice_from_inbox',
+    supplier_id: SUPPLIER_ID,
+    counterparty_label: 'Telia Sverige AB',
+    pattern: { vat_treatment: 'standard_25', reverse_charge_kind: null, item_lines: ['6212:25'], line_accounts: ['2440', '2641', '6212'] },
+    amount_limit_sek: 1500,
+    monthly_limit_sek: null,
+    credential: { kind: 'any' },
+    evidence: { booking_count: 5, max_amount_sek: 1349, last_booked: '2026-05-03' },
+    source: 'suggestion',
+    suggestion_key: `create_grant:supplier-${SUPPLIER_ID}`,
+  }
+
+  it('creates the rule through the new overload when the person approves it in the app', async () => {
+    const svc = createTableMockSupabase({
+      'rpc:create_company_grant': { data: { ok: true, grant_id: GRANT_ID, version: 1, superseded_grant_id: null, valid_from: '2026-10-17T10:00:00Z' } },
+    })
+    service.current = svc.supabase
+    const { supabase } = sessionClient()
+    const result = await commitPendingOperation(supabase as never, OWNER_ID, COMPANY_ID, makeOp('create_grant', SUPPLIER_PARAMS), PERSON)
+    expect(result).toMatchObject({ status: 'committed', data: { grant_id: GRANT_ID, counterparty_label: 'Telia Sverige AB', amount_limit_sek: 1500 } })
+    expect(svc.findCall('rpc:create_company_grant', 'rpc')).toEqual([
+      expect.objectContaining({
+        p_actor_type: 'user',
+        p_operation_type: 'create_supplier_invoice_from_inbox',
+        p_counterparty_key: `supplier:${SUPPLIER_ID}`,
+        p_supplier_id: SUPPLIER_ID,
+        p_item_lines: ['6212:25'],
+        p_line_accounts: ['2440', '2641', '6212'],
+        p_category: null,
+        p_account_number: null,
+        p_direction: 'out',
+      }),
+    ])
+  })
+
+  it('never lets an agent accept a supplier rule: every key, the OAuth connector, the in-app assistant, a service account, no actor', async () => {
+    const svc = createTableMockSupabase({ 'rpc:create_company_grant': { data: { ok: true } } })
+    service.current = svc.supabase
+    for (const opts of [
+      { commitMethod: 'api_key' as const, actor: { type: 'api_key' as const, label: 'Claude' } },
+      { commitMethod: 'api_key' as const, actor: { type: 'mcp_oauth' as const, label: 'Claude (Anthropic)' } },
+      { commitMethod: 'agent' as const, actor: { type: 'agent_chat' as const } },
+      { commitMethod: 'api_key' as const, actor: { type: 'service_account' as const, label: 'Nattlig synk' } },
+      { commitMethod: 'user_accept' as const },
+      { commitMethod: 'bulk_accept' as const, actor: { type: 'user' as const } },
+    ]) {
+      const { supabase, findCalls } = createQueuedMockSupabase()
+      const result = await commitPendingOperation(supabase as never, OWNER_ID, COMPANY_ID, makeOp('create_grant', SUPPLIER_PARAMS), opts)
+      expect(result).toMatchObject({ status: 'failed', code: 'GRANT_NEEDS_PERSON', http_status: 403, operation_status: 'pending' })
+      expect(findCalls('pending_operations', 'update')).toEqual([])
+    }
+    expect(svc.findCall('rpc:create_company_grant', 'rpc')).toBeUndefined()
+  })
+
+  it('refuses a supplier rule while GRANT_SUGGESTIONS is off, even approved by the person', async () => {
+    vi.stubEnv('GRANT_SUGGESTIONS', 'false')
+    const svc = createTableMockSupabase({ 'rpc:create_company_grant': { data: { ok: true } } })
+    service.current = svc.supabase
+    const { supabase } = sessionClient()
+    const result = await commitPendingOperation(supabase as never, OWNER_ID, COMPANY_ID, makeOp('create_grant', SUPPLIER_PARAMS), PERSON)
+    expect(result).toMatchObject({ code: 'GRANTS_SWITCHED_OFF', http_status: 409, operation_status: 'rejected' })
+    expect(svc.findCall('rpc:create_company_grant', 'rpc')).toBeUndefined()
+  })
+
+  it('refuses tampered supplier params before the database: a bank-text key, a foreign rate, a line outside the verifikat, a reverse charge without its kind', async () => {
+    const svc = createTableMockSupabase({ 'rpc:create_company_grant': { data: { ok: true } } })
+    service.current = svc.supabase
+    for (const params of [
+      { ...SUPPLIER_PARAMS, counterparty_key: 'telia' },
+      { ...SUPPLIER_PARAMS, pattern: { ...SUPPLIER_PARAMS.pattern, item_lines: ['6212:19'] } },
+      { ...SUPPLIER_PARAMS, pattern: { ...SUPPLIER_PARAMS.pattern, line_accounts: ['2440', '2641', '6211'] } },
+      { ...SUPPLIER_PARAMS, pattern: { ...SUPPLIER_PARAMS.pattern, vat_treatment: 'reverse_charge' } },
+    ]) {
+      const { supabase } = sessionClient()
+      const result = await commitPendingOperation(supabase as never, OWNER_ID, COMPANY_ID, makeOp('create_grant', params), PERSON)
+      expect(result).toMatchObject({ status: 'failed', http_status: 400, operation_status: 'rejected' })
+    }
+    expect(svc.findCall('rpc:create_company_grant', 'rpc')).toBeUndefined()
+  })
+
+  it('passes the account rule to the database, and rejects what create_company_grant refuses (representation)', async () => {
+    const svc = createTableMockSupabase({ 'rpc:create_company_grant': { data: { ok: false, code: 'GRANT_INVALID', field: 'item_lines' } } })
+    service.current = svc.supabase
+    const { supabase } = sessionClient()
+    const params = { ...SUPPLIER_PARAMS, pattern: { ...SUPPLIER_PARAMS.pattern, item_lines: ['6072:25'], line_accounts: ['2440', '2641', '6072'] } }
+    const result = await commitPendingOperation(supabase as never, OWNER_ID, COMPANY_ID, makeOp('create_grant', params), PERSON)
+    expect(result).toMatchObject({ status: 'failed', code: 'GRANT_INVALID', http_status: 400 })
+    expect(svc.findCall('rpc:create_company_grant', 'rpc')?.[0]).toMatchObject({ p_item_lines: ['6072:25'] })
+  })
+})
+
 describe('commitPendingOperation: revoke_grant', () => {
   it('revokes and answers the postings the grant let through', async () => {
     const postings = [{ use_id: 'u1', journal_entry_id: 'je-1', amount_sek: 149, entry_date: '2026-06-03' }]
@@ -239,6 +333,9 @@ describe('commitPendingOperation: the grant option', () => {
     for (const [op, actor] of [
       [makeOp('create_customer', { name: 'X' }), { type: 'api_key' as const, label: 'Claude' }],
       [makeOp('categorize_transaction', { transaction_id: 't1', category: 'expense_software' }), { type: 'user' as const }],
+      // Neither supplier-invoice write a grant does not cover, nor the covered one approved by a person.
+      [makeOp('book_supplier_invoice', { supplier_invoice_id: 'si-1' }), { type: 'api_key' as const, label: 'Claude' }],
+      [makeOp('create_supplier_invoice_from_inbox', { inbox_item_id: 'in-1' }), { type: 'user' as const }],
     ] as const) {
       const { supabase, findCalls } = createQueuedMockSupabase()
       const result = await commitPendingOperation(supabase as never, OWNER_ID, COMPANY_ID, op, {

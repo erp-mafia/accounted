@@ -1,0 +1,1 @@
+[2026-10-17] A supplier invoice stating bank details the supplier card lacks or does not have never books under a rule: confirming would write them to the card or route a payment to them, the step an invoice fraud needs.

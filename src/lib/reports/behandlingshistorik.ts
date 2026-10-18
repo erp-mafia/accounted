@@ -1278,21 +1278,40 @@ const GRANT_VAT_LABELS: Record<string, string> = {
   export: 'export utan moms',
 }
 
+const GRANT_REVERSE_CHARGE_LABELS: Record<string, string> = {
+  eu_services: 'tjänster från EU',
+  non_eu_services: 'tjänster från länder utanför EU',
+  domestic_services: 'inom Sverige, till exempel byggtjänster',
+}
+
+/** "konto 6212 moms 25 %": one invoice line's booking under a supplier-invoice rule ('6212:25'). */
+function grantItemLineLabel(line: string): string {
+  const [account, rate] = line.split(':')
+  return rate === '0' ? `konto ${account} utan moms` : `konto ${account} moms ${rate} %`
+}
+
 /**
  * A rule for automatic booking (grant, migration 20261017100200): an
  * automatkontering in BFNAR 2013:2 p. 9.16's sense, dated when it is
  * accepted, superseded or revoked. The approver is the actor. One line says
  * what the rule permits: "Regel för automatisk bokföring: <motpart>, upp
- * till <belopp> kr".
+ * till <belopp> kr", or for a known supplier's invoices from the inbox
+ * (grants slice 2, migration 20261018100000) "Regel för automatisk
+ * bokföring av leverantörsfakturor: <leverantör>, upp till <belopp> kr
+ * inklusive moms", with the line bookings and the VAT treatment it pins.
  */
 function grantAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
   const state = (row.new_state ?? row.old_state ?? {}) as Record<string, unknown>
-  const counterparty = str(state.counterparty_label) ?? str(state.counterparty_key) ?? 'okänd motpart'
+  const supplierInvoice = str(state.operation_type) === 'create_supplier_invoice_from_inbox'
+  const counterparty =
+    str(state.counterparty_label) ?? (supplierInvoice ? 'okänd leverantör' : (str(state.counterparty_key) ?? 'okänd motpart'))
   const limitRaw = state.amount_limit_sek
   const limit = typeof limitRaw === 'number' ? limitRaw : Number(limitRaw)
-  const limitText = Number.isFinite(limit) ? `, upp till ${fmtKronor(limit)} kr` : ''
+  const limitText = Number.isFinite(limit) ? `, upp till ${fmtKronor(limit)} kr${supplierInvoice ? ' inklusive moms' : ''}` : ''
   const version = typeof state.version === 'number' ? state.version : Number(state.version)
-  const object = `Regel för automatisk bokföring: ${counterparty}${limitText}`
+  const object = supplierInvoice
+    ? `Regel för automatisk bokföring av leverantörsfakturor: ${counterparty}${limitText}`
+    : `Regel för automatisk bokföring: ${counterparty}${limitText}`
   if (row.action === 'INSERT') {
     const details: string[] = []
     if (Number.isFinite(version)) details.push(`Version: ${version}`)
@@ -1300,6 +1319,20 @@ function grantAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null
     if (account) {
       const vat = str(state.vat_treatment)
       details.push(`Bokföring: konto ${account}${vat ? `, ${GRANT_VAT_LABELS[vat] ?? vat}` : ''}`)
+    }
+    if (supplierInvoice) {
+      const supplierId = str(state.supplier_id)
+      if (supplierId) details.push(`Leverantör: ${counterparty} (${supplierId})`)
+      const lines = Array.isArray(state.item_lines) ? (state.item_lines as unknown[]).map(String) : []
+      if (lines.length > 0) details.push(`Fakturarader: ${lines.map(grantItemLineLabel).join(', ')}`)
+      const vat = str(state.vat_treatment)
+      if (vat) {
+        const kind = str(state.reverse_charge_kind)
+        details.push(
+          `Momsbehandling: ${GRANT_VAT_LABELS[vat] ?? vat}${kind ? ` (${GRANT_REVERSE_CHARGE_LABELS[kind] ?? kind})` : ''}`,
+        )
+      }
+      details.push('Gäller: fakturor från inkorgen i SEK med underlag, som bokförs när de registreras')
     }
     const accounts = Array.isArray(state.line_accounts) ? (state.line_accounts as unknown[]).map(String) : []
     if (accounts.length > 0) details.push(`Konton i verifikatet: ${accounts.join(', ')}`)

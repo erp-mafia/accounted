@@ -137,6 +137,38 @@ describe('applyCompanyGrant', () => {
     )
   })
 
+  it("completes a supplier invoice's use with its registration verifikat", async () => {
+    const mock = db(
+      { data: { ...MATCH, operation_type: 'create_supplier_invoice_from_inbox', amount_sek: 1249, counterparty_label: 'Telia Sverige AB' } },
+      { pending_operations: { data: { ...ROW, operation_type: 'create_supplier_invoice_from_inbox' } } },
+    )
+    commitMock.mockResolvedValue({
+      status: 'committed',
+      data: { supplier_invoice_id: 'si-1', inbox_item_id: 'in-1', registration_journal_entry_id: 'je-2', arrival_number: 7, grant: {} },
+      operation_status: 'committed',
+    } satisfies CommitResult)
+
+    const outcome = await applyCompanyGrant(mock.supabase as never, { companyId: COMPANY, userId: USER, operationId: OP, credential, log })
+
+    expect(outcome).toMatchObject({
+      applied: true,
+      committed: true,
+      journalEntryId: 'je-2',
+      grant: { operation_type: 'create_supplier_invoice_from_inbox', grant_id: GRANT, amount_sek: 1249 },
+    })
+    expect(mock.findCall('rpc:complete_company_grant_use', 'rpc')).toEqual([{ p_use_id: 'use-1', p_journal_entry_id: 'je-2' }])
+    expect(historyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ payload: expect.objectContaining({ operation_type: 'create_supplier_invoice_from_inbox', channel: 'grant' }) }),
+    )
+  })
+
+  it('reads a claim from before migration 20261018100200 (no operation_type) as a bank line', async () => {
+    const mock = db({ data: MATCH })
+    commitMock.mockResolvedValue({ status: 'committed', data: { journal_entry_id: 'je-1' }, operation_status: 'committed' } satisfies CommitResult)
+    const outcome = await applyCompanyGrant(mock.supabase as never, { companyId: COMPANY, userId: USER, operationId: OP, credential, log })
+    expect(outcome).toMatchObject({ applied: true, grant: { operation_type: 'categorize_transaction' } })
+  })
+
   it('releases the claim when the commit refuses, and reports where the operation is', async () => {
     const mock = db({ data: MATCH })
     commitMock.mockResolvedValue({ status: 'failed', code: 'UNATTENDED_COMMIT_LIMIT_EXCEEDED', http_status: 403, operation_status: 'pending' } satisfies CommitResult)

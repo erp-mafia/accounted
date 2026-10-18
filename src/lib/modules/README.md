@@ -151,7 +151,22 @@ regler), and the briefing's `grants` block lists the same.
 
 - `grant-candidate`: `transaction.categorized`, behind `GRANT_SUGGESTIONS`
   (off): the latest five approved stagings of the counterparty, all the same
-  way: "Godkänn <motpart> automatiskt nästa gång, upp till X kr?".
+  way: "Godkänn <motpart> automatiskt nästa gång, upp till X kr?". Also
+  `supplier_invoice.registered` (slice 2): the latest five approved inbox
+  invoices of the supplier, still posted, never credited, all the same way:
+  "Godkänn <leverantör> automatiskt nästa gång, upp till X kr?".
+
+Slice 2 (migrations `20261018100000` to `20261018100300`) adds the second
+operation type, `create_supplier_invoice_from_inbox`: a known supplier's
+invoice from the inbox, registered and booked in one commit. The rule is keyed
+by the supplier's id and pins the VAT treatment, the reverse-charge kind and
+every line's account and VAT rate (`item_lines`, '6212:25'), with the
+verifikat's accounts checked after the commit. Only a plain registration
+qualifies: SEK, the underlag in the archive, no dimensions, no SLP, no credit
+or negative line, no new bank details, no staging warning, a company that
+books invoices when they are registered; everything else, a new supplier
+included, waits for a person. In Att göra such a posting opens its invoice
+(corrected or credited there) instead of Ångra.
 
 `GRANT_SUGGESTIONS` (`src/lib/grants/flag.ts`) is Jakob's master switch for
 the whole feature: off, the detector does not run, `create_grant` is refused
