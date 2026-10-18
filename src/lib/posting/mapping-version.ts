@@ -98,6 +98,15 @@ export const MAPPING_SOURCES = {
   yearEndAccruals: 'se.year-end-accruals',
   customerPayment: 'se.customer-payment-lines',
   rotRut: 'se.rot-rut-lines',
+  // The reconciliation worksheet's residual (lib/reconciliation/residual.ts,
+  // RESIDUAL_KINDS): the remainder of a selection booked on the kind's
+  // account (6570 bank fee, 8310/8410 interest, 3740 öresavrundning) against
+  // the bank account.
+  reconciliationResidual: 'se.reconciliation-residual',
+  // The momsdeklaration's basis fix (rc-basis-gaps/fix): the basbelopp pair
+  // (44xx/45xx and 4598) a reverse-charge verifikat lacks per momssats, added
+  // to its lines by correction.
+  vatRcBasisFix: 'se.vat-rc-basis-fix',
 } as const
 
 export type MappingSource = keyof typeof MAPPING_SOURCES

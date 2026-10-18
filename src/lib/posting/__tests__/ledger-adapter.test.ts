@@ -14,9 +14,14 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
 vi.mock('@/lib/bookkeeping/journal-entry-batch', () => ({
   createJournalEntries: vi.fn(async () => [{ id: 'je-4' }, { id: 'je-5' }]),
 }))
+vi.mock('@/lib/core/bookkeeping/storno-service', () => ({
+  correctEntry: vi.fn(async () => ({ reversal: { id: 'je-6' }, corrected: { id: 'je-7' } })),
+  recordateEntry: vi.fn(async () => ({ reversal: { id: 'je-8' }, corrected: { id: 'je-9' } })),
+}))
 
 const { commitEntry, createDraftEntry, createJournalEntry, reverseEntry } = await import('@/lib/bookkeeping/engine')
 const { createJournalEntries } = await import('@/lib/bookkeeping/journal-entry-batch')
+const { correctEntry, recordateEntry } = await import('@/lib/core/bookkeeping/storno-service')
 const { ledgerAdapter } = await import('../ledger-adapter')
 
 const INPUT = { description: 'x', lines: [] } as unknown as CreateJournalEntryInput
@@ -87,5 +92,38 @@ describe('ledger adapter', () => {
       supabase: 'sb' as never, companyId: 'c', userId: 'u', entryId: 'je-1', options: { allowDeepChain: true }, businessEvent: LINK,
     })
     expect(vi.mocked(reverseEntry).mock.calls[1]).toEqual(['sb', 'c', 'u', 'je-1', undefined, { allowDeepChain: true, businessEvent: LINK }])
+  })
+
+  it('corrects with exactly the producer\'s arguments when there is nothing to add, the links beside its options', async () => {
+    const lines = [{ account_number: '1930', debit_amount: 1, credit_amount: 0 }]
+    await ledgerAdapter.correctEntry({ supabase: 'sb' as never, companyId: 'c', userId: 'u', entryId: 'je-1', correction: { lines } })
+    expect(vi.mocked(correctEntry).mock.calls[0]).toEqual(['sb', 'c', 'u', 'je-1', lines])
+    expect(vi.mocked(correctEntry).mock.calls[0]).toHaveLength(5)
+    expect(vi.mocked(correctEntry).mock.calls[0]![4]).toBe(lines)
+    const options = { description: 'Rättelse', allowDeepChain: true }
+    await ledgerAdapter.correctEntry({ supabase: 'sb' as never, companyId: 'c', userId: 'u', entryId: 'je-1', correction: { lines, options } })
+    expect(vi.mocked(correctEntry).mock.calls[1]![5]).toBe(options)
+    const links = { reversal: { ...LINK, role: 'reversal' as const }, correction: { ...LINK, role: 'correction' as const } }
+    await ledgerAdapter.correctEntry({
+      supabase: 'sb' as never, companyId: 'c', userId: 'u', entryId: 'je-1', correction: { lines, options }, businessEvents: links,
+    })
+    expect(vi.mocked(correctEntry).mock.calls[2]).toEqual(['sb', 'c', 'u', 'je-1', lines, { ...options, businessEvents: links }])
+  })
+
+  it('moves a verifikat to another date through recordateEntry, by the same rule', async () => {
+    await ledgerAdapter.correctEntry({ supabase: 'sb' as never, companyId: 'c', userId: 'u', entryId: 'je-1', correction: { newDate: '2025-01-02' } })
+    expect(vi.mocked(recordateEntry).mock.calls[0]).toEqual(['sb', 'c', 'u', 'je-1', '2025-01-02'])
+    expect(vi.mocked(recordateEntry).mock.calls[0]).toHaveLength(5)
+    const options = { allowDeepChain: true }
+    await ledgerAdapter.correctEntry({
+      supabase: 'sb' as never, companyId: 'c', userId: 'u', entryId: 'je-1', correction: { newDate: '2025-01-02', options },
+    })
+    expect(vi.mocked(recordateEntry).mock.calls[1]![5]).toBe(options)
+    const links = { reversal: { ...LINK, role: 'reversal' as const } }
+    await ledgerAdapter.correctEntry({
+      supabase: 'sb' as never, companyId: 'c', userId: 'u', entryId: 'je-1', correction: { newDate: '2025-01-02' }, businessEvents: links,
+    })
+    expect(vi.mocked(recordateEntry).mock.calls[2]).toEqual(['sb', 'c', 'u', 'je-1', '2025-01-02', { businessEvents: links }])
+    expect(correctEntry).not.toHaveBeenCalled()
   })
 })

@@ -230,3 +230,38 @@ describe('reverseEntry: running the registered hooks', () => {
     expect(h.trace.filter((s) => s.startsWith('emit '))).toEqual([])
   })
 })
+
+describe('reverseEntry through the posting port (step 2i): the registry refuses exactly as before', () => {
+  const STORNO_EVENT = {
+    kind: 'ledger.storno' as const,
+    occurredOn: '2026-10-18',
+    subject: { type: 'journal_entry' as const, id: '00000000-0000-4000-8000-0000000e0001' },
+    evidence: { link_basis: 'user_created' as const },
+  }
+
+  it.each(['off', 'shadow', 'strict'])(
+    'POSTING_EVENTS=%s: a storno of a source type with no required hook refuses with REVERSAL_HOOK_MISSING, no verifikat written',
+    async (mode) => {
+      vi.stubEnv('POSTING_EVENTS', mode)
+      try {
+        const { postingPort } = await import('@/lib/posting/port')
+        const client = clientFor(originalOf('rot_rut_reclaim'))
+        const refusal = postingPort.reverseJournalEntry({
+          supabase: client as never,
+          companyId: 'company-1',
+          userId: 'user-1',
+          entryId: 'entry-1',
+          event: STORNO_EVENT,
+          role: 'reversal',
+        })
+        await expect(refusal).rejects.toBeInstanceOf(ReversalHookMissingError)
+        await expect(refusal).rejects.toMatchObject({ code: 'REVERSAL_HOOK_MISSING', sourceType: 'rot_rut_reclaim' })
+        expect(client.rpc).not.toHaveBeenCalled()
+        // Only the event the port records first (shadow, strict); nothing on the journal.
+        expect(writes()).toEqual(mode === 'off' ? [] : ['insert business_events'])
+      } finally {
+        vi.unstubAllEnvs()
+      }
+    },
+  )
+})

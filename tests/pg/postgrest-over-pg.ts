@@ -613,7 +613,14 @@ export interface PgRest {
   unsupported: string[]
 }
 
-export function createPgRest(options: { role?: PgRestRole; userId?: string | null } = {}): PgRest {
+export function createPgRest(
+  options: {
+    role?: PgRestRole
+    userId?: string | null
+    /** Further JWT claims of the session, e.g. is_anonymous for a sandbox visitor. */
+    claims?: Record<string, unknown>
+  } = {},
+): PgRest {
   const role: PgRestRole = options.role ?? 'service_role'
   const unsupported: string[] = []
 
@@ -623,7 +630,7 @@ export function createPgRest(options: { role?: PgRestRole; userId?: string | nul
       if (!catalogPromise) catalogPromise = loadCatalog(client)
       await catalogPromise
       await client.query('BEGIN')
-      const claims = role === 'service_role' ? { role } : { role, sub: options.userId }
+      const claims = role === 'service_role' ? { role } : { ...options.claims, role, sub: options.userId }
       await client.query(`SELECT set_config('request.jwt.claims', $1, true)`, [JSON.stringify(claims)])
       await client.query(`SELECT set_config('request.jwt.claim.role', $1, true)`, [role])
       if (options.userId) await client.query(`SELECT set_config('request.jwt.claim.sub', $1, true)`, [options.userId])

@@ -1,5 +1,6 @@
 import { commitEntry, createDraftEntry, createJournalEntry, reverseEntry } from '@/lib/bookkeeping/engine'
 import { createJournalEntries } from '@/lib/bookkeeping/journal-entry-batch'
+import { correctEntry, recordateEntry } from '@/lib/core/bookkeeping/storno-service'
 import type { PostingAdapter } from './types'
 
 /**
@@ -51,5 +52,18 @@ export const ledgerAdapter: PostingAdapter = {
     return reversalDate === undefined
       ? reverseEntry(supabase, companyId, userId, entryId)
       : reverseEntry(supabase, companyId, userId, entryId, reversalDate)
+  },
+
+  correctEntry({ supabase, companyId, userId, entryId, correction, businessEvents }) {
+    if ('newDate' in correction) {
+      const options = businessEvents ? { ...correction.options, businessEvents } : correction.options
+      return options === undefined
+        ? recordateEntry(supabase, companyId, userId, entryId, correction.newDate)
+        : recordateEntry(supabase, companyId, userId, entryId, correction.newDate, options)
+    }
+    const options = businessEvents ? { ...correction.options, businessEvents } : correction.options
+    return options === undefined
+      ? correctEntry(supabase, companyId, userId, entryId, correction.lines)
+      : correctEntry(supabase, companyId, userId, entryId, correction.lines, options)
   },
 }

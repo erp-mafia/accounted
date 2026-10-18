@@ -1,5 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import type { LinkBasisColumns } from '@/lib/links/link-basis'
+import type { BusinessEventCategory } from '@/lib/posting/categories'
+import { mappingVersion } from '@/lib/posting/mapping-version'
+import { postingPort } from '@/lib/posting/port'
+import type { BusinessEventDraft } from '@/lib/posting/types'
 import { roundOre } from '@/lib/money'
 import { ISO_DATE_RE } from '@/lib/invariants'
 import { createLogger } from '@/lib/logger'
@@ -58,6 +63,53 @@ export class ReconciliationResidualError extends Error {
     super(message)
     this.name = 'ReconciliationResidualError'
     this.code = code
+  }
+}
+
+/** The business event category of each residual kind; öresavrundning names none. */
+export const RESIDUAL_CATEGORY: Readonly<Record<ResidualKind, BusinessEventCategory | null>> = {
+  bank_fee: 'expense.bank_fees',
+  interest_income: 'finance.banking',
+  interest_expense: 'finance.banking',
+  rounding: null,
+}
+
+/**
+ * The business event of a residual verifikat, for the posting port (step
+ * 2i): ledger.manual, the kind its source type names (a person booked it
+ * from the worksheet in the same gesture as the link), filed under its
+ * kind's category, dated the verifikat's date. The subject is the bank line
+ * the residual verifikat is anchored to; the amount is the remainder booked,
+ * its sign the direction, and the rule source names RESIDUAL_KINDS, the
+ * account each kind books on. Pure: built only while POSTING_EVENTS is on.
+ */
+export function residualBusinessEvent(args: {
+  kind: ResidualKind
+  transactionId: string
+  entryDate: string
+  /** The remainder as booked, signed: negative money left the bank. */
+  residual: number
+  linkBasis: LinkBasisColumns
+}): BusinessEventDraft {
+  const amount = roundOre(Math.abs(args.residual))
+  const linkEvidence = args.linkBasis.link_evidence ?? null
+  return {
+    kind: 'ledger.manual',
+    category: RESIDUAL_CATEGORY[args.kind],
+    occurredOn: args.entryDate,
+    subject: { type: 'transaction', id: args.transactionId },
+    // The verifikat's own amount: its lines are in the ledger currency.
+    currency: 'SEK',
+    amount,
+    amountSek: amount,
+    evidence: {
+      direction: args.residual < 0 ? 'out' : 'in',
+      link_basis: args.linkBasis.link_basis,
+      link_evidence: linkEvidence ?? undefined,
+    },
+    pendingOperationId: linkEvidence?.pending_operation_id ?? null,
+    mappingVersion: mappingVersion('reconciliationResidual'),
+    jurisdiction: 'SE',
   }
 }
 
@@ -281,12 +333,21 @@ export async function bookResidualAndLink(
 
   let residualEntry: { id: string }
   try {
-    residualEntry = await createJournalEntry(supabase, companyId, userId, {
-      fiscal_period_id: fiscalPeriodId,
-      entry_date: entryDate,
-      description,
-      source_type: 'manual',
-      lines,
+    // Posting port (step 2i): the engine gets the same input and, while
+    // POSTING_EVENTS is on, the residual's event is linked before the number.
+    residualEntry = await postingPort.postJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      event: () =>
+        residualBusinessEvent({ kind: input.kind, transactionId: ids[0], entryDate, residual, linkBasis: linkBasisColumns('user_created') }),
+      input: {
+        fiscal_period_id: fiscalPeriodId,
+        entry_date: entryDate,
+        description,
+        source_type: 'manual',
+        lines,
+      },
     })
   } catch (err) {
     for (const id of ids) {

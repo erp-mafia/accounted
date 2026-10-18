@@ -24,7 +24,10 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import type { ApiV1Context } from '@/lib/api/v1/with-api-v1'
-import { reverseEntry } from '@/lib/bookkeeping/engine'
+import { voucherStornoBusinessEvent } from '@/lib/bookkeeping/ledger-business-events'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { postingPort } from '@/lib/posting/port'
 import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
 import { assertStornoTarget } from '@/lib/core/bookkeeping/storno-target'
 import {
@@ -198,8 +201,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     try {
-      const reversal = await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, entryId, reversalDate, {
-        allowDeepChain: bodyAllowDeepChain,
+      // Posting port (step 2i): ledger.storno of the verifikat while
+      // POSTING_EVENTS is on, client_asserted on a key.
+      const reversal = await postingPort.reverseJournalEntry({
+        supabase: ctx.supabase,
+        companyId: ctx.companyId!,
+        userId: ctx.userId,
+        entryId,
+        reversalDate,
+        options: { allowDeepChain: bodyAllowDeepChain },
+        event: () => voucherStornoBusinessEvent({ entryId, occurredOn: todayIsoStockholm(), linkBasis: linkBasisColumns('user_created') }),
+        role: 'reversal',
       })
       return ok(
         {

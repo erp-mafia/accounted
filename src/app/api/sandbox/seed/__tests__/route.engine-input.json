@@ -1,0 +1,1503 @@
+[
+  {
+    "name": "a sandbox seeded in May",
+    "postings": [
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-01-02",
+          "description": "Egen insättning, startkapital",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "1930",
+              "account_id": null,
+              "debit_amount": 60000,
+              "credit_amount": 0,
+              "line_description": "Insättning på företagskontot",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "2018",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 60000,
+              "line_description": "Övriga egna insättningar",
+              "sort_order": 1,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-01-03",
+          "description": "Programvaror, molntjänster januari",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "5420",
+              "account_id": null,
+              "debit_amount": 1010,
+              "credit_amount": 0,
+              "line_description": "Programvaror, molntjänster januari",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "2641",
+              "account_id": null,
+              "debit_amount": 252.5,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25 %",
+              "sort_order": 1,
+              "dimensions": {}
+            },
+            {
+              "account_number": "1930",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 1262.5,
+              "line_description": "Betalt från företagskontot",
+              "sort_order": 2,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-01-08",
+          "description": "Mobiltelefon och abonnemang, januari",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "6212",
+              "account_id": null,
+              "debit_amount": 464,
+              "credit_amount": 0,
+              "line_description": "Mobiltelefon och abonnemang, januari",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "2641",
+              "account_id": null,
+              "debit_amount": 116,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25 %",
+              "sort_order": 1,
+              "dimensions": {}
+            },
+            {
+              "account_number": "1930",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 580,
+              "line_description": "Betalt från företagskontot",
+              "sort_order": 2,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-01-25",
+          "description": "Faktura, konsultarvode januari (96 tim)",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "1510",
+              "account_id": null,
+              "debit_amount": 114000,
+              "credit_amount": 0,
+              "line_description": "Kundfordran",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "3001",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 91200,
+              "line_description": "Konsultarvode 96 tim à 950 kr",
+              "sort_order": 1,
+              "dimensions": {
+                "1": "BUTIK",
+                "6": "P001"
+              }
+            },
+            {
+              "account_number": "2611",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 22800,
+              "line_description": "Utgående moms 25 %",
+              "sort_order": 2,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-02-03",
+          "description": "Programvaror, molntjänster februari",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "5420",
+              "account_id": null,
+              "debit_amount": 1130,
+              "credit_amount": 0,
+              "line_description": "Programvaror, molntjänster februari",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "2641",
+              "account_id": null,
+              "debit_amount": 282.5,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25 %",
+              "sort_order": 1,
+              "dimensions": {}
+            },
+            {
+              "account_number": "1930",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 1412.5,
+              "line_description": "Betalt från företagskontot",
+              "sort_order": 2,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-02-08",
+          "description": "Mobiltelefon och abonnemang, februari",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "6212",
+              "account_id": null,
+              "debit_amount": 499,
+              "credit_amount": 0,
+              "line_description": "Mobiltelefon och abonnemang, februari",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "2641",
+              "account_id": null,
+              "debit_amount": 124.75,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25 %",
+              "sort_order": 1,
+              "dimensions": {}
+            },
+            {
+              "account_number": "1930",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 623.75,
+              "line_description": "Betalt från företagskontot",
+              "sort_order": 2,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-02-12",
+          "description": "Annonsering, kampanj sociala medier",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "5910",
+              "account_id": null,
+              "debit_amount": 2400,
+              "credit_amount": 0,
+              "line_description": "Annonsering, kampanj sociala medier",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "2641",
+              "account_id": null,
+              "debit_amount": 600,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25 %",
+              "sort_order": 1,
+              "dimensions": {}
+            },
+            {
+              "account_number": "1930",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 3000,
+              "line_description": "Betalt från företagskontot",
+              "sort_order": 2,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-02-20",
+          "description": "Kundinbetalning, konsultarvode januari",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "1930",
+              "account_id": null,
+              "debit_amount": 114000,
+              "credit_amount": 0,
+              "line_description": "Insättning på företagskontot",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "1510",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 114000,
+              "line_description": "Kvittad kundfordran",
+              "sort_order": 1,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-02-25",
+          "description": "Faktura, konsultarvode februari (104 tim)",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "1510",
+              "account_id": null,
+              "debit_amount": 123500,
+              "credit_amount": 0,
+              "line_description": "Kundfordran",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "3001",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 98800,
+              "line_description": "Konsultarvode 104 tim à 950 kr",
+              "sort_order": 1,
+              "dimensions": {
+                "1": "WEBB",
+                "6": "P002"
+              }
+            },
+            {
+              "account_number": "2611",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 24700,
+              "line_description": "Utgående moms 25 %",
+              "sort_order": 2,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-02-27",
+          "description": "Eget uttag, februari",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "2013",
+              "account_id": null,
+              "debit_amount": 46000,
+              "credit_amount": 0,
+              "line_description": "Övriga egna uttag",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "1930",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 46000,
+              "line_description": "Uttag från företagskontot",
+              "sort_order": 1,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-03-03",
+          "description": "Programvaror, molntjänster mars",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "5420",
+              "account_id": null,
+              "debit_amount": 950,
+              "credit_amount": 0,
+              "line_description": "Programvaror, molntjänster mars",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "2641",
+              "account_id": null,
+              "debit_amount": 237.5,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25 %",
+              "sort_order": 1,
+              "dimensions": {}
+            },
+            {
+              "account_number": "1930",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 1187.5,
+              "line_description": "Betalt från företagskontot",
+              "sort_order": 2,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-03-08",
+          "description": "Mobiltelefon och abonnemang, mars",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "6212",
+              "account_id": null,
+              "debit_amount": 534,
+              "credit_amount": 0,
+              "line_description": "Mobiltelefon och abonnemang, mars",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "2641",
+              "account_id": null,
+              "debit_amount": 133.5,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25 %",
+              "sort_order": 1,
+              "dimensions": {}
+            },
+            {
+              "account_number": "1930",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 667.5,
+              "line_description": "Betalt från företagskontot",
+              "sort_order": 2,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-03-12",
+          "description": "Redovisningskonsult, avstämning inför deklaration",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "6530",
+              "account_id": null,
+              "debit_amount": 6500,
+              "credit_amount": 0,
+              "line_description": "Redovisningskonsult, avstämning inför deklaration",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "2641",
+              "account_id": null,
+              "debit_amount": 1625,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25 %",
+              "sort_order": 1,
+              "dimensions": {}
+            },
+            {
+              "account_number": "1930",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 8125,
+              "line_description": "Betalt från företagskontot",
+              "sort_order": 2,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-03-20",
+          "description": "Kundinbetalning, konsultarvode februari",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "1930",
+              "account_id": null,
+              "debit_amount": 123500,
+              "credit_amount": 0,
+              "line_description": "Insättning på företagskontot",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "1510",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 123500,
+              "line_description": "Kvittad kundfordran",
+              "sort_order": 1,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-03-25",
+          "description": "Faktura, konsultarvode mars (120 tim)",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "1510",
+              "account_id": null,
+              "debit_amount": 142500,
+              "credit_amount": 0,
+              "line_description": "Kundfordran",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "3001",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 114000,
+              "line_description": "Konsultarvode 120 tim à 950 kr",
+              "sort_order": 1,
+              "dimensions": {}
+            },
+            {
+              "account_number": "2611",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 28500,
+              "line_description": "Utgående moms 25 %",
+              "sort_order": 2,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-03-27",
+          "description": "Eget uttag, mars",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "2013",
+              "account_id": null,
+              "debit_amount": 42000,
+              "credit_amount": 0,
+              "line_description": "Övriga egna uttag",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "1930",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 42000,
+              "line_description": "Uttag från företagskontot",
+              "sort_order": 1,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-03-31",
+          "description": "Momsredovisning 2026 Q1",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "2611",
+              "account_id": null,
+              "debit_amount": 76000,
+              "credit_amount": 0,
+              "line_description": "Utgående moms för perioden",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "2641",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 3371.75,
+              "line_description": "Ingående moms för perioden",
+              "sort_order": 1,
+              "dimensions": {}
+            },
+            {
+              "account_number": "2650",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 72628.25,
+              "line_description": "Redovisningskonto för moms",
+              "sort_order": 2,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-04-03",
+          "description": "Programvaror, molntjänster april",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "5420",
+              "account_id": null,
+              "debit_amount": 1070,
+              "credit_amount": 0,
+              "line_description": "Programvaror, molntjänster april",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "2641",
+              "account_id": null,
+              "debit_amount": 267.5,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25 %",
+              "sort_order": 1,
+              "dimensions": {}
+            },
+            {
+              "account_number": "1930",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 1337.5,
+              "line_description": "Betalt från företagskontot",
+              "sort_order": 2,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-04-08",
+          "description": "Mobiltelefon och abonnemang, april",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "6212",
+              "account_id": null,
+              "debit_amount": 429,
+              "credit_amount": 0,
+              "line_description": "Mobiltelefon och abonnemang, april",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "2641",
+              "account_id": null,
+              "debit_amount": 107.25,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25 %",
+              "sort_order": 1,
+              "dimensions": {}
+            },
+            {
+              "account_number": "1930",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 536.25,
+              "line_description": "Betalt från företagskontot",
+              "sort_order": 2,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-04-12",
+          "description": "Bredband kontorsplats, första halvåret",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "6230",
+              "account_id": null,
+              "debit_amount": 1490,
+              "credit_amount": 0,
+              "line_description": "Bredband kontorsplats, första halvåret",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "2641",
+              "account_id": null,
+              "debit_amount": 372.5,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25 %",
+              "sort_order": 1,
+              "dimensions": {}
+            },
+            {
+              "account_number": "1930",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 1862.5,
+              "line_description": "Betalt från företagskontot",
+              "sort_order": 2,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-04-20",
+          "description": "Kundinbetalning, konsultarvode mars",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "1930",
+              "account_id": null,
+              "debit_amount": 142500,
+              "credit_amount": 0,
+              "line_description": "Insättning på företagskontot",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "1510",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 142500,
+              "line_description": "Kvittad kundfordran",
+              "sort_order": 1,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-04-25",
+          "description": "Faktura, konsultarvode april (112 tim)",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "1510",
+              "account_id": null,
+              "debit_amount": 133000,
+              "credit_amount": 0,
+              "line_description": "Kundfordran",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "3001",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 106400,
+              "line_description": "Konsultarvode 112 tim à 950 kr",
+              "sort_order": 1,
+              "dimensions": {
+                "1": "BUTIK",
+                "6": "P001"
+              }
+            },
+            {
+              "account_number": "2611",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 26600,
+              "line_description": "Utgående moms 25 %",
+              "sort_order": 2,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-04-27",
+          "description": "Eget uttag, april",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "2013",
+              "account_id": null,
+              "debit_amount": 38000,
+              "credit_amount": 0,
+              "line_description": "Övriga egna uttag",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "1930",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 38000,
+              "line_description": "Uttag från företagskontot",
+              "sort_order": 1,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-04-15",
+          "description": "Faktura F-2026001, Björk & Partner AB",
+          "source_type": "invoice_created",
+          "source_id": "invoices-6",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 18750,
+              "credit_amount": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 15000,
+              "dimensions": {
+                "1": "BUTIK",
+                "6": "P001"
+              }
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 3750,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-04-30",
+          "description": "Betalning faktura F-2026001, Björk & Partner AB",
+          "source_type": "invoice_paid",
+          "source_id": "invoices-6",
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 18750,
+              "credit_amount": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 0,
+              "credit_amount": 18750,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-04-25",
+          "description": "Lön 2026-04",
+          "source_type": "salary_payment",
+          "source_id": "salary_runs-75",
+          "lines": [
+            {
+              "account_number": "7210",
+              "debit_amount": 57600,
+              "credit_amount": 0,
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "2710",
+              "debit_amount": 0,
+              "credit_amount": 10000,
+              "sort_order": 1,
+              "dimensions": {}
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 47600,
+              "sort_order": 2,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-04-25",
+          "description": "Lön 2026-04: arbetsgivaravgifter",
+          "source_type": "salary_payment",
+          "source_id": "salary_runs-75",
+          "lines": [
+            {
+              "account_number": "7510",
+              "debit_amount": 18097.92,
+              "credit_amount": 0,
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "2731",
+              "debit_amount": 0,
+              "credit_amount": 18097.92,
+              "sort_order": 1,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-04-25",
+          "description": "Lön 2026-04: semesterlöneskuld",
+          "source_type": "salary_payment",
+          "source_id": "salary_runs-75",
+          "lines": [
+            {
+              "account_number": "7290",
+              "debit_amount": 6912,
+              "credit_amount": 0,
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "2920",
+              "debit_amount": 0,
+              "credit_amount": 6912,
+              "sort_order": 1,
+              "dimensions": {}
+            },
+            {
+              "account_number": "7519",
+              "debit_amount": 2171.75,
+              "credit_amount": 0,
+              "sort_order": 2,
+              "dimensions": {}
+            },
+            {
+              "account_number": "2940",
+              "debit_amount": 0,
+              "credit_amount": 2171.75,
+              "sort_order": 3,
+              "dimensions": {}
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "status": 200,
+      "body": {
+        "seeded": true
+      }
+    }
+  },
+  {
+    "name": "a sandbox seeded in early January",
+    "postings": [
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-01-01",
+          "description": "Faktura F-2026001, Björk & Partner AB",
+          "source_type": "invoice_created",
+          "source_id": "invoices-6",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 18750,
+              "credit_amount": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 15000,
+              "dimensions": {
+                "1": "BUTIK",
+                "6": "P001"
+              }
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 3750,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-01-01",
+          "description": "Betalning faktura F-2026001, Björk & Partner AB",
+          "source_type": "invoice_paid",
+          "source_id": "invoices-6",
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 18750,
+              "credit_amount": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 0,
+              "credit_amount": 18750,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-01-25",
+          "description": "Lön 2026-01",
+          "source_type": "salary_payment",
+          "source_id": "salary_runs-75",
+          "lines": [
+            {
+              "account_number": "7210",
+              "debit_amount": 57600,
+              "credit_amount": 0,
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "2710",
+              "debit_amount": 0,
+              "credit_amount": 10000,
+              "sort_order": 1,
+              "dimensions": {}
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 47600,
+              "sort_order": 2,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-01-25",
+          "description": "Lön 2026-01: arbetsgivaravgifter",
+          "source_type": "salary_payment",
+          "source_id": "salary_runs-75",
+          "lines": [
+            {
+              "account_number": "7510",
+              "debit_amount": 18097.92,
+              "credit_amount": 0,
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "2731",
+              "debit_amount": 0,
+              "credit_amount": 18097.92,
+              "sort_order": 1,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-01-25",
+          "description": "Lön 2026-01: semesterlöneskuld",
+          "source_type": "salary_payment",
+          "source_id": "salary_runs-75",
+          "lines": [
+            {
+              "account_number": "7290",
+              "debit_amount": 6912,
+              "credit_amount": 0,
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "2920",
+              "debit_amount": 0,
+              "credit_amount": 6912,
+              "sort_order": 1,
+              "dimensions": {}
+            },
+            {
+              "account_number": "7519",
+              "debit_amount": 2171.75,
+              "credit_amount": 0,
+              "sort_order": 2,
+              "dimensions": {}
+            },
+            {
+              "account_number": "2940",
+              "debit_amount": 0,
+              "credit_amount": 2171.75,
+              "sort_order": 3,
+              "dimensions": {}
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "status": 200,
+      "body": {
+        "seeded": true
+      }
+    }
+  },
+  {
+    "name": "the engine refuses the fifth history voucher: the seed fails",
+    "postings": [
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-01-02",
+          "description": "Egen insättning, startkapital",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "1930",
+              "account_id": null,
+              "debit_amount": 60000,
+              "credit_amount": 0,
+              "line_description": "Insättning på företagskontot",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "2018",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 60000,
+              "line_description": "Övriga egna insättningar",
+              "sort_order": 1,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-01-03",
+          "description": "Programvaror, molntjänster januari",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "5420",
+              "account_id": null,
+              "debit_amount": 1010,
+              "credit_amount": 0,
+              "line_description": "Programvaror, molntjänster januari",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "2641",
+              "account_id": null,
+              "debit_amount": 252.5,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25 %",
+              "sort_order": 1,
+              "dimensions": {}
+            },
+            {
+              "account_number": "1930",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 1262.5,
+              "line_description": "Betalt från företagskontot",
+              "sort_order": 2,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-01-08",
+          "description": "Mobiltelefon och abonnemang, januari",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "6212",
+              "account_id": null,
+              "debit_amount": 464,
+              "credit_amount": 0,
+              "line_description": "Mobiltelefon och abonnemang, januari",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "2641",
+              "account_id": null,
+              "debit_amount": 116,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25 %",
+              "sort_order": 1,
+              "dimensions": {}
+            },
+            {
+              "account_number": "1930",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 580,
+              "line_description": "Betalt från företagskontot",
+              "sort_order": 2,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-01-25",
+          "description": "Faktura, konsultarvode januari (96 tim)",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "1510",
+              "account_id": null,
+              "debit_amount": 114000,
+              "credit_amount": 0,
+              "line_description": "Kundfordran",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "3001",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 91200,
+              "line_description": "Konsultarvode 96 tim à 950 kr",
+              "sort_order": 1,
+              "dimensions": {
+                "1": "BUTIK",
+                "6": "P001"
+              }
+            },
+            {
+              "account_number": "2611",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 22800,
+              "line_description": "Utgående moms 25 %",
+              "sort_order": 2,
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
+          "voucher_series": "A",
+          "entry_date": "2026-02-03",
+          "description": "Programvaror, molntjänster februari",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "5420",
+              "account_id": null,
+              "debit_amount": 1130,
+              "credit_amount": 0,
+              "line_description": "Programvaror, molntjänster februari",
+              "sort_order": 0,
+              "dimensions": {}
+            },
+            {
+              "account_number": "2641",
+              "account_id": null,
+              "debit_amount": 282.5,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25 %",
+              "sort_order": 1,
+              "dimensions": {}
+            },
+            {
+              "account_number": "1930",
+              "account_id": null,
+              "debit_amount": 0,
+              "credit_amount": 1412.5,
+              "line_description": "Betalt från företagskontot",
+              "sort_order": 2,
+              "dimensions": {}
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "status": 500,
+      "body": {
+        "error": "failed"
+      }
+    }
+  }
+]

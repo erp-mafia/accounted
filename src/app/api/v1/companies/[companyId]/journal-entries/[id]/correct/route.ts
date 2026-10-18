@@ -26,7 +26,10 @@ import { readV1JsonBody } from '@/lib/api/v1/body'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { CorrectJournalEntrySchema } from '@/lib/api/schemas'
 import { validateBalance } from '@/lib/bookkeeping/engine'
-import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
+import { correctionBusinessEvents } from '@/lib/bookkeeping/ledger-business-events'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { postingPort } from '@/lib/posting/port'
 import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
 import { CorrectionChainTooDeepError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 
@@ -189,14 +192,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     try {
-      const { reversal, corrected } = await correctEntry(
-        ctx.supabase,
-        ctx.companyId!,
-        ctx.userId,
+      // Posting port (step 2i): ledger.storno and ledger.correction of the
+      // verifikat while POSTING_EVENTS is on, client_asserted on a key.
+      const { reversal, corrected } = await postingPort.correctJournalEntry({
+        supabase: ctx.supabase,
+        companyId: ctx.companyId!,
+        userId: ctx.userId,
         entryId,
-        lines,
-        { description, allowDeepChain: allow_deep_chain },
-      )
+        ...correctionBusinessEvents({ entryId, occurredOn: todayIsoStockholm, linkBasis: () => linkBasisColumns('user_created') }),
+        correction: { lines, options: { description, allowDeepChain: allow_deep_chain } },
+      })
       return ok(
         {
           reversal_id: reversal.id,

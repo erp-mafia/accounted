@@ -686,7 +686,9 @@ describe('POST /api/bookkeeping/journal-entries', () => {
 
     expect(status).toBe(200)
     expect(body.data).toEqual(entry)
-    expect(mockCreateJournalEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', input)
+    // Through the posting port, whose ledger adapter always passes the
+    // commitMethod and rubricVersion positions (undefined here).
+    expect(mockCreateJournalEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', input, undefined, undefined)
   })
 
   it('returns 400 when engine throws', async () => {
@@ -778,7 +780,9 @@ describe('POST /api/bookkeeping/journal-entries: source_type allowlist', () => {
       expect.anything(),
       'company-1',
       'user-1',
-      expect.objectContaining({ source_type: 'vat_settlement' })
+      expect.objectContaining({ source_type: 'vat_settlement' }),
+      undefined,
+      undefined,
     )
   })
 
@@ -796,7 +800,9 @@ describe('POST /api/bookkeeping/journal-entries: source_type allowlist', () => {
       expect.anything(),
       'company-1',
       'user-1',
-      expect.objectContaining({ source_type: 'manual' })
+      expect.objectContaining({ source_type: 'manual' }),
+      undefined,
+      undefined,
     )
   })
 })

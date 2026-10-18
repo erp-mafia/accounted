@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
-import { createDraftEntry, createJournalEntry } from '@/lib/bookkeeping/engine'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
+import { manualVoucherBusinessEvent } from '@/lib/bookkeeping/ledger-business-events'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { postingPort } from '@/lib/posting/port'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateDashboardJournalEntrySchema } from '@/lib/api/schemas'
@@ -413,10 +415,18 @@ export const POST = withRouteContext(
   const { searchParams } = new URL(request.url)
   const asDraft = searchParams.get('as_draft') === 'true'
 
+  // Posting port (step 2i): the engine gets the body unchanged and, while
+  // POSTING_EVENTS is shadow or strict, the voucher's event (the kind its
+  // source type names, the person's own: user_created) is linked to the
+  // draft before a number is drawn. A draft records its event now, linked to
+  // the draft; its later commit records nothing (as kassa and webbshop).
+  const event = () =>
+    manualVoucherBusinessEvent({ sourceType: body.source_type, entryDate: body.entry_date, linkBasis: linkBasisColumns('user_created') })
+
   try {
     const entry = asDraft
-      ? await createDraftEntry(supabase, companyId, user.id, body)
-      : await createJournalEntry(supabase, companyId, user.id, body)
+      ? await postingPort.draftJournalEntry({ supabase, companyId, userId: user.id, event, input: body })
+      : await postingPort.postJournalEntry({ supabase, companyId, userId: user.id, event, input: body })
     return NextResponse.json({ data: entry })
   } catch (err) {
     const typed = bookkeepingErrorResponse(err)

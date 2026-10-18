@@ -119,7 +119,9 @@ describe('commitPendingOperation: create_voucher', () => {
       // Default commit_method when opts.commitMethod is not passed.
       // Must be one of the values allowed by the DB CHECK constraint
       // (migration 20260420120001_journal_entry_commit_metadata.sql).
-      'user_accept'
+      'user_accept',
+      // The posting port's ledger adapter passes the rubricVersion position.
+      undefined,
     )
     // findFiscalPeriod must NOT be called when fiscal_period_id is supplied:
     // it's the caller's explicit choice.
@@ -294,7 +296,8 @@ describe('commitPendingOperation: create_voucher', () => {
       'company-1',
       'user-1',
       expect.objectContaining({ source_type: 'manual' }),
-      'user_accept'
+      'user_accept',
+      undefined,
     )
     expect(createJournalEntry).not.toHaveBeenCalledWith(
       expect.anything(),
@@ -347,7 +350,8 @@ describe('commitPendingOperation: create_voucher', () => {
       'company-1',
       'user-1',
       expect.objectContaining({ source_type: 'opening_balance' }),
-      'user_accept'
+      'user_accept',
+      undefined,
     )
     // The year points at its IB, as after every other IB writer, so
     // gnubok_correct_opening_balances can replace it (it reads the pointer).
@@ -542,7 +546,8 @@ describe('commitPendingOperation: create_voucher', () => {
       'company-1',
       'user-1',
       expect.objectContaining({ source_type: 'manual' }),
-      'user_accept'
+      'user_accept',
+      undefined,
     )
   })
 
@@ -582,7 +587,8 @@ describe('commitPendingOperation: create_voucher', () => {
       'company-1',
       'user-1',
       expect.anything(),
-      'bulk_accept'
+      'bulk_accept',
+      undefined,
     )
   })
 

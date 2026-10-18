@@ -10,6 +10,7 @@ import {
   type FiscalYearReopenDeps,
 } from '@/lib/core/bookkeeping/fiscal-year-reopen'
 import { ensureTicSnapshot } from '@/lib/agent/composer/tic-fetch'
+import { linkBasisColumns } from '@/lib/links/stamp'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 type Params = { params: Promise<{ id: string }> }
@@ -80,7 +81,11 @@ export const POST = withRouteContext<Params>(
         confirmName: validation.data.confirm_name,
         confirmNotAdopted: validation.data.confirm_annual_report_not_adopted,
       },
-      registryDeps(supabase, companyId!),
+      {
+        ...registryDeps(supabase, companyId!),
+        // The posting port's events, while POSTING_EVENTS is on: the owner reopened the year.
+        posting: () => ({ linkBasis: linkBasisColumns('user_created') }),
+      },
     )
 
     if (!result.ok) {

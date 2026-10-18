@@ -1,7 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
-import { cancelOrphanedEntry, reverseEntry } from '@/lib/bookkeeping/engine'
+import { cancelOrphanedEntry } from '@/lib/bookkeeping/engine'
 import { getUnusedVoucherAllocation } from '@/lib/bookkeeping/errors'
+import { voucherStornoBusinessEvent } from '@/lib/bookkeeping/ledger-business-events'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { linkBasisColumns } from '@/lib/links/stamp'
 import { postingPort } from '@/lib/posting/port'
 import type { BusinessEventDraft } from '@/lib/posting/types'
 
@@ -83,12 +86,13 @@ export async function recordVoucherGapExplanation(
  * never edited or cancelled in place. Compensation is best-effort so the
  * caller can preserve the original conflict response.
  *
- * A door that posts through the posting port passes `stornoEvent` (step 2e:
- * ledger.storno of the record it could not link), and the storno goes
- * through the port too: while POSTING_EVENTS is on, the event is linked to
- * the storno's draft before its number is drawn, and under strict a failed
- * event write stops the storno like any other failure here. Without it the
- * engine is called directly, exactly as before.
+ * The storno goes through the posting port: while POSTING_EVENTS is on, its
+ * event is linked to the storno's draft before its number is drawn, and
+ * under strict a failed event write stops the storno like any other failure
+ * here. A door passes `stornoEvent` (step 2e: ledger.storno of the record it
+ * could not link); without one (step 2i) the event is ledger.storno of the
+ * verifikat reversed, system_derived: nobody chose this storno, the
+ * compensation did. The engine gets the call it always did.
  */
 export async function reverseOrphanedJournalEntry(
   supabase: SupabaseClient,
@@ -100,18 +104,17 @@ export async function reverseOrphanedJournalEntry(
 ): Promise<void> {
   let unusedVoucher: ReturnType<typeof getUnusedVoucherAllocation> = null
   try {
-    if (stornoEvent) {
-      await postingPort.reverseJournalEntry({
-        supabase,
-        companyId,
-        userId,
-        entryId: journalEntryId,
-        event: stornoEvent,
-        role: 'reversal',
-      })
-    } else {
-      await reverseEntry(supabase, companyId, userId, journalEntryId)
-    }
+    await postingPort.reverseJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      entryId: journalEntryId,
+      event:
+        stornoEvent ??
+        (() =>
+          voucherStornoBusinessEvent({ entryId: journalEntryId, occurredOn: todayIsoStockholm(), linkBasis: linkBasisColumns('system_derived') })),
+      role: 'reversal',
+    })
     return
   } catch (reverseError) {
     unusedVoucher = getUnusedVoucherAllocation(reverseError)

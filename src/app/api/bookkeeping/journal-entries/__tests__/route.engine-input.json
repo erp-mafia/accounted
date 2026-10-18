@@ -1,0 +1,448 @@
+[
+  {
+    "name": "create: a manual voucher posted from the form",
+    "calls": {
+      "createJournalEntry": [
+        [
+          4,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "entry_date": "2026-04-14",
+            "description": "Kontorsmaterial, Clas Ohlson",
+            "source_type": "manual",
+            "notes": "Kvitto i pärmen",
+            "lines": [
+              {
+                "account_number": "6110",
+                "debit_amount": 400,
+                "credit_amount": 0,
+                "line_description": "Kontorsmaterial"
+              },
+              {
+                "account_number": "2641",
+                "debit_amount": 100,
+                "credit_amount": 0
+              },
+              {
+                "account_number": "1930",
+                "debit_amount": 0,
+                "credit_amount": 500
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "outcome": {
+      "status": 200,
+      "error": null
+    }
+  },
+  {
+    "name": "create: a momsredovisning booked from its template (vat_settlement)",
+    "calls": {
+      "createJournalEntry": [
+        [
+          4,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "entry_date": "2026-04-14",
+            "description": "Momsredovisning mars",
+            "source_type": "vat_settlement",
+            "lines": [
+              {
+                "account_number": "2611",
+                "debit_amount": 2500,
+                "credit_amount": 0
+              },
+              {
+                "account_number": "2641",
+                "debit_amount": 0,
+                "credit_amount": 900
+              },
+              {
+                "account_number": "2650",
+                "debit_amount": 0,
+                "credit_amount": 1600
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "outcome": {
+      "status": 200,
+      "error": null
+    }
+  },
+  {
+    "name": "create: saved as a draft",
+    "calls": {
+      "createDraftEntry": [
+        [
+          4,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "entry_date": "2026-04-14",
+            "description": "Kontorsmaterial, Clas Ohlson",
+            "source_type": "manual",
+            "voucher_series": "B",
+            "lines": [
+              {
+                "account_number": "6110",
+                "debit_amount": 400,
+                "credit_amount": 0,
+                "line_description": "Kontorsmaterial"
+              },
+              {
+                "account_number": "2641",
+                "debit_amount": 100,
+                "credit_amount": 0
+              },
+              {
+                "account_number": "1930",
+                "debit_amount": 0,
+                "credit_amount": 500
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "outcome": {
+      "status": 200,
+      "error": null
+    }
+  },
+  {
+    "name": "create: the engine refuses the voucher",
+    "calls": {
+      "createJournalEntry": [
+        [
+          4,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "entry_date": "2026-04-14",
+            "description": "Kontorsmaterial, Clas Ohlson",
+            "source_type": "manual",
+            "lines": [
+              {
+                "account_number": "6110",
+                "debit_amount": 400,
+                "credit_amount": 0,
+                "line_description": "Kontorsmaterial"
+              },
+              {
+                "account_number": "2641",
+                "debit_amount": 100,
+                "credit_amount": 0
+              },
+              {
+                "account_number": "1930",
+                "debit_amount": 0,
+                "credit_amount": 500
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "outcome": {
+      "status": 400,
+      "error": "ACCOUNTS_NOT_IN_CHART"
+    }
+  },
+  {
+    "name": "create: a draft the engine refuses",
+    "calls": {
+      "createDraftEntry": [
+        [
+          4,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "entry_date": "2026-04-14",
+            "description": "Kontorsmaterial, Clas Ohlson",
+            "source_type": "manual",
+            "lines": [
+              {
+                "account_number": "6110",
+                "debit_amount": 400,
+                "credit_amount": 0,
+                "line_description": "Kontorsmaterial"
+              },
+              {
+                "account_number": "2641",
+                "debit_amount": 100,
+                "credit_amount": 0
+              },
+              {
+                "account_number": "1930",
+                "debit_amount": 0,
+                "credit_amount": 500
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "outcome": {
+      "status": 400,
+      "error": "ACCOUNTS_NOT_IN_CHART"
+    }
+  },
+  {
+    "name": "commit: a draft posted from the draft list",
+    "calls": {
+      "commitEntry": [
+        [
+          5,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          "00000000-0000-4000-8000-0000000e0006",
+          "user_accept"
+        ]
+      ]
+    },
+    "outcome": {
+      "status": 200,
+      "error": null
+    }
+  },
+  {
+    "name": "reverse: a posted voucher reversed",
+    "calls": {
+      "reverseEntry": [
+        [
+          6,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          "00000000-0000-4000-8000-0000000e0007",
+          "<undefined>",
+          {
+            "allowDeepChain": false
+          }
+        ]
+      ]
+    },
+    "outcome": {
+      "status": 200,
+      "error": null
+    }
+  },
+  {
+    "name": "reverse: deep in a correction chain, reversed anyway",
+    "calls": {
+      "reverseEntry": [
+        [
+          6,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          "00000000-0000-4000-8000-0000000e0008",
+          "<undefined>",
+          {
+            "allowDeepChain": true
+          }
+        ]
+      ]
+    },
+    "outcome": {
+      "status": 200,
+      "error": null
+    }
+  },
+  {
+    "name": "reverse: the engine refuses the storno",
+    "calls": {
+      "reverseEntry": [
+        [
+          6,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          "00000000-0000-4000-8000-0000000e0009",
+          "<undefined>",
+          {
+            "allowDeepChain": false
+          }
+        ]
+      ]
+    },
+    "outcome": {
+      "status": 400,
+      "error": "CANNOT_REVERSE_NON_POSTED"
+    }
+  },
+  {
+    "name": "correct: a posted voucher corrected with new lines and its own text",
+    "calls": {
+      "correctEntry": [
+        [
+          6,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          "00000000-0000-4000-8000-0000000e0010",
+          [
+            {
+              "account_number": "5410",
+              "debit_amount": 400,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 100,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 500
+            }
+          ],
+          {
+            "description": "Rättelse: förbrukningsinventarier, inte kontorsmaterial"
+          }
+        ]
+      ]
+    },
+    "outcome": {
+      "status": 200,
+      "error": null
+    }
+  },
+  {
+    "name": "correct: deep in a chain, corrected anyway, default text",
+    "calls": {
+      "correctEntry": [
+        [
+          6,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          "00000000-0000-4000-8000-0000000e0011",
+          [
+            {
+              "account_number": "6110",
+              "debit_amount": 320,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 80,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 400
+            }
+          ],
+          {
+            "allowDeepChain": true
+          }
+        ]
+      ]
+    },
+    "outcome": {
+      "status": 200,
+      "error": null
+    }
+  },
+  {
+    "name": "correct: the storno service refuses the correction",
+    "calls": {
+      "correctEntry": [
+        [
+          6,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          "00000000-0000-4000-8000-0000000e0012",
+          [
+            {
+              "account_number": "6110",
+              "debit_amount": 400,
+              "credit_amount": 0,
+              "line_description": "Kontorsmaterial"
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 100,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 500
+            }
+          ],
+          {}
+        ]
+      ]
+    },
+    "outcome": {
+      "status": 400,
+      "error": "MEANINGLESS_CORRECTION"
+    }
+  },
+  {
+    "name": "recordate: a posted voucher moved to the right year",
+    "calls": {
+      "recordateEntry": [
+        [
+          6,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          "00000000-0000-4000-8000-0000000e0013",
+          "2025-04-14",
+          {}
+        ]
+      ]
+    },
+    "outcome": {
+      "status": 200,
+      "error": null
+    }
+  },
+  {
+    "name": "recordate: the storno service refuses the move",
+    "calls": {
+      "recordateEntry": [
+        [
+          6,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          "00000000-0000-4000-8000-0000000e0014",
+          "2025-04-15",
+          {
+            "allowDeepChain": true
+          }
+        ]
+      ]
+    },
+    "outcome": {
+      "status": 400,
+      "error": "MEANINGLESS_CORRECTION"
+    }
+  }
+]

@@ -23,7 +23,10 @@ import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { ownsFiscalPeriod } from '@/lib/api/v1/owns-fiscal-period'
 import { CreateApiJournalEntrySchema } from '@/lib/api/schemas'
-import { createDraftEntry, validateBalance } from '@/lib/bookkeeping/engine'
+import { validateBalance } from '@/lib/bookkeeping/engine'
+import { manualVoucherBusinessEvent } from '@/lib/bookkeeping/ledger-business-events'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { postingPort } from '@/lib/posting/port'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
 import { expandVoucherLineVatCodes, type ExpandedVoucherLines } from '@/lib/bookkeeping/voucher-line-vat-code'
@@ -133,7 +136,16 @@ async function createOne(
     }
   }
   try {
-    const entry = await createDraftEntry(supabase, companyId, userId, input)
+    // Posting port (step 2i): each draft through the port with its own event,
+    // as the single POST; its commit records nothing.
+    const entry = await postingPort.draftJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      event: () =>
+        manualVoucherBusinessEvent({ sourceType: input.source_type, entryDate: input.entry_date, linkBasis: linkBasisColumns('user_created') }),
+      input,
+    })
     return {
       ok: true,
       request_index: index,

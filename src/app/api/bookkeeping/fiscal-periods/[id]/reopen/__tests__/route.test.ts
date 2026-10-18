@@ -203,7 +203,8 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/reopen', () => {
       'period-1',
       'user-1',
       { confirmName: '2025', confirmNotAdopted: true },
-      { refreshRegistry: expect.any(Function) },
+      // The posting port's link basis, handed down to the kernel as a function.
+      { refreshRegistry: expect.any(Function), posting: expect.any(Function) },
     )
   })
 

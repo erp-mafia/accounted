@@ -1,0 +1,2625 @@
+{
+  "dumps": [
+    {
+      "flow": "dashboard: a manual voucher posted from the form",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 1,
+          "entry_date": "2026-02-03",
+          "description": "Kontorsmaterial, Clas Ohlson",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": "Kvitto i pärmen",
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "500",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "100",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "400",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": "Pärmar",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "dashboard: a draft saved, then posted from the draft list",
+      "entries": [
+        {
+          "voucher_series": "B",
+          "voucher_number": 1,
+          "entry_date": "2026-02-04",
+          "description": "Skärm till kontoret",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "500",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "100",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "400",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "5410",
+              "line_description": null,
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "dashboard: a momsredovisning booked from its template",
+      "entries": [
+        {
+          "voucher_series": "M",
+          "voucher_number": 1,
+          "entry_date": "2026-02-12",
+          "description": "Momsredovisning januari",
+          "source_type": "vat_settlement",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "2500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "900",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1600",
+              "exchange_rate": null,
+              "account_number": "2650",
+              "line_description": null,
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "v1: a draft created on an API key, then committed",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 2,
+          "entry_date": "2026-02-05",
+          "description": "Bankavgift februari",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "50",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "50",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6570",
+              "line_description": null,
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "v1: batch-create of a webshop order an integration labels and a manual voucher, each committed",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 3,
+          "entry_date": "2026-02-06",
+          "description": "Porto",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "120",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "120",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6250",
+              "line_description": null,
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "L",
+          "voucher_number": 1,
+          "entry_date": "2026-01-15",
+          "description": "Order 1001",
+          "source_type": "webshop_order",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "1250",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "250",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1000",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": null,
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "staged: create_voucher approved",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 4,
+          "entry_date": "2026-02-07",
+          "description": "Skärm, agentens förslag",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": "Underlag mejlat",
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "500",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "100",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "400",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "5410",
+              "line_description": null,
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "staged: create_voucher of a kvitto whose inbox claim is refused, so the voucher is reversed",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 5,
+          "entry_date": "2026-02-08",
+          "description": "Kvitto Clas Ohlson",
+          "source_type": "manual",
+          "status": "reversed",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "500",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "100",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "400",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": null,
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 6,
+          "entry_date": "2026-02-08",
+          "description": "Makulering: Kvitto Clas Ohlson",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "reverses": "A5:reversed",
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Reversal: ",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "100",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Reversal: ",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "400",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": "Reversal: ",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "dashboard: a posted voucher reversed",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 8,
+          "entry_date": "2026-02-10",
+          "description": "Makulering: Felbokad kontorsvara",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "reverses": "A7:reversed",
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Reversal: ",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "100",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Reversal: ",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {
+                "1": "BUTIK"
+              },
+              "debit_amount": "0",
+              "credit_amount": "400",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": "Reversal: ",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "v1: a posted voucher reversed on a later date in its year",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 10,
+          "entry_date": "2026-02-28",
+          "description": "Makulering: Dubbelbokad bankavgift",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "reverses": "A9:reversed",
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "50",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Reversal: ",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "50",
+              "exchange_rate": null,
+              "account_number": "6570",
+              "line_description": "Reversal: ",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "staged: reverse_entry approved",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 12,
+          "entry_date": "2026-02-13",
+          "description": "Makulering: Felbokad skärm",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "reverses": "A11:reversed",
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Reversal: ",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "100",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Reversal: ",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "400",
+              "exchange_rate": null,
+              "account_number": "5410",
+              "line_description": "Reversal: ",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "dashboard: a posted voucher corrected with new lines and its own text",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 14,
+          "entry_date": "2026-02-14",
+          "description": "Storno: Kontorsmaterial",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "reverses": "A13:reversed",
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Storno: ",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "100",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Storno: ",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {
+                "1": "BUTIK"
+              },
+              "debit_amount": "0",
+              "credit_amount": "400",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": "Storno: ",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 15,
+          "entry_date": "2026-02-14",
+          "description": "Rättelse: skärm, inte kontorsmaterial",
+          "source_type": "correction",
+          "status": "posted",
+          "notes": "Kvitto i pärmen",
+          "reverses": null,
+          "corrects": "A13:reversed",
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "500",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "100",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "400",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "5410",
+              "line_description": "Skärm",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "v1: a posted voucher corrected",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 17,
+          "entry_date": "2026-02-15",
+          "description": "Storno: Bankavgift",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "reverses": "A16:reversed",
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "50",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Storno: ",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "50",
+              "exchange_rate": null,
+              "account_number": "6570",
+              "line_description": "Storno: ",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 18,
+          "entry_date": "2026-02-15",
+          "description": "Rättelse: Bankavgift",
+          "source_type": "correction",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": "A16:reversed",
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "50",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "50",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6064",
+              "line_description": null,
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "staged: correct_entry approved",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 20,
+          "entry_date": "2026-02-16",
+          "description": "Storno: Skärm",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "reverses": "A19:reversed",
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Storno: ",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "100",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Storno: ",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "400",
+              "exchange_rate": null,
+              "account_number": "5410",
+              "line_description": "Storno: ",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 21,
+          "entry_date": "2026-02-16",
+          "description": "Rättelse: inventarie",
+          "source_type": "correction",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": "A19:reversed",
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "400",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1220",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "500",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "100",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": null,
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "dashboard: a posted voucher moved to the year before (recordate)",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 1,
+          "entry_date": "2025-12-17",
+          "description": "Rättelse: Hyra december",
+          "source_type": "correction",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": "A22:reversed",
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "8000",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "8000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "5010",
+              "line_description": null,
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 23,
+          "entry_date": "2026-02-17",
+          "description": "Storno: Hyra december",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "reverses": "A22:reversed",
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "8000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Storno: ",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "8000",
+              "exchange_rate": null,
+              "account_number": "5010",
+              "line_description": "Storno: ",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "v1: a posted voucher moved to the year before (redate)",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 2,
+          "entry_date": "2025-12-18",
+          "description": "Rättelse: El december",
+          "source_type": "correction",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": "A24:reversed",
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "900",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "900",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "5020",
+              "line_description": null,
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 25,
+          "entry_date": "2026-02-18",
+          "description": "Storno: El december",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "reverses": "A24:reversed",
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "900",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Storno: ",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "900",
+              "exchange_rate": null,
+              "account_number": "5020",
+              "line_description": "Storno: ",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "staged: redate_entry approved",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 3,
+          "entry_date": "2025-12-19",
+          "description": "Rättelse: Telefon december",
+          "source_type": "correction",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": "A26:reversed",
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "300",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "300",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6212",
+              "line_description": null,
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 27,
+          "entry_date": "2026-02-19",
+          "description": "Storno: Telefon december",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "reverses": "A26:reversed",
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "300",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Storno: ",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "300",
+              "exchange_rate": null,
+              "account_number": "6212",
+              "line_description": "Storno: ",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "momsdeklaration: the basis a reverse-charge verifikat lacks added by correction",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 29,
+          "entry_date": "2026-02-20",
+          "description": "Storno: Hosting, EU-leverantör",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "reverses": "A28:reversed",
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "10000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Storno: ",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "2500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2614",
+              "line_description": "Storno: ",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "2500",
+              "exchange_rate": null,
+              "account_number": "2645",
+              "line_description": "Storno: ",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {
+                "1": "BUTIK"
+              },
+              "debit_amount": "0",
+              "credit_amount": "10000",
+              "exchange_rate": null,
+              "account_number": "6540",
+              "line_description": "Storno: ",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 30,
+          "entry_date": "2026-02-20",
+          "description": "Rättelse: Hosting, EU-leverantör",
+          "source_type": "correction",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": "A28:reversed",
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "10000",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "2500",
+              "exchange_rate": null,
+              "account_number": "2614",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "2500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2645",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "10000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "4535",
+              "line_description": "Basbelopp omvänd skattskyldighet 25%",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "10000",
+              "exchange_rate": null,
+              "account_number": "4598",
+              "line_description": "Motkonto beräknad omvänd moms 25%",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {
+                "1": "BUTIK"
+              },
+              "debit_amount": "10000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6540",
+              "line_description": null,
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "reconciliation: a bank fee booked as the residual of a selection",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 32,
+          "entry_date": "2026-02-21",
+          "description": "Bankavgift: Leverantörsbetalning",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "10",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "10",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6570",
+              "line_description": null,
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "fiscal year reopen: the bokslut of a closed year reversed by the owner",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 1,
+          "entry_date": "2025-12-31",
+          "description": "Makulering: Årsbokslut 2025",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "reverses": "A9001:reversed",
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2099",
+              "line_description": "Reversal: ",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1000",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": "Reversal: ",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 1,
+          "entry_date": "2026-01-01",
+          "description": "Makulering: Omföring av föregående års resultat",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "reverses": "A9002:reversed",
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2098",
+              "line_description": "Reversal: ",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1000",
+              "exchange_rate": null,
+              "account_number": "2099",
+              "line_description": "Reversal: ",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 2,
+          "entry_date": "2026-01-01",
+          "description": "Makulering: Ingående balans 2026",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "reverses": "A9001:reversed",
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1000",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Reversal: ",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2099",
+              "line_description": "Reversal: ",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "sandbox seed: an anonymous visitor gets a demo company with its ledger history, invoice and payroll",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 1,
+          "entry_date": "2026-01-02",
+          "description": "Egen insättning, startkapital",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "60000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Insättning på företagskontot",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "60000",
+              "exchange_rate": null,
+              "account_number": "2018",
+              "line_description": "Övriga egna insättningar",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 2,
+          "entry_date": "2026-01-03",
+          "description": "Programvaror, molntjänster januari",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1262.5",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Betalt från företagskontot",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "252.5",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 25 %",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "1010",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "5420",
+              "line_description": "Programvaror, molntjänster januari",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 3,
+          "entry_date": "2026-01-08",
+          "description": "Mobiltelefon och abonnemang, januari",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "580",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Betalt från företagskontot",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "116",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 25 %",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "464",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6212",
+              "line_description": "Mobiltelefon och abonnemang, januari",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 4,
+          "entry_date": "2026-01-25",
+          "description": "Faktura, konsultarvode januari (96 tim)",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "114000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Kundfordran",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "22800",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": "Utgående moms 25 %",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {
+                "1": "BUTIK",
+                "6": "P001"
+              },
+              "debit_amount": "0",
+              "credit_amount": "91200",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": "Konsultarvode 96 tim à 950 kr",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 5,
+          "entry_date": "2026-02-03",
+          "description": "Programvaror, molntjänster februari",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1412.5",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Betalt från företagskontot",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "282.5",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 25 %",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "1130",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "5420",
+              "line_description": "Programvaror, molntjänster februari",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 6,
+          "entry_date": "2026-02-08",
+          "description": "Mobiltelefon och abonnemang, februari",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "623.75",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Betalt från företagskontot",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "124.75",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 25 %",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "499",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6212",
+              "line_description": "Mobiltelefon och abonnemang, februari",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 7,
+          "entry_date": "2026-02-12",
+          "description": "Annonsering, kampanj sociala medier",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "3000",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Betalt från företagskontot",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "600",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 25 %",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "2400",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "5910",
+              "line_description": "Annonsering, kampanj sociala medier",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 8,
+          "entry_date": "2026-02-20",
+          "description": "Kundinbetalning, konsultarvode januari",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "114000",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Kvittad kundfordran",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "114000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Insättning på företagskontot",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 9,
+          "entry_date": "2026-02-25",
+          "description": "Faktura, konsultarvode februari (104 tim)",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "123500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Kundfordran",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "24700",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": "Utgående moms 25 %",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {
+                "1": "WEBB",
+                "6": "P002"
+              },
+              "debit_amount": "0",
+              "credit_amount": "98800",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": "Konsultarvode 104 tim à 950 kr",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 10,
+          "entry_date": "2026-02-27",
+          "description": "Eget uttag, februari",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "46000",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Uttag från företagskontot",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "46000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2013",
+              "line_description": "Övriga egna uttag",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 11,
+          "entry_date": "2026-03-03",
+          "description": "Programvaror, molntjänster mars",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1187.5",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Betalt från företagskontot",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "237.5",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 25 %",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "950",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "5420",
+              "line_description": "Programvaror, molntjänster mars",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 12,
+          "entry_date": "2026-03-08",
+          "description": "Mobiltelefon och abonnemang, mars",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "667.5",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Betalt från företagskontot",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "133.5",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 25 %",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "534",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6212",
+              "line_description": "Mobiltelefon och abonnemang, mars",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 13,
+          "entry_date": "2026-03-12",
+          "description": "Redovisningskonsult, avstämning inför deklaration",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "8125",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Betalt från företagskontot",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "1625",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 25 %",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "6500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6530",
+              "line_description": "Redovisningskonsult, avstämning inför deklaration",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 14,
+          "entry_date": "2026-03-20",
+          "description": "Kundinbetalning, konsultarvode februari",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "123500",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Kvittad kundfordran",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "123500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Insättning på företagskontot",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 15,
+          "entry_date": "2026-03-25",
+          "description": "Faktura, konsultarvode mars (120 tim)",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "142500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Kundfordran",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "28500",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": "Utgående moms 25 %",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "114000",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": "Konsultarvode 120 tim à 950 kr",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 16,
+          "entry_date": "2026-03-27",
+          "description": "Eget uttag, mars",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "42000",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Uttag från företagskontot",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "42000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2013",
+              "line_description": "Övriga egna uttag",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 17,
+          "entry_date": "2026-03-31",
+          "description": "Momsredovisning 2026 Q1",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "76000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": "Utgående moms för perioden",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "3371.75",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms för perioden",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "72628.25",
+              "exchange_rate": null,
+              "account_number": "2650",
+              "line_description": "Redovisningskonto för moms",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 18,
+          "entry_date": "2026-04-03",
+          "description": "Programvaror, molntjänster april",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1337.5",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Betalt från företagskontot",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "267.5",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 25 %",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "1070",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "5420",
+              "line_description": "Programvaror, molntjänster april",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 19,
+          "entry_date": "2026-04-08",
+          "description": "Mobiltelefon och abonnemang, april",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "536.25",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Betalt från företagskontot",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "107.25",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 25 %",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "429",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6212",
+              "line_description": "Mobiltelefon och abonnemang, april",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 20,
+          "entry_date": "2026-04-12",
+          "description": "Bredband kontorsplats, första halvåret",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1862.5",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Betalt från företagskontot",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "372.5",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 25 %",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "1490",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6230",
+              "line_description": "Bredband kontorsplats, första halvåret",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 21,
+          "entry_date": "2026-04-20",
+          "description": "Kundinbetalning, konsultarvode mars",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "142500",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Kvittad kundfordran",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "142500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Insättning på företagskontot",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 22,
+          "entry_date": "2026-04-25",
+          "description": "Faktura, konsultarvode april (112 tim)",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "133000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Kundfordran",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "26600",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": "Utgående moms 25 %",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {
+                "1": "BUTIK",
+                "6": "P001"
+              },
+              "debit_amount": "0",
+              "credit_amount": "106400",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": "Konsultarvode 112 tim à 950 kr",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 23,
+          "entry_date": "2026-04-27",
+          "description": "Eget uttag, april",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "38000",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Uttag från företagskontot",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "38000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2013",
+              "line_description": "Övriga egna uttag",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 24,
+          "entry_date": "2026-04-15",
+          "description": "Faktura F-2026001, Björk & Partner AB",
+          "source_type": "invoice_created",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "18750",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "3750",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {
+                "1": "BUTIK",
+                "6": "P001"
+              },
+              "debit_amount": "0",
+              "credit_amount": "15000",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": null,
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 25,
+          "entry_date": "2026-04-30",
+          "description": "Betalning faktura F-2026001, Björk & Partner AB",
+          "source_type": "invoice_paid",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "18750",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "18750",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": null,
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 26,
+          "entry_date": "2026-04-25",
+          "description": "Lön 2026-04",
+          "source_type": "salary_payment",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "47600",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "10000",
+              "exchange_rate": null,
+              "account_number": "2710",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "57600",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7210",
+              "line_description": null,
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 27,
+          "entry_date": "2026-04-25",
+          "description": "Lön 2026-04: arbetsgivaravgifter",
+          "source_type": "salary_payment",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "18097.92",
+              "exchange_rate": null,
+              "account_number": "2731",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "18097.92",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7510",
+              "line_description": null,
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 28,
+          "entry_date": "2026-04-25",
+          "description": "Lön 2026-04: semesterlöneskuld",
+          "source_type": "salary_payment",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "6912",
+              "exchange_rate": null,
+              "account_number": "2920",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "2171.75",
+              "exchange_rate": null,
+              "account_number": "2940",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "6912",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7290",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "2171.75",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7519",
+              "line_description": null,
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "register": {
+    "transactions": [
+      {
+        "date": "2026-02-21",
+        "description": "Betalning Leverantör AB",
+        "amount": "-1010",
+        "category": "uncategorized",
+        "voucher": "A31:posted"
+      }
+    ],
+    "links": [
+      {
+        "transaction": "Betalning Leverantör AB",
+        "voucher": "A32:posted",
+        "allocated_amount": "-10.00",
+        "role": "other",
+        "link_basis": "user_created"
+      }
+    ],
+    "inbox": [
+      {
+        "file_name": "kvitto-ledger-1.pdf",
+        "voucher": null
+      }
+    ],
+    "reopenedCompanyPeriods": [
+      {
+        "name": "2025",
+        "is_closed": false,
+        "locked": false,
+        "closing_entry": null,
+        "opening_balance_entry": null
+      },
+      {
+        "name": "2026",
+        "is_closed": false,
+        "locked": false,
+        "closing_entry": null,
+        "opening_balance_entry": null
+      }
+    ]
+  }
+}

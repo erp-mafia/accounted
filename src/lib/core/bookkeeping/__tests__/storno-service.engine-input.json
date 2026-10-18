@@ -1,0 +1,756 @@
+[
+  {
+    "name": "correctEntry: new lines and its own text",
+    "writes": [
+      [
+        "journal_entries",
+        "insert",
+        {
+          "company_id": "00000000-0000-4000-8000-00000000c001",
+          "user_id": "00000000-0000-4000-8000-00000000a001",
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f026",
+          "voucher_number": 0,
+          "voucher_series": "A",
+          "entry_date": "2026-03-10",
+          "description": "Storno: Kontorsmaterial",
+          "source_type": "storno",
+          "reverses_id": "00000000-0000-4000-8000-0000000e0001",
+          "status": "draft"
+        }
+      ],
+      [
+        "journal_entry_lines",
+        "insert",
+        [
+          {
+            "journal_entry_id": "00000000-0000-4000-8000-0000000e0002",
+            "account_number": "6110",
+            "account_id": "acc-6110",
+            "debit_amount": 0,
+            "credit_amount": 400,
+            "currency": "SEK",
+            "amount_in_currency": null,
+            "exchange_rate": null,
+            "line_description": "Storno: Pärmar",
+            "tax_code": null,
+            "dimensions": {
+              "1": "BUTIK"
+            },
+            "sort_order": 0
+          },
+          {
+            "journal_entry_id": "00000000-0000-4000-8000-0000000e0002",
+            "account_number": "2641",
+            "account_id": "acc-2641",
+            "debit_amount": 0,
+            "credit_amount": 100,
+            "currency": "SEK",
+            "amount_in_currency": null,
+            "exchange_rate": null,
+            "line_description": "Storno: ",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1
+          },
+          {
+            "journal_entry_id": "00000000-0000-4000-8000-0000000e0002",
+            "account_number": "1930",
+            "account_id": "acc-1930",
+            "debit_amount": 500,
+            "credit_amount": 0,
+            "currency": "SEK",
+            "amount_in_currency": null,
+            "exchange_rate": null,
+            "line_description": "Storno: ",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 2
+          }
+        ]
+      ],
+      [
+        "rpc:commit_journal_entry",
+        "rpc",
+        {
+          "p_company_id": "00000000-0000-4000-8000-00000000c001",
+          "p_entry_id": "00000000-0000-4000-8000-0000000e0002",
+          "p_commit_method": "user_accept",
+          "p_rubric_version": null,
+          "p_actor_type": "user",
+          "p_actor_label": null
+        }
+      ],
+      [
+        "journal_entries",
+        "insert",
+        {
+          "company_id": "00000000-0000-4000-8000-00000000c001",
+          "user_id": "00000000-0000-4000-8000-00000000a001",
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f026",
+          "voucher_number": 0,
+          "voucher_series": "A",
+          "entry_date": "2026-03-10",
+          "description": "Rättelse: skärm, inte pärmar",
+          "source_type": "correction",
+          "correction_of_id": "00000000-0000-4000-8000-0000000e0001",
+          "status": "draft",
+          "notes": "Kvitto i pärmen"
+        }
+      ],
+      [
+        "journal_entry_lines",
+        "insert",
+        [
+          {
+            "journal_entry_id": "00000000-0000-4000-8000-0000000e0003",
+            "account_number": "5410",
+            "account_id": "acc-5410",
+            "debit_amount": 400,
+            "credit_amount": 0,
+            "currency": "SEK",
+            "amount_in_currency": null,
+            "exchange_rate": null,
+            "line_description": "Skärm",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 0
+          },
+          {
+            "journal_entry_id": "00000000-0000-4000-8000-0000000e0003",
+            "account_number": "2641",
+            "account_id": "acc-2641",
+            "debit_amount": 100,
+            "credit_amount": 0,
+            "currency": "SEK",
+            "amount_in_currency": null,
+            "exchange_rate": null,
+            "line_description": null,
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1
+          },
+          {
+            "journal_entry_id": "00000000-0000-4000-8000-0000000e0003",
+            "account_number": "1930",
+            "account_id": "acc-1930",
+            "debit_amount": 0,
+            "credit_amount": 500,
+            "currency": "SEK",
+            "amount_in_currency": null,
+            "exchange_rate": null,
+            "line_description": null,
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 2
+          }
+        ]
+      ],
+      [
+        "rpc:commit_journal_entry",
+        "rpc",
+        {
+          "p_company_id": "00000000-0000-4000-8000-00000000c001",
+          "p_entry_id": "00000000-0000-4000-8000-0000000e0003",
+          "p_commit_method": "user_accept",
+          "p_rubric_version": null,
+          "p_actor_type": "user",
+          "p_actor_label": null
+        }
+      ],
+      [
+        "journal_entries",
+        "update",
+        {
+          "status": "reversed",
+          "reversed_by_id": "00000000-0000-4000-8000-0000000e0002"
+        }
+      ],
+      [
+        "transactions",
+        "update",
+        {
+          "journal_entry_id": "00000000-0000-4000-8000-0000000e0003"
+        }
+      ],
+      [
+        "transaction_voucher_links",
+        "update",
+        {
+          "journal_entry_id": "00000000-0000-4000-8000-0000000e0003"
+        }
+      ],
+      [
+        "rpc:relink_documents_to_correction",
+        "rpc",
+        {
+          "p_user_id": "00000000-0000-4000-8000-00000000a001",
+          "p_from_entry_id": "00000000-0000-4000-8000-0000000e0001",
+          "p_to_entry_id": "00000000-0000-4000-8000-0000000e0003"
+        }
+      ]
+    ],
+    "outcome": {
+      "reversal": "00000000-0000-4000-8000-0000000e0002",
+      "corrected": "00000000-0000-4000-8000-0000000e0003"
+    }
+  },
+  {
+    "name": "correctEntry: the corrected lines are refused, so both new verifikat are cancelled",
+    "writes": [
+      [
+        "journal_entries",
+        "insert",
+        {
+          "company_id": "00000000-0000-4000-8000-00000000c001",
+          "user_id": "00000000-0000-4000-8000-00000000a001",
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f026",
+          "voucher_number": 0,
+          "voucher_series": "A",
+          "entry_date": "2026-03-10",
+          "description": "Storno: Kontorsmaterial",
+          "source_type": "storno",
+          "reverses_id": "00000000-0000-4000-8000-0000000e0001",
+          "status": "draft"
+        }
+      ],
+      [
+        "journal_entry_lines",
+        "insert",
+        [
+          {
+            "journal_entry_id": "00000000-0000-4000-8000-0000000e0002",
+            "account_number": "6110",
+            "account_id": "acc-6110",
+            "debit_amount": 0,
+            "credit_amount": 400,
+            "currency": "SEK",
+            "amount_in_currency": null,
+            "exchange_rate": null,
+            "line_description": "Storno: Pärmar",
+            "tax_code": null,
+            "dimensions": {
+              "1": "BUTIK"
+            },
+            "sort_order": 0
+          },
+          {
+            "journal_entry_id": "00000000-0000-4000-8000-0000000e0002",
+            "account_number": "2641",
+            "account_id": "acc-2641",
+            "debit_amount": 0,
+            "credit_amount": 100,
+            "currency": "SEK",
+            "amount_in_currency": null,
+            "exchange_rate": null,
+            "line_description": "Storno: ",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1
+          },
+          {
+            "journal_entry_id": "00000000-0000-4000-8000-0000000e0002",
+            "account_number": "1930",
+            "account_id": "acc-1930",
+            "debit_amount": 500,
+            "credit_amount": 0,
+            "currency": "SEK",
+            "amount_in_currency": null,
+            "exchange_rate": null,
+            "line_description": "Storno: ",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 2
+          }
+        ]
+      ],
+      [
+        "rpc:commit_journal_entry",
+        "rpc",
+        {
+          "p_company_id": "00000000-0000-4000-8000-00000000c001",
+          "p_entry_id": "00000000-0000-4000-8000-0000000e0002",
+          "p_commit_method": "user_accept",
+          "p_rubric_version": null,
+          "p_actor_type": "user",
+          "p_actor_label": null
+        }
+      ],
+      [
+        "journal_entries",
+        "insert",
+        {
+          "company_id": "00000000-0000-4000-8000-00000000c001",
+          "user_id": "00000000-0000-4000-8000-00000000a001",
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f026",
+          "voucher_number": 0,
+          "voucher_series": "A",
+          "entry_date": "2026-03-10",
+          "description": "Rättelse: Kontorsmaterial",
+          "source_type": "correction",
+          "correction_of_id": "00000000-0000-4000-8000-0000000e0001",
+          "status": "draft",
+          "notes": "Kvitto i pärmen"
+        }
+      ],
+      [
+        "journal_entry_lines",
+        "insert",
+        [
+          {
+            "journal_entry_id": "00000000-0000-4000-8000-0000000e0003",
+            "account_number": "5410",
+            "account_id": "acc-5410",
+            "debit_amount": 400,
+            "credit_amount": 0,
+            "currency": "SEK",
+            "amount_in_currency": null,
+            "exchange_rate": null,
+            "line_description": "Skärm",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 0
+          },
+          {
+            "journal_entry_id": "00000000-0000-4000-8000-0000000e0003",
+            "account_number": "2641",
+            "account_id": "acc-2641",
+            "debit_amount": 100,
+            "credit_amount": 0,
+            "currency": "SEK",
+            "amount_in_currency": null,
+            "exchange_rate": null,
+            "line_description": null,
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1
+          },
+          {
+            "journal_entry_id": "00000000-0000-4000-8000-0000000e0003",
+            "account_number": "1930",
+            "account_id": "acc-1930",
+            "debit_amount": 0,
+            "credit_amount": 500,
+            "currency": "SEK",
+            "amount_in_currency": null,
+            "exchange_rate": null,
+            "line_description": null,
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 2
+          }
+        ]
+      ],
+      [
+        "rpc:cancel_orphaned_entry",
+        "rpc",
+        {
+          "p_company_id": "00000000-0000-4000-8000-00000000c001",
+          "p_entry_id": "00000000-0000-4000-8000-0000000e0003",
+          "p_user_id": "00000000-0000-4000-8000-00000000a001",
+          "p_gap_explanation": null
+        }
+      ],
+      [
+        "rpc:cancel_orphaned_entry",
+        "rpc",
+        {
+          "p_company_id": "00000000-0000-4000-8000-00000000c001",
+          "p_entry_id": "00000000-0000-4000-8000-0000000e0002",
+          "p_user_id": "00000000-0000-4000-8000-00000000a001",
+          "p_gap_explanation": null
+        }
+      ]
+    ],
+    "outcome": {
+      "error": "BookkeepingDatabaseError"
+    }
+  },
+  {
+    "name": "correctEntry: a concurrent storno won, so both new verifikat are cancelled",
+    "writes": [
+      [
+        "journal_entries",
+        "insert",
+        {
+          "company_id": "00000000-0000-4000-8000-00000000c001",
+          "user_id": "00000000-0000-4000-8000-00000000a001",
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f026",
+          "voucher_number": 0,
+          "voucher_series": "A",
+          "entry_date": "2026-03-10",
+          "description": "Storno: Kontorsmaterial",
+          "source_type": "storno",
+          "reverses_id": "00000000-0000-4000-8000-0000000e0001",
+          "status": "draft"
+        }
+      ],
+      [
+        "journal_entry_lines",
+        "insert",
+        [
+          {
+            "journal_entry_id": "00000000-0000-4000-8000-0000000e0002",
+            "account_number": "6110",
+            "account_id": "acc-6110",
+            "debit_amount": 0,
+            "credit_amount": 400,
+            "currency": "SEK",
+            "amount_in_currency": null,
+            "exchange_rate": null,
+            "line_description": "Storno: Pärmar",
+            "tax_code": null,
+            "dimensions": {
+              "1": "BUTIK"
+            },
+            "sort_order": 0
+          },
+          {
+            "journal_entry_id": "00000000-0000-4000-8000-0000000e0002",
+            "account_number": "2641",
+            "account_id": "acc-2641",
+            "debit_amount": 0,
+            "credit_amount": 100,
+            "currency": "SEK",
+            "amount_in_currency": null,
+            "exchange_rate": null,
+            "line_description": "Storno: ",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1
+          },
+          {
+            "journal_entry_id": "00000000-0000-4000-8000-0000000e0002",
+            "account_number": "1930",
+            "account_id": "acc-1930",
+            "debit_amount": 500,
+            "credit_amount": 0,
+            "currency": "SEK",
+            "amount_in_currency": null,
+            "exchange_rate": null,
+            "line_description": "Storno: ",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 2
+          }
+        ]
+      ],
+      [
+        "rpc:commit_journal_entry",
+        "rpc",
+        {
+          "p_company_id": "00000000-0000-4000-8000-00000000c001",
+          "p_entry_id": "00000000-0000-4000-8000-0000000e0002",
+          "p_commit_method": "user_accept",
+          "p_rubric_version": null,
+          "p_actor_type": "user",
+          "p_actor_label": null
+        }
+      ],
+      [
+        "journal_entries",
+        "insert",
+        {
+          "company_id": "00000000-0000-4000-8000-00000000c001",
+          "user_id": "00000000-0000-4000-8000-00000000a001",
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f026",
+          "voucher_number": 0,
+          "voucher_series": "A",
+          "entry_date": "2026-03-10",
+          "description": "Rättelse: Kontorsmaterial",
+          "source_type": "correction",
+          "correction_of_id": "00000000-0000-4000-8000-0000000e0001",
+          "status": "draft",
+          "notes": "Kvitto i pärmen"
+        }
+      ],
+      [
+        "journal_entry_lines",
+        "insert",
+        [
+          {
+            "journal_entry_id": "00000000-0000-4000-8000-0000000e0003",
+            "account_number": "5410",
+            "account_id": "acc-5410",
+            "debit_amount": 400,
+            "credit_amount": 0,
+            "currency": "SEK",
+            "amount_in_currency": null,
+            "exchange_rate": null,
+            "line_description": "Skärm",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 0
+          },
+          {
+            "journal_entry_id": "00000000-0000-4000-8000-0000000e0003",
+            "account_number": "2641",
+            "account_id": "acc-2641",
+            "debit_amount": 100,
+            "credit_amount": 0,
+            "currency": "SEK",
+            "amount_in_currency": null,
+            "exchange_rate": null,
+            "line_description": null,
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1
+          },
+          {
+            "journal_entry_id": "00000000-0000-4000-8000-0000000e0003",
+            "account_number": "1930",
+            "account_id": "acc-1930",
+            "debit_amount": 0,
+            "credit_amount": 500,
+            "currency": "SEK",
+            "amount_in_currency": null,
+            "exchange_rate": null,
+            "line_description": null,
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 2
+          }
+        ]
+      ],
+      [
+        "rpc:commit_journal_entry",
+        "rpc",
+        {
+          "p_company_id": "00000000-0000-4000-8000-00000000c001",
+          "p_entry_id": "00000000-0000-4000-8000-0000000e0003",
+          "p_commit_method": "user_accept",
+          "p_rubric_version": null,
+          "p_actor_type": "user",
+          "p_actor_label": null
+        }
+      ],
+      [
+        "journal_entries",
+        "update",
+        {
+          "status": "reversed",
+          "reversed_by_id": "00000000-0000-4000-8000-0000000e0002"
+        }
+      ],
+      [
+        "rpc:cancel_orphaned_entry",
+        "rpc",
+        {
+          "p_company_id": "00000000-0000-4000-8000-00000000c001",
+          "p_entry_id": "00000000-0000-4000-8000-0000000e0002",
+          "p_user_id": "00000000-0000-4000-8000-00000000a001",
+          "p_gap_explanation": null
+        }
+      ],
+      [
+        "rpc:cancel_orphaned_entry",
+        "rpc",
+        {
+          "p_company_id": "00000000-0000-4000-8000-00000000c001",
+          "p_entry_id": "00000000-0000-4000-8000-0000000e0003",
+          "p_user_id": "00000000-0000-4000-8000-00000000a001",
+          "p_gap_explanation": null
+        }
+      ]
+    ],
+    "outcome": {
+      "error": "EntryAlreadyReversedError"
+    }
+  },
+  {
+    "name": "recordateEntry: moved to the year before",
+    "writes": [
+      [
+        "journal_entries",
+        "insert",
+        {
+          "company_id": "00000000-0000-4000-8000-00000000c001",
+          "user_id": "00000000-0000-4000-8000-00000000a001",
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f026",
+          "voucher_number": 0,
+          "voucher_series": "A",
+          "entry_date": "2026-03-10",
+          "description": "Storno: Kontorsmaterial",
+          "source_type": "storno",
+          "reverses_id": "00000000-0000-4000-8000-0000000e0001",
+          "status": "draft"
+        }
+      ],
+      [
+        "journal_entry_lines",
+        "insert",
+        [
+          {
+            "journal_entry_id": "00000000-0000-4000-8000-0000000e0002",
+            "account_number": "6110",
+            "account_id": "acc-6110",
+            "debit_amount": 0,
+            "credit_amount": 400,
+            "currency": "SEK",
+            "amount_in_currency": null,
+            "exchange_rate": null,
+            "line_description": "Storno: Pärmar",
+            "tax_code": null,
+            "dimensions": {
+              "1": "BUTIK"
+            },
+            "sort_order": 0
+          },
+          {
+            "journal_entry_id": "00000000-0000-4000-8000-0000000e0002",
+            "account_number": "2641",
+            "account_id": "acc-2641",
+            "debit_amount": 0,
+            "credit_amount": 100,
+            "currency": "SEK",
+            "amount_in_currency": null,
+            "exchange_rate": null,
+            "line_description": "Storno: ",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1
+          },
+          {
+            "journal_entry_id": "00000000-0000-4000-8000-0000000e0002",
+            "account_number": "1930",
+            "account_id": "acc-1930",
+            "debit_amount": 500,
+            "credit_amount": 0,
+            "currency": "SEK",
+            "amount_in_currency": null,
+            "exchange_rate": null,
+            "line_description": "Storno: ",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 2
+          }
+        ]
+      ],
+      [
+        "rpc:commit_journal_entry",
+        "rpc",
+        {
+          "p_company_id": "00000000-0000-4000-8000-00000000c001",
+          "p_entry_id": "00000000-0000-4000-8000-0000000e0002",
+          "p_commit_method": "user_accept",
+          "p_rubric_version": null,
+          "p_actor_type": "user",
+          "p_actor_label": null
+        }
+      ],
+      [
+        "journal_entries",
+        "insert",
+        {
+          "company_id": "00000000-0000-4000-8000-00000000c001",
+          "user_id": "00000000-0000-4000-8000-00000000a001",
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f025",
+          "voucher_number": 0,
+          "voucher_series": "A",
+          "entry_date": "2025-03-10",
+          "description": "Rättelse: Kontorsmaterial",
+          "source_type": "correction",
+          "correction_of_id": "00000000-0000-4000-8000-0000000e0001",
+          "status": "draft",
+          "notes": "Kvitto i pärmen"
+        }
+      ],
+      [
+        "journal_entry_lines",
+        "insert",
+        [
+          {
+            "journal_entry_id": "00000000-0000-4000-8000-0000000e0003",
+            "account_number": "6110",
+            "account_id": "acc-6110",
+            "debit_amount": 400,
+            "credit_amount": 0,
+            "currency": "SEK",
+            "amount_in_currency": null,
+            "exchange_rate": null,
+            "line_description": "Pärmar",
+            "tax_code": null,
+            "dimensions": {
+              "1": "BUTIK"
+            },
+            "sort_order": 0
+          },
+          {
+            "journal_entry_id": "00000000-0000-4000-8000-0000000e0003",
+            "account_number": "2641",
+            "account_id": "acc-2641",
+            "debit_amount": 100,
+            "credit_amount": 0,
+            "currency": "SEK",
+            "amount_in_currency": null,
+            "exchange_rate": null,
+            "line_description": null,
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1
+          },
+          {
+            "journal_entry_id": "00000000-0000-4000-8000-0000000e0003",
+            "account_number": "1930",
+            "account_id": "acc-1930",
+            "debit_amount": 0,
+            "credit_amount": 500,
+            "currency": "SEK",
+            "amount_in_currency": null,
+            "exchange_rate": null,
+            "line_description": null,
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 2
+          }
+        ]
+      ],
+      [
+        "rpc:commit_journal_entry",
+        "rpc",
+        {
+          "p_company_id": "00000000-0000-4000-8000-00000000c001",
+          "p_entry_id": "00000000-0000-4000-8000-0000000e0003",
+          "p_commit_method": "user_accept",
+          "p_rubric_version": null,
+          "p_actor_type": "user",
+          "p_actor_label": null
+        }
+      ],
+      [
+        "journal_entries",
+        "update",
+        {
+          "status": "reversed",
+          "reversed_by_id": "00000000-0000-4000-8000-0000000e0002"
+        }
+      ],
+      [
+        "transactions",
+        "update",
+        {
+          "journal_entry_id": "00000000-0000-4000-8000-0000000e0003"
+        }
+      ],
+      [
+        "transaction_voucher_links",
+        "update",
+        {
+          "journal_entry_id": "00000000-0000-4000-8000-0000000e0003"
+        }
+      ],
+      [
+        "rpc:relink_documents_to_correction",
+        "rpc",
+        {
+          "p_user_id": "00000000-0000-4000-8000-00000000a001",
+          "p_from_entry_id": "00000000-0000-4000-8000-0000000e0001",
+          "p_to_entry_id": "00000000-0000-4000-8000-0000000e0003"
+        }
+      ]
+    ],
+    "outcome": {
+      "reversal": "00000000-0000-4000-8000-0000000e0002",
+      "corrected": "00000000-0000-4000-8000-0000000e0003"
+    }
+  }
+]

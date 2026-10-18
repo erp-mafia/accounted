@@ -69,6 +69,7 @@ type SetArgs = Parameters<PostingAdapter['createJournalEntries']>[0]
 type DraftArgs = Parameters<PostingAdapter['createDraftEntry']>[0]
 type CommitArgs = Parameters<PostingAdapter['commitEntry']>[0]
 type ReverseArgs = Parameters<PostingAdapter['reverseEntry']>[0]
+type CorrectArgs = Parameters<PostingAdapter['correctEntry']>[0]
 
 function fakeAdapter() {
   const entry = { id: 'je-1' } as JournalEntry
@@ -79,6 +80,7 @@ function fakeAdapter() {
     createDraftEntry: vi.fn(async (_args: DraftArgs) => entry),
     commitEntry: vi.fn(async (_args: CommitArgs) => entry),
     reverseEntry: vi.fn(async (_args: ReverseArgs) => entry),
+    correctEntry: vi.fn(async (_args: CorrectArgs) => ({ reversal: { id: 'je-storno' } as JournalEntry, corrected: { id: 'je-correction' } as JournalEntry })),
   } satisfies PostingAdapter
   return adapter
 }
@@ -447,5 +449,84 @@ describe('posting port: an event linked to no verifikat (recordEvent, an import 
       [null, null],
       ['cron', 'SIE worker'],
     ])
+  })
+})
+
+describe('posting port: a correction, two verifikat and two events (correctJournalEntry)', () => {
+  const ORIGINAL = '66666666-6666-4666-8666-666666666666'
+  const STORNO_EVENT: BusinessEventDraft = {
+    kind: 'ledger.storno',
+    occurredOn: '2026-10-18',
+    subject: { type: 'journal_entry', id: ORIGINAL },
+    evidence: { link_basis: 'user_created' },
+  }
+  const CORRECTION_EVENT: BusinessEventDraft = { ...STORNO_EVENT, kind: 'ledger.correction' }
+  const LINES = INPUT.lines
+  const ids = ['77777777-7777-4777-8777-777777777771', '77777777-7777-4777-8777-777777777772']
+
+  function correctionPort(mode: PostingEventsMode, adapter: PostingAdapter) {
+    let n = 0
+    return createPostingPort({ adapter, mode: () => mode, newId: () => ids[n++]! })
+  }
+
+  it('off: builds no event and hands the storno service its own arguments as the same objects', async () => {
+    const adapter = fakeAdapter()
+    const { supabase, from } = fakeSupabase(() => ({ error: null }))
+    const stornoEvent = vi.fn(() => STORNO_EVENT)
+    const correctionEvent = vi.fn(() => CORRECTION_EVENT)
+    const correction = { lines: LINES, options: { description: 'Rättelse', allowDeepChain: true } }
+    const result = await correctionPort('off', adapter).correctJournalEntry({
+      supabase, companyId: COMPANY, userId: 'u', entryId: ORIGINAL, stornoEvent, correctionEvent, correction,
+    })
+    expect(result.corrected.id).toBe('je-correction')
+    expect(stornoEvent).not.toHaveBeenCalled()
+    expect(correctionEvent).not.toHaveBeenCalled()
+    expect(from).not.toHaveBeenCalled()
+    const args = callArgs(adapter.correctEntry, 0)
+    expect(args.correction).toBe(correction)
+    expect(args.businessEvents).toBeUndefined()
+    expect(args).toMatchObject({ companyId: COMPANY, userId: 'u', entryId: ORIGINAL })
+  })
+
+  it('shadow: records the storno\'s and the correction\'s events first, each linked by its own role', async () => {
+    const adapter = fakeAdapter()
+    const { supabase, inserted } = fakeSupabase(() => ({ error: null }))
+    await correctionPort('shadow', adapter).correctJournalEntry({
+      supabase, companyId: COMPANY, userId: 'u', entryId: ORIGINAL, stornoEvent: STORNO_EVENT, correctionEvent: () => CORRECTION_EVENT,
+      correction: { newDate: '2025-10-18' },
+    })
+    expect(inserted.map((row) => (row as { kind: string }).kind)).toEqual(['ledger.storno', 'ledger.correction'])
+    expect(callArgs(adapter.correctEntry, 0).businessEvents).toEqual({
+      reversal: { id: ids[0], role: 'reversal', onFailure: 'log' },
+      correction: { id: ids[1], role: 'correction', onFailure: 'log' },
+    })
+  })
+
+  it('shadow corrects through a refused event write; strict stops before the storno service writes anything', async () => {
+    const adapter = fakeAdapter()
+    const { supabase } = fakeSupabase(() => ({ error: { message: 'refused', code: '42501' } }))
+    await correctionPort('shadow', adapter).correctJournalEntry({
+      supabase, companyId: COMPANY, userId: 'u', entryId: ORIGINAL, stornoEvent: STORNO_EVENT, correctionEvent: CORRECTION_EVENT,
+      correction: { lines: LINES },
+    })
+    expect(callArgs(adapter.correctEntry, 0).businessEvents).toBeUndefined()
+    await expect(
+      correctionPort('strict', adapter).correctJournalEntry({
+        supabase, companyId: COMPANY, userId: 'u', entryId: ORIGINAL, stornoEvent: STORNO_EVENT, correctionEvent: CORRECTION_EVENT,
+        correction: { lines: LINES },
+      }),
+    ).rejects.toBeInstanceOf(BookkeepingDatabaseError)
+    expect(adapter.correctEntry).toHaveBeenCalledTimes(1)
+  })
+
+  it('records no event for lines the storno service refuses on its own (unbalanced)', async () => {
+    const adapter = fakeAdapter()
+    const { supabase, from } = fakeSupabase(() => ({ error: null }))
+    await correctionPort('strict', adapter).correctJournalEntry({
+      supabase, companyId: COMPANY, userId: 'u', entryId: ORIGINAL, stornoEvent: STORNO_EVENT, correctionEvent: CORRECTION_EVENT,
+      correction: { lines: [{ account_number: '1930', debit_amount: 1, credit_amount: 0 }] },
+    })
+    expect(from).not.toHaveBeenCalled()
+    expect(callArgs(adapter.correctEntry, 0).businessEvents).toBeUndefined()
   })
 })

@@ -1,6 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { CannotReverseNonPostedError, EntryAlreadyReversedError } from '@/lib/bookkeeping/errors'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import type { LinkBasisColumns } from '@/lib/links/link-basis'
+import { postingPort } from '@/lib/posting/port'
+import type { BusinessEventDraft } from '@/lib/posting/types'
 import { preparesArsredovisning, resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { eventBus } from '@/lib/events'
 import { createLogger } from '@/lib/logger'
@@ -53,6 +56,36 @@ export interface FiscalYearReopenDeps {
    * reports the registry unusable. A throw keeps the gate closed.
    */
   refreshRegistry: () => Promise<unknown>
+  /**
+   * Posting port (step 2i): what the door saw, its link basis (the owner's
+   * own act: user_created), called only while POSTING_EVENTS is on. The
+   * kernel may not read the request scope itself, so the door hands it down.
+   */
+  posting?: () => { linkBasis?: LinkBasisColumns }
+}
+
+/**
+ * The event of one storno the reopen makes (kind ledger.storno, linked with
+ * role reversal), dated the day it is made: the subject is the year
+ * reopened, as for the stornos the year-end close makes of its own
+ * verifikat. One event per storno, each verifikat posted on its own.
+ */
+export function reopenStornoBusinessEvent(args: {
+  periodId: string
+  occurredOn: string
+  linkBasis?: LinkBasisColumns
+}): BusinessEventDraft {
+  const linkEvidence = args.linkBasis?.link_evidence ?? null
+  return {
+    kind: 'ledger.storno',
+    category: null,
+    occurredOn: args.occurredOn,
+    subject: { type: 'fiscal_period', id: args.periodId },
+    evidence: { link_basis: args.linkBasis?.link_basis, link_evidence: linkEvidence ?? undefined },
+    pendingOperationId: linkEvidence?.pending_operation_id ?? null,
+    mappingVersion: null,
+    jurisdiction: 'SE',
+  }
 }
 
 export type FiscalYearReopenFailureCode =
@@ -189,15 +222,28 @@ export async function getFiscalYearReopenEligibility(
   return { ok: true, eligibility }
 }
 
-/** Post the storno of one verifikat unless it is already reversed. */
+/**
+ * Post the storno of one verifikat unless it is already reversed, through
+ * the posting port: the engine gets the call it always did and, while
+ * POSTING_EVENTS is on, the storno's event is linked before its number.
+ */
 async function reverseIfPosted(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
   entry: FiscalYearReopenEntry,
+  periodId: string,
+  deps: FiscalYearReopenDeps,
 ): Promise<boolean> {
   try {
-    await reverseEntry(supabase, companyId, userId, entry.id)
+    await postingPort.reverseJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      entryId: entry.id,
+      event: () => reopenStornoBusinessEvent({ periodId, occurredOn: todayIsoStockholm(), linkBasis: deps.posting?.().linkBasis }),
+      role: 'reversal',
+    })
     return true
   } catch (err) {
     // A concurrent run (or the previous one) got there first: the storno
@@ -254,7 +300,7 @@ export async function reopenClosedFiscalYear(
   const reversed: FiscalYearReopenEntry[] = []
   for (const entry of result.entries ?? []) {
     try {
-      if (await reverseIfPosted(supabase, companyId, userId, entry)) reversed.push(entry)
+      if (await reverseIfPosted(supabase, companyId, userId, entry, periodId, deps)) reversed.push(entry)
     } catch (err) {
       log.error('reopen stopped on a storno; the year is open and resumable', err as Error, {
         companyId,
