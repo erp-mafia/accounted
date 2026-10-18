@@ -23566,7 +23566,6 @@ export const tools: McpTool[] = [
         fiscal_period_id: string
         correction_of_id: string | null
         reverses_id: string | null
-        fiscal_periods: { name?: string; is_closed?: boolean; locked_at?: string | null } | { name?: string; is_closed?: boolean; locked_at?: string | null }[] | null
         lines: Array<{
           account_number: string
           debit_amount: number | string
@@ -23585,7 +23584,6 @@ export const tools: McpTool[] = [
         .from('journal_entries')
         .select(
           'id, status, entry_date, description, voucher_number, voucher_series, fiscal_period_id, correction_of_id, reverses_id, ' +
-          'fiscal_periods!journal_entries_fiscal_period_id_fkey!inner(name, is_closed, locked_at), ' +
           'lines:journal_entry_lines(account_number, debit_amount, credit_amount, line_description, currency, amount_in_currency, exchange_rate, tax_code, dimensions, cost_center, project)'
         )
         .eq('id', entryId)
@@ -23606,14 +23604,14 @@ export const tools: McpTool[] = [
       if (original.status !== 'posted') {
         throw new Error(`Only posted entries can be corrected. Current status: ${original.status}.`)
       }
-      const periodInfo = Array.isArray(original.fiscal_periods)
-        ? original.fiscal_periods[0]
-        : original.fiscal_periods
-      if (periodInfo?.is_closed || periodInfo?.locked_at) {
-        throw new Error(
-          `Fiscal period "${periodInfo.name ?? 'okänd'}" is locked or closed. Unlock the period, or use omprövning for already-filed VAT.`
-        )
-      }
+      // The storno lands on the original's date in the original's year, so
+      // that year must take it: the engine's own check (assertStornoTarget,
+      // which correctEntry runs again at commit). Its typed refusals carry the
+      // registry's answer: TARGET_PERIOD_LOCKED (unlock first) or
+      // TARGET_PERIOD_CLOSED, which says what to do with a closed year. The
+      // old hand-rolled check told the agent to unlock a closed year, which
+      // unlock refuses (crm#1290).
+      await assertStornoTarget(supabase, companyId, original)
 
       // Chain-depth guard at staging time so the agent reconsiders NOW, not at
       // approval. The executor (commitCorrectEntry → correctEntry) re-checks.

@@ -36,6 +36,17 @@ const balancedLines = [
   { account_number: '1930', debit_amount: 0, credit_amount: 250 },
 ]
 
+// The three reads assertStornoTarget makes for an original dated 2026-05-12
+// in an open, unlocked 2026 with no company lock date: the original's year,
+// then resolvePeriodStatusForDate (company lock date, covering period).
+// gnubok_correct_entry and gnubok_reverse_journal_entry both run it before
+// staging.
+const OPEN_STORNO_TARGET = [
+  { data: { name: '2026', period_start: '2026-01-01', period_end: '2026-12-31' }, error: null },
+  { data: { bookkeeping_locked_through: null }, error: null },
+  { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
+]
+
 describe('gnubok_create_voucher: staging gates', () => {
   it('is registered and mapped to bookkeeping:write scope', async () => {
     const { TOOL_SCOPE_MAP } = await import('@/lib/auth/api-keys')
@@ -794,7 +805,7 @@ describe('gnubok_correct_entry: registration', () => {
   })
 
   it('shows preserved currency, tax, and dimension metadata in the correction preview', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
+    const { supabase, enqueue, enqueueMany } = createQueuedMockSupabase()
     enqueue({ data: { dimensions_enabled: false }, error: null })
     enqueue({
       data: {
@@ -837,6 +848,7 @@ describe('gnubok_correct_entry: registration', () => {
       },
       error: null,
     })
+    enqueueMany(OPEN_STORNO_TARGET)
     enqueue({ data: { bookkeeping_locked_through: null }, error: null })
     enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null })
     enqueue({ data: { id: 'op-correct-1' }, error: null })
@@ -925,6 +937,7 @@ describe('gnubok_correct_entry: the corrected entry\'s text', () => {
   const staging = () => {
     const mock = createQueuedMockSupabase()
     mock.enqueue({ data: original, error: null })
+    mock.enqueueMany(OPEN_STORNO_TARGET)
     mock.enqueue({ data: { bookkeeping_locked_through: null }, error: null })
     mock.enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null })
     mock.enqueue({ data: { id: 'op-correct-text' }, error: null })
@@ -1006,6 +1019,7 @@ describe('gnubok_correct_entry / gnubok_reverse_journal_entry: chain-depth guard
     // Lines carry no dimensions, so no dimension-registry query precedes the
     // entry fetch.
     enqueue({ data: deepTarget, error: null })
+    enqueueMany(OPEN_STORNO_TARGET)
     enqueueMany(walkerRows)
 
     await expect(
@@ -1023,8 +1037,9 @@ describe('gnubok_correct_entry / gnubok_reverse_journal_entry: chain-depth guard
   })
 
   it('stages when allow_deep_chain=true and forwards the flag to the executor params', async () => {
-    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    const { supabase, enqueue, enqueueMany, findCall } = createQueuedMockSupabase()
     enqueue({ data: deepTarget, error: null })
+    enqueueMany(OPEN_STORNO_TARGET)
     // No walker queries: the guard is skipped entirely on explicit override.
     enqueue({ data: { bookkeeping_locked_through: null }, error: null })
     enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null })
@@ -1189,6 +1204,80 @@ describe('gnubok_reverse_journal_entry: staging gates', () => {
   })
 })
 
+// crm#1290: a correction of a verifikat in a year closed with a year-end
+// closing was refused with "Unlock the period, or use omprövning", and unlock
+// refuses a closed year. The pre-flight is now the engine's storno target
+// check, so the refusal is the typed one the app gives, with the registry's
+// answer for what to do instead.
+describe('gnubok_correct_entry: an original in a closed or locked year', () => {
+  const original = {
+    id: '44444444-4444-4444-8444-444444444444',
+    status: 'posted',
+    entry_date: '2026-04-21',
+    description: 'Utbetald utdelning',
+    voucher_number: 27,
+    voucher_series: 'A',
+    fiscal_period_id: 'fp-2025',
+    correction_of_id: null,
+    reverses_id: null,
+    lines: [
+      { account_number: '2898', debit_amount: 1000, credit_amount: 0, line_description: null, currency: null, amount_in_currency: null, exchange_rate: null, tax_code: null, dimensions: null, cost_center: null, project: null },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1000, line_description: null, currency: null, amount_in_currency: null, exchange_rate: null, tax_code: null, dimensions: null, cost_center: null, project: null },
+    ],
+  }
+  const lines = [
+    { account_number: '2091', debit_amount: 1000, credit_amount: 0 },
+    { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+  ]
+  const year = { name: 'Räkenskapsår 2025/2026', period_start: '2025-05-01', period_end: '2026-04-30' }
+
+  it('refuses a year closed with a year-end closing with TARGET_PERIOD_CLOSED and stages nothing', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: original, error: null })
+    enqueue({ data: year, error: null })
+    enqueue({ data: { bookkeeping_locked_through: null }, error: null })
+    enqueue({ data: { id: 'fp-2025', is_closed: true, locked_at: '2026-09-25T18:02:15Z' }, error: null })
+
+    const refusal = await correctEntry
+      .execute({ entry_id: original.id, lines }, 'company-1', 'user-1', supabase as never)
+      .catch((err: unknown) => err)
+
+    expect(refusal).toMatchObject({ code: 'TARGET_PERIOD_CLOSED', date: '2026-04-21' })
+    // Never the old advice: a closed year cannot be unlocked.
+    expect(String((refusal as Error).message)).not.toMatch(/unlock the period|omprövning/i)
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+
+  it('refuses an original behind the company lock date with TARGET_PERIOD_LOCKED', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: original, error: null })
+    enqueue({ data: year, error: null })
+    enqueue({ data: { bookkeeping_locked_through: '2026-04-30' }, error: null })
+    enqueue({ data: { id: 'fp-2025' }, error: null })
+
+    await expect(
+      correctEntry.execute({ entry_id: original.id, lines }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toMatchObject({ code: 'TARGET_PERIOD_LOCKED' })
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+
+  it('stages when the original year is open', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: original, error: null })
+    enqueue({ data: year, error: null })
+    enqueue({ data: { bookkeeping_locked_through: null }, error: null })
+    enqueue({ data: { id: 'fp-2025', is_closed: false, locked_at: null }, error: null })
+    // stage(): the period check for the original's date, then the insert.
+    enqueue({ data: { bookkeeping_locked_through: null }, error: null })
+    enqueue({ data: { id: 'fp-2025', is_closed: false, locked_at: null }, error: null })
+    enqueue({ data: { id: 'op-open-year' }, error: null })
+
+    await correctEntry.execute({ entry_id: original.id, lines }, 'company-1', 'user-1', supabase as never)
+
+    expect(findCall('pending_operations', 'insert')).toBeDefined()
+  })
+})
+
 describe('entry_id resolution: voucher refs and hallucinated UUIDs', () => {
   // These tests cover the resolveJournalEntryRef helper as exercised through
   // gnubok_correct_entry. The same resolution path is wired into
@@ -1220,11 +1309,14 @@ describe('entry_id resolution: voucher refs and hallucinated UUIDs', () => {
         voucher_number: 113,
         voucher_series: 'A',
         fiscal_period_id: 'fp-closed',
-        fiscal_periods: { name: '2026', is_closed: true, locked_at: null },
         lines: [],
       },
       error: null,
     })
+    // 3) the storno target check reads the original's (closed) year.
+    enqueue({ data: { name: '2026', period_start: '2026-01-01', period_end: '2026-12-31' }, error: null })
+    enqueue({ data: { bookkeeping_locked_through: null }, error: null })
+    enqueue({ data: { id: 'fp-closed', is_closed: true, locked_at: null }, error: null })
 
     await expect(
       correctEntry.execute(
@@ -1233,7 +1325,7 @@ describe('entry_id resolution: voucher refs and hallucinated UUIDs', () => {
         'user-1',
         supabase as never,
       ),
-    ).rejects.toThrow(/locked or closed/i)
+    ).rejects.toMatchObject({ code: 'TARGET_PERIOD_CLOSED' })
   })
 
   it('errors when a voucher ref matches multiple entries across fiscal periods', async () => {

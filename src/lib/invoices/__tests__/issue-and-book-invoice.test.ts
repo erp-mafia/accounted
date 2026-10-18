@@ -52,7 +52,13 @@ vi.mock('@/lib/invoices/invoice-deliveries', () => ({
   recordManualInvoiceDelivery: (...args: unknown[]) => mockRecordManualInvoiceDelivery(...args),
 }))
 
+const mockSettleInvoicePayment = vi.fn()
+vi.mock('@/lib/invoices/settle-invoice-payment', () => ({
+  settleInvoicePayment: (...args: unknown[]) => mockSettleInvoicePayment(...args),
+}))
+
 import { archiveIssuedInvoicePdf, issueAndBookInvoice, markInvoiceSentAndBook } from '../issue-and-book-invoice'
+import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import type { CompanySettings } from '@/types'
 
@@ -282,6 +288,116 @@ describe('issueAndBookInvoice', () => {
         expect.objectContaining({ step: 'pdf_archive' }),
       ])
     }
+  })
+})
+
+describe('issueAndBookInvoice: kontantfaktura, paid at issue (crm#1281)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    eventBus.clear()
+    mockRenderToBuffer.mockResolvedValue(Buffer.from('fake-pdf'))
+    mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+    mockRecordManualInvoiceDelivery.mockResolvedValue({ id: 'delivery-1' })
+    mockEnsureInvoiceNumber.mockResolvedValue('F-2026010')
+  })
+
+  const paidDraft = () =>
+    makeDraft({ invoice_date: '2026-10-17', total: 1250, remaining_amount: 1250, paid_amount: null })
+
+  function issuePaid(theSettings: CompanySettings = settings, invoice = paidDraft()) {
+    return issueAndBookInvoice({
+      supabase: mockSupabase as never,
+      companyId: 'company-1',
+      userId: 'user-1',
+      invoice: invoice as never,
+      settings: theSettings,
+      log,
+      paidAtIssue: { settlementAccountNumber: '1940' },
+    })
+  }
+
+  it.each(['accrual', 'cash'] as const)(
+    'under %s: no registration verifikat, the whole invoice settled on its date to the chosen account, the receipt archived on that voucher',
+    async (method) => {
+      enqueue({ data: [{ id: 'inv-1' }], error: null }) // CAS flip to sent
+      mockSettleInvoicePayment.mockResolvedValue({
+        ok: true,
+        newStatus: 'paid',
+        newPaidAmount: 1250,
+        newRemaining: 0,
+        journalEntryId: 'je-cash',
+        paidAt: '2026-10-17T12:00:00.000Z',
+      })
+
+      const result = await issuePaid({ ...settings, accounting_method: method } as CompanySettings)
+
+      expect(result).toEqual({ ok: true, journalEntryId: 'je-cash', partialFailures: [] })
+      // Never a 1510 registration entry: the payment's cash entry is the one verifikat.
+      expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+      expect(mockCreateSchedules).not.toHaveBeenCalled()
+      expect(mockSettleInvoicePayment).toHaveBeenCalledWith(
+        mockSupabase,
+        'company-1',
+        'user-1',
+        expect.objectContaining({
+          invoice: expect.objectContaining({ id: 'inv-1', status: 'sent' }),
+          paymentAmountInInvoiceCurrency: 1250,
+          paymentDate: '2026-10-17',
+          accountingMethod: method,
+          settlementAccountNumber: '1940',
+          paymentSource: 'manual',
+          recognizeSaleAtPayment: true,
+        }),
+      )
+      // The archived underlag is the receipt (BETALD), linked to the cash voucher.
+      expect(InvoicePDF).toHaveBeenCalledWith(
+        expect.objectContaining({ invoice: expect.objectContaining({ status: 'paid', remaining_amount: 0 }) }),
+      )
+      expect(mockUploadDocument).toHaveBeenCalledWith(
+        mockSupabase,
+        'user-1',
+        'company-1',
+        expect.anything(),
+        expect.objectContaining({ journal_entry_id: 'je-cash' }),
+      )
+      expect(mockRecordManualInvoiceDelivery).toHaveBeenCalledTimes(1)
+    },
+  )
+
+  it('restores the draft and answers with the refusal when the payment cannot be booked', async () => {
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // CAS flip to sent
+    mockSettleInvoicePayment.mockResolvedValue({
+      ok: false,
+      code: 'INVOICE_PAID_NO_FISCAL_PERIOD',
+      details: { paymentDate: '2026-10-17' },
+    })
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // restore to draft
+
+    const result = await issuePaid()
+
+    expect(result).toEqual({ ok: false, errorCode: 'INVOICE_PAID_NO_FISCAL_PERIOD' })
+    expect(findCalls('invoices', 'update')).toEqual([[{ status: 'sent' }], [{ status: 'draft' }]])
+    // Nothing reaches the customer for a sale the ledger does not have.
+    expect(mockUploadDocument).not.toHaveBeenCalled()
+    expect(mockRecordManualInvoiceDelivery).not.toHaveBeenCalled()
+  })
+
+  it("hands the engine's refusal (a payment account outside the chart) to the door", async () => {
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // CAS flip to sent
+    const refusal = new AccountsNotInChartError(['1940'])
+    mockSettleInvoicePayment.mockResolvedValue({ ok: false, code: 'BOOKKEEPING_ERROR', error: refusal })
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // restore to draft
+
+    const result = await issuePaid()
+
+    expect(result).toEqual({
+      ok: false,
+      errorCode: 'INVOICE_MARK_SENT_BOOK_FAILED',
+      reason: expect.any(String),
+      bookingError: refusal,
+    })
+    expect(findCalls('invoices', 'update')).toEqual([[{ status: 'sent' }], [{ status: 'draft' }]])
   })
 })
 

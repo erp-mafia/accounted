@@ -1,4 +1,5 @@
 import { proposeSendLines } from '@/lib/bookkeeping/propose-send-lines'
+import { buildInvoiceCashLines } from '@/lib/bookkeeping/invoice-lines'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
 import { roundOre } from '@/lib/money'
 import {
@@ -47,7 +48,36 @@ export interface DraftVoucherInput {
  * dialog says so instead of showing kronor it cannot know).
  */
 export function proposeDraftSendLines(input: DraftVoucherInput): FormLine[] {
-  if (input.currency !== 'SEK') return []
+  const invoice = draftInvoice(input)
+  if (!invoice) return []
+  return proposeSendLines({ invoice, entityType: input.entityType })
+}
+
+/**
+ * The kontantfaktura's one verifikat (crm#1281), shown by the editor's
+ * "Redan betald" confirm before anything exists: the payment account debit
+ * against revenue and output VAT, from buildInvoiceCashLines, the generator
+ * the payment at issue books with. [] under the same conditions as
+ * proposeDraftSendLines.
+ */
+export function proposeDraftCashLines(
+  input: DraftVoucherInput,
+  settlementAccountNumber: string,
+): Array<{ account_number: string; debit_amount: number; credit_amount: number }> {
+  const invoice = draftInvoice(input)
+  if (!invoice) return []
+  return buildInvoiceCashLines(invoice, input.entityType, undefined, settlementAccountNumber)
+    .lines.filter((line) => roundOre(line.debit_amount) !== 0 || roundOre(line.credit_amount) !== 0)
+    .map((line) => ({
+      account_number: line.account_number,
+      debit_amount: roundOre(line.debit_amount),
+      credit_amount: roundOre(line.credit_amount),
+    }))
+}
+
+/** The form as a stored invoice row, or null when it cannot be stated in kronor or prices nothing. */
+function draftInvoice(input: DraftVoucherInput) {
+  if (input.currency !== 'SEK') return null
   const items = input.items.map((item, index): InvoiceItem => {
     const isText = item.line_type === 'text'
     const quantity = isText ? 0 : Number(item.quantity) || 0
@@ -75,23 +105,20 @@ export function proposeDraftSendLines(input: DraftVoucherInput): FormLine[] {
     } as InvoiceItem
   })
   const priced = items.filter((item) => item.line_type !== 'text')
-  if (priced.length === 0) return []
+  if (priced.length === 0) return null
   const subtotal = roundOre(priced.reduce((sum, item) => sum + item.line_total, 0))
   const vatAmount = roundOre(priced.reduce((sum, item) => sum + item.vat_amount, 0))
-  return proposeSendLines({
-    invoice: {
-      id: 'draft',
-      invoice_number: input.invoiceNumber,
-      total: roundOre(subtotal + vatAmount),
-      subtotal,
-      vat_amount: vatAmount,
-      currency: input.currency,
-      vat_treatment: input.vatTreatment,
-      items,
-      default_dimensions: input.defaultDimensions ?? null,
-    },
-    entityType: input.entityType,
-  })
+  return {
+    id: 'draft',
+    invoice_number: input.invoiceNumber,
+    total: roundOre(subtotal + vatAmount),
+    subtotal,
+    vat_amount: vatAmount,
+    currency: input.currency,
+    vat_treatment: input.vatTreatment,
+    items,
+    default_dimensions: input.defaultDimensions ?? null,
+  }
 }
 
 /**

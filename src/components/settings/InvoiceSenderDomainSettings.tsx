@@ -119,6 +119,12 @@ export function InvoiceSenderDomainSettings({ companyName }: { companyName: stri
         body: JSON.stringify({ domain: domainInput }),
       })
       const json = await res.json()
+      // The platform's email provider account is out of domains (crm#1288):
+      // nothing the user did or can fix, and their invoice mail is unaffected.
+      if (json.code === 'SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT') {
+        toast({ title: t('claim_unavailable_title'), description: t('claim_unavailable_description') })
+        return
+      }
       if (!res.ok) throw new Error(json.error ?? t('claim_error_title'))
       applyRow(json.data)
       setDomainInput('')

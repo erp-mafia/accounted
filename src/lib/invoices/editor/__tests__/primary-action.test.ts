@@ -114,7 +114,11 @@ describe('resolveEditorMenu', () => {
       ['channel_email', true, true],
       ['channel_manual', false, true],
     ])
-    expect(menu?.actions.map((a) => a.label)).toEqual(['action_save_as_draft', 'action_create_without_sending'])
+    expect(menu?.actions.map((a) => a.label)).toEqual([
+      'action_issue_paid',
+      'action_save_as_draft',
+      'action_create_without_sending',
+    ])
   })
 
   it('offers no unnumbered draft for a quote (numbered at insert)', () => {
@@ -129,7 +133,8 @@ describe('resolveEditorMenu', () => {
       { kind: 'send', channel: 'email' },
       { kind: 'send', channel: 'manual' },
     ])
-    expect(menu?.actions).toEqual([])
+    // A saved faktura draft can still go out as a kontantfaktura (crm#1281).
+    expect(menu?.actions).toEqual([{ intent: { kind: 'issue_paid' }, label: 'action_issue_paid' }])
   })
 
   it('has no menu for a received självfaktura', () => {

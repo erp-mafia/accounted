@@ -109,7 +109,12 @@ import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { DEFAULT_DEFERRED_REVENUE_ACCOUNT } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { countCalendarMonths, invoiceMonthOnlyAccrualRows } from '@/lib/bookkeeping/accruals/compute'
-import { cashAccountPayee, isUsableInvoicePayee } from '@/lib/cash-accounts/invoice-payee-rules'
+import {
+  cashAccountPayee,
+  invoicePayeeAccountLabel as payeeAccountLabel,
+  isUsableInvoicePayee,
+} from '@/lib/cash-accounts/invoice-payee-rules'
+import { chooseForeignInvoicePayee } from '@/lib/invoices/choose-foreign-payee'
 import type { InvoiceCopyInitial } from '@/lib/invoices/copy-invoice'
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
 import UnitPicker from '@/components/invoices/UnitPicker'
@@ -144,7 +149,9 @@ import {
 import { resolveEditorStatusLine } from '@/lib/invoices/editor/status-line'
 import { resolveTopBarMeta } from '@/lib/invoices/editor/top-bar-meta'
 import { buildEditorPreviewRequest, withQuoteValidity } from '@/lib/invoices/editor/preview-request'
-import { proposeDraftSendLines } from '@/lib/invoices/editor/voucher-preview'
+import { proposeDraftCashLines, proposeDraftSendLines } from '@/lib/invoices/editor/voucher-preview'
+import { isPaidAtIssueAccount, paidAtIssueBlockReason } from '@/lib/invoices/paid-at-issue'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { persistAndSend } from '@/lib/invoices/editor/send-sequence'
 import {
   continueInvoiceSeries,
@@ -299,15 +306,9 @@ const NOTE_INPUT_CLASS =
 // value renders as the placeholder in Radix Select.
 const PAYEE_DEFAULT = '__default__'
 
-/** "Företagskonto (1930)" or the bare ledger account when the row has no name. */
-function payeeAccountLabel(account: CashAccount): string {
-  const name = account.name?.trim()
-  return name ? `${name} (${account.ledger_account})` : account.ledger_account
-}
-
-// The intents that go through the confirm dialog: a send, or a create
-// without sending (both lock a number).
-type ConfirmIntent = Extract<EditorIntent, { kind: 'send' } | { kind: 'create' }>
+// The intents that go through the confirm dialog: a send, a create without
+// sending, or a kontantfaktura issued already paid (all lock a number).
+type ConfirmIntent = Extract<EditorIntent, { kind: 'send' } | { kind: 'create' } | { kind: 'issue_paid' }>
 
 // Why email is not possible, as keys of the invoice_editor_shell namespace.
 const EMAIL_BLOCK_KEYS: Record<EmailBlockReason, string> = {
@@ -663,6 +664,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // Explicit confirm for Swedish VAT to an EU customer whose reverse charge
   // is blocked (#2749). Reset every time the confirm dialog closes.
   const [swedishVatAcknowledged, setSwedishVatAcknowledged] = useState(false)
+  // Kontantfaktura confirm (crm#1281): the 19xx account the customer paid to
+  // ('' = the default for this invoice) and whether the receipt is mailed.
+  const [paidAccountChoice, setPaidAccountChoice] = useState('')
+  const [paidEmailReceipt, setPaidEmailReceipt] = useState(true)
   const [pendingData, setPendingData] = useState<FormData | null>(null)
   // The channel the user picked in the caret menu; null = the default
   // (lib/invoices/editor/channel.ts).
@@ -2267,21 +2272,37 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       case 'create':
         void handleSubmit((data) => prepareConfirm(data, intent), onInvalidSubmit)()
         return
+      case 'issue_paid': {
+        // A periodiserad line cannot ride a cash verifikat (lib/invoices/paid-at-issue.ts).
+        if (paidAtIssueBlockReason({ items: watchItems }) === 'periodisering') {
+          toast({
+            title: tShell('issue_paid_blocked_title'),
+            description: tShell('issue_paid_block_periodisering'),
+            variant: 'destructive',
+          })
+          return
+        }
+        setPaidAccountChoice('')
+        setPaidEmailReceipt(true)
+        void handleSubmit((data) => prepareConfirm(data, intent), onInvalidSubmit)()
+        return
+      }
     }
   }
 
   async function prepareConfirm(data: FormData, intent: ConfirmIntent) {
     // A send books on the invoice date: one in a locked or closed period is
     // refused by the database, so the date is the thing to fix first (the
-    // status line says why).
-    if (intent.kind === 'send' && dateLock && data.document_type === 'invoice') {
+    // status line says why). A kontantfaktura books its payment on that date.
+    const issues = intent.kind === 'send' || intent.kind === 'issue_paid'
+    if (issues && dateLock && data.document_type === 'invoice') {
       focusSettingsField('invoice_date')
       return
     }
     // The send refuses a faktura without the seller's VAT number, and the
     // create before it would already have numbered it: stop here and say why
     // (the status line carries the fix).
-    if (intent.kind === 'send' && sellerVatMissing) {
+    if (issues && sellerVatMissing) {
       toast({
         title: tShell('toast_cannot_send_title'),
         description: getErrorMessage({ error: { code: 'INVOICE_SEND_VAT_NUMBER_MISSING' } }, { locale, context: 'invoice' }),
@@ -2377,15 +2398,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     setChoosingForeignPayee(true)
     try {
       if (isCompanyAdmin && canWrite) {
-        const send = async (url: string, method: 'PATCH' | 'PUT', body: Record<string, unknown>) => {
-          const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-          const json = await res.json().catch(() => null)
-          if (!res.ok) throw new Error(getErrorMessage(json, { locale, context: 'settings', statusCode: res.status }))
-        }
-        if (candidate.bankIban) {
-          await send(`/api/cash-accounts/${cashAccountId}`, 'PATCH', { iban: candidate.bankIban, invoice_payee: true })
-        }
-        await send('/api/cash-accounts/payee-defaults', 'PUT', { currency, cash_account_id: cashAccountId })
+        await chooseForeignInvoicePayee({ currency, cashAccountId, bankIban: candidate.bankIban, locale })
         const fresh = await fetch('/api/cash-accounts/payee-defaults').then((res) => (res.ok ? res.json() : null))
         if (fresh?.data) setPayeeState(fresh.data)
         await refetchCompanySettings()
@@ -2492,11 +2505,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // (lib/invoices/editor/send-sequence.ts). "Jag skickar själv" lands on the
   // detail page with ?download=1, which downloads the archived, numbered PDF
   // the customer is to get.
-  async function sendFromEditor(channel: EditorChannel) {
+  async function sendFromEditor(channel: EditorChannel, paidAtIssue: { account_number: string } | null = null) {
     if (!pendingData) return
     setIsSubmitting(true)
     try {
       const result = await persistAndSend({
+        paidAtIssue,
         mode: isEditMode ? 'edit' : 'create',
         invoiceId: initial?.id ?? null,
         invoiceNumber: initial?.invoice_number ?? null,
@@ -2537,6 +2551,29 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           variant: 'destructive',
         })
         setIsSubmitting(false)
+        return
+      }
+
+      if (paidAtIssue) {
+        // Kontantfaktura: issued paid and booked; the receipt was mailed or
+        // is downloaded on the detail page.
+        toast({
+          title: tShell('toast_paid_title'),
+          description: result.receiptFailed
+            ? tShell('toast_paid_receipt_failed')
+            : result.partial
+              ? tSend('mark_partial_success')
+              : channel === 'email'
+                ? tShell('toast_paid_emailed')
+                : undefined,
+          ...(result.receiptFailed || result.partial ? { variant: 'destructive' as const } : {}),
+        })
+        setConfirmIntent(null)
+        router.replace(
+          channel === 'manual' && !result.partial
+            ? `/invoices/${result.invoiceId}?download=1`
+            : `/invoices/${result.invoiceId}`,
+        )
         return
       }
 
@@ -3297,7 +3334,24 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // ===== Confirm dialog ====================================================
   const confirmData = pendingData
   const confirmDocType = confirmData?.document_type ?? watchDocumentType
-  const confirmChannel = confirmIntent?.kind === 'send' ? confirmIntent.channel : null
+  // Kontantfaktura (crm#1281): issued paid at once to a 19xx account active
+  // in the chart (kassa, bank, Swish). The default is the account the invoice
+  // asks to be paid to, else the bank role. The receipt is mailed when email can go.
+  const isPaidConfirm = confirmIntent?.kind === 'issue_paid'
+  const paidAccountOptions = activeAccounts.filter((account) => isPaidAtIssueAccount(account.account_number))
+  const payeeLedgerAccount = (
+    watchPayeeAccount ? payeeState?.accounts.find((account) => account.id === watchPayeeAccount) : defaultPayee
+  )?.ledger_account
+  const defaultPaidAccount =
+    [payeeLedgerAccount, resolveAccountRole(PINNED_JURISDICTION, 'bank')].find(
+      (candidate) => candidate && paidAccountOptions.some((option) => option.account_number === candidate),
+    ) ??
+    paidAccountOptions[0]?.account_number ??
+    ''
+  const paidAccount = paidAccountChoice || defaultPaidAccount
+  const paidEmailAvailable = channelOptions.some((option) => option.channel === 'email' && option.available)
+  const paidChannel: EditorChannel = paidEmailAvailable && paidEmailReceipt ? 'email' : 'manual'
+  const confirmChannel = confirmIntent?.kind === 'send' ? confirmIntent.channel : isPaidConfirm ? paidChannel : null
   // Only a faktura continues the company's series through the settings; a
   // numbered draft keeps its number.
   const confirmContinuation =
@@ -3311,7 +3365,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const confirmTitleKey =
     confirmIntent?.kind === 'create'
       ? 'confirm_title_create'
-      : confirmChannel === 'email'
+      : isPaidConfirm
+        ? 'confirm_title_paid'
+        : confirmChannel === 'email'
         ? 'confirm_title_email'
         : 'confirm_title_manual'
   const confirmTitle = confirmNumber
@@ -3325,7 +3381,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       value: [tShell('confirm_to_with_pdf', { email: selectedCustomer?.email ?? '' }), ...(isCompanyAdmin ? extraCc : [])].join(', '),
     })
   } else if (confirmChannel) {
-    confirmRows.push({ label: tShell('confirm_row_channel'), value: tShell('confirm_channel_manual') })
+    confirmRows.push({
+      label: tShell('confirm_row_channel'),
+      value: tShell(isPaidConfirm ? 'confirm_paid_channel_manual' : 'confirm_channel_manual'),
+    })
   }
   confirmRows.push({
     label: tShell('confirm_row_number'),
@@ -3343,6 +3402,14 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         date: withQuoteValidity({ document_type: 'quote', due_date: confirmData?.due_date ?? '', valid_until: confirmData?.valid_until }).due_date,
       }),
     })
+  } else if (isPaidConfirm) {
+    confirmRows.push({
+      label: tShell('confirm_row_paid'),
+      value: tShell('confirm_paid_value', {
+        amount: formatCurrency(displayedToPay, confirmCurrency),
+        date: confirmData?.invoice_date ?? '',
+      }),
+    })
   } else if (confirmDocType !== 'delivery_note') {
     confirmRows.push({
       label: hasAnyDeduction || confirmDocType === 'invoice' ? t('to_pay_label') : t('total_label'),
@@ -3355,16 +3422,58 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const entityType: EntityType =
     (companySettings?.entity_type as EntityType | null | undefined) ?? company?.entity_type ?? 'enskild_firma'
   const accountNames = new Map(activeAccounts.map((account) => [account.account_number, account.account_name]))
+  // The voucher is stated in kronor only for a SEK invoice (the rate is the send's).
+  const confirmInForeignCurrency = confirmCurrency !== 'SEK'
   let confirmVoucher: ConfirmVoucher | null = null
   if (confirmIntent?.kind === 'create') {
     confirmVoucher = { kind: 'note', text: tShell('confirm_create_note') }
+  } else if (isPaidConfirm && confirmData) {
+    // One verifikat in either accounting method: the payment account against
+    // revenue and VAT, the generator the payment at issue books with.
+    const lines = paidAccount
+      ? proposeDraftCashLines(
+          {
+            invoiceNumber: confirmNumber ?? null,
+            currency: confirmCurrency,
+            vatTreatment: vatRules?.treatment ?? 'standard_25',
+            vatRegistered,
+            defaultVatRate: vatRules?.rate || 25,
+            items: confirmData.items,
+            defaultDimensions: defaultDims,
+            entityType,
+          },
+          paidAccount,
+        )
+      : []
+    confirmVoucher =
+      lines.length > 0
+        ? {
+            kind: 'lines',
+            date: confirmData.invoice_date,
+            lines: lines.map((line) => ({
+              account: line.account_number,
+              name: accountNames.get(line.account_number) ?? '',
+              debit: line.debit_amount,
+              credit: line.credit_amount,
+            })),
+          }
+        : {
+            kind: 'note',
+            text: tShell(
+              !paidAccount
+                ? 'confirm_paid_no_account'
+                : confirmInForeignCurrency
+                  ? 'confirm_voucher_paid_foreign'
+                  : 'confirm_voucher_paid',
+            ),
+          }
   } else if (confirmChannel && confirmDocType === 'invoice' && confirmData) {
     if (!booksOnIssue) {
       confirmVoucher = {
         kind: 'note',
         text: accountingMethod === 'cash' ? tShell('confirm_voucher_cash') : tShell('confirm_voucher_deferred'),
       }
-    } else if (confirmCurrency !== 'SEK') {
+    } else if (confirmInForeignCurrency) {
       confirmVoucher = { kind: 'note', text: tShell('confirm_voucher_foreign') }
     } else {
       const lines = proposeDraftSendLines({
@@ -3394,9 +3503,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const confirmLabel =
     confirmIntent?.kind === 'create'
       ? tShell('action_create_without_sending')
-      : tShell(resolveSendLabel({ documentType: confirmDocType, channel: confirmChannel ?? channel, booksOnIssue }))
+      : isPaidConfirm
+        ? tShell('action_issue_paid_confirm')
+        : tShell(resolveSendLabel({ documentType: confirmDocType, channel: confirmChannel ?? channel, booksOnIssue }))
   const confirmDisabled =
     !canWrite ||
+    (isPaidConfirm && !isPaidAtIssueAccount(paidAccount)) ||
     (needsSwedishVatAcknowledgement && !swedishVatAcknowledged) ||
     (confirmChannel === 'email' && isCompanyAdmin && extraCcError !== null)
 
@@ -3450,6 +3562,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           key: entry.intent.kind,
           label: tShell(entry.label),
           disabled: !canWrite,
+          // Says when to pick it: the Fortnox "kontantfaktura" (crm#1281).
+          reason: entry.intent.kind === 'issue_paid' ? tShell('action_issue_paid_hint') : null,
           onSelect: () => requestIntent(entry.intent),
         })),
       }
@@ -5028,31 +5142,67 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         rows={confirmRows}
         voucher={confirmVoucher}
         extra={
-          // Swedish VAT to an EU customer whose reverse charge is blocked
-          // needs the explicit tick before the invoice exists (#2749).
-          selectedCustomer && vatWarnings.length > 0 ? (
-            <div className="space-y-3">
-              <VatTreatmentNotice
-                tone="muted"
-                customer={selectedCustomer}
-                lineVatRates={effectiveLineVatRates}
-                onValidated={handleCustomerVatValidated}
-              />
-              {needsSwedishVatAcknowledgement && (
-                <div className="flex items-start gap-2">
-                  <Checkbox
-                    id="swedish-vat-acknowledged"
-                    checked={swedishVatAcknowledged}
-                    onCheckedChange={(checked) => setSwedishVatAcknowledged(checked === true)}
-                    className="mt-0.5"
-                  />
-                  <Label htmlFor="swedish-vat-acknowledged" className="text-[13px] font-normal leading-5">
-                    {tVat('acknowledge_swedish_vat')}
+          <>
+            {isPaidConfirm && (
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="paid-at-issue-account" className="text-[13px] font-normal">
+                    {tShell('confirm_paid_account_label')}
                   </Label>
+                  <Select value={paidAccount} onValueChange={setPaidAccountChoice}>
+                    <SelectTrigger id="paid-at-issue-account" className="h-9">
+                      <SelectValue placeholder={tShell('confirm_paid_account_placeholder')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {paidAccountOptions.map((account) => (
+                        <SelectItem key={account.account_number} value={account.account_number}>
+                          {account.account_number} {account.account_name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
-              )}
-            </div>
-          ) : null
+                {paidEmailAvailable && (
+                  <div className="flex items-start gap-2">
+                    <Checkbox
+                      id="paid-at-issue-email"
+                      checked={paidEmailReceipt}
+                      onCheckedChange={(checked) => setPaidEmailReceipt(checked === true)}
+                      className="mt-0.5"
+                    />
+                    <Label htmlFor="paid-at-issue-email" className="text-[13px] font-normal leading-5" data-ph-mask="">
+                      {tShell('confirm_paid_email_receipt', { email: selectedCustomer?.email ?? '' })}
+                    </Label>
+                  </div>
+                )}
+              </div>
+            )}
+            {/* Swedish VAT to an EU customer whose reverse charge is blocked
+                needs the explicit tick before the invoice exists (#2749). */}
+            {selectedCustomer && vatWarnings.length > 0 ? (
+              <div className="space-y-3">
+                <VatTreatmentNotice
+                  tone="muted"
+                  customer={selectedCustomer}
+                  lineVatRates={effectiveLineVatRates}
+                  onValidated={handleCustomerVatValidated}
+                />
+                {needsSwedishVatAcknowledgement && (
+                  <div className="flex items-start gap-2">
+                    <Checkbox
+                      id="swedish-vat-acknowledged"
+                      checked={swedishVatAcknowledged}
+                      onCheckedChange={(checked) => setSwedishVatAcknowledged(checked === true)}
+                      className="mt-0.5"
+                    />
+                    <Label htmlFor="swedish-vat-acknowledged" className="text-[13px] font-normal leading-5">
+                      {tVat('acknowledge_swedish_vat')}
+                    </Label>
+                  </div>
+                )}
+              </div>
+            ) : null}
+          </>
         }
         confirmLabel={confirmLabel}
         confirmDisabled={confirmDisabled}
@@ -5076,6 +5226,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             }
             if (confirmIntent?.kind === 'create') void createWithoutSending()
             else if (confirmIntent?.kind === 'send') void sendFromEditor(confirmIntent.channel)
+            else if (confirmIntent?.kind === 'issue_paid') {
+              void sendFromEditor(paidChannel, { account_number: paidAccount })
+            }
           })()
         }}
       />

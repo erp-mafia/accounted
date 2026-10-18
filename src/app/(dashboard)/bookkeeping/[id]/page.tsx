@@ -572,6 +572,12 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   // a user who never opens the ⋯ menu concluded the feature did not exist).
   // The ⋯ item stays, so the menu remains the complete action list.
   const showStrikeButton = showRattelseGroup && canInlineRattelse && periodStatus === 'open'
+  // A year closed with a year-end closing takes no storno and no rättelse:
+  // every action in the Rätta group would be refused (crm#1290). They stay
+  // listed but disabled, with the way on in their place: a new verifikat in
+  // the open year, or support reopening a year whose årsredovisning is
+  // unsigned. Unknown status keeps them enabled; the server still decides.
+  const yearClosed = periodStatus === 'closed'
 
   const underlagAside = (() => {
     if (attachmentCount === 0 && references.length === 0) {
@@ -702,26 +708,31 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                     <>
                       <DropdownMenuSeparator />
                       <DropdownMenuLabel>{t('correct_menu')}</DropdownMenuLabel>
+                      {yearClosed && (
+                        <p className="max-w-64 px-2 pb-1.5 text-xs text-muted-foreground">
+                          {t('correct_menu_year_closed')}
+                        </p>
+                      )}
                       {canInlineRattelse && (
-                        <DropdownMenuItem onSelect={() => setShowStrikeLines(true)} disabled={!canWrite}>
+                        <DropdownMenuItem onSelect={() => setShowStrikeLines(true)} disabled={!canWrite || yearClosed}>
                           <Scissors className="h-4 w-4" />
                           {t('strike_lines')}
                         </DropdownMenuItem>
                       )}
-                      <DropdownMenuItem onSelect={() => setShowCorrectMetadata(true)} disabled={!canWrite}>
+                      <DropdownMenuItem onSelect={() => setShowCorrectMetadata(true)} disabled={!canWrite || yearClosed}>
                         <PenLine className="h-4 w-4" />
                         {t('correct_metadata')}
                       </DropdownMenuItem>
-                      <DropdownMenuItem onSelect={() => setShowCorrection(true)} disabled={!canWrite}>
+                      <DropdownMenuItem onSelect={() => setShowCorrection(true)} disabled={!canWrite || yearClosed}>
                         <Pencil className="h-4 w-4" />
                         {t('correct_lines')}
                       </DropdownMenuItem>
-                      <DropdownMenuItem onSelect={() => setShowRecordate(true)} disabled={!canWrite}>
+                      <DropdownMenuItem onSelect={() => setShowRecordate(true)} disabled={!canWrite || yearClosed}>
                         <CalendarClock className="h-4 w-4" />
                         {t('correct_date')}
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
-                      <DropdownMenuItem onSelect={() => setShowReverseConfirm(true)} disabled={!canWrite}>
+                      <DropdownMenuItem onSelect={() => setShowReverseConfirm(true)} disabled={!canWrite || yearClosed}>
                         <RotateCcw className="h-4 w-4" />
                         {t('reverse_action')}
                       </DropdownMenuItem>

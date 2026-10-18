@@ -1,7 +1,12 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
-import { useAccounts, useCompanySettings, useFiscalPeriods } from '@/lib/reference-data/hooks'
+import Link from 'next/link'
+import { useAccounts, useCashAccounts, useCompanySettings, useFiscalPeriods } from '@/lib/reference-data/hooks'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
+import { foreignPayeeChoiceForDraft } from '@/lib/invoices/editor/payment-summary'
+import { invoicePayeeAccountLabel } from '@/lib/cash-accounts/invoice-payee-rules'
+import { chooseForeignInvoicePayee } from '@/lib/invoices/choose-foreign-payee'
 import { useLocale, useTranslations } from 'next-intl'
 import {
   Dialog,
@@ -33,7 +38,7 @@ import { itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { explainVatTreatment, requiresSwedishVatAcknowledgement } from '@/lib/invoices/vat-rules'
 import { VatTreatmentNotice } from '@/components/invoices/VatTreatmentNotice'
 import { InvoiceAttachmentsSection } from '@/components/invoices/InvoiceAttachmentsSection'
-import { Mail, Send } from 'lucide-react'
+import { Landmark, Mail, Send } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import type { Customer, EntityType } from '@/types'
@@ -80,6 +85,7 @@ export default function SendInvoiceDialog({
   const canEmail = useCapability(CAPABILITY.email_send)
   const t = useTranslations('invoice_send_dialog')
   const tVat = useTranslations('vat_treatment_notice')
+  const tPay = useTranslations('invoice_editor_pay')
   const locale = useLocale() as 'sv' | 'en'
   const isCreditNote = !!invoice.credited_invoice_id
   const isCreditRepair = isCreditNote && invoice.status === 'sent'
@@ -101,7 +107,25 @@ export default function SendInvoiceDialog({
     settings: companySettings,
     isLoading: settingsLoading,
     error: settingsError,
+    refetch: refetchCompanySettings,
   } = useCompanySettings()
+  // A foreign-currency draft with no account chosen for its currency (PH 181):
+  // the send guard refuses it, so the dialog offers the accounts that can
+  // carry it (a SEK account with an IBAN too) instead of a refusal toast.
+  const isCompanyAdmin = role === 'owner' || role === 'admin'
+  const { cashAccounts, isLoading: cashAccountsLoading } = useCashAccounts()
+  const foreignPayee = useMemo(
+    () =>
+      foreignPayeeChoiceForDraft({
+        settings: companySettings,
+        invoice,
+        accounts: cashAccountsLoading ? null : cashAccounts,
+        canEditCompany: isCompanyAdmin,
+        label: invoicePayeeAccountLabel,
+      }),
+    [companySettings, invoice, cashAccounts, cashAccountsLoading, isCompanyAdmin],
+  )
+  const [choosingPayee, setChoosingPayee] = useState(false)
   const {
     periods: fiscalPeriods,
     isLoading: periodsLoading,
@@ -377,6 +401,7 @@ export default function SendInvoiceDialog({
     if (editable && (!isBalanced || hasOrphanAmounts)) return
     if (mode === 'email' && recipientError) return
     if (mode === 'email' && attachmentsBusy) return
+    if (foreignPayee) return
     if (needsSwedishVatAcknowledgement && !swedishVatAcknowledged) return
     setIsSubmitting(true)
 
@@ -507,6 +532,33 @@ export default function SendInvoiceDialog({
     setIsSubmitting(false)
   }
 
+  // An administrator makes the picked account the currency's default, as in
+  // the editor's Betalning section (crm#1273): later invoices in the currency
+  // print it too, and this draft prints it when issued. The send stays
+  // blocked until the refetched settings show the choice.
+  const choosePayee = async (option: { id: string; label: string; bankIban: string | null }) => {
+    if (!foreignPayee) return
+    const { currency } = foreignPayee
+    setChoosingPayee(true)
+    try {
+      await chooseForeignInvoicePayee({ currency, cashAccountId: option.id, bankIban: option.bankIban, locale })
+      await refetchCompanySettings()
+      await invalidateReferenceData(['ref:cash-accounts', 'company_settings'])
+      toast({
+        title: tPay('foreign_chosen_title', { currency }),
+        description: tPay('foreign_chosen_description', { account: option.label, currency }),
+      })
+    } catch (err) {
+      toast({
+        title: tPay('foreign_choose_failed'),
+        description: getUserErrorMessage(err, { locale }),
+        variant: 'destructive',
+      })
+    } finally {
+      setChoosingPayee(false)
+    }
+  }
+
   const handleClose = () => {
     onOpenChange(false)
   }
@@ -571,6 +623,58 @@ export default function SendInvoiceDialog({
                   Uppgradera
                 </a>{' '}
                 eller använd &laquo;Markera som skickad&raquo;.
+              </div>
+            )}
+            {foreignPayee && !cashAccountsLoading && (
+              <div className="flex items-start gap-3 rounded-lg border border-border px-3 py-2.5 text-sm">
+                <Landmark className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <div className="min-w-0 flex-1 leading-5">
+                  <p className="text-muted-foreground">
+                    {tPay(foreignPayee.options.length > 0 ? 'foreign_missing' : 'foreign_missing_no_iban', {
+                      currency: foreignPayee.currency,
+                    })}
+                  </p>
+                  {foreignPayee.options.length > 0 ? (
+                    isCompanyAdmin ? (
+                      <div className="mt-1 flex flex-col items-start gap-1">
+                        {foreignPayee.options.map((option) => (
+                          <button
+                            key={option.id}
+                            type="button"
+                            disabled={choosingPayee || isSubmitting}
+                            onClick={() => void choosePayee(option)}
+                            className="text-left text-foreground underline underline-offset-2 hover:text-muted-foreground disabled:opacity-50"
+                            data-ph-mask=""
+                          >
+                            {tPay('foreign_use_account', {
+                              account: option.label,
+                              printed: option.printed,
+                              currency: foreignPayee.currency,
+                            })}
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      // A member may pick an account for this invoice alone,
+                      // which the editor saves with the draft.
+                      <Link
+                        href={`/invoices/${invoice.id}/edit`}
+                        className="mt-1 inline-block text-foreground underline underline-offset-2 hover:text-muted-foreground"
+                      >
+                        {t('foreign_payee_choose_in_editor')}
+                      </Link>
+                    )
+                  ) : isCompanyAdmin ? (
+                    <Link
+                      href="/settings/invoicing"
+                      className="mt-1 inline-block text-foreground underline underline-offset-2 hover:text-muted-foreground"
+                    >
+                      {tPay('foreign_open_settings')}
+                    </Link>
+                  ) : (
+                    <p className="text-muted-foreground">{tPay('ask_admin')}</p>
+                  )}
+                </div>
               </div>
             )}
             {mode === 'email' && (
@@ -762,6 +866,7 @@ export default function SendInvoiceDialog({
               !isInitialized ||
               (editable && (!isBalanced || hasOrphanAmounts)) ||
               (mode === 'email' && (isSandbox || !canEmail || !!recipientError || attachmentsBusy)) ||
+              !!foreignPayee ||
               (needsSwedishVatAcknowledgement && !swedishVatAcknowledged)
             }
             title={

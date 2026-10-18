@@ -567,11 +567,25 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
       resource: 'Accounted://period/active',
     },
   },
+  // A year closed with a year-end run in Accounted. Which correction path is
+  // lawful depends on the årsredovisning, which the refusing code does not
+  // read: unsigned and unfiled, the year is reopened (today an administrative
+  // undo by support, scripts/undo-year-end-closing.ts) and corrected where the
+  // affärshändelse belongs; signed or filed, the correction is a new
+  // verifikation in the open year (rättelse av fel, K2 punkt 2.12). The
+  // message names both instead of the old "cannot be reopened" dead end
+  // (crm#1290).
   TARGET_PERIOD_CLOSED: {
     httpStatus: 409,
     message_sv:
-      'Räkenskapsåret som täcker datumet är stängt (bokslut) och kan inte öppnas. Bokför i en öppen period i stället.',
-    message_en: 'The fiscal year covering the date is closed and cannot be reopened.',
+      'Räkenskapsåret som täcker datumet är stängt med bokslut, så inget kan bokföras eller stornas där. Är årsredovisningen för året inte undertecknad eller inskickad kan året öppnas igen: kontakta supporten. Annars bokför du rättelsen som ett nytt verifikat i det öppna räkenskapsåret, med hänvisning till originalverifikatet.',
+    message_en:
+      'The fiscal year covering the date is closed with a year-end closing, so nothing can be posted or reversed in it. If the annual report for that year has not been signed or filed, the year can be reopened: contact support. Otherwise, post the correction as a new voucher in the open fiscal year, referring to the original voucher.',
+    remediation: {
+      description:
+        'Do not retry and do not unlock: a closed year cannot be unlocked. Ask the user whether the årsredovisning for that year has been signed or filed. Not signed or filed: Accounted support reopens the year (the year-end closing is reversed by storno), the user then books the correction in that year and runs the year-end again. Signed or filed: book the correction as a new verifikation dated in the open fiscal year (rättelse av fel, K2 punkt 2.12), naming the original voucher in the description.',
+      tool: 'gnubok_create_voucher',
+    },
   },
   TARGET_PERIOD_LOCKED: {
     httpStatus: 409,
@@ -1775,6 +1789,16 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Fakturan kunde inte bokföras och ligger kvar som utkast.',
     message_en: 'The invoice could not be posted and remains a draft.',
   },
+  // crm#1281: issuing a kontantfaktura (paid at issue) is refused for a
+  // document that is not a plain faktura, or one with periodiserade lines or
+  // user-edited issuance lines. details.reason names which.
+  INVOICE_PAID_AT_ISSUE_NOT_ALLOWED: {
+    httpStatus: 400,
+    message_sv:
+      'Den här fakturan kan inte utfärdas som redan betald (kontantfaktura). Det går bara för en vanlig faktura utan periodiserade rader. Skicka den som vanligt och registrera betalningen efteråt.',
+    message_en:
+      'This invoice cannot be issued as already paid (cash invoice). Only a plain invoice without periodised lines can. Send it as usual and register the payment afterwards.',
+  },
   INVOICE_MARK_SENT_REPAIR_REQUIRED: {
     httpStatus: 500,
     message_sv: 'Verifikatet skapades, men kopplingen till fakturan måste återställas. Kontakta support.',
@@ -1849,6 +1873,21 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_en: 'Email service is not configured.',
     remediation: {
       description: 'Set RESEND_API_KEY and RESEND_FROM_EMAIL (or SMTP_HOST and SMTP_FROM_EMAIL with EMAIL_PROVIDER=smtp) in the deployment environment.',
+    },
+  },
+  // Every company's own sending domain is registered in the platform's one
+  // Resend account, and that account has used every domain its plan includes
+  // (crm#1288). Nothing the company can fix: the founders grow the plan or
+  // remove unused domains. Invoice mail keeps leaving from the platform address.
+  SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT: {
+    httpStatus: 503,
+    message_sv:
+      'Det går inte att lägga till en egen avsändardomän just nu på grund av en tillfällig begränsning hos vår e-postleverantör. Fakturamejl skickas som vanligt från vår adress under tiden. Försök igen senare.',
+    message_en:
+      'Adding your own sending domain is temporarily unavailable because of a limit at our email provider. Invoice emails keep going out from our address in the meantime. Try again later.',
+    remediation: {
+      description:
+        'Operator action, not the caller: the platform Resend account has no domain left on its plan. Retrying does not help until the plan grows or unused domains are removed.',
     },
   },
   INVOICE_SEND_NO_CUSTOMER_EMAIL: {
@@ -2883,10 +2922,18 @@ const PERIOD: Record<string, StructuredErrorEntry> = {
     message_sv: 'Perioden är inte låst.',
     message_en: 'Period is not locked.',
   },
+  // Both refusals end where TARGET_PERIOD_CLOSED does for a year closed with
+  // a year-end run here: support reopens it while the årsredovisning has no
+  // legal weight, otherwise corrections go into the open year (crm#1290).
   PERIOD_UNLOCK_CLOSED: {
     httpStatus: 409,
-    message_sv: 'Ett stängt räkenskapsår kan inte låsas upp. Klarmarkerades året som avslutat i ett tidigare program kan du i stället öppna det igen under Räkenskapsår.',
-    message_en: 'A closed fiscal year cannot be unlocked. If the year was marked as closed in a previous system, reopen it from Fiscal years instead.',
+    message_sv: 'Ett stängt räkenskapsår kan inte låsas upp. Klarmarkerades året som avslutat i ett tidigare program kan du i stället öppna det igen under Räkenskapsår. Stängdes det med bokslut i Accounted och är årsredovisningen inte undertecknad eller inskickad kan supporten öppna året igen; annars bokför du rättelser som nya verifikat i det öppna räkenskapsåret.',
+    message_en: 'A closed fiscal year cannot be unlocked. If the year was marked as closed in a previous system, reopen it from Fiscal years instead. If it was closed with a year-end closing in Accounted and the annual report has not been signed or filed, support can reopen the year; otherwise, post corrections as new vouchers in the open fiscal year.',
+    remediation: {
+      description:
+        'A year marked closed in a previous system (closed_externally, no closing entry): reopen it with gnubok_reopen_fiscal_period_external. A year closed by a year-end run here: ask the user whether its årsredovisning has been signed or filed. Not signed or filed: Accounted support reopens it. Signed or filed: book corrections as new verifikationer dated in the open fiscal year (rättelse av fel, K2 punkt 2.12).',
+      tool: 'gnubok_list_fiscal_periods',
+    },
   },
   PERIOD_REOPEN_NOT_CLOSED: {
     httpStatus: 409,
@@ -2895,8 +2942,8 @@ const PERIOD: Record<string, StructuredErrorEntry> = {
   },
   PERIOD_REOPEN_NOT_EXTERNAL: {
     httpStatus: 409,
-    message_sv: 'Räkenskapsåret stängdes med ett bokslut i Accounted och kan inte öppnas igen här.',
-    message_en: 'The fiscal year was closed with a year-end run in Accounted and cannot be reopened here.',
+    message_sv: 'Räkenskapsåret stängdes med ett bokslut i Accounted och kan inte öppnas igen här. Är årsredovisningen inte undertecknad eller inskickad kan supporten öppna året igen; annars bokför du rättelser som nya verifikat i det öppna räkenskapsåret.',
+    message_en: 'The fiscal year was closed with a year-end run in Accounted and cannot be reopened here. If the annual report has not been signed or filed, support can reopen the year; otherwise, post corrections as new vouchers in the open fiscal year.',
   },
   // Creating and editing a räkenskapsår (lib/core/bookkeeping/fiscal-year-service.ts,
   // operations fiscal-periods.create / .update). The shape rules are BFL 3 kap.

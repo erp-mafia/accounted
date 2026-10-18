@@ -5,7 +5,10 @@ import { issueCreditNoteDraft } from '@/lib/invoices/credit-invoice'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { parseCustomIssuanceLines } from '@/lib/invoices/issuance-custom-lines'
 import { hasRequiredInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { paidAtIssueBlockReason } from '@/lib/invoices/paid-at-issue'
+import { MarkInvoiceSentPaidAtIssueSchema } from '@/lib/api/schemas'
+import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type {
   CompanySettings,
   CreditNote,
@@ -18,6 +21,13 @@ import type {
  * Manually marks a draft invoice as sent (for invoices delivered outside the system).
  * Under faktureringsmetoden (accrual): creates the journal entry (Debit 1510, Credit 30xx/26xx).
  * Under kontantmetoden (cash): no journal entry; booking happens at payment.
+ *
+ * Body `paid_at_issue: { account_number }` (crm#1281, the kontantfaktura):
+ * the invoice is issued already paid, on its fakturadatum, to that 19xx
+ * account. In either method it books one verifikat, Debit 19xx, Credit
+ * 30xx/26xx, with no 1510 leg, and the invoice ends paid. Refused for
+ * anything but a plain faktura (paidAtIssueBlockReason) and together with
+ * custom issuance lines.
  *
  * The non-credit-note core lives in lib/invoices/issue-and-book-invoice.ts,
  * shared with POST /api/invoices/bulk-book; the credit-note issue step in
@@ -82,6 +92,26 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   }
   const customLines = linesResult.lines
 
+  const paidAtIssueResult = MarkInvoiceSentPaidAtIssueSchema.safeParse(rawBody ?? {})
+  if (!paidAtIssueResult.success) {
+    log.warn('mark-sent paid_at_issue validation failed', { invoiceId: id })
+    return NextResponse.json(
+      { error: 'Ogiltig förfrågan', details: paidAtIssueResult.error.flatten() },
+      { status: 400 },
+    )
+  }
+  const paidAtIssue = paidAtIssueResult.data.paid_at_issue
+  if (paidAtIssue) {
+    // Custom lines are the registration verifikat a kontantfaktura never has.
+    const reason = customLines ? 'custom_lines' : paidAtIssueBlockReason(invoice)
+    if (reason) {
+      return errorResponseFromCode('INVOICE_PAID_AT_ISSUE_NOT_ALLOWED', log, {
+        requestId,
+        details: { reason },
+      })
+    }
+  }
+
   // Fetch full company settings for PDF rendering and accounting method
   const { data: settings, error: settingsError } = await supabase
     .from('company_settings')
@@ -102,9 +132,15 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       settings: settings as CompanySettings,
       log,
       customLines,
+      paidAtIssue: paidAtIssue ? { settlementAccountNumber: paidAtIssue.account_number } : null,
     })
 
     if (!result.ok) {
+      // The engine's own refusal (a locked period, an account outside the
+      // chart) says what to fix, as on the send route.
+      if (isBookkeepingError(result.bookingError)) {
+        return errorResponse(result.bookingError, log, { requestId })
+      }
       return errorResponseFromCode(result.errorCode, log, {
         requestId,
         ...(result.details ? { details: result.details } : {}),
@@ -115,7 +151,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     return NextResponse.json(
       {
         success: true,
-        status: 'sent',
+        status: paidAtIssue ? 'paid' : 'sent',
         journal_entry_id: result.journalEntryId,
         ...(result.partialFailures.length > 0
           ? { partial: true, partial_failures: result.partialFailures }

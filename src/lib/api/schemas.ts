@@ -36,6 +36,7 @@ import {
   periodEndsBeforeInvoiceMonth,
 } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { ORE_ROUNDING_ACCOUNT } from '@/lib/money'
+import { isPaidAtIssueAccount } from '@/lib/invoices/paid-at-issue'
 import { DIMENSION_RULE_TYPES, ruleValueProblem } from '@/lib/dimensions/rule-value'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
 import { validateJamkning } from '@/lib/salary/jamkning-rules'
@@ -1350,6 +1351,22 @@ export const MarkInvoiceSentSchema = z.object({
     line_description: z.string().optional(),
     dimensions: DimensionsBagSchema.optional(),
   })).min(2).optional(),
+})
+
+// The kontantfaktura (crm#1281, lib/invoices/paid-at-issue.ts): mark-sent
+// only. The invoice is issued already paid, on its fakturadatum, to this
+// 19xx account (kassa, bank, Swish), as one cash verifikat in either
+// accounting method. Deliberately NOT on MarkInvoiceSentSchema: the send
+// route extends that schema and would silently drop the field, emailing an
+// unpaid invoice while the caller believes it is paid.
+export const MarkInvoiceSentPaidAtIssueSchema = z.object({
+  paid_at_issue: z
+    .object({
+      account_number: accountNumber.refine(isPaidAtIssueAccount, {
+        message: 'Betalkontot måste vara ett 19xx-konto (kassa, bank eller Swish)',
+      }),
+    })
+    .optional(),
 })
 
 // Bulk Bokför: drafts are issued (F-number + mark-sent semantics, no email)

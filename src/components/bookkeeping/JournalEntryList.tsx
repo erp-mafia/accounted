@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
+import { Fragment, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -48,7 +48,8 @@ import { ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Copy, Paperclip
 import { cn, formatAmount, formatDate, formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveCurrentPeriodId } from '@/lib/bookkeeping/suggest-fiscal-period'
-import { useFiscalPeriods } from '@/lib/reference-data/hooks'
+import { useCashAccounts, useFiscalPeriods } from '@/lib/reference-data/hooks'
+import { voucherDisplayAmount } from '@/lib/bookkeeping/voucher-display-amount'
 import { Input } from '@/components/ui/input'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
@@ -449,6 +450,15 @@ export default function JournalEntryList({
   // company: a background revalidation of the list must not snap the scope
   // back (the deep-link "all years" visit in particular).
   const { periods: fiscalPeriods, isLoading: fiscalPeriodsLoading } = useFiscalPeriods()
+  // Belopp shows the money that moved when a verifikat records one payment
+  // through one money account (crm#1280). A cash account kept outside 19xx
+  // (a payment provider's balance on 1686) counts as a money account too;
+  // disabled ones included, since old vouchers still sit on them.
+  const { cashAccounts } = useCashAccounts()
+  const extraMoneyAccounts = useMemo(
+    () => new Set(cashAccounts.map((a) => a.ledger_account).filter((a): a is string => !!a)),
+    [cashAccounts],
+  )
   const periodScopeResolvedForRef = useRef<string | null>(null)
   useEffect(() => {
     if (!company?.id) {
@@ -1485,8 +1495,11 @@ export default function JournalEntryList({
               {filteredEntries.map((entry) => {
                 const isExpanded = expandedId === entry.id
                 const lines = (entry.lines || []) as JournalEntryLine[]
-                // Voucher total = sum of the debit side (= credit side when balanced).
-                const voucherTotal = lines.reduce((sum, l) => sum + (Number(l.debit_amount) || 0), 0)
+                // The money line when the verifikat records one payment, else
+                // the omslutning (sum of the debit side); see
+                // lib/bookkeeping/voucher-display-amount.ts. The amount sort
+                // still orders by the omslutning (total_amount).
+                const displayAmount = voucherDisplayAmount(entry, extraMoneyAccounts)
                 const selectable = canWrite && isEligibleForExempt(entry)
                 // A makulerad verifikat should read as struck out, the way
                 // Grundbok already renders it. Applied per data cell rather
@@ -1593,8 +1606,17 @@ export default function JournalEntryList({
                           )}
                         </span>
                       </td>
-                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask', struckCell)}>
-                        {formatCurrency(voucherTotal, 'SEK', { minimumFractionDigits: 2 })}
+                      <td
+                        className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask', struckCell)}
+                        title={
+                          displayAmount.amount !== displayAmount.debitTotal
+                            ? t('amount_money_tooltip', {
+                                total: formatCurrency(displayAmount.debitTotal, 'SEK', { minimumFractionDigits: 2 }),
+                              })
+                            : undefined
+                        }
+                      >
+                        {formatCurrency(displayAmount.amount, 'SEK', { minimumFractionDigits: 2 })}
                       </td>
                       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right py-[9px]')}>
                         <span className="inline-flex items-center justify-end gap-2">
@@ -1881,12 +1903,7 @@ export default function JournalEntryList({
               ? t('confirm_post_description', {
                   voucher: commitVoucherPreview,
                   description: commitTarget.description || '',
-                  amount: formatCurrency(
-                    ((commitTarget.lines || []) as JournalEntryLine[]).reduce(
-                      (sum, l) => sum + (Number(l.debit_amount) || 0),
-                      0,
-                    ),
-                  ),
+                  amount: formatCurrency(voucherDisplayAmount(commitTarget, extraMoneyAccounts).amount),
                 })
               : t('confirm_post_description_generic', {
                   description: commitTarget.description || '',

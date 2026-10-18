@@ -189,7 +189,14 @@ export const emailExtension: Extension = {
           ctx.companyId,
           body.domain,
         )
-        if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
+        if (!result.ok) {
+          // `code` names a failure the page explains on its own terms (the
+          // shared provider account is out of domains, crm#1288).
+          return NextResponse.json(
+            { error: result.error, ...(result.code ? { code: result.code } : {}) },
+            { status: result.status },
+          )
+        }
         return NextResponse.json({ data: result.data })
       },
     },
