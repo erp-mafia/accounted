@@ -1,14 +1,15 @@
 import type { LinkBasisColumns } from '@/lib/links/link-basis'
+import { roundOre } from '@/lib/money'
 import { mappingVersion } from '@/lib/posting/mapping-version'
 import type { BusinessEventDraft } from '@/lib/posting/types'
-import type { SupplierInvoice } from '@/types'
+import type { CreateJournalEntryInput, SupplierInvoice } from '@/types'
 
 /**
  * The business events of a supplier invoice's verifikat, for the posting port
  * (step 2d): its registration (purchase.registered), its credit note
  * (purchase.credited) and the stornos the doors make of them
- * (ledger.storno). Pure: built only while POSTING_EVENTS is shadow or
- * strict, never while it is off.
+ * (ledger.storno); and (step 2e) its payments (purchase.paid). Pure: built
+ * only while POSTING_EVENTS is shadow or strict, never while it is off.
  *
  * The subject is the supplier_invoices row the verifikat books (a credit
  * note is a row of its own, which names the original in
@@ -109,4 +110,85 @@ export function supplierInvoiceStornoBusinessEvent(
     pendingOperationId: linkBasis.link_evidence?.pending_operation_id ?? null,
     jurisdiction: 'SE',
   }
+}
+
+/** What a payment door saw when it posted a supplier invoice's payment verifikat. */
+export interface SupplierPaymentPostingContext {
+  /** The door's link basis, resolved in its request (linkBasisColumns). */
+  linkBasis?: LinkBasisColumns
+  /**
+   * The debt the payment settles, in the invoice's currency: the
+   * supplier_invoice_payments row's amount (an absorbed öre residual
+   * included, a bank fee not).
+   */
+  settledAmount?: number | null
+}
+
+/** What the producer of the payment verifikat knows about its lines. */
+export interface SupplierPaymentLineFacts {
+  /** The account the payment leg credits; null when the door names none (a person's own rows). */
+  paymentAccount: string | null | undefined
+  /** The lines came from the payment generators (supplier-invoice-entries.ts), not a person's own rows. */
+  generated: boolean
+  /** The verifikat books a matched bank line: money out of the business. */
+  bankLine: boolean
+}
+
+type PaymentInvoice = Pick<SupplierInvoice, 'id' | 'supplier_id' | 'currency' | 'vat_amount_sek' | 'vat_treatment'>
+
+/**
+ * The payment verifikat's event (purchase.paid, for faktureringsmetoden's
+ * 2440 clearing and kontantmetoden's payment alike), dated the payment: the
+ * verifikat's own date, the bank line's for a bank match. The subject is the
+ * invoice the payment settles, the party its supplier.
+ *
+ * Amounts are magnitudes: the debt settled in the invoice's currency (as the
+ * payment row records it, from the door), and the kronor that left the
+ * payment account, read off the verifikat's own payment leg (the bank fee on
+ * top included, as on the bank line); none when the door names no payment
+ * account. Only kontantmetoden books moms at payment: its event carries the
+ * moms the invoice states under its vat_treatment, as the registration's
+ * does; a 2440 clearing carries none (the moms was the registration's).
+ * The generators' lines record their rule source; a person's own rows none.
+ */
+export function supplierInvoicePaymentBusinessEvent(
+  invoice: PaymentInvoice,
+  input: Pick<CreateJournalEntryInput, 'entry_date' | 'source_type' | 'lines'>,
+  facts: SupplierPaymentLineFacts,
+  context: SupplierPaymentPostingContext = {},
+): BusinessEventDraft {
+  const settled = context.settledAmount == null ? null : Math.abs(context.settledAmount)
+  const vatSek = invoice.vat_amount_sek == null ? 0 : Math.abs(invoice.vat_amount_sek)
+  const booksVat = input.source_type === 'supplier_invoice_cash_payment' && vatSek > 0
+  const linkEvidence = context.linkBasis?.link_evidence ?? null
+  return {
+    kind: 'purchase.paid',
+    category: null,
+    occurredOn: input.entry_date,
+    subject: { type: 'supplier_invoice', id: invoice.id },
+    party: { type: 'supplier', id: invoice.supplier_id },
+    currency: invoice.currency,
+    amount: settled,
+    amountSek: paidOutOf(input.lines, facts.paymentAccount),
+    taxAmounts: booksVat ? [{ tax: 'vat', treatment: invoice.vat_treatment ?? null, amount_sek: vatSek }] : [],
+    evidence: {
+      direction: facts.bankLine ? 'out' : undefined,
+      link_basis: context.linkBasis?.link_basis ?? undefined,
+      link_evidence: linkEvidence ?? undefined,
+    },
+    pendingOperationId: linkEvidence?.pending_operation_id ?? null,
+    mappingVersion: facts.generated ? mappingVersion('supplierPayment') : null,
+    jurisdiction: 'SE',
+  }
+}
+
+/** The net credit on the payment account in the lines, or null without an account or a credit. */
+function paidOutOf(lines: CreateJournalEntryInput['lines'], paymentAccount: string | null | undefined): number | null {
+  if (!paymentAccount) return null
+  const net = roundOre(
+    lines
+      .filter((line) => line.account_number === paymentAccount)
+      .reduce((sum, line) => sum + (line.credit_amount ?? 0) - (line.debit_amount ?? 0), 0),
+  )
+  return net > 0 ? net : null
 }

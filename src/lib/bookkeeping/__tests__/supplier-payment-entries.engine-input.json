@@ -1,0 +1,571 @@
+[
+  {
+    "name": "payment: a SEK invoice paid in full from the default account",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-28",
+          "description": "Utbetalning leverantörsfaktura F-3000, Kontorsbolaget AB (ankomstnr 60)",
+          "source_type": "supplier_invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000001",
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Utbetalning leverantörsfaktura F-3000, Kontorsbolaget AB (ankomstnr 60)"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Utbetalning leverantörsfaktura F-3000, Kontorsbolaget AB (ankomstnr 60)"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-0"
+    }
+  },
+  {
+    "name": "payment: a partial payment out of private funds (2893) with invoice dimensions",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-29",
+          "description": "Utbetalning leverantörsfaktura F-3001, Kontorsbolaget AB (ankomstnr 61)",
+          "source_type": "supplier_invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000002",
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 600,
+              "credit_amount": 0,
+              "line_description": "Utbetalning leverantörsfaktura F-3001, Kontorsbolaget AB (ankomstnr 61)",
+              "dimensions": {
+                "6": "P100"
+              }
+            },
+            {
+              "account_number": "2893",
+              "debit_amount": 0,
+              "credit_amount": 600,
+              "line_description": "Utbetalning leverantörsfaktura F-3001, Kontorsbolaget AB (ankomstnr 61)",
+              "dimensions": {
+                "6": "P100"
+              }
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-1"
+    }
+  },
+  {
+    "name": "payment: an EUR invoice cleared at the booked rate with a kursförlust",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-10-02",
+          "description": "Utbetalning leverantörsfaktura F-3002, Hosting GmbH (ankomstnr 62)",
+          "source_type": "supplier_invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000003",
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 2300,
+              "credit_amount": 0,
+              "line_description": "Utbetalning leverantörsfaktura F-3002, Hosting GmbH (ankomstnr 62)"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 2323.5,
+              "line_description": "Utbetalning leverantörsfaktura F-3002, Hosting GmbH (ankomstnr 62)"
+            },
+            {
+              "account_number": "7960",
+              "debit_amount": 23.5,
+              "credit_amount": 0,
+              "line_description": "Valutakursförlust"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-2"
+    }
+  },
+  {
+    "name": "payment: an EUR invoice cleared at the booked rate with a kursvinst",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-10-03",
+          "description": "Utbetalning leverantörsfaktura F-3003 (ankomstnr 63)",
+          "source_type": "supplier_invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000004",
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 2300,
+              "credit_amount": 0,
+              "line_description": "Utbetalning leverantörsfaktura F-3003 (ankomstnr 63)"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 2287.75,
+              "line_description": "Utbetalning leverantörsfaktura F-3003 (ankomstnr 63)"
+            },
+            {
+              "account_number": "3960",
+              "debit_amount": 0,
+              "credit_amount": 12.25,
+              "line_description": "Valutakursvinst"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-3"
+    }
+  },
+  {
+    "name": "payment: a matched SEK bank row with öresavrundning and a bank fee",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-10-05",
+          "description": "Utbetalning leverantörsfaktura F-3004 (ankomstnr 64)",
+          "source_type": "supplier_invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000005",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0005",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-10-05",
+              "amount": -1525,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 1499.6,
+              "credit_amount": 0,
+              "line_description": "Kvittning leverantörsskuld"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1524.6,
+              "line_description": "Utbetalning från bank"
+            },
+            {
+              "account_number": "6570",
+              "debit_amount": 25,
+              "credit_amount": 0,
+              "line_description": "Bankavgift"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-4"
+    }
+  },
+  {
+    "name": "payment: no open fiscal period, nothing posted",
+    "calls": [],
+    "outcome": null
+  },
+  {
+    "name": "cash: a domestic invoice at 25 % paid from the default account",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-30",
+          "description": "Kontantbetalning leverantörsfaktura F-3006, Kontorsbolaget AB",
+          "source_type": "supplier_invoice_cash_payment",
+          "source_id": "00000000-0000-4000-8000-000000000007",
+          "lines": [
+            {
+              "account_number": "5410",
+              "debit_amount": 1000,
+              "credit_amount": 0,
+              "line_description": "Kontantbetalning leverantörsfaktura F-3006, Kontorsbolaget AB",
+              "dimensions": {
+                "6": "P200"
+              }
+            },
+            {
+              "account_number": "6110",
+              "debit_amount": 200,
+              "credit_amount": 0,
+              "line_description": "Kontantbetalning leverantörsfaktura F-3006, Kontorsbolaget AB",
+              "dimensions": {
+                "6": "P200"
+              }
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 300,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25% Kontantbetalning leverantörsfaktura F-3006, Kontorsbolaget AB",
+              "dimensions": {
+                "6": "P200"
+              }
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Kontantbetalning leverantörsfaktura F-3006, Kontorsbolaget AB",
+              "dimensions": {
+                "6": "P200"
+              }
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-6"
+    }
+  },
+  {
+    "name": "cash: an EU supplier in EUR under reverse charge, settled from a bank row",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-10-06",
+          "description": "Kontantbetalning leverantörsfaktura F-3007",
+          "source_type": "supplier_invoice_cash_payment",
+          "source_id": "00000000-0000-4000-8000-000000000008",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0008",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-10-06",
+              "amount": -200,
+              "currency": "EUR"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "6540",
+              "debit_amount": 1733.55,
+              "credit_amount": 0,
+              "line_description": "Kontantbetalning leverantörsfaktura F-3007"
+            },
+            {
+              "account_number": "6550",
+              "debit_amount": 577.85,
+              "credit_amount": 0,
+              "line_description": "Kontantbetalning leverantörsfaktura F-3007"
+            },
+            {
+              "account_number": "2645",
+              "debit_amount": 577.85,
+              "credit_amount": 0,
+              "line_description": "Fiktiv ingående moms 25% (omvänd skattskyldighet)"
+            },
+            {
+              "account_number": "2614",
+              "debit_amount": 0,
+              "credit_amount": 577.85,
+              "line_description": "Fiktiv utgående moms 25% (omvänd skattskyldighet)"
+            },
+            {
+              "account_number": "4535",
+              "debit_amount": 2311.4,
+              "credit_amount": 0,
+              "line_description": "Inköp tjänster annat EU-land 25% (basbelopp omvänd skattskyldighet)"
+            },
+            {
+              "account_number": "4598",
+              "debit_amount": 0,
+              "credit_amount": 2311.4,
+              "line_description": "Motkonto beräknad omvänd moms 25%"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 2311.4,
+              "line_description": "Kontantbetalning leverantörsfaktura F-3007"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-7"
+    }
+  },
+  {
+    "name": "cash: a SEK invoice settled with a whole-krona bank row and a bank fee",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-10-07",
+          "description": "Kontantbetalning leverantörsfaktura F-3008",
+          "source_type": "supplier_invoice_cash_payment",
+          "source_id": "00000000-0000-4000-8000-000000000009",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0009",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-10-07",
+              "amount": -1520,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "5410",
+              "debit_amount": 1199.68,
+              "credit_amount": 0,
+              "line_description": "Kontantbetalning leverantörsfaktura F-3008"
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 299.92,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25% Kontantbetalning leverantörsfaktura F-3008"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1520,
+              "line_description": "Kontantbetalning leverantörsfaktura F-3008"
+            },
+            {
+              "account_number": "3740",
+              "debit_amount": 0.4,
+              "credit_amount": 0,
+              "line_description": "Öresavrundning"
+            },
+            {
+              "account_number": "6570",
+              "debit_amount": 20,
+              "credit_amount": 0,
+              "line_description": "Bankavgift"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-8"
+    }
+  },
+  {
+    "name": "cash: no open fiscal period, nothing posted",
+    "calls": [],
+    "outcome": null
+  },
+  {
+    "name": "bank match: a kontantmetoden booking of a matched row",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-10-08",
+          "description": "Kontantbetalning leverantörsfaktura F-3010",
+          "source_type": "supplier_invoice_cash_payment",
+          "source_id": "00000000-0000-4000-8000-000000000011",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0011",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-10-08",
+              "amount": -1500,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "5410",
+              "debit_amount": 1000,
+              "credit_amount": 0,
+              "line_description": "Kontantbetalning leverantörsfaktura F-3010"
+            },
+            {
+              "account_number": "6110",
+              "debit_amount": 200,
+              "credit_amount": 0,
+              "line_description": "Kontantbetalning leverantörsfaktura F-3010"
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 300,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25% Kontantbetalning leverantörsfaktura F-3010"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Kontantbetalning leverantörsfaktura F-3010"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-10"
+    }
+  },
+  {
+    "name": "bank match: a SEK clearing of a matched row names the supplier",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-10-09",
+          "description": "Utbetalning leverantörsfaktura F-3011, Kontorsbolaget AB (ankomstnr 71)",
+          "source_type": "supplier_invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000012",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0012",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1931",
+              "date": "2026-10-09",
+              "amount": -1500,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Kvittning leverantörsskuld"
+            },
+            {
+              "account_number": "1931",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Utbetalning från bank"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-11"
+    }
+  },
+  {
+    "name": "bank match: an EUR clearing with a kursdifferens",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-10-10",
+          "description": "Utbetalning leverantörsfaktura F-3012 (ankomstnr 72)",
+          "source_type": "supplier_invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000013",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-0000000a0013",
+              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
+              "settlement_account": "1930",
+              "date": "2026-10-10",
+              "amount": -200,
+              "currency": "EUR"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 2300,
+              "credit_amount": 0,
+              "line_description": "Utbetalning leverantörsfaktura F-3012 (ankomstnr 72)"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 2311.4,
+              "line_description": "Utbetalning leverantörsfaktura F-3012 (ankomstnr 72)"
+            },
+            {
+              "account_number": "7960",
+              "debit_amount": 11.4,
+              "credit_amount": 0,
+              "line_description": "Valutakursförlust"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-12"
+    }
+  }
+]

@@ -34,8 +34,14 @@ import {
   createSupplierInvoiceCashEntry,
   createSupplierInvoicePaymentEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
-import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { buildSupplierDescription, supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
+import {
+  supplierInvoicePaymentBusinessEvent,
+  supplierInvoiceStornoBusinessEvent,
+  type SupplierPaymentPostingContext,
+} from '@/lib/bookkeeping/supplier-invoice-business-events'
+import { postingPort } from '@/lib/posting/port'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import {
@@ -48,7 +54,7 @@ import { findDuplicatePaymentCandidatesForSupplierInvoice } from '@/lib/invoices
 import { recordSupplierInvoiceDuplicateGuardBypass } from '@/lib/invoices/duplicate-guard-history'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { emitSupplierInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
-import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
+import type { CreateJournalEntryInput, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { linkBasisColumns } from '@/lib/links/stamp'
@@ -475,6 +481,26 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     // Strict-mode: book the JE FIRST. Failure aborts before any SI mutation.
     let journalEntryId: string | null = null
+    // Posting port (step 2e): the door's side of the purchase.paid event,
+    // read only while POSTING_EVENTS is on. The caller stated it is paid; on
+    // an API key the request scope records client_asserted.
+    const posting = (): SupplierPaymentPostingContext => ({
+      linkBasis: linkBasisColumns('user_created'),
+      settledAmount: paymentAmount,
+    })
+    // The storno of a payment verifikat this door posted and could not keep:
+    // ledger.storno of the invoice, system_derived (no one chose it), dated
+    // the day; the verifikat itself on the payment date, as before.
+    const reverseOwnPayment = (entryId: string) =>
+      postingPort.reverseJournalEntry({
+        supabase: ctx.supabase,
+        companyId: ctx.companyId!,
+        userId: ctx.userId,
+        entryId,
+        reversalDate: paymentDate,
+        event: () => supplierInvoiceStornoBusinessEvent(invoiceId, todayIsoStockholm(), linkBasisColumns('system_derived')),
+        role: 'reversal',
+      })
     try {
       if (customLines) {
         const totalDebit = customLines.reduce((s, l) => s + l.debit_amount, 0)
@@ -498,13 +524,26 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           supplierInvoiceReference(typed.supplier_invoice_number, typed.arrival_number),
           supplierRow?.name || undefined,
         )
-        const entry = await createJournalEntry(ctx.supabase, ctx.companyId!, ctx.userId, {
+        const input: CreateJournalEntryInput = {
           fiscal_period_id: fiscalPeriodId,
           entry_date: paymentDate,
           description: desc,
           source_type: sourceType,
           source_id: typed.id,
           lines: customLines,
+        }
+        const entry = await postingPort.postJournalEntry({
+          supabase: ctx.supabase,
+          companyId: ctx.companyId!,
+          userId: ctx.userId,
+          event: () =>
+            supplierInvoicePaymentBusinessEvent(
+              typed as unknown as SupplierInvoice,
+              input,
+              { paymentAccount: bodyPaymentAccount, generated: false, bankLine: false },
+              posting(),
+            ),
+          input,
         })
         journalEntryId = entry?.id ?? null
       } else if (useCashEntry) {
@@ -521,6 +560,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           // Foreign invoice: the SEK that left the account pins the entry to
           // the payment-date rate, as a bank match does.
           bodyAmountSek,
+          undefined, // bankTransaction: no bank line on this door
+          undefined, // bankFeeSek
+          posting,
         )
         journalEntryId = entry?.id ?? null
       } else {
@@ -534,6 +576,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           exchangeRateDifference,
           supplierRow?.name,
           bodyPaymentAccount,
+          undefined, // bankTransaction: no bank line on this door
+          undefined, // bankFeeSek
+          undefined, // sekClearingDebt
+          posting,
         )
         journalEntryId = entry?.id ?? null
       }
@@ -585,11 +631,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
       // The payment JE is already posted but the SI update failed: without a
       // storno, the AP ledger would carry a 2440/1930 entry with no matching
-      // SI status change (BFL 5 kap 5 § integrity violation). reverseEntry()
+      // SI status change (BFL 5 kap 5 § integrity violation). The storno
       // takes the entry id directly (no pre-fetch needed), matching the CAS-
       // race branch immediately below.
       try {
-        await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, journalEntryId, paymentDate)
+        await reverseOwnPayment(journalEntryId)
       } catch (revErr) {
         ctx.log.error('orphan JE storno failed after SI update error: manual reconciliation required', revErr as Error, {
           invoiceId,
@@ -613,7 +659,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         journalEntryId,
       })
       try {
-        await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, journalEntryId, paymentDate)
+        await reverseOwnPayment(journalEntryId)
       } catch (revErr) {
         ctx.log.error('orphan JE storno failed: manual reconciliation required', revErr as Error, {
           invoiceId,

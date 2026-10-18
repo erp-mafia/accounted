@@ -693,6 +693,7 @@ describe('POST /api/transactions/[id]/book', () => {
       'user-1',
       'je-new',
       expect.any(String),
+      expect.any(Function), // the storno's business event, read by the posting port only while POSTING_EVENTS is on
     )
   })
 
@@ -718,6 +719,7 @@ describe('POST /api/transactions/[id]/book', () => {
       'user-1',
       'je-new',
       expect.any(String),
+      expect.any(Function), // the storno's business event, read by the posting port only while POSTING_EVENTS is on
     )
   })
 

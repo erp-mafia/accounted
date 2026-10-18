@@ -1,0 +1,1266 @@
+{
+  "dumps": [
+    {
+      "flow": "mark-paid (dashboard): a registered invoice paid in full from the default account",
+      "entries": [
+        {
+          "voucher_series": "E",
+          "voucher_number": 1,
+          "entry_date": "2026-03-20",
+          "description": "Utbetalning leverantörsfaktura F-2001, Kontorsbolaget AB (ankomstnr 1)",
+          "source_type": "supplier_invoice_paid",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1500",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Utbetalning leverantörsfaktura F-2001, Kontorsbolaget AB (ankomstnr 1)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "1500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Utbetalning leverantörsfaktura F-2001, Kontorsbolaget AB (ankomstnr 1)",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "mark-paid (dashboard): a partial payment on the person's own rows",
+      "entries": [
+        {
+          "voucher_series": "E",
+          "voucher_number": 2,
+          "entry_date": "2026-03-21",
+          "description": "Utbetalning leverantörsfaktura F-2002, Kontorsbolaget AB",
+          "source_type": "supplier_invoice_paid",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "600",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "600",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Delbetalning",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "mark-paid (dashboard): kontantmetoden books a never-registered invoice with its moms at payment",
+      "entries": [
+        {
+          "voucher_series": "E",
+          "voucher_number": 3,
+          "entry_date": "2026-03-22",
+          "description": "Kontantbetalning leverantörsfaktura F-2003, Kontorsbolaget AB",
+          "source_type": "supplier_invoice_cash_payment",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1500",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Kontantbetalning leverantörsfaktura F-2003, Kontorsbolaget AB",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "300",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 25% Kontantbetalning leverantörsfaktura F-2003, Kontorsbolaget AB",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "5410",
+              "line_description": "Kontantbetalning leverantörsfaktura F-2003, Kontorsbolaget AB",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "200",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": "Kontantbetalning leverantörsfaktura F-2003, Kontorsbolaget AB",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "mark-paid (v1): an EUR invoice cleared at the booked rate, the kursdifferens from amount_sek",
+      "entries": [
+        {
+          "voucher_series": "E",
+          "voucher_number": 4,
+          "entry_date": "2026-04-02",
+          "description": "Utbetalning leverantörsfaktura EU-2004, Hosting GmbH (ankomstnr 4)",
+          "source_type": "supplier_invoice_paid",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "2311.4",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Utbetalning leverantörsfaktura EU-2004, Hosting GmbH (ankomstnr 4)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "2300",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Utbetalning leverantörsfaktura EU-2004, Hosting GmbH (ankomstnr 4)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "11.4",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7960",
+              "line_description": "Valutakursförlust",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "mark-paid (v1): the invoice flip fails, so the payment is reversed on the payment date",
+      "entries": [
+        {
+          "voucher_series": "E",
+          "voucher_number": 5,
+          "entry_date": "2026-04-03",
+          "description": "Utbetalning leverantörsfaktura F-2005, Kontorsbolaget AB (ankomstnr 5)",
+          "source_type": "supplier_invoice_paid",
+          "status": "reversed",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1500",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Utbetalning leverantörsfaktura F-2005, Kontorsbolaget AB (ankomstnr 5)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "1500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Utbetalning leverantörsfaktura F-2005, Kontorsbolaget AB (ankomstnr 5)",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "E",
+          "voucher_number": 6,
+          "entry_date": "2026-04-03",
+          "description": "Makulering: Utbetalning leverantörsfaktura F-2005, Kontorsbolaget AB (ankomstnr 5)",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "1500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Reversal: Utbetalning leverantörsfaktura F-2005, Kontorsbolaget AB (ankomstnr 5)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1500",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Reversal: Utbetalning leverantörsfaktura F-2005, Kontorsbolaget AB (ankomstnr 5)",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "bank match (dashboard): a SEK row paying more than owed, the excess on 6570",
+      "entries": [
+        {
+          "voucher_series": "E",
+          "voucher_number": 7,
+          "entry_date": "2026-04-15",
+          "description": "Utbetalning leverantörsfaktura F-2006, Kontorsbolaget AB (ankomstnr 6)",
+          "source_type": "supplier_invoice_paid",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1525",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Utbetalning från bank",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "1500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Kvittning leverantörsskuld",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "25",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6570",
+              "line_description": "Bankavgift",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "bank match (payment order debit): a signed payment settled from its debit on a rule",
+      "entries": [
+        {
+          "voucher_series": "E",
+          "voucher_number": 8,
+          "entry_date": "2026-04-16",
+          "description": "Utbetalning leverantörsfaktura F-2007, Kontorsbolaget AB (ankomstnr 7)",
+          "source_type": "supplier_invoice_paid",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1500",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Utbetalning från bank",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "1500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Kvittning leverantörsskuld",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "bank match (v1): a row categorized first has that verifikat reversed, then the payment is booked",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 2,
+          "entry_date": "2026-06-22",
+          "description": "Makulering: Kontorsbolaget F-2008",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "1500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Reversal: Kontorsbolaget F-2008",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "300",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Reversal: Ingående moms 25%",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1200",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": "Reversal: Kontorsbolaget F-2008",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "E",
+          "voucher_number": 9,
+          "entry_date": "2026-06-22",
+          "description": "Utbetalning leverantörsfaktura F-2008, Kontorsbolaget AB (ankomstnr 8)",
+          "source_type": "supplier_invoice_paid",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1500",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Utbetalning från bank",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "1500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Kvittning leverantörsskuld",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "bank match (v1): kontantmetoden settles a never-registered invoice from the row",
+      "entries": [
+        {
+          "voucher_series": "E",
+          "voucher_number": 10,
+          "entry_date": "2026-04-21",
+          "description": "Kontantbetalning leverantörsfaktura F-2009",
+          "source_type": "supplier_invoice_cash_payment",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1500",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Kontantbetalning leverantörsfaktura F-2009",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "300",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 25% Kontantbetalning leverantörsfaktura F-2009",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "5410",
+              "line_description": "Kontantbetalning leverantörsfaktura F-2009",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "200",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": "Kontantbetalning leverantörsfaktura F-2009",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "book (dashboard): a withdrawal booked on the person's own rows",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 3,
+          "entry_date": "2026-05-04",
+          "description": "Programvarulicens",
+          "source_type": "bank_transaction",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1250",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "250",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "5420",
+              "line_description": null,
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "book (dashboard): a foreign deposit booked on the person's own rows",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 4,
+          "entry_date": "2026-05-06",
+          "description": "Konsultuppdrag EU",
+          "source_type": "bank_transaction",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "1150.25",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1150.25",
+              "exchange_rate": null,
+              "account_number": "3308",
+              "line_description": null,
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "book (dashboard): the bank line refuses the link, so the verifikat is reversed",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 5,
+          "entry_date": "2026-05-08",
+          "description": "Kontorsmaterial",
+          "source_type": "bank_transaction",
+          "status": "reversed",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "400",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "400",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": null,
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 6,
+          "entry_date": "2026-05-08",
+          "description": "Makulering: Kontorsmaterial",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "400",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Reversal: ",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "400",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": "Reversal: ",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "uncategorize (dashboard): a booked row's verifikat is reversed",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 8,
+          "entry_date": "2026-05-11",
+          "description": "Makulering: Felbokad rad",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "300",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Reversal: ",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "300",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": "Reversal: ",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "uncategorize (v1): a categorized row's verifikat is reversed",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 10,
+          "entry_date": "2026-05-12",
+          "description": "Makulering: Kontorsvaror",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Reversal: Kontorsvaror",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "100",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Reversal: Ingående moms 25%",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "400",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": "Reversal: Kontorsvaror",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "book-direct (inbox): a receipt without a bank row books the inbox item",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 11,
+          "entry_date": "2026-05-14",
+          "description": "Kvitto lunchmöte",
+          "source_type": "inbox_item",
+          "status": "posted",
+          "notes": "Deltagare: Anna, Per. Syfte: kundmöte",
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "99",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "19.8",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "79.2",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6540",
+              "line_description": null,
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "book-direct (inbox): a receipt booked against the bank row the person picked",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 12,
+          "entry_date": "2026-05-15",
+          "description": "Kvitto från Spotify",
+          "source_type": "bank_transaction",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "99",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "19.8",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "79.2",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6540",
+              "line_description": null,
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "book-direct (inbox): the item refuses the claim, so the verifikat is reversed",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 13,
+          "entry_date": "2026-05-18",
+          "description": "Kvitto taxi",
+          "source_type": "inbox_item",
+          "status": "reversed",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "99",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "19.8",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "79.2",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6540",
+              "line_description": null,
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 14,
+          "entry_date": "2026-05-18",
+          "description": "Makulering: Kvitto taxi",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "99",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Reversal: ",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "19.8",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Reversal: ",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "79.2",
+              "exchange_rate": null,
+              "account_number": "6540",
+              "line_description": "Reversal: ",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "register": {
+    "invoices": [
+      {
+        "supplier_invoice_number": "F-2001",
+        "status": "paid",
+        "currency": "SEK",
+        "paid_amount": "1500",
+        "remaining_amount": "0",
+        "paid_at": "2026-03-20 12:00:00+00",
+        "payment_voucher": "E1:posted",
+        "transaction": null
+      },
+      {
+        "supplier_invoice_number": "F-2002",
+        "status": "partially_paid",
+        "currency": "SEK",
+        "paid_amount": "600",
+        "remaining_amount": "900",
+        "paid_at": null,
+        "payment_voucher": "E2:posted",
+        "transaction": null
+      },
+      {
+        "supplier_invoice_number": "F-2003",
+        "status": "paid",
+        "currency": "SEK",
+        "paid_amount": "1500",
+        "remaining_amount": "0",
+        "paid_at": "2026-03-22 12:00:00+00",
+        "payment_voucher": "E3:posted",
+        "transaction": null
+      },
+      {
+        "supplier_invoice_number": "EU-2004",
+        "status": "paid",
+        "currency": "EUR",
+        "paid_amount": "200",
+        "remaining_amount": "0",
+        "paid_at": "2026-04-02 12:00:00+00",
+        "payment_voucher": "E4:posted",
+        "transaction": null
+      },
+      {
+        "supplier_invoice_number": "F-2005",
+        "status": "approved",
+        "currency": "SEK",
+        "paid_amount": "0",
+        "remaining_amount": "1500",
+        "paid_at": null,
+        "payment_voucher": null,
+        "transaction": null
+      },
+      {
+        "supplier_invoice_number": "F-2006",
+        "status": "paid",
+        "currency": "SEK",
+        "paid_amount": "1500",
+        "remaining_amount": "0",
+        "paid_at": "2026-04-15 12:00:00+00",
+        "payment_voucher": "E7:posted",
+        "transaction": "Kontorsbolaget F-2006"
+      },
+      {
+        "supplier_invoice_number": "F-2007",
+        "status": "paid",
+        "currency": "SEK",
+        "paid_amount": "1500",
+        "remaining_amount": "0",
+        "paid_at": "2026-04-16 12:00:00+00",
+        "payment_voucher": "E8:posted",
+        "transaction": "Betalning F-2007"
+      },
+      {
+        "supplier_invoice_number": "F-2008",
+        "status": "paid",
+        "currency": "SEK",
+        "paid_amount": "1500",
+        "remaining_amount": "0",
+        "paid_at": "2026-06-22 12:00:00+00",
+        "payment_voucher": "E9:posted",
+        "transaction": "Kontorsbolaget F-2008"
+      },
+      {
+        "supplier_invoice_number": "F-2009",
+        "status": "paid",
+        "currency": "SEK",
+        "paid_amount": "1500",
+        "remaining_amount": "0",
+        "paid_at": "2026-04-21 12:00:00+00",
+        "payment_voucher": "E10:posted",
+        "transaction": "Kontorsbolaget F-2009"
+      }
+    ],
+    "payments": [
+      {
+        "supplier_invoice_number": "EU-2004",
+        "payment_date": "2026-04-02",
+        "amount": "200",
+        "currency": "EUR",
+        "exchange_rate_difference": "-11.4",
+        "notes": null,
+        "link_basis": "client_asserted",
+        "link_evidence": null,
+        "voucher": "E4:posted",
+        "transaction": null
+      },
+      {
+        "supplier_invoice_number": "F-2001",
+        "payment_date": "2026-03-20",
+        "amount": "1500",
+        "currency": "SEK",
+        "exchange_rate_difference": "0",
+        "notes": null,
+        "link_basis": "user_created",
+        "link_evidence": null,
+        "voucher": "E1:posted",
+        "transaction": null
+      },
+      {
+        "supplier_invoice_number": "F-2002",
+        "payment_date": "2026-03-21",
+        "amount": "600",
+        "currency": "SEK",
+        "exchange_rate_difference": "0",
+        "notes": null,
+        "link_basis": "user_created",
+        "link_evidence": null,
+        "voucher": "E2:posted",
+        "transaction": null
+      },
+      {
+        "supplier_invoice_number": "F-2003",
+        "payment_date": "2026-03-22",
+        "amount": "1500",
+        "currency": "SEK",
+        "exchange_rate_difference": "0",
+        "notes": null,
+        "link_basis": "user_created",
+        "link_evidence": null,
+        "voucher": "E3:posted",
+        "transaction": null
+      },
+      {
+        "supplier_invoice_number": "F-2006",
+        "payment_date": "2026-04-15",
+        "amount": "1500",
+        "currency": "SEK",
+        "exchange_rate_difference": "0",
+        "notes": null,
+        "link_basis": "user_confirmed",
+        "link_evidence": null,
+        "voucher": "E7:posted",
+        "transaction": "Kontorsbolaget F-2006"
+      },
+      {
+        "supplier_invoice_number": "F-2007",
+        "payment_date": "2026-04-16",
+        "amount": "1500",
+        "currency": "SEK",
+        "exchange_rate_difference": "0",
+        "notes": null,
+        "link_basis": "rule_ocr_reference",
+        "link_evidence": {
+          "score": 1,
+          "rule_id": "payment_order:end_to_end_id"
+        },
+        "voucher": "E8:posted",
+        "transaction": "Betalning F-2007"
+      },
+      {
+        "supplier_invoice_number": "F-2008",
+        "payment_date": "2026-06-22",
+        "amount": "1500",
+        "currency": "SEK",
+        "exchange_rate_difference": "0",
+        "notes": null,
+        "link_basis": "client_asserted",
+        "link_evidence": null,
+        "voucher": "E9:posted",
+        "transaction": "Kontorsbolaget F-2008"
+      },
+      {
+        "supplier_invoice_number": "F-2009",
+        "payment_date": "2026-04-21",
+        "amount": "1500",
+        "currency": "SEK",
+        "exchange_rate_difference": "0",
+        "notes": null,
+        "link_basis": "client_asserted",
+        "link_evidence": null,
+        "voucher": "E10:posted",
+        "transaction": "Kontorsbolaget F-2009"
+      }
+    ],
+    "transactions": [
+      {
+        "date": "2026-04-15",
+        "description": "Kontorsbolaget F-2006",
+        "amount": "-1525",
+        "currency": "SEK",
+        "category": "uncategorized",
+        "is_business": true,
+        "link_basis": "user_confirmed",
+        "voucher": "E7:posted",
+        "supplier_invoice": "F-2006"
+      },
+      {
+        "date": "2026-04-16",
+        "description": "Betalning F-2007",
+        "amount": "-1500",
+        "currency": "SEK",
+        "category": "uncategorized",
+        "is_business": true,
+        "link_basis": "rule_ocr_reference",
+        "voucher": "E8:posted",
+        "supplier_invoice": "F-2007"
+      },
+      {
+        "date": "2026-04-21",
+        "description": "Kontorsbolaget F-2009",
+        "amount": "-1500",
+        "currency": "SEK",
+        "category": "uncategorized",
+        "is_business": true,
+        "link_basis": "client_asserted",
+        "voucher": "E10:posted",
+        "supplier_invoice": "F-2009"
+      },
+      {
+        "date": "2026-05-04",
+        "description": "Programvarulicens",
+        "amount": "-1250",
+        "currency": "SEK",
+        "category": "uncategorized",
+        "is_business": true,
+        "link_basis": "user_created",
+        "voucher": "A3:posted",
+        "supplier_invoice": null
+      },
+      {
+        "date": "2026-05-06",
+        "description": "Consulting GmbH",
+        "amount": "100",
+        "currency": "EUR",
+        "category": "uncategorized",
+        "is_business": true,
+        "link_basis": "user_created",
+        "voucher": "A4:posted",
+        "supplier_invoice": null
+      },
+      {
+        "date": "2026-05-08",
+        "description": "Kontorsmaterial",
+        "amount": "-400",
+        "currency": "SEK",
+        "category": "uncategorized",
+        "is_business": null,
+        "link_basis": null,
+        "voucher": null,
+        "supplier_invoice": null
+      },
+      {
+        "date": "2026-05-11",
+        "description": "Felbokad rad",
+        "amount": "-300",
+        "currency": "SEK",
+        "category": null,
+        "is_business": null,
+        "link_basis": null,
+        "voucher": null,
+        "supplier_invoice": null
+      },
+      {
+        "date": "2026-05-12",
+        "description": "Kontorsvaror",
+        "amount": "-500",
+        "currency": "SEK",
+        "category": null,
+        "is_business": null,
+        "link_basis": null,
+        "voucher": null,
+        "supplier_invoice": null
+      },
+      {
+        "date": "2026-05-15",
+        "description": "SPOTIFY",
+        "amount": "-99",
+        "currency": "SEK",
+        "category": "uncategorized",
+        "is_business": true,
+        "link_basis": "user_created",
+        "voucher": "A12:posted",
+        "supplier_invoice": null
+      },
+      {
+        "date": "2026-06-22",
+        "description": "Kontorsbolaget F-2008",
+        "amount": "-1500",
+        "currency": "SEK",
+        "category": null,
+        "is_business": true,
+        "link_basis": "client_asserted",
+        "voucher": "E9:posted",
+        "supplier_invoice": "F-2008"
+      }
+    ],
+    "inbox": [
+      {
+        "file_name": "kvitto-2015.pdf",
+        "voucher": "A11:posted",
+        "matched_transaction": null
+      },
+      {
+        "file_name": "kvitto-2016.pdf",
+        "voucher": "A12:posted",
+        "matched_transaction": "SPOTIFY"
+      },
+      {
+        "file_name": "kvitto-2017.pdf",
+        "voucher": null,
+        "matched_transaction": null
+      }
+    ],
+    "documents": [
+      {
+        "file_name": "kvitto-2015.pdf",
+        "voucher": "A11:posted",
+        "link_basis": "user_created"
+      },
+      {
+        "file_name": "kvitto-2016.pdf",
+        "voucher": "A12:posted",
+        "link_basis": "user_created"
+      },
+      {
+        "file_name": "kvitto-2017.pdf",
+        "voucher": null,
+        "link_basis": null
+      }
+    ]
+  }
+}

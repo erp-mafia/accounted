@@ -18,8 +18,15 @@ import { MatchSupplierInvoiceSchema } from '@/lib/api/schemas'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { createSupplierBankMatchEntry } from '@/lib/bookkeeping/supplier-bank-match-entry'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
-import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { buildSupplierDescription, supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
+import { bankLineStornoBusinessEvent } from '@/lib/bookkeeping/bank-line-business-events'
+import {
+  supplierInvoicePaymentBusinessEvent,
+  type SupplierPaymentPostingContext,
+} from '@/lib/bookkeeping/supplier-invoice-business-events'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { postingPort } from '@/lib/posting/port'
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
@@ -30,7 +37,7 @@ import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-inv
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { eventBus } from '@/lib/events/bus'
 import { emitSupplierInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
-import type { SupplierInvoice, Transaction } from '@/types'
+import type { CreateJournalEntryInput, SupplierInvoice, Transaction } from '@/types'
 import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
 import { linkBasisColumns } from '@/lib/links/stamp'
 
@@ -260,12 +267,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     if (transaction.journal_entry_id && !priorReconciliationLink) {
       try {
-        await reverseEntry(
-          ctx.supabase,
-          ctx.companyId!,
-          ctx.userId,
-          transaction.journal_entry_id,
-        )
+        // Through the posting port: while POSTING_EVENTS is on, the storno
+        // records ledger.storno of the bank line, system_derived (the match
+        // replaces the booking; no one chose the storno itself), dated the day.
+        await postingPort.reverseJournalEntry({
+          supabase: ctx.supabase,
+          companyId: ctx.companyId!,
+          userId: ctx.userId,
+          entryId: transaction.journal_entry_id,
+          event: () => bankLineStornoBusinessEvent(txId, todayIsoStockholm(), linkBasisColumns('system_derived')),
+          role: 'reversal',
+        })
         const { error: clearErr } = await ctx.supabase
           .from('transactions')
           .update({ journal_entry_id: null })
@@ -285,6 +297,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // Strict-mode for the public API: abort before mutating state if the
     // payment JE can't be created. See the parallel comment in match-invoice.
     let journalEntryId: string | null = null
+    // Posting port (step 2e): the door's side of the purchase.paid event,
+    // read only while POSTING_EVENTS is on. The caller named this bank line
+    // for this invoice; on an API key the request scope records client_asserted.
+    const posting = (): SupplierPaymentPostingContext => ({
+      linkBasis: linkBasisColumns('user_confirmed'),
+      settledAmount: plan.settledAmount,
+    })
     try {
       if (customLines) {
         const sourceType = plan.booking.kind === 'cash' ? 'supplier_invoice_cash_payment' : 'supplier_invoice_paid'
@@ -293,7 +312,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           supplierInvoiceReference(invoice.supplier_invoice_number, invoice.arrival_number),
           invoice.supplier?.name || undefined,
         )
-        const je = await createJournalEntry(ctx.supabase, ctx.companyId!, ctx.userId, {
+        const input: CreateJournalEntryInput = {
           fiscal_period_id: fiscalPeriodId,
           entry_date: transaction.date,
           description: desc,
@@ -301,6 +320,19 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           source_id: invoice.id,
           bank_booking_context: [bankBookingContext(transaction, paymentAccount)],
           lines: customLines,
+        }
+        const je = await postingPort.postJournalEntry({
+          supabase: ctx.supabase,
+          companyId: ctx.companyId!,
+          userId: ctx.userId,
+          event: () =>
+            supplierInvoicePaymentBusinessEvent(
+              invoice as SupplierInvoice,
+              input,
+              { paymentAccount, generated: false, bankLine: true },
+              posting(),
+            ),
+          input,
         })
         if (je) journalEntryId = je.id
       } else {
@@ -314,6 +346,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           booking: plan.booking,
           paymentAccount,
           transaction,
+          posting,
         })
         if (je) journalEntryId = je.id
       }

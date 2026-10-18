@@ -1,0 +1,1 @@
+[2026-10-18] Step 2e leaves link_supplier_invoice_to_voucher, bulk_book_transactions and match_batch_allocate on SQL: each drafts and commits in one transaction, so an event link needs it to take an event id, a migration of its own; the brief allowed none.

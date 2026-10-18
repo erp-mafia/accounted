@@ -14,6 +14,11 @@
  * Two callers: a person confirming a suggestion (the match route, action
  * 'matched'), and the debit of a bank payment order the owner already
  * BankID-signed (lib/payments/orders/auto-settle.ts, action 'auto_matched').
+ *
+ * Posting port (step 2e): the payment verifikat, the generator's or the
+ * person's own rows, goes through lib/posting and, while POSTING_EVENTS is
+ * shadow or strict, records purchase.paid with the door's link basis and
+ * the debt settled, linked to the draft before a voucher number is drawn.
  * A refusal names the structured error code the route answers with; one that
  * carries `error` is answered through errorResponse (a bookkeeping error, a
  * database error), the rest through errorResponseFromCode.
@@ -26,8 +31,13 @@ import { createSupplierBankMatchEntry } from '@/lib/bookkeeping/supplier-bank-ma
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { planSupplierBankMatch, type SupplierBankMatchPlan } from '@/lib/invoices/apply-supplier-payment'
-import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { buildSupplierDescription, supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
+import {
+  supplierInvoicePaymentBusinessEvent,
+  type SupplierPaymentPostingContext,
+} from '@/lib/bookkeeping/supplier-invoice-business-events'
+import { postingPort } from '@/lib/posting/port'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { logMatchEvent, type MatchAction } from '@/lib/invoices/match-log'
@@ -35,7 +45,7 @@ import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-inv
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { emitSupplierInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { eventBus } from '@/lib/events/bus'
-import type { CreateJournalEntryLineInput, SupplierInvoice, Transaction } from '@/types'
+import type { CreateJournalEntryInput, CreateJournalEntryLineInput, SupplierInvoice, Transaction } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
 import { linkBasisColumns, linkBasisColumnsFor, type LinkBasisInput } from '@/lib/links/stamp'
@@ -159,6 +169,11 @@ export async function bookSupplierBankMatch(
   }
 
   let journalEntryId: string | null = null
+  // The door's side of the purchase.paid event, read only while the port is on.
+  const posting = (): SupplierPaymentPostingContext => ({
+    linkBasis: linkBasisColumnsFor(args.linkBasis),
+    settledAmount: plan.settledAmount,
+  })
 
   try {
     if (customLines) {
@@ -172,7 +187,7 @@ export async function bookSupplierBankMatch(
         }
       }
       const sourceType = plan.booking.kind === 'cash' ? 'supplier_invoice_cash_payment' : 'supplier_invoice_paid'
-      const journalEntry = await createJournalEntry(supabase, companyId, userId, {
+      const input: CreateJournalEntryInput = {
         fiscal_period_id: fiscalPeriodId,
         entry_date: transaction.date,
         description: desc,
@@ -180,6 +195,14 @@ export async function bookSupplierBankMatch(
         source_id: invoice.id,
         bank_booking_context: [bankBookingContext(transaction, paymentAccount)],
         lines: customLines,
+      }
+      const journalEntry = await postingPort.postJournalEntry({
+        supabase,
+        companyId,
+        userId,
+        event: () =>
+          supplierInvoicePaymentBusinessEvent(invoice, input, { paymentAccount, generated: false, bankLine: true }, posting()),
+        input,
       })
       if (journalEntry) journalEntryId = journalEntry.id
     } else {
@@ -191,6 +214,7 @@ export async function bookSupplierBankMatch(
         booking: plan.booking,
         paymentAccount,
         transaction,
+        posting,
       })
       if (journalEntry) journalEntryId = journalEntry.id
     }

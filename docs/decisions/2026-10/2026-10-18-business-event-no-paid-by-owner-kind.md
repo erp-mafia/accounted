@@ -1,0 +1,1 @@
+[2026-10-18] No purchase.paid_by_owner kind: a payment out of private funds (2893 and the like) is booked as supplier_invoice_paid like any other, so it records purchase.paid, the kind history projects; the payment account is in the lines, and an account is never read as a kind.

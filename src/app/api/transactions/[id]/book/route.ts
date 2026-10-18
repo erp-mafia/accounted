@@ -3,7 +3,9 @@ import { bankBookingContext, booksBankLineInBankDirection } from '@/lib/bookkeep
 import { NextResponse } from 'next/server'
 import { eventBus } from '@/lib/events'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { bankLineBookingBusinessEvent, bankLineStornoBusinessEvent } from '@/lib/bookkeeping/bank-line-business-events'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { postingPort } from '@/lib/posting/port'
 import { resolveCashAccountVoucherSeries } from '@/lib/bookkeeping/cash-account-voucher-series'
 import { guardBookedCounterLines } from '@/lib/cash-accounts/service'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
@@ -230,20 +232,36 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // What was on offer, taken before the booking.
     const suggestionSnapshot = await snapshotSuggestions(supabase, companyId, [id])
 
-    // Create journal entry via the engine
+    // The storno of a verifikat this door posted and could not link to the
+    // bank line: ledger.storno of the bank line, system_derived (no one chose
+    // it), dated the day, while POSTING_EVENTS is on.
+    const stornoEvent = () => bankLineStornoBusinessEvent(id, todayIsoStockholm(), linkBasisColumns('system_derived'))
+
+    // Create the journal entry through the posting port (step 2e): it hands
+    // the input to the engine unchanged and, while POSTING_EVENTS is shadow
+    // or strict, records bank.categorized of the bank line first, linked to
+    // the draft before a voucher number is drawn.
     let journalEntry
     try {
-      journalEntry = await createJournalEntry(supabase, companyId, user.id, {
-        fiscal_period_id,
-        entry_date,
-        description,
-        source_type: 'bank_transaction',
-        source_id: id,
-        bank_booking_context: [bankBookingContext(transaction, settlementAccount, repointCashAccountId)],
-        lines,
-        ...(voucherSeries ? { voucher_series: voucherSeries } : {}),
+      journalEntry = await postingPort.postJournalEntry({
+        supabase,
+        companyId,
+        userId: user.id,
+        // The person booked this verifikat from the bank line, on their own rows.
+        event: () => bankLineBookingBusinessEvent(transaction as Transaction, { linkBasis: linkBasisColumns('user_created') }),
+        input: {
+          fiscal_period_id,
+          entry_date,
+          description,
+          source_type: 'bank_transaction',
+          source_id: id,
+          bank_booking_context: [bankBookingContext(transaction, settlementAccount, repointCashAccountId)],
+          lines,
+          ...(voucherSeries ? { voucher_series: voucherSeries } : {}),
+        },
         // The voucher carries the rules its decision was made under.
-      }, undefined, suggestionSnapshot.ruleVersion)
+        rubricVersion: suggestionSnapshot.ruleVersion,
+      })
     } catch (err) {
       const typed = bookkeepingErrorResponse(err)
       if (typed) return typed
@@ -284,6 +302,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         user.id,
         journalEntry.id,
         'Bokföringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
+        stornoEvent,
       )
       return errorResponse(updateError, log, { requestId })
     }
@@ -298,6 +317,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         user.id,
         journalEntry.id,
         'Bokföringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
+        stornoEvent,
       )
       return errorResponseFromCode('TX_CATEGORIZE_RACE', log, { requestId })
     }

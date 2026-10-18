@@ -1,5 +1,5 @@
 import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
-import { createJournalEntry, findFiscalPeriod } from './engine'
+import { findFiscalPeriod } from './engine'
 import { fxDifferenceLine } from './ore-rounding'
 import { buildSupplierDescription, supplierInvoiceReference } from './supplier-invoice-description'
 import {
@@ -16,8 +16,10 @@ import { roundOre } from '@/lib/money'
 import { postingPort } from '@/lib/posting/port'
 import {
   supplierCreditNoteBusinessEvent,
+  supplierInvoicePaymentBusinessEvent,
   supplierInvoiceRegistrationBusinessEvent,
   type SupplierInvoicePostingContext,
+  type SupplierPaymentPostingContext,
 } from './supplier-invoice-business-events'
 import { creditNatural, debitNatural } from './line-side'
 import { supplierInvoiceTotalsTolerance } from '@/lib/supplier-invoices/line-totals'
@@ -387,6 +389,13 @@ export function buildSupplierInvoicePaymentLines(
  * Create the journal entry when a supplier invoice is paid (accrual method):
  * the lines of buildSupplierInvoicePaymentLines, booked in the open period of
  * the payment date. Returns null when no open period covers it.
+ *
+ * Posting port (step 2e): the verifikat goes through lib/posting, which
+ * hands `input` to the engine unchanged and, while POSTING_EVENTS is shadow
+ * or strict, records the purchase.paid event first and has the engine link
+ * it to the draft before a voucher number is drawn. `posting` is what the
+ * door saw (its link basis, the debt settled), called only while the port is
+ * on: off, the engine gets the call it always did.
  */
 export async function createSupplierInvoicePaymentEntry(
   supabase: SupabaseClient,
@@ -404,6 +413,7 @@ export async function createSupplierInvoicePaymentEntry(
   bankFeeSek?: number,
   // Pure-SEK bank match: see SupplierInvoicePaymentLinesOptions.sekClearingDebt.
   sekClearingDebt?: number,
+  posting?: () => SupplierPaymentPostingContext,
 ): Promise<JournalEntry | null> {
   const { description, creditAccount, lines } = buildSupplierInvoicePaymentLines(invoice, {
     paymentAmount,
@@ -429,7 +439,19 @@ export async function createSupplierInvoicePaymentEntry(
     lines,
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  return postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    event: () =>
+      supplierInvoicePaymentBusinessEvent(
+        invoice,
+        input,
+        { paymentAccount: creditAccount, generated: true, bankLine: !!bankTransaction },
+        posting?.(),
+      ),
+    input,
+  })
 }
 
 export interface SupplierInvoiceCashLinesOptions {
@@ -667,6 +689,9 @@ export function buildSupplierInvoiceCashLines(
  *   Cr/Dr  3740 Öresavrundning       [sub-krona residual, when there is one]
  *
  * Lines come from buildSupplierInvoiceCashLines, shared with the previews.
+ * Posting port (step 2e): as createSupplierInvoicePaymentEntry, the
+ * purchase.paid event is recorded and linked to the draft only while
+ * POSTING_EVENTS is on.
  */
 export async function createSupplierInvoiceCashEntry(
   supabase: SupabaseClient,
@@ -683,6 +708,7 @@ export async function createSupplierInvoiceCashEntry(
   settledBankSek?: number,
   bankTransaction?: Pick<Transaction, 'id' | 'cash_account_id' | 'date' | 'amount' | 'currency'>,
   bankFeeSek?: number,
+  posting?: () => SupplierPaymentPostingContext,
 ): Promise<JournalEntry | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
   if (!fiscalPeriodId) {
@@ -708,7 +734,19 @@ export async function createSupplierInvoiceCashEntry(
     lines,
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  return postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    event: () =>
+      supplierInvoicePaymentBusinessEvent(
+        invoice,
+        input,
+        { paymentAccount: paymentAccount || DEFAULT_SUPPLIER_PAYMENT_ACCOUNT, generated: true, bankLine: !!bankTransaction },
+        posting?.(),
+      ),
+    input,
+  })
 }
 
 /**
