@@ -347,6 +347,9 @@ describe('POST .../opening-balances/manual', () => {
           { account_number: '2099', debit_amount: 0, credit_amount: 50000, line_description: 'IB 2099' },
         ],
       }),
+      // The posting port's ledger adapter fills commitMethod and rubricVersion, undefined as before.
+      undefined,
+      undefined,
     )
     const activation = client.calls.find((c) => c.table === 'chart_of_accounts' && c.method === 'insert')
     expect((activation?.args[0] as Array<{ account_number: string }>).map((a) => a.account_number)).toEqual(['1510'])

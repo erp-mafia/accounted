@@ -1,0 +1,344 @@
+[
+  {
+    "name": "set: the IB of a year",
+    "calls": [
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-01-01",
+          "description": "Ingående balanser",
+          "source_type": "opening_balance",
+          "voucher_series": "A",
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 98500,
+              "credit_amount": 0,
+              "line_description": "IB 1930"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 20000,
+              "credit_amount": 0,
+              "line_description": "IB 1510"
+            },
+            {
+              "account_number": "2081",
+              "debit_amount": 0,
+              "credit_amount": 25000,
+              "line_description": "IB 2081"
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 13500,
+              "line_description": "IB 2440"
+            },
+            {
+              "account_number": "2091",
+              "debit_amount": 0,
+              "credit_amount": 80000,
+              "line_description": "IB 2091"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "ok": true,
+      "data": {
+        "journal_entry_id": "00000000-0000-4000-8000-0000000e0002",
+        "voucher_series": "A",
+        "voucher_number": 7,
+        "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+        "entry_date": "2026-01-01",
+        "lines_created": 5,
+        "total_debit": 118500,
+        "total_credit": 118500
+      }
+    }
+  },
+  {
+    "name": "set: the IB of a year under its own text",
+    "calls": [
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-01-01",
+          "description": "IB enligt tidigare system",
+          "source_type": "opening_balance",
+          "voucher_series": "A",
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 98500,
+              "credit_amount": 0,
+              "line_description": "IB 1930"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 20000,
+              "credit_amount": 0,
+              "line_description": "IB 1510"
+            },
+            {
+              "account_number": "2081",
+              "debit_amount": 0,
+              "credit_amount": 25000,
+              "line_description": "IB 2081"
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 13500,
+              "line_description": "IB 2440"
+            },
+            {
+              "account_number": "2091",
+              "debit_amount": 0,
+              "credit_amount": 80000,
+              "line_description": "IB 2091"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "ok": true,
+      "data": {
+        "journal_entry_id": "00000000-0000-4000-8000-0000000e0002",
+        "voucher_series": "A",
+        "voucher_number": 7,
+        "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+        "entry_date": "2026-01-01",
+        "lines_created": 5,
+        "total_debit": 118500,
+        "total_credit": 118500
+      }
+    }
+  },
+  {
+    "name": "correct: the corrected IB, the storno of the old one, the relink",
+    "calls": [
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-01-01",
+          "description": "Ingående balanser (korrigerade, rättelse av A1)",
+          "source_type": "opening_balance",
+          "voucher_series": "A",
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 98500,
+              "credit_amount": 0,
+              "line_description": "IB 1930"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 20000,
+              "credit_amount": 0,
+              "line_description": "IB 1510"
+            },
+            {
+              "account_number": "2081",
+              "debit_amount": 0,
+              "credit_amount": 25000,
+              "line_description": "IB 2081"
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 13500,
+              "line_description": "IB 2440"
+            },
+            {
+              "account_number": "2091",
+              "debit_amount": 0,
+              "credit_amount": 80000,
+              "line_description": "IB 2091"
+            }
+          ]
+        }
+      ],
+      [
+        "reverseEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "00000000-0000-4000-8000-0000000e0001"
+      ]
+    ],
+    "outcome": {
+      "ok": true,
+      "data": {
+        "journal_entry_id": "00000000-0000-4000-8000-0000000e0002",
+        "voucher_series": "A",
+        "voucher_number": 7,
+        "reversed_entry_id": "00000000-0000-4000-8000-0000000e0001",
+        "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+        "lines_created": 5,
+        "total_debit": 118500,
+        "total_credit": 118500
+      }
+    }
+  },
+  {
+    "name": "correct whose relink is refused: the corrected IB is stornoed again",
+    "calls": [
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-01-01",
+          "description": "Ingående balanser (korrigerade, rättelse av A1)",
+          "source_type": "opening_balance",
+          "voucher_series": "A",
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 98500,
+              "credit_amount": 0,
+              "line_description": "IB 1930"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 20000,
+              "credit_amount": 0,
+              "line_description": "IB 1510"
+            },
+            {
+              "account_number": "2081",
+              "debit_amount": 0,
+              "credit_amount": 25000,
+              "line_description": "IB 2081"
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 13500,
+              "line_description": "IB 2440"
+            },
+            {
+              "account_number": "2091",
+              "debit_amount": 0,
+              "credit_amount": 80000,
+              "line_description": "IB 2091"
+            }
+          ]
+        }
+      ],
+      [
+        "reverseEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "00000000-0000-4000-8000-0000000e0001"
+      ],
+      [
+        "reverseEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "00000000-0000-4000-8000-0000000e0002"
+      ]
+    ],
+    "outcome": {
+      "ok": false,
+      "code": "OB_CORRECT_FAILED"
+    }
+  },
+  {
+    "name": "correct whose storno of the old IB fails: the corrected IB is stornoed again",
+    "calls": [
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-01-01",
+          "description": "Ingående balanser (korrigerade, rättelse av A1)",
+          "source_type": "opening_balance",
+          "voucher_series": "A",
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 98500,
+              "credit_amount": 0,
+              "line_description": "IB 1930"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 20000,
+              "credit_amount": 0,
+              "line_description": "IB 1510"
+            },
+            {
+              "account_number": "2081",
+              "debit_amount": 0,
+              "credit_amount": 25000,
+              "line_description": "IB 2081"
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 13500,
+              "line_description": "IB 2440"
+            },
+            {
+              "account_number": "2091",
+              "debit_amount": 0,
+              "credit_amount": 80000,
+              "line_description": "IB 2091"
+            }
+          ]
+        }
+      ],
+      [
+        "reverseEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "00000000-0000-4000-8000-0000000e0001"
+      ],
+      [
+        "reverseEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "00000000-0000-4000-8000-0000000e0002"
+      ]
+    ],
+    "outcome": {
+      "ok": false,
+      "code": "OB_CORRECT_FAILED"
+    }
+  }
+]

@@ -1,0 +1,1 @@
+[2026-10-18] The stornos an IB correction makes (the old IB, and the corrected one again when the relink fails) record ledger.storno, subject the year, not ledger.opening_balance: a storno keeps the kind history projects for it, as for a salary correction.

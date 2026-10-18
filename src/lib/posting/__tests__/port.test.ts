@@ -367,3 +367,85 @@ describe('posting port: a lazily built event', () => {
     expect(adapter.createJournalEntry).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('posting port: an event linked to no verifikat (recordEvent, an import job)', () => {
+  const JOB = '66666666-6666-4666-8666-666666666666'
+  const JOB_EVENT: BusinessEventDraft = {
+    kind: 'ledger.history_import',
+    occurredOn: '2026-10-18',
+    subject: { type: 'sie_import', id: JOB },
+    evidence: { link_basis: 'import_carried_over', file_hash: 'a'.repeat(64), voucher_count: 4 },
+    idempotencyKey: `ledger.history_import:sie_import:${JOB}`,
+  }
+
+  function adapterUntouched(adapter: ReturnType<typeof fakeAdapter>) {
+    for (const fn of [adapter.createJournalEntry, adapter.createJournalEntries, adapter.createDraftEntry, adapter.commitEntry, adapter.reverseEntry]) {
+      expect(fn).not.toHaveBeenCalled()
+    }
+  }
+
+  it('off: builds nothing, writes nothing and answers null', async () => {
+    const adapter = fakeAdapter()
+    const { supabase, from } = fakeSupabase(() => ({ error: null }))
+    const build = vi.fn(() => JOB_EVENT)
+    expect(await port('off', adapter).recordEvent({ supabase, companyId: COMPANY, event: build })).toBeNull()
+    expect(build).not.toHaveBeenCalled()
+    expect(from).not.toHaveBeenCalled()
+    adapterUntouched(adapter)
+  })
+
+  it('shadow: writes the one event and answers its id; the adapter posts nothing', async () => {
+    const adapter = fakeAdapter()
+    const { supabase, inserted } = fakeSupabase(() => ({ error: null }))
+    expect(await port('shadow', adapter).recordEvent({ supabase, companyId: COMPANY, event: JOB_EVENT })).toBe(EVENT_ID)
+    expect(inserted).toEqual([
+      expect.objectContaining({
+        id: EVENT_ID,
+        company_id: COMPANY,
+        kind: 'ledger.history_import',
+        subject_type: 'sie_import',
+        subject_id: JOB,
+        amount: null,
+        evidence: { link_basis: 'import_carried_over', file_hash: 'a'.repeat(64), voucher_count: 4 },
+        idempotency_key: `ledger.history_import:sie_import:${JOB}`,
+      }),
+    ])
+    adapterUntouched(adapter)
+  })
+
+  it('a retried job answers the event its first attempt recorded (idempotency key)', async () => {
+    const adapter = fakeAdapter()
+    const { supabase } = fakeSupabase(() => ({ error: { message: 'duplicate key', code: '23505' } }), { id: EXISTING_ID })
+    expect(await port('strict', adapter).recordEvent({ supabase, companyId: COMPANY, event: JOB_EVENT })).toBe(EXISTING_ID)
+  })
+
+  it('shadow answers null through a refused write; strict throws', async () => {
+    const adapter = fakeAdapter()
+    const { supabase } = fakeSupabase(() => ({ error: { message: 'refused', code: '42501' } }))
+    expect(await port('shadow', adapter).recordEvent({ supabase, companyId: COMPANY, event: JOB_EVENT })).toBeNull()
+    await expect(port('strict', adapter).recordEvent({ supabase, companyId: COMPANY, event: JOB_EVENT })).rejects.toBeInstanceOf(
+      BookkeepingDatabaseError,
+    )
+    const missing = fakeSupabase(() => ({ error: { message: 'relation "business_events" does not exist', code: '42P01' } }))
+    expect(await port('strict', adapter).recordEvent({ supabase: missing.supabase, companyId: COMPANY, event: JOB_EVENT })).toBeNull()
+    adapterUntouched(adapter)
+  })
+
+  it('names the actor it is given (null for none) instead of the surrounding scope', async () => {
+    const adapter = fakeAdapter()
+    const { supabase, inserted } = fakeSupabase(() => ({ error: null }))
+    await runWithActor({ type: 'cron', label: 'SIE worker' }, async () => {
+      await port('shadow', adapter).recordEvent({ supabase, companyId: COMPANY, event: JOB_EVENT, actor: { type: 'api_key', label: 'SIE import: Byrån' } })
+      await port('shadow', adapter).recordEvent({ supabase, companyId: COMPANY, event: JOB_EVENT, actor: null })
+      await port('shadow', adapter).recordEvent({ supabase, companyId: COMPANY, event: JOB_EVENT })
+    })
+    expect(inserted.map((row) => {
+      const r = row as { actor_type: string | null; actor_label: string | null }
+      return [r.actor_type, r.actor_label]
+    })).toEqual([
+      ['api_key', 'SIE import: Byrån'],
+      [null, null],
+      ['cron', 'SIE worker'],
+    ])
+  })
+})

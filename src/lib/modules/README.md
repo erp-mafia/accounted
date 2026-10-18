@@ -473,3 +473,21 @@ these producers, so nothing waits on an event id; their proof is
 `tests/pg/posting-parity-year-end.pg.test.ts`,
 `tests/pg/posting-parity-accruals.pg.test.ts` and the producers'
 `*.engine-input.test.ts`.
+
+Step 2h moves imports and opening balances. The IB service
+(`setOpeningBalances`, `correctOpeningBalances`, behind the dashboard, the
+SIE file review and the v1 and MCP operations) posts through the port: each
+IB verifikat records `ledger.opening_balance` and each storno it makes (the
+old IB, and the corrected one again when the relink fails) `ledger.storno`,
+subject the year. An SIE import job (a file upload or a provider migration)
+records ONE `ledger.history_import` event through the port's `recordEvent`,
+subject the job (typed handle `sie_`), linked to none of its verifikat: they
+are written in SQL by `import_sie_chunk`, and `projectBusinessEvent` names the
+job per entry from its `import_batch_id` (design call 1). The event is written
+just before `complete_sie_import_job`, keyed by the job; under strict a refused
+write holds the completion and the job is retried, as its verifikat are
+numbered already. An undo records nothing new. `commit_opening_balance_replacement`
+(the cascade's later years) waits for an event id, like the other SQL posting
+functions; their proof is `tests/pg/posting-parity-opening-balances.pg.test.ts`,
+`tests/pg/posting-parity-sie-import.pg.test.ts` and
+`service.engine-input.test.ts`.

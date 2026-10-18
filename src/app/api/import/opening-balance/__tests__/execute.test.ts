@@ -292,6 +292,9 @@ describe('POST /api/import/opening-balance/execute', () => {
         source_type: 'opening_balance',
         voucher_series: 'A',
       }),
+      // The posting port's ledger adapter fills commitMethod and rubricVersion, undefined as before.
+      undefined,
+      undefined,
     )
   })
 })

@@ -243,6 +243,9 @@ describe('POST /api/import/opening-balance/correct', () => {
       'company-1',
       'user-1',
       expect.objectContaining({ source_type: 'opening_balance', voucher_series: 'A' }),
+      // The posting port's ledger adapter fills commitMethod and rubricVersion, undefined as before.
+      undefined,
+      undefined,
     )
     expect(mockReverseEntry).toHaveBeenCalledWith(
       expect.anything(),

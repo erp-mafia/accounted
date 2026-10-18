@@ -125,6 +125,9 @@ describe('POST /api/import/opening-balance/correct: atomicity, audit, BFL refere
         description: 'Ingående balanser (korrigerade, rättelse av B7)',
         source_type: 'opening_balance',
       }),
+      // The posting port's ledger adapter fills commitMethod and rubricVersion, undefined as before.
+      undefined,
+      undefined,
     )
     // Happy path stornoes ONLY the old entry, no compensating reverse.
     expect(mockReverseEntry).toHaveBeenCalledTimes(1)

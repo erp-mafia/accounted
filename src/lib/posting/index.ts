@@ -48,5 +48,6 @@ export type {
   PostJournalEntrySetRequest,
   PostingAdapter,
   PostingPort,
+  RecordBusinessEventRequest,
   ReverseJournalEntryRequest,
 } from './types'
