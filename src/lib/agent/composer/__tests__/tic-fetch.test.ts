@@ -200,6 +200,45 @@ describe('ensureTicSnapshot: cache miss & refetch', () => {
   })
 })
 
+describe('ensureTicSnapshot: requireKeys', () => {
+  it('refetches a fresh snapshot that lacks a required key', async () => {
+    const cached = { statuses: [], financialReports: [] /* no financialReportsComplete */ }
+    const profile = { statuses: [], financialReports: [], financialReportsComplete: true }
+    profileService.mockResolvedValue(profile)
+    const { supabase } = buildSupabase({
+      data: { org_number: '5560125790', tic_snapshot: cached, tic_snapshot_fetched_at: new Date().toISOString() },
+      error: null,
+    })
+
+    const result = await ensureTicSnapshot({
+      supabase,
+      companyId: COMPANY_ID,
+      requireKeys: ['financialReportsComplete'],
+    })
+
+    expect(result.source).toBe('fetched')
+    expect(result.snapshot).toEqual(profile)
+    expect(profileService).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a fresh snapshot that has every required key', async () => {
+    const cached = { statuses: [], financialReports: [], financialReportsComplete: false }
+    const { supabase } = buildSupabase({
+      data: { org_number: '5560125790', tic_snapshot: cached, tic_snapshot_fetched_at: new Date().toISOString() },
+      error: null,
+    })
+
+    const result = await ensureTicSnapshot({
+      supabase,
+      companyId: COMPANY_ID,
+      requireKeys: ['financialReportsComplete'],
+    })
+
+    expect(result.source).toBe('cached')
+    expect(profileService).not.toHaveBeenCalled()
+  })
+})
+
 describe('ensureTicSnapshot: degraded paths', () => {
   it('returns fallback null when companies row does not exist', async () => {
     const { supabase } = buildSupabase({ data: null, error: null })

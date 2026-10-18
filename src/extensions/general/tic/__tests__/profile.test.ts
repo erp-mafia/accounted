@@ -300,6 +300,7 @@ describe('TIC profile route', () => {
     const { data } = await res.json()
 
     expect(data.financialReports).toHaveLength(1)
+    expect(data.financialReportsComplete).toBe(true)
     expect(data.financialReports[0]).toMatchObject({
       title: 'Årsredovisning',
       periodStart: '2023-01-01',
@@ -346,6 +347,8 @@ describe('TIC profile route', () => {
     expect(data.signatory).toEqual([{ description: 'Firman tecknas av styrelsen.' }])
     // These come from Phase 2, so they degrade to empty
     expect(data.financialReports).toEqual([])
+    // ...and the empty report list says it is not the full answer.
+    expect(data.financialReportsComplete).toBe(false)
     expect(data.fiscalYear).toBeNull()
     expect(data.fiscalYearHistory).toEqual([])
     expect(data.board).toBeNull()

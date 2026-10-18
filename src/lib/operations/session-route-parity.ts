@@ -225,6 +225,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/bookkeeping/fiscal-periods/:id/close-external': covered([`POST ${V}/fiscal-periods/:id/close-external`, 'gnubok_close_fiscal_period_external']),
   'POST /api/bookkeeping/fiscal-periods/:id/reopen-external': covered([`POST ${V}/fiscal-periods/:id/reopen-external`, 'gnubok_reopen_fiscal_period_external']),
   'POST /api/bookkeeping/fiscal-periods/:id/reset': uiOnly('destructive owner-only fiscal year reset'),
+  'POST /api/bookkeeping/fiscal-periods/:id/reopen': uiOnly('owner-only reopen of a year closed with a bokslut, on the owner\'s typed statement that the årsredovisning was not signed, adopted or filed'),
   'POST /api/bookkeeping/fiscal-periods/:id/opening-balance-review': gap('P3', 'sign off the opening balance review'),
   'POST /api/bookkeeping/fiscal-periods/:id/opening-balance-review/sie-file': covered(
     [`POST ${V}/fiscal-periods/:id/opening-balances/manual`, 'gnubok_set_opening_balances_manual'],

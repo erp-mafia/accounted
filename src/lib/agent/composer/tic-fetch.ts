@@ -64,8 +64,14 @@ export async function ensureTicSnapshot(opts: {
   // fetches don't get aborted before the ~13-call Lens fan-out completes:
   // which was the root cause of the May 2026 quota-burn incident.
   timeoutMs?: number
+  // Keys the caller reads that older snapshots may lack: a cached snapshot
+  // inside the 7-day window without every one of them is re-fetched, as a v1
+  // snapshot is under upgradeV1. The closed-year reopen passes
+  // financialReportsComplete, without which it cannot tell "no annual report
+  // registered" from "could not ask".
+  requireKeys?: readonly string[]
 }): Promise<TicSnapshotResult> {
-  const { supabase, companyId, upgradeV1 = false, timeoutMs = FETCH_TIMEOUT_MS } = opts
+  const { supabase, companyId, upgradeV1 = false, timeoutMs = FETCH_TIMEOUT_MS, requireKeys = [] } = opts
 
   const { data: companyRow } = await supabase
     .from('companies')
@@ -77,13 +83,16 @@ export async function ensureTicSnapshot(opts: {
 
   const cachedSnapshot = companyRow.tic_snapshot as Record<string, unknown> | null
   const needsV2Upgrade = upgradeV1 && isV1Snapshot(cachedSnapshot)
+  const lacksRequiredKey =
+    cachedSnapshot != null && requireKeys.some((key) => !(key in cachedSnapshot))
 
   // Fresh cache hit: nothing to do. (Unless the caller needs v2 fields and
   // the cache is still v1, in which case we fall through to a refetch.)
   if (
     cachedSnapshot &&
     !isStale(companyRow.tic_snapshot_fetched_at as string | null) &&
-    !needsV2Upgrade
+    !needsV2Upgrade &&
+    !lacksRequiredKey
   ) {
     return { snapshot: cachedSnapshot, source: 'cached' }
   }
