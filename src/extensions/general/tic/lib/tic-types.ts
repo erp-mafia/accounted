@@ -411,6 +411,14 @@ export interface TICCompanyProfile {
     equityAssetsRatio: number | null
   } | null
   financialReports: TICFinancialReportSummary[]
+  /**
+   * True when the documents call answered, so `financialReports` is the full
+   * list of annual reports Bolagsverket holds. False when it failed and the
+   * list is an empty placeholder: "no reports" and "could not ask" must not
+   * look the same to a gate that reads it (the closed-year reopen refuses on
+   * a registered report, crm#1290).
+   */
+  financialReportsComplete: boolean
   fiscalYear: TICProfileFiscalYear | null
   fiscalYearHistory: TICProfileFiscalYear[]
   signatory: TICProfileSignatory[]

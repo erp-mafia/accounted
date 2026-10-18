@@ -5408,6 +5408,22 @@ export const FiscalYearResetSchema = z.object({
 })
 
 /**
+ * Owner reopen of a year closed with a bokslut (crm#1290): the year's name
+ * restated, and the owner's statement that the årsredovisning was not signed,
+ * adopted at a stämma or filed outside Accounted. A false statement is passed
+ * on, not refused here: the database answers it with
+ * FISCAL_YEAR_REOPEN_CONFIRMATION_REQUIRED.
+ */
+export const FiscalYearReopenSchema = z.object({
+  confirm_name: z
+    .string()
+    .trim()
+    .min(1, 'Ange räkenskapsårets namn exakt som det visas')
+    .max(200, 'Räkenskapsårets namn får vara högst 200 tecken'),
+  confirm_annual_report_not_adopted: z.boolean(),
+})
+
+/**
  * POST /api/notices/dismiss
  *
  * notice_id is an opaque lib/notices id (category + state discriminator).

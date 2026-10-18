@@ -569,21 +569,20 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
   },
   // A year closed with a year-end run in Accounted. Which correction path is
   // lawful depends on the årsredovisning, which the refusing code does not
-  // read: unsigned and unfiled, the year is reopened (today an administrative
-  // undo by support, scripts/undo-year-end-closing.ts) and corrected where the
+  // read: unsigned and unfiled, the owner reopens the year (Räkenskapsår,
+  // lib/core/bookkeeping/fiscal-year-reopen.ts) and corrects where the
   // affärshändelse belongs; signed or filed, the correction is a new
-  // verifikation in the open year (rättelse av fel, K2 punkt 2.12). The
-  // message names both instead of the old "cannot be reopened" dead end
-  // (crm#1290).
+  // verifikation in the open year (rättelse av fel, K2 punkt 2.12). Support
+  // only when the reopen's own gate refuses and says so (crm#1290).
   TARGET_PERIOD_CLOSED: {
     httpStatus: 409,
     message_sv:
-      'Räkenskapsåret som täcker datumet är stängt med bokslut, så inget kan bokföras eller stornas där. Är årsredovisningen för året inte undertecknad eller inskickad kan året öppnas igen: kontakta supporten. Annars bokför du rättelsen som ett nytt verifikat i det öppna räkenskapsåret, med hänvisning till originalverifikatet.',
+      'Räkenskapsåret som täcker datumet är stängt med bokslut, så inget kan bokföras eller stornas där. Är årsredovisningen för året inte undertecknad, fastställd eller inskickad kan företagets ägare öppna året igen under Inställningar → Bokföring → Räkenskapsår. Annars bokför du rättelsen som ett nytt verifikat i det öppna räkenskapsåret, med hänvisning till originalverifikatet.',
     message_en:
-      'The fiscal year covering the date is closed with a year-end closing, so nothing can be posted or reversed in it. If the annual report for that year has not been signed or filed, the year can be reopened: contact support. Otherwise, post the correction as a new voucher in the open fiscal year, referring to the original voucher.',
+      'The fiscal year covering the date is closed with a year-end closing, so nothing can be posted or reversed in it. If the annual report for that year has not been signed, adopted or filed, the company owner can reopen the year under Settings → Bookkeeping → Fiscal years. Otherwise, post the correction as a new voucher in the open fiscal year, referring to the original voucher.',
     remediation: {
       description:
-        'Do not retry and do not unlock: a closed year cannot be unlocked. Ask the user whether the årsredovisning for that year has been signed or filed. Not signed or filed: Accounted support reopens the year (the year-end closing is reversed by storno), the user then books the correction in that year and runs the year-end again. Signed or filed: book the correction as a new verifikation dated in the open fiscal year (rättelse av fel, K2 punkt 2.12), naming the original voucher in the description.',
+        'Do not retry and do not unlock: a closed year cannot be unlocked. Ask the user whether the årsredovisning for that year has been signed, adopted or filed. Not signed, adopted or filed: the company owner reopens the year in the app under Inställningar → Bokföring → Räkenskapsår (owner only, typed confirmation; there is no API or MCP door), which reverses the year-end closing by storno; the user then books the correction in that year and runs the year-end again. Signed, adopted or filed: book the correction as a new verifikation dated in the open fiscal year (rättelse av fel, K2 punkt 2.12), naming the original voucher in the description.',
       tool: 'gnubok_create_voucher',
     },
   },
@@ -2923,15 +2922,16 @@ const PERIOD: Record<string, StructuredErrorEntry> = {
     message_en: 'Period is not locked.',
   },
   // Both refusals end where TARGET_PERIOD_CLOSED does for a year closed with
-  // a year-end run here: support reopens it while the årsredovisning has no
-  // legal weight, otherwise corrections go into the open year (crm#1290).
+  // a year-end run here: the owner reopens it under Räkenskapsår while the
+  // årsredovisning has no legal weight, otherwise corrections go into the
+  // open year (crm#1290).
   PERIOD_UNLOCK_CLOSED: {
     httpStatus: 409,
-    message_sv: 'Ett stängt räkenskapsår kan inte låsas upp. Klarmarkerades året som avslutat i ett tidigare program kan du i stället öppna det igen under Räkenskapsår. Stängdes det med bokslut i Accounted och är årsredovisningen inte undertecknad eller inskickad kan supporten öppna året igen; annars bokför du rättelser som nya verifikat i det öppna räkenskapsåret.',
-    message_en: 'A closed fiscal year cannot be unlocked. If the year was marked as closed in a previous system, reopen it from Fiscal years instead. If it was closed with a year-end closing in Accounted and the annual report has not been signed or filed, support can reopen the year; otherwise, post corrections as new vouchers in the open fiscal year.',
+    message_sv: 'Ett stängt räkenskapsår kan inte låsas upp, men det kan öppnas igen under Inställningar → Bokföring → Räkenskapsår. Ett år som klarmarkerats i ett tidigare program öppnas av ägare eller administratör; ett år som stängts med bokslut i Accounted öppnas av företagets ägare så länge årsredovisningen inte är undertecknad, fastställd eller inskickad. Annars bokför du rättelser som nya verifikat i det öppna räkenskapsåret.',
+    message_en: 'A closed fiscal year cannot be unlocked, but it can be reopened under Settings → Bookkeeping → Fiscal years. An owner or admin reopens a year marked as closed in a previous system; the company owner reopens a year closed with a year-end closing in Accounted, as long as the annual report has not been signed, adopted or filed. Otherwise, post corrections as new vouchers in the open fiscal year.',
     remediation: {
       description:
-        'A year marked closed in a previous system (closed_externally, no closing entry): reopen it with gnubok_reopen_fiscal_period_external. A year closed by a year-end run here: ask the user whether its årsredovisning has been signed or filed. Not signed or filed: Accounted support reopens it. Signed or filed: book corrections as new verifikationer dated in the open fiscal year (rättelse av fel, K2 punkt 2.12).',
+        'A year marked closed in a previous system (closed_externally, no closing entry): reopen it with gnubok_reopen_fiscal_period_external. A year closed by a year-end run here: ask the user whether its årsredovisning has been signed, adopted or filed. Not signed, adopted or filed: the company owner reopens it in the app under Inställningar → Bokföring → Räkenskapsår (no API or MCP door). Signed, adopted or filed: book corrections as new verifikationer dated in the open fiscal year (rättelse av fel, K2 punkt 2.12).',
       tool: 'gnubok_list_fiscal_periods',
     },
   },
@@ -2942,8 +2942,8 @@ const PERIOD: Record<string, StructuredErrorEntry> = {
   },
   PERIOD_REOPEN_NOT_EXTERNAL: {
     httpStatus: 409,
-    message_sv: 'Räkenskapsåret stängdes med ett bokslut i Accounted och kan inte öppnas igen här. Är årsredovisningen inte undertecknad eller inskickad kan supporten öppna året igen; annars bokför du rättelser som nya verifikat i det öppna räkenskapsåret.',
-    message_en: 'The fiscal year was closed with a year-end run in Accounted and cannot be reopened here. If the annual report has not been signed or filed, support can reopen the year; otherwise, post corrections as new vouchers in the open fiscal year.',
+    message_sv: 'Räkenskapsåret stängdes med ett bokslut i Accounted och öppnas inte som ett klarmarkerat år. Är årsredovisningen inte undertecknad, fastställd eller inskickad kan företagets ägare öppna det igen under Inställningar → Bokföring → Räkenskapsår; annars bokför du rättelser som nya verifikat i det öppna räkenskapsåret.',
+    message_en: 'The fiscal year was closed with a year-end run in Accounted and is not reopened as a year marked closed elsewhere. If the annual report has not been signed, adopted or filed, the company owner can reopen it under Settings → Bookkeeping → Fiscal years; otherwise, post corrections as new vouchers in the open fiscal year.',
   },
   // Creating and editing a räkenskapsår (lib/core/bookkeeping/fiscal-year-service.ts,
   // operations fiscal-periods.create / .update). The shape rules are BFL 3 kap.
@@ -3116,6 +3116,45 @@ const PERIOD: Record<string, StructuredErrorEntry> = {
     httpStatus: 500,
     message_sv: 'Räkenskapsåret kunde inte nollställas. Inga ändringar har sparats.',
     message_en: 'Failed to reset the fiscal year. No changes were saved.',
+  },
+  // The owner's reopen of a year closed with a bokslut (crm#1290,
+  // lib/core/bookkeeping/fiscal-year-reopen.ts). INELIGIBLE carries the
+  // blockers in details; the dialog names each one.
+  FISCAL_YEAR_REOPEN_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Räkenskapsåret kunde inte hittas.',
+    message_en: 'Fiscal year not found.',
+  },
+  FISCAL_YEAR_REOPEN_FORBIDDEN: {
+    httpStatus: 403,
+    message_sv: 'Bara företagets ägare kan öppna ett stängt räkenskapsår igen.',
+    message_en: 'Only the company owner can reopen a closed fiscal year.',
+  },
+  FISCAL_YEAR_REOPEN_INELIGIBLE: {
+    httpStatus: 409,
+    message_sv: 'Räkenskapsåret kan inte öppnas igen i sitt nuvarande läge. Inget har ändrats.',
+    message_en: 'The fiscal year cannot be reopened in its current state. Nothing was changed.',
+  },
+  FISCAL_YEAR_REOPEN_CONFIRMATION_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Bekräfta att årsredovisningen inte är undertecknad, fastställd eller inskickad. Inget har ändrats.',
+    message_en: 'Confirm that the annual report has not been signed, adopted or filed. Nothing was changed.',
+  },
+  FISCAL_YEAR_REOPEN_CONFIRMATION_MISMATCH: {
+    httpStatus: 400,
+    message_sv: 'Räkenskapsårets namn stämmer inte överens. Inget har ändrats.',
+    message_en: 'The fiscal year name does not match. Nothing was changed.',
+  },
+  FISCAL_YEAR_REOPEN_INCOMPLETE: {
+    httpStatus: 500,
+    retryable: true,
+    message_sv: 'Räkenskapsåret är öppnat, men bokslutet kunde inte återföras helt. Öppna året igen en gång till: det fortsätter där det stannade.',
+    message_en: 'The fiscal year is open, but the year-end closing could not be fully reversed. Reopen it once more: it continues where it stopped.',
+  },
+  FISCAL_YEAR_REOPEN_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Räkenskapsåret kunde inte öppnas igen. Inget har ändrats.',
+    message_en: 'The fiscal year could not be reopened. Nothing was changed.',
   },
   // Retired 2026-07-26: PERIOD_CREATE_BLOCKED_BY_OPEN_PERIODS. Creating the
   // next räkenskapsår while a prior one is still fully open is no longer an

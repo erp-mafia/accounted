@@ -187,6 +187,73 @@ export interface FiscalYearResetRpcResult {
   period_name?: string
 }
 
+// Owner reopen of a year closed with a bokslut in Accounted (crm#1290;
+// migration 20261018120000, lib/core/bookkeeping/fiscal-year-reopen.ts).
+// form_not_supported is the app's own gate (a form without an årsredovisning);
+// every other code comes from fiscal_year_reopen_snapshot.
+export type FiscalYearReopenBlockerCode =
+  | 'not_closed_with_bokslut'
+  | 'closed_externally'
+  | 'annual_report_submitted'
+  | 'annual_report_signed'
+  | 'later_year_closed'
+  | 'next_year_locked'
+  | 'company_lock_date'
+  | 'registry_unavailable'
+  | 'annual_report_registered'
+  | 'form_not_supported'
+
+export interface FiscalYearReopenBlocker {
+  code: FiscalYearReopenBlockerCode
+  /** company_lock_date: the lock date. */
+  date?: string
+  /** next_year_locked: the next year's name. */
+  name?: string
+}
+
+/** A verifikat the reopen reverses by storno, in the order it does so. */
+export interface FiscalYearReopenEntry {
+  id: string
+  kind: 'result_appropriation' | 'opening_balance' | 'closing_entry' | 'currency_revaluation'
+  voucher_series: string | null
+  voucher_number: number | null
+  entry_date: string
+  fiscal_period_id: string
+}
+
+export interface FiscalYearReopenEligibility {
+  eligible: boolean
+  blockers: FiscalYearReopenBlocker[]
+  /** A reopen that stopped midway: the year is open, its bokslut not yet reversed. */
+  resume: boolean
+  period: {
+    id: string
+    name: string
+    period_start: string
+    period_end: string
+    closing_entry_id: string | null
+  }
+  next_period: { id: string; name: string } | null
+  entries: FiscalYearReopenEntry[]
+  annual_report: {
+    versions_to_supersede: number
+    pending_signatures: number
+    agm_date: string | null
+  }
+  registry: { fetched_at: string | null; reports: number | null }
+}
+
+export interface FiscalYearReopenRpcResult extends Partial<FiscalYearReopenEligibility> {
+  ok: boolean
+  code?: string
+  period_name?: string
+  resumed?: boolean
+  closing_entry_id?: string | null
+  next_period_id?: string | null
+  superseded_version_ids?: string[]
+  voided_signature_request_ids?: string[]
+}
+
 // Shape of user_preferences.ui_state. All fields optional: the bag grows
 // as UI surfaces add preferences (UI migration plan PR 2/3). Stored bags may
 // still carry retired keys (shell, nav_collapsed, nav_folds) from the old

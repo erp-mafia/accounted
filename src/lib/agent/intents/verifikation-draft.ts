@@ -286,8 +286,8 @@ export const verifikationDraft = defineAgentIntent<
       if (periodState === 'closed') {
         // Moving the date is only right once the year's årsredovisning has
         // legal weight; before that the event belongs in its own year, which
-        // support can reopen (crm#1290).
-        lines.push('PERIODEN ÄR STÄNGD (bokslut): ingenting får bokföras på detta datum, och en stängd period kan inte låsas upp. Fråga om årsredovisningen för året är undertecknad eller inskickad. Är den inte det hör händelsen hemma i det året: be användaren kontakta supporten, som kan öppna året igen. Är den det bokförs händelsen som rättelse i det öppna räkenskapsåret: vägled användaren att sätta verifikationsdatumet i en öppen period och hänvisa till det stängda året i texten.')
+        // the owner can reopen (crm#1290).
+        lines.push('PERIODEN ÄR STÄNGD (bokslut): ingenting får bokföras på detta datum, och en stängd period kan inte låsas upp. Fråga om årsredovisningen för året är undertecknad, fastställd eller inskickad. Är den inte det hör händelsen hemma i det året: företagets ägare kan öppna året igen under Inställningar → Bokföring → Räkenskapsår (bokslutet återförs med storno), bokföra händelsen där och köra bokslutet igen. Är den det bokförs händelsen som rättelse i det öppna räkenskapsåret: vägled användaren att sätta verifikationsdatumet i en öppen period och hänvisa till det stängda året i texten.')
       } else if (periodState === 'locked') {
         lines.push('PERIODEN ÄR LÅST: ett utkast kan inte bokföras här. Vägled användaren att ändra verifikationsdatumet till en öppen period (utkast redigeras fritt), eller att låsa upp perioden om datumet måste stå kvar: ett låst räkenskapsår under Inställningar → Bokföring → Räkenskapsår, bolagets låsdatum (Periodlåsning, "Bokföring låst t.o.m.") under Inställningar → Bokföring → Allmänt.')
       } else if (periodState === 'unknown') {

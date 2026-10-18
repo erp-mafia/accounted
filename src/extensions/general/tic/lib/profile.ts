@@ -116,6 +116,10 @@ export async function buildCompanyProfile(
   // dedicated call: doc.documents has a different shape
   // (`companyDocumentType` vs `type`) so direct substitution
   // would silently drop annualReport detection.
+  // Whether the list below is complete: a failed or empty-handed documents
+  // call leaves it empty, which must not read as "nothing registered".
+  const financialReportsComplete =
+    documentsResult.status === 'fulfilled' && Array.isArray(documentsResult.value)
   const financialReports =
     documentsResult.status === 'fulfilled' && documentsResult.value
       ? documentsResult.value
@@ -368,6 +372,7 @@ export async function buildCompanyProfile(
     beneficialOwners,
     financials,
     financialReports,
+    financialReportsComplete,
     fiscalYear,
     fiscalYearHistory,
     signatory,

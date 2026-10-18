@@ -19,6 +19,7 @@ import { formatDate } from '@/lib/utils'
 import type { FiscalPeriod } from '@/types'
 import CreatePeriodDialog from '@/components/bookkeeping/CreatePeriodDialog'
 import { FiscalYearResetDialog } from '@/components/settings/FiscalYearResetDialog'
+import { FiscalYearReopenDialog } from '@/components/settings/FiscalYearReopenDialog'
 import { FiscalYearEditDialog } from '@/components/settings/FiscalYearEditDialog'
 import { SIEOpeningBalanceReview } from '@/components/settings/SIEOpeningBalanceReview'
 import { suggestSeedDate } from '@/lib/bookkeeping/suggest-fiscal-period'
@@ -52,6 +53,7 @@ export function FiscalYearsManager() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [mutatingId, setMutatingId] = useState<string | null>(null)
   const [resetTarget, setResetTarget] = useState<FiscalPeriod | null>(null)
+  const [reopenTarget, setReopenTarget] = useState<FiscalPeriod | null>(null)
   const [editTarget, setEditTarget] = useState<FiscalPeriod | null>(null)
   const [editMode, setEditMode] = useState<'edit' | 'start'>('edit')
 
@@ -160,6 +162,13 @@ export function FiscalYearsManager() {
           const isMutating = mutatingId === p.id
           const closedExternally = status === 'closed' && p.closed_externally === true
           const canReopen = canManage && closedExternally && !p.closing_entry_id
+          // A year closed with a bokslut here: the owner reopens it while its
+          // årsredovisning has no legal weight (crm#1290). A closing entry on
+          // a year that is no longer closed is a reopen that stopped midway,
+          // offered again so it can finish. The dialog shows every gate; the
+          // server enforces them.
+          const canReopenClosed =
+            role === 'owner' && !closedExternally && Boolean(p.closing_entry_id)
           // crm#1140: the company's first year may still get its start
           // corrected within its month once it is locked or closed (the
           // registration day instead of the 1st). Posted opening balances
@@ -259,6 +268,18 @@ export function FiscalYearsManager() {
                     {t('fy_action_reopen')}
                   </Button>
                 )}
+                {canReopenClosed && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-muted-foreground hover:text-foreground"
+                    disabled={isMutating}
+                    onClick={() => setReopenTarget(p)}
+                  >
+                    <Unlock className="mr-1.5 h-4 w-4" />
+                    {t('fy_action_reopen')}
+                  </Button>
+                )}
               </div>
             </div>
           )
@@ -309,6 +330,18 @@ export function FiscalYearsManager() {
             if (!open) setResetTarget(null)
           }}
           onReset={refreshPeriods}
+        />
+      )}
+
+      {reopenTarget && (
+        <FiscalYearReopenDialog
+          periodId={reopenTarget.id}
+          periodName={reopenTarget.name}
+          open={reopenTarget !== null}
+          onOpenChange={(open) => {
+            if (!open) setReopenTarget(null)
+          }}
+          onReopened={refreshPeriods}
         />
       )}
 
