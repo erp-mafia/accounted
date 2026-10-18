@@ -184,12 +184,45 @@ describe('payment orders before the bank has them', () => {
   it('reads no signing when no order awaits a signature', async () => {
     enqueue({ data: [draftOrder()] })
 
-    const { body } = await parseJsonResponse<{ data: Array<{ bank_confirming: boolean }> }>(
+    const { body } = await parseJsonResponse<{ data: Array<{ bank_confirming: boolean; sign_again: boolean }> }>(
       await listOrders(createMockRequest('/api/payments/orders'), { params: Promise.resolve({}) }),
     )
 
     expect(body.data[0]!.bank_confirming).toBe(false)
+    expect(body.data[0]!.sign_again).toBe(false)
     expect(findCall('payment_order_batches', 'select')).toBeUndefined()
+  })
+
+  it('offers to sign again a payment waiting unsigned at the bank after its BankID was abandoned (crm#1282)', async () => {
+    const OTHER_BATCH = '55555555-5555-4555-8555-555555555555'
+    const STOPPED_BATCH = '66666666-6666-4666-8666-666666666666'
+    enqueue({
+      data: [
+        draftOrder({ id: 'abandoned', status: 'submitted', batch_id: BATCH, provider_payment_id: 'pay-1' }),
+        draftOrder({ id: 'sending', status: 'submitted', batch_id: OTHER_BATCH, provider_payment_id: null }),
+        draftOrder({ id: 'unknown', status: 'submitted', batch_id: BATCH, provider_payment_id: 'pay-2', outcome_unknown_at: '2026-10-17T09:00:00Z' }),
+        draftOrder({ id: 'stopped', status: 'submitted', batch_id: STOPPED_BATCH, provider_payment_id: 'pay-3' }),
+        draftOrder({ id: 'signing', status: 'awaiting_signature', batch_id: OTHER_BATCH, provider_payment_id: 'pay-4' }),
+      ],
+    })
+    enqueue({ data: [{ id: BATCH, status: 'created' }, { id: OTHER_BATCH, status: 'awaiting_signature' }, { id: STOPPED_BATCH, status: 'failed' }] })
+
+    const { status, body } = await parseJsonResponse<{ data: Array<Record<string, unknown> & { id: string; sign_again: boolean }> }>(
+      await listOrders(createMockRequest('/api/payments/orders'), { params: Promise.resolve({}) }),
+    )
+
+    expect(status).toBe(200)
+    expect(body.data.map((o) => [o.id, o.sign_again])).toEqual([
+      ['abandoned', true],
+      ['sending', false],
+      ['unknown', false],
+      ['stopped', false],
+      ['signing', false],
+    ])
+    // The bank's payment id is read to decide, never answered.
+    expect(findCall('payment_orders', 'select')?.[0]).toContain('provider_payment_id')
+    expect(body.data.every((o) => !('provider_payment_id' in o))).toBe(true)
+    expect(findCall('payment_order_batches', 'in')).toEqual(['id', [BATCH, STOPPED_BATCH, OTHER_BATCH]])
   })
 
   it('approve answers 404 for an order that is not the company', async () => {
@@ -272,8 +305,8 @@ describe('payment orders before the bank has them', () => {
 
 describe('cancelling an order the bank may hold', () => {
   const unknown = () => draftOrder({ status: 'submitted', provider_payment_id: null, outcome_unknown_at: '2026-10-01T08:30:00Z' })
-  const atBank = () =>
-    draftOrder({ status: 'accepted', provider_payment_id: 'pay-1', provider_payment_product: 'swedish-giro', debtor_snapshot: { bic: 'ESSESESS' } })
+  const atBank = (overrides: Record<string, unknown> = {}) =>
+    draftOrder({ status: 'accepted', provider_payment_id: 'pay-1', provider_payment_product: 'swedish-giro', debtor_snapshot: { bic: 'ESSESESS' }, ...overrides })
 
   it('leaves a payment whose outcome is unknown to a person who checked the online bank', async () => {
     enqueue({ data: [unknown()] })
@@ -326,6 +359,23 @@ describe('cancelling an order the bank may hold', () => {
 
     expect(status).toBe(httpStatus)
     expect(body.error.code).toBe(code)
+    expect(findCall('payment_orders', 'update')).toBeUndefined()
+  })
+
+  it('says an unsigned payment the bank would not cancel is unsigned, not too late (crm#1282)', async () => {
+    const cancelPayment = vi.fn().mockResolvedValue({ outcome: 'too_late', providerStatus: 'RCVD', unsigned: true })
+    registerPaymentInitiationProvider({ id: 'open_payments', isAvailableFor: () => true, cancelPayment } as unknown as PaymentInitiationProvider)
+    enqueue({ data: [atBank({ status: 'submitted' })] })
+    enqueue({ data: { org_number: '5566778899' } })
+    enqueue({ data: null })
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(
+      await cancelOrder(post(`/api/payments/orders/${ORDER}/cancel`, {}), params(ORDER)),
+    )
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('PAYMENT_CANCEL_UNSIGNED_REFUSED')
+    expect(body.error.message).toContain('inte signerad')
     expect(findCall('payment_orders', 'update')).toBeUndefined()
   })
 

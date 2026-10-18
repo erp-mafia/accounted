@@ -7,12 +7,13 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { AlertTriangle, FileDown, Info } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import { isFiscalYear } from '@/lib/invariants/fiscal-year'
 import type { EgenavgiftCategory } from '@/lib/bokslut/enskild-firma/egenavgifter-calculator'
-import type { EfDeclarationItem } from '@/lib/bokslut/enskild-firma/types'
+import type { EfDeclarationItem, EfNeRutor, EfOvrigUppgift } from '@/lib/bokslut/enskild-firma/types'
 import type { EfFondState } from '@/lib/bokslut/enskild-firma/periodiseringsfond-ef'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -28,6 +29,7 @@ interface EfDeclarationSectionProps {
 interface EfOverrideInputs {
   category: EgenavgiftCategory
   kapitalunderlag: string
+  sparatFordelningsbelopp: string
   expansionsfondKapitalunderlag: string
   priorSchablon: string
   priorActual: string
@@ -48,6 +50,9 @@ interface EfPreviewResponse {
   bookedSurplus: number
   items: EfDeclarationItem[]
   pfondFonder?: EfFondState[]
+  rutor?: EfNeRutor
+  ovrigaUppgifter?: EfOvrigUppgift[]
+  warnings?: string[]
   postedEntryCount: number
   inputWarnings: string[]
 }
@@ -55,6 +60,7 @@ interface EfPreviewResponse {
 const DEFAULT_OVERRIDES: EfOverrideInputs = {
   category: 'full',
   kapitalunderlag: '',
+  sparatFordelningsbelopp: '',
   expansionsfondKapitalunderlag: '',
   priorSchablon: '',
   priorActual: '',
@@ -121,6 +127,8 @@ export function EfDeclarationSection({
     params.set('category', overrides.category)
     const kap = parseFloat(overrides.kapitalunderlag)
     if (Number.isFinite(kap)) params.set('kapitalunderlag', String(kap))
+    const sparat = parseFloat(overrides.sparatFordelningsbelopp)
+    if (Number.isFinite(sparat) && sparat > 0) params.set('sparatFordelningsbelopp', String(sparat))
     const kapUb = parseFloat(overrides.expansionsfondKapitalunderlag)
     if (Number.isFinite(kapUb)) params.set('expansionsfondKapitalunderlag', String(kapUb))
     const ps = parseFloat(overrides.priorSchablon)
@@ -193,6 +201,9 @@ export function EfDeclarationSection({
 
   const items = preview?.items ?? []
   const inputWarnings = preview?.inputWarnings ?? []
+  const rutor = preview?.rutor
+  const ovrigaUppgifter = preview?.ovrigaUppgifter ?? []
+  const previewWarnings = preview?.warnings ?? []
   const noPostedEntries = preview ? preview.postedEntryCount === 0 : false
 
   return (
@@ -255,12 +266,26 @@ export function EfDeclarationSection({
               </select>
             </div>
             <div className="space-y-1">
-              <Label className="text-xs">Kapitalunderlag för räntefördelning (vid IB)</Label>
+              <Label className="text-xs">
+                Kapitalunderlag för räntefördelning (vid IB, sparat fördelningsbelopp inräknat)
+              </Label>
               <Input
                 type="number"
                 step="1"
                 value={overrides.kapitalunderlag}
                 onChange={(e) => update('kapitalunderlag', e.target.value)}
+                placeholder="0"
+                className="tabular-nums h-9"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Sparat fördelningsbelopp från tidigare år</Label>
+              <Input
+                type="number"
+                step="1"
+                min="0"
+                value={overrides.sparatFordelningsbelopp}
+                onChange={(e) => update('sparatFordelningsbelopp', e.target.value)}
                 placeholder="0"
                 className="tabular-nums h-9"
               />
@@ -427,6 +452,61 @@ export function EfDeclarationSection({
         </Card>
       ))}
 
+      {/* NE-bilaga sida 2: every ruta the preview fills, in the form's order. */}
+      {rutor && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">NE-bilaga sida 2</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Beloppen att fylla i, i blankettens ordning. Summarutorna visas alltid, övriga när de inte är 0.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-16">Ruta</TableHead>
+                  <TableHead>Uppgift</TableHead>
+                  <TableHead className="text-right">Belopp</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {NE_RUTA_ROWS.filter((row) => row.sum || rutor[row.ruta] !== 0).map((row) => (
+                  <TableRow key={row.ruta}>
+                    <TableCell className="text-sm tabular-nums">{row.ruta}</TableCell>
+                    <TableCell className={`text-sm ${row.sum ? 'font-medium' : ''}`}>{row.label}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatCurrency(rutor[row.ruta])}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            {ovrigaUppgifter.length > 0 && (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Övriga uppgifter</TableHead>
+                    <TableHead className="text-right">Belopp</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {ovrigaUppgifter.map((uppgift) => (
+                    <TableRow key={uppgift.faltkod}>
+                      <TableCell className="text-sm">{uppgift.label}</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatCurrency(uppgift.amount)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+            {previewWarnings.map((w, i) => (
+              <p key={i} className="text-xs text-muted-foreground">
+                {w}
+              </p>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       {/* NE-bilaga download */}
       <Card>
         <CardHeader>
@@ -454,6 +534,23 @@ export function EfDeclarationSection({
     </div>
   )
 }
+
+/** NE-bilaga sida 2 rutor (SKV 2161), with the form's wording. */
+const NE_RUTA_ROWS: Array<{ ruta: keyof EfNeRutor; label: string; sum?: boolean }> = [
+  { ruta: 'R29', label: 'Överskott/underskott före räntefördelning', sum: true },
+  { ruta: 'R30', label: 'Positiv räntefördelning' },
+  { ruta: 'R31', label: 'Negativ räntefördelning' },
+  { ruta: 'R32', label: 'Återföring av periodiseringsfond' },
+  { ruta: 'R33', label: 'Överskott/underskott före avsättning till periodiseringsfond', sum: true },
+  { ruta: 'R34', label: 'Avsättning till periodiseringsfond' },
+  { ruta: 'R35', label: 'Överskott/underskott före ökning av expansionsfond', sum: true },
+  { ruta: 'R36', label: 'Ökning av expansionsfond' },
+  { ruta: 'R37', label: 'Minskning av expansionsfond' },
+  { ruta: 'R40', label: 'Medgivna avdrag för egenavgifter föregående beskattningsår' },
+  { ruta: 'R41', label: 'Påförda egenavgifter enligt slutskattebesked' },
+  { ruta: 'R42', label: 'Överskott/underskott före årets avdrag för egenavgifter', sum: true },
+  { ruta: 'R43', label: 'Årets beräknade avdrag för egenavgifter' },
+]
 
 /** Rows with a valid year and a positive balance; a repeated year counts once. */
 function enteredFonder(rows: Array<{ year: string; balance: string }>): Array<{ year: string; balance: string }> {

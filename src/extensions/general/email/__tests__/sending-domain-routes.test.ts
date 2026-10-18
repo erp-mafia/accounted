@@ -193,6 +193,22 @@ describe('POST /sending-domain/verify', () => {
     expect(res.status).toBe(404)
   })
 
+  it('passes a provider-failure code through with the Swedish sentence (crm#1288)', async () => {
+    verifyMock.mockResolvedValue({
+      ok: false,
+      status: 502,
+      code: 'SENDING_DOMAIN_VERIFY_PROVIDER_ERROR',
+      error: 'Kunde inte kontrollera domänen hos e-postleverantören just nu.',
+    })
+    const res = await route.handler(createMockRequest('/sending-domain/verify', { method: 'POST' }), adminCtx())
+    const { status, body } = await parseJsonResponse<Record<string, unknown>>(res)
+    expect(status).toBe(502)
+    expect(body).toEqual({
+      code: 'SENDING_DOMAIN_VERIFY_PROVIDER_ERROR',
+      error: 'Kunde inte kontrollera domänen hos e-postleverantören just nu.',
+    })
+  })
+
   it('returns the re-checked row', async () => {
     verifyMock.mockResolvedValue({ ok: true, data: { ...ROW, status: 'verified' } })
     const res = await route.handler(createMockRequest('/sending-domain/verify', { method: 'POST' }), adminCtx())
@@ -232,6 +248,20 @@ describe('DELETE /sending-domain', () => {
     const res = await route.handler(createMockRequest('/sending-domain', { method: 'DELETE' }), adminCtx('member'))
     expect(res.status).toBe(403)
     expect(removeMock).not.toHaveBeenCalled()
+  })
+
+  it('passes a provider-failure code through with the Swedish sentence (crm#1288)', async () => {
+    removeMock.mockResolvedValue({
+      ok: false,
+      status: 502,
+      code: 'SENDING_DOMAIN_REMOVE_PROVIDER_ERROR',
+      error: 'Kunde inte ta bort domänen hos e-postleverantören just nu, så den ligger kvar.',
+    })
+    const res = await route.handler(createMockRequest('/sending-domain', { method: 'DELETE' }), adminCtx())
+    const { status, body } = await parseJsonResponse<{ error: string; code: string }>(res)
+    expect(status).toBe(502)
+    expect(body.code).toBe('SENDING_DOMAIN_REMOVE_PROVIDER_ERROR')
+    expect(body.error).toMatch(/ligger kvar/)
   })
 
   it('removes for an owner', async () => {

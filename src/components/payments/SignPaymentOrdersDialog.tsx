@@ -9,20 +9,22 @@ import type { PaymentOrder } from './payments-client'
 import type { PaymentSigningReturn } from '@/lib/payments/orders/return-url'
 
 interface SignPaymentOrdersDialogProps {
-  /** Approved orders from one account in one currency. */
+  /** Approved orders from one account in one currency, or the orders of the signing to sign again (pendingBatchId). */
   orders: PaymentOrder[]
   signerKnown: boolean
   /** The bank the payments leave from, for its mark and the bank-page texts. */
   bankName?: string | null
   /** Back from the bank's own page: reopen at the signing's poll instead of the method choice. */
   resume?: PaymentSigningReturn | null
+  /** Signera igen: the signing these orders wait unsigned in, signed again instead of a new one. */
+  pendingBatchId?: string | null
   onOpenChange: (open: boolean) => void
   /** Called on close when payments were sent to the bank. */
   onDone: () => void
 }
 
 /** Signera from the Betalningar page: one BankID for the selected approved payments. */
-export function SignPaymentOrdersDialog({ orders, signerKnown, bankName = null, resume = null, onOpenChange, onDone }: SignPaymentOrdersDialogProps) {
+export function SignPaymentOrdersDialog({ orders, signerKnown, bankName = null, resume = null, pendingBatchId = null, onOpenChange, onDone }: SignPaymentOrdersDialogProps) {
   const t = useTranslations('bank_payments')
   const [stage, setStage] = useState<SigningFlowStage>(resume ? 'signing' : 'method')
   // A resumed signing was sent to the bank before the page reloaded: the list reloads on close.
@@ -45,6 +47,7 @@ export function SignPaymentOrdersDialog({ orders, signerKnown, bankName = null, 
           signerKnown={signerKnown}
           bankName={bankName}
           resume={resume}
+          pendingBatchId={pendingBatchId}
           closeButton={
             <Button variant="secondary" onClick={() => close(false)}>
               {t('close')}

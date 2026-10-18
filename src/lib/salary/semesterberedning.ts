@@ -21,6 +21,10 @@
  *   sammalöneregeln (monthly): monthly/dailyDivisor + monthly x tillägg
  *   procentregeln (monthly)  : monthly x 12 x rate / entitled days
  *   procentregeln (hourly)   : hourly x hours_per_week x 52 x rate / entitled
+ * Under sammalöneregeln the liability also carries the semesterlön of the
+ * rörliga lönedelar still unpaid at the year end (Semesterlagen 16 a §
+ * tredje stycket, lib/salary/variable-vacation-pay.ts): it is paid after the
+ * semesterår, not per day, so it is a sum per employee, not a day value.
  * Avgifter on the liability use per-employee age tiers at the settlement
  * year (born <= 1937 exempt, fyllt 67 vid årets ingång 10.21%, otherwise
  * 31.42%), matching the rates the per-run accruals booked on 2940; a flat
@@ -40,6 +44,7 @@ import { roundOre, sumOre } from '@/lib/money'
 import { dailyDivisor, degreeAdjustedMonthlySalary } from './work-schedule'
 import { paidDaysPerDayOff } from './vacation-net-days'
 import { resolveVacationPayRate } from './vacation-pay-rate'
+import { loadVariablePayRuns, previousVacationYearStart, unpaidVariableVacationPayAtYearEnd } from './variable-vacation-pay'
 import { getVacationYearBounds, type VacationYearBasis } from './vacation-year'
 import { getVacationYearBasis, syncVacationLedgerForEmployees, type VacationBalanceRow } from './vacation-ledger'
 import { remainingSavedDays } from './vacation-category'
@@ -92,6 +97,10 @@ export interface VacationCloseEmployeeRow {
   saved_days_after: Record<string, number>
   next_year_entitled: number
   day_value_sek: number
+  /** Sammalöneregeln: semesterlön of the rörliga lönedelar still unpaid at
+   *  the year end (Semesterlagen 16 a § tredje stycket), included in
+   *  computed_liability_sek; 0 for everyone else. */
+  variable_vacation_pay_sek: number
   computed_liability_sek: number
   /** Age-tier avgifter rate applied to this employee's liability for the
    * 2940 target (0 exempt, 0.1021 fyllt 67, 0.3142 standard). */
@@ -369,6 +378,21 @@ export async function previewVacationYearClose(
     }>).map((o) => [o.employee_id, o]),
   )
 
+  // Sammalöneregeln: the payslips that carry the rörliga lönedelar of the
+  // closing year and the year before it (lib/salary/variable-vacation-pay.ts).
+  const sammaloneIds = roster.data.filter((e) => e.vacation_rule === 'sammaloneregeln').map((e) => e.id)
+  let variablePayRuns: Awaited<ReturnType<typeof loadVariablePayRuns>>
+  try {
+    variablePayRuns = await loadVariablePayRuns(supabase, {
+      companyId,
+      employeeIds: sammaloneIds,
+      from: previousVacationYearStart(closingYearStart),
+      to: bounds.end,
+    })
+  } catch (err) {
+    return { ok: false, code: 'INTERNAL_ERROR', details: { message: err instanceof Error ? err.message : 'unknown' } }
+  }
+
   const closingYear = Number(closingYearStart.slice(0, 4))
   // The rolled liability is paid out during the new vacation year: that is
   // the year the avgifter age tier is evaluated against.
@@ -424,7 +448,15 @@ export async function previewVacationYearClose(
     const liabilityDays = roundOre(
       remaining + Object.values(savedBefore).reduce((s, d) => s + (Number(d) || 0), 0),
     )
-    const liability = roundOre(liabilityDays * dayValue)
+    const variableVacationPay =
+      emp.vacation_rule === 'sammaloneregeln'
+        ? unpaidVariableVacationPayAtYearEnd({
+            closingYearStart,
+            rate: resolveVacationPayRate(emp.vacation_days_per_year, emp.vacation_pay_rate),
+            runs: variablePayRuns.get(emp.id) ?? [],
+          }).unpaid
+        : 0
+    const liability = roundOre(liabilityDays * dayValue + variableVacationPay)
 
     rows.push({
       employee_id: emp.id,
@@ -447,6 +479,7 @@ export async function previewVacationYearClose(
         roundOre(nextYearEntitled(emp, newYearStart, newYearBounds.end) - advanceTaken),
       ),
       day_value_sek: dayValue,
+      variable_vacation_pay_sek: variableVacationPay,
       computed_liability_sek: liability,
       avgifter_rate: avgifterRateFor(emp, settlementYear),
       liability_change_account: vacationLiabilityChangeAccount({

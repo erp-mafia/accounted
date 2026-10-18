@@ -36,6 +36,23 @@ const PREVIEW: EfDeclarationPreview = {
     },
   ],
   pfondFonder: [],
+  rutor: {
+    R29: 130_000,
+    R30: 0,
+    R31: 0,
+    R32: 0,
+    R33: 130_000,
+    R34: 0,
+    R35: 130_000,
+    R36: 0,
+    R37: 0,
+    R40: 0,
+    R41: 0,
+    R42: 130_000,
+    R43: 32_500,
+  },
+  ovrigaUppgifter: [],
+  warnings: [],
 }
 
 function mkReq(query = '') {
@@ -72,6 +89,7 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/ef-declaration', () => {
     ['a non-numeric amount', '?kapitalunderlag=abc'],
     ['an unknown egenavgifter category', '?category=retired'],
     ['a negative prior-year amount', '?priorYearSchablonavdrag=-100'],
+    ['a negative sparat fördelningsbelopp', '?sparatFordelningsbelopp=-1'],
     ['earlier funds not written as år:belopp', '?pfondExistingFonder=2019-50000'],
     ['the same avsättningsår twice', '?pfondExistingFonder=2019:1000,2019:2000'],
   ])('returns 400 for %s', async (_label, query) => {
@@ -194,6 +212,31 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/ef-declaration', () => {
     const res = await GET(mkReq('?kapitalunderlag=100000&expansionsfondDesiredChange=-50000'), mkParams())
     const body = await res.json()
     expect(body.data.inputWarnings).toEqual([])
+  })
+
+  it('warns that an existing expansionsfond cannot be checked without the closing kapitalunderlag', async () => {
+    const { enqueue } = signedIn()
+    enqueue({ data: { id: 'period-1' } })
+    enqueue({ count: 3 })
+    vi.mocked(computeEfDeclarationPreview).mockResolvedValue(PREVIEW)
+
+    const res = await GET(mkReq('?kapitalunderlag=100000&expansionsfondExistingBalance=80000'), mkParams())
+    const body = await res.json()
+    expect(body.data.inputWarnings).toEqual([expect.stringMatching(/ryms inom 125,94 %/)])
+  })
+
+  it('passes the sparat fördelningsbelopp on', async () => {
+    const { enqueue } = signedIn()
+    enqueue({ data: { id: 'period-1' } })
+    enqueue({ count: 4 })
+    vi.mocked(computeEfDeclarationPreview).mockResolvedValue(PREVIEW)
+
+    const res = await GET(mkReq('?kapitalunderlag=110000&sparatFordelningsbelopp=10000'), mkParams())
+    expect(res.status).toBe(200)
+    expect(computeEfDeclarationPreview).toHaveBeenCalledWith(expect.anything(), 'company-1', 'period-1', {
+      kapitalunderlag: 110_000,
+      sparatFordelningsbelopp: 10_000,
+    })
   })
 
   it('passes earlier periodiseringsfonder on as year and balance', async () => {

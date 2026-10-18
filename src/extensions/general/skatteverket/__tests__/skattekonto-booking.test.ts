@@ -34,10 +34,17 @@ beforeEach(() => {
 /**
  * System seeds mirror supabase/migrations/20260519100000_skattekonto_rules.sql
  * plus the follow-up corrections 20260817120100 (EF preliminärskatt 2012 ->
- * 2013) and 20260819200100 (requires_employer on the 'avdragen skatt' rule).
+ * 2013), 20260819200100 (requires_employer on the 'avdragen skatt' rule) and
+ * 20261018132300 (the rot/rut kvittning rule ahead of utbetalning).
  * Kept in lockstep so the resolver behaves identically against mock and real DB.
  */
 const SEED_RULES = [
+  {
+    id: 'sys-0', priority: 5, pattern: 'kvittning av utbetalning för rot,kvittning av utbetalning för rut',
+    amount_min: null, amount_max: null, company_type: 'all',
+    counter_account: '1513', counter_account_ef: null,
+    label: 'Rot/rut-utbetalning kvittad på skattekontot', active: true, requires_employer: false,
+  },
   {
     id: 'sys-1', priority: 10, pattern: 'inbetalning bokförd,inbetalning,överföring från bank',
     amount_min: null, amount_max: null, company_type: 'all',
@@ -475,6 +482,166 @@ describe('guessCounterAccount: a VAT refund clears the 1650 receivable', () => {
   })
 })
 
+// crm#1255: Skatteverket sets a rot/rut payout off on the skattekonto when the
+// company owes tax ("Kvittning av utbetalning för rot- och rutarbeten"). The
+// text contains "utbetalning", so the generic payout rule booked it against
+// the bank although no money reached it, and left the 1513 receivable open.
+// The kvittning clears the receivable instead (swedish-invoice-compliance:
+// SKV's payout is Debit 1930 / Credit 1513; set off, 1630 takes the debit).
+describe('guessCounterAccount: a rot/rut kvittning clears the receivable, never the bank', () => {
+  const kvittningText = 'Kvittning av utbetalning för rot- och rutarbeten'
+
+  it('books the kvittning against 1513 without touching the bank (regression)', async () => {
+    const { supabase, enqueue, findCalls } = makeSupabase()
+    enqueueRules(enqueue)
+
+    expect(
+      await guessCounterAccount(supabase as unknown as SupabaseClient, 'company-1', kvittningText, 'aktiebolag', 7202),
+    ).toEqual({ account: '1513', label: 'Rot/rut-utbetalning kvittad på skattekontot' })
+    // The primary bank account is never even looked up.
+    expect(findCalls('cash_accounts', 'select')).toEqual([])
+  })
+
+  it('books it the same way for an enskild firma', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    enqueueRules(enqueue)
+
+    expect(
+      (await guessCounterAccount(supabase as unknown as SupabaseClient, 'company-1', kvittningText, 'enskild_firma', 4447))?.account,
+    ).toBe('1513')
+  })
+
+  it('keeps an ordinary payout and a returned payout on the bank', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    enqueueRules(enqueue)
+    expect(
+      (await guessCounterAccount(supabase as unknown as SupabaseClient, 'company-1', 'Utbetalning', 'aktiebolag', -15000))?.account,
+    ).toBe('1930')
+
+    enqueueRules(enqueue)
+    expect(
+      (await guessCounterAccount(supabase as unknown as SupabaseClient, 'company-1', 'Återsänd utbetalning från bank', 'aktiebolag', 9000))?.account,
+    ).toBe('1930')
+  })
+
+  it("leaves a private buyer's preliminär skattereduktion unmatched", async () => {
+    const { supabase, enqueue } = makeSupabase()
+    enqueueRules(enqueue)
+    expect(
+      await guessCounterAccount(
+        supabase as unknown as SupabaseClient, 'company-1', 'Preliminär skattereduktion för rot/rut/grön teknik', 'enskild_firma', -7500,
+      ),
+    ).toBeNull()
+  })
+})
+
+// accounted#68: the seed rule sent every avgift draw to 2731 while a company
+// whose payroll books the liability on the group account 2730 (another payroll
+// system, the SIE history it brought) carried it there, so 2730 and 2731 drifted
+// apart with opposite balances. The seed's 2731 now follows the account the
+// company's own liability was last booked on (swedish-payroll bas-7xxx.md:
+// 2731 or 2730 consistently, never both in one company).
+describe('guessCounterAccount: the avgift draw clears the account the liability sits on', () => {
+  const drawText = 'Arbetsgivaravgift sept 2026'
+  const guess = (supabase: unknown, text = drawText, belopp = -22319) =>
+    guessCounterAccount(supabase as SupabaseClient, 'company-1', text, 'aktiebolag', belopp, false, '2026-10-12')
+  const liabilityBooking = (account: string, entryDate = '2026-09-25') => ({
+    entry_date: entryDate,
+    journal_entry_lines: [
+      { account_number: '7510', debit_amount: 22319, credit_amount: 0 },
+      { account_number: account, debit_amount: 0, credit_amount: 22319 },
+    ],
+  })
+
+  it('debits 2730 when the payroll books the liability there (regression)', async () => {
+    const { supabase, enqueue, findCall } = makeSupabase()
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: [liabilityBooking('2730')] })
+
+    expect(await guess(supabase)).toEqual({ account: '2730', label: 'Arbetsgivaravgifter' })
+    // Read up to the event date: the draw clears what was booked before it.
+    expect(findCall('journal_entries', 'lte')).toEqual(['entry_date', '2026-10-12'])
+  })
+
+  it('keeps 2731 when the salary run here books the liability on 2731', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: [liabilityBooking('2731')] })
+
+    expect((await guess(supabase))?.account).toBe('2731')
+  })
+
+  it('keeps 2731 when no liability booking is found', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: [] })
+
+    expect((await guess(supabase))?.account).toBe('2731')
+  })
+
+  it('keeps 2731 when the liability read fails', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    enqueue({ data: SEED_RULES })
+    enqueue({ error: { message: 'timeout' } })
+
+    expect((await guess(supabase))?.account).toBe('2731')
+  })
+
+  it('follows the liability on a positive avgift decision too', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: [liabilityBooking('2730')] })
+
+    expect((await guess(supabase, 'Beslut 260703 arbetsgivaravgift mars 2026', 1200))?.account).toBe('2730')
+  })
+
+  it('does not read the liability for other events', async () => {
+    const { supabase, enqueue, findCalls } = makeSupabase()
+    enqueue({ data: SEED_RULES })
+
+    expect((await guess(supabase, 'Avdragen skatt sept 2026', -5000))?.account).toBe('2710')
+    expect(findCalls('journal_entries', 'select')).toEqual([])
+  })
+
+  it("keeps a company's own avgift rule: only the system seed is re-routed", async () => {
+    const { supabase, enqueue, findCalls } = makeSupabase()
+    enqueue({
+      data: [
+        {
+          id: 'own-1', company_id: 'company-1', priority: 5, pattern: 'arbetsgivaravgift',
+          amount_min: null, amount_max: null, company_type: 'all',
+          counter_account: '2731', counter_account_ef: null,
+          label: 'Egen avgiftsregel', active: true, requires_employer: false,
+        },
+        ...SEED_RULES,
+      ],
+    })
+    enqueue({ data: [liabilityBooking('2730')] })
+
+    expect(await guess(supabase)).toEqual({ account: '2731', label: 'Egen avgiftsregel' })
+    expect(findCalls('journal_entries', 'select')).toEqual([])
+  })
+
+  it('suggests the same account in the list', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'aktiebolag', employer_registered: true } })
+    enqueue({ data: [liabilityBooking('2730')] })
+
+    const [row] = await attachBookingSuggestions(supabase as unknown as SupabaseClient, 'company-1', [
+      {
+        transaktionstext: drawText,
+        belopp_skatteverket: -22319,
+        journal_entry_id: null,
+        status: 'booked',
+        transaktionsdatum: '2026-10-12',
+      },
+    ])
+
+    expect(row.booking_suggestion).toMatchObject({ account: '2730', label: 'Arbetsgivaravgifter' })
+  })
+})
+
 // One resolver behind every door (resolveCounterAccount): the single-event
 // guess and the list's suggestion must name the same account for the same
 // event, rules and company, including the employer gate, the primary-SEK
@@ -496,6 +663,7 @@ describe('one counter-account resolver: guess and suggestion agree', () => {
     { name: 'EF A-skatt without employer (gated)', text: 'Avdragen skatt', belopp: -500, entityType: 'enskild_firma', expected: null },
     { name: 'EF A-skatt as employer', text: 'Avdragen skatt', belopp: -500, entityType: 'enskild_firma', employer: true, expected: '2710' },
     { name: 'payout to the primary SEK account', text: 'Utbetalning', belopp: 3000, entityType: 'aktiebolag', expected: '1931' },
+    { name: 'rot/rut payout set off on the skattekonto', text: 'Kvittning av utbetalning för rot- och rutarbeten', belopp: 7202, entityType: 'aktiebolag', expected: '1513' },
     { name: 'VAT charged', text: 'Mervärdesskatt mars', belopp: -3000, entityType: 'aktiebolag', expected: '2650' },
     { name: 'VAT refund clearing 1650', text: 'Moms juli 2026 - sept 2026', belopp: 1240, entityType: 'aktiebolag', receivable: 1240, expected: '1650' },
   ]

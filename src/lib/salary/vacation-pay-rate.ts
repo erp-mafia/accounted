@@ -12,7 +12,8 @@
  * valuation and the v1/MCP vacation-balance estimate all call it, so a CBA
  * rate cannot apply in one place and not another.
  *
- * Sammalöneregeln does not use this rate: its semestertillägg is
+ * Sammalöneregeln uses it only for the rörliga lönedelar (16 a § tredje
+ * stycket, lib/salary/variable-vacation-pay.ts): its semestertillägg is
  * `semestertillagg_rate`, a separate field.
  */
 

@@ -126,16 +126,48 @@ describe('EF periodiseringsfond: fund states', () => {
   })
 })
 
+// Expansionsfond (IL 34 kap; NE R35-R37). Skatteverket, Expansionsfond: the
+// ökning is "högst inkomsten i näringsverksamheten före avsättning till
+// expansionsfond", the sum in R35, and the whole fund at most 125,94 % of the
+// kapitalunderlag at year-end; a fund above that "måste" return the excess.
+// A generous R35 isolates the 125,94 % cap.
+const LARGE_R35 = 10_000_000
+
 describe('Expansionsfond', () => {
-  it('caps avsättning at 125.94 % of kapitalunderlag', () => {
+  it('caps avsättning at 125.94 % of kapitalunderlag (Skatteverket: Johan, 100 000 gives 125 940)', () => {
     const r = calculateExpansionsfondChange({
       kapitalunderlag: 100_000,
       existingBalance: 0,
       desiredChange: 200_000, // would exceed 125 940 cap
+      resultBeforeExpansionsfond: LARGE_R35,
     })
-    expect(r).not.toBeNull()
-    expect(r!.amount).toBe(125_940)
-    expect(r!.warnings[0]).toContain('125,94')
+    expect(r.item).not.toBeNull()
+    expect(r.item!.amount).toBe(125_940)
+    expect(r.r36).toBe(125_940)
+    expect(r.item!.warnings[0]).toContain('125,94')
+  })
+
+  it('caps the ökning at R35, the result before it, as well', () => {
+    // Before this fix R36 was 300 000 on an R35 of 120 000: an underskott
+    // made by the avsättning, which the form forbids ("dock högst överskott
+    // vid R35").
+    const r = calculateExpansionsfondChange({
+      kapitalunderlag: 400_000,
+      desiredChange: 300_000,
+      resultBeforeExpansionsfond: 120_000,
+    })
+    expect(r.r36).toBe(120_000)
+    expect(r.item).toMatchObject({ kind: 'expansionsfond_avsattning', amount: 120_000, ne_ruta: 'R36' })
+    expect(r.item!.warnings[0]).toContain('R35')
+  })
+
+  it('allows no ökning on a loss', () => {
+    const r = calculateExpansionsfondChange({
+      kapitalunderlag: 400_000,
+      desiredChange: 50_000,
+      resultBeforeExpansionsfond: -10_000,
+    })
+    expect(r.r36).toBe(0)
   })
 
   it('limits återföring to existing balance', () => {
@@ -143,15 +175,73 @@ describe('Expansionsfond', () => {
       kapitalunderlag: 100_000,
       existingBalance: 30_000,
       desiredChange: -50_000,
+      resultBeforeExpansionsfond: LARGE_R35,
     })
-    expect(r).not.toBeNull()
-    expect(r!.kind).toBe('expansionsfond_ateforing')
-    expect(r!.amount).toBe(30_000)
+    expect(r.item!.kind).toBe('expansionsfond_ateforing')
+    expect(r.item!.amount).toBe(30_000)
+    expect(r.r37).toBe(30_000)
   })
 
-  it('returns null when desiredChange is 0', () => {
+  it('allows a minskning in a loss year (Skatteverket: Edin)', () => {
+    const r = calculateExpansionsfondChange({
+      kapitalunderlag: 500_000,
+      existingBalance: 200_000,
+      desiredChange: -100_000,
+      resultBeforeExpansionsfond: -100_000,
+    })
+    expect(r).toMatchObject({ r36: 0, r37: 100_000, newBalance: 100_000 })
+  })
+
+  it('returns the part of the fund above the cap even when nothing was asked', () => {
+    // 125,94 % of 100 000 = 125 940; a fund of 200 000 must give back 74 060.
+    const r = calculateExpansionsfondChange({
+      kapitalunderlag: 100_000,
+      existingBalance: 200_000,
+      resultBeforeExpansionsfond: LARGE_R35,
+    })
+    expect(r).toMatchObject({ r36: 0, r37: 74_060, newBalance: 125_940 })
+    expect(r.item).toMatchObject({ kind: 'expansionsfond_ateforing', ne_ruta: 'R37', amount: 74_060 })
+    expect(r.item!.warnings[0]).toContain('måste återföras')
+  })
+
+  it('turns an asked ökning into the forced minskning when the fund is above the cap', () => {
+    const r = calculateExpansionsfondChange({
+      kapitalunderlag: 100_000,
+      existingBalance: 200_000,
+      desiredChange: 10_000,
+      resultBeforeExpansionsfond: LARGE_R35,
+    })
+    expect(r).toMatchObject({ r36: 0, r37: 74_060 })
+  })
+
+  it('keeps an asked minskning larger than the forced one', () => {
+    const r = calculateExpansionsfondChange({
+      kapitalunderlag: 100_000,
+      existingBalance: 200_000,
+      desiredChange: -150_000,
+      resultBeforeExpansionsfond: LARGE_R35,
+    })
+    expect(r.r37).toBe(150_000)
+  })
+
+  it('returns the whole fund when the kapitalunderlag is negative', () => {
+    const r = calculateExpansionsfondChange({
+      kapitalunderlag: -20_000,
+      existingBalance: 50_000,
+      resultBeforeExpansionsfond: LARGE_R35,
+    })
+    expect(r).toMatchObject({ r37: 50_000, newBalance: 0 })
+  })
+
+  it('forces nothing while the kapitalunderlag is not entered', () => {
+    const r = calculateExpansionsfondChange({ existingBalance: 200_000, resultBeforeExpansionsfond: LARGE_R35 })
+    expect(r).toMatchObject({ r36: 0, r37: 0, newBalance: 200_000, item: null })
+  })
+
+  it('returns no item when desiredChange is 0 and the fund fits', () => {
     expect(
-      calculateExpansionsfondChange({ kapitalunderlag: 100_000, desiredChange: 0 }),
+      calculateExpansionsfondChange({ kapitalunderlag: 100_000, desiredChange: 0, resultBeforeExpansionsfond: LARGE_R35 })
+        .item,
     ).toBeNull()
   })
 })
@@ -173,19 +263,30 @@ describe('NE-bilaga rutor', () => {
   })
 
   it('expansionsfond: ökning in R36, minskning in R37', () => {
-    const okning = calculateExpansionsfondChange({ kapitalunderlag: 100_000, desiredChange: 10_000 })
-    expect(okning!.ne_ruta).toBe('R36')
+    const okning = calculateExpansionsfondChange({
+      kapitalunderlag: 100_000,
+      desiredChange: 10_000,
+      resultBeforeExpansionsfond: LARGE_R35,
+    })
+    expect(okning.item!.ne_ruta).toBe('R36')
+    expect(okning.item!.description).toContain('punkt 12.1')
 
     const minskning = calculateExpansionsfondChange({
       kapitalunderlag: 100_000,
       existingBalance: 30_000,
       desiredChange: -10_000,
+      resultBeforeExpansionsfond: LARGE_R35,
     })
-    expect(minskning!.ne_ruta).toBe('R37')
+    expect(minskning.item!.ne_ruta).toBe('R37')
+    expect(minskning.item!.description).toContain('punkt 12.2')
   })
 
   it('expansionsfond: an avsättning capped to 0 is still an avsättning, not a återföring', () => {
-    const r = calculateExpansionsfondChange({ kapitalunderlag: 0, desiredChange: 10_000 })
+    const { item: r } = calculateExpansionsfondChange({
+      kapitalunderlag: 0,
+      desiredChange: 10_000,
+      resultBeforeExpansionsfond: LARGE_R35,
+    })
     expect(r!.kind).toBe('expansionsfond_avsattning')
     expect(r!.ne_ruta).toBe('R36')
     expect(r!.amount).toBe(0)

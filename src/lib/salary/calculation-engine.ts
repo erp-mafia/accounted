@@ -5,6 +5,8 @@ import { calculateAgeAtYearStart, decryptPersonnummer } from './personnummer'
 import { avgiftAgeTier } from './avgift-tier'
 import { TAX_FREE_REIMBURSEMENT_TYPES } from './account-mapping'
 import { resolveVacationPayRate } from './vacation-pay-rate'
+import { sammaloneVariablePay } from './variable-vacation-pay'
+import { roundOre } from '@/lib/money'
 import type { SalaryCalculationPolicy } from './calculation-policy'
 import { groupOneOffBasesByRate, oneOffTaxForGroup, validateOneOffTaxLine } from './one-off-tax'
 import { isBenefitItemType, resolveTaxableBenefits } from './benefit-payments'
@@ -51,8 +53,9 @@ export interface SalaryCalculationInput {
   vacationDaysPerYear: number
   semestertillaggRate: number
   /** Kollektivavtal semesterlön rate as a fraction (0.135 = 13.5 %), or
-   *  null/undefined for the statutory 12 % (14.4 % at 30 days). Read only
-   *  under procentregeln and semesterersättning (lib/salary/vacation-pay-rate). */
+   *  null/undefined for the statutory 12 % (14.4 % at 30 days). Read under
+   *  procentregeln and semesterersättning, and under sammalöneregeln for the
+   *  rörliga lönedelar only (lib/salary/vacation-pay-rate). */
   vacationPayRate?: number | null
   /** Work-schedule daily-rate divisor (arbetsschema-lite). Defaults to the
    *  legacy 21 (5-day week); callers with a part-time schedule pass
@@ -829,9 +832,10 @@ export function calculateSalary(
   } else {
     // Sammalöneregeln (§16a): employee keeps regular salary during vacation
     // + semestertillägg per vacation day (min 0.43%, often 0.8% per CBA)
-    // Accrual = tillägg only (salary cost is already in normal monthly expense)
-    // The liability (2920) for sammalöneregeln is the tillägg portion,
-    // since the base salary is expensed monthly regardless of vacation.
+    // Accrual = tillägg (salary cost is already in normal monthly expense),
+    // plus the semesterlön of the rörliga lönedelar below. The liability
+    // (2920) for sammalöneregeln is those two portions, since the base salary
+    // is expensed monthly regardless of vacation.
     //
     // The tillägg is a share of the MONTHLY salary per vacation day, never of
     // the dagslön. Valuing it off a daily rate under-provisioned 2920 by the
@@ -860,6 +864,26 @@ export function calculateSalary(
       },
       output: vacationAccrual,
     })
+
+    // Rörliga lönedelar (Semesterlagen 16 a § tredje stycket): OB, övertid,
+    // bonus and provision are not in the monthly salary that runs through
+    // the vacation, so they earn their own semesterlön, the semesterlön
+    // percentage of the variable pay (lib/salary/variable-vacation-pay.ts).
+    // It is paid after the semesterår ends, so until then it is a liability:
+    // it accrues here with the tillägg and books on 2920/2940 like it. A run
+    // without variable pay accrues exactly what it did before.
+    const variablePay = sammaloneVariablePay(input.lineItems)
+    if (variablePay !== 0) {
+      const variableRate = resolveVacationPayRate(input.vacationDaysPerYear, input.vacationPayRate)
+      const variablePart = roundOre(variablePay * variableRate)
+      vacationAccrual = roundOre(tillagg + variablePart)
+      steps.push({
+        label: `Semesteravsättning rörliga lönedelar (sammalöneregeln ${fmtPct(variableRate)})`,
+        formula: `rörlig lön (OB, övertid, bonus, provision) × ${fmtPct(variableRate)}`,
+        input: { variable_pay: variablePay, rate: variableRate },
+        output: variablePart,
+      })
+    }
   }
 
   // ─── Step 10: Avgifter on vacation accrual ───

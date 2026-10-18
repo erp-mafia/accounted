@@ -3,6 +3,8 @@
  * dated on the payment date even when that date was a week ahead. Every
  * other state-advancing action on the page confirmed first; design.md
  * convention 10 says posting actions confirm up front with the outcome.
+ * Markera som betald, the step before it, asks first too when the payment
+ * date has not come yet (the rule itself: lib/salary/payout-date.ts).
  * Components are not rendered in this suite (vitest runs in `node`), so the
  * wiring is pinned on the page source and the copy on the message files.
  */
@@ -31,12 +33,44 @@ describe('salary run Bokför confirms before posting', () => {
   })
 
   it('says so when the payment date is after today (Stockholm calendar day)', () => {
-    expect(page).toMatch(/run\.payment_date > todayIsoStockholm\(\)\) lines\.push\(t\('confirm_book_ahead'/)
+    expect(page).toMatch(/if \(isPaymentDateAhead\(run\.payment_date\)\) lines\.push\(t\('confirm_book_ahead'/)
+  })
+
+  it('names the bank leg when the run pays something out', () => {
+    expect(page).toMatch(/if \(!noPayout\) lines\.push\(t\('confirm_book_bank'\)\)/)
   })
 })
 
-describe('Bokför confirm copy', () => {
-  const keys = ['confirm_book_title', 'confirm_book_intro', 'confirm_book_ahead', 'confirm_book_correction'] as const
+describe('salary run Markera som betald asks first when the payment date is ahead', () => {
+  it('the header action goes through handleMarkPaid, never straight to the paid endpoint', () => {
+    expect(page).toMatch(/key: 'paid', label: [^}]*, onClick: handleMarkPaid \}/)
+    expect(page).not.toMatch(/onClick: \(\) => handleAction\('paid'\)/)
+  })
+
+  it('confirms only for a future payout, and marks paid only after the confirm resolves true', () => {
+    const body = page.slice(page.indexOf('async function handleMarkPaid()'))
+    const askAt = body.indexOf('if (needsFuturePayoutConfirm(run.payment_date, noPayout))')
+    const confirmAt = body.indexOf('await confirmAction(')
+    const guardAt = body.indexOf('if (!ok) return')
+    const paidAt = body.indexOf("handleAction('paid')")
+    expect(askAt).toBeGreaterThan(-1)
+    expect(confirmAt).toBeGreaterThan(askAt)
+    expect(guardAt).toBeGreaterThan(confirmAt)
+    expect(paidAt).toBeGreaterThan(guardAt)
+    expect(body.slice(confirmAt, guardAt)).toContain("t('confirm_mark_paid_ahead'")
+  })
+})
+
+describe('Bokför and Markera som betald confirm copy', () => {
+  const keys = [
+    'confirm_book_title',
+    'confirm_book_intro',
+    'confirm_book_bank',
+    'confirm_book_ahead',
+    'confirm_book_correction',
+    'confirm_mark_paid_ahead_title',
+    'confirm_mark_paid_ahead',
+  ] as const
 
   it.each([
     ['sv', sv.salary_run],
@@ -46,6 +80,7 @@ describe('Bokför confirm copy', () => {
     expect(messages.confirm_book_intro).toContain('{period}')
     expect(messages.confirm_book_intro).toContain('{date}')
     expect(messages.confirm_book_ahead).toContain('{date}')
+    expect(messages.confirm_mark_paid_ahead).toContain('{date}')
     for (const key of keys) expect(messages[key]).not.toMatch(/[–—]/)
   })
 

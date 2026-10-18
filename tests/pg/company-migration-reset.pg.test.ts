@@ -1036,6 +1036,92 @@ describe('company migration reset RPCs (pg)', () => {
     }
   })
 
+  it('moves the invoice sending domain to the replacement with its verification intact (crm#1288)', async () => {
+    const { userId, companyId } = await seedCompany()
+    const domain = `reset-${randomUUID().slice(0, 8)}.example`
+    const resendDomainId = `rd_${randomUUID()}`
+    const seeded = await getPool().query<{ id: string; verified_at: string }>(
+      `INSERT INTO public.company_sending_domains
+         (company_id, domain, status, sender_local_part, resend_domain_id, dns_records,
+          verified_at, last_checked_at)
+       VALUES ($1, $2, 'verified', 'ekonomi', $3, '[{"record":"DKIM"}]'::jsonb, now(), now())
+       RETURNING id, verified_at::text`,
+      [companyId, domain, resendDomainId],
+    )
+    const row = seeded.rows[0]!
+
+    // The reset runs under the owner's tenant JWT claims, so the sending-domain
+    // tenant guard is live for the move (20261018134300).
+    await withUserContext(userId, async (client) => {
+      const { rows } = await client.query<{ result: RpcResult }>(
+        `SELECT public.reset_company_for_migration($1, $2, $3, true, true) AS result`,
+        [companyId, 'Test AB', 'The first migration used the wrong fiscal periods.'],
+      )
+      const result = rows[0]!.result
+      expect(result.ok).toBe(true)
+      const replacementId = result.replacement_company_id!
+      await client.query('RESET ROLE')
+
+      const moved = await client.query(
+        `SELECT id, company_id::text, status, sender_local_part, resend_domain_id, dns_records,
+                verified_at::text
+         FROM public.company_sending_domains
+         WHERE domain = $1`,
+        [domain],
+      )
+      expect(moved.rows).toEqual([
+        {
+          id: row.id,
+          company_id: replacementId,
+          status: 'verified',
+          sender_local_part: 'ekonomi',
+          resend_domain_id: resendDomainId,
+          dns_records: [{ record: 'DKIM' }],
+          verified_at: row.verified_at,
+        },
+      ])
+
+      const snapshot = await client.query<{ n: number }>(
+        `SELECT (confirmation_snapshot ->> 'sending_domains_transferred')::int AS n
+         FROM public.company_migration_resets
+         WHERE id = $1`,
+        [result.reset_id],
+      )
+      expect(snapshot.rows[0]!.n).toBe(1)
+
+      // Only the recorded source -> replacement direction passes the guard:
+      // moving it back under the same tenant claims is refused.
+      await client.query('SAVEPOINT sending_domain_back_to_source')
+      await expect(
+        client.query(`UPDATE public.company_sending_domains SET company_id = $1 WHERE domain = $2`, [
+          companyId,
+          domain,
+        ]),
+      ).rejects.toThrow(/server-managed/)
+      await client.query('ROLLBACK TO SAVEPOINT sending_domain_back_to_source')
+    })
+  })
+
+  it('records zero sending domains transferred for a company without one', async () => {
+    const { userId, companyId } = await seedCompany()
+    await withUserContext(userId, async (client) => {
+      const { rows } = await client.query<{ result: RpcResult }>(
+        `SELECT public.reset_company_for_migration($1, $2, $3, true, true) AS result`,
+        [companyId, 'Test AB', 'The first migration used the wrong fiscal periods.'],
+      )
+      const result = rows[0]!.result
+      expect(result.ok).toBe(true)
+      await client.query('RESET ROLE')
+      const snapshot = await client.query<{ n: number }>(
+        `SELECT (confirmation_snapshot ->> 'sending_domains_transferred')::int AS n
+         FROM public.company_migration_resets
+         WHERE id = $1`,
+        [result.reset_id],
+      )
+      expect(snapshot.rows[0]!.n).toBe(0)
+    })
+  })
+
   it('requires the exact display name, audit reason, and both attestations', async () => {
     const { userId, companyId } = await seedCompany()
     await getPool().query(

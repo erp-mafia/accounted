@@ -460,7 +460,7 @@ POST /companies/{companyId}/cash-accounts : Create a bank account by hand (no ba
 PATCH /companies/{companyId}/cash-accounts/{id} : Edit a bank account: verifikationsserie, payee details, name, or turn it on/off [scope:companies:write risk:medium idempotent dry-run reversible]
 POST /companies/{companyId}/cash-accounts/{id}/set-primary : Make a bank account the company's primary [scope:companies:write risk:medium idempotent dry-run reversible]
 PUT /companies/{companyId}/cash-accounts/payee-defaults : Choose which bank account invoices in a currency tell the customer to pay to [scope:companies:write risk:medium idempotent dry-run reversible]
-POST /companies/{companyId}/imports/bank : Import a bank-file (CSV / XML / CAMT053) [scope:transactions:write risk:medium idempotent]
+POST /companies/{companyId}/imports/bank : Import a bank-file (CSV / Excel / XML / CAMT053) [scope:transactions:write risk:medium idempotent]
 POST /companies/{companyId}/imports/bank/{id}/undo : Undo a bank file import: delete the rows it created that are still unbooked [scope:transactions:write risk:high idempotent dry-run]
 POST /companies/{companyId}/imports/sie : Import a SIE4 file [scope:bookkeeping:write risk:high idempotent reversible]
 POST /companies/{companyId}/imports/sie/{id}/resume : Resume an interrupted SIE import from where it stopped [scope:bookkeeping:write risk:medium idempotent dry-run]

@@ -35,11 +35,18 @@ const HEADER_SCAN_LIMIT = 15
  * and carrying a Handelsbanken date column plus the amount column. Specific
  * enough not to steal SEB / Nordea Företag / ICA / Skandia files, which use
  * different date labels (bokföringsdag, valutadag, datum).
+ *
+ * Handelsbanken names its booking date Reskontradatum. A header with a
+ * Bokföringsdag/Bokföringsdatum column beside Transaktionsdatum and no
+ * Reskontradatum is Länsförsäkringar's (crm#1236): read as Handelsbanken it
+ * would be dated on the transaction date and lose its Meddelande text.
  */
 function isHandelsbankenHeader(line: string): boolean {
   const lower = line.toLowerCase()
   if (!lower.includes(';')) return false
-  const hasDate = lower.includes('reskontradatum') || lower.includes('transaktionsdatum')
+  const hasReskontra = lower.includes('reskontradatum')
+  if (!hasReskontra && /bokf(ö|o)ringsda(g|tum)/.test(lower)) return false
+  const hasDate = hasReskontra || lower.includes('transaktionsdatum')
   const hasAmount = lower.includes('belopp')
   return hasDate && hasAmount
 }

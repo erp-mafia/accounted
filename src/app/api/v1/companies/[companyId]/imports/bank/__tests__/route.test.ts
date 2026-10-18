@@ -18,6 +18,7 @@
  *     stayed `status: 'processing'` with zeroed counters forever.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import * as XLSX from 'xlsx'
 
 beforeAll(() => {
   if (process.env.NODE_ENV !== 'test') throw new Error('NODE_ENV=test required')
@@ -405,5 +406,97 @@ describe('POST /api/v1/companies/:companyId/imports/bank', () => {
     expect(body.error.code).toBe('BANK_IMPORT_FAILED')
     expect(failOperationMock).toHaveBeenCalledTimes(1)
     expect(completeOperationMock).not.toHaveBeenCalled()
+  })
+})
+
+// crm#1236: Länsförsäkringar's kontoutdrag is an .xls file per month, and a
+// file whose columns nothing recognizes is answered with the columns it has.
+describe('POST /api/v1/companies/:companyId/imports/bank (Excel files and unrecognized columns)', () => {
+  function excelSerial(iso: string): number {
+    const [y, m, d] = iso.split('-').map(Number)
+    return (Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / 86_400_000
+  }
+
+  function monthStatementXls(): ArrayBuffer {
+    const sheet: XLSX.WorkSheet = {
+      A1: { t: 's', v: 'Kontoutdrag oktober 2025' },
+      A3: { t: 's', v: 'Bokföringsdag' },
+      B3: { t: 's', v: 'Transaktionsdag' },
+      C3: { t: 's', v: 'Transaktionstyp' },
+      D3: { t: 's', v: 'Meddelande' },
+      E3: { t: 's', v: 'Belopp' },
+      A4: { t: 'n', v: excelSerial('2025-10-03'), z: 'yyyy-mm-dd' },
+      B4: { t: 'n', v: excelSerial('2025-10-01'), z: 'yyyy-mm-dd' },
+      C4: { t: 's', v: 'Kortköp' },
+      D4: { t: 's', v: 'ICA NÄRA TESTBY' },
+      E4: { t: 'n', v: -1234.5 },
+      '!ref': 'A1:E4',
+    }
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, sheet, 'Kontoutdrag')
+    return XLSX.write(workbook, { bookType: 'biff8', type: 'array' }) as ArrayBuffer
+  }
+
+  function callWithBytes(bytes: ArrayBuffer | string, filename: string, search = '') {
+    const fd = new FormData()
+    fd.append('file', new File([bytes], filename))
+    return POST(
+      new Request(`https://x.test/api/v1/companies/${COMPANY_ID}/imports/bank${search}`, {
+        method: 'POST',
+        body: fd,
+        headers: { Authorization: 'Bearer test-fixture-not-a-real-key' },
+      }),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+  }
+
+  it('imports a Länsförsäkringar .xls kontoutdrag on its booking date', async () => {
+    const res = await callWithBytes(monthStatementXls(), 'Kontoutdrag 2025-10.xls')
+
+    expect(res.status).toBe(202)
+    expect(ingestedRows()).toHaveLength(1)
+    expect(ingestedRows()[0]).toMatchObject({
+      import_source: 'csv_lansforsakringar',
+      date: '2025-10-03',
+      description: 'ICA NÄRA TESTBY',
+      amount: -1234.5,
+    })
+  })
+
+  it('names the columns it found when no bank format matches', async () => {
+    const res = await callWithBytes('Kontoutdrag oktober 2025\nDag;Vad;Summa kronor\n3 okt;ICA;-500\n', 'okand.csv')
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('BANK_FILE_FORMAT_UNKNOWN')
+    expect(body.error.details.found_columns).toEqual(['Dag', 'Vad', 'Summa kronor'])
+    expect(body.error.message).toContain('Kolumner i filen: Dag, Vad, Summa kronor.')
+    expect(ingestMock).not.toHaveBeenCalled()
+  })
+
+  it('answers BANK_FILE_COLUMNS_UNRECOGNIZED with found and expected columns for a forced format', async () => {
+    const res = await callWithBytes('Dag;Vad;Summa kronor\n3 okt;ICA;-500\n', 'okand.csv', '?format=lansforsakringar')
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('BANK_FILE_COLUMNS_UNRECOGNIZED')
+    expect(body.error.details).toMatchObject({
+      format: 'lansforsakringar',
+      found_columns: ['Dag', 'Vad', 'Summa kronor'],
+      expected_columns: { date: expect.arrayContaining(['Bokföringsdag']), amount: ['Belopp', 'Insättning + Uttag'] },
+    })
+    expect(body.error.message).toContain('Filen behöver en datumkolumn')
+    expect(body.error.message_en).toContain('Columns found: Dag, Vad, Summa kronor.')
+    expect(ingestMock).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 for a file that is Excel by its bytes but cannot be read', async () => {
+    const broken = new Uint8Array([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 1, 2, 3, 4]).buffer
+    const res = await callWithBytes(broken, 'trasig.xls')
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(ingestMock).not.toHaveBeenCalled()
   })
 })

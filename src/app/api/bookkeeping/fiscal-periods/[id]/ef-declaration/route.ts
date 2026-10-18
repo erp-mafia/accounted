@@ -23,6 +23,13 @@ const EXPANSIONSFOND_KAPITALUNDERLAG_MISSING =
   'Kapitalunderlag för expansionsfond saknas: avsättningen begränsas till 0 kr. Fyll i kapitalunderlaget vid årets utgång.'
 
 /**
+ * A fund above 125,94 % of the closing kapitalunderlag must return the
+ * excess (IL 34 kap), so an existing fund cannot be checked without it.
+ */
+const EXPANSIONSFOND_BALANCE_UNCHECKED =
+  'Kapitalunderlag för expansionsfond saknas: det går inte att se om expansionsfonden ryms inom 125,94 % av kapitalunderlaget. Det som överstiger måste återföras. Fyll i kapitalunderlaget vid årets utgång.'
+
+/**
  * The year-end wizard's NE-bilaga step (EfDeclarationSection). Read-only:
  * egenavgifter, räntefördelning, periodiseringsfond and expansionsfond are
  * declaration-only and never booked. Same computation as the MCP tool
@@ -68,10 +75,13 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
         postedEntryCount: count ?? 0,
         inputWarnings: [
           ...(query.data.kapitalunderlag === undefined ? [KAPITALUNDERLAG_MISSING] : []),
-          ...((query.data.expansionsfondDesiredChange ?? 0) > 0 &&
-          query.data.expansionsfondKapitalunderlag === undefined
-            ? [EXPANSIONSFOND_KAPITALUNDERLAG_MISSING]
-            : []),
+          ...(query.data.expansionsfondKapitalunderlag !== undefined
+            ? []
+            : (query.data.expansionsfondDesiredChange ?? 0) > 0
+              ? [EXPANSIONSFOND_KAPITALUNDERLAG_MISSING]
+              : (query.data.expansionsfondExistingBalance ?? 0) > 0
+                ? [EXPANSIONSFOND_BALANCE_UNCHECKED]
+                : []),
         ],
       },
     })

@@ -102,6 +102,8 @@ export interface PaymentOrder {
   updated_at: string
   /** Signed, and the bank has not confirmed the payment yet: nothing is left to sign (isBankConfirming). Absent from servers before it. */
   bank_confirming?: boolean
+  /** Unsigned at the bank in a signing nobody is in (an abandoned or expired BankID): Signera igen restarts it (isSignableAgain). Absent from servers before it. */
+  sign_again?: boolean
   /** The invoice paid, with what its document states (lib/payments/orders/invoice-document). */
   supplier_invoice: (InvoiceDocumentSource & {
     id: string

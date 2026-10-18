@@ -46,7 +46,7 @@ import { RunEmployeesTable } from '@/components/salary/run/RunEmployeesTable'
 import { RunCalculationDetails } from '@/components/salary/run/RunCalculationDetails'
 import { RunJournalPreview, type PreviewData } from '@/components/salary/run/RunJournalPreview'
 import { formatRunAmount, periodLabelOf, type RunDetail } from '@/components/salary/run/types'
-import { todayIsoStockholm } from '@/lib/dates/iso'
+import { isPaymentDateAhead, needsFuturePayoutConfirm } from '@/lib/salary/payout-date'
 import { formatDate } from '@/lib/utils'
 import {
   agiReportingPeriod,
@@ -921,16 +921,35 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     handleAction('review')
   }
 
+  // Markera som betald records that the net pay has left the bank; it posts
+  // nothing, but Bokför then books the payout on the payment date. With that
+  // date still ahead it is rarely true yet, so ask first (crm#1216). Ask,
+  // never refuse: some companies pay early on purpose.
+  async function handleMarkPaid() {
+    if (!run) return
+    if (needsFuturePayoutConfirm(run.payment_date, noPayout)) {
+      const ok = await confirmAction({
+        title: t('confirm_mark_paid_ahead_title'),
+        description: t('confirm_mark_paid_ahead', { date: formatDate(run.payment_date) }),
+        confirmLabel: t('action_mark_paid'),
+        variant: 'warning',
+      })
+      if (!ok) return
+    }
+    handleAction('paid')
+  }
+
   // Bokför posts the run's vouchers at once, dated on the payment date (frozen
-  // when the run left draft). Confirm up front with that outcome (design.md
-  // convention 10), and say plainly when the date has not come yet: nothing
-  // else on the page told the user the vouchers would be dated ahead of the
-  // payout (crm#1216).
+  // when the run left draft), the net pay out of the bank account. Confirm up
+  // front with that outcome (design.md convention 10), and say plainly when
+  // the date has not come yet: nothing else on the page told the user the
+  // vouchers would be dated ahead of the payout (crm#1216).
   async function handleBook() {
     if (!run) return
     const date = formatDate(run.payment_date)
     const lines = [t('confirm_book_intro', { period: periodLabel, date })]
-    if (run.payment_date > todayIsoStockholm()) lines.push(t('confirm_book_ahead', { date }))
+    if (!noPayout) lines.push(t('confirm_book_bank'))
+    if (isPaymentDateAhead(run.payment_date)) lines.push(t('confirm_book_ahead', { date }))
     lines.push(t('confirm_book_correction'))
     const ok = await confirmAction({
       title: t('confirm_book_title'),
@@ -964,7 +983,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
               onClick: () => handleCalculate({ fromReview: true }),
             }
         : run.status === 'approved'
-          ? { key: 'paid', label: noPayout ? t('action_continue') : t('action_mark_paid'), onClick: () => handleAction('paid') }
+          ? { key: 'paid', label: noPayout ? t('action_continue') : t('action_mark_paid'), onClick: handleMarkPaid }
           : run.status === 'paid'
             ? { key: 'book', label: t('action_book'), onClick: handleBook }
             : null

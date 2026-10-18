@@ -61,6 +61,9 @@ export const nordeaBusinessFormat: BankFileFormat = {
     const headers = firstLine.split(';').map(h => h.replace(/"/g, '').trim())
     const hasSeparateDatum = headers.some(h => h === 'datum')
     if (hasSeparateDatum && headers.some(h => h === 'typ')) return false
+    // ...and its exports with a transaction date beside the booking date
+    // (crm#1236); no Nordea Företag layout has a Transaktionsdag column.
+    if (headers.some(h => /^transaktionsda(g|tum)$/.test(h))) return false
 
     // Accept any of these Nordea Business patterns:
     return (

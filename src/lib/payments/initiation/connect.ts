@@ -110,6 +110,18 @@ export function cancelIdempotencyKey(providerPaymentId: string): string {
   return `cancel:${providerPaymentId}:${randomUUID()}`
 }
 
+/**
+ * Open Payments statuses of a payment the bank holds unsigned: received
+ * (RCVD) or pending (PDNG), the two the service maps to 'submitted'. Every
+ * other status is signed, final or not known to be unsigned.
+ */
+const UNSIGNED_PROVIDER_STATUSES: ReadonlySet<string> = new Set(['RCVD', 'PDNG'])
+
+/** Whether the bank's status for a payment says it is not signed (UNSIGNED_PROVIDER_STATUSES). */
+export function isUnsignedProviderStatus(providerStatus: string | null | undefined): boolean {
+  return typeof providerStatus === 'string' && UNSIGNED_PROVIDER_STATUSES.has(providerStatus.toUpperCase())
+}
+
 function signingTargetId(target: SigningTarget): string {
   return target.kind === 'payment' ? target.providerPaymentId : target.providerBasketId
 }
@@ -289,7 +301,7 @@ export function createConnectPaymentsProvider(upstream: ConnectorUpstream, deps:
         providerPaymentId,
         product,
       })
-      return { outcome: result.outcome, providerStatus: result.providerStatus }
+      return { outcome: result.outcome, providerStatus: result.providerStatus, unsigned: isUnsignedProviderStatus(result.providerStatus) }
     },
 
     async getBankCapabilities(ctx) {

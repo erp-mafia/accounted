@@ -17,7 +17,14 @@ import type { SalaryLineItemType, ShiftPremiumItemType } from '@/types'
 
 export const VACATION_COMPENSATION_SOURCE = 'vacation_compensation'
 
-/** True for the semesterersättning row the engine itself derived. */
+/**
+ * True for the semesterersättning row the engine itself derived. Two rows
+ * carry the provenance, never on the same payslip: the per-run
+ * semesterersättning under vacation_rule 'semesterersattning', and under
+ * sammalöneregeln the semesterlön of the rörliga lönedelar paid after the
+ * semesterår (lib/salary/variable-vacation-pay.ts). Both are deleted and
+ * derived again on every calculation.
+ */
 export function isAutomaticVacationLine(line: {
   item_type?: unknown
   calculation_source?: unknown

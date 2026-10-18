@@ -10,6 +10,10 @@ import {
   removeSendingDomain,
   applySendingDomainStatusFromWebhook,
   SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT,
+  SENDING_DOMAIN_CLAIM_PROVIDER_ERROR,
+  SENDING_DOMAIN_VERIFY_PROVIDER_ERROR,
+  SENDING_DOMAIN_VERIFY_PROVIDER_DOMAIN_MISSING,
+  SENDING_DOMAIN_REMOVE_PROVIDER_ERROR,
 } from '@/extensions/general/email/lib/sending-domains'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -83,6 +87,17 @@ function sb(): ReturnType<typeof createQueuedMockSupabase> & { client: SupabaseC
   const m = createQueuedMockSupabase()
   return Object.assign(m, { client: m.supabase as unknown as SupabaseClient })
 }
+
+/** The registry's Swedish sentence and status for a code, as a refusal. */
+function registryRefusal(code: string) {
+  const entry = getErrorEntry(code)
+  if (!entry) throw new Error(`${code} is not in the structured-errors registry`)
+  return { ok: false, status: entry.httpStatus, code, error: entry.message_sv }
+}
+
+// What Resend answers on an outage-shaped failure; its text must never reach
+// the customer.
+const PROVIDER_OUTAGE = { name: 'application_error', statusCode: 500, message: 'Internal server error at provider' }
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -312,8 +327,10 @@ describe('claimSendingDomain', () => {
     })
 
     const result = await claimSendingDomain(client, client, 'company-1', 'hansbolag.example')
-    expect(result).toEqual({ ok: false, status: 502, error: expect.stringMatching(/e-postleverantören/) })
+    expect(result).toEqual(registryRefusal(SENDING_DOMAIN_CLAIM_PROVIDER_ERROR))
     if (result.ok) throw new Error('expected a refusal')
+    expect(result.status).toBe(502)
+    expect(result.error).toMatch(/e-postleverantören/)
     expect(result.error).not.toContain('Too many requests')
     expect(logMock.error).toHaveBeenCalledWith(
       expect.any(String),
@@ -332,8 +349,108 @@ describe('claimSendingDomain', () => {
     domainsMock.remove.mockResolvedValue({ data: null, error: null })
 
     const result = await claimSendingDomain(client, client, 'company-1', 'hansbolag.example')
-    expect(result.ok).toBe(false)
+    expect(result).toEqual({ ok: false, status: 500, error: expect.stringMatching(/Kunde inte spara domänen/) })
+    if (result.ok) throw new Error('expected a refusal')
+    expect(result.error).not.toContain('db down')
     expect(domainsMock.remove).toHaveBeenCalledWith('rd_1')
+    // A clean cleanup is not an alert.
+    expect(logMock.error.mock.calls.some(([, ctx]) => (ctx as { alert?: boolean })?.alert)).toBe(false)
+  })
+
+  it('DNS-record fetch failure after a successful create: removes the Resend domain and the row, answers in Swedish without the provider text', async () => {
+    const { client, enqueue, findCalls } = sb()
+    enqueue({ data: { ...ROW, resend_domain_id: null } }) // insert
+    enqueue({ data: null }) // rollback delete
+    domainsMock.create.mockResolvedValue({ data: { id: 'rd_1' }, error: null })
+    domainsMock.get.mockResolvedValue({ data: null, error: PROVIDER_OUTAGE })
+    domainsMock.remove.mockResolvedValue({ data: { id: 'rd_1', deleted: true }, error: null })
+
+    const result = await claimSendingDomain(client, client, 'company-1', 'hansbolag.example')
+
+    expect(result).toEqual(registryRefusal(SENDING_DOMAIN_CLAIM_PROVIDER_ERROR))
+    if (result.ok) throw new Error('expected a refusal')
+    expect(result.error).not.toContain(PROVIDER_OUTAGE.message)
+    expect(domainsMock.remove).toHaveBeenCalledWith('rd_1')
+    expect(findCalls('company_sending_domains', 'delete')).toHaveLength(1)
+    expect(logMock.error).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ companyId: 'company-1', providerStatus: 500, providerMessage: PROVIDER_OUTAGE.message }),
+    )
+  })
+
+  it('a throw after a successful create removes the Resend domain too, not only the row (orphan regression)', async () => {
+    const { client, enqueue, findCalls } = sb()
+    enqueue({ data: { ...ROW, resend_domain_id: null } }) // insert
+    enqueue({ data: null }) // rollback delete
+    domainsMock.create.mockResolvedValue({ data: { id: 'rd_1' }, error: null })
+    domainsMock.get.mockRejectedValue(new Error('fetch failed: ECONNRESET'))
+    domainsMock.remove.mockResolvedValue({ data: { id: 'rd_1', deleted: true }, error: null })
+
+    const result = await claimSendingDomain(client, client, 'company-1', 'hansbolag.example')
+
+    expect(result).toEqual(registryRefusal(SENDING_DOMAIN_CLAIM_PROVIDER_ERROR))
+    if (result.ok) throw new Error('expected a refusal')
+    expect(result.error).not.toContain('ECONNRESET')
+    expect(domainsMock.remove).toHaveBeenCalledWith('rd_1')
+    expect(findCalls('company_sending_domains', 'delete')).toHaveLength(1)
+  })
+
+  it('a refused cleanup ({ error }, not a throw) is alert-logged with the orphaned domain id', async () => {
+    const { client, enqueue, findCalls } = sb()
+    enqueue({ data: { ...ROW, resend_domain_id: null } }) // insert
+    enqueue({ data: null }) // rollback delete
+    domainsMock.create.mockResolvedValue({ data: { id: 'rd_1' }, error: null })
+    domainsMock.get.mockResolvedValue({ data: null, error: PROVIDER_OUTAGE })
+    domainsMock.remove.mockResolvedValue({ data: null, error: { name: 'rate_limit_exceeded', statusCode: 429, message: 'Too many requests' } })
+
+    const result = await claimSendingDomain(client, client, 'company-1', 'hansbolag.example')
+
+    expect(result).toEqual(registryRefusal(SENDING_DOMAIN_CLAIM_PROVIDER_ERROR))
+    // The row still goes: the customer can claim again; the orphan is ours.
+    expect(findCalls('company_sending_domains', 'delete')).toHaveLength(1)
+    expect(logMock.error).toHaveBeenCalledWith(
+      expect.stringMatching(/could not remove the Resend domain/),
+      expect.objectContaining({
+        alert: true,
+        companyId: 'company-1',
+        domain: 'hansbolag.example',
+        resendDomainId: 'rd_1',
+        providerStatus: 429,
+        providerMessage: 'Too many requests',
+      }),
+    )
+  })
+
+  it('a cleanup that throws is alert-logged too', async () => {
+    const { client, enqueue } = sb()
+    enqueue({ data: { ...ROW, resend_domain_id: null } }) // insert
+    enqueue({ data: null, error: { message: 'db down' } }) // update fails
+    enqueue({ data: null }) // rollback delete
+    domainsMock.create.mockResolvedValue({ data: { id: 'rd_1' }, error: null })
+    domainsMock.get.mockResolvedValue({ data: { id: 'rd_1', status: 'pending', records: [], capabilities: SENDING_ONLY }, error: null })
+    domainsMock.remove.mockRejectedValue(new Error('socket hang up'))
+
+    const result = await claimSendingDomain(client, client, 'company-1', 'hansbolag.example')
+
+    expect(result.ok).toBe(false)
+    expect(logMock.error).toHaveBeenCalledWith(
+      expect.stringMatching(/could not remove the Resend domain/),
+      expect.objectContaining({ alert: true, resendDomainId: 'rd_1', providerMessage: 'socket hang up' }),
+    )
+  })
+
+  it('a cleanup answered with 404 (already gone) is not an alert', async () => {
+    const { client, enqueue } = sb()
+    enqueue({ data: { ...ROW, resend_domain_id: null } }) // insert
+    enqueue({ data: null }) // rollback delete
+    domainsMock.create.mockResolvedValue({ data: { id: 'rd_1' }, error: null })
+    domainsMock.get.mockResolvedValue({ data: null, error: PROVIDER_OUTAGE })
+    domainsMock.remove.mockResolvedValue({ data: null, error: { name: 'not_found', statusCode: 404, message: 'Domain not found' } })
+
+    await claimSendingDomain(client, client, 'company-1', 'hansbolag.example')
+
+    expect(domainsMock.remove).toHaveBeenCalledWith('rd_1')
+    expect(logMock.error.mock.calls.some(([, ctx]) => (ctx as { alert?: boolean })?.alert)).toBe(false)
   })
 })
 
@@ -427,6 +544,53 @@ describe('checkSendingDomainVerification', () => {
     expect(findCall('company_sending_domains', 'update')).toBeUndefined()
   })
 
+  it('a Resend failure answers in Swedish under its code, never with the provider text', async () => {
+    const { client, enqueue, findCall } = sb()
+    enqueue({ data: ROW })
+    domainsMock.get.mockResolvedValue({ data: null, error: PROVIDER_OUTAGE })
+
+    const result = await checkSendingDomainVerification(client, client, 'company-1')
+
+    expect(result).toEqual(registryRefusal(SENDING_DOMAIN_VERIFY_PROVIDER_ERROR))
+    if (result.ok) throw new Error('expected a refusal')
+    expect(result.error).not.toContain(PROVIDER_OUTAGE.message)
+    expect(findCall('company_sending_domains', 'update')).toBeUndefined()
+    expect(logMock.error).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        operation: 'sending-domain.verify',
+        companyId: 'company-1',
+        providerStatus: 500,
+        providerMessage: PROVIDER_OUTAGE.message,
+      }),
+    )
+  })
+
+  it('a domain Resend no longer has (404) says so and points at removing and adding it again', async () => {
+    const { client, enqueue } = sb()
+    enqueue({ data: ROW })
+    domainsMock.get.mockResolvedValue({ data: null, error: { name: 'not_found', statusCode: 404, message: 'Domain not found' } })
+
+    const result = await checkSendingDomainVerification(client, client, 'company-1')
+
+    expect(result).toEqual(registryRefusal(SENDING_DOMAIN_VERIFY_PROVIDER_DOMAIN_MISSING))
+    if (result.ok) throw new Error('expected a refusal')
+    expect(result.status).toBe(409)
+    expect(result.error).not.toContain('Domain not found')
+  })
+
+  it('a throw during the check answers in Swedish without the thrown text', async () => {
+    const { client, enqueue } = sb()
+    enqueue({ data: ROW })
+    domainsMock.get.mockRejectedValue(new Error('fetch failed: ETIMEDOUT'))
+
+    const result = await checkSendingDomainVerification(client, client, 'company-1')
+
+    expect(result).toEqual(registryRefusal(SENDING_DOMAIN_VERIFY_PROVIDER_ERROR))
+    if (result.ok) throw new Error('expected a refusal')
+    expect(result.error).not.toContain('ETIMEDOUT')
+  })
+
   it('refuses to flip a domain without the sending capability', async () => {
     const { client, enqueue } = sb()
     enqueue({ data: ROW })
@@ -503,6 +667,67 @@ describe('removeSendingDomain', () => {
     const result = await removeSendingDomain(client, 'company-1')
     expect(result.ok).toBe(true)
     expect(domainsMock.remove).not.toHaveBeenCalled()
+  })
+
+  it('a failed Resend lookup keeps the row and answers in Swedish without the provider text', async () => {
+    const { client, enqueue, findCalls } = sb()
+    enqueue({ data: ROW })
+    domainsMock.get.mockResolvedValue({ data: null, error: PROVIDER_OUTAGE })
+
+    const result = await removeSendingDomain(client, 'company-1')
+
+    expect(result).toEqual(registryRefusal(SENDING_DOMAIN_REMOVE_PROVIDER_ERROR))
+    if (result.ok) throw new Error('expected a refusal')
+    expect(result.error).not.toContain(PROVIDER_OUTAGE.message)
+    expect(domainsMock.remove).not.toHaveBeenCalled()
+    expect(findCalls('company_sending_domains', 'delete')).toHaveLength(0)
+  })
+
+  it('a removal Resend refuses keeps the row (no orphaned domain) and logs the provider text for us', async () => {
+    const { client, enqueue, findCalls } = sb()
+    enqueue({ data: ROW })
+    domainsMock.get.mockResolvedValue({
+      data: { id: 'rd_1', name: 'hansbolag.example', capabilities: SENDING_ONLY },
+      error: null,
+    })
+    domainsMock.remove.mockResolvedValue({ data: null, error: PROVIDER_OUTAGE })
+
+    const result = await removeSendingDomain(client, 'company-1')
+
+    expect(result).toEqual(registryRefusal(SENDING_DOMAIN_REMOVE_PROVIDER_ERROR))
+    if (result.ok) throw new Error('expected a refusal')
+    expect(result.error).not.toContain(PROVIDER_OUTAGE.message)
+    expect(findCalls('company_sending_domains', 'delete')).toHaveLength(0)
+    expect(logMock.error).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ operation: 'sending-domain.remove', providerMessage: PROVIDER_OUTAGE.message }),
+    )
+  })
+
+  it('a throw during removal keeps the row and answers in Swedish without the thrown text', async () => {
+    const { client, enqueue, findCalls } = sb()
+    enqueue({ data: ROW })
+    domainsMock.get.mockRejectedValue(new Error('fetch failed: ECONNREFUSED'))
+
+    const result = await removeSendingDomain(client, 'company-1')
+
+    expect(result).toEqual(registryRefusal(SENDING_DOMAIN_REMOVE_PROVIDER_ERROR))
+    if (result.ok) throw new Error('expected a refusal')
+    expect(result.error).not.toContain('ECONNREFUSED')
+    expect(findCalls('company_sending_domains', 'delete')).toHaveLength(0)
+  })
+
+  it('drops the row when Resend already lost the domain (404)', async () => {
+    const { client, enqueue, findCalls } = sb()
+    enqueue({ data: ROW })
+    enqueue({ data: null }) // delete
+    domainsMock.get.mockResolvedValue({ data: null, error: { name: 'not_found', statusCode: 404, message: 'Domain not found' } })
+
+    const result = await removeSendingDomain(client, 'company-1')
+
+    expect(result).toEqual({ ok: true, data: { removed: true } })
+    expect(domainsMock.remove).not.toHaveBeenCalled()
+    expect(findCalls('company_sending_domains', 'delete')).toHaveLength(1)
   })
 
   it('leaves a receiving-capable Resend domain alone', async () => {
@@ -595,5 +820,21 @@ describe('applySendingDomainStatusFromWebhook', () => {
     const update = findCall('company_sending_domains', 'update')?.[0] as Record<string, unknown>
     expect(update.status).toBe('failed')
     expect(update.verified_at).toBe('2026-08-01T00:00:00Z')
+  })
+})
+
+describe('sending-domain provider codes in the structured-errors registry', () => {
+  it.each([
+    SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT,
+    SENDING_DOMAIN_CLAIM_PROVIDER_ERROR,
+    SENDING_DOMAIN_VERIFY_PROVIDER_ERROR,
+    SENDING_DOMAIN_VERIFY_PROVIDER_DOMAIN_MISSING,
+    SENDING_DOMAIN_REMOVE_PROVIDER_ERROR,
+  ])('%s has a Swedish sentence the settings toast shows unchanged', (code) => {
+    const entry = getErrorEntry(code)
+    expect(entry).toBeDefined()
+    expect(entry?.message_en).toBeTruthy()
+    // The page throws new Error(json.error) and maps it for the toast.
+    expect(getErrorMessage(new Error(entry?.message_sv))).toBe(entry?.message_sv)
   })
 })

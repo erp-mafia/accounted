@@ -3925,6 +3925,7 @@ const efPfondFonderParam = z
 export const EfDeclarationPreviewQuerySchema = z.object({
   category: z.enum(['full', 'pensioner', 'passive']).optional(),
   kapitalunderlag: emptyStringAsUndefined(z.coerce.number()),
+  sparatFordelningsbelopp: emptyStringAsUndefined(z.coerce.number().nonnegative()),
   expansionsfondKapitalunderlag: emptyStringAsUndefined(z.coerce.number()),
   priorYearSchablonavdrag: emptyStringAsUndefined(z.coerce.number().nonnegative()),
   priorYearActualCharged: emptyStringAsUndefined(z.coerce.number().nonnegative()),

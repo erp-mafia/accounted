@@ -24545,7 +24545,8 @@ export const tools: McpTool[] = [
           enum: ['full', 'pensioner', 'passive'],
           description: 'Egenavgifter category: defaults to "full"',
         },
-        kapitalunderlag: { type: 'number', description: 'Räntefördelning: vid föregående års utgång' },
+        kapitalunderlag: { type: 'number', description: 'Räntefördelning, SKV 2196 incl. sparat belopp' },
+        sparat_fordelningsbelopp: { type: 'number', minimum: 0 },
         expansionsfond_kapitalunderlag: { type: 'number', description: 'Vid årets utgång' },
         prior_year_schablonavdrag: { type: 'number' },
         prior_year_actual_charged: { type: 'number' },
@@ -24579,6 +24580,7 @@ export const tools: McpTool[] = [
       return computeEfDeclarationPreview(supabase, companyId, fiscalPeriodId, {
         category: args.category as 'full' | 'pensioner' | 'passive' | undefined,
         kapitalunderlag: args.kapitalunderlag as number | undefined,
+        sparatFordelningsbelopp: args.sparat_fordelningsbelopp as number | undefined,
         expansionsfondKapitalunderlag: args.expansionsfond_kapitalunderlag as number | undefined,
         priorYearSchablonavdrag: args.prior_year_schablonavdrag as number | undefined,
         priorYearActualCharged: args.prior_year_actual_charged as number | undefined,

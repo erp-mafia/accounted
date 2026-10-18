@@ -69,6 +69,17 @@ export function canCancel(order: { status: PaymentOrderStatus; outcome_unknown_a
 }
 
 /**
+ * Signera igen on a row: the order waits unsigned at the bank after its
+ * BankID was abandoned or expired (sign_again, decided by the server with
+ * isSignableAgain). The restart signs its whole signing, so the dialog shows
+ * every order of that signing that waits too.
+ */
+export function signAgainOrders<T extends { id: string; batch_id: string | null; sign_again?: boolean }>(order: T, orders: readonly T[]): T[] {
+  if (!order.sign_again || !order.batch_id) return []
+  return orders.filter((o) => o.batch_id === order.batch_id && o.sign_again === true)
+}
+
+/**
  * Codes after which signing again cannot help (the fix is in the online bank
  * or at the provider); mirrors PERMANENT_SIGNING_FAILURES in
  * lib/payments/orders/signing.ts, which is server-only.

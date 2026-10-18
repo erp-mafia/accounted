@@ -7,6 +7,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+import { roundOre } from '@/lib/money'
 
 const mockTrialBalance = vi.fn()
 vi.mock('@/lib/reports/trial-balance', () => ({
@@ -92,18 +93,21 @@ beforeEach(() => {
 })
 
 /** Queue the preview's supabase calls: closure check, roster, ledger rows,
- * cutover opening rows (förskott pool), fiscal period (for the booked-balance
- * read). */
+ * cutover opening rows (förskott pool), the sammalöneregeln payslips of the
+ * closing year and the year before (rörliga lönedelar), fiscal period (for
+ * the booked-balance read). */
 function queuePreview(over: {
   ledger?: Array<Record<string, unknown>>
   opening?: Array<Record<string, unknown>>
   closure?: { id: string } | null
   roster?: Array<Record<string, unknown>>
+  payslips?: Array<Record<string, unknown>>
 } = {}) {
   mock.enqueue({ data: over.closure ?? null }) // vacation_year_closures check
   mock.enqueue({ data: over.roster ?? [ROSTER_ROW] }) // roster
   mock.enqueue({ data: over.ledger ?? [] }) // ledger rows for the closing year
   mock.enqueue({ data: over.opening ?? [] }) // employee_opening_balances (advance pool)
+  mock.enqueue({ data: over.payslips ?? [] }) // salary_run_employees (rörliga lönedelar)
   mock.enqueue({ data: { id: 'fp-2025', period_start: '2025-01-01', period_end: '2025-12-31' } }) // fiscal period
 }
 
@@ -220,6 +224,7 @@ describe('previewVacationYearClose: beredning math', () => {
       data: [ledgerRow(EMPLOYEE_ID), ledgerRow(EMPLOYEE_2), ledgerRow(EMPLOYEE_3)],
     }) // ledger rows
     mock.enqueue({ data: [] }) // employee_opening_balances (advance pool)
+    mock.enqueue({ data: [] }) // salary_run_employees (rörliga lönedelar)
     mock.enqueue({ data: { id: 'fp-2025', period_start: '2025-01-01', period_end: '2025-12-31' } })
 
     const result = await previewVacationYearClose(supabase, COMPANY_ID, '2025-01-01')
@@ -484,5 +489,89 @@ describe('previewVacationYearClose: categorized cutover pools', () => {
     expect(row.unpaid_days_lapsed).toBe(0)
     expect(row.advance_days_taken).toBe(0)
     expect(row.next_year_entitled).toBe(25)
+  })
+})
+
+describe('previewVacationYearClose: rörliga lönedelar under sammalöneregeln (Semesterlagen 16 a §, #60 B)', () => {
+  const SAMMALONE_BREAKDOWN = { steps: [{ label: 'Semesteravsättning (sammalöneregeln, tillägg 0,43 %)' }] }
+  const PROCENT_BREAKDOWN = { steps: [{ label: 'Semesteravsättning (procentregeln 12 %)' }] }
+  const ledger = [
+    {
+      id: 'vb-1',
+      employee_id: EMPLOYEE_ID,
+      vacation_year_start: '2025-01-01',
+      entitled_days: 25,
+      accrued_days: 0,
+      taken_days: 15,
+      saved_days: {},
+      forced_payout_days: 0,
+      status: 'open',
+    },
+  ]
+  const obLine = (amount: number) => ({
+    item_type: 'ob_weekend',
+    amount,
+    is_taxable: true,
+    is_vacation_basis: true,
+    is_gross_deduction: false,
+    is_net_deduction: false,
+    calculation_source: null,
+  })
+  const payoutLine = (amount: number) => ({
+    item_type: 'semesterersattning',
+    amount,
+    is_taxable: true,
+    is_vacation_basis: false,
+    is_gross_deduction: false,
+    is_net_deduction: false,
+    calculation_source: 'vacation_compensation',
+  })
+  const payslip = (
+    runId: string,
+    paymentDate: string,
+    lines: Array<Record<string, unknown>>,
+    over: { status?: string; breakdown?: unknown } = {},
+  ) => ({
+    employee_id: EMPLOYEE_ID,
+    calculation_breakdown: over.breakdown ?? SAMMALONE_BREAKDOWN,
+    line_items: lines,
+    salary_run: { id: runId, payment_date: paymentDate, status: over.status ?? 'booked' },
+  })
+
+  async function liabilityWith(payslips: Array<Record<string, unknown>>) {
+    queuePreview({ ledger, payslips })
+    const result = await previewVacationYearClose(supabase, COMPANY_ID, '2025-01-01')
+    if (!result.ok) throw new Error(result.code)
+    return result.data.rows[0]
+  }
+
+  it('adds 12 % of the closing year variable pay to the liability', async () => {
+    const without = await liabilityWith([])
+    const row = await liabilityWith([
+      payslip('run-2025-03', '2025-03-25', [obLine(5000)]),
+      payslip('run-2025-06', '2025-06-25', [obLine(2500)]),
+    ])
+    expect(without.variable_vacation_pay_sek).toBe(0)
+    expect(row.variable_vacation_pay_sek).toBe(900)
+    expect(row.computed_liability_sek).toBe(roundOre(without.computed_liability_sek + 900))
+  })
+
+  it('leaves out the previous year once the closing year paid it, and runs under procentregeln or not yet approved', async () => {
+    const row = await liabilityWith([
+      // 2024 variable pay, paid out in the first 2025 run.
+      payslip('run-2024-11', '2024-11-25', [obLine(3000)]),
+      payslip('run-2025-01', '2025-01-25', [payoutLine(360)]),
+      // Calculated under procentregeln: its 12 % base already has the OB.
+      payslip('run-2025-02', '2025-02-25', [obLine(4000)], { breakdown: PROCENT_BREAKDOWN }),
+      // A draft is not pay that has fallen due.
+      payslip('run-2025-12', '2025-12-25', [obLine(1000)], { status: 'draft' }),
+      payslip('run-2025-05', '2025-05-25', [obLine(5000)]),
+    ])
+    expect(row.variable_vacation_pay_sek).toBe(600)
+  })
+
+  it('carries a previous-year variable part nobody paid', async () => {
+    const row = await liabilityWith([payslip('run-2024-11', '2024-11-25', [obLine(3000)])])
+    expect(row.variable_vacation_pay_sek).toBe(360)
   })
 })

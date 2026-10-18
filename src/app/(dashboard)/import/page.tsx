@@ -293,8 +293,9 @@ function BankFileImportWizard() {
       // Read raw file content for CSV preview. Decode from bytes, not
       // file.text(): that is UTF-8-only and turns Windows-1252 åäö into
       // U+FFFD (Handelsbanken exports Windows-1252), corrupting both the
-      // column-mapping preview and the re-parse on confirm.
-      const text = decodeFileContent(await file.arrayBuffer())
+      // column-mapping preview and the re-parse on confirm. An Excel file
+      // comes back from the route already read as text (file_content).
+      const text: string = data.data.file_content ?? decodeFileContent(await file.arrayBuffer())
       setRawFileContent(text)
 
       const txCount = data.data.parse_result.transactions.length

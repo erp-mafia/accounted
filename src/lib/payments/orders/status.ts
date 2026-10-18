@@ -110,6 +110,27 @@ export const OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES: readonly PaymentOrderStatus[
 export const SIGNING_FINISHED_BATCH_STATUSES: ReadonlySet<string> = new Set(['signed', 'awaiting_second_signer'])
 
 /**
+ * The order's payment waits at the bank unsigned in a signing nobody is in
+ * any more: its BankID was abandoned or expired (the signing poll or the
+ * status sync put the signing back to 'created'), or never started. Signing
+ * it again is restartPaymentSigning on that signing, which reads each
+ * payment at the bank first; a signing stopped for good ('failed') asked
+ * the bank to cancel its payments and is not offered again.
+ */
+export function isSignableAgain(
+  order: { status: PaymentOrderStatus | string; provider_payment_id?: string | null; outcome_unknown_at?: string | null; batch_id?: string | null },
+  batchStatus: string | null | undefined,
+): boolean {
+  return (
+    order.status === 'submitted' &&
+    Boolean(order.provider_payment_id) &&
+    !order.outcome_unknown_at &&
+    Boolean(order.batch_id) &&
+    batchStatus === 'created'
+  )
+}
+
+/**
  * The bank is confirming the payment: its BankID finalised (the batch is
  * signed) while the bank still answers that it has only received it (RCVD),
  * so the order stays awaiting_signature (applyProviderState never moves an

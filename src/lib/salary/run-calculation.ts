@@ -32,7 +32,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { calculateSalary, monthlyBaseSalary } from './calculation-engine'
+import { calculateSalary, monthlyBaseSalary, type CalculationStep } from './calculation-engine'
 import { SalaryCalculationPolicySchema } from './calculation-policy'
 import {
   DERIVED_ABSENCE_TYPES,
@@ -55,7 +55,7 @@ import {
   type PayrollConfig,
 } from './payroll-config'
 import { fetchAllTaxTableRatesForRun, TaxTableUnavailableError } from './tax-tables'
-import { deriveEmployeeAbsence, loadRunAbsence } from './derive-absence-line-items'
+import { AbsenceInputError, deriveEmployeeAbsence, loadRunAbsence } from './derive-absence-line-items'
 import { monthWindow, runDeviationWindow } from './deviation-period'
 import type { MoneyLineItemType } from './account-mapping'
 import { recurringLineFlags, type RecurringLineItemType } from './recurring-lines'
@@ -68,6 +68,16 @@ import { refreshRunEmployeeSalaryType } from './base-salary-line'
 import { computePriorYtd, loadOpeningBalances } from './ytd'
 import { dailyDivisor, degreeAdjustedMonthlySalary, hourlyDivisor, scheduledHoursPerDay } from './work-schedule'
 import { paidDaysPerDayOff } from './vacation-net-days'
+import { resolveVacationPayRate } from './vacation-pay-rate'
+import { getVacationYearBounds, getVacationYearStart, type VacationYearBasis } from './vacation-year'
+import {
+  loadVariablePayRuns,
+  payslipVariableVacationPay,
+  previousVacationYearStart,
+  sammaloneVariablePay,
+  vacationYearLabel,
+  type VariablePayRun,
+} from './variable-vacation-pay'
 import { vaxaStodRefundWarning } from './vaxa-stod'
 import type { WorkedDayShift } from './shift-premium-engine'
 import type { Logger } from '@/lib/logger'
@@ -229,13 +239,17 @@ export async function runSalaryCalculation(
   //     refuses the run rather than silently calculating on defaults.
   const { data: companySettings, error: settingsError } = await supabase
     .from('company_settings')
-    .select('salary_net_rounding, salary_calculation_policy')
+    .select('salary_net_rounding, salary_calculation_policy, salary_vacation_year_basis')
     .eq('company_id', companyId)
     .maybeSingle()
   if (settingsError) {
     return { ok: false, code: 'DATABASE_ERROR', details: settingsError }
   }
   const roundNetToWholeKrona = companySettings?.salary_net_rounding === true
+  // Semesterår boundaries for the variable vacation pay (step 7c), read the
+  // way getVacationYearBasis reads them: anything but statutory is calendar.
+  const vacationYearBasis: VacationYearBasis =
+    companySettings?.salary_vacation_year_basis === 'statutory_apr_mar' ? 'statutory_apr_mar' : 'calendar'
   const policyParse = SalaryCalculationPolicySchema.safeParse(companySettings?.salary_calculation_policy ?? {})
   if (!policyParse.success) {
     return {
@@ -455,7 +469,15 @@ export async function runSalaryCalculation(
   const workedDayEmployeeIds = roster
     .filter((sre) => sre.employee.salary_type === 'hourly' || premiumRules.length > 0)
     .map((sre) => sre.employee.id as string)
-  const [absenceLoad, workedLoad, benefitsLoad, recurringLoad] = await Promise.allSettled([
+  // Sammalöneregeln employees: their other payslips from the start of the
+  // previous semesterår to the end of the current one, for the semesterlön of
+  // the rörliga lönedelar (lib/salary/variable-vacation-pay.ts). Nobody on
+  // the rule, no read.
+  const sammaloneEmployeeIds = roster
+    .filter((sre) => sre.employee.vacation_rule === 'sammaloneregeln')
+    .map((sre) => sre.employee.id as string)
+  const currentVacationYearStart = getVacationYearStart(run.payment_date, vacationYearBasis)
+  const [absenceLoad, workedLoad, benefitsLoad, recurringLoad, variablePayLoad] = await Promise.allSettled([
     loadRunAbsence(supabase, {
       companyId,
       employeeIds,
@@ -511,15 +533,26 @@ export async function runSalaryCalculation(
             .order('id')
             .range(from, to),
         ),
+    sammaloneEmployeeIds.length === 0
+      ? Promise.resolve(new Map<string, VariablePayRun[]>())
+      : loadVariablePayRuns(supabase, {
+          companyId,
+          employeeIds: sammaloneEmployeeIds,
+          from: previousVacationYearStart(currentVacationYearStart),
+          to: getVacationYearBounds(currentVacationYearStart).end,
+          excludeRunId: id,
+        }),
   ])
   if (absenceLoad.status === 'rejected') throw absenceLoad.reason
   if (workedLoad.status === 'rejected') return databaseError(workedLoad.reason)
   if (benefitsLoad.status === 'rejected') return databaseError(benefitsLoad.reason)
   if (recurringLoad.status === 'rejected') return databaseError(recurringLoad.reason)
+  if (variablePayLoad.status === 'rejected') return databaseError(variablePayLoad.reason)
   const absenceByEmployee = absenceLoad.value
   const workedDaysByEmployee = groupByEmployee(workedLoad.value)
   const benefitsByEmployee = groupByEmployee(benefitsLoad.value)
   const recurringByEmployee = groupByEmployee(recurringLoad.value)
+  const variablePayRunsByEmployee = variablePayLoad.value
 
   // Per-run aggregates collected during the loop.
   let totalGross = 0
@@ -533,8 +566,10 @@ export async function runSalaryCalculation(
   // calculation, not an error.
   const lakarintygEmployees: string[] = []
   const fkReportingEmployees: string[] = []
+  const hourlyKarensEmployees: string[] = []
   const doubleBenefitAdjustments: string[] = []
   const vaxaStodRefundEmployees: string[] = []
+  const variableVacationPayEmployees: string[] = []
 
   // What the loop decides to write. Nothing is written until every employee
   // is priced (step 9), so a refusal part-way leaves the run as it was.
@@ -566,24 +601,44 @@ export async function runSalaryCalculation(
       opening !== undefined &&
       opening.karensPeriodsAdjustment > 0 &&
       lookbackStartMs < Date.parse(`${opening.cutoverDate}T00:00:00Z`)
-    const absenceResult = deriveEmployeeAbsence({
-      rows: absenceByEmployee.get(emp.id),
-      // The pay the deductions are taken from. sre.monthly_salary is the
-      // full-time salary; a 10 % employee's karensavdrag comes off 10 % of it,
-      // the same base the engine's Step 1 pays (issue #2879).
-      monthlySalary: degreeAdjustedMonthlySalary(sre.monthly_salary, emp.employment_degree),
-      payrollConfig: config,
-      periodStart: deviation.start,
-      periodEnd: deviation.end,
-      karensPeriodsAdjustment: karensAdjustmentApplies ? opening.karensPeriodsAdjustment : 0,
-      dailyDivisor: dailyDivisor(emp.workdays_per_week),
-      // Scheduled hours per day weight partial absence rows (4 h of an 8 h day
-      // is half a day). hours_per_week already reflects the employment degree.
-      hoursPerDay: scheduledHoursPerDay(emp.hours_per_week, emp.workdays_per_week),
-      hoursPerWeek: emp.hours_per_week > 0 ? emp.hours_per_week : 40,
-      workdaysPerWeek: emp.workdays_per_week > 0 ? emp.workdays_per_week : 5,
-      calculationPolicy,
-    })
+    const hourlyPay = emp.salary_type === 'hourly'
+    let absenceResult: ReturnType<typeof deriveEmployeeAbsence>
+    try {
+      absenceResult = deriveEmployeeAbsence({
+        rows: absenceByEmployee.get(emp.id),
+        // The pay the deductions are taken from. sre.monthly_salary is the
+        // full-time salary; a 10 % employee's karensavdrag comes off 10 % of it,
+        // the same base the engine's Step 1 pays (issue #2879). Hourly pay has
+        // no such salary (a stale monthly_salary from before a switch to hourly
+        // must never be deducted from timlön): sick pay is priced from the
+        // timlön and the hours on the sick rows instead.
+        monthlySalary: hourlyPay ? 0 : degreeAdjustedMonthlySalary(sre.monthly_salary, emp.employment_degree),
+        salaryType: hourlyPay ? 'hourly' : 'monthly',
+        hourlyRate: hourlyPay ? emp.hourly_rate : null,
+        payrollConfig: config,
+        periodStart: deviation.start,
+        periodEnd: deviation.end,
+        karensPeriodsAdjustment: karensAdjustmentApplies ? opening.karensPeriodsAdjustment : 0,
+        dailyDivisor: dailyDivisor(emp.workdays_per_week),
+        // Scheduled hours per day weight partial absence rows (4 h of an 8 h day
+        // is half a day). hours_per_week already reflects the employment degree.
+        hoursPerDay: scheduledHoursPerDay(emp.hours_per_week, emp.workdays_per_week),
+        hoursPerWeek: emp.hours_per_week > 0 ? emp.hours_per_week : 40,
+        workdaysPerWeek: emp.workdays_per_week > 0 ? emp.workdays_per_week : 5,
+        calculationPolicy,
+      })
+    } catch (err) {
+      // An input the sick pay cannot be priced without: refuse by name
+      // rather than pay 0 kr. Nothing has been written yet.
+      if (err instanceof AbsenceInputError) {
+        return {
+          ok: false,
+          code: 'VALIDATION_ERROR',
+          details: { issues: [`${emp.first_name} ${emp.last_name}: ${err.message}`], reason: 'absence_input_incomplete' },
+        }
+      }
+      throw err
+    }
 
     // 8b. For hourly employees, derive worked hours from the calendar.
     //     For all employees (when premium rules exist), the same rows feed
@@ -667,6 +722,12 @@ export async function runSalaryCalculation(
     const employeeName = `${emp.first_name} ${emp.last_name}`
     if (absenceResult.flagLakarintyg) lakarintygEmployees.push(employeeName)
     if (absenceResult.flagFkReporting) fkReportingEmployees.push(employeeName)
+    // An hourly employee's karensavdrag rests on the weekly hours registered
+    // on the employee (SjLL 6 § 2 st: the average week). Named every time, so
+    // a schedule left at the default is seen before the run is approved.
+    if (hourlyPay && absenceResult.lineItems.some((li) => li.item_type === 'sick_karens')) {
+      hourlyKarensEmployees.push(`${employeeName} (${emp.hours_per_week > 0 ? emp.hours_per_week : 40} tim/vecka)`)
+    }
 
     // 8d. Derive benefit line items from employee_benefits.
     const derivedBenefitRows = (benefitsByEmployee.get(emp.id) ?? [])
@@ -867,6 +928,76 @@ export async function runSalaryCalculation(
       ...derivedRecurringLineItems,
     ]
 
+    // 8e1. Semesterlön för rörliga lönedelar (Semesterlagen 16 a § tredje
+    //      stycket, 26 § andra stycket, 29 §): under sammalöneregeln the
+    //      variable pay that fell due during the semesterår earns the
+    //      semesterlön percentage, paid in the first run after the year ends,
+    //      or with the final pay when the employment has ended. Derived from
+    //      the other payslips every calculation (nothing is stored but the
+    //      row), less what an earlier payslip of the year already paid. The
+    //      row carries the engine's provenance, so the next calculation
+    //      replaces it like the semesterersättning row (step 9c).
+    const variableVacationPayRows: Array<Record<string, unknown>> = []
+    let variableVacationPayStep: CalculationStep | null = null
+    if (emp.vacation_rule === 'sammaloneregeln') {
+      const finalSettlement = Boolean(emp.employment_end && emp.employment_end <= periodEnd)
+      const variable = payslipVariableVacationPay({
+        paymentDate: run.payment_date,
+        basis: vacationYearBasis,
+        rate: resolveVacationPayRate(emp.vacation_days_per_year, emp.vacation_pay_rate),
+        runs: variablePayRunsByEmployee.get(emp.id) ?? [],
+        finalSettlement,
+        thisRunVariablePay: sammaloneVariablePay(lineItems),
+      })
+      const amount = variable.owed.unpaid
+      if (amount > 0) {
+        // A final pay settles the running semesterår as well.
+        const yearLabel = finalSettlement
+          ? `${vacationYearLabel(variable.yearStart, vacationYearBasis)} och ${vacationYearLabel(currentVacationYearStart, vacationYearBasis)}`
+          : vacationYearLabel(variable.yearStart, vacationYearBasis)
+        const description = `Semesterlön rörliga lönedelar ${yearLabel}`
+        variableVacationPayRows.push({
+          salary_run_employee_id: sre.id,
+          company_id: companyId,
+          item_type: 'semesterersattning',
+          calculation_source: VACATION_COMPENSATION_SOURCE,
+          description,
+          quantity: 1,
+          amount,
+          is_taxable: true,
+          is_avgift_basis: true,
+          is_vacation_basis: false,
+          is_gross_deduction: false,
+          is_net_deduction: false,
+          account_number: null,
+          sort_order: 51,
+        })
+        lineItems.push({
+          itemType: 'semesterersattning',
+          amount,
+          isTaxable: true,
+          isAvgiftBasis: true,
+          isVacationBasis: false,
+          isGrossDeduction: false,
+          isNetDeduction: false,
+        })
+        variableVacationPayStep = {
+          label: `${description} (Semesterlagen 16 a §)`,
+          formula: finalSettlement
+            ? 'rörlig lön sedan föregående semesterårs början (slutlön) × semesterlöneprocent − redan utbetalt'
+            : 'rörlig lön under föregående semesterår × semesterlöneprocent − redan utbetalt',
+          input: {
+            variable_pay: variable.owed.variablePay,
+            rate: variable.owed.rate,
+            payslips: variable.owed.runCount,
+            already_paid: variable.owed.alreadyPaid,
+          },
+          output: amount,
+        }
+        variableVacationPayEmployees.push(`${emp.first_name} ${emp.last_name}`)
+      }
+    }
+
     // 8e2. An employee's payment for a benefit lowers the taxable
     //      förmånsvärde (lib/salary/benefit-payments.ts). Checked on the FINAL
     //      set, not on the stored rows: steps 8d and 8d3 just rebuilt the
@@ -935,6 +1066,12 @@ export async function runSalaryCalculation(
       taxRates,
     )
     if (result.vaxaStodRefund) vaxaStodRefundEmployees.push(employeeName)
+    // The breakdown names where the variable vacation pay came from, next to
+    // the additions it is part of.
+    if (variableVacationPayStep) {
+      const grossIndex = result.steps.findIndex((step) => step.label === 'Bruttolön')
+      result.steps.splice(grossIndex === -1 ? result.steps.length : grossIndex, 0, variableVacationPayStep)
+    }
 
     // Aggregated absence counts derived from per-day records.
     const sickDays = absenceResult.aggregated.sickDays
@@ -1067,6 +1204,7 @@ export async function runSalaryCalculation(
       ...absenceRows,
       ...derivedPremiumRows,
       ...vacationCompensationRows,
+      ...variableVacationPayRows,
       ...roundingRows,
     )
 
@@ -1252,10 +1390,22 @@ export async function runSalaryCalculation(
         `Säkerställ att anmälan till FK är gjord.`,
     )
   }
+  if (hourlyKarensEmployees.length > 0) {
+    warnings.push(
+      `Karensavdraget för timavlönade bygger på Timmar per vecka hos den anställde: ${hourlyKarensEmployees.join(', ')}. ` +
+        `Är det inte den genomsnittliga veckoarbetstiden, ändra Timmar per vecka och beräkna om.`,
+    )
+  }
   const doubleAdjustmentWarning = doubleBenefitAdjustmentWarning(doubleBenefitAdjustments)
   if (doubleAdjustmentWarning) warnings.push(doubleAdjustmentWarning)
   const vaxaStodWarning = vaxaStodRefundWarning(vaxaStodRefundEmployees)
   if (vaxaStodWarning) warnings.push(vaxaStodWarning)
+  if (variableVacationPayEmployees.length > 0) {
+    warnings.push(
+      `Semesterlön för rörliga lönedelar (Semesterlagen 16 a §) har lagts till för ${variableVacationPayEmployees.join(', ')}. ` +
+        `Beloppet bygger på lönekörningarna i Accounted; ta bort en manuellt inlagd rad för samma ersättning så att den inte betalas två gånger.`,
+    )
+  }
 
   opLog.info('salary calculation complete', {
     requestId,
