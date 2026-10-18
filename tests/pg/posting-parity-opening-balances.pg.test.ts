@@ -34,8 +34,10 @@
  *      IB verifikat the service posts has exactly one ledger.opening_balance
  *      event and every storno it makes one ledger.storno event (subject the
  *      year), and the cascade's verifikat, written in SQL by
- *      commit_opening_balance_replacement, have none: that function waits
- *      for an event id parameter;
+ *      commit_opening_balance_replacement, have theirs too (the SQL step:
+ *      the cascade records the next year's ledger.opening_balance and
+ *      ledger.storno through the port and the function links them to its
+ *      drafts);
  *   3. a failed event or link write under shadow still posts; under strict a
  *      refused event stops a set and a correction before any voucher number,
  *      and a link refused on the storno of the old IB stops that storno
@@ -166,8 +168,6 @@ interface Flow {
   name: string
   run: (seed: Seed) => Promise<Posted>
   events: ExpectedEvent[]
-  /** Indices into the flow's entryIds the port does not post (the SQL cascade): no event, no link. */
-  sqlEntries?: number[]
 }
 
 type Line = [account: string, debit: number, credit: number]
@@ -298,8 +298,10 @@ const FLOWS: Flow[] = [
       { ...SET, occurred_on: '2028-01-01', year: '2028', entries: [1] },
       { ...SET, occurred_on: '2027-01-01', year: '2027', entries: [2] },
       { ...STORNO, year: '2027', entries: [3] },
+      // The cascade's, written in SQL and linked there (the SQL step).
+      { ...SET, occurred_on: '2028-01-01', year: '2028', entries: [4] },
+      { ...STORNO, year: '2028', entries: [5] },
     ],
-    sqlEntries: [4, 5],
   },
   {
     name: 'set inside a staged approval, from the v1 and MCP door (service role)',
@@ -577,13 +579,9 @@ describe('posting port parity, opening balances (pg)', () => {
       expect({ dumps: shadow.dumps, register: shadow.register }).toEqual(JSON.parse(fs.readFileSync(FIXTURE, 'utf8')))
 
       const { companyId } = shadow.seed
-      // The verifikat the service posts have exactly one link each; the
-      // cascade's, written in SQL, have none.
-      const viaPort = new Set(
-        FLOWS.flatMap((flow, i) =>
-          shadow.posted[i]!.entryIds.filter((_, k) => !(flow.sqlEntries ?? []).includes(k)),
-        ),
-      )
+      // Every verifikat the flows post has exactly one link, the SQL
+      // cascade's included; no other verifikat has any.
+      const viaPort = new Set(FLOWS.flatMap((_, i) => shadow.posted[i]!.entryIds))
       const counts = await linkCounts(companyId)
       expect(counts.filter((e) => viaPort.has(e.id) && e.links !== 1)).toEqual([])
       expect(counts.filter((e) => !viaPort.has(e.id) && e.links !== 0)).toEqual([])

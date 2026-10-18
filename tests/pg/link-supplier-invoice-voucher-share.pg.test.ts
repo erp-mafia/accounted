@@ -675,13 +675,13 @@ describe('link_supplier_invoice_to_voucher: one function, old callers intact', (
        WHERE proname = 'link_supplier_invoice_to_voucher' AND pronamespace = 'public'::regnamespace`,
     )
     expect(rows).toEqual([
-      { signature: 'link_supplier_invoice_to_voucher(uuid,uuid,uuid,uuid,text,numeric,text,text)', security_definer: true },
+      { signature: 'link_supplier_invoice_to_voucher(uuid,uuid,uuid,uuid,text,numeric,text,text,uuid[],text)', security_definer: true },
     ])
 
     const grants = await getPool().query<{ anon: boolean; authenticated: boolean; service: boolean }>(
-      `SELECT has_function_privilege('anon', 'public.link_supplier_invoice_to_voucher(uuid,uuid,uuid,uuid,text,numeric,text,text)', 'EXECUTE') AS anon,
-              has_function_privilege('authenticated', 'public.link_supplier_invoice_to_voucher(uuid,uuid,uuid,uuid,text,numeric,text,text)', 'EXECUTE') AS authenticated,
-              has_function_privilege('service_role', 'public.link_supplier_invoice_to_voucher(uuid,uuid,uuid,uuid,text,numeric,text,text)', 'EXECUTE') AS service`,
+      `SELECT has_function_privilege('anon', 'public.link_supplier_invoice_to_voucher(uuid,uuid,uuid,uuid,text,numeric,text,text,uuid[],text)', 'EXECUTE') AS anon,
+              has_function_privilege('authenticated', 'public.link_supplier_invoice_to_voucher(uuid,uuid,uuid,uuid,text,numeric,text,text,uuid[],text)', 'EXECUTE') AS authenticated,
+              has_function_privilege('service_role', 'public.link_supplier_invoice_to_voucher(uuid,uuid,uuid,uuid,text,numeric,text,text,uuid[],text)', 'EXECUTE') AS service`,
     )
     expect(grants.rows[0]).toEqual({ anon: false, authenticated: true, service: true })
   })

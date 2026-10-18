@@ -15,6 +15,7 @@ import {
   type BusinessEventEntryRole,
   type BusinessEventLink,
   type BusinessEventRow,
+  type SqlBusinessEventLink,
 } from './store'
 import type { BusinessEventDraft, CorrectJournalEntryResult, PostingAdapter, PostingPort } from './types'
 
@@ -54,11 +55,22 @@ import type { BusinessEventDraft, CorrectJournalEntryResult, PostingAdapter, Pos
  * failed write throws and the producer decides what it stops; the import
  * worker holds the job's completion, as its verifikat are numbered already.
  *
+ * A SQL posting function (recordEventsForSql) drafts and commits its own
+ * verifikat in one transaction, so 2 moves into SQL: the port records the
+ * events in 1 and answers their ids, the producer hands them to the
+ * function, which links each draft it writes before commit_journal_entry
+ * draws the number (public.link_business_events_to_draft). A refused link is
+ * logged by the function under shadow and fails it under strict, before any
+ * number; a refused event write is the port's, as for any posting.
+ *
  * Kept free of the event bus and lib/init (the antipattern guard counts
  * lib/init's reach); the engine announces the posting as it always has.
  */
 
 const log = createLogger('posting.port')
+
+/** How many events recordEventsForSql writes at once (a bulk booking has up to 200). */
+const SQL_EVENT_WRITE_WAVE = 10
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -214,6 +226,38 @@ export function createPostingPort(deps: PostingPortDeps = {}): PostingPort {
       // No verifikat to link and no adapter call: the event is the whole
       // write. A named actor (null for none) replaces the scope's.
       return (await writeEvent(mode, supabase, companyId, event, request.actor)) ?? null
+    },
+
+    async recordEventsForSql(request): Promise<SqlBusinessEventLink | undefined> {
+      const { supabase, companyId } = request
+      const mode = modeOf()
+      if (mode === 'off') return undefined
+      let drafts: BusinessEventDraft[]
+      try {
+        drafts = await request.events()
+      } catch (err) {
+        if (mode === 'strict') throw err
+        log.warn('business events not built (shadow); the posting goes ahead without them', {
+          companyId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+        return undefined
+      }
+      if (drafts.length === 0) return undefined
+      // Each event is written as for one posting (a shadow failure leaves its
+      // slot null, a strict one throws), in small waves so a bulk booking of
+      // 200 bank lines does not cost 200 round trips in a row.
+      const ids: Array<string | null> = drafts.map(() => null)
+      for (let start = 0; start < drafts.length; start += SQL_EVENT_WRITE_WAVE) {
+        const wave = drafts.slice(start, start + SQL_EVENT_WRITE_WAVE)
+        const written = await Promise.all(wave.map((draft) => writeEvent(mode, supabase, companyId, draft)))
+        written.forEach((id, i) => {
+          ids[start + i] = id ?? null
+        })
+      }
+      // Nothing recorded (a missing table, every write refused under shadow):
+      // the function is called as before.
+      return ids.some((id) => id !== null) ? { ids, mode } : undefined
     },
   }
 }

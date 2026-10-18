@@ -39,6 +39,7 @@ export {
   type BusinessEventPartyType,
   type BusinessEventRow,
   type BusinessEventTaxAmount,
+  type SqlBusinessEventLink,
 } from './store'
 export type {
   BusinessEventDraft,
@@ -51,5 +52,6 @@ export type {
   PostingAdapter,
   PostingPort,
   RecordBusinessEventRequest,
+  RecordSqlPostingEventsRequest,
   ReverseJournalEntryRequest,
 } from './types'

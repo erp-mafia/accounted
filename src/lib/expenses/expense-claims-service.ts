@@ -49,8 +49,18 @@ import { todayIsoStockholm } from '@/lib/dates/iso'
 import { postingPort } from '@/lib/posting/port'
 import { mappingVersion } from '@/lib/posting/mapping-version'
 import type { BusinessEventDraft } from '@/lib/posting/types'
+import type { SqlBusinessEventLink } from '@/lib/bookkeeping/business-event-link'
+import { expensePayoutBusinessEvent, type PayoutClaimFacts } from '@/lib/bookkeeping/sql-posting-business-events'
+import { chunk } from '@/lib/utils'
 
 const log = createLogger('expenses/claims')
+
+/**
+ * Claim ids per PostgREST `.in()` read: ids travel in the GET query string,
+ * and a gateway with the stock 8 KB header buffer answers a long one with 414
+ * (#2395), so a payout's claims are read in slices of this size.
+ */
+const CLAIM_ID_READ_CHUNK = 100
 
 /** Result (P&L) accounts, classes 3-8: the lines a claim-level bag tags. */
 const RESULT_ACCOUNT_RE = /^[3-8]/
@@ -919,9 +929,10 @@ interface PayoutRpcRow {
  * The claimant/liability/status rules are enforced by the RPC and echoed
  * here as result codes.
  *
- * Not through the posting port yet: the RPC drafts and commits in one
- * transaction, so an event link needs the function to take an event id (a
- * migration of its own, step 2's SQL posting functions).
+ * Through the posting port's SQL step: one expense.paid_out event per claim
+ * is recorded first and the RPC links them to its draft before the number
+ * is drawn (migration 20261018210500). Off: nothing is read or built and the
+ * RPC is called as before.
  */
 export async function createPayoutBatch(
   supabase: SupabaseClient,
@@ -932,12 +943,26 @@ export async function createPayoutBatch(
   const claimIds = [...new Set(input.claim_ids)]
   if (claimIds.length === 0) return { ok: false, code: 'NO_CLAIMS' }
 
+  let businessEvents: SqlBusinessEventLink | undefined
+  try {
+    businessEvents = await postingPort.recordEventsForSql({
+      supabase,
+      companyId,
+      events: () => payoutEvents(supabase, companyId, claimIds, input),
+    })
+  } catch (err) {
+    // strict: an event that could not be recorded stops the payout before any number.
+    log.error('create_expense_payout_batch business events not recorded (strict)', err, { companyId })
+    return { ok: false, code: 'BATCH_INSERT_FAILED', detail: err instanceof Error ? err.message : String(err), error: err }
+  }
+
   const { data, error } = await commitExpensePayoutBatch(supabase, companyId, userId, {
     claimIds,
     payoutDate: input.payout_date,
     cashAccount: input.cash_account,
     notes: input.notes ?? null,
     transactionId: input.transaction_id ?? null,
+    ...(businessEvents ? { businessEvents } : {}),
   })
   if (error) {
     // Period-lock and lock-date triggers surface here as Postgres errors;
@@ -975,6 +1000,35 @@ export async function createPayoutBatch(
     total_sek: roundOre(Number(row.total_sek ?? 0)),
     claim_count: row.claim_count ?? claimIds.length,
   }
+}
+
+/**
+ * The events of a payout, one expense.paid_out per claim in the order of
+ * claimIds. None when a claim is not there (the RPC then refuses as
+ * before). A read error throws: the port logs it under shadow and stops the
+ * payout under strict.
+ */
+async function payoutEvents(
+  supabase: SupabaseClient,
+  companyId: string,
+  claimIds: string[],
+  input: CreatePayoutBatchInput,
+): Promise<BusinessEventDraft[]> {
+  // In slices: a long id list in one .in() overruns the gateway's URL limit.
+  const byId = new Map<string, PayoutClaimFacts>()
+  for (const part of chunk(claimIds, CLAIM_ID_READ_CHUNK)) {
+    const { data, error } = await supabase
+      .from('expense_claims')
+      .select('id, employee_id, amount_sek, document_id')
+      .in('id', part)
+      .eq('company_id', companyId)
+    if (error) throw error
+    for (const claim of (data ?? []) as PayoutClaimFacts[]) byId.set(claim.id, claim)
+  }
+  if (claimIds.some((id) => !byId.has(id))) return []
+  const linkBasis = linkBasisColumns('user_created')
+  const payout = { payoutDate: input.payout_date, bankLine: !!input.transaction_id }
+  return claimIds.map((id) => expensePayoutBusinessEvent(byId.get(id)!, payout, linkBasis))
 }
 
 export async function listPayoutBatches(

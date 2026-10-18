@@ -1,0 +1,1081 @@
+{
+  "dumps": [
+    {
+      "flow": "bulk book: a samlingsverifikat of two bank fees, own lines",
+      "outcomes": [
+        {
+          "ok": true,
+          "mode": "create_new",
+          "voucher_series": "A",
+          "voucher_number": 1,
+          "linked_tx_count": 2,
+          "tx_sum": -125,
+          "docs_linked": 0
+        }
+      ],
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 1,
+          "entry_date": "2026-03-10",
+          "description": "Bankavgifter mars",
+          "source_type": "manual",
+          "status": "posted",
+          "reverses_voucher": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "125",
+              "account_number": "1930",
+              "line_description": null,
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "125",
+              "credit_amount": "0",
+              "account_number": "6570",
+              "line_description": "Bankavgifter",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ],
+      "rpc": [
+        {
+          "fn": "bulk_book_transactions",
+          "body": {
+            "p_actor_label": null,
+            "p_actor_type": "user",
+            "p_commit_method": "bulk_accept",
+            "p_company_id": "<company>",
+            "p_existing_journal_entry_id": null,
+            "p_new_entry": {
+              "description": "Bankavgifter mars",
+              "lines": [
+                {
+                  "account_number": "6570",
+                  "credit_amount": 0,
+                  "currency": "SEK",
+                  "debit_amount": 125,
+                  "line_description": "Bankavgifter",
+                  "sort_order": 0
+                },
+                {
+                  "account_number": "1930",
+                  "credit_amount": 125,
+                  "currency": "SEK",
+                  "debit_amount": 0,
+                  "sort_order": 1
+                }
+              ]
+            },
+            "p_tx_ids": [
+              "<id:3>",
+              "<id:4>"
+            ],
+            "p_user_id": "<user>"
+          }
+        }
+      ]
+    },
+    {
+      "flow": "bulk book: three bank fees through a company template, one line per row",
+      "outcomes": [
+        {
+          "ok": true,
+          "mode": "create_new",
+          "voucher_series": "A",
+          "voucher_number": 2,
+          "linked_tx_count": 3,
+          "tx_sum": -95,
+          "docs_linked": 0
+        }
+      ],
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 2,
+          "entry_date": "2026-03-11",
+          "description": "Bankavgifter, mall",
+          "source_type": "manual",
+          "status": "posted",
+          "reverses_voucher": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "20",
+              "account_number": "1930",
+              "line_description": "Bank: Avgift A",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "30",
+              "account_number": "1930",
+              "line_description": "Bank: Avgift B",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "45",
+              "account_number": "1930",
+              "line_description": "Bank: Avgift C",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "20",
+              "credit_amount": "0",
+              "account_number": "6570",
+              "line_description": "Bankavgift: Avgift A",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "30",
+              "credit_amount": "0",
+              "account_number": "6570",
+              "line_description": "Bankavgift: Avgift B",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "45",
+              "credit_amount": "0",
+              "account_number": "6570",
+              "line_description": "Bankavgift: Avgift C",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ],
+      "rpc": [
+        {
+          "fn": "bulk_book_transactions",
+          "body": {
+            "p_actor_label": null,
+            "p_actor_type": "user",
+            "p_commit_method": "bulk_accept",
+            "p_company_id": "<company>",
+            "p_existing_journal_entry_id": null,
+            "p_new_entry": {
+              "description": "Bankavgifter, mall",
+              "lines": [
+                {
+                  "account_number": "6570",
+                  "credit_amount": 0,
+                  "currency": "SEK",
+                  "debit_amount": 20,
+                  "line_description": "Bankavgift: Avgift A",
+                  "sort_order": 0
+                },
+                {
+                  "account_number": "1930",
+                  "credit_amount": 20,
+                  "currency": "SEK",
+                  "debit_amount": 0,
+                  "line_description": "Bank: Avgift A",
+                  "sort_order": 1
+                },
+                {
+                  "account_number": "6570",
+                  "credit_amount": 0,
+                  "currency": "SEK",
+                  "debit_amount": 30,
+                  "line_description": "Bankavgift: Avgift B",
+                  "sort_order": 2
+                },
+                {
+                  "account_number": "1930",
+                  "credit_amount": 30,
+                  "currency": "SEK",
+                  "debit_amount": 0,
+                  "line_description": "Bank: Avgift B",
+                  "sort_order": 3
+                },
+                {
+                  "account_number": "6570",
+                  "credit_amount": 0,
+                  "currency": "SEK",
+                  "debit_amount": 45,
+                  "line_description": "Bankavgift: Avgift C",
+                  "sort_order": 4
+                },
+                {
+                  "account_number": "1930",
+                  "credit_amount": 45,
+                  "currency": "SEK",
+                  "debit_amount": 0,
+                  "line_description": "Bank: Avgift C",
+                  "sort_order": 5
+                }
+              ]
+            },
+            "p_tx_ids": [
+              "<id:3>",
+              "<id:4>",
+              "<id:5>"
+            ],
+            "p_user_id": "<user>"
+          }
+        }
+      ]
+    },
+    {
+      "flow": "bulk book: two rows linked to a posted verifikat (no new verifikat)",
+      "outcomes": [
+        {
+          "ok": true,
+          "mode": "link_existing",
+          "voucher_series": "A",
+          "voucher_number": 3,
+          "linked_tx_count": 2,
+          "tx_sum": -100,
+          "docs_linked": 0
+        }
+      ],
+      "entries": [],
+      "rpc": [
+        {
+          "fn": "bulk_book_transactions",
+          "body": {
+            "p_actor_label": null,
+            "p_actor_type": "user",
+            "p_commit_method": "bulk_accept",
+            "p_company_id": "<company>",
+            "p_existing_journal_entry_id": "<id:3>",
+            "p_new_entry": null,
+            "p_tx_ids": [
+              "<id:4>",
+              "<id:5>"
+            ],
+            "p_user_id": "<user>"
+          }
+        }
+      ]
+    },
+    {
+      "flow": "match batch: one deposit against two customer invoices",
+      "outcomes": [
+        {
+          "ok": true,
+          "voucher_series": "C",
+          "voucher_number": 1,
+          "total_allocated": 3000,
+          "leftover": 0,
+          "allocations": [
+            {
+              "kind": "customer_invoice",
+              "status": "paid",
+              "amount": 1250,
+              "paid_amount": 1250,
+              "remaining_amount": 0
+            },
+            {
+              "kind": "customer_invoice",
+              "status": "paid",
+              "amount": 1750,
+              "paid_amount": 1750.4,
+              "remaining_amount": 0
+            }
+          ]
+        }
+      ],
+      "entries": [
+        {
+          "voucher_series": "C",
+          "voucher_number": 1,
+          "entry_date": "2026-03-14",
+          "description": "Samlingsinbetalning 2026-03-14",
+          "source_type": "invoice_paid",
+          "status": "posted",
+          "reverses_voucher": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1250",
+              "account_number": "1510",
+              "line_description": "Faktura F-1001",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1750.4000000000000000",
+              "account_number": "1510",
+              "line_description": "Faktura F-1002",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "3000",
+              "credit_amount": "0",
+              "account_number": "1930",
+              "line_description": "Inbetalning 2026-03-14",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "0.40000000000000000000",
+              "credit_amount": "0",
+              "account_number": "3740",
+              "line_description": "Öresavrundning",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ],
+      "rpc": [
+        {
+          "fn": "match_batch_allocate",
+          "body": {
+            "p_actor_label": null,
+            "p_actor_type": "user",
+            "p_allocations": [
+              {
+                "amount": 1250,
+                "invoice_id": "<id:3>",
+                "kind": "customer_invoice"
+              },
+              {
+                "amount": 1750,
+                "invoice_id": "<id:4>",
+                "kind": "customer_invoice"
+              }
+            ],
+            "p_company_id": "<company>",
+            "p_tx_id": "<id:5>",
+            "p_user_id": "<user>"
+          }
+        }
+      ]
+    },
+    {
+      "flow": "match batch: one deposit against a EUR invoice (kursdifferens inside)",
+      "outcomes": [
+        {
+          "ok": true,
+          "voucher_series": "C",
+          "voucher_number": 2,
+          "total_allocated": 1120,
+          "leftover": 0,
+          "allocations": [
+            {
+              "kind": "customer_invoice",
+              "status": "paid",
+              "amount": 1120,
+              "paid_amount": 100,
+              "remaining_amount": 0
+            }
+          ]
+        }
+      ],
+      "entries": [
+        {
+          "voucher_series": "C",
+          "voucher_number": 2,
+          "entry_date": "2026-03-15",
+          "description": "Inbetalning kundfaktura F-1003, Kund AB",
+          "source_type": "invoice_paid",
+          "status": "posted",
+          "reverses_voucher": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1140.0000000000000000",
+              "account_number": "1510",
+              "line_description": "Faktura F-1003 (EUR)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "1120",
+              "credit_amount": "0",
+              "account_number": "1930",
+              "line_description": "Inbetalning 2026-03-15",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "20.0000000000000000",
+              "credit_amount": "0",
+              "account_number": "7960",
+              "line_description": "Valutakursförlust F-1003",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ],
+      "rpc": [
+        {
+          "fn": "match_batch_allocate",
+          "body": {
+            "p_actor_label": null,
+            "p_actor_type": "user",
+            "p_allocations": [
+              {
+                "amount": 1120,
+                "invoice_id": "<id:3>",
+                "kind": "customer_invoice"
+              }
+            ],
+            "p_company_id": "<company>",
+            "p_tx_id": "<id:4>",
+            "p_user_id": "<user>"
+          }
+        }
+      ]
+    },
+    {
+      "flow": "match batch: one payment against two supplier invoices",
+      "outcomes": [
+        {
+          "ok": true,
+          "voucher_series": "E",
+          "voucher_number": 1,
+          "total_allocated": 2000,
+          "leftover": 0,
+          "allocations": [
+            {
+              "kind": "supplier_invoice",
+              "status": "paid",
+              "amount": 1200,
+              "paid_amount": 1200,
+              "remaining_amount": 0
+            },
+            {
+              "kind": "supplier_invoice",
+              "status": "paid",
+              "amount": 800,
+              "paid_amount": 800,
+              "remaining_amount": 0
+            }
+          ]
+        }
+      ],
+      "entries": [
+        {
+          "voucher_series": "E",
+          "voucher_number": 1,
+          "entry_date": "2026-03-16",
+          "description": "Samlingsbetalning 2026-03-16",
+          "source_type": "supplier_invoice_paid",
+          "status": "posted",
+          "reverses_voucher": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "2000",
+              "account_number": "1930",
+              "line_description": "Utbetalning 2026-03-16",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "800",
+              "credit_amount": "0",
+              "account_number": "2440",
+              "line_description": "Leverantör AB - LF-2001",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "1200",
+              "credit_amount": "0",
+              "account_number": "2440",
+              "line_description": "Leverantör AB - LF-2002",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ],
+      "rpc": [
+        {
+          "fn": "match_batch_allocate",
+          "body": {
+            "p_actor_label": null,
+            "p_actor_type": "user",
+            "p_allocations": [
+              {
+                "amount": 800,
+                "kind": "supplier_invoice",
+                "supplier_invoice_id": "<id:3>"
+              },
+              {
+                "amount": 1200,
+                "kind": "supplier_invoice",
+                "supplier_invoice_id": "<id:4>"
+              }
+            ],
+            "p_company_id": "<company>",
+            "p_tx_id": "<id:5>",
+            "p_user_id": "<user>"
+          }
+        }
+      ]
+    },
+    {
+      "flow": "voucher link: a EUR customer invoice settled by a SEK voucher (kursdifferens verifikat)",
+      "outcomes": [
+        {
+          "ok": true,
+          "invoiceStatus": "paid",
+          "paidAmount": 1000,
+          "remainingAmount": 0,
+          "paymentAmount": 1000
+        }
+      ],
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 5,
+          "entry_date": "2026-03-17",
+          "description": "Valutakursdifferens faktura F-1004",
+          "source_type": "invoice_paid",
+          "status": "posted",
+          "reverses_voucher": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "300.0000000000000000",
+              "account_number": "1510",
+              "line_description": "Faktura F-1004 (EUR)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "300.0000000000000000",
+              "credit_amount": "0",
+              "account_number": "7960",
+              "line_description": "Valutakursförlust F-1004",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ],
+      "rpc": [
+        {
+          "fn": "link_invoice_to_voucher",
+          "body": {
+            "p_actor_label": null,
+            "p_actor_type": "user",
+            "p_company_id": "<company>",
+            "p_invoice_id": "<id:3>",
+            "p_journal_entry_id": "<id:4>",
+            "p_notes": null,
+            "p_user_id": "<user>"
+          }
+        }
+      ]
+    },
+    {
+      "flow": "voucher link: a SEK customer invoice (no verifikat of its own)",
+      "outcomes": [
+        {
+          "ok": true,
+          "invoiceStatus": "paid",
+          "paidAmount": 900,
+          "remainingAmount": 0,
+          "paymentAmount": 900
+        }
+      ],
+      "entries": [],
+      "rpc": [
+        {
+          "fn": "link_invoice_to_voucher",
+          "body": {
+            "p_actor_label": null,
+            "p_actor_type": "user",
+            "p_company_id": "<company>",
+            "p_invoice_id": "<id:3>",
+            "p_journal_entry_id": "<id:4>",
+            "p_notes": null,
+            "p_user_id": "<user>"
+          }
+        }
+      ]
+    },
+    {
+      "flow": "voucher link: a EUR supplier invoice paid by a SEK voucher (kursdifferens verifikat)",
+      "outcomes": [
+        {
+          "ok": true,
+          "invoiceStatus": "paid",
+          "paidAmount": 1000,
+          "remainingAmount": 0,
+          "paymentAmount": 1000,
+          "voucherRemaining": 0
+        }
+      ],
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 8,
+          "entry_date": "2026-03-19",
+          "description": "Valutakursdifferens leverantörsfaktura LF-2003",
+          "source_type": "supplier_invoice_paid",
+          "status": "posted",
+          "reverses_voucher": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "300.0000000000000000",
+              "credit_amount": "0",
+              "account_number": "2440",
+              "line_description": "Leverantörsfaktura LF-2003 (EUR)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "300.0000000000000000",
+              "account_number": "3960",
+              "line_description": "Valutakursvinst LF-2003",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ],
+      "rpc": [
+        {
+          "fn": "link_supplier_invoice_to_voucher",
+          "body": {
+            "p_actor_label": null,
+            "p_actor_type": "user",
+            "p_company_id": "<company>",
+            "p_journal_entry_id": "<id:3>",
+            "p_notes": null,
+            "p_supplier_invoice_id": "<id:4>",
+            "p_user_id": "<user>"
+          }
+        }
+      ]
+    },
+    {
+      "flow": "utlägg payout: two claims repaid in one transfer",
+      "outcomes": [
+        {
+          "ok": true,
+          "voucher_number": 9,
+          "total_sek": 800,
+          "claim_count": 2
+        }
+      ],
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 9,
+          "entry_date": "2026-03-20",
+          "description": "Utbetalning utlägg: Ägaren (2 st)",
+          "source_type": "expense_payout",
+          "status": "posted",
+          "reverses_voucher": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "800.00",
+              "account_number": "1930",
+              "line_description": "Utbetalning utlägg: Ägaren (2 st)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "800.00",
+              "credit_amount": "0",
+              "account_number": "2893",
+              "line_description": "Utbetalning utlägg: Ägaren (2 st)",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ],
+      "rpc": [
+        {
+          "fn": "create_expense_payout_batch",
+          "body": {
+            "p_actor_label": null,
+            "p_actor_type": "user",
+            "p_cash_account": "1930",
+            "p_claim_ids": [
+              "<id:3>",
+              "<id:4>"
+            ],
+            "p_company_id": "<company>",
+            "p_notes": null,
+            "p_payout_date": "2026-03-20",
+            "p_transaction_id": null,
+            "p_user_id": "<user>"
+          }
+        }
+      ]
+    },
+    {
+      "flow": "utlägg payout matched to its bank transfer",
+      "outcomes": [
+        {
+          "ok": true,
+          "voucher_number": 10,
+          "total_sek": 265,
+          "claim_count": 1
+        }
+      ],
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 10,
+          "entry_date": "2026-03-21",
+          "description": "Utbetalning utlägg: Ägaren (1 st)",
+          "source_type": "expense_payout",
+          "status": "posted",
+          "reverses_voucher": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "265.00",
+              "account_number": "1930",
+              "line_description": "Utbetalning utlägg: Ägaren (1 st)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "265.00",
+              "credit_amount": "0",
+              "account_number": "2893",
+              "line_description": "Utbetalning utlägg: Ägaren (1 st)",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ],
+      "rpc": [
+        {
+          "fn": "create_expense_payout_batch",
+          "body": {
+            "p_actor_label": null,
+            "p_actor_type": "user",
+            "p_cash_account": "1930",
+            "p_claim_ids": [
+              "<id:3>"
+            ],
+            "p_company_id": "<company>",
+            "p_notes": null,
+            "p_payout_date": "2026-03-21",
+            "p_transaction_id": "<id:4>",
+            "p_user_id": "<user>"
+          }
+        }
+      ]
+    },
+    {
+      "flow": "IB correction with cascade: the next year IB replaced in SQL",
+      "outcomes": [
+        {
+          "ok": true,
+          "voucher_series": "A",
+          "voucher_number": 12,
+          "lines_created": 3,
+          "total_debit": 98000,
+          "total_credit": 98000,
+          "cascade": {
+            "corrected": [
+              "2027"
+            ],
+            "skipped": 0
+          }
+        }
+      ],
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 2,
+          "entry_date": "2027-01-01",
+          "description": "Ingående balanser (korrigerade, rättelse av A1)",
+          "source_type": "opening_balance",
+          "status": "posted",
+          "reverses_voucher": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "0.00",
+              "credit_amount": "2000.00",
+              "account_number": "1930",
+              "line_description": "IB-rättelse 1930",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "120000.00",
+              "credit_amount": "0.00",
+              "account_number": "1930",
+              "line_description": "IB 1930",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "0.00",
+              "credit_amount": "25000.00",
+              "account_number": "2081",
+              "line_description": "IB 2081",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "0.00",
+              "credit_amount": "95000.00",
+              "account_number": "2091",
+              "line_description": "IB 2091",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "2000.00",
+              "credit_amount": "0.00",
+              "account_number": "2091",
+              "line_description": "IB-rättelse 2091",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 3,
+          "entry_date": "2027-01-01",
+          "description": "Makulering: Ingående balanser",
+          "source_type": "storno",
+          "status": "posted",
+          "reverses_voucher": 1,
+          "lines": [
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "120000",
+              "account_number": "1930",
+              "line_description": "Reversal: IB 1930",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "25000",
+              "credit_amount": "0",
+              "account_number": "2081",
+              "line_description": "Reversal: IB 2081",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "95000",
+              "credit_amount": "0",
+              "account_number": "2091",
+              "line_description": "Reversal: IB 2091",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 12,
+          "entry_date": "2026-01-01",
+          "description": "Ingående balanser (korrigerade, rättelse av A11)",
+          "source_type": "opening_balance",
+          "status": "posted",
+          "reverses_voucher": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "98000",
+              "credit_amount": "0",
+              "account_number": "1930",
+              "line_description": "IB 1930",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "25000",
+              "account_number": "2081",
+              "line_description": "IB 2081",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "73000",
+              "account_number": "2091",
+              "line_description": "IB 2091",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 13,
+          "entry_date": "2026-01-01",
+          "description": "Makulering: Ingående balanser",
+          "source_type": "storno",
+          "status": "posted",
+          "reverses_voucher": 11,
+          "lines": [
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "100000",
+              "account_number": "1930",
+              "line_description": "Reversal: IB 1930",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "25000",
+              "credit_amount": "0",
+              "account_number": "2081",
+              "line_description": "Reversal: IB 2081",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "dimensions": {},
+              "debit_amount": "75000",
+              "credit_amount": "0",
+              "account_number": "2091",
+              "line_description": "Reversal: IB 2091",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ],
+      "rpc": [
+        {
+          "fn": "commit_opening_balance_replacement",
+          "body": {
+            "p_actor_label": null,
+            "p_actor_type": "user",
+            "p_company_id": "<company>",
+            "p_description": "Ingående balanser (korrigerade, rättelse av A1)",
+            "p_entry_date": "2027-01-01",
+            "p_expected_old_entry_id": "<id:3>",
+            "p_lines": [
+              {
+                "account_id": "<account:1930>",
+                "account_number": "1930",
+                "amount_in_currency": null,
+                "credit_amount": 2000,
+                "currency": "SEK",
+                "debit_amount": 0,
+                "dimensions": {},
+                "exchange_rate": null,
+                "line_description": "IB-rättelse 1930",
+                "sort_order": null,
+                "tax_code": null
+              },
+              {
+                "account_id": "<account:1930>",
+                "account_number": "1930",
+                "amount_in_currency": null,
+                "credit_amount": 0,
+                "currency": "SEK",
+                "debit_amount": 120000,
+                "dimensions": {},
+                "exchange_rate": null,
+                "line_description": "IB 1930",
+                "sort_order": null,
+                "tax_code": null
+              },
+              {
+                "account_id": "<account:2081>",
+                "account_number": "2081",
+                "amount_in_currency": null,
+                "credit_amount": 25000,
+                "currency": "SEK",
+                "debit_amount": 0,
+                "dimensions": {},
+                "exchange_rate": null,
+                "line_description": "IB 2081",
+                "sort_order": null,
+                "tax_code": null
+              },
+              {
+                "account_id": "<account:2091>",
+                "account_number": "2091",
+                "amount_in_currency": null,
+                "credit_amount": 95000,
+                "currency": "SEK",
+                "debit_amount": 0,
+                "dimensions": {},
+                "exchange_rate": null,
+                "line_description": "IB 2091",
+                "sort_order": null,
+                "tax_code": null
+              },
+              {
+                "account_id": "<account:2091>",
+                "account_number": "2091",
+                "amount_in_currency": null,
+                "credit_amount": 0,
+                "currency": "SEK",
+                "debit_amount": 2000,
+                "dimensions": {},
+                "exchange_rate": null,
+                "line_description": "IB-rättelse 2091",
+                "sort_order": null,
+                "tax_code": null
+              }
+            ],
+            "p_period_id": "<id:4>",
+            "p_user_id": "<user>",
+            "p_voucher_series": "A"
+          }
+        }
+      ]
+    }
+  ]
+}

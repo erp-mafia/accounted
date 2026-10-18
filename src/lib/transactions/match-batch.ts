@@ -47,6 +47,11 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { commitMatchBatchAllocation } from '@/lib/bookkeeping/engine'
+import type { SqlBusinessEventLink } from '@/lib/bookkeeping/business-event-link'
+import { batchAllocationBusinessEvent, type BatchAllocationFacts } from '@/lib/bookkeeping/sql-posting-business-events'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { postingPort } from '@/lib/posting/port'
+import type { BusinessEventDraft } from '@/lib/posting/types'
 import { roundOre } from '@/lib/money'
 import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
 import { chunk } from '@/lib/utils'
@@ -204,11 +209,29 @@ export async function matchTransactionBatch(
     })
   }
 
+  // The posting port (its SQL step): one payment event per allocation
+  // (sale.payment_received or purchase.paid, as the single bank match
+  // records), which the RPC links to its samlingsverifikat before the number
+  // is drawn. Off: nothing is read or built and the RPC is called as before.
+  let businessEvents: SqlBusinessEventLink | undefined
+  try {
+    businessEvents = await postingPort.recordEventsForSql({
+      supabase,
+      companyId,
+      events: () => batchAllocationEvents(ctx, transactionId, allocations),
+    })
+  } catch (err) {
+    // strict: an event that could not be recorded stops the booking before any number.
+    txLog.error('match-batch: business events not recorded (strict)', err)
+    return { ok: false, code: 'BATCH_RPC_FAILED', details: { message: getUserErrorMessage(err) } }
+  }
+
   // 4. The RPC is the atomicity boundary, behind the engine door that also
   // announces its verifikat with journal_entry.committed.
   const { data, error } = await commitMatchBatchAllocation(supabase, companyId, userId, {
     transactionId,
     allocations,
+    ...(businessEvents ? { businessEvents } : {}),
   })
   if (error) {
     txLog.error('match_batch_allocate RPC error', error)
@@ -260,6 +283,70 @@ export async function matchTransactionBatch(
       leftover: result.leftover,
     },
   }
+}
+
+/**
+ * The events of a batch allocation, one per allocation in the request's
+ * order: the bank line's date and currency and each invoice's party,
+ * currency and remainder, read as the RPC reads them. None (the RPC is then
+ * called as before, and refuses as before) when the bank line or an invoice
+ * is not there or the allocations mix customer and supplier invoices. A
+ * read error throws: the port logs it under shadow and stops the booking
+ * under strict.
+ */
+async function batchAllocationEvents(
+  ctx: OperationContext,
+  transactionId: string,
+  allocations: MatchBatchAllocation[],
+): Promise<BusinessEventDraft[]> {
+  const { supabase, companyId } = ctx
+  const kinds = new Set(allocations.map((a) => a.kind))
+  if (kinds.size !== 1) return []
+  const isCustomer = kinds.has('customer_invoice')
+
+  const { data: txRow, error: txError } = await supabase
+    .from('transactions')
+    .select('date, currency')
+    .eq('id', transactionId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (txError) throw txError
+  if (!txRow) return []
+  const transaction = txRow as { date: string; currency: string | null }
+
+  const ids = Array.from(new Set(allocations.map((a) => (a.kind === 'customer_invoice' ? a.invoice_id : a.supplier_invoice_id))))
+  const invoices = new Map<string, { partyId: string; invoice: BatchAllocationFacts['invoice'] }>()
+  for (const part of chunk(ids, ID_READ_CHUNK)) {
+    if (isCustomer) {
+      const { data, error } = await supabase
+        .from('invoices')
+        .select('id, customer_id, currency, remaining_amount, total')
+        .in('id', part)
+        .eq('company_id', companyId)
+      if (error) throw error
+      for (const row of (data ?? []) as Array<{ id: string; customer_id: string; currency: string | null; remaining_amount: number | null; total: number }>) {
+        invoices.set(row.id, { partyId: row.customer_id, invoice: row })
+      }
+    } else {
+      const { data, error } = await supabase
+        .from('supplier_invoices')
+        .select('id, supplier_id, currency, remaining_amount, total')
+        .in('id', part)
+        .eq('company_id', companyId)
+      if (error) throw error
+      for (const row of (data ?? []) as Array<{ id: string; supplier_id: string; currency: string | null; remaining_amount: number | null; total: number }>) {
+        invoices.set(row.id, { partyId: row.supplier_id, invoice: row })
+      }
+    }
+  }
+  if (ids.some((id) => !invoices.has(id))) return []
+
+  const linkBasis = linkBasisColumns('user_confirmed')
+  return allocations.map((a) => {
+    const invoiceId = a.kind === 'customer_invoice' ? a.invoice_id : a.supplier_invoice_id
+    const { partyId, invoice } = invoices.get(invoiceId)!
+    return batchAllocationBusinessEvent({ kind: a.kind, invoiceId, partyId, amount: a.amount, invoice }, transaction, linkBasis)
+  })
 }
 
 /**

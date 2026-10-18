@@ -15,6 +15,7 @@ export {
   isMissingTableError,
   type BusinessEventEntryRole,
   type BusinessEventLink,
+  type SqlBusinessEventLink,
 } from '@/lib/bookkeeping/business-event-link'
 
 /** The party types business_events_party_type_check accepts: a type and an id, never a name. */

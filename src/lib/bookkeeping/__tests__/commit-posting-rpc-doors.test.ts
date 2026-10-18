@@ -24,6 +24,7 @@ vi.mock('@/lib/bookkeeping/account-backfill', () => ({
 
 const { runWithActor } = await import('@/lib/bookkeeping/actor-context-node')
 const {
+  commitBulkBooking,
   commitMatchBatchAllocation,
   commitExpensePayoutBatch,
   commitInvoiceVoucherLink,
@@ -304,6 +305,114 @@ describe.each(DOORS)('$name: the actor', (door) => {
     expect(rpc).toHaveBeenCalledTimes(2)
     expect(rpc).toHaveBeenNthCalledWith(1, door.rpcName, { ...door.rpcArgs, p_actor_type: 'user', p_actor_label: null })
     expect(rpc).toHaveBeenNthCalledWith(2, door.rpcName, door.rpcArgs)
+    expect(emit).toHaveBeenCalledTimes(1)
+  })
+})
+
+// The posting port's SQL step (migrations 20261018210100 to 20261018210500):
+// a door handed the port's events sends their ids and the mode beside the
+// RPC's own arguments; without them it sends exactly what it sent before
+// (the tables above). A database without the migration answers PGRST202 and
+// the door retries without the two, so the booking goes through unlinked.
+const LINK = { ids: ['ev-1', null], mode: 'shadow' as const }
+const EVENTS = { p_event_ids: ['ev-1', null], p_event_mode: 'shadow' }
+
+const EVENT_DOORS: Array<{
+  name: string
+  rpcName: string
+  call: (supabase: never) => Promise<{ data: unknown; error: unknown }>
+  rpcArgs: Record<string, unknown>
+  posted: Record<string, unknown>
+}> = [
+  {
+    name: 'commitBulkBooking',
+    rpcName: 'bulk_book_transactions',
+    call: (supabase) =>
+      commitBulkBooking(supabase, 'co', 'user-1', {
+        txIds: ['tx-1', 'tx-2'],
+        existingJournalEntryId: null,
+        newEntry: { description: 'Bankavgifter', lines: [] },
+        commitMethod: 'bulk_accept',
+        businessEvents: LINK,
+      }),
+    rpcArgs: {
+      p_tx_ids: ['tx-1', 'tx-2'],
+      p_existing_journal_entry_id: null,
+      p_new_entry: { description: 'Bankavgifter', lines: [] },
+      p_company_id: 'co',
+      p_user_id: 'user-1',
+      p_commit_method: 'bulk_accept',
+      p_actor_type: 'user',
+      p_actor_label: null,
+    },
+    posted: { ok: true, mode: 'create_new', journal_entry_id: 'je-new' },
+  },
+  ...DOORS.map((door) => ({
+    name: door.name,
+    rpcName: door.rpcName,
+    rpcArgs: { ...door.rpcArgs, p_actor_type: 'user', p_actor_label: null },
+    posted: door.posted,
+    call: (supabase: never) => {
+      switch (door.rpcName) {
+        case 'match_batch_allocate':
+          return commitMatchBatchAllocation(supabase, 'co', 'user-1', {
+            transactionId: 'tx-1',
+            allocations: [{ kind: 'customer_invoice', invoice_id: 'inv-1', amount: 1250 }],
+            businessEvents: LINK,
+          })
+        case 'create_expense_payout_batch':
+          return commitExpensePayoutBatch(supabase, 'co', 'user-1', {
+            claimIds: ['c1', 'c2'],
+            payoutDate: '2026-09-10',
+            cashAccount: '1930',
+            notes: null,
+            transactionId: 'tx-1',
+            businessEvents: LINK,
+          })
+        case 'link_invoice_to_voucher':
+          return commitInvoiceVoucherLink(supabase, 'co', 'user-1', {
+            invoiceId: 'inv-1',
+            journalEntryId: 'je-pay',
+            notes: null,
+            businessEvents: LINK,
+          })
+        default:
+          return commitSupplierInvoiceVoucherLink(supabase, 'co', 'user-1', {
+            supplierInvoiceId: 'si-1',
+            journalEntryId: 'je-pay',
+            notes: 'Auto-länkad',
+            businessEvents: LINK,
+          })
+      }
+    },
+  })),
+]
+
+describe.each(EVENT_DOORS)('$name: the posting port\'s event ids', (door) => {
+  it('sends the ids and the mode beside the RPC arguments, in one call', async () => {
+    const { supabase, rpc } = makeSupabase({ data: door.posted })
+
+    const result = await runWithActor({ type: 'user' }, () => door.call(supabase))
+
+    expect(result).toEqual({ data: door.posted, error: null })
+    expect(rpc).toHaveBeenCalledTimes(1)
+    expect(rpc).toHaveBeenCalledWith(door.rpcName, { ...door.rpcArgs, ...EVENTS })
+    expect(emit).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries without the ids when the database predates them, and still books and announces', async () => {
+    const { supabase, rpc } = makeSupabase({ data: door.posted })
+    const missing = { data: null, error: { code: 'PGRST202', message: `Could not find the function public.${door.rpcName}` } }
+    // The actor doors retry once without the actor first (still with the ids).
+    const misses = door.rpcName === 'bulk_book_transactions' ? 1 : 2
+    for (let i = 0; i < misses; i++) rpc.mockResolvedValueOnce(missing)
+
+    const result = await runWithActor({ type: 'user' }, () => door.call(supabase))
+
+    expect(result).toEqual({ data: door.posted, error: null })
+    expect(rpc).toHaveBeenCalledTimes(misses + 1)
+    expect(rpc).toHaveBeenNthCalledWith(1, door.rpcName, { ...door.rpcArgs, ...EVENTS })
+    expect(rpc).toHaveBeenLastCalledWith(door.rpcName, door.rpcArgs)
     expect(emit).toHaveBeenCalledTimes(1)
   })
 })

@@ -34,6 +34,31 @@ export interface BusinessEventLink {
   onFailure: 'log' | 'abort'
 }
 
+/**
+ * The links a SQL posting function writes itself: bulk_book_transactions,
+ * match_batch_allocate, link_invoice_to_voucher,
+ * link_supplier_invoice_to_voucher, create_expense_payout_batch and
+ * commit_opening_balance_replacement draft and commit their verifikat in one
+ * transaction, so the engine cannot link between the two. The port records
+ * the events first and the engine door hands this to the function, which
+ * links each draft it writes before commit_journal_entry draws the number
+ * (public.link_business_events_to_draft, migration 20261018210000). Built by
+ * the port; the engine only passes it on (business-event-rpc.ts).
+ */
+export interface SqlBusinessEventLink {
+  /**
+   * The recorded events' ids, in the order the function reads them (one per
+   * bank line, allocation or claim, or by position); null where an event was
+   * not recorded under shadow.
+   */
+  ids: Array<string | null>
+  /**
+   * strict: a refused link fails the function before a number is drawn.
+   * shadow: it is logged and the posting goes ahead.
+   */
+  mode: 'shadow' | 'strict'
+}
+
 interface DbError {
   code?: string
   message?: string

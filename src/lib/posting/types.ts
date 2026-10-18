@@ -6,7 +6,13 @@ import type { HandleType } from '@/lib/handles/registry'
 import type { CreateJournalEntryInput, CreateJournalEntryLineInput, JournalEntry } from '@/types'
 import type { BusinessEventCategory } from './categories'
 import type { BusinessEventKind } from './kinds'
-import type { BusinessEventEntryRole, BusinessEventLink, BusinessEventPartyType, BusinessEventTaxAmount } from './store'
+import type {
+  BusinessEventEntryRole,
+  BusinessEventLink,
+  BusinessEventPartyType,
+  BusinessEventTaxAmount,
+  SqlBusinessEventLink,
+} from './store'
 
 /**
  * What happened, as a producer describes it to the port. The producer still
@@ -193,6 +199,30 @@ export interface RecordBusinessEventRequest {
 }
 
 /**
+ * The events of verifikat a SQL function drafts and commits itself, in one
+ * transaction (bulk_book_transactions, match_batch_allocate,
+ * link_invoice_to_voucher, link_supplier_invoice_to_voucher,
+ * create_expense_payout_batch, commit_opening_balance_replacement). The port
+ * records them first and answers their ids and the mode; the producer hands
+ * that to its engine door, and the function links each draft it writes
+ * before commit_journal_entry draws the number (migration 20261018210000).
+ * With POSTING_EVENTS off nothing is built or written and the answer is
+ * undefined, so the door calls the function as before.
+ */
+export interface RecordSqlPostingEventsRequest {
+  supabase: SupabaseClient
+  companyId: string
+  /**
+   * The events in the order the function reads their ids (one per bank
+   * line, allocation or claim, or by position). Called only while the port
+   * is on, inside its error handling, so it may read what the events need:
+   * under shadow a failure is logged and nothing is linked, under strict it
+   * throws before the function runs.
+   */
+  events: () => BusinessEventDraft[] | Promise<BusinessEventDraft[]>
+}
+
+/**
  * The posting port: every new posting records its business event here. Step
  * 1 moves one producer (bank-line booking) onto it; step 2 moves the rest.
  * A producer that drafts, does its own work and then commits (kassa,
@@ -200,7 +230,10 @@ export interface RecordBusinessEventRequest {
  * postJournalEntry; a producer whose one business act is several verifikat
  * posted all or none (a salary run) uses postJournalEntrySet; a producer
  * whose verifikat are written in SQL as one job (an SIE import) records the
- * job's one event with recordEvent.
+ * job's one event with recordEvent; a producer whose verifikat a SQL
+ * function drafts and commits (a bulk booking, a batch allocation, a voucher
+ * link's kursdifferens, an utlägg payout, the IB cascade) records its events
+ * with recordEventsForSql and hands their ids to the function.
  */
 export interface PostingPort {
   postJournalEntry(request: PostJournalEntryRequest): Promise<JournalEntry>
@@ -214,6 +247,8 @@ export interface PostingPort {
   reverseJournalEntry(request: ReverseJournalEntryRequest): Promise<JournalEntry>
   /** The event alone, linked to no verifikat: its id, or null when none was recorded; see RecordBusinessEventRequest. */
   recordEvent(request: RecordBusinessEventRequest): Promise<string | null>
+  /** The events a SQL posting function links to its own drafts; see RecordSqlPostingEventsRequest. */
+  recordEventsForSql(request: RecordSqlPostingEventsRequest): Promise<SqlBusinessEventLink | undefined>
 }
 
 /**
