@@ -91,6 +91,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/year-end', () => {
       'company-1',
       'user-1',
       'period-1',
+      expect.any(Function), // what the door saw, read by the posting port only while POSTING_EVENTS is on
     )
   })
 })

@@ -1,0 +1,788 @@
+{
+  "dumps": [
+    {
+      "flow": "accruals: a förutbetald kostnad from a supplier invoice, the months already begun posted at once",
+      "entries": [
+        {
+          "voucher_series": "H",
+          "voucher_number": 1,
+          "entry_date": "2026-01-15",
+          "description": "Periodisering 2026-01: Företagsförsäkring 2026",
+          "source_type": "accrual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "lines": [
+            {
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1000",
+              "account_number": "1710",
+              "line_description": "Periodisering 2026-01: Företagsförsäkring 2026"
+            },
+            {
+              "dimensions": {},
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "account_number": "6310",
+              "line_description": "Periodisering 2026-01: Företagsförsäkring 2026"
+            }
+          ]
+        },
+        {
+          "voucher_series": "H",
+          "voucher_number": 2,
+          "entry_date": "2026-02-01",
+          "description": "Periodisering 2026-02: Företagsförsäkring 2026",
+          "source_type": "accrual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "lines": [
+            {
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1000",
+              "account_number": "1710",
+              "line_description": "Periodisering 2026-02: Företagsförsäkring 2026"
+            },
+            {
+              "dimensions": {},
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "account_number": "6310",
+              "line_description": "Periodisering 2026-02: Företagsförsäkring 2026"
+            }
+          ]
+        },
+        {
+          "voucher_series": "H",
+          "voucher_number": 3,
+          "entry_date": "2026-03-01",
+          "description": "Periodisering 2026-03: Företagsförsäkring 2026",
+          "source_type": "accrual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "lines": [
+            {
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1000",
+              "account_number": "1710",
+              "line_description": "Periodisering 2026-03: Företagsförsäkring 2026"
+            },
+            {
+              "dimensions": {},
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "account_number": "6310",
+              "line_description": "Periodisering 2026-03: Företagsförsäkring 2026"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "accruals: an upplupen kostnad for the months before its invoice, each on the month's last day",
+      "entries": [
+        {
+          "voucher_series": "H",
+          "voucher_number": 1,
+          "entry_date": "2025-11-30",
+          "description": "Periodisering 2025-11: El november och december 2025",
+          "source_type": "accrual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "lines": [
+            {
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "2000",
+              "account_number": "2990",
+              "line_description": "Periodisering 2025-11: El november och december 2025"
+            },
+            {
+              "dimensions": {},
+              "debit_amount": "2000",
+              "credit_amount": "0",
+              "account_number": "5310",
+              "line_description": "Periodisering 2025-11: El november och december 2025"
+            }
+          ]
+        },
+        {
+          "voucher_series": "H",
+          "voucher_number": 2,
+          "entry_date": "2025-12-31",
+          "description": "Periodisering 2025-12: El november och december 2025",
+          "source_type": "accrual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "lines": [
+            {
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "2000",
+              "account_number": "2990",
+              "line_description": "Periodisering 2025-12: El november och december 2025"
+            },
+            {
+              "dimensions": {},
+              "debit_amount": "2000",
+              "credit_amount": "0",
+              "account_number": "5310",
+              "line_description": "Periodisering 2025-12: El november och december 2025"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "accruals: the daily cron posts the months begun since",
+      "entries": [
+        {
+          "voucher_series": "H",
+          "voucher_number": 4,
+          "entry_date": "2026-04-01",
+          "description": "Periodisering 2026-04: Företagsförsäkring 2026",
+          "source_type": "accrual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "lines": [
+            {
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1000",
+              "account_number": "1710",
+              "line_description": "Periodisering 2026-04: Företagsförsäkring 2026"
+            },
+            {
+              "dimensions": {},
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "account_number": "6310",
+              "line_description": "Periodisering 2026-04: Företagsförsäkring 2026"
+            }
+          ]
+        },
+        {
+          "voucher_series": "H",
+          "voucher_number": 5,
+          "entry_date": "2026-05-01",
+          "description": "Periodisering 2026-05: Företagsförsäkring 2026",
+          "source_type": "accrual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "lines": [
+            {
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1000",
+              "account_number": "1710",
+              "line_description": "Periodisering 2026-05: Företagsförsäkring 2026"
+            },
+            {
+              "dimensions": {},
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "account_number": "6310",
+              "line_description": "Periodisering 2026-05: Företagsförsäkring 2026"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "accruals: a förutbetald intäkt from a customer invoice, the months already begun posted at once",
+      "entries": [
+        {
+          "voucher_series": "H",
+          "voucher_number": 6,
+          "entry_date": "2026-02-01",
+          "description": "Periodisering 2026-02: Supportavtal februari till juli 2026",
+          "source_type": "accrual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "lines": [
+            {
+              "dimensions": {},
+              "debit_amount": "4000",
+              "credit_amount": "0",
+              "account_number": "2970",
+              "line_description": "Periodisering 2026-02: Supportavtal februari till juli 2026"
+            },
+            {
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "4000",
+              "account_number": "3001",
+              "line_description": "Periodisering 2026-02: Supportavtal februari till juli 2026"
+            }
+          ]
+        },
+        {
+          "voucher_series": "H",
+          "voucher_number": 7,
+          "entry_date": "2026-03-01",
+          "description": "Periodisering 2026-03: Supportavtal februari till juli 2026",
+          "source_type": "accrual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "lines": [
+            {
+              "dimensions": {},
+              "debit_amount": "4000",
+              "credit_amount": "0",
+              "account_number": "2970",
+              "line_description": "Periodisering 2026-03: Supportavtal februari till juli 2026"
+            },
+            {
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "4000",
+              "account_number": "3001",
+              "line_description": "Periodisering 2026-03: Supportavtal februari till juli 2026"
+            }
+          ]
+        },
+        {
+          "voucher_series": "H",
+          "voucher_number": 8,
+          "entry_date": "2026-04-01",
+          "description": "Periodisering 2026-04: Supportavtal februari till juli 2026",
+          "source_type": "accrual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "lines": [
+            {
+              "dimensions": {},
+              "debit_amount": "4000",
+              "credit_amount": "0",
+              "account_number": "2970",
+              "line_description": "Periodisering 2026-04: Supportavtal februari till juli 2026"
+            },
+            {
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "4000",
+              "account_number": "3001",
+              "line_description": "Periodisering 2026-04: Supportavtal februari till juli 2026"
+            }
+          ]
+        },
+        {
+          "voucher_series": "H",
+          "voucher_number": 9,
+          "entry_date": "2026-05-01",
+          "description": "Periodisering 2026-05: Supportavtal februari till juli 2026",
+          "source_type": "accrual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "lines": [
+            {
+              "dimensions": {},
+              "debit_amount": "4000",
+              "credit_amount": "0",
+              "account_number": "2970",
+              "line_description": "Periodisering 2026-05: Supportavtal februari till juli 2026"
+            },
+            {
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "4000",
+              "account_number": "3001",
+              "line_description": "Periodisering 2026-05: Supportavtal februari till juli 2026"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "accruals: the rest of the förutbetald intäkt dissolved now, in one verifikat",
+      "entries": [
+        {
+          "voucher_series": "H",
+          "voucher_number": 10,
+          "entry_date": "2026-06-10",
+          "description": "Periodisering, slutupplösning: Supportavtal februari till juli 2026",
+          "source_type": "accrual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "lines": [
+            {
+              "dimensions": {},
+              "debit_amount": "8000",
+              "credit_amount": "0",
+              "account_number": "2970",
+              "line_description": "Periodisering, slutupplösning: Supportavtal februari till juli 2026"
+            },
+            {
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "8000",
+              "account_number": "3001",
+              "line_description": "Periodisering, slutupplösning: Supportavtal februari till juli 2026"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "accruals: the supplier invoice credited, every posted dissolution stornoed on the credit date",
+      "entries": [
+        {
+          "voucher_series": "H",
+          "voucher_number": null,
+          "entry_date": "2026-06-15",
+          "description": "Makulering: Periodisering 2026-01: Företagsförsäkring 2026",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "reverses": "H1",
+          "lines": [
+            {
+              "dimensions": {},
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "account_number": "1710",
+              "line_description": "Reversal: Periodisering 2026-01: Företagsförsäkring 2026"
+            },
+            {
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1000",
+              "account_number": "6310",
+              "line_description": "Reversal: Periodisering 2026-01: Företagsförsäkring 2026"
+            }
+          ]
+        },
+        {
+          "voucher_series": "H",
+          "voucher_number": null,
+          "entry_date": "2026-06-15",
+          "description": "Makulering: Periodisering 2026-02: Företagsförsäkring 2026",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "reverses": "H2",
+          "lines": [
+            {
+              "dimensions": {},
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "account_number": "1710",
+              "line_description": "Reversal: Periodisering 2026-02: Företagsförsäkring 2026"
+            },
+            {
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1000",
+              "account_number": "6310",
+              "line_description": "Reversal: Periodisering 2026-02: Företagsförsäkring 2026"
+            }
+          ]
+        },
+        {
+          "voucher_series": "H",
+          "voucher_number": null,
+          "entry_date": "2026-06-15",
+          "description": "Makulering: Periodisering 2026-03: Företagsförsäkring 2026",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "reverses": "H3",
+          "lines": [
+            {
+              "dimensions": {},
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "account_number": "1710",
+              "line_description": "Reversal: Periodisering 2026-03: Företagsförsäkring 2026"
+            },
+            {
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1000",
+              "account_number": "6310",
+              "line_description": "Reversal: Periodisering 2026-03: Företagsförsäkring 2026"
+            }
+          ]
+        },
+        {
+          "voucher_series": "H",
+          "voucher_number": null,
+          "entry_date": "2026-06-15",
+          "description": "Makulering: Periodisering 2026-04: Företagsförsäkring 2026",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "reverses": "H4",
+          "lines": [
+            {
+              "dimensions": {},
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "account_number": "1710",
+              "line_description": "Reversal: Periodisering 2026-04: Företagsförsäkring 2026"
+            },
+            {
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1000",
+              "account_number": "6310",
+              "line_description": "Reversal: Periodisering 2026-04: Företagsförsäkring 2026"
+            }
+          ]
+        },
+        {
+          "voucher_series": "H",
+          "voucher_number": null,
+          "entry_date": "2026-06-15",
+          "description": "Makulering: Periodisering 2026-05: Företagsförsäkring 2026",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "reverses": "H5",
+          "lines": [
+            {
+              "dimensions": {},
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "account_number": "1710",
+              "line_description": "Reversal: Periodisering 2026-05: Företagsförsäkring 2026"
+            },
+            {
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1000",
+              "account_number": "6310",
+              "line_description": "Reversal: Periodisering 2026-05: Företagsförsäkring 2026"
+            }
+          ]
+        }
+      ],
+      "voucherNumbers": [
+        11,
+        12,
+        13,
+        14,
+        15
+      ]
+    },
+    {
+      "flow": "year-end accruals: periodiseringar at balansdagen from the year-end wizard",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 1,
+          "entry_date": "2025-12-31",
+          "description": "Periodisering: Beräknat arvode för revision (vänds 2026-01-01)",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "lines": [
+            {
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "15000",
+              "account_number": "2992",
+              "line_description": "Beräknat arvode revision"
+            },
+            {
+              "dimensions": {},
+              "debit_amount": "15000",
+              "credit_amount": "0",
+              "account_number": "6420",
+              "line_description": "Beräknat revisionsarvode"
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 2,
+          "entry_date": "2025-12-31",
+          "description": "Periodisering: Förutbetald kostnad: Hyra januari 2026 (vänds 2026-01-01)",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "lines": [
+            {
+              "dimensions": {},
+              "debit_amount": "6000",
+              "credit_amount": "0",
+              "account_number": "1710",
+              "line_description": "Förutbetald: Hyra januari 2026"
+            },
+            {
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "6000",
+              "account_number": "5010",
+              "line_description": "Periodisering ut: Hyra januari 2026"
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 3,
+          "entry_date": "2025-12-31",
+          "description": "Periodisering: Upplupen kostnad: Telefoni december (vänds 2026-01-01)",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "lines": [
+            {
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "3000",
+              "account_number": "2990",
+              "line_description": "Upplupen: Telefoni december"
+            },
+            {
+              "dimensions": {},
+              "debit_amount": "3000",
+              "credit_amount": "0",
+              "account_number": "6212",
+              "line_description": "Periodisering in: Telefoni december"
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 4,
+          "entry_date": "2025-12-31",
+          "description": "Periodisering: Förutbetald intäkt: Förskott kurs (vänds 2026-01-01)",
+          "source_type": "manual",
+          "status": "posted",
+          "notes": null,
+          "reverses": null,
+          "lines": [
+            {
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "2000",
+              "account_number": "2970",
+              "line_description": "Förutbetald intäkt: Förskott kurs"
+            },
+            {
+              "dimensions": {},
+              "debit_amount": "2000",
+              "credit_amount": "0",
+              "account_number": "3001",
+              "line_description": "Periodisering intäkt ut: Förskott kurs"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "register": {
+    "schedules": [
+      {
+        "direction": "expense",
+        "balance_account": "1710",
+        "target_account": "6310",
+        "total_amount": "12000.00",
+        "months": 12,
+        "status": "cancelled",
+        "posting_floor_date": "2026-01-15",
+        "description": "Företagsförsäkring 2026"
+      },
+      {
+        "direction": "expense",
+        "balance_account": "2990",
+        "target_account": "5310",
+        "total_amount": "4000.00",
+        "months": 2,
+        "status": "completed",
+        "posting_floor_date": "2026-01-10",
+        "description": "El november och december 2025"
+      },
+      {
+        "direction": "revenue",
+        "balance_account": "2970",
+        "target_account": "3001",
+        "total_amount": "24000.00",
+        "months": 6,
+        "status": "completed",
+        "posting_floor_date": "2026-02-01",
+        "description": "Supportavtal februari till juli 2026"
+      }
+    ],
+    "installments": [
+      {
+        "schedule": "Företagsförsäkring 2026",
+        "period_month": "2026-01-01",
+        "amount": "1000.00",
+        "status": "posted",
+        "voucher": "H1",
+        "last_error": null
+      },
+      {
+        "schedule": "Företagsförsäkring 2026",
+        "period_month": "2026-02-01",
+        "amount": "1000.00",
+        "status": "posted",
+        "voucher": "H2",
+        "last_error": null
+      },
+      {
+        "schedule": "Företagsförsäkring 2026",
+        "period_month": "2026-03-01",
+        "amount": "1000.00",
+        "status": "posted",
+        "voucher": "H3",
+        "last_error": null
+      },
+      {
+        "schedule": "Företagsförsäkring 2026",
+        "period_month": "2026-04-01",
+        "amount": "1000.00",
+        "status": "posted",
+        "voucher": "H4",
+        "last_error": null
+      },
+      {
+        "schedule": "Företagsförsäkring 2026",
+        "period_month": "2026-05-01",
+        "amount": "1000.00",
+        "status": "posted",
+        "voucher": "H5",
+        "last_error": null
+      },
+      {
+        "schedule": "Företagsförsäkring 2026",
+        "period_month": "2026-06-01",
+        "amount": "1000.00",
+        "status": "cancelled",
+        "voucher": null,
+        "last_error": null
+      },
+      {
+        "schedule": "Företagsförsäkring 2026",
+        "period_month": "2026-07-01",
+        "amount": "1000.00",
+        "status": "cancelled",
+        "voucher": null,
+        "last_error": null
+      },
+      {
+        "schedule": "Företagsförsäkring 2026",
+        "period_month": "2026-08-01",
+        "amount": "1000.00",
+        "status": "cancelled",
+        "voucher": null,
+        "last_error": null
+      },
+      {
+        "schedule": "Företagsförsäkring 2026",
+        "period_month": "2026-09-01",
+        "amount": "1000.00",
+        "status": "cancelled",
+        "voucher": null,
+        "last_error": null
+      },
+      {
+        "schedule": "Företagsförsäkring 2026",
+        "period_month": "2026-10-01",
+        "amount": "1000.00",
+        "status": "cancelled",
+        "voucher": null,
+        "last_error": null
+      },
+      {
+        "schedule": "Företagsförsäkring 2026",
+        "period_month": "2026-11-01",
+        "amount": "1000.00",
+        "status": "cancelled",
+        "voucher": null,
+        "last_error": null
+      },
+      {
+        "schedule": "Företagsförsäkring 2026",
+        "period_month": "2026-12-01",
+        "amount": "1000.00",
+        "status": "cancelled",
+        "voucher": null,
+        "last_error": null
+      },
+      {
+        "schedule": "El november och december 2025",
+        "period_month": "2025-11-01",
+        "amount": "2000.00",
+        "status": "posted",
+        "voucher": "H1",
+        "last_error": null
+      },
+      {
+        "schedule": "El november och december 2025",
+        "period_month": "2025-12-01",
+        "amount": "2000.00",
+        "status": "posted",
+        "voucher": "H2",
+        "last_error": null
+      },
+      {
+        "schedule": "Supportavtal februari till juli 2026",
+        "period_month": "2026-02-01",
+        "amount": "4000.00",
+        "status": "posted",
+        "voucher": "H6",
+        "last_error": null
+      },
+      {
+        "schedule": "Supportavtal februari till juli 2026",
+        "period_month": "2026-03-01",
+        "amount": "4000.00",
+        "status": "posted",
+        "voucher": "H7",
+        "last_error": null
+      },
+      {
+        "schedule": "Supportavtal februari till juli 2026",
+        "period_month": "2026-04-01",
+        "amount": "4000.00",
+        "status": "posted",
+        "voucher": "H8",
+        "last_error": null
+      },
+      {
+        "schedule": "Supportavtal februari till juli 2026",
+        "period_month": "2026-05-01",
+        "amount": "4000.00",
+        "status": "posted",
+        "voucher": "H9",
+        "last_error": null
+      },
+      {
+        "schedule": "Supportavtal februari till juli 2026",
+        "period_month": "2026-06-01",
+        "amount": "4000.00",
+        "status": "posted",
+        "voucher": "H10",
+        "last_error": null
+      },
+      {
+        "schedule": "Supportavtal februari till juli 2026",
+        "period_month": "2026-07-01",
+        "amount": "4000.00",
+        "status": "posted",
+        "voucher": "H10",
+        "last_error": null
+      }
+    ]
+  }
+}

@@ -1,0 +1,770 @@
+{
+  "dumps": [
+    {
+      "flow": "aktiebolag: bokslutsdispositioner from the year-end wizard (periodiseringsfond, then bolagsskatt)",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 5,
+          "entry_date": "2025-12-31",
+          "description": "Bokslutsdisposition: Avsättning till periodiseringsfond 2025",
+          "source_type": "year_end",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "20250",
+              "exchange_rate": null,
+              "account_number": "2125",
+              "line_description": "Periodiseringsfond 2025",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "20250",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "8811",
+              "line_description": "Avsättning periodiseringsfond 2025",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 6,
+          "entry_date": "2025-12-31",
+          "description": "Bokslutsdisposition: Bolagsskatt 20,6 %",
+          "source_type": "year_end",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "12515",
+              "exchange_rate": null,
+              "account_number": "2512",
+              "line_description": "Beräknad inkomstskatt",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "12515",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "8910",
+              "line_description": "Bolagsskatt 20,6 % på 60750 kr",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "aktiebolag: the year-end close from the wizard (balansdagen revaluation, bokslutsverifikation, ingående balans, omföring)",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 1,
+          "entry_date": "2026-01-01",
+          "description": "Ingående balans 2026",
+          "source_type": "opening_balance",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "11500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Ingående balans: Kundfordringar",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "112500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Ingående balans: Företagskonto",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "25000",
+              "exchange_rate": null,
+              "account_number": "2081",
+              "line_description": "Ingående balans: Aktiekapital",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "48735",
+              "exchange_rate": null,
+              "account_number": "2099",
+              "line_description": "Ingående balans: Årets resultat",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "20250",
+              "exchange_rate": null,
+              "account_number": "2125",
+              "line_description": "Ingående balans: Periodiseringsfond 2025",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "12515",
+              "exchange_rate": null,
+              "account_number": "2512",
+              "line_description": "Ingående balans: Beräknad inkomstskatt",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "25000",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": "Ingående balans: Utgående moms på försäljning inom Sverige, 25 %",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "7500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående balans: Debiterad ingående moms",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 2,
+          "entry_date": "2026-01-01",
+          "description": "Omföring av föregående års resultat (2099 → 2098)",
+          "source_type": "result_appropriation",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "48735",
+              "exchange_rate": null,
+              "account_number": "2098",
+              "line_description": "Föregående års resultat",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "48735",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2099",
+              "line_description": "Omföring av föregående års resultat",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 7,
+          "entry_date": "2025-12-31",
+          "description": "Omvärdering utländsk valuta 2025-12-31",
+          "source_type": "currency_revaluation",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Omvärdering kundfordringar: orealiserad kursvinst",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "500",
+              "exchange_rate": null,
+              "account_number": "3960",
+              "line_description": "Orealiserade valutakursvinster",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 8,
+          "entry_date": "2025-12-31",
+          "description": "Årsbokslut 2025",
+          "source_type": "year_end",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "48735",
+              "exchange_rate": null,
+              "account_number": "2099",
+              "line_description": "Årets resultat → Årets resultat",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "111000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": "Closing: Försäljning inom Sverige, 25 % moms",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "3960",
+              "line_description": "Closing: Valutakursvinster på fordringar och skulder av rörelsekaraktär",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "30000",
+              "exchange_rate": null,
+              "account_number": "5010",
+              "line_description": "Closing: Lokalhyra",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "20250",
+              "exchange_rate": null,
+              "account_number": "8811",
+              "line_description": "Closing: Avsättning till periodiseringsfond",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "12515",
+              "exchange_rate": null,
+              "account_number": "8910",
+              "line_description": "Closing: Skatt som belastar årets resultat",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "enskild firma: the kontantmetod cut-off approved from a staged operation (fordringar and skulder with their vändningar)",
+      "entries": [
+        {
+          "voucher_series": "I",
+          "voucher_number": 1,
+          "entry_date": "2025-12-31",
+          "description": "Kundfordringar vid bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "status": "posted",
+          "notes": "Kundfordringar (1 st): F-10",
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "10000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Kundfordringar vid räkenskapsårets utgång (kontantmetoden)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "2000",
+              "exchange_rate": null,
+              "account_number": "2618",
+              "line_description": "Utgående moms på obetald faktura vid bokslut",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "8000",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": "Obetalda kundfakturor vid bokslut",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "I",
+          "voucher_number": 1,
+          "entry_date": "2026-01-01",
+          "description": "Vändning kundfordringar bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "status": "posted",
+          "notes": "Vändning kundfordringar (1 st): F-10",
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "10000",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Vändning: Kundfordringar vid räkenskapsårets utgång (kontantmetoden)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "2000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2618",
+              "line_description": "Vändning: Utgående moms på obetald faktura vid bokslut",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "8000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": "Vändning: Obetalda kundfakturor vid bokslut",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "I",
+          "voucher_number": 2,
+          "entry_date": "2025-12-31",
+          "description": "Leverantörsskulder vid bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "status": "posted",
+          "notes": "Leverantörsskulder (1 st): L-1",
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "2500",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Leverantörsskulder vid räkenskapsårets utgång (kontantmetoden)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2648",
+              "line_description": "Ingående moms på obetald faktura vid bokslut",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "2000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "4010",
+              "line_description": "Obetalda leverantörsfakturor vid bokslut",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "I",
+          "voucher_number": 2,
+          "entry_date": "2026-01-01",
+          "description": "Vändning leverantörsskulder bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "status": "posted",
+          "notes": "Vändning leverantörsskulder (1 st): L-1",
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "2500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Vändning: Leverantörsskulder vid räkenskapsårets utgång (kontantmetoden)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "500",
+              "exchange_rate": null,
+              "account_number": "2648",
+              "line_description": "Vändning: Ingående moms på obetald faktura vid bokslut",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "2000",
+              "exchange_rate": null,
+              "account_number": "4010",
+              "line_description": "Vändning: Obetalda leverantörsfakturor vid bokslut",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "enskild firma: the year-end close approved from a staged operation (into 2010, no omföring)",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 1,
+          "entry_date": "2026-01-01",
+          "description": "Ingående balans 2026",
+          "source_type": "opening_balance",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "10000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Ingående balans: Kundfordringar",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "7500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Ingående balans: Företagskonto",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "12000",
+              "exchange_rate": null,
+              "account_number": "2010",
+              "line_description": "Ingående balans: Eget kapital",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "2500",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Ingående balans: Leverantörsskulder",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "2500",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": "Ingående balans: Utgående moms på försäljning inom Sverige, 25 %",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "2000",
+              "exchange_rate": null,
+              "account_number": "2618",
+              "line_description": "Ingående balans: Vilande utgående moms, 25 %",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående balans: Debiterad ingående moms",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2648",
+              "line_description": "Ingående balans: Vilande ingående moms",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 3,
+          "entry_date": "2025-12-31",
+          "description": "Årsbokslut 2025",
+          "source_type": "year_end",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "12000",
+              "exchange_rate": null,
+              "account_number": "2010",
+              "line_description": "Årets resultat → Eget kapital",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "18000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": "Closing: Försäljning inom Sverige, 25 % moms",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "6000",
+              "exchange_rate": null,
+              "account_number": "4010",
+              "line_description": "Closing: Inköp av handelsvaror i Sverige",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "migrated aktiebolag: the historical omföring of the 2099 its imported ingående balans carries",
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 2,
+          "entry_date": "2026-01-01",
+          "description": "Omföring av föregående års resultat (2099 → 2098)",
+          "source_type": "result_appropriation",
+          "status": "posted",
+          "notes": "Underlag: ingående balans, verifikat A1 (<id>). Historisk rättelse av kvarliggande föregående års resultat på 2099.",
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "25000",
+              "exchange_rate": null,
+              "account_number": "2098",
+              "line_description": "Föregående års resultat",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "25000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2099",
+              "line_description": "Omföring av föregående års resultat",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "register": {
+    "periods": [
+      {
+        "company": "aktiebolag",
+        "name": "2025",
+        "is_closed": true,
+        "locked": true,
+        "continuity_verified": null,
+        "closing_voucher": "A8",
+        "opening_voucher": null
+      },
+      {
+        "company": "aktiebolag",
+        "name": "2026",
+        "is_closed": false,
+        "locked": false,
+        "continuity_verified": true,
+        "closing_voucher": null,
+        "opening_voucher": "A1"
+      },
+      {
+        "company": "enskild firma",
+        "name": "2025",
+        "is_closed": true,
+        "locked": true,
+        "continuity_verified": null,
+        "closing_voucher": "A3",
+        "opening_voucher": null
+      },
+      {
+        "company": "enskild firma",
+        "name": "2026",
+        "is_closed": false,
+        "locked": false,
+        "continuity_verified": true,
+        "closing_voucher": null,
+        "opening_voucher": "A1"
+      },
+      {
+        "company": "migrated",
+        "name": "2026",
+        "is_closed": false,
+        "locked": false,
+        "continuity_verified": null,
+        "closing_voucher": null,
+        "opening_voucher": "A1"
+      }
+    ],
+    "cutoffMarkers": [
+      {
+        "kind": "payable",
+        "voucher": "I2",
+        "status": "posted"
+      },
+      {
+        "kind": "payable_reversal",
+        "voucher": "I2",
+        "status": "posted"
+      },
+      {
+        "kind": "receivable",
+        "voucher": "I1",
+        "status": "posted"
+      },
+      {
+        "kind": "receivable_reversal",
+        "voucher": "I1",
+        "status": "posted"
+      }
+    ],
+    "operations": [
+      {
+        "operation_type": "post_kontantmetod_cutoff",
+        "status": "committed"
+      },
+      {
+        "operation_type": "run_year_end",
+        "status": "committed"
+      }
+    ]
+  }
+}

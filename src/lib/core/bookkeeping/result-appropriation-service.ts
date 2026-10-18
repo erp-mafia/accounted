@@ -1,6 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveCompanyEntityType, resultClosingAccounts } from '@/lib/company/entity-type'
-import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { roundOre, ORE_TOLERANCE } from '@/lib/bokslut/rounding'
 import { addDaysIso } from '@/lib/dates/iso'
 import { createLogger } from '@/lib/logger'
@@ -12,6 +11,8 @@ import type {
 } from '@/types'
 import { carryAfterDispositions, priorResultCarry, type PriorResultCarry } from './prior-result-carry'
 import { findNextPeriod } from './period-service'
+import { postingPort } from '@/lib/posting/port'
+import { resultAppropriationBusinessEvent, type YearEndPostingContext } from './year-end-business-events'
 
 const log = createLogger('result-appropriation-service')
 
@@ -258,23 +259,40 @@ export async function previewResultAppropriation(
  * Idempotent / AB-only: see planResultAppropriation for the no-op conditions.
  * Powers both executeYearEndClosing (steady state) and the retroactive
  * catch-up script (clears any accumulated 2099 in a company's open period).
+ *
+ * Posting port (step 2g): the verifikat goes through lib/posting, which
+ * records year_end.result_appropriated (subject the opened year) only while
+ * POSTING_EVENTS is on; `posting` is what the close's door saw.
  */
 export async function generateResultAppropriation(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
   periodId: string,
+  posting?: () => YearEndPostingContext,
 ): Promise<JournalEntry | null> {
   const plan = await planResultAppropriation(supabase, companyId, periodId)
   if (!plan) return null
 
-  const entry = await createJournalEntry(supabase, companyId, userId, {
-    fiscal_period_id: periodId,
-    entry_date: plan.periodStart,
-    description: `Omföring av föregående års resultat (${plan.resultAccount} → ${plan.priorResultAccount})`,
-    source_type: 'result_appropriation',
-    voucher_series: 'A',
-    lines: plan.lines,
+  const entry = await postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    event: () =>
+      resultAppropriationBusinessEvent({
+        fiscalPeriodId: periodId,
+        periodStart: plan.periodStart,
+        amount: plan.amount,
+        linkBasis: posting?.().linkBasis,
+      }),
+    input: {
+      fiscal_period_id: periodId,
+      entry_date: plan.periodStart,
+      description: `Omföring av föregående års resultat (${plan.resultAccount} → ${plan.priorResultAccount})`,
+      source_type: 'result_appropriation',
+      voucher_series: 'A',
+      lines: plan.lines,
+    },
   })
 
   log.info('Posted result appropriation omföring', {

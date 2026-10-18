@@ -129,6 +129,11 @@ export const KERNEL_INNER_MODULES = [
   'lib/events/types',
   'lib/invariants/', // the shared format contracts hand-rolled-invariant points at
   'lib/links/link-basis', // the link-basis vocabulary: constants, a Zod schema and pure functions, no business logic
+  // The posting port: the ledger's own write door (business events, the
+  // ledger adapter over the engine, the closed kind and category lists).
+  // Step 3 of Phase 2 lets only it call the engine, so the kernel's own
+  // producers (the year-end close, the cut-off, storno) post through it.
+  'lib/posting/',
   'lib/logger',
   'lib/money',
   'lib/observability/',

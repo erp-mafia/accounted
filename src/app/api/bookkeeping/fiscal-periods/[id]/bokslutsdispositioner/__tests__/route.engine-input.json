@@ -1,0 +1,160 @@
+[
+  {
+    "name": "bolagsskatt and an avsättning sent in that order: booked avsättning first, bolagsskatt last",
+    "createJournalEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Bokslutsdisposition: Avsättning till periodiseringsfond 2025",
+          "source_type": "year_end",
+          "voucher_series": "A",
+          "lines": [
+            {
+              "account_number": "8811",
+              "debit_amount": 20250,
+              "credit_amount": 0,
+              "line_description": "Avsättning till periodiseringsfond 2025"
+            },
+            {
+              "account_number": "2125",
+              "debit_amount": 0,
+              "credit_amount": 20250,
+              "line_description": "Avsättning till periodiseringsfond 2025"
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Bokslutsdisposition: Bolagsskatt 20,6 %",
+          "source_type": "year_end",
+          "source_id": "00000000-0000-4000-8000-00000000f001",
+          "voucher_series": "A",
+          "lines": [
+            {
+              "account_number": "8910",
+              "debit_amount": 12515,
+              "credit_amount": 0,
+              "line_description": "Bolagsskatt 20,6 %"
+            },
+            {
+              "account_number": "2512",
+              "debit_amount": 0,
+              "credit_amount": 12515,
+              "line_description": "Bolagsskatt 20,6 %"
+            }
+          ]
+        }
+      ]
+    ]
+  },
+  {
+    "name": "two fonder returned in one verifikat, an överavskrivning and the särskild löneskatt",
+    "createJournalEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Bokslutsdisposition: Återföring periodiseringsfond",
+          "source_type": "year_end",
+          "voucher_series": "A",
+          "lines": [
+            {
+              "account_number": "2129",
+              "debit_amount": 8000,
+              "credit_amount": 0,
+              "line_description": "Återföring periodiseringsfond 2019"
+            },
+            {
+              "account_number": "8819",
+              "debit_amount": 0,
+              "credit_amount": 8000,
+              "line_description": "Återföring periodiseringsfond 2019"
+            },
+            {
+              "account_number": "2120",
+              "debit_amount": 4500,
+              "credit_amount": 0,
+              "line_description": "Återföring periodiseringsfond 2020"
+            },
+            {
+              "account_number": "8819",
+              "debit_amount": 0,
+              "credit_amount": 4500,
+              "line_description": "Återföring periodiseringsfond 2020"
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Bokslutsdisposition: Ökning av överavskrivningar (maskiner & inventarier)",
+          "source_type": "year_end",
+          "voucher_series": "A",
+          "lines": [
+            {
+              "account_number": "8853",
+              "debit_amount": 8000,
+              "credit_amount": 0,
+              "line_description": "Förändring av överavskrivningar"
+            },
+            {
+              "account_number": "2153",
+              "debit_amount": 0,
+              "credit_amount": 8000,
+              "line_description": "Ackumulerade överavskrivningar"
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Bokslutsdisposition: Särskild löneskatt på pensionskostnader",
+          "source_type": "year_end",
+          "voucher_series": "A",
+          "lines": [
+            {
+              "account_number": "7533",
+              "debit_amount": 2426,
+              "credit_amount": 0,
+              "line_description": "Särskild löneskatt på pensionskostnader"
+            },
+            {
+              "account_number": "2514",
+              "debit_amount": 0,
+              "credit_amount": 2426,
+              "line_description": "Särskild löneskatt på pensionskostnader"
+            }
+          ]
+        }
+      ]
+    ]
+  }
+]

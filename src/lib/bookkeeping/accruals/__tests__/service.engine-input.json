@@ -1,0 +1,423 @@
+[
+  {
+    "name": "a förutbetald kostnad created: January on the posting floor, February and March on the first of the month",
+    "calls": [
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f026",
+          "entry_date": "2026-01-15",
+          "description": "Periodisering 2026-01: Företagsförsäkring 2026",
+          "source_type": "accrual",
+          "source_id": "00000000-0000-4000-8000-0000000a5001",
+          "lines": [
+            {
+              "account_number": "6310",
+              "debit_amount": 1000,
+              "credit_amount": 0,
+              "line_description": "Periodisering 2026-01: Företagsförsäkring 2026"
+            },
+            {
+              "account_number": "1710",
+              "debit_amount": 0,
+              "credit_amount": 1000,
+              "line_description": "Periodisering 2026-01: Företagsförsäkring 2026"
+            }
+          ]
+        }
+      ],
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f026",
+          "entry_date": "2026-02-01",
+          "description": "Periodisering 2026-02: Företagsförsäkring 2026",
+          "source_type": "accrual",
+          "source_id": "00000000-0000-4000-8000-0000000a5001",
+          "lines": [
+            {
+              "account_number": "6310",
+              "debit_amount": 1000,
+              "credit_amount": 0,
+              "line_description": "Periodisering 2026-02: Företagsförsäkring 2026"
+            },
+            {
+              "account_number": "1710",
+              "debit_amount": 0,
+              "credit_amount": 1000,
+              "line_description": "Periodisering 2026-02: Företagsförsäkring 2026"
+            }
+          ]
+        }
+      ],
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f026",
+          "entry_date": "2026-03-01",
+          "description": "Periodisering 2026-03: Företagsförsäkring 2026",
+          "source_type": "accrual",
+          "source_id": "00000000-0000-4000-8000-0000000a5001",
+          "lines": [
+            {
+              "account_number": "6310",
+              "debit_amount": 1000,
+              "credit_amount": 0,
+              "line_description": "Periodisering 2026-03: Företagsförsäkring 2026"
+            },
+            {
+              "account_number": "1710",
+              "debit_amount": 0,
+              "credit_amount": 1000,
+              "line_description": "Periodisering 2026-03: Företagsförsäkring 2026"
+            }
+          ]
+        }
+      ]
+    ]
+  },
+  {
+    "name": "an upplupen kostnad created: each month on its last day, before the invoice",
+    "calls": [
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f025",
+          "entry_date": "2025-11-30",
+          "description": "Periodisering 2025-11: El november och december 2025",
+          "source_type": "accrual",
+          "source_id": "00000000-0000-4000-8000-0000000a5001",
+          "lines": [
+            {
+              "account_number": "5310",
+              "debit_amount": 2000,
+              "credit_amount": 0,
+              "line_description": "Periodisering 2025-11: El november och december 2025"
+            },
+            {
+              "account_number": "2990",
+              "debit_amount": 0,
+              "credit_amount": 2000,
+              "line_description": "Periodisering 2025-11: El november och december 2025"
+            }
+          ]
+        }
+      ],
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f025",
+          "entry_date": "2025-12-31",
+          "description": "Periodisering 2025-12: El november och december 2025",
+          "source_type": "accrual",
+          "source_id": "00000000-0000-4000-8000-0000000a5001",
+          "lines": [
+            {
+              "account_number": "5310",
+              "debit_amount": 2000,
+              "credit_amount": 0,
+              "line_description": "Periodisering 2025-12: El november och december 2025"
+            },
+            {
+              "account_number": "2990",
+              "debit_amount": 0,
+              "credit_amount": 2000,
+              "line_description": "Periodisering 2025-12: El november och december 2025"
+            }
+          ]
+        }
+      ]
+    ]
+  },
+  {
+    "name": "a förutbetald intäkt created on a project: its bag on both lines",
+    "calls": [
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f026",
+          "entry_date": "2026-02-01",
+          "description": "Periodisering 2026-02: Supportavtal februari till juli 2026",
+          "source_type": "accrual",
+          "source_id": "00000000-0000-4000-8000-0000000a5001",
+          "lines": [
+            {
+              "account_number": "2970",
+              "debit_amount": 4000,
+              "credit_amount": 0,
+              "line_description": "Periodisering 2026-02: Supportavtal februari till juli 2026",
+              "dimensions": {
+                "6": "P-100"
+              }
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 4000,
+              "line_description": "Periodisering 2026-02: Supportavtal februari till juli 2026",
+              "dimensions": {
+                "6": "P-100"
+              }
+            }
+          ]
+        }
+      ],
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f026",
+          "entry_date": "2026-03-01",
+          "description": "Periodisering 2026-03: Supportavtal februari till juli 2026",
+          "source_type": "accrual",
+          "source_id": "00000000-0000-4000-8000-0000000a5001",
+          "lines": [
+            {
+              "account_number": "2970",
+              "debit_amount": 4000,
+              "credit_amount": 0,
+              "line_description": "Periodisering 2026-03: Supportavtal februari till juli 2026",
+              "dimensions": {
+                "6": "P-100"
+              }
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 4000,
+              "line_description": "Periodisering 2026-03: Supportavtal februari till juli 2026",
+              "dimensions": {
+                "6": "P-100"
+              }
+            }
+          ]
+        }
+      ]
+    ]
+  },
+  {
+    "name": "the cron posts a month a concurrent runner claimed first: the duplicate stornoed as the schedule's creator",
+    "calls": [
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a002",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f026",
+          "entry_date": "2026-04-01",
+          "description": "Periodisering 2026-04: Företagsförsäkring 2026",
+          "source_type": "accrual",
+          "source_id": "00000000-0000-4000-8000-0000000a5001",
+          "lines": [
+            {
+              "account_number": "6310",
+              "debit_amount": 1000,
+              "credit_amount": 0,
+              "line_description": "Periodisering 2026-04: Företagsförsäkring 2026"
+            },
+            {
+              "account_number": "1710",
+              "debit_amount": 0,
+              "credit_amount": 1000,
+              "line_description": "Periodisering 2026-04: Företagsförsäkring 2026"
+            }
+          ]
+        }
+      ],
+      [
+        "reverseEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a002",
+        "je-1"
+      ]
+    ]
+  },
+  {
+    "name": "Bokför förfallna whose claim fails: the month stornoed and left pending",
+    "calls": [
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f026",
+          "entry_date": "2026-04-01",
+          "description": "Periodisering 2026-04: Företagsförsäkring 2026",
+          "source_type": "accrual",
+          "source_id": "00000000-0000-4000-8000-0000000a5001",
+          "lines": [
+            {
+              "account_number": "6310",
+              "debit_amount": 1000,
+              "credit_amount": 0,
+              "line_description": "Periodisering 2026-04: Företagsförsäkring 2026"
+            },
+            {
+              "account_number": "1710",
+              "debit_amount": 0,
+              "credit_amount": 1000,
+              "line_description": "Periodisering 2026-04: Företagsförsäkring 2026"
+            }
+          ]
+        }
+      ],
+      [
+        "reverseEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-1"
+      ]
+    ]
+  },
+  {
+    "name": "the rest dissolved now in one verifikat",
+    "calls": [
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f026",
+          "entry_date": "2026-06-10",
+          "description": "Periodisering, slutupplösning: Supportavtal februari till juli 2026",
+          "source_type": "accrual",
+          "source_id": "00000000-0000-4000-8000-0000000a5001",
+          "lines": [
+            {
+              "account_number": "2970",
+              "debit_amount": 8000,
+              "credit_amount": 0,
+              "line_description": "Periodisering, slutupplösning: Supportavtal februari till juli 2026",
+              "dimensions": {
+                "6": "P-100"
+              }
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 8000,
+              "line_description": "Periodisering, slutupplösning: Supportavtal februari till juli 2026",
+              "dimensions": {
+                "6": "P-100"
+              }
+            }
+          ]
+        }
+      ]
+    ]
+  },
+  {
+    "name": "the rest dissolved now while the cron posted a month: the combined verifikat stornoed",
+    "calls": [
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f026",
+          "entry_date": "2026-06-10",
+          "description": "Periodisering, slutupplösning: Supportavtal februari till juli 2026",
+          "source_type": "accrual",
+          "source_id": "00000000-0000-4000-8000-0000000a5001",
+          "lines": [
+            {
+              "account_number": "2970",
+              "debit_amount": 8000,
+              "credit_amount": 0,
+              "line_description": "Periodisering, slutupplösning: Supportavtal februari till juli 2026",
+              "dimensions": {
+                "6": "P-100"
+              }
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 8000,
+              "line_description": "Periodisering, slutupplösning: Supportavtal februari till juli 2026",
+              "dimensions": {
+                "6": "P-100"
+              }
+            }
+          ]
+        }
+      ],
+      [
+        "reverseEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-1"
+      ]
+    ]
+  },
+  {
+    "name": "the invoice credited: each posted month stornoed, on the credit date inside its own year, else on its own date",
+    "calls": [
+      [
+        "reverseEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-nov"
+      ],
+      [
+        "reverseEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-dec"
+      ],
+      [
+        "reverseEntry",
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-jan",
+        "2026-02-20"
+      ]
+    ]
+  }
+]

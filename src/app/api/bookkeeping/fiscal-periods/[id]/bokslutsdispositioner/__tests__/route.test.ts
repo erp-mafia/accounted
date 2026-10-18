@@ -497,6 +497,9 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner', () =
       'company-1',
       'user-1',
       expect.objectContaining({ source_id: 'period-1' }),
+      // The posting port's ledger adapter passes commitMethod and rubricVersion, undefined as before.
+      undefined,
+      undefined,
     )
   })
 
@@ -609,6 +612,9 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner', () =
           },
         ],
       }),
+      // The posting port's ledger adapter passes commitMethod and rubricVersion, undefined as before.
+      undefined,
+      undefined,
     )
   })
 
@@ -735,6 +741,9 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner', () =
           },
         ],
       }),
+      // The posting port's ledger adapter passes commitMethod and rubricVersion, undefined as before.
+      undefined,
+      undefined,
     )
   })
 

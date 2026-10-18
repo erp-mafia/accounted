@@ -1,0 +1,1 @@
+[2026-10-18] mapping_version names eight year-end rule sources at the build: se.year-end-closing, se.opening-balance, se.result-appropriation, se.kontantmetod-cutoff, se.currency-revaluation, se.year-end-dispositions, se.accrual-schedule and se.year-end-accruals.

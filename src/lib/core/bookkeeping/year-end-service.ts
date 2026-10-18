@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
-import { createJournalEntry, reverseEntry } from '@/lib/bookkeeping/engine'
 import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
+import { postingPort } from '@/lib/posting/port'
 import { roundOre, ORE_TOLERANCE } from '@/lib/bokslut/rounding'
 import { createLogger } from '@/lib/logger'
 
@@ -39,6 +39,13 @@ import { overDisposedAmount, resultAccountLeftover, resultAccountResidual } from
 import { priorResultCarry } from './prior-result-carry'
 import { buildOpeningBalanceLines, fetchObjectClosingBalances } from './opening-balance-split'
 import { listVoucherGaps } from './voucher-gaps'
+import {
+  openingBalanceBusinessEvent,
+  systemDerivedLinkBasis,
+  yearEndClosingBusinessEvent,
+  yearEndStornoBusinessEvent,
+  type YearEndPostingContext,
+} from './year-end-business-events'
 import {
   assertNoOpeningBalance,
   findExistingOpeningBalance,
@@ -756,12 +763,21 @@ export async function previewYearEndClosing(
  * 9. Generate opening balances in next period
  * 10. Validate IB/UB continuity
  * 11. Omföra föregående års resultat (2099 → 2098) in the new period (AB only)
+ *
+ * Posting port (step 2g): every verifikat the close books goes through
+ * lib/posting, which hands the engine its input unchanged and, while
+ * POSTING_EVENTS is shadow or strict, records one business event per
+ * verifikat (they are posted independently, with the lock and close between
+ * them) and has the engine link it to the draft before a voucher number is
+ * drawn. `posting` is what the door saw (its link basis), called only while
+ * the port is on: off, the engine gets the calls it always did.
  */
 export async function executeYearEndClosing(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
-  fiscalPeriodId: string
+  fiscalPeriodId: string,
+  posting?: () => YearEndPostingContext,
 ): Promise<YearEndResult> {
   // 1. Validate readiness
   const validation = await validateYearEndReadiness(supabase, companyId, userId, fiscalPeriodId)
@@ -819,14 +835,27 @@ export async function executeYearEndClosing(
     )
   }
 
-  // 4. Create closing entry via the journal engine
-  const closingEntry = await createJournalEntry(supabase, companyId, userId, {
-    fiscal_period_id: fiscalPeriodId,
-    entry_date: period.period_end,
-    description: `Årsbokslut ${period.name}`,
-    source_type: 'year_end',
-    voucher_series: 'A',
-    lines: preview.closingLines,
+  // 4. Create closing entry via the journal engine, through the posting port
+  //    (year_end.closing, recorded only while POSTING_EVENTS is on).
+  const closingEntry = await postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    event: () =>
+      yearEndClosingBusinessEvent({
+        fiscalPeriodId,
+        periodEnd: period.period_end,
+        netResult: preview.netResult,
+        linkBasis: posting?.().linkBasis,
+      }),
+    input: {
+      fiscal_period_id: fiscalPeriodId,
+      entry_date: period.period_end,
+      description: `Årsbokslut ${period.name}`,
+      source_type: 'year_end',
+      voucher_series: 'A',
+      lines: preview.closingLines,
+    },
   })
 
   // 4a. INVARIANT: after the closing entry, class 3-8 net must be exactly 0
@@ -851,7 +880,7 @@ export async function executeYearEndClosing(
     }
   } catch (err) {
     // Best-effort reversal of the closing entry before re-throwing.
-    await safeReverse(supabase, companyId, userId, closingEntry.id, 'closing entry')
+    await safeReverse(supabase, companyId, userId, closingEntry.id, 'closing entry', fiscalPeriodId, posting)
     throw err
   }
 
@@ -904,7 +933,8 @@ export async function executeYearEndClosing(
     companyId,
     userId,
     fiscalPeriodId,
-    nextPeriod.id
+    nextPeriod.id,
+    posting,
   )
 
   // 10. Validate IB/UB continuity and persist result.
@@ -932,8 +962,8 @@ export async function executeYearEndClosing(
     (d) => Math.abs(d.difference) > ORE_TOLERANCE
   )
   if (overTolerance.length > 0) {
-    await safeReverse(supabase, companyId, userId, openingBalanceEntry.id, 'opening balance entry')
-    await safeReverse(supabase, companyId, userId, closingEntry.id, 'closing entry')
+    await safeReverse(supabase, companyId, userId, openingBalanceEntry.id, 'opening balance entry', nextPeriod.id, posting)
+    await safeReverse(supabase, companyId, userId, closingEntry.id, 'closing entry', fiscalPeriodId, posting)
 
     throw new Error(
       `IB/UB-kontinuitet misslyckades: ${overTolerance.length} konto(n) avviker. ` +
@@ -960,7 +990,8 @@ export async function executeYearEndClosing(
       supabase,
       companyId,
       userId,
-      nextPeriod.id
+      nextPeriod.id,
+      posting,
     )
   } catch (err) {
     resultAppropriationFailed = true
@@ -1016,13 +1047,19 @@ export async function executeYearEndClosing(
  * never split: their IB stays one untagged line. Per-account totals are the
  * trial balance's, exactly as before the split.
  * The entry must be balanced (total debit openings = total credit openings).
+ *
+ * Posting port (step 2g): the IB goes through lib/posting as one
+ * ledger.opening_balance event, recorded only while POSTING_EVENTS is on;
+ * the per-account retry links to the event its first attempt recorded.
+ * `posting` is what the door saw, as for executeYearEndClosing.
  */
 export async function generateOpeningBalances(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
   closedPeriodId: string,
-  nextPeriodId: string
+  nextPeriodId: string,
+  posting?: () => YearEndPostingContext,
 ): Promise<JournalEntry> {
 
   // One IB per year (ÅRL 2:4: IB is the previous year's UB). Refused before
@@ -1100,11 +1137,25 @@ export async function generateOpeningBalances(
     voucher_series: 'A',
     lines,
   })
+  // One event for the IB, whichever attempt posts it: its id is made once.
+  let eventId: string | undefined
+  const openingEvent = () =>
+    openingBalanceBusinessEvent({
+      id: (eventId ??= globalThis.crypto.randomUUID()),
+      fiscalPeriodId: nextPeriodId,
+      periodStart: nextPeriod.period_start,
+      linkBasis: posting?.().linkBasis,
+    })
   let openingEntry: JournalEntry
   try {
-    openingEntry = await createJournalEntry(
-      supabase, companyId, userId, openingEntryInput(openingLines), undefined, undefined, { replayDimensions: true }
-    )
+    openingEntry = await postingPort.postJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      event: openingEvent,
+      input: openingEntryInput(openingLines),
+      options: { replayDimensions: true },
+    })
   } catch (err) {
     // The period is already closed, so a split that the database refuses
     // (a line insert constraint, e.g. a legacy bag the NOT VALID
@@ -1131,9 +1182,13 @@ export async function generateOpeningBalances(
       entityType: 'fiscal_period',
       entityId: nextPeriodId,
     })
-    openingEntry = await createJournalEntry(
-      supabase, companyId, userId, openingEntryInput(buildOpeningBalanceLines(accountTotals, new Map()))
-    )
+    openingEntry = await postingPort.postJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      event: openingEvent,
+      input: openingEntryInput(buildOpeningBalanceLines(accountTotals, new Map())),
+    })
   }
 
   // Mark next period with opening balance entry
@@ -1345,16 +1400,33 @@ async function countOpenFxItemsAtBalansdagen(
  * failures here so the caller can re-throw the original invariant error
  * with maximum diagnostic value; the orphaned entries (if any) become
  * a manual cleanup task documented in the surfaced Swedish error.
+ *
+ * Through the posting port: while POSTING_EVENTS is on, the storno records
+ * ledger.storno of the year it belongs to (system_derived: nobody chose it).
  */
 async function safeReverse(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
   entryId: string,
-  label: string
+  label: string,
+  fiscalPeriodId: string,
+  posting: (() => YearEndPostingContext) | undefined,
 ): Promise<void> {
   try {
-    await reverseEntry(supabase, companyId, userId, entryId)
+    await postingPort.reverseJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      entryId,
+      event: () =>
+        yearEndStornoBusinessEvent({
+          fiscalPeriodId,
+          occurredOn: todayIsoStockholm(),
+          linkBasis: systemDerivedLinkBasis(posting?.()),
+        }),
+      role: 'reversal',
+    })
   } catch (err) {
     log.error(`year-end rollback: could not reverse ${label}`, err as Error, {
       operation: 'year_end.rollback',

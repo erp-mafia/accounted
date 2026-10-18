@@ -6,6 +6,7 @@ import {
 } from '@/lib/core/bookkeeping/year-end-service'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 /** GET: validate readiness + preview the year-end entries. */
 export const GET = withRouteContext(
@@ -41,7 +42,14 @@ export const POST = withRouteContext(
     const opLog = log.child({ periodId: id })
 
     try {
-      const result = await executeYearEndClosing(supabase, companyId!, user.id, id)
+      const result = await executeYearEndClosing(
+        supabase,
+        companyId!,
+        user.id,
+        id,
+        // The posting port's events, while POSTING_EVENTS is on: the person closed the year.
+        () => ({ linkBasis: linkBasisColumns('user_created') }),
+      )
       return NextResponse.json({ data: result })
     } catch (err) {
       const message = err instanceof Error ? err.message : ''
