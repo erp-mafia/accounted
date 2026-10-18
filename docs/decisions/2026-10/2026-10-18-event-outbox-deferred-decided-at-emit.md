@@ -1,0 +1,1 @@
+[2026-10-18] An async event consumer's inline-or-outbox choice is made once per event by the emitting instance and stored as inline_result 'deferred'; the dispatcher runs only deferred deliveries, so a rolling deploy or a switch flipped back never runs one event twice.

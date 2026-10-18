@@ -16,8 +16,10 @@
  * After an enqueue that wrote something, one dispatch cycle is scheduled to
  * run after the response (next/server after()), coalesced per instance, as
  * the webhook dispatch kick does (lib/webhooks/dispatch-kick.ts): it moves
- * the first claim forward from the per-minute cron to seconds. Never awaited
- * by the emitter and never throws.
+ * the first claim forward from the per-minute cron to seconds. For a
+ * delivery the bus deferred (EVENT_DELIVERY_WEBHOOKS=outbox, step E3) that
+ * cycle is what runs the consumer, so a webhook still leaves seconds after
+ * the request. Never awaited by the emitter and never throws.
  */
 import { after } from 'next/server'
 import type { SupabaseClient } from '@supabase/supabase-js'

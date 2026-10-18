@@ -2,10 +2,12 @@
  * GET /api/events/dispatch/cron: per-minute event outbox dispatcher.
  *
  * Claims due deliveries from event_deliveries and finishes them
- * (lib/events/outbox-dispatcher.ts). Step E2, shadow mode: every consumer
- * still runs inline in the request that emitted the event, so the cycle marks
- * each claimed delivery done without calling any handler. With
- * EVENT_OUTBOX_MODE off (the default) it answers at once and touches nothing.
+ * (lib/events/outbox-dispatcher.ts). A delivery the bus deferred to the
+ * outbox (EVENT_DELIVERY_WEBHOOKS=outbox, step E3) runs its consumer here and
+ * is retried with backoff when that fails; every other one (shadow mode: the
+ * consumer ran inline in the request that emitted the event) is marked done
+ * without calling any handler. With EVENT_OUTBOX_MODE off (the default) it
+ * answers at once and touches nothing.
  *
  * Authenticated via CRON_SECRET (withCronContext). Overlap with the kick an
  * emit schedules, or with a slow previous tick, is safe: claims are FOR
@@ -34,6 +36,9 @@ export const GET = withCronContext('cron.event_outbox_dispatch', async (_request
     batches: summary.batches,
     claimed: summary.claimed,
     completed: summary.completed,
+    ran: summary.ran,
+    retried: summary.retried,
+    dead: summary.dead,
     oldestAgeMs: summary.oldestAgeMs,
     notDeployed: summary.notDeployed,
   })

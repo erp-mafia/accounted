@@ -1,0 +1,1 @@
+[2026-10-18] When the outbox enqueue of a deferred consumer fails, the bus runs that consumer inline after all: a rare duplicate (an enqueue that timed out but landed) beats a lost webhook, per the at-least-once decision of 2026-10-17.

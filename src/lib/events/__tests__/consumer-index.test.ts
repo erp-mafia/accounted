@@ -15,11 +15,14 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { EventConsumer } from '@/lib/events/consumers'
 import {
+  ASYNC_CONSUMER_SWITCHES,
   EVENT_CONSUMER_INDEX,
   INLINE_ONLY_CONSUMERS,
+  eventDelivery,
   eventOutboxMode,
   isIndexedConsumer,
   outboxConsumerIds,
+  outboxSwitchedConsumerIds,
 } from '@/lib/events/consumer-index'
 
 type Table = Record<string, string[]>
@@ -136,6 +139,52 @@ describe('eventOutboxMode', () => {
   })
 })
 
+describe('per-consumer delivery switches (step E3)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('switches webhooks only, by EVENT_DELIVERY_WEBHOOKS', () => {
+    expect(ASYNC_CONSUMER_SWITCHES).toEqual({ webhooks: 'EVENT_DELIVERY_WEBHOOKS' })
+  })
+
+  it('is inline unless the switch says outbox, and always inline for a consumer without a switch', () => {
+    vi.stubEnv('EVENT_DELIVERY_WEBHOOKS', undefined)
+    expect(eventDelivery('webhooks')).toBe('inline')
+    expect(outboxSwitchedConsumerIds()).toEqual([])
+    for (const value of ['', 'inline', 'off', 'on', 'async', 'true', 'outboxes']) {
+      vi.stubEnv('EVENT_DELIVERY_WEBHOOKS', value)
+      expect(eventDelivery('webhooks'), value).toBe('inline')
+    }
+    for (const value of ['outbox', ' Outbox ', 'OUTBOX']) {
+      vi.stubEnv('EVENT_DELIVERY_WEBHOOKS', value)
+      expect(eventDelivery('webhooks'), value).toBe('outbox')
+    }
+    expect(outboxSwitchedConsumerIds()).toEqual(['webhooks'])
+    for (const consumerId of ['event-log', 'attest-notify', 'ext:stripe', 'toString', '__proto__']) {
+      expect(eventDelivery(consumerId), consumerId).toBe('inline')
+    }
+  })
+
+  it('switches exactly the consumers the dispatcher can run (ASYNC_EVENT_CONSUMERS), each an outbox consumer', async () => {
+    const { ASYNC_EVENT_CONSUMERS } = await import('@/lib/composition/async-event-consumers')
+    expect(ASYNC_EVENT_CONSUMERS.map((consumer) => consumer.id).sort()).toEqual(Object.keys(ASYNC_CONSUMER_SWITCHES).sort())
+    for (const consumer of ASYNC_EVENT_CONSUMERS) {
+      expect(INLINE_ONLY_CONSUMERS.has(consumer.id)).toBe(false)
+      for (const type of consumer.eventTypes) expect(outboxConsumerIds(type), type).toContain(consumer.id)
+    }
+  }, 60_000)
+
+  it('declares each async consumer once: EVENT_CONSUMERS lists the same object', async () => {
+    const { ASYNC_EVENT_CONSUMERS } = await import('@/lib/composition/async-event-consumers')
+    const { EVENT_CONSUMERS } = await import('@/lib/composition/event-consumers')
+    for (const consumer of ASYNC_EVENT_CONSUMERS) {
+      expect(EVENT_CONSUMERS.filter((c) => c.id === consumer.id)).toEqual([consumer])
+      expect(EVENT_CONSUMERS.find((c) => c.id === consumer.id)).toBe(consumer)
+    }
+  }, 60_000)
+})
+
 describe('the event bus import graph', () => {
   /** The module specifiers a source file imports, statically or dynamically. */
   function importsOf(relativePath: string): string[] {
@@ -155,5 +204,13 @@ describe('the event bus import graph', () => {
 
   it('the consumer index imports only types and the generated list of enabled extension ids', () => {
     expect(importsOf('consumer-index.ts')).toEqual(['./types', '@/lib/extensions/_generated/enabled-extensions'])
+  })
+
+  it('the outbox dispatcher reaches the async consumers only, never the full consumer list or lib/init', () => {
+    const imports = importsOf('outbox-dispatcher.ts')
+    expect(imports.filter((specifier) => specifier.startsWith('@/lib/composition/'))).toEqual([
+      '@/lib/composition/async-event-consumers',
+    ])
+    expect(imports.some((specifier) => /lib\/init(ialized)?$|\/bus$|\/handlers\//.test(specifier))).toBe(false)
   })
 })

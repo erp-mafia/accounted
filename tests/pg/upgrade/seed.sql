@@ -139,6 +139,19 @@ VALUES (
   'whsec_pg_upgrade_fixture_only'
 );
 
+-- Webhook deliveries as the inline fan-out wrote them: the same event twice
+-- for one webhook, and a delivered (immutable) row. A unique key or a NOT
+-- NULL over webhook_deliveries must leave this history as it is
+-- (20261018110200 keys the outbox rows only).
+INSERT INTO public.webhook_deliveries (id, webhook_id, company_id, event_type, payload, api_version, status, delivered_at)
+VALUES
+  ('99999999-9999-9999-9999-999999999911', '99999999-9999-9999-9999-999999999901',
+   '22222222-2222-2222-2222-222222222222', 'invoice.paid', '{"n":1}'::jsonb, '2026-05-12', 'pending', NULL),
+  ('99999999-9999-9999-9999-999999999912', '99999999-9999-9999-9999-999999999901',
+   '22222222-2222-2222-2222-222222222222', 'invoice.paid', '{"n":1}'::jsonb, '2026-05-12', 'pending', NULL),
+  ('99999999-9999-9999-9999-999999999913', '99999999-9999-9999-9999-999999999901',
+   '22222222-2222-2222-2222-222222222222', 'invoice.paid', '{"n":2}'::jsonb, '2026-05-12', 'delivered', now());
+
 -- event_log rows as the bus handler wrote them before event_log.dedupe_key
 -- (20261016001100), including the same journal_entry.committed twice: a
 -- unique index over event_log must not trip on history.

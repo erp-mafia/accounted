@@ -172,3 +172,183 @@ describe('EVENT_OUTBOX_MODE shadow', () => {
     ])
   })
 })
+
+/**
+ * Step E3: EVENT_DELIVERY_WEBHOOKS. outbox, with the outbox mode shadow and a
+ * writer installed: the bus does not run the webhooks consumer, it enqueues
+ * the delivery as 'deferred' for the dispatcher. Anything else: webhooks run
+ * inline exactly as before.
+ */
+describe('EVENT_DELIVERY_WEBHOOKS', () => {
+  const invoiceSent: CoreEvent = {
+    type: 'invoice.sent',
+    payload: { invoice: { id: 'inv-1' }, userId: 'u1', companyId: '00000000-0000-4000-8000-000000000001' },
+  } as unknown as CoreEvent
+
+  function subscribeInvoiceSent() {
+    const eventLog = consumer('event-log', () => undefined)
+    const webhooks = consumer('webhooks', () => undefined)
+    eventBus.on('invoice.sent', eventLog)
+    eventBus.on('invoice.sent', webhooks)
+    return { eventLog, webhooks }
+  }
+
+  it('outbox with the mode shadow: webhooks are not run inline but enqueued as deferred', async () => {
+    vi.stubEnv('EVENT_OUTBOX_MODE', 'shadow')
+    vi.stubEnv('EVENT_DELIVERY_WEBHOOKS', 'outbox')
+    const { eventLog, webhooks } = subscribeInvoiceSent()
+
+    await eventBus.emit(invoiceSent)
+
+    expect(eventLog).toHaveBeenCalledTimes(1)
+    expect(webhooks).not.toHaveBeenCalled()
+    expect(writer).toHaveBeenCalledTimes(1)
+    expect(writer).toHaveBeenCalledWith(invoiceSent, [{ consumerId: 'webhooks', inline: 'deferred' }])
+    expect(logMock.warn).not.toHaveBeenCalled()
+  })
+
+  it('defers only the switched consumer: the others of the same event still run inline and are recorded as such', async () => {
+    vi.stubEnv('EVENT_OUTBOX_MODE', 'shadow')
+    vi.stubEnv('EVENT_DELIVERY_WEBHOOKS', ' Outbox ')
+    const attest = consumer('attest-notify', () => undefined)
+    const webhooks = consumer('webhooks', () => undefined)
+    eventBus.on('supplier_invoice.registered', attest)
+    eventBus.on('supplier_invoice.registered', webhooks)
+
+    await eventBus.emit(registered)
+
+    expect(attest).toHaveBeenCalledTimes(1)
+    expect(webhooks).not.toHaveBeenCalled()
+    const inline: Record<string, string> = { 'attest-notify': 'ok', webhooks: 'deferred' }
+    expect(writer).toHaveBeenCalledWith(
+      registered,
+      indexSpies.outboxConsumerIds(registered.type).map((consumerId: string) => ({
+        consumerId,
+        inline: inline[consumerId] ?? 'not_subscribed',
+      })),
+    )
+    expect(writer.mock.calls[0]![1]).toEqual(
+      expect.arrayContaining([
+        { consumerId: 'attest-notify', inline: 'ok' },
+        { consumerId: 'webhooks', inline: 'deferred' },
+      ]),
+    )
+  })
+
+  it.each([undefined, '', 'inline', 'async', 'true'])('runs webhooks inline as before when the switch is %s', async (value) => {
+    vi.stubEnv('EVENT_OUTBOX_MODE', 'shadow')
+    vi.stubEnv('EVENT_DELIVERY_WEBHOOKS', value)
+    const { webhooks } = subscribeInvoiceSent()
+
+    await eventBus.emit(invoiceSent)
+
+    expect(webhooks).toHaveBeenCalledTimes(1)
+    expect(writer).toHaveBeenCalledWith(invoiceSent, [{ consumerId: 'webhooks', inline: 'ok' }])
+  })
+
+  it('decides per emit: flipping the switch back runs the next event inline', async () => {
+    vi.stubEnv('EVENT_OUTBOX_MODE', 'shadow')
+    vi.stubEnv('EVENT_DELIVERY_WEBHOOKS', 'outbox')
+    const { webhooks } = subscribeInvoiceSent()
+
+    await eventBus.emit(invoiceSent)
+    vi.stubEnv('EVENT_DELIVERY_WEBHOOKS', 'inline')
+    await eventBus.emit(invoiceSent)
+
+    expect(webhooks).toHaveBeenCalledTimes(1)
+    expect(writer.mock.calls.map(([, deliveries]) => deliveries)).toEqual([
+      [{ consumerId: 'webhooks', inline: 'deferred' }],
+      [{ consumerId: 'webhooks', inline: 'ok' }],
+    ])
+  })
+
+  it('outbox with the mode off: webhooks stay inline, nothing is enqueued, and that is logged once', async () => {
+    vi.stubEnv('EVENT_OUTBOX_MODE', 'off')
+    vi.stubEnv('EVENT_DELIVERY_WEBHOOKS', 'outbox')
+    const { webhooks } = subscribeInvoiceSent()
+
+    await eventBus.emit(invoiceSent)
+    await eventBus.emit(invoiceSent)
+
+    expect(webhooks).toHaveBeenCalledTimes(2)
+    expect(writer).not.toHaveBeenCalled()
+    expect(indexSpies.outboxConsumerIds).not.toHaveBeenCalled()
+    expect(logMock.warn).toHaveBeenCalledTimes(1)
+    expect(logMock.warn).toHaveBeenCalledWith(
+      'event delivery switch ignored: EVENT_OUTBOX_MODE is off, the consumers stay inline',
+      { consumers: ['webhooks'] },
+    )
+  })
+
+  it('runs the deferred consumer inline after all when the enqueue fails: never lost', async () => {
+    vi.stubEnv('EVENT_OUTBOX_MODE', 'shadow')
+    vi.stubEnv('EVENT_DELIVERY_WEBHOOKS', 'outbox')
+    const order: string[] = []
+    eventBus.on('invoice.sent', consumer('event-log', () => void order.push('event-log')))
+    const webhooks = consumer('webhooks', () => void order.push('webhooks'))
+    eventBus.on('invoice.sent', webhooks)
+    writer.mockImplementation(async () => {
+      order.push('enqueue')
+      throw new Error('event outbox enqueue failed: canceling statement due to statement timeout (57014)')
+    })
+
+    await expect(eventBus.emit(invoiceSent)).resolves.toBeUndefined()
+
+    expect(webhooks).toHaveBeenCalledTimes(1)
+    expect(webhooks).toHaveBeenCalledWith(invoiceSent.payload)
+    expect(order).toEqual(['event-log', 'enqueue', 'webhooks'])
+    expect(logMock.warn).toHaveBeenCalledWith('event outbox enqueue failed: deferred consumers ran inline', {
+      eventType: 'invoice.sent',
+      consumers: ['webhooks'],
+    })
+  })
+
+  it('logs a failing fallback run like any handler failure, never throwing at the emitter', async () => {
+    vi.stubEnv('EVENT_OUTBOX_MODE', 'shadow')
+    vi.stubEnv('EVENT_DELIVERY_WEBHOOKS', 'outbox')
+    writer.mockRejectedValue(new Error('down'))
+    eventBus.on(
+      'invoice.sent',
+      consumer('webhooks', async () => {
+        throw new Error('fan-out failed')
+      }),
+    )
+
+    await expect(eventBus.emit(invoiceSent)).resolves.toBeUndefined()
+    expect(logMock.error).toHaveBeenCalledWith('handler failed', expect.any(Error), expect.objectContaining({ handler: 'webhooks' }))
+  })
+
+  it('defers nothing without an installed writer: webhooks run inline', async () => {
+    vi.stubEnv('EVENT_OUTBOX_MODE', 'shadow')
+    vi.stubEnv('EVENT_DELIVERY_WEBHOOKS', 'outbox')
+    eventBus.setOutboxWriter(null)
+    const { webhooks } = subscribeInvoiceSent()
+
+    await eventBus.emit(invoiceSent)
+
+    expect(webhooks).toHaveBeenCalledTimes(1)
+  })
+
+  it('defers nothing for an event type webhooks do not consume', async () => {
+    vi.stubEnv('EVENT_OUTBOX_MODE', 'shadow')
+    vi.stubEnv('EVENT_DELIVERY_WEBHOOKS', 'outbox')
+    const relay = consumer('agent-feedback-relay', () => undefined)
+    eventBus.on('agent.feedback', relay)
+
+    await eventBus.emit({ type: 'agent.feedback', payload: { companyId: 'c1', userId: 'u1' } } as unknown as CoreEvent)
+
+    expect(relay).toHaveBeenCalledTimes(1)
+    expect(writer).toHaveBeenCalledWith(expect.objectContaining({ type: 'agent.feedback' }), [
+      { consumerId: 'agent-feedback-relay', inline: 'ok' },
+    ])
+  })
+
+  it('enqueues the deferred delivery even when nothing on the bus subscribes webhooks (the dispatcher runs it)', async () => {
+    vi.stubEnv('EVENT_OUTBOX_MODE', 'shadow')
+    vi.stubEnv('EVENT_DELIVERY_WEBHOOKS', 'outbox')
+
+    await eventBus.emit(invoiceSent)
+
+    expect(writer).toHaveBeenCalledWith(invoiceSent, [{ consumerId: 'webhooks', inline: 'deferred' }])
+  })
+})

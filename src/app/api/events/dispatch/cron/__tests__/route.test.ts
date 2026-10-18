@@ -26,7 +26,17 @@ import { GET, maxDuration } from '../route'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { createCronRequest, parseJsonResponse } from '@/tests/helpers'
 
-const SUMMARY = { mode: 'shadow', batches: 2, claimed: 230, completed: 230, oldestAgeMs: 41_000, notDeployed: false }
+const SUMMARY = {
+  mode: 'shadow',
+  batches: 2,
+  claimed: 230,
+  completed: 229,
+  ran: 12,
+  retried: 1,
+  dead: 0,
+  oldestAgeMs: 41_000,
+  notDeployed: false,
+}
 
 beforeEach(() => {
   vi.clearAllMocks()

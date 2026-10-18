@@ -8,6 +8,9 @@
  * share, they start in this order and run concurrently, inline in the request
  * that emits (Promise.allSettled in lib/events/bus.ts).
  *
+ * A consumer that can be delivered from the event outbox instead (step E3)
+ * is declared in ./async-event-consumers.ts and listed here by reference.
+ *
  * Adding a consumer changes which handlers run on which events, which
  * src/lib/events/__tests__/subscriptions.test.ts pins: record it there, and
  * in the consumer index the event bus reads (lib/events/consumer-index.ts,
@@ -15,13 +18,13 @@
  */
 import { handleSupplierInvoiceRetroMatch } from '@/lib/bookkeeping/handlers/supplier-invoice-handler'
 import { unlearnOnReversal } from '@/lib/bookkeeping/handlers/unlearn-on-reversal'
+import { WEBHOOKS_EVENT_CONSUMER } from '@/lib/composition/async-event-consumers'
 import { eventConsumer, type EventConsumer } from '@/lib/events/consumers'
 import { relayAgentFeedback } from '@/lib/events/handlers/agent-feedback-relay-handler'
 import { enqueueDocumentRead } from '@/lib/events/handlers/document-read-handler'
 import { PERSISTED_EVENT_TYPES, writeEventLog } from '@/lib/events/handlers/event-log-handler'
 import { detectorsByEventType, runEventDetectors } from '@/lib/suggestions/handler'
 import { handleSupplierInvoiceRegistered } from '@/lib/supplier-invoices/attest-notify'
-import { fanOutEvent, WEBHOOK_EVENT_TYPES } from '@/lib/webhooks/handler'
 
 const SUGGESTION_DETECTORS = detectorsByEventType()
 
@@ -70,13 +73,10 @@ export const EVENT_CONSUMERS: readonly EventConsumer[] = Object.freeze([
     eventTypes: ['agent.feedback'],
     handle: (event) => relayAgentFeedback(event.payload),
   }),
-  // One webhook_deliveries row per matching webhook of the company.
-  eventConsumer({
-    id: 'webhooks',
-    owner: 'platform',
-    eventTypes: WEBHOOK_EVENT_TYPES,
-    handle: (event) => fanOutEvent(event.type, event.payload),
-  }),
+  // One webhook_deliveries row per matching webhook of the company. Declared
+  // with the consumers the outbox dispatcher may run (./async-event-consumers.ts):
+  // EVENT_DELIVERY_WEBHOOKS=outbox moves it there.
+  WEBHOOKS_EVENT_CONSUMER,
   // Suggestion detectors (lib/suggestions): the events that can call for a
   // package switch (an employee registered, a till or webshop connected)
   // stage it for a person to approve. Never an automatic change.
