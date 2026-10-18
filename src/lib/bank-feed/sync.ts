@@ -32,7 +32,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { AisParty, BankSyncEnrichment, NormalizedBankTransaction } from '@accounted/connect-contract'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { ingestTransactions as defaultIngest } from '@/lib/transactions/ingest'
-import { buildStableExternalIds, FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
+import { buildStableExternalIds, dropRepeatedBankRows, FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
 import { OPEN_PAYMENTS_AGGREGATOR } from '@/lib/bank-sync/aggregator'
 import type { BankIngestRoute, IngestOptions, IngestResult, RawTransaction } from '@/types'
 import { ConsentOverError, getBankFeedConnect, type BankFeedConnect } from './connect'
@@ -132,13 +132,21 @@ export function mapBankFeedRows(input: {
   account: Pick<BankFeedAccount, 'uid' | 'iban' | 'currency' | 'dedup_scope'>
   connectionId: string
   archivedPageIds: ReadonlyArray<string | null>
-}): { rows: RawTransaction[]; scope: string; minBookingDate?: string; maxBookingDate?: string } {
+}): { rows: RawTransaction[]; scope: string; minBookingDate?: string; maxBookingDate?: string; repeatsDropped: number } {
   const scope = accountDedupScope(input.account)
-  const ids = buildStableExternalIds('eb', scope, input.rows.map((tx) => ({ date: tx.booking_date, amount: tx.amount })))
+  // A bank entry the response served more than once is one transaction
+  // (crm#1295): dropped before the ids are built, exactly as Enable Banking does.
+  const unique = dropRepeatedBankRows(input.rows, (tx) => ({
+    providerTransactionId: tx.provider_transaction_id,
+    date: tx.booking_date,
+    amount: tx.amount,
+    description: tx.description,
+  }))
+  const ids = buildStableExternalIds('eb', scope, unique.map((tx) => ({ date: tx.booking_date, amount: tx.amount })))
   let minBookingDate: string | undefined
   let maxBookingDate: string | undefined
   const accountCurrency = input.account.currency.toUpperCase()
-  const rows = input.rows.map((tx, i): RawTransaction => {
+  const rows = unique.map((tx, i): RawTransaction => {
     if (!minBookingDate || tx.booking_date < minBookingDate) minBookingDate = tx.booking_date
     if (!maxBookingDate || tx.booking_date > maxBookingDate) maxBookingDate = tx.booking_date
     const cpAccount = tx.counterparty_account ?? null
@@ -184,7 +192,7 @@ export function mapBankFeedRows(input: {
       parts,
     }
   })
-  return { rows, scope, minBookingDate, maxBookingDate }
+  return { rows, scope, minBookingDate, maxBookingDate, repeatsDropped: input.rows.length - unique.length }
 }
 
 /** The sync response's enrichment in the result's shape; null when the service reported nothing. */
@@ -230,6 +238,14 @@ export async function syncOpenPaymentsAccount(supabase: SupabaseClient, input: B
 
   const mapped = mapBankFeedRows({ rows: remote.transactions, account, connectionId, archivedPageIds })
   if (!account.dedup_scope) account.dedup_scope = mapped.scope
+  if (mapped.repeatsDropped > 0) {
+    console.warn('[bank-feed] Dropped bank rows the response repeated', {
+      connectionId,
+      accountUid: account.uid,
+      repeated: mapped.repeatsDropped,
+      total: remote.transactions.length,
+    })
+  }
 
   const ingestOptions: IngestOptions = { bankRoute, settlementAccount: bankRoute.ledgerAccount }
   if (input.options?.skipAutoCategorization) ingestOptions.skipAutoCategorization = true

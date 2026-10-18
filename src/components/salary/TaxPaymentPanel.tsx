@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { DetailSection, DefRow } from '@/components/ui/detail-section'
@@ -21,8 +21,18 @@ import { PayDeclarationViaBankButton } from '@/components/payments/PayDeclaratio
 type PaymentFormat = 'bg_lb' | 'pain001'
 
 interface TaxPaymentPanelProps {
-  /** YYYY-MM */
+  /**
+   * The AGI redovisningsperiod, YYYY-MM: the payout month (agiReportingPeriod),
+   * which the declaration, the payment file and mark-paid are keyed on. Not
+   * the earned month: for lön i efterskott that is the previous month's AGI.
+   */
   period: string
+  /**
+   * The day the period's tax and contributions must be on the skattekonto
+   * (YYYY-MM-DD, from GET /api/skatteverket/tax-payments/{period}); null or
+   * absent when unknown, and the row is then left out.
+   */
+  paymentDueDate?: string | null
   totalTax: number
   totalAvgifter: number
   paymentFileFormat: string | null
@@ -58,6 +68,7 @@ export function TaxPaymentPanel({
   paymentFileFormat,
   paymentFileGeneratedAt,
   taxPaidAt,
+  paymentDueDate,
   defaultFormat,
   senderBankgiro,
   senderIban,
@@ -71,17 +82,6 @@ export function TaxPaymentPanel({
   const [format, setFormat] = useState<PaymentFormat>(defaultFormat)
   const [downloading, setDownloading] = useState(false)
   const [marking, setMarking] = useState(false)
-  const [paymentDeadline, setPaymentDeadline] = useState<string>('')
-
-  useEffect(() => {
-    const m = /^(\d{4})-(\d{2})$/.exec(period)
-    if (!m) return
-    const year = parseInt(m[1], 10)
-    const month = parseInt(m[2], 10)
-    const dlMonth = month === 12 ? 1 : month + 1
-    const dlYear = month === 12 ? year + 1 : year
-    setPaymentDeadline(`${dlYear}-${String(dlMonth).padStart(2, '0')}-12`)
-  }, [period])
 
   // The page passes the AGI declaration's stored totals when the AGI exists
   // (whole kronor for declarations generated since the whole-krona change:
@@ -200,9 +200,11 @@ export function TaxPaymentPanel({
           <span className="font-medium tabular-nums">{formatCurrency(totalAmount)}</span>
         </DefRow>
         <DefRow label={t('tax_recipient')}>{t('tax_recipient_value')}</DefRow>
-        <DefRow label={t('tax_due_date')}>
-          <span className="tabular-nums">{paymentDeadline}</span>
-        </DefRow>
+        {paymentDueDate && (
+          <DefRow label={t('tax_due_date')}>
+            <span className="tabular-nums">{paymentDueDate}</span>
+          </DefRow>
+        )}
         {paymentFileGeneratedAt && (
           <DefRow label={t('tax_file_generated')}>
             {paymentFileFormat && (

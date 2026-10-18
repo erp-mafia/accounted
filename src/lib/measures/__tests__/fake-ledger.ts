@@ -249,8 +249,16 @@ export function createFakeLedger(data: FakeLedgerData, failures: FakeFailures = 
         return { bucket, account_number, debit: t.debit, credit: t.credit }
       })
     },
-    compute_prior_opening_balances() {
-      return []
+    // The continuation-import fallback, simplified: balance-sheet accounts
+    // (class 1-2) summed over every ledger entry before the period. The real
+    // RPC also floors at an earlier IB verifikat; no fixture needs that here.
+    compute_prior_opening_balances(args) {
+      const before = args.p_period_start as string
+      const totals = sum(
+        ledgerLines().filter(({ entry }) => entry.entry_date < before),
+        ({ line }) => (/^[12]/.test(String(line.account_number)) ? (line.account_number as string) : null),
+      )
+      return [...totals].map(([account_number, t]) => ({ account_number, debit: t.debit, credit: t.credit }))
     },
     get_kpi_report_aggregates(args) {
       const period = periodOf(args.p_fiscal_period_id)!

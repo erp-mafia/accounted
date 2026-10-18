@@ -18144,7 +18144,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_agi_submit',
     keywords: ['arbetsgivardeklaration', 'lämna in agi'],
     title: 'Submit AGI Declaration (Arbetsgivardeklaration)',
-    description: "Stage filing of a salary run's arbetsgivardeklaration (AGI) with Skatteverket. High-risk: approval posts the XML underlag and returns a BankID signing link; it is not filed until you sign. Always staged.",
+    description: "Stage filing a salary run's AGI with Skatteverket. High-risk: approval rebuilds the XML underlag from current data (unless filed), posts it and returns a BankID signing link; it is not filed until you sign. Always staged.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { TAX_DEADLINE_CONFIGS } from '../deadline-config'
+import { TAX_DEADLINE_CONFIGS, getAgiPaymentDueDate } from '../deadline-config'
 import type { CompanySettingsForDeadlines } from '../deadline-config'
 
 function getConfig(type: string) {
@@ -635,5 +635,34 @@ describe('ekonomisk förening: juridisk person deadlines with the association wo
     expect(yearly.generateDates(2027, ekf({ moms_period: 'yearly', vat_filing_method: 'paper' }))[0]).toMatchObject(
       yearly.generateDates(2027, makeSettings({ entity_type: 'aktiebolag', moms_period: 'yearly', vat_filing_method: 'paper' }))[0],
     )
+  })
+})
+
+describe('getAgiPaymentDueDate (the tax payment panel and Betala via banken)', () => {
+  const SMALL = { vat_registered: true, vat_taxable_base_over_40m: false }
+  const LARGE = { vat_registered: true, vat_taxable_base_over_40m: true }
+
+  it('is the 12th of the following month on a banking day', () => {
+    expect(getAgiPaymentDueDate(2026, 9, SMALL)).toBe('2026-10-12')
+  })
+
+  it('moves a 12th on a Saturday to the Monday', () => {
+    // 12 September 2026 is a Saturday.
+    expect(getAgiPaymentDueDate(2026, 8, SMALL)).toBe('2026-09-14')
+  })
+
+  it('is the 17th in August up to the SEK 40M VAT taxable base, the 12th above it', () => {
+    expect(getAgiPaymentDueDate(2026, 7, SMALL)).toBe('2026-08-17')
+    expect(getAgiPaymentDueDate(2026, 7, LARGE)).toBe('2026-08-12')
+  })
+
+  it('is the 17th in January for everyone, moved off a Sunday', () => {
+    // 17 January 2027 is a Sunday.
+    expect(getAgiPaymentDueDate(2026, 12, SMALL)).toBe('2027-01-18')
+    expect(getAgiPaymentDueDate(2026, 12, LARGE)).toBe('2027-01-18')
+  })
+
+  it('has no answer for a month that does not exist', () => {
+    expect(getAgiPaymentDueDate(2026, 13, SMALL)).toBeNull()
   })
 })

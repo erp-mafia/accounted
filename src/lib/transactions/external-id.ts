@@ -115,6 +115,49 @@ export function buildStableExternalIds(
   })
 }
 
+/** What `dropRepeatedBankRows` reads from a fetched row. */
+export interface BankRowIdentity {
+  /** The bank's own id for the row (entry_reference / transaction_id), when it sent one. */
+  providerTransactionId?: string | null
+  date: string
+  amount: number | string
+  description: string
+}
+
+/**
+ * Drop the repeats of a bank row that ONE fetched response served more than
+ * once, keeping the first.
+ *
+ * Some banks page their transaction lists unstably: a later page repeats rows
+ * an earlier page already served and leaves others out (observed at Nordea
+ * through Enable Banking, crm#1295). `buildStableExternalIds` gives each copy
+ * its own occurrence index, so every copy was stored as a transaction of its
+ * own. A stored copy then also swallows a genuinely new row in a later sync:
+ * no incoming row bridges the copy, so `reconcileStableExternalIds` pairs the
+ * new row with it by id alone and Layer 1 skips it as a duplicate.
+ *
+ * A repeat carries the same non-empty bank id AND the same booking date,
+ * amount (öre) and description as an earlier row of the response: one bank
+ * entry, not two payments. Rows without a bank id are never dropped: two
+ * equal payments on the same day are real, and only the bank's id tells them
+ * apart from a repeat. The id is compared only within one response, so a bank
+ * that changes its ids between requests (the reason the stored key is not the
+ * bank's id) is unaffected. Callers apply this before building the ids, so
+ * the occurrence index counts each entry once.
+ */
+export function dropRepeatedBankRows<T>(rows: readonly T[], identity: (row: T) => BankRowIdentity): T[] {
+  const seen = new Set<string>()
+  return rows.filter((row) => {
+    const { providerTransactionId, date, amount, description } = identity(row)
+    const bankId = (providerTransactionId ?? '').trim()
+    if (bankId === '') return true
+    const key = JSON.stringify([bankId, date, amountToOre(amount), description])
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
 /** Splits a `buildStableExternalIds` id into its `{prefix}_{scope}_{date}_{öre}` family and index. */
 const STABLE_EXTERNAL_ID = /^(.+_\d{4}-\d{2}-\d{2}_-?\d+)_(\d+)$/
 

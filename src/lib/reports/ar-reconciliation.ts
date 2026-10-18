@@ -1,7 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { hasPreRegisterArInPeriod } from '@/lib/invoices/invoice-register-coverage'
 import {
@@ -9,12 +8,14 @@ import {
   liveReceivableOutstanding,
 } from '@/lib/invoices/skatteverket-share'
 import { fetchCreditNoteCreditUsed, outstandingWithCreditUsed } from './credit-note-settlement'
+import { closingBalanceOf } from './trial-balance'
 
 export interface ARReconciliationResult {
   ar_ledger_total: number
   /**
-   * Sum of posted balances on accounts 1510 (Kundfordringar) and 1513
-   * (Kundfordringar: delad faktura). 1513 carries the Skatteverket portion
+   * Closing balance (UB, ingående balans included) of accounts 1510
+   * (Kundfordringar) and 1513 (Kundfordringar: delad faktura), as the balance
+   * sheet shows them. 1513 carries the Skatteverket portion
    * of ROT/RUT fakturamodellen invoices until the begäran's payout clears it;
    * ar_ledger_total counts the same share per invoice (skatteverket-share.ts).
    */
@@ -119,44 +120,23 @@ export async function generateARReconciliation(
       return Math.round((sum + sek) * 100) / 100
     }, 0)
 
-  // Get AR receivable balance from the ledger in this period. We sum 1510
-  // (Kundfordringar) AND 1513 (Kundfordringar: delad faktura) so the comparison
-  // stays correct under ROT/RUT fakturamodellen, where the customer portion sits
-  // on 1510 and the Skatteverket claim on 1513: both are open AR receivable
-  // from the company's perspective, and the subledger side above counts each
-  // invoice's Skatteverket share until the begäran's payout clears it.
+  // The booked AR balance: 1510 (Kundfordringar) AND 1513 (Kundfordringar:
+  // delad faktura), so the comparison stays correct under ROT/RUT
+  // fakturamodellen, where the customer portion sits on 1510 and the
+  // Skatteverket claim on 1513: both are open AR receivable from the company's
+  // perspective, and the subledger side above counts each invoice's
+  // Skatteverket share until the begäran's payout clears it.
   //
-  // We count posted AND reversed entries together: the SAME inclusion rule the
-  // trial balance / balance sheet use. A corrected invoice flips its original to
-  // status='reversed'; that reversed leg is cancelled by the posted storno, so
-  // both must be summed or a corrected invoice manufactures a phantom gap.
-  // Fetched via the two-step entry-lines helper (entries first, then lines
-  // chunked by entry id, both paginated): see lib/bookkeeping/entry-lines.ts.
-  const journalLines = await fetchEntryLines<{
-    id: string
-    debit_amount: number | null
-    credit_amount: number | null
-  }>({
-    supabase,
-    lineColumns: 'id, debit_amount, credit_amount',
-    filterEntries: (q: EntryLinesQuery) =>
-      q
-        .eq('company_id', companyId)
-        .eq('fiscal_period_id', periodId)
-        .in('status', ['posted', 'reversed']),
-    filterLines: (q: EntryLinesQuery) =>
-      q.in('account_number', [
-        resolveAccountRole(PINNED_JURISDICTION, 'accounts_receivable'),
-        resolveAccountRole(PINNED_JURISDICTION, 'rot_rut_receivable'),
-      ]),
-    attachEntriesAs: null,
-  })
-
-  // Both 1510 and 1513 are debit-normal assets: balance = debits - credits
-  let account1510Balance = 0
-  for (const line of journalLines) {
-    account1510Balance = Math.round((account1510Balance + (Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0)) * 100) / 100
-  }
+  // Read as the balance sheet reads it (closingBalanceOf: the trial balance's
+  // UB, ingående balans included). The open invoices above are every open
+  // invoice of the register, whatever year it was booked in, so the ledger
+  // side must carry the opening balance too: summing only this fiscal year's
+  // verifikat left out an IB carried from earlier years' verifikat and showed
+  // that IB as a false difference (crm#1296). Both are debit-normal assets.
+  const account1510Balance = await closingBalanceOf(supabase, companyId, periodId, [
+    resolveAccountRole(PINNED_JURISDICTION, 'accounts_receivable'),
+    resolveAccountRole(PINNED_JURISDICTION, 'rot_rut_receivable'),
+  ])
 
   const difference = Math.round((arLedgerTotal - account1510Balance) * 100) / 100
 

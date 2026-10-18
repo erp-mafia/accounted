@@ -18,7 +18,7 @@ import { connectorHeaders } from '@/lib/connect/instance/connector-fetch'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { resolveBankIngestRoute } from '@/lib/bank-sync/ingest-route'
 import { ingestTransactions as defaultIngest } from '@/lib/transactions/ingest'
-import { buildStableExternalIds, FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
+import { buildStableExternalIds, dropRepeatedBankRows, FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
 import { aggregatorOf } from '@/lib/bank-sync/aggregator'
 import { ConsentOverError, ProviderUnavailableError, RateLimitedError } from '@/lib/bank-feed/connect'
 import { buildBankFeedParty, UNATTENDED_SIGNER, type BankFeedSignerInput } from '@/lib/bank-feed/party'
@@ -431,6 +431,25 @@ export async function syncAccountTransactions(
       skippedPending,
       total: totalFetched,
     })
+  }
+
+  // A bank entry this response served more than once is one transaction: some
+  // banks repeat rows across pages (crm#1295). Dropped before the ids are
+  // built, so no copy is stored as a transaction of its own (dropRepeatedBankRows).
+  const uniqueEntries = dropRepeatedBankRows(bookedEntries, ({ tx, bookingDate }) => ({
+    providerTransactionId: tx.provider_transaction_id,
+    date: bookingDate,
+    amount: tx.amount,
+    description: tx.description,
+  }))
+  if (uniqueEntries.length < bookedEntries.length) {
+    console.warn('[enable-banking] Dropped bank rows the response repeated', {
+      connectionId,
+      accountUid: account.uid,
+      repeated: bookedEntries.length - uniqueEntries.length,
+      total: bookedEntries.length,
+    })
+    bookedEntries = uniqueEntries
   }
 
   // Derive a stable, content-based external_id per booked transaction. We

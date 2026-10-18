@@ -442,6 +442,72 @@ describe('syncAccountTransactions', () => {
     ])
   })
 
+  describe('a bank entry the response serves more than once (crm#1295)', () => {
+    type ApiTx = { entry_reference?: string; booking_date: string; transaction_amount: { amount: string; currency: string }; text: string }
+    const swish = (ref: string | undefined, text: string, amount = '250'): ApiTx =>
+      ({ entry_reference: ref, booking_date: '2026-06-15', transaction_amount: { amount, currency: 'SEK' }, text })
+    const convert = (tx: ApiTx) => ({
+      id: tx.entry_reference ?? 'x',
+      date: tx.booking_date,
+      booking_date: tx.booking_date,
+      amount: parseFloat(tx.transaction_amount.amount),
+      currency: 'SEK',
+      description: tx.text,
+      provider_transaction_id: tx.entry_reference,
+    })
+    const sync = async (pages: ApiTx[][]) => {
+      mockGetAllTransactionsWithRaw.mockResolvedValueOnce({
+        transactions: pages.flat(),
+        rawPages: pages.map((rows) => JSON.stringify({ transactions: rows })),
+      })
+      await syncAccountTransactions({} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+        '2026-06-01', '2026-06-30', mockIngest)
+      return mockIngest.mock.calls[mockIngest.mock.calls.length - 1][3] as Array<{ external_id: string; provider_transaction_id: string | null; raw_document_id: string | null }>
+    }
+
+    beforeEach(() => {
+      mockConvertTransaction.mockImplementation(convert)
+      mockUploadDocument.mockImplementation(async (_db: unknown, _u: unknown, _c: unknown, file: { name: string }) => ({ id: file.name.replace(/^.*_(p\d+)\.json$/, '$1') }))
+    })
+
+    it('ingests each entry once when a later page repeats rows of an earlier one', async () => {
+      const rows = await sync([
+        [swish('E3', 'Swish ref-3'), swish('E2', 'Swish ref-2')],
+        [swish('E2', 'Swish ref-2'), swish('E1', 'Swish ref-1')],
+      ])
+      expect(rows.map((r) => r.provider_transaction_id)).toEqual(['E3', 'E2', 'E1'])
+      expect(rows.map((r) => r.external_id)).toEqual([
+        'eb_acc-uid-1_2026-06-15_25000_0',
+        'eb_acc-uid-1_2026-06-15_25000_1',
+        'eb_acc-uid-1_2026-06-15_25000_2',
+      ])
+      // The kept copy stays linked to the page it first came in.
+      expect(rows.map((r) => r.raw_document_id)).toEqual(['p1', 'p1', 'p2'])
+    })
+
+    it('mints the same ids as a response without the repeat, so a re-sync dedupes', async () => {
+      const clean = await sync([[swish('E3', 'Swish ref-3'), swish('E2', 'Swish ref-2'), swish('E1', 'Swish ref-1')]])
+      const repeated = await sync([
+        [swish('E3', 'Swish ref-3'), swish('E2', 'Swish ref-2')],
+        [swish('E2', 'Swish ref-2'), swish('E3', 'Swish ref-3'), swish('E1', 'Swish ref-1')],
+      ])
+      expect(repeated.map((r) => r.external_id)).toEqual(clean.map((r) => r.external_id))
+    })
+
+    it('keeps two equal Swish payments on the same day: the bank ids differ', async () => {
+      const rows = await sync([[swish('E1', 'Swish'), swish('E2', 'Swish')]])
+      expect(rows.map((r) => r.external_id)).toEqual([
+        'eb_acc-uid-1_2026-06-15_25000_0',
+        'eb_acc-uid-1_2026-06-15_25000_1',
+      ])
+    })
+
+    it('keeps identical rows the bank sent without an id', async () => {
+      const rows = await sync([[swish(undefined, 'Swish'), swish(undefined, 'Swish')]])
+      expect(rows).toHaveLength(2)
+    })
+  })
+
   it('prefers IBAN over uid for the external_id account scope', async () => {
     mockGetAllTransactionsWithRaw.mockResolvedValue({
       transactions: [{ transaction_amount: { amount: '100', currency: 'SEK' }, booking_date: '2024-06-15' }],

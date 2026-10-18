@@ -1,0 +1,1 @@
+[2026-10-18] AGI submit regenerates an unfiled declaration and writes only on a difference (XML minus Skapad, totals); filed = the run's kvittens stamp or a receipt newer than its XML; the tax payment file keeps the 12th, only the shown due date follows the deadline config (#69).

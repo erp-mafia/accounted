@@ -13,6 +13,7 @@ vi.mock('@/lib/utils', async (importOriginal) => ({
 vi.mock('../lib/declaration-prep', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/declaration-prep')>()),
   buildAgiUnderlag: vi.fn(),
+  refreshAgiUnderlag: vi.fn(),
 }))
 vi.mock('../lib/agi-client', () => ({
   agiPostUnderlag: vi.fn(),
@@ -21,13 +22,14 @@ vi.mock('../lib/agi-client', () => ({
 }))
 
 import { createAgiSigningLink, submitAgiChain, submitAgiUnderlag } from '../lib/agi-submit'
-import { buildAgiUnderlag } from '../lib/declaration-prep'
+import { buildAgiUnderlag, refreshAgiUnderlag } from '../lib/declaration-prep'
 import { agiGetKontrollresultat, agiPostUnderlag, agiSkapaGranskningsunderlag } from '../lib/agi-client'
 
 const settings = { get: vi.fn(), set: vi.fn().mockResolvedValue(undefined), clear: vi.fn() } as never
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(refreshAgiUnderlag).mockResolvedValue({ ok: true, outcome: 'unchanged' })
   vi.mocked(buildAgiUnderlag).mockResolvedValue({
     arbetsgivare: '165560000000',
     period: '202606',
@@ -42,6 +44,59 @@ beforeEach(() => {
     ok: true,
     data: { tillstand: 'LOCKED_FOR_SIGNING', link: 'https://skatteverket.se/sign', meddelande: null },
   } as never)
+})
+
+describe('submitAgiUnderlag: a fresh underlag, never a stale stored one (issue #69)', () => {
+  it('regenerates the run\'s underlag before it reads and posts it', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    vi.mocked(refreshAgiUnderlag).mockResolvedValue({ ok: true, outcome: 'replaced' })
+    vi.mocked(buildAgiUnderlag).mockResolvedValue({
+      arbetsgivare: '165560000000',
+      period: '202606',
+      xml: '<Skatteverket>fresh</Skatteverket>',
+      periodYear: 2026,
+      periodMonth: 6,
+      salaryRunId: 'run-1',
+    } as never)
+
+    const result = await submitAgiUnderlag(supabase as never, 'user-1', 'company-1', settings, 'run-1')
+
+    expect(result.ok).toBe(true)
+    expect(refreshAgiUnderlag).toHaveBeenCalledWith(supabase, 'company-1', 'user-1', 'run-1')
+    const refreshedAt = vi.mocked(refreshAgiUnderlag).mock.invocationCallOrder[0]
+    expect(refreshedAt).toBeLessThan(vi.mocked(buildAgiUnderlag).mock.invocationCallOrder[0])
+    expect(refreshedAt).toBeLessThan(vi.mocked(agiPostUnderlag).mock.invocationCallOrder[0])
+    expect(agiPostUnderlag).toHaveBeenCalledWith(
+      supabase, 'user-1', 'company-1', '<Skatteverket>fresh</Skatteverket>',
+      { agRegistreradId: '165560000000', redovisningsperiod: '202606' },
+    )
+  })
+
+  it('stops at a refused regeneration: nothing posted, nothing flipped, no settings written', async () => {
+    const { supabase, findCall } = createQueuedMockSupabase()
+    vi.mocked(refreshAgiUnderlag).mockResolvedValue({
+      ok: false,
+      code: 'AGI_INCOMPLETE_DATA',
+      httpStatus: 400,
+      error: 'AGI kräver telefon.',
+      details: { missing_fields: ['telefon'] },
+    })
+
+    const result = await submitAgiChain(supabase as never, 'user-1', 'company-1', settings, 'run-1')
+
+    expect(result).toEqual({
+      ok: false,
+      code: 'AGI_INCOMPLETE_DATA',
+      httpStatus: 400,
+      recoverable: false,
+      error: 'AGI kräver telefon.',
+      details: { missing_fields: ['telefon'] },
+    })
+    expect(buildAgiUnderlag).not.toHaveBeenCalled()
+    expect(agiPostUnderlag).not.toHaveBeenCalled()
+    expect(findCall('agi_declarations', 'update')).toBeUndefined()
+    expect((settings as unknown as { set: ReturnType<typeof vi.fn> }).set).not.toHaveBeenCalled()
+  })
 })
 
 describe('submitAgiChain', () => {

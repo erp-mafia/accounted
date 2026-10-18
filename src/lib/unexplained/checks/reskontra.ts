@@ -439,20 +439,18 @@ async function ledgerWithoutInvoice(
   ctx: CheckContext,
   spec: SideSpec,
   source: ReskontraSource,
-): Promise<{ items: CheckItem[]; opening: number; ledgerTotal: number }> {
+): Promise<{ items: CheckItem[]; opening: number }> {
   const sorted = [...source.accounts].sort()
   const gl = await generateGeneralLedger(ctx.supabase, ctx.companyId, source.period.id, sorted[0], sorted[sorted.length - 1])
   const wanted = new Set(source.accounts)
   const engine = new Set<string>(spec.engineSourceTypes)
   const sign = spec.normal === 'debit' ? 1 : -1
   let opening = 0
-  let ledgerTotal = 0
   const candidates: Array<CheckItem & { journal_entry_id: string }> = []
   const candidateSources = new Map<string, string>()
   for (const account of gl.accounts) {
     if (!wanted.has(account.account_number)) continue
     opening += sign * account.opening_balance
-    ledgerTotal += sign * account.closing_balance
     for (const line of account.lines) {
       if (engine.has(line.source_type)) continue
       candidateSources.set(line.journal_entry_id, line.source_type)
@@ -484,7 +482,6 @@ async function ledgerWithoutInvoice(
       return !engine.has(root.rootSource) && !referenced.has(c.journal_entry_id) && !referenced.has(root.rootId)
     }),
     opening: roundOre(opening),
-    ledgerTotal: roundOre(ledgerTotal),
   }
 }
 
@@ -527,9 +524,6 @@ async function explainSide(ctx: CheckContext, spec: SideSpec, run: CheckRun<Resk
   }
   if (source.preRegisterInPeriod) {
     notes.push('Verifikat outside the invoice engine debit the receivables before the register\'s first invoice this fiscal year: invoice history exists only as journal entries.')
-  }
-  if (!tiesOut(ledger.ledgerTotal, source.ledgerBalance, 2)) {
-    notes.push(`The huvudbok closes the accounts at ${ledger.ledgerTotal} while the reconciliation reads ${source.ledgerBalance}: an opening balance carried from an earlier year without an ingående balans verifikat.`)
   }
   return {
     parts,

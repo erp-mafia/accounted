@@ -104,6 +104,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     tax_payment_file_format: string | null
     tax_payment_file_generated_at: string | null
     tax_paid_at: string | null
+    payment_due_date?: string | null
   } | null>(null)
   const [taxPaymentLoading, setTaxPaymentLoading] = useState(false)
 
@@ -1080,7 +1081,10 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
           </div>
         ) : (
           <TaxPaymentPanel
-            period={periodLabel}
+            // The AGI period (payout month), the key the declaration was
+            // fetched with above: the earned month named the previous AGI for
+            // lön i efterskott, so the file and mark-paid hit the wrong period.
+            period={formatAgiPeriodDashed(agiReportingPeriod(run))}
             // Prefer the AGI declaration's stored totals (whole kronor, and
             // they honor review overrides/corrections); the run totals are
             // the pre-AGI fallback and get truncated inside the panel.
@@ -1089,6 +1093,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
             paymentFileFormat={taxPayment?.tax_payment_file_format ?? null}
             paymentFileGeneratedAt={taxPayment?.tax_payment_file_generated_at ?? null}
             taxPaidAt={taxPayment?.tax_paid_at ?? null}
+            paymentDueDate={taxPayment?.payment_due_date ?? null}
             agiPeriod={taxPayment ? formatAgiPeriodDashed(agiReportingPeriod(run)) : null}
             defaultFormat={preferredPaymentFormat}
             senderBankgiro={senderBankgiro}

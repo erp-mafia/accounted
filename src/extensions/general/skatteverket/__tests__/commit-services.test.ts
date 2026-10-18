@@ -14,9 +14,29 @@ vi.mock('../lib/api-client', async (importOriginal) => {
 })
 
 const mockBuildMomsuppgift = vi.fn()
+const mockRefreshAgiUnderlag = vi.fn()
+const mockBuildAgiUnderlag = vi.fn()
 vi.mock('../lib/declaration-prep', async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>
-  return { ...actual, buildMomsuppgift: (...a: unknown[]) => mockBuildMomsuppgift(...a) }
+  return {
+    ...actual,
+    buildMomsuppgift: (...a: unknown[]) => mockBuildMomsuppgift(...a),
+    refreshAgiUnderlag: (...a: unknown[]) => mockRefreshAgiUnderlag(...a),
+    buildAgiUnderlag: (...a: unknown[]) => mockBuildAgiUnderlag(...a),
+  }
+})
+
+const mockAgiPostUnderlag = vi.fn()
+const mockAgiGetKontrollresultat = vi.fn()
+const mockAgiSkapaGranskningsunderlag = vi.fn()
+vi.mock('../lib/agi-client', async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>
+  return {
+    ...actual,
+    agiPostUnderlag: (...a: unknown[]) => mockAgiPostUnderlag(...a),
+    agiGetKontrollresultat: (...a: unknown[]) => mockAgiGetKontrollresultat(...a),
+    agiSkapaGranskningsunderlag: (...a: unknown[]) => mockAgiSkapaGranskningsunderlag(...a),
+  }
 })
 
 vi.mock('../lib/audit', () => ({ writeSkatteverketAudit: vi.fn() }))
@@ -35,6 +55,7 @@ vi.mock('@/lib/extensions/context-factory', () => ({
   }),
 }))
 
+import { createQueuedMockSupabase } from '@/tests/helpers'
 import { skatteverketExtension } from '../index'
 import { SkatteverketAuthError } from '../lib/api-client'
 import { vatDeclarationFixture } from './vat-declaration-fixture'
@@ -64,6 +85,51 @@ beforeEach(() => {
 afterEach(() => {
   if (prevEnv === undefined) delete process.env.SKATTEVERKET_ENABLED
   else process.env.SKATTEVERKET_ENABLED = prevEnv
+})
+
+// MCP gnubok_agi_submit at approval (issue #69): the chain regenerates an
+// unfiled underlag first, so an op staged before a generator fix files the
+// fixed XML, not the one stored at staging time.
+describe('commitSubmitAgi', () => {
+  const commitSubmitAgi = skatteverketExtension.services!.commitSubmitAgi as unknown as SkvSubmitFn
+
+  beforeEach(() => {
+    mockRefreshAgiUnderlag.mockResolvedValue({ ok: true, outcome: 'replaced' })
+    mockBuildAgiUnderlag.mockResolvedValue({
+      arbetsgivare: '165560000000', period: '202609', xml: '<Skatteverket>fresh</Skatteverket>',
+      periodYear: 2026, periodMonth: 9, salaryRunId: 'run-1',
+    })
+    mockAgiPostUnderlag.mockResolvedValue({ ok: true, data: { inlamningId: 7 } })
+    mockAgiGetKontrollresultat.mockResolvedValue({ ok: true, data: { status: 'DONE_SUCCESS' } })
+    mockAgiSkapaGranskningsunderlag.mockResolvedValue({
+      ok: true, data: { tillstand: 'LOCKED_FOR_SIGNING', link: 'https://skv.test/agi/sign', meddelande: null },
+    })
+  })
+
+  it('regenerates the run\'s underlag before posting it, then returns the signing link', async () => {
+    const { supabase } = createQueuedMockSupabase()
+
+    const result = await commitSubmitAgi(supabase, 'user-1', 'company-1', { salary_run_id: 'run-1' })
+
+    expect(result).toMatchObject({ ok: true, signing_url: 'https://skv.test/agi/sign' })
+    expect(mockRefreshAgiUnderlag).toHaveBeenCalledWith(supabase, 'company-1', 'user-1', 'run-1')
+    expect(mockRefreshAgiUnderlag.mock.invocationCallOrder[0]).toBeLessThan(mockAgiPostUnderlag.mock.invocationCallOrder[0])
+    expect(mockAgiPostUnderlag.mock.calls[0][3]).toBe('<Skatteverket>fresh</Skatteverket>')
+  })
+
+  it('a refused regeneration is non-recoverable and posts nothing', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    mockRefreshAgiUnderlag.mockResolvedValue({
+      ok: false, code: 'AGI_INCOMPLETE_DATA', httpStatus: 400, error: 'AGI kräver telefon.',
+    })
+
+    const result = await commitSubmitAgi(supabase, 'user-1', 'company-1', { salary_run_id: 'run-1' })
+
+    expect(result).toMatchObject({
+      ok: false, code: 'AGI_INCOMPLETE_DATA', http_status: 400, recoverable: false, error: 'AGI kräver telefon.',
+    })
+    expect(mockAgiPostUnderlag).not.toHaveBeenCalled()
+  })
 })
 
 describe('commitSubmitVatDeclaration', () => {

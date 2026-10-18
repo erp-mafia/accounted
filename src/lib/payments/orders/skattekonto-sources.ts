@@ -14,7 +14,7 @@
  *     (vatPeriodDeadline).
  *   - AGI: the declaration's stored totals, what the tax payment file pays
  *     and Skatteverket draws. Due on the day the deadline configuration gives
- *     the month (getAgiPaymentDeadlineForPeriod: the 12th, 17th in January and
+ *     the month (getAgiPaymentDueDate: the 12th, 17th in January and
  *     August; the 12th, 17th in January, above the SEK 40M VAT taxable base),
  *     moved to the next banking day.
  *
@@ -35,9 +35,8 @@ import { saneIsoDateSchema } from '@/lib/invariants/zod'
 import { roundOre } from '@/lib/money'
 import { computeVatDeclaration } from '@/lib/reports/vat-declaration'
 import { buildFiledAmounts } from '@/lib/reports/vat-manual-filing'
-import { getAgiPaymentDeadlineForPeriod } from '@/lib/tax/deadline-config'
+import { getAgiPaymentDueDate } from '@/lib/tax/deadline-config'
 import { vatPeriodDeadline, type VatPeriodDeadline } from '@/lib/vat/filing-record-store'
-import { nextBankDayIso } from '../bank-days'
 
 /** The declaration a skattekonto payment pays. */
 export type SkattekontoDeclarationSource =
@@ -304,13 +303,10 @@ async function resolveAgi(
   if (!agi) return { ok: false, code: 'SKATTEKONTO_PAYMENT_AGI_NOT_FOUND', details: { tax_period: taxPeriod } }
 
   const settings = settingsRes.data as { vat_registered: boolean | null; vat_taxable_base_over_40m: boolean | null } | null
-  const instance = getAgiPaymentDeadlineForPeriod(source.year, source.month, {
+  const dueDate = getAgiPaymentDueDate(source.year, source.month, {
     vat_registered: settings?.vat_registered === true,
     vat_taxable_base_over_40m: settings?.vat_taxable_base_over_40m === true,
   })
-  const dueDate = instance
-    ? nextBankDayIso(`${instance.year}-${String(instance.month + 1).padStart(2, '0')}-${String(instance.day).padStart(2, '0')}`)
-    : null
   const deadlineRows = (deadlineRes.data ?? []) as Array<{ is_completed: boolean | null }>
   const filed = AGI_FILED_STATUSES.has(agi.status) || deadlineRows.some((row) => row.is_completed === true)
 

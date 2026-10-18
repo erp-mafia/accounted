@@ -5,7 +5,8 @@
  *
  * The chain is two steps, exported on their own so every door runs the same
  * code and flips the same rows:
- *   - submitAgiUnderlag: POST /underlag, poll kontrollresultat;
+ *   - submitAgiUnderlag: regenerate an unfiled underlag from current data,
+ *     POST /underlag, poll kontrollresultat;
  *   - createAgiSigningLink: skapaGranskningsunderlag with the period locked.
  * Callers:
  *   - `POST /agi/send-for-signing` (index.ts), the panel's one-click
@@ -33,7 +34,7 @@ import type { ExtensionContext } from '@/lib/extensions/types'
 import { sleep } from '@/lib/utils'
 import { agiGetKontrollresultat, agiPostUnderlag, agiSkapaGranskningsunderlag } from './agi-client'
 import { firstAgiKontrollMessage, summarizeAgiKontrollrapport, type AgiKontrollrapportSummary } from './agi-kontrollrapport'
-import { buildAgiUnderlag } from './declaration-prep'
+import { buildAgiUnderlag, refreshAgiUnderlag } from './declaration-prep'
 
 export interface AgiSubmitChainOptions {
   /** Kontrollresultat polls after the first read (Skatteverket is usually sub-second). */
@@ -102,7 +103,9 @@ function flipRunDeclaration(supabase: SupabaseClient, companyId: string, target:
 }
 
 /**
- * Step 1: POST the run's stored underlag and poll kontrollresultat until it
+ * Step 1: bring the run's underlag up to date (refreshAgiUnderlag: an unfiled
+ * declaration is regenerated from current data, so a generator fix reaches
+ * an XML stored before it), POST it and poll kontrollresultat until it
  * settles. A refusal at kontroll marks the run's declaration rejected and
  * carries Skatteverket's kontrollsvar.
  */
@@ -114,6 +117,19 @@ export async function submitAgiUnderlag(
   salaryRunId: string,
   options: AgiSubmitChainOptions = {},
 ): Promise<AgiUnderlagStepResult> {
+  const refreshed = await refreshAgiUnderlag(supabase, companyId, userId, salaryRunId)
+  if (!refreshed.ok) {
+    // The fresh generation refused (incomplete data, a period conflict, ...):
+    // nothing is posted, and never the stale stored XML in its place.
+    return {
+      ok: false,
+      code: refreshed.code,
+      httpStatus: refreshed.httpStatus,
+      recoverable: false,
+      error: refreshed.error,
+      ...(refreshed.details ? { details: refreshed.details } : {}),
+    }
+  }
   const { arbetsgivare, period, xml, periodYear, periodMonth } = await buildAgiUnderlag(supabase, companyId, salaryRunId)
   const target: AgiRunTarget = { salaryRunId, arbetsgivare, period, periodYear, periodMonth }
   const scope = { agRegistreradId: arbetsgivare, redovisningsperiod: period }

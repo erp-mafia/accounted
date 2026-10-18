@@ -1557,7 +1557,8 @@ export const skatteverketExtension: Extension = {
     // AGI (Arbetsgivardeklaration) routes
     //
     // AGI submission is XML, not JSON. We feed agi_declarations.xml_content
-    // (built by lib/salary/agi/xml-generator.ts) to POST /underlag, then poll
+    // (built by lib/salary/agi/xml-generator.ts, regenerated from current data
+    // before every submit while unfiled) to POST /underlag, then poll
     // kontrollresultat, save into Eget utrymme, and return a Mina Sidor
     // signing link via skapaGranskningsunderlag. After the user signs we
     // observe the kvittenser endpoint to record kvittensnummer/signeradTid.
@@ -1571,7 +1572,7 @@ export const skatteverketExtension: Extension = {
     // ── AGI: Skicka in underlag (step 1 of the chain) ───────────────
     // Body: { salaryRunId }. The panel's advanced "Skicka in underlag":
     // submitAgiUnderlag (lib/agi-submit.ts), the first step of the one-click
-    // chain: POST the stored XML, poll kontrollresultat with the panel's
+    // chain: refresh and POST the XML, poll kontrollresultat with the panel's
     // patience, mark the run's declaration rejected on a refusal at kontroll.
     // Answers { data: { inlamningId, kontrollrapport } } or { error, code,
     // details } (details.kontrollrapport on a refusal at kontroll).
@@ -1615,7 +1616,7 @@ export const skatteverketExtension: Extension = {
     // runs at approval, so both doors submit, poll, lock and flip the run's
     // declaration alike. Answers { data: { signing_url, tillstand, period } }
     // or { error, code, details } (details.kontrollrapport on a refusal at
-    // kontroll). The XML must have been generated; nothing is filed here.
+    // kontroll). The XML is (re)generated first; nothing is filed here.
     {
       method: 'POST',
       path: '/agi/send-for-signing',
