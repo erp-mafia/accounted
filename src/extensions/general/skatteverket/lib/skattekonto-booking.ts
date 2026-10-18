@@ -19,6 +19,8 @@ import {
 } from '@/lib/reconciliation/skattekonto-reconciliation'
 import { formatCurrency } from '@/lib/utils'
 import { VAT_REFUND_ACCOUNT, VAT_ROUNDING_ACCOUNT, VAT_SETTLEMENT_ACCOUNT } from '@/lib/reports/vat-settlement'
+import { SALARY_ACCOUNTS } from '@/lib/salary/account-mapping'
+import { findAvgifterLiabilityAccount } from '@/lib/salary/agi/avgifter-liability-account'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import {
   findLedgerTwinCandidates,
@@ -232,6 +234,47 @@ async function resolveVatRefundCounterAccount(
     : { account: VAT_REFUND_ACCOUNT, label, oreRounding: gap }
 }
 
+/** The account a company's avgifter liability sits on at an event date (null: unknown). */
+type AvgifterLiabilityReader = (eventDate: string | undefined) => Promise<string | null>
+
+function readAvgifterLiabilityAccount(supabase: SupabaseClient, companyId: string): AvgifterLiabilityReader {
+  const byDate = new Map<string, Promise<string | null>>()
+  return (eventDate) => {
+    const cutoffDate = eventDate ?? todayIsoStockholm()
+    let pending = byDate.get(cutoffDate)
+    if (!pending) {
+      pending = findAvgifterLiabilityAccount(supabase, companyId, cutoffDate)
+      byDate.set(cutoffDate, pending)
+    }
+    return pending
+  }
+}
+
+/**
+ * The counter-account for an arbetsgivaravgift event (accounted#68).
+ *
+ * The seed rule books every avgift event on 2731, the account the salary
+ * module credits. A company whose payroll books the liability on the group
+ * account 2730 instead (another payroll system, or the SIE history it
+ * brought) then got every draw on 2731 while the liability sat on 2730: the
+ * two accounts drifted apart with opposite balances, right only in sum. So
+ * the seed rule's 2731 follows the account the company's own liability was
+ * last booked on before the event (findAvgifterLiabilityAccount). Everything
+ * else keeps the rule's account: a company's own rule, no liability booking
+ * in the lookback, both accounts on the newest date, and a failed read.
+ */
+async function resolveAvgifterLiabilityCounterAccount(
+  match: CounterAccountMatch,
+  seedRule: boolean,
+  eventDate: string | undefined,
+  readLiabilityAccount: AvgifterLiabilityReader,
+): Promise<CounterAccountMatch> {
+  if (!seedRule || match.account !== SALARY_ACCOUNTS.AVGIFTER_LIABILITY) return match
+  const account = await readLiabilityAccount(eventDate)
+  if (!account || account === match.account) return match
+  return { ...match, account }
+}
+
 /**
  * Find the counter-account for a Skatteverket transaktionstext by consulting
  * `skattekonto_rules` (system seeds + per-company overrides). Returns null when
@@ -397,6 +440,7 @@ export async function guessCounterAccount(
       entityType,
       employerRegistered,
       resolvePrimarySek: () => resolvePrimarySekAccount(supabase, companyId),
+      readAvgifterLiability: readAvgifterLiabilityAccount(supabase, companyId),
     },
     { transaktionstext, belopp, transaktionsdatum: eventDate },
     readVatReceivableBalance(supabase, companyId),
@@ -420,6 +464,9 @@ export interface SkattekontoRuleContext {
    *  Drives the requires_employer rule gate for enskild firma. */
   employerRegistered: boolean
   resolvePrimarySek: () => Promise<string>
+  /** Where the avgifter liability sits per event date, memoized: read only
+   *  when the seed arbetsgivaravgift rule matches. */
+  readAvgifterLiability: AvgifterLiabilityReader
 }
 
 export async function loadRuleContext(
@@ -437,6 +484,7 @@ export async function loadRuleContext(
       account: SKATTEKONTO_ACCOUNT_DEFAULT,
       employerRegistered: false,
       resolvePrimarySek: async () => PRIMARY_SEK_FALLBACK,
+      readAvgifterLiability: async () => null,
     }
   }
 
@@ -468,6 +516,7 @@ export async function loadRuleContext(
       }
       return primary
     },
+    readAvgifterLiability: readAvgifterLiabilityAccount(supabase, companyId),
   }
 }
 
@@ -476,9 +525,11 @@ export async function loadRuleContext(
  * that books or suggests one: the per-row and batch booking, the list's
  * suggestion and guessCounterAccount. It walks the rules
  * (matchSkattekontoRule: legal form, amount bounds, the employer gate),
- * resolves the __PRIMARY_SEK__ sentinel against cash_accounts, and lets a
+ * resolves the __PRIMARY_SEK__ sentinel against cash_accounts, lets a
  * seed-rule VAT refund clear the 1650 receivable
- * (resolveVatRefundCounterAccount). A caller only chooses how the 1650
+ * (resolveVatRefundCounterAccount), and moves a seed-rule avgift event onto
+ * the account the company's liability sits on
+ * (resolveAvgifterLiabilityCounterAccount). A caller only chooses how the 1650
  * balance is read: fresh per row when booking, the page's remaining
  * receivable when suggesting.
  */
@@ -496,7 +547,7 @@ async function resolveCounterAccount(
     ctx.employerRegistered,
   )
   if (outcome.kind !== 'match') return outcome
-  const match = await resolveVatRefundCounterAccount(
+  const vatMatch = await resolveVatRefundCounterAccount(
     {
       ...outcome.match,
       account:
@@ -509,6 +560,12 @@ async function resolveCounterAccount(
     event.transaktionstext,
     event.transaktionsdatum,
     readBalance,
+  )
+  const match = await resolveAvgifterLiabilityCounterAccount(
+    vatMatch,
+    outcome.seedRule,
+    event.transaktionsdatum,
+    ctx.readAvgifterLiability,
   )
   return { ...outcome, match }
 }

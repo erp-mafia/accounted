@@ -37,6 +37,7 @@ import {
   PAYMENT_ORDER_SECTIONS,
   PAYMENT_ORDER_STATUS_BADGE,
   sectionOf,
+  signAgainOrders,
   type PaymentOrderSection,
 } from './payment-order-status'
 import {
@@ -93,6 +94,8 @@ export function PaymentOrdersPage() {
   const [signing, setSigning] = useState<PaymentOrder[] | null>(null)
   /** Set when the signing dialog was reopened by a return from the bank's own page. */
   const [resume, setResume] = useState<PaymentSigningReturn | null>(null)
+  /** Signera igen: the signing whose payments wait unsigned at the bank, restarted instead of a new one. */
+  const [signAgainBatch, setSignAgainBatch] = useState<string | null>(null)
   const [resolving, setResolving] = useState<PaymentOrder | null>(null)
   /** Be någon annan signera: the approved orders a signing link is being made for. */
   const [requesting, setRequesting] = useState<PaymentOrder[] | null>(null)
@@ -238,6 +241,16 @@ export function PaymentOrdersPage() {
     } finally {
       setBusyId(null)
     }
+  }
+
+  // An abandoned or expired BankID left the payments waiting unsigned at the
+  // bank: the same signing is started again (restartPaymentSigning), over
+  // every order of it that still waits.
+  function signAgain(order: PaymentOrder) {
+    const again = signAgainOrders(order, orders ?? [])
+    if (again.length === 0 || !order.batch_id) return
+    setSignAgainBatch(order.batch_id)
+    setSigning(again)
   }
 
   async function cancel(order: PaymentOrder) {
@@ -539,6 +552,11 @@ export function PaymentOrdersPage() {
                                     {t('unapprove')}
                                   </button>
                                 )}
+                                {order.sign_again && available && (
+                                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => signAgain(order)} disabled={busyId !== null}>
+                                    {t('sign_again')}
+                                  </button>
+                                )}
                                 {held && available && (
                                   <button type="button" className={QUIET_LINK_CLASS} onClick={() => setResolving(order)} disabled={busyId !== null}>
                                     {t('resolve')}
@@ -590,10 +608,12 @@ export function PaymentOrdersPage() {
           signerKnown={availability.signer_known}
           bankName={availability.accounts.find((a) => a.id === signing[0]?.cash_account_id)?.bank_name ?? null}
           resume={resume}
+          pendingBatchId={signAgainBatch}
           onOpenChange={(open) => {
             if (!open) {
               setSigning(null)
               setResume(null)
+              setSignAgainBatch(null)
             }
           }}
           onDone={refresh}

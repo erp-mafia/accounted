@@ -5,6 +5,8 @@
  * and ISO 20022 camt.053 XML.
  */
 
+import type { UnrecognizedColumns } from './columns'
+
 /** Parsed and normalized bank transaction from any file format */
 export interface ParsedBankTransaction {
   date: string // YYYY-MM-DD
@@ -52,6 +54,12 @@ export interface BankFileParseResult {
   date_from: string | null
   date_to: string | null
   issues: BankFileParseIssue[]
+  /**
+   * Set when the format found no column it could read: the columns the file
+   * does have and the ones the format expects. The parse routes answer it
+   * with BANK_FILE_COLUMNS_UNRECOGNIZED instead of an empty preview.
+   */
+  unrecognized_columns?: UnrecognizedColumns
   stats: {
     total_rows: number
     parsed_rows: number

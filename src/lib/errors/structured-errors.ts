@@ -1889,6 +1889,41 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
         'Operator action, not the caller: the platform Resend account has no domain left on its plan. Retrying does not help until the plan grows or unused domains are removed.',
     },
   },
+  // The rest of the sending-domain answers when Resend fails or refuses. The
+  // customer gets these sentences; Resend's own name, status and text go to
+  // the log only (crm#1288 follow-up: that text used to reach the toast).
+  SENDING_DOMAIN_CLAIM_PROVIDER_ERROR: {
+    httpStatus: 502,
+    message_sv:
+      'Kunde inte registrera domänen hos e-postleverantören. Försök igen om en stund och kontakta supporten om felet kvarstår.',
+    message_en:
+      'The domain could not be registered with our email provider. Try again in a moment and contact support if the problem persists.',
+    retryable: true,
+  },
+  SENDING_DOMAIN_VERIFY_PROVIDER_ERROR: {
+    httpStatus: 502,
+    message_sv:
+      'Kunde inte kontrollera domänen hos e-postleverantören just nu. Försök igen om en stund och kontakta supporten om felet kvarstår.',
+    message_en:
+      'The domain could not be checked with our email provider right now. Try again in a moment and contact support if the problem persists.',
+    retryable: true,
+  },
+  // Resend answers 404 for the stored domain id: it was removed on the
+  // provider's side. Checking again never helps; claiming it again does.
+  SENDING_DOMAIN_VERIFY_PROVIDER_DOMAIN_MISSING: {
+    httpStatus: 409,
+    message_sv: 'Domänen finns inte längre hos e-postleverantören. Ta bort den här och lägg till den igen.',
+    message_en: 'The domain no longer exists at our email provider. Remove it here and add it again.',
+    remediation: { description: 'DELETE the sending domain, then claim it again and publish the new DNS records.' },
+  },
+  SENDING_DOMAIN_REMOVE_PROVIDER_ERROR: {
+    httpStatus: 502,
+    message_sv:
+      'Kunde inte ta bort domänen hos e-postleverantören just nu, så den ligger kvar. Försök igen om en stund och kontakta supporten om felet kvarstår.',
+    message_en:
+      'The domain could not be removed at our email provider right now, so it is still in place. Try again in a moment and contact support if the problem persists.',
+    retryable: true,
+  },
   INVOICE_SEND_NO_CUSTOMER_EMAIL: {
     httpStatus: 400,
     message_sv: 'Kunden saknar e-postadress. Uppdatera kunduppgifterna först.',
@@ -6179,6 +6214,23 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Bankfilens format kunde inte identifieras.',
     message_en: 'Bank file format could not be identified.',
+    remediation: {
+      description:
+        'details.found_columns lists the columns the file has. Pass `format` to force a bank format, or export the statement as CSV, Excel or camt.053 from the bank.',
+    },
+    // The route names the columns it found in the file.
+    thrown_message_sv: true,
+  },
+  BANK_FILE_COLUMNS_UNRECOGNIZED: {
+    httpStatus: 400,
+    message_sv: 'Bankfilens kolumner kändes inte igen.',
+    message_en: "The bank file's columns were not recognized.",
+    remediation: {
+      description:
+        'details.found_columns lists the columns the file has, details.expected_columns what the format reads (a date column and an amount column). Export the statement again from the bank, or map the columns by hand with format=generic_csv in the app.',
+    },
+    // The message names the columns found and the ones expected.
+    thrown_message_sv: true,
   },
   BANK_IMPORT_DUPLICATE_OTHER_COMPANY: {
     httpStatus: 409,
@@ -8858,6 +8910,17 @@ const PAYMENT_ORDERS: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'Betalningen är redan genomförd eller för nära betaldagen för att makuleras.',
     message_en: 'The payment has already been made or is too close to its payment date to cancel.',
+  },
+  // The bank refused the cancel of a payment it holds unsigned (crm#1282):
+  // nothing was paid, so "too late" would be wrong.
+  PAYMENT_CANCEL_UNSIGNED_REFUSED: {
+    httpStatus: 409,
+    message_sv: 'Betalningen är inte signerad hos banken och betalas inte utan signering. Banken nekade ändå makuleringen, oftast för att en signering med BankID har startats och inte löpt ut än. Försök igen om några minuter.',
+    message_en: 'The payment is not signed at the bank and will not be paid without a signature. The bank still refused the cancellation, usually because a BankID signing was started and has not expired yet. Try again in a few minutes.',
+    remediation: {
+      description:
+        'Nothing was paid: the bank holds the payment unsigned (provider_status RCVD or PDNG) and refused the cancel, typically while a signing of it is still open. The order is unchanged. Retry the cancel in a few minutes; the payment is not executed unless someone signs it.',
+    },
   },
   PAYMENT_CANCEL_NOT_CONFIRMED: {
     httpStatus: 502,

@@ -36,11 +36,70 @@ export type SendingDomainResult<T> =
  */
 export const SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT = 'SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT'
 
+/**
+ * Every other Resend failure, by operation (structured-errors registry). The
+ * customer gets the registry's Swedish sentence under the code; Resend's own
+ * name, status and text are logged for us and never returned.
+ */
+export const SENDING_DOMAIN_CLAIM_PROVIDER_ERROR = 'SENDING_DOMAIN_CLAIM_PROVIDER_ERROR'
+export const SENDING_DOMAIN_VERIFY_PROVIDER_ERROR = 'SENDING_DOMAIN_VERIFY_PROVIDER_ERROR'
+export const SENDING_DOMAIN_VERIFY_PROVIDER_DOMAIN_MISSING = 'SENDING_DOMAIN_VERIFY_PROVIDER_DOMAIN_MISSING'
+export const SENDING_DOMAIN_REMOVE_PROVIDER_ERROR = 'SENDING_DOMAIN_REMOVE_PROVIDER_ERROR'
+
+type SendingDomainProviderCode =
+  | typeof SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT
+  | typeof SENDING_DOMAIN_CLAIM_PROVIDER_ERROR
+  | typeof SENDING_DOMAIN_VERIFY_PROVIDER_ERROR
+  | typeof SENDING_DOMAIN_VERIFY_PROVIDER_DOMAIN_MISSING
+  | typeof SENDING_DOMAIN_REMOVE_PROVIDER_ERROR
+
 /** Resend's documented error body: { name, message, statusCode }. */
 interface ResendErrorShape {
   name?: string
   message?: string
   statusCode?: number | null
+}
+
+/**
+ * What Resend said (or what the SDK threw), for the log. Never for the
+ * response: its text is English, names provider internals, and once told a
+ * customer about our plan's domain count (crm#1288).
+ */
+function describeProviderError(error: unknown): {
+  providerError: string | null
+  providerStatus: number | null
+  providerMessage: string | null
+} {
+  if (error instanceof Error) {
+    return { providerError: error.name, providerStatus: null, providerMessage: error.message }
+  }
+  const shape = (error ?? null) as ResendErrorShape | null
+  return {
+    providerError: shape?.name ?? null,
+    providerStatus: shape?.statusCode ?? null,
+    providerMessage: shape?.message ?? null,
+  }
+}
+
+/**
+ * A Resend failure as the customer sees it: the registry's sentence and status
+ * under its code. The provider's own error is logged with the operation and
+ * company; `alert` marks the ones the founders must act on.
+ */
+function providerFailure(
+  code: SendingDomainProviderCode,
+  logMessage: string,
+  context: { operation: string; companyId: string; alert?: true },
+  providerError: unknown,
+): { ok: false; status: number; error: string; code: string } {
+  log.error(logMessage, { ...context, ...describeProviderError(providerError), code })
+  const entry = getErrorEntry(code)
+  return {
+    ok: false,
+    status: entry?.httpStatus ?? 502,
+    code,
+    error: entry?.message_sv ?? 'E-postleverantören svarade inte som väntat. Försök igen om en stund.',
+  }
 }
 
 export type DomainCreateRefusal = 'already_registered' | 'plan_limit' | 'other'
@@ -208,20 +267,27 @@ export async function claimSendingDomain(
         : 'Domänen är redan registrerad.'
       return { ok: false, status: 409, error: message }
     }
-    return {
-      ok: false,
-      status: 500,
-      error: insertError?.message ?? 'Kunde inte spara domänen.',
-    }
+    log.error('sending-domain claim could not insert the row', {
+      operation: 'sending-domain.claim',
+      companyId,
+      dbError: insertError?.message ?? null,
+    })
+    return { ok: false, status: 500, error: 'Kunde inte spara domänen. Försök igen om en stund.' }
   }
 
+  // Set once Resend has created the domain. From then on a rollback removes
+  // it too: left behind, it holds one of the shared account's plan slots with
+  // no row pointing at it (crm#1288).
+  let resendDomainId: string | null = null
   const rollback = async () => {
+    if (resendDomainId) await removeCreatedResendDomain(resendDomainId, companyId, domain)
     await supabase
       .from('company_sending_domains')
       .delete()
       .eq('id', inserted.id)
       .eq('company_id', companyId)
   }
+  const claimContext = { operation: 'sending-domain.claim', companyId }
 
   try {
     const resend = getResendClient()
@@ -247,54 +313,39 @@ export async function claimSendingDomain(
             'Domänen finns redan hos e-postleverantören och kan inte läggas till automatiskt. Kontakta supporten.',
         }
       }
-      // Resend's own text is for us, never the customer: it is logged here
-      // and the customer gets our sentence.
-      const provider = {
-        operation: 'sending-domain.claim',
-        companyId,
-        providerError: created.error?.name ?? null,
-        providerStatus: created.error?.statusCode ?? null,
-        providerMessage: created.error?.message ?? null,
-      }
       if (refusal === 'plan_limit') {
         // Every company's domain lives in the one platform account, so this
         // refuses every claim until the plan grows or domains are removed:
         // the founders have to act, the customer cannot.
-        log.error('sending-domain claim refused: the Resend account has used every domain its plan includes', {
-          ...provider,
-          alert: true,
-          code: SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT,
-        })
-        const entry = getErrorEntry(SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT)
-        return {
-          ok: false,
-          status: entry?.httpStatus ?? 503,
-          code: SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT,
-          error: entry?.message_sv ?? 'Egen avsändardomän går inte att lägga till just nu. Försök igen senare.',
-        }
+        return providerFailure(
+          SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT,
+          'sending-domain claim refused: the Resend account has used every domain its plan includes',
+          { ...claimContext, alert: true },
+          created.error,
+        )
       }
-      log.error('sending-domain claim refused by Resend', provider)
-      return {
-        ok: false,
-        status: 502,
-        error:
-          'Kunde inte registrera domänen hos e-postleverantören. Försök igen om en stund och kontakta supporten om felet kvarstår.',
-      }
+      return providerFailure(
+        SENDING_DOMAIN_CLAIM_PROVIDER_ERROR,
+        'sending-domain claim refused by Resend',
+        claimContext,
+        created.error,
+      )
     }
 
-    const resendDomainId = created.data.id
+    const createdId = created.data.id
+    resendDomainId = createdId
 
     // get() rather than the create response: it returns the same shape with
     // the full DNS record list and the per-record status the UI renders.
-    const fetched = await resend.domains.get(resendDomainId)
+    const fetched = await resend.domains.get(createdId)
     if (fetched.error || !fetched.data) {
-      await resend.domains.remove(resendDomainId).catch(() => undefined)
       await rollback()
-      return {
-        ok: false,
-        status: 502,
-        error: `Kunde inte hämta DNS-poster: ${fetched.error?.message ?? 'okänt fel'}`,
-      }
+      return providerFailure(
+        SENDING_DOMAIN_CLAIM_PROVIDER_ERROR,
+        'sending-domain claim could not read the DNS records of the domain it created',
+        claimContext,
+        fetched.error,
+      )
     }
 
     // A freshly created domain has no DNS yet, so it is never verified here;
@@ -308,7 +359,7 @@ export async function claimSendingDomain(
     const { data: updated, error: updateError } = await writer
       .from('company_sending_domains')
       .update({
-        resend_domain_id: resendDomainId,
+        resend_domain_id: createdId,
         dns_records: fetched.data.records,
         status,
         verified_at: status === 'verified' ? new Date().toISOString() : null,
@@ -322,20 +373,47 @@ export async function claimSendingDomain(
       .single()
 
     if (updateError || !updated) {
-      await resend.domains.remove(resendDomainId).catch(() => undefined)
       await rollback()
-      return { ok: false, status: 500, error: updateError?.message ?? 'Kunde inte spara DNS-poster.' }
+      log.error('sending-domain claim could not store the DNS records', {
+        ...claimContext,
+        dbError: updateError?.message ?? null,
+      })
+      return { ok: false, status: 500, error: 'Kunde inte spara domänen. Försök igen om en stund.' }
     }
 
     return { ok: true, data: updated as CompanySendingDomain }
   } catch (err) {
+    // A throw (network, SDK, configuration) at any step: the domain Resend
+    // may already have created goes too, not only the row.
     await rollback()
-    return {
-      ok: false,
-      status: 502,
-      error: err instanceof Error ? err.message : 'Domänregistreringen misslyckades.',
-    }
+    return providerFailure(SENDING_DOMAIN_CLAIM_PROVIDER_ERROR, 'sending-domain claim failed', claimContext, err)
   }
+}
+
+/**
+ * Removes the Resend domain a claim created moments ago, after a later step
+ * of that claim failed. Resend reports a refused removal as `{ error }`, not
+ * a throw, so both are checked (a 404 means it is already gone). When it
+ * cannot be removed the domain is orphaned in the shared account: an
+ * alert-flagged log names it for an operator to remove by hand.
+ */
+async function removeCreatedResendDomain(resendDomainId: string, companyId: string, domain: string): Promise<void> {
+  let failure: unknown
+  try {
+    const removed = await getResendClient().domains.remove(resendDomainId)
+    if (!removed.error || removed.error.statusCode === 404) return
+    failure = removed.error
+  } catch (err) {
+    failure = err
+  }
+  log.error('sending-domain claim rollback could not remove the Resend domain it created; remove it by hand', {
+    operation: 'sending-domain.claim.rollback',
+    companyId,
+    domain,
+    resendDomainId,
+    ...describeProviderError(failure),
+    alert: true,
+  })
 }
 
 /**
@@ -368,6 +446,7 @@ export async function checkSendingDomainVerification(
     }
   }
 
+  const verifyContext = { operation: 'sending-domain.verify', companyId }
   try {
     const resend = getResendClient()
     let fetched = await resend.domains.get(row.resend_domain_id)
@@ -376,11 +455,22 @@ export async function checkSendingDomainVerification(
       fetched = await resend.domains.get(row.resend_domain_id)
     }
     if (fetched.error || !fetched.data) {
-      return {
-        ok: false,
-        status: 502,
-        error: `Kunde inte kontrollera domänen: ${fetched.error?.message ?? 'okänt fel'}`,
+      // 404: the domain was removed on Resend's side (by hand, to free a plan
+      // slot). Checking again never helps; claiming it again does.
+      if (fetched.error?.statusCode === 404) {
+        return providerFailure(
+          SENDING_DOMAIN_VERIFY_PROVIDER_DOMAIN_MISSING,
+          'sending-domain check: Resend no longer has the domain',
+          verifyContext,
+          fetched.error,
+        )
       }
+      return providerFailure(
+        SENDING_DOMAIN_VERIFY_PROVIDER_ERROR,
+        'sending-domain check failed at Resend',
+        verifyContext,
+        fetched.error,
+      )
     }
 
     // A domain without the sending capability can never carry outbound
@@ -416,15 +506,15 @@ export async function checkSendingDomainVerification(
       .single()
 
     if (updateError || !updated) {
-      return { ok: false, status: 500, error: updateError?.message ?? 'Kunde inte spara status.' }
+      log.error('sending-domain check could not store the status', {
+        ...verifyContext,
+        dbError: updateError?.message ?? null,
+      })
+      return { ok: false, status: 500, error: 'Kunde inte spara status. Försök igen om en stund.' }
     }
     return { ok: true, data: updated as CompanySendingDomain }
   } catch (err) {
-    return {
-      ok: false,
-      status: 502,
-      error: err instanceof Error ? err.message : 'Kontrollen misslyckades.',
-    }
+    return providerFailure(SENDING_DOMAIN_VERIFY_PROVIDER_ERROR, 'sending-domain check failed', verifyContext, err)
   }
 }
 
@@ -501,16 +591,20 @@ export async function removeSendingDomain(
   const row = await getSendingDomain(supabase, companyId)
   if (!row) return { ok: false, status: 404, error: 'Ingen avsändardomän är registrerad.' }
 
+  // Every refusal below keeps the row, so the customer can simply try again:
+  // dropping it while the Resend domain stays would orphan a plan slot.
+  const removeContext = { operation: 'sending-domain.remove', companyId }
   if (row.resend_domain_id) {
     try {
       const resend = getResendClient()
       const fetched = await resend.domains.get(row.resend_domain_id)
       if (fetched.error && fetched.error.statusCode !== 404) {
-        return {
-          ok: false,
-          status: 502,
-          error: `Kunde inte kontrollera domänen hos e-postleverantören: ${fetched.error.message}`,
-        }
+        return providerFailure(
+          SENDING_DOMAIN_REMOVE_PROVIDER_ERROR,
+          'sending-domain removal could not read the domain at Resend',
+          removeContext,
+          fetched.error,
+        )
       }
       if (
         fetched.data &&
@@ -519,19 +613,16 @@ export async function removeSendingDomain(
       ) {
         const removed = await resend.domains.remove(row.resend_domain_id)
         if (removed.error && removed.error.statusCode !== 404) {
-          return {
-            ok: false,
-            status: 502,
-            error: `Kunde inte ta bort domänen hos e-postleverantören: ${removed.error.message}`,
-          }
+          return providerFailure(
+            SENDING_DOMAIN_REMOVE_PROVIDER_ERROR,
+            'sending-domain removal refused by Resend',
+            removeContext,
+            removed.error,
+          )
         }
       }
     } catch (err) {
-      return {
-        ok: false,
-        status: 502,
-        error: err instanceof Error ? err.message : 'Borttagningen misslyckades.',
-      }
+      return providerFailure(SENDING_DOMAIN_REMOVE_PROVIDER_ERROR, 'sending-domain removal failed', removeContext, err)
     }
   }
 
@@ -541,7 +632,10 @@ export async function removeSendingDomain(
     .eq('id', row.id)
     .eq('company_id', companyId)
 
-  if (error) return { ok: false, status: 500, error: error.message }
+  if (error) {
+    log.error('sending-domain removal could not delete the row', { ...removeContext, dbError: error.message })
+    return { ok: false, status: 500, error: 'Kunde inte ta bort domänen. Försök igen om en stund.' }
+  }
   return { ok: true, data: { removed: true } }
 }
 

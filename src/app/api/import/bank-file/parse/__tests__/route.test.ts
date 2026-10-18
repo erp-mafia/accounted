@@ -6,6 +6,7 @@
  * parse as the escape hatch.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import * as XLSX from 'xlsx'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { septemberFile } from '@/lib/import/bgmax/__tests__/bgmax-fixture'
 
@@ -173,5 +174,78 @@ describe('POST /api/import/bank-file/parse (account match)', () => {
     expect(response.status).toBe(200)
     expect(body.data.account_match).toBeNull()
     expect(supabase.from).not.toHaveBeenCalledWith('cash_accounts')
+  })
+})
+
+// crm#1236: Länsförsäkringar's kontoutdrag comes as one .xls file per month.
+describe('POST /api/import/bank-file/parse (Excel files and unrecognized columns)', () => {
+  function monthStatementXlsx(): ArrayBuffer {
+    const serial = (iso: string) => {
+      const [y, m, d] = iso.split('-').map(Number)
+      return (Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / 86_400_000
+    }
+    const sheet: XLSX.WorkSheet = {
+      A1: { t: 's', v: 'Kontoutdrag oktober 2025' },
+      A2: { t: 's', v: 'Bokföringsdag' },
+      B2: { t: 's', v: 'Transaktionsdag' },
+      C2: { t: 's', v: 'Meddelande' },
+      D2: { t: 's', v: 'Belopp' },
+      A3: { t: 'n', v: serial('2025-10-03'), z: 'yyyy-mm-dd' },
+      B3: { t: 'n', v: serial('2025-10-01'), z: 'yyyy-mm-dd' },
+      C3: { t: 's', v: 'ICA NÄRA TESTBY' },
+      D3: { t: 'n', v: -1234.5 },
+      '!ref': 'A1:D3',
+    }
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, sheet, 'Kontoutdrag')
+    return XLSX.write(workbook, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer
+  }
+
+  function makeBytesRequest(bytes: ArrayBuffer, filename: string) {
+    const formData = new FormData()
+    formData.append('file', new File([bytes], filename))
+    return new Request('http://localhost:3000/api/import/bank-file/parse', { method: 'POST', body: formData })
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
+  })
+
+  it('parses an Excel kontoutdrag and returns the text it was read as', async () => {
+    enqueue({ data: null }) // no prior bank_file_imports row
+    const response = await POST(makeBytesRequest(monthStatementXlsx(), 'Kontoutdrag 2025-10.xlsx'), emptyParams)
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body.data.detected_format).toBe('lansforsakringar')
+    expect(body.data.parse_result.transactions).toEqual([
+      expect.objectContaining({ date: '2025-10-03', description: 'ICA NÄRA TESTBY', amount: -1234.5 }),
+    ])
+    // The manual column mapping reads this text, not the workbook's bytes.
+    expect(body.data.file_content.split('\n')[1]).toBe('Bokföringsdag;Transaktionsdag;Meddelande;Belopp')
+  })
+
+  it('returns no file_content for a text file', async () => {
+    enqueue({ data: null })
+    const response = await POST(makeFileRequest(SEB_BANK_CSV, 'kontoutdrag.csv'), emptyParams)
+    const body = await response.json()
+    expect(body.data.file_content).toBeNull()
+  })
+
+  it('names the found and expected columns when the chosen bank reads none of them', async () => {
+    enqueue({ data: null })
+    const response = await POST(
+      makeFileRequest('Kontoutdrag oktober 2025\nDag;Vad;Summa kronor\n3 okt;ICA;-500\n', 'okand.csv', 'lansforsakringar'),
+      emptyParams,
+    )
+    const body = await response.json()
+
+    expect(response.status).toBe(400)
+    expect(body.error.code).toBe('BANK_FILE_COLUMNS_UNRECOGNIZED')
+    expect(body.error.message).toContain('Kolumner i filen: Dag, Vad, Summa kronor.')
+    expect(body.error.message).toContain('Filen behöver en datumkolumn (Bokföringsdag, Bokföringsdatum, Transaktionsdatum eller Datum)')
+    expect(body.error.details.found_columns).toEqual(['Dag', 'Vad', 'Summa kronor'])
   })
 })

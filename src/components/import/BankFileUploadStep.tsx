@@ -66,14 +66,16 @@ export default function BankFileUploadStep({
 
   // A BG Max file (Bankgirot's deposit specification, crm#1170) comes as
   // .txt, .bgm, .dat or with no extension at all: the content decides what it is.
-  const acceptedExtensions = '.csv,.txt,.xml,.bgm,.bgmax,.dat'
+  // Excel (.xls/.xlsx): some banks give account history only as a workbook,
+  // Länsförsäkringar's kontoutdrag one file per month (crm#1236).
+  const acceptedExtensions = '.csv,.txt,.xml,.bgm,.bgmax,.dat,.xls,.xlsx'
 
   // One rule for a dropped and a picked file: the picker's accept filter can
   // be switched to "all files", and a dropped file never had it.
   const handleFile = useCallback((file: File) => {
     const name = file.name.toLowerCase()
     const extension = name.includes('.') ? name.slice(name.lastIndexOf('.')) : ''
-    if (!['.csv', '.txt', '.xml', '.bgm', '.bgmax', '.dat', ''].includes(extension)) return
+    if (!['.csv', '.txt', '.xml', '.bgm', '.bgmax', '.dat', '.xls', '.xlsx', ''].includes(extension)) return
     setSelectedFile(file)
     onFileSelect(file, formatOverride)
   }, [onFileSelect, formatOverride])
@@ -95,7 +97,7 @@ export default function BankFileUploadStep({
             Ladda upp kontoutdrag
           </CardTitle>
           <CardDescription>
-            Exportera transaktioner som CSV eller XML från din internetbank och ladda upp filen.{' '}
+            {t('bank_upload_description')}{' '}
             {t('bgmax_upload_hint')}
           </CardDescription>
         </CardHeader>
@@ -171,7 +173,7 @@ export default function BankFileUploadStep({
                   <p className="font-medium hidden sm:block">Dra och släpp bankfil här</p>
                   <p className="font-medium sm:hidden">Tryck för att välja bankfil</p>
                   <p className="text-sm text-muted-foreground">
-                    CSV, TXT eller XML (max 10 MB)
+                    {t('bank_upload_formats')}
                   </p>
                 </div>
               </div>
@@ -243,7 +245,7 @@ export default function BankFileUploadStep({
           <div>
             <p className="font-medium">Länsförsäkringar</p>
             <p className="text-muted-foreground">
-              Logga in → Konton → Kontoutdrag → Exportera (CSV)
+              {t('bank_export_lansforsakringar')}
             </p>
           </div>
           <div>

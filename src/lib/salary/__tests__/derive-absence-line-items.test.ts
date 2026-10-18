@@ -5,6 +5,7 @@ import {
   sjukloneperiodGapTolerance,
   calculateVabDeduction,
   calculateParentalLeaveDeduction,
+  AbsenceInputError,
   type AbsenceDay,
   type DeriveInput,
 } from '../derive-absence-line-items'
@@ -929,5 +930,170 @@ describe('calculateParentalLeaveDeduction', () => {
   it('marks as semesterlönegrundande within 120 days per pregnancy', () => {
     const result = calculateParentalLeaveDeduction(30000, 10, 100)
     expect(result.semesterGrundande).toBe(true) // 100 + 10 = 110 ≤ 120
+  })
+})
+
+// ============================================================
+// Hourly pay (#60 part A, SjLL 6 §)
+// ============================================================
+
+describe('deriveAbsenceLineItems: hourly pay', () => {
+  /** An hourly employee at 200 kr/h on a 40 h, five-day week. */
+  const hourlyInput = (over: Partial<DeriveInput> = {}): DeriveInput =>
+    baseInput({
+      monthlySalary: 0,
+      salaryType: 'hourly',
+      hourlyRate: 200,
+      hoursPerDay: 8,
+      hoursPerWeek: 40,
+      workdaysPerWeek: 5,
+      ...over,
+    })
+  const sickRows = (entries: Array<[string, number]>): AbsenceDay[] =>
+    entries.map(([absence_date, hours]) => ({ absence_date, absence_type: 'sick', hours }))
+  const total = (lines: { amount: number }[]) => r2(lines.reduce((sum, li) => sum + li.amount, 0))
+
+  it('pays 80 % of timlön for the sick hours and takes 20 % of a week\'s sjuklön as karensavdrag', () => {
+    // Was 0 kr: sjuklön priced from monthly_salary, which is 0 for timlön.
+    const result = deriveAbsenceLineItems(
+      hourlyInput({ periodDays: sickRows([['2026-04-06', 8], ['2026-04-07', 8], ['2026-04-08', 8]]) }),
+    )
+    const karens = result.lineItems.find(li => li.item_type === 'sick_karens')!
+    const sjuklon = result.lineItems.find(li => li.item_type === 'sick_day2_14')!
+    // 3 x 8 h x 200 x 0,8 = 3 840; karens 0,2 x 0,8 x 200 x 40 = 1 280.
+    expect(sjuklon.amount).toBe(3840)
+    expect(sjuklon.quantity).toBe(24)
+    expect(sjuklon.description).toBe('Sjuklön dag 1-14 (3 dagar, 24 tim)')
+    expect(sjuklon).toMatchObject({ is_taxable: true, is_avgift_basis: true, is_vacation_basis: true })
+    expect(karens.amount).toBe(-1280)
+    expect(karens.description).toBe('Karensavdrag (2026-04-06, 40 tim/vecka)')
+    expect(total(result.lineItems)).toBe(2560)
+    expect(result.aggregated.sickDays).toBe(3)
+  })
+
+  it('takes the karensavdrag from the weekly hours on the schedule (28 h at 120 kr/h)', () => {
+    const result = deriveAbsenceLineItems(
+      hourlyInput({
+        hourlyRate: 120,
+        hoursPerDay: 7,
+        hoursPerWeek: 28,
+        workdaysPerWeek: 4,
+        periodDays: sickRows([['2026-04-06', 7], ['2026-04-07', 7], ['2026-04-08', 7]]),
+      }),
+    )
+    // A week's sjuklön 120 x 0,8 x 28 = 2 688, karens 20 % = 537,60.
+    expect(result.lineItems.find(li => li.item_type === 'sick_karens')!.amount).toBe(-537.6)
+    expect(result.lineItems.find(li => li.item_type === 'sick_day2_14')!.amount).toBe(2016)
+  })
+
+  it('prices the hours on the row, also a shift longer than the average day', () => {
+    const result = deriveAbsenceLineItems(
+      hourlyInput({ periodDays: sickRows([['2026-04-06', 10], ['2026-04-07', 3.5]]) }),
+    )
+    const sjuklon = result.lineItems.find(li => li.item_type === 'sick_day2_14')!
+    expect(sjuklon.quantity).toBe(13.5)
+    expect(sjuklon.amount).toBe(2160) // 13,5 x 200 x 0,8
+  })
+
+  it('caps the karensavdrag at the sjuklön the period yields', () => {
+    const result = deriveAbsenceLineItems(hourlyInput({ periodDays: sickRows([['2026-04-06', 4]]) }))
+    expect(result.lineItems.find(li => li.item_type === 'sick_day2_14')!.amount).toBe(640)
+    expect(result.lineItems.find(li => li.item_type === 'sick_karens')!.amount).toBe(-640)
+    expect(total(result.lineItems)).toBe(0)
+  })
+
+  it('carries the unconsumed karensavdrag into the next month of the same period', () => {
+    const july = deriveAbsenceLineItems(
+      hourlyInput({
+        periodDays: sickRows([['2026-07-01', 8]]),
+        lookbackSickDates: ['2026-06-30'],
+        lookbackSickDays: sickRows([['2026-06-30', 4]]),
+      }),
+    )
+    // June's 4 h absorbed 640 of the 1 280; July takes the remaining 640.
+    expect(july.lineItems.find(li => li.item_type === 'sick_karens')!.amount).toBe(-640)
+    expect(july.lineItems.find(li => li.item_type === 'sick_day2_14')!.amount).toBe(1280)
+  })
+
+  it('takes no karensavdrag past the högriskskydd cap and keeps the full sjuklön', () => {
+    const lookback = Array.from({ length: 10 }, (_, i) =>
+      new Date(Date.UTC(2026, 0, 5 + i * 10)).toISOString().slice(0, 10),
+    )
+    const result = deriveAbsenceLineItems(
+      hourlyInput({ lookbackSickDates: lookback, periodDays: sickRows([['2026-07-06', 8]]) }),
+    )
+    expect(result.lineItems.find(li => li.item_type === 'sick_karens')).toBeUndefined()
+    expect(result.lineItems.find(li => li.item_type === 'sick_day2_14')!.amount).toBe(1280)
+  })
+
+  it('pays days 1-14 only and deducts nothing from day 15 (Försäkringskassan)', () => {
+    const periodDays = sickRows(
+      Array.from({ length: 16 }, (_, i): [string, number] => [`2026-04-${String(6 + i).padStart(2, '0')}`, 8]),
+    )
+    const result = deriveAbsenceLineItems(hourlyInput({ periodDays }))
+    expect(result.lineItems.find(li => li.item_type === 'sick_day2_14')!.amount).toBe(17920) // 14 x 8 x 160
+    expect(result.lineItems.find(li => li.item_type === 'sick_day15_plus')).toBeUndefined()
+    expect(result.flagFkReporting).toBe(true)
+    expect(result.flagLakarintyg).toBe(true)
+  })
+
+  it('never prices hourly sick pay from a monthly salary left on the employee', () => {
+    const periodDays = sickRows([['2026-04-06', 8], ['2026-04-07', 8]])
+    const clean = deriveAbsenceLineItems(hourlyInput({ periodDays }))
+    const stale = deriveAbsenceLineItems(hourlyInput({ periodDays, monthlySalary: 30000 }))
+    expect(stale.lineItems).toEqual(clean.lineItems)
+  })
+
+  it('refuses a sick row without hours rather than paying 0 kr', () => {
+    for (const hours of [Number.NaN, 0]) {
+      const run = () =>
+        deriveAbsenceLineItems(hourlyInput({ periodDays: sickRows([['2026-04-06', 8], ['2026-04-07', hours]]) }))
+      expect(run).toThrow(AbsenceInputError)
+      expect(run).toThrow('Sjukdagen 2026-04-07 saknar timmar')
+    }
+  })
+
+  it('refuses sick days without a timlön rather than paying 0 kr', () => {
+    for (const hourlyRate of [null, 0, undefined]) {
+      const run = () => deriveAbsenceLineItems(hourlyInput({ hourlyRate, periodDays: sickRows([['2026-04-06', 8]]) }))
+      expect(run).toThrow(AbsenceInputError)
+      expect(run).toThrow('Timlön saknas')
+    }
+  })
+
+  it('needs no timlön when the period has no sick days', () => {
+    const result = deriveAbsenceLineItems(
+      hourlyInput({ hourlyRate: null, periodDays: [{ absence_date: '2026-04-06', absence_type: 'vab', hours: 8 }] }),
+    )
+    expect(result.lineItems.map(li => li.item_type)).toEqual(['vab'])
+  })
+})
+
+describe('deriveAbsenceLineItems: monthly pay is unchanged by the hourly model', () => {
+  it('gives the identical result whether salaryType is omitted or monthly, with any hourlyRate', () => {
+    const periodDays: AbsenceDay[] = [
+      { absence_date: '2026-04-06', absence_type: 'sick', hours: 8 },
+      { absence_date: '2026-04-07', absence_type: 'sick', hours: 4 },
+      ...Array.from({ length: 14 }, (_, i): AbsenceDay => ({
+        absence_date: `2026-04-${String(8 + i).padStart(2, '0')}`,
+        absence_type: 'sick',
+        hours: 8,
+      })),
+      { absence_date: '2026-04-27', absence_type: 'vab', hours: 8 },
+      { absence_date: '2026-04-28', absence_type: 'parental', hours: 8 },
+      { absence_date: '2026-04-29', absence_type: 'unpaid_leave', hours: 4 },
+    ]
+    const input = baseInput({
+      periodDays,
+      lookbackSickDates: ['2026-03-02'],
+      lookbackSickDays: [{ absence_date: '2026-03-02', absence_type: 'sick', hours: 8 }],
+    })
+    const omitted = deriveAbsenceLineItems(input)
+    const monthly = deriveAbsenceLineItems({ ...input, salaryType: 'monthly', hourlyRate: 250 })
+    expect(monthly).toEqual(omitted)
+    // The monthly model still deducts: karens and the 20 % gap are negative.
+    expect(omitted.lineItems.find(li => li.item_type === 'sick_karens')!.amount).toBe(-1107.69)
+    expect(omitted.lineItems.find(li => li.item_type === 'sick_day2_14')!.amount).toBeLessThan(0)
+    expect(omitted.lineItems.find(li => li.item_type === 'sick_day15_plus')!.amount).toBeLessThan(0)
   })
 })

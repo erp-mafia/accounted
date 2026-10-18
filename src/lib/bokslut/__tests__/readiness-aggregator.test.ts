@@ -216,6 +216,23 @@ describe('buildBokslutReadinessReport', () => {
       bookedSurplus: 80_000,
       items: [],
       pfondFonder: [],
+      rutor: {
+        R29: 80_000,
+        R30: 0,
+        R31: 0,
+        R32: 0,
+        R33: 80_000,
+        R34: 0,
+        R35: 80_000,
+        R36: 0,
+        R37: 0,
+        R40: 0,
+        R41: 0,
+        R42: 80_000,
+        R43: 20_000,
+      },
+      ovrigaUppgifter: [],
+      warnings: [],
     })
     const supabase = makeSupabase({
       period: { data: PERIOD, error: null },

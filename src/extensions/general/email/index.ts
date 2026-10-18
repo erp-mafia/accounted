@@ -136,6 +136,18 @@ async function guardSendingDomainRoute(
   return null
 }
 
+/**
+ * A refused sending-domain request: the helper's Swedish sentence, plus its
+ * structured-errors `code` when it has one (a provider failure, crm#1288), so
+ * the page and agents can tell an outage at the provider from a mistake.
+ */
+function sendingDomainRefusal(result: { status: number; error: string; code?: string }): NextResponse {
+  return NextResponse.json(
+    { error: result.error, ...(result.code ? { code: result.code } : {}) },
+    { status: result.status },
+  )
+}
+
 export const emailExtension: Extension = {
   id: 'email',
   name: 'E-post',
@@ -189,14 +201,7 @@ export const emailExtension: Extension = {
           ctx.companyId,
           body.domain,
         )
-        if (!result.ok) {
-          // `code` names a failure the page explains on its own terms (the
-          // shared provider account is out of domains, crm#1288).
-          return NextResponse.json(
-            { error: result.error, ...(result.code ? { code: result.code } : {}) },
-            { status: result.status },
-          )
-        }
+        if (!result.ok) return sendingDomainRefusal(result)
         return NextResponse.json({ data: result.data })
       },
     },
@@ -214,7 +219,7 @@ export const emailExtension: Extension = {
           createServiceClientNoCookies(),
           ctx.companyId,
         )
-        if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
+        if (!result.ok) return sendingDomainRefusal(result)
         return NextResponse.json({ data: result.data })
       },
     },
@@ -252,7 +257,7 @@ export const emailExtension: Extension = {
         if (denied) return denied
 
         const result = await removeSendingDomain(ctx.supabase, ctx.companyId)
-        if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
+        if (!result.ok) return sendingDomainRefusal(result)
         return NextResponse.json({ data: result.data })
       },
     },

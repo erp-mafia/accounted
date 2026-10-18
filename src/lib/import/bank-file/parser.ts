@@ -14,6 +14,7 @@ import type { BankFileFormat, BankFileFormatId, BankFileParseResult, ParsedBankT
 // pulling this module's `crypto` import into the browser bundle.
 import { detectFileFormat, getAllFormats, getFormat } from './formats'
 export { detectFileFormat, getAllFormats, getFormat } from './formats'
+import { headerLikeCells } from './columns'
 
 /**
  * Parse a bank file with auto-detection or explicit format
@@ -82,7 +83,11 @@ export function parseBankFile(
       const csvFormats = getAllFormats()
         .filter(f => f.id !== 'generic_csv' && f.id !== 'camt053')
         .map(f => f.name)
+      // Name the columns the file has (its most header-like row, past any
+      // heading rows above it); the raw first line only when it has none.
+      const found = headerLikeCells(content)
       const firstLine = content.split('\n')[0]?.substring(0, 80) || ''
+      const seen = found.length > 0 ? `Kolumner i filen: ${found.join(', ')}.` : `Första raden: "${firstLine}".`
       return {
         format: 'generic_csv',
         format_name: 'Unknown',
@@ -91,7 +96,7 @@ export function parseBankFile(
         date_to: null,
         issues: [{
           row: 0,
-          message: `Kunde inte identifiera bankformatet. Stödda format: CSV-exporter från ${csvFormats.join(', ')} samt kontoutdrag i ISO 20022 camt.053 (XML, oavsett filändelse). Första raden: "${firstLine}". Välj bank manuellt eller använd "Annan CSV".`,
+          message: `Kunde inte identifiera bankformatet. Stödda format: CSV- och Excel-exporter från ${csvFormats.join(', ')} samt kontoutdrag i ISO 20022 camt.053 (XML, oavsett filändelse). ${seen} En bankfil behöver minst en datumkolumn och en beloppskolumn. Välj bank manuellt eller använd "Annan CSV".`,
           severity: 'error',
         }],
         stats: { total_rows: 0, parsed_rows: 0, skipped_rows: 0, total_income: 0, total_expenses: 0 },

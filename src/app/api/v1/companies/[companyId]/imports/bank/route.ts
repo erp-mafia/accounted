@@ -4,7 +4,8 @@
  * Bank-file import. Multipart upload: the file is the request body. The
  * route:
  *   1. Decodes the file (UTF-8 / UTF-16 / Windows-1252 auto-detected;
- *      BOMs handled at the byte level).
+ *      BOMs handled at the byte level), or reads an Excel workbook
+ *      (.xls / .xlsx) as semicolon text.
  *   2. Detects the bank file format (SEB / Swedbank / Nordea / Handelsbanken
  *      / Lansforsakringar / Lunar / ICA Banken / Skandia / CAMT053 /
  *      Nordea Business / Wise / generic CSV), or honors the optional `format`
@@ -37,7 +38,8 @@ import {
   toRawTransaction,
 } from '@/lib/import/bank-file/parser'
 import { ingestTransactions } from '@/lib/transactions/ingest'
-import { decodeFileContent } from '@/lib/import/shared/encoding'
+import { decodeBankFile } from '@/lib/import/bank-file/workbook'
+import { headerLikeCells, unrecognizedColumnsMessages } from '@/lib/import/bank-file/columns'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -80,9 +82,9 @@ registerEndpoint({
   operation: 'imports.bank',
   method: 'POST',
   path: '/api/v1/companies/:companyId/imports/bank',
-  summary: 'Import a bank-file (CSV / XML / CAMT053).',
+  summary: 'Import a bank-file (CSV / Excel / XML / CAMT053).',
   description:
-    'Accepts a bank statement file (UTF-8 / UTF-16 / Windows-1252, up to 10 MB) as multipart/form-data. Auto-detects the bank format (SEB, Swedbank, Handelsbanken, Nordea, Nordea Business, Lansforsakringar, Lunar, ICA Banken, Skandia, Wise transaction history, Wise balance statement, CAMT053, generic CSV) or honors a `format` override. Parses transactions, ingests them into the `transactions` table (NOT into journal entries: see BFL note in pitfalls), and emits `transaction.synced` events. Returns operation_id for polling.',
+    'Accepts a bank statement file (CSV in UTF-8 / UTF-16 / Windows-1252, an Excel workbook .xls / .xlsx, or camt.053 XML; up to 10 MB) as multipart/form-data. Auto-detects the bank format (SEB, Swedbank, Handelsbanken, Nordea, Nordea Business, Lansforsakringar, Lunar, ICA Banken, Skandia, Wise transaction history, Wise balance statement, CAMT053, generic CSV) or honors a `format` override. Parses transactions, ingests them into the `transactions` table (NOT into journal entries: see BFL note in pitfalls), and emits `transaction.synced` events. Returns operation_id for polling.',
   useWhen:
     'Importing a bank statement export for a period. Common with PSD2 bank connections that don\'t auto-sync, or for legacy bank accounts.',
   doNotUseFor:
@@ -170,19 +172,35 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       formatOverride = parsed.data
     }
 
-    // Decode the file with the shared importer decode (BOM-aware UTF-8 /
-    // UTF-16 / Windows-1252): one decode implementation for every path.
+    // Decode the file with the shared bank file decode (BOM-aware UTF-8 /
+    // UTF-16 / Windows-1252, or a workbook read as semicolon text): one
+    // decode implementation for every path.
     const buffer = await file.arrayBuffer()
-    const content = decodeFileContent(buffer)
+    let content: string
+    try {
+      content = (await decodeBankFile(buffer, file.name)).content
+    } catch {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { field: 'file', message: 'The file looks like an Excel workbook but could not be read.' },
+      })
+    }
 
     const fileHash = await generateFileHash(content)
 
     // Detect format (or honor explicit override).
     const format = formatOverride ?? detectFileFormat(content, file.name)?.id
     if (!format) {
+      // Name the columns the file has, so the caller can tell a wrong file
+      // from a bank layout we do not know (crm#1236).
+      const found = headerLikeCells(content)
+      const foundSv = found.length > 0 ? found.join(', ') : 'ingen rubrikrad hittades'
+      const foundEn = found.length > 0 ? found.join(', ') : 'no header row found'
       return v1ErrorResponseFromCode('BANK_FILE_FORMAT_UNKNOWN', ctx.log, {
         requestId: ctx.requestId,
-        details: { filename: file.name },
+        details: { filename: file.name, found_columns: found },
+        messageSv: `Bankfilens format kunde inte identifieras. Kolumner i filen: ${foundSv}. En bankfil behöver minst en datumkolumn och en beloppskolumn.`,
+        messageEn: `Bank file format could not be identified. Columns found: ${foundEn}. A bank file needs at least a date column and an amount column.`,
       })
     }
 
@@ -192,6 +210,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // ids, import_source, stored file_format) must use the format the result
     // actually carries so ids equal what the auto-detect path would produce.
     const effectiveFormat = parseResult.format
+    if (parseResult.transactions.length === 0 && parseResult.unrecognized_columns) {
+      const columns = parseResult.unrecognized_columns
+      const messages = unrecognizedColumnsMessages(parseResult.format_name, columns)
+      return v1ErrorResponseFromCode('BANK_FILE_COLUMNS_UNRECOGNIZED', ctx.log, {
+        requestId: ctx.requestId,
+        details: { format: effectiveFormat, found_columns: columns.found, expected_columns: columns.expected },
+        messageSv: messages.sv,
+        messageEn: messages.en,
+      })
+    }
     const blockingIssues = parseResult.issues.filter((issue) => issue.severity === 'error')
     if (blockingIssues.length > 0) {
       // Cap the reported rows so a large malformed file cannot balloon the

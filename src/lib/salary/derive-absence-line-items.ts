@@ -39,6 +39,15 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
  * period, the dates up to and including it form one row that is
  * semestergrundande and the dates after it a second row that is not.
  *
+ * Hourly pay (salaryType 'hourly') has no full salary to deduct from: the
+ * hours a sick employee would have worked were never in base pay, which is
+ * rate × worked hours. So the same sjuklöneperioder, karens carry and
+ * högriskskydd apply, but days 1-14 are PAID as a positive sjuklön row of 80 %
+ * of timlön × the hours on each sick row (the hours the employee was
+ * scheduled to work, SjLL 6 § 1 st), and the karensavdrag is 20 % of a week's
+ * sjuklön at timlön × the employee's weekly hours (SjLL 6 § 2 st). Day 15+
+ * and the other leave types deduct nothing: there is nothing to take back.
+ *
  * Company conventions (lib/salary/calculation-policy.ts) change HOW a day is
  * priced, never WHICH days are sjuklön, karens or Försäkringskassan:
  * sick_rate = annual_hourly prices sick days 1-14 per hour at månadslön × 12
@@ -279,8 +288,27 @@ export function calculateParentalLeaveDeduction(
   }
 }
 
+/**
+ * An input the derivation cannot price without, named in Swedish for the
+ * person running payroll. run-calculation refuses the run with it rather
+ * than pay sick leave as 0 kr.
+ */
+export class AbsenceInputError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'AbsenceInputError'
+  }
+}
+
 export interface DeriveInput {
+  /** The pay absence is deducted from (monthly pay only; 0 for hourly pay). */
   monthlySalary: number
+  /** employees.salary_type. Omitted = 'monthly'. See the module comment for
+   *  how hourly sick pay differs. */
+  salaryType?: 'monthly' | 'hourly'
+  /** employees.hourly_rate. Required when salaryType is 'hourly' and the
+   *  period has sick rows. */
+  hourlyRate?: number | null
   payrollConfig: PayrollConfig
   /** Absence rows in the pay period being calculated. */
   periodDays: AbsenceDay[]
@@ -313,8 +341,9 @@ export interface DeriveInput {
    *  legacy 21 (5-day week); part-time schedules pass
    *  dailyDivisor(workdays_per_week) from lib/salary/work-schedule. */
   dailyDivisor?: number
-  /** Scheduled hours per week (employment-degree adjusted). Only read under
-   *  sick_rate = annual_hourly; defaults to hoursPerDay × 5. */
+  /** Scheduled hours per week (employment-degree adjusted). Read under
+   *  sick_rate = annual_hourly and, for hourly pay, as the average week the
+   *  karensavdrag is taken from; defaults to hoursPerDay × 5. */
   hoursPerWeek?: number
   /** Working days per week. long_leave = calendar_after_five_workdays is a
    *  five-day-week rule and refuses any other schedule. */
@@ -407,6 +436,30 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
   if (periodSickDates.length > 0) {
     const periodMin = periodSickDates[0]
 
+    // Hourly pay prices each sick row by its own hours. Without a timlön or
+    // without the hours the sjuklön would silently be 0 kr, so refuse.
+    const hourlyPay = input.salaryType === 'hourly'
+    const hourlyWage = hourlyPay ? Number(input.hourlyRate) : 0
+    if (hourlyPay && !(Number.isFinite(hourlyWage) && hourlyWage > 0)) {
+      throw new AbsenceInputError(
+        'Timlön saknas: sjuklön för en timavlönad beräknas på timlönen. Ange timlön på den anställde och beräkna om.',
+      )
+    }
+    /** What a sick row is priced in: its share of a scheduled day, or for
+     *  hourly pay the hours the employee would have worked that day. */
+    const sickUnits = (d: AbsenceDay) => {
+      if (!hourlyPay) return dayShare(d)
+      const hours = Number(d.hours)
+      if (!(Number.isFinite(hours) && hours > 0)) {
+        throw new AbsenceInputError(
+          `Sjukdagen ${d.absence_date} saknar timmar: sjuklön för en timavlönad beräknas på de timmar ` +
+            'den anställde skulle ha arbetat. Registrera sjukfrånvaron med antal timmar och beräkna om.',
+        )
+      }
+      return hours
+    }
+    const sumSickUnits = (rows: AbsenceDay[]) => rows.reduce((sum, d) => sum + sickUnits(d), 0)
+
     // Build segments over (lookback ∪ period). Segments may straddle the
     // boundary; we need the full picture to classify each period day's
     // index within its segment.
@@ -448,26 +501,34 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
     // only the DAILY rate scales with the workday schedule.
     const dailyRate = r(monthlySalary / (input.dailyDivisor ?? 21))
     const weeklyRate = r(monthlySalary * 12 / 52 * payrollConfig.sjuklonRate)
-    const karensAmount = r(weeklyRate * payrollConfig.karensavdragFactor)
+    // Hourly pay: a week's sjuklön is 80 % of timlön × the weekly hours.
+    const karensAmount = hourlyPay
+      ? r(r(hourlyWage * hoursPerWeek * payrollConfig.sjuklonRate) * payrollConfig.karensavdragFactor)
+      : r(weeklyRate * payrollConfig.karensavdragFactor)
     // sick_rate = annual_hourly (Fortnox): timlön = månadslön × 12 / (52 ×
     // veckoarbetstid), priced per absent hour; sjuklön per timme is the
     // 80 % of that, rounded to öre before it is multiplied.
     const hourlyRate = r((monthlySalary * 12) / (52 * hoursPerWeek))
     const sickHourlyRate = r(hourlyRate * payrollConfig.sjuklonRate)
-    /** Pay lost for a number of scheduled days (dagavdrag or timavdrag). */
+    /** Pay lost for a number of scheduled days (dagavdrag or timavdrag).
+     *  Monthly pay only: an hourly employee's lost hours were never paid. */
     const lostPayFor = (dayCount: number) =>
       annualHourly ? r(hourlyRate * dayCount * hoursPerDay) : r(dailyRate * dayCount)
-    /** Sjuklön (80 %) for a number of scheduled days. */
-    const sickPayFor = (dayCount: number) =>
-      annualHourly
-        ? r(sickHourlyRate * dayCount * hoursPerDay)
-        : r(dailyRate * payrollConfig.sjuklonRate * dayCount)
+    /** Sjuklön (80 %) for a number of sick units: scheduled days, or for
+     *  hourly pay the hours the employee would have worked. */
+    const sickPayFor = (units: number) =>
+      hourlyPay
+        ? r(hourlyWage * payrollConfig.sjuklonRate * units)
+        : annualHourly
+          ? r(sickHourlyRate * units * hoursPerDay)
+          : r(dailyRate * payrollConfig.sjuklonRate * units)
     // Lookback rows with hours, or every lookback date as a full day.
     const lookbackSickRows: AbsenceDay[] =
       input.lookbackSickDays ??
       input.lookbackSickDates.map(absence_date => ({ absence_date, absence_type: 'sick' as const, hours: hoursPerDay }))
 
     let day2_14CountTotal = 0
+    let day2_14Dates = 0
     let day15PlusCountTotal = 0
 
     // Walk each segment that touches the period.
@@ -483,13 +544,13 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
       // first day cannot absorb continues on the following sick days, also
       // when they fall in the next pay period: the prior period's sjuklön
       // (from the lookback rows) is what has already been consumed.
-      const periodDaysInSjuklon = sumDays(
+      const periodDaysInSjuklon = sumSickUnits(
         periodSickRows.filter(
           d => d.absence_date >= seg.startDate && d.absence_date <= seg.endDate &&
             daysBetweenIso(seg.startDate, d.absence_date) < 14,
         ),
       )
-      const priorDaysInSjuklon = sumDays(
+      const priorDaysInSjuklon = sumSickUnits(
         lookbackSickRows.filter(
           d => d.absence_date >= seg.startDate && d.absence_date < periodMin &&
             daysBetweenIso(seg.startDate, d.absence_date) < 14,
@@ -508,7 +569,10 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
       if (karensEligible && karensNow > 0) {
         lineItems.push({
           item_type: 'sick_karens',
-          description: `Karensavdrag (${seg.startDate})`,
+          // Hourly pay names the weekly hours the average week rests on.
+          description: hourlyPay
+            ? `Karensavdrag (${seg.startDate}, ${hoursPerWeek} tim/vecka)`
+            : `Karensavdrag (${seg.startDate})`,
           quantity: 1,
           amount: -karensNow,
           is_taxable: true,
@@ -528,7 +592,8 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
         if (d < seg.startDate || d > seg.endDate) continue
         const segDayIndex = daysBetweenIso(seg.startDate, d) + 1
         if (segDayIndex <= 14) {
-          day2_14CountTotal += dayShare(row)
+          day2_14CountTotal += sickUnits(row)
+          day2_14Dates += 1
           if (segDayIndex >= 8) flagLakarintyg = true
         } else {
           day15PlusCountTotal += dayShare(row)
@@ -537,7 +602,21 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
       }
     }
 
-    if (day2_14CountTotal > 0) {
+    if (day2_14CountTotal > 0 && hourlyPay) {
+      // The employer pays 80 % of the lost hours; nothing is deducted
+      // because the hours were never in base pay. quantity is hours, the
+      // unit the row is priced in.
+      lineItems.push({
+        item_type: 'sick_day2_14',
+        description: `Sjuklön dag 1-14 (${day2_14Dates} dagar, ${r(day2_14CountTotal)} tim)`,
+        quantity: r(day2_14CountTotal),
+        amount: sickPayFor(day2_14CountTotal),
+        is_taxable: true,
+        is_avgift_basis: true,
+        is_vacation_basis: true,
+        is_gross_deduction: true,
+      })
+    } else if (day2_14CountTotal > 0) {
       const lostPay = lostPayFor(day2_14CountTotal)
       const sjuklon = sickPayFor(day2_14CountTotal)
       lineItems.push({
@@ -555,7 +634,9 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
       })
     }
 
-    if (day15PlusCountTotal > 0) {
+    // Hourly pay: day 15+ is Försäkringskassan's and there is no full salary
+    // to take it back from, so no row (the FK reporting flag still stands).
+    if (day15PlusCountTotal > 0 && !hourlyPay) {
       // long_leave = calendar_after_five_workdays prices the Försäkringskassan
       // phase per calendar day from its first day: the rows on segment day
       // 15+ (lookback and period) form the episodes, the in-window days are
@@ -832,6 +913,10 @@ export async function loadRunAbsence(
 export function deriveEmployeeAbsence(params: {
   rows: EmployeeAbsenceRows | undefined
   monthlySalary: number
+  /** See DeriveInput.salaryType. */
+  salaryType?: 'monthly' | 'hourly'
+  /** See DeriveInput.hourlyRate. */
+  hourlyRate?: number | null
   payrollConfig: PayrollConfig
   periodStart: string
   periodEnd: string
@@ -851,6 +936,8 @@ export function deriveEmployeeAbsence(params: {
   const rows = params.rows ?? NO_ABSENCE
   return deriveAbsenceLineItems({
     monthlySalary: params.monthlySalary,
+    salaryType: params.salaryType,
+    hourlyRate: params.hourlyRate,
     payrollConfig: params.payrollConfig,
     periodDays: rows.periodDays,
     lookbackSickDates: rows.lookbackSickDays.map(r => r.absence_date),

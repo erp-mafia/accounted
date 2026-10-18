@@ -80,11 +80,31 @@ describe('gnubok_preview_ef_declaration: legal-form gate', () => {
       'user-1',
       makeSupabase('enskild_firma') as never,
       { type: 'api_key' } as never,
-    )) as { items: Array<{ kind: string; amount: number; computation: Record<string, unknown> }> }
+    )) as {
+      items: Array<{ kind: string; amount: number; computation: Record<string, unknown> }>
+      rutor: Record<string, number>
+    }
 
+    // Cap 125,94 % x 400 000 = 503 760, but the ökning is also at most R35:
+    // R29 120 000 - R30 7 960 (7,96 % of 100 000, inkomstår 2025) = R33
+    // 112 040, less R34 33 612 (30 %) = R35 78 428.
     const exp = result.items.find((i) => i.kind === 'expansionsfond_avsattning')
-    expect(exp?.computation).toMatchObject({ kapitalunderlag: 400_000 })
-    expect(exp?.amount).toBe(300_000)
+    expect(exp?.computation).toMatchObject({ kapitalunderlag: 400_000, maxTotalBalance: 503_760 })
+    expect(exp?.amount).toBe(78_428)
+    expect(result.rutor).toMatchObject({ R30: 7_960, R35: 78_428, R36: 78_428 })
+  })
+
+  it('uses sparat_fordelningsbelopp in R30 on top of the year\'s fördelningsbelopp', async () => {
+    const result = (await tool.execute(
+      { fiscal_period_id: 'fp-1', kapitalunderlag: 110_000, sparat_fordelningsbelopp: 10_000 },
+      'company-1',
+      'user-1',
+      makeSupabase('enskild_firma') as never,
+      { type: 'api_key' } as never,
+    )) as { rutor: Record<string, number> }
+
+    // Skatteverket's example: 7,96 % x 110 000 = 8 756, plus the sparat 10 000.
+    expect(result.rutor.R30).toBe(18_756)
   })
 
   it('returns the fund in its last year in R32 and lists the rest with their last year', async () => {

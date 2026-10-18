@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server'
 import { parseBankFile, generateFileHash, detectFileFormat } from '@/lib/import/bank-file/parser'
 import { detectSkattekontoFile } from '@/lib/import/skattekonto-file/parser'
 import { detectBgMax } from '@/lib/import/bgmax/parser'
-import { decodeFileContent } from '@/lib/import/shared/encoding'
+import { decodeBankFile } from '@/lib/import/bank-file/workbook'
+import { unrecognizedColumnsMessages } from '@/lib/import/bank-file/columns'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
@@ -13,8 +14,10 @@ import { dominantCurrency } from '@/lib/import/bank-file/currency-summary'
 /**
  * POST /api/import/bank-file/parse
  *
- * Accepts a bank file (CSV/XML) via FormData, auto-detects format, and returns
- * a parsed transactions preview with duplicate detection.
+ * Accepts a bank file (CSV/XML, or an Excel workbook: .xls/.xlsx) via
+ * FormData, auto-detects format, and returns a parsed transactions preview
+ * with duplicate detection. A workbook is converted to semicolon text first
+ * and returned as `file_content`, the text the manual column mapping reads.
  */
 export const POST = withRouteContext(
   'bank_file.parse',
@@ -40,7 +43,7 @@ export const POST = withRouteContext(
 
     try {
       const arrayBuffer = await file.arrayBuffer()
-      const content = decodeFileContent(arrayBuffer)
+      const { content, workbook } = await decodeBankFile(arrayBuffer, file.name)
 
       // Bankgirot's deposit specification (BG Max) is not a statement: its
       // deposits are bank rows that already exist, so it never creates rows.
@@ -86,6 +89,23 @@ export const POST = withRouteContext(
 
       const parseResult = parseBankFile(content, file.name, formatOverride || undefined)
 
+      // The bank's parser found none of its columns (crm#1236): say which
+      // columns the file has and which it needs, not an empty preview.
+      if (parseResult.transactions.length === 0 && parseResult.unrecognized_columns) {
+        const columns = parseResult.unrecognized_columns
+        const messages = unrecognizedColumnsMessages(parseResult.format_name, columns)
+        return errorResponseFromCode('BANK_FILE_COLUMNS_UNRECOGNIZED', opLog, {
+          requestId,
+          messageSv: messages.sv,
+          messageEn: messages.en,
+          details: {
+            format: parseResult.format,
+            found_columns: columns.found,
+            expected_columns: columns.expected,
+          },
+        })
+      }
+
       // The cash account the file's own account already is (crm#1204): the
       // wizard pre-selects it and execute refuses any other. Advisory here: a
       // failed read leaves the choice to the user, and execute reads again.
@@ -111,6 +131,9 @@ export const POST = withRouteContext(
           detected_format_name: detectedFormat?.name || parseResult.format_name,
           file_hash: fileHash,
           filename: file.name,
+          // The text a workbook was read as, for the client-side column
+          // mapping; null for a text file, which the client decodes itself.
+          file_content: workbook ? content : null,
           account_match: accountMatch,
           headers: parseResult.format === 'generic_csv'
             ? content.split('\n')[0]?.split(',').map((h) => h.trim()) || []

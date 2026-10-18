@@ -963,6 +963,117 @@ describe('hardening: sammalöneregeln', () => {
   })
 })
 
+describe('sammalöneregeln: rörliga lönedelar (Semesterlagen 16 a § tredje stycket, #60 B)', () => {
+  const base = {
+    vacationRule: 'sammaloneregeln' as const,
+    monthlySalary: 30000,
+    semestertillaggRate: 0.0043,
+  }
+  const ob = lineItem({ itemType: 'ob_weekend', amount: 5000, isVacationBasis: true })
+
+  it('accrues 12 % of the variable pay on top of the tillägg', () => {
+    const without = calculateSalary(
+      makeBasicInput({ ...base, lineItems: [baseLineItem(30000)] }),
+      config2026, emptyTaxRates
+    )
+    const withOb = calculateSalary(
+      makeBasicInput({ ...base, lineItems: [baseLineItem(30000), ob] }),
+      config2026, emptyTaxRates
+    )
+    // The issue's probe: 5 000 kr OB left the accrual at 268,75 kr; it rises by 600 kr.
+    expect(without.vacationAccrual).toBe(268.75)
+    expect(withOb.vacationAccrual).toBe(868.75)
+    expect(withOb.vacationAccrualAvgifter).toBe(roundOre(868.75 * 0.3142))
+    expect(withOb.grossSalary).toBe(35000)
+    const step = withOb.steps.find((s) => s.label.startsWith('Semesteravsättning rörliga lönedelar'))
+    expect(step).toMatchObject({ input: { variable_pay: 5000, rate: 0.12 }, output: 600 })
+  })
+
+  it('counts every semesterlönegrundande wage addition: övertid, bonus, provision, övrigt', () => {
+    const r = calculateSalary(
+      makeBasicInput({
+        ...base,
+        lineItems: [
+          baseLineItem(30000),
+          lineItem({ itemType: 'overtime_50', amount: 1000, isVacationBasis: true }),
+          lineItem({ itemType: 'bonus', amount: 2000, isVacationBasis: true }),
+          lineItem({ itemType: 'commission', amount: 3000, isVacationBasis: true }),
+          lineItem({ itemType: 'other', amount: 4000, isVacationBasis: true }),
+        ],
+      }),
+      config2026, emptyTaxRates
+    )
+    expect(r.vacationAccrual).toBe(roundOre(268.75 + 10000 * 0.12))
+  })
+
+  it('leaves out absence, semesterersättning and lines outside the semester base', () => {
+    const r = calculateSalary(
+      makeBasicInput({
+        ...base,
+        lineItems: [
+          baseLineItem(30000),
+          // Absence adjusts the fixed salary: not variable pay, even when flagged.
+          lineItem({ itemType: 'sick_day2_14', amount: -800, isVacationBasis: true, isGrossDeduction: true }),
+          // Semesterlön is not semesterlönegrundande.
+          lineItem({ itemType: 'semesterersattning', amount: 900, isVacationBasis: true }),
+          // Taxable traktamente is not semester base (its flag says so).
+          lineItem({ itemType: 'traktamente_taxable', amount: 700, isVacationBasis: false }),
+          // A bonus the operator flagged outside the semester base stays outside.
+          lineItem({ itemType: 'bonus', amount: 600, isVacationBasis: false }),
+        ],
+      }),
+      config2026, emptyTaxRates
+    )
+    expect(r.vacationAccrual).toBe(268.75)
+    expect(r.steps.some((s) => s.label.startsWith('Semesteravsättning rörliga lönedelar'))).toBe(false)
+  })
+
+  it('uses the semesterlön percentage: 14,4 % at 30 days, a higher kollektivavtal rate', () => {
+    const thirty = calculateSalary(
+      makeBasicInput({ ...base, vacationDaysPerYear: 30, lineItems: [baseLineItem(30000), ob] }),
+      config2026, emptyTaxRates
+    )
+    // tillägg 30000 x 0,43 % x 30/12 = 322,50, plus 5000 x 14,4 %.
+    expect(thirty.vacationAccrual).toBe(roundOre(322.5 + 5000 * 0.144))
+    const cba = calculateSalary(
+      makeBasicInput({ ...base, vacationPayRate: 0.135, lineItems: [baseLineItem(30000), ob] }),
+      config2026, emptyTaxRates
+    )
+    expect(cba.vacationAccrual).toBe(roundOre(268.75 + 5000 * 0.135))
+  })
+
+  it('a negative correction of variable pay lowers the accrual', () => {
+    const r = calculateSalary(
+      makeBasicInput({
+        ...base,
+        lineItems: [baseLineItem(30000), ob, lineItem({ itemType: 'correction', amount: -1000, isVacationBasis: true })],
+      }),
+      config2026, emptyTaxRates
+    )
+    expect(r.vacationAccrual).toBe(roundOre(268.75 + 4000 * 0.12))
+  })
+
+  it('a run without variable pay is unchanged: same accrual, same breakdown', () => {
+    const r = calculateSalary(
+      makeBasicInput({ ...base, lineItems: [baseLineItem(30000)] }),
+      config2026, emptyTaxRates
+    )
+    const labels = r.steps.map((s) => s.label)
+    expect(labels.filter((l) => l.startsWith('Semesteravsättning'))).toEqual([
+      'Semesteravsättning (sammalöneregeln, tillägg 0,43 %)',
+    ])
+  })
+
+  it('procentregeln keeps the variable pay in its own 12 % base, counted once', () => {
+    const r = calculateSalary(
+      makeBasicInput({ ...base, vacationRule: 'procentregeln', lineItems: [baseLineItem(30000), ob] }),
+      config2026, emptyTaxRates
+    )
+    expect(r.vacationAccrual).toBe(roundOre(35000 * 0.12))
+    expect(r.steps.some((s) => s.label.startsWith('Semesteravsättning rörliga lönedelar'))).toBe(false)
+  })
+})
+
 describe('hardening: realistic combined scenarios', () => {
   it('monthly worker with overtime, benefit, pension deduction, semesterersättning', () => {
     const r = calculateSalary(

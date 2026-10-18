@@ -19,6 +19,7 @@ import {
 } from '@/lib/payments/initiation/provider'
 import { createServiceClient } from '@/lib/supabase/server'
 import { buildPartyContext } from './party'
+import { SIGNING_FINISHED_BATCH_STATUSES } from './status'
 import { logPaymentOrderEvents, type PaymentOrderRow } from './types'
 import { executionDateFor } from '@/lib/payments/bank-days'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -28,6 +29,30 @@ const CANCEL_ANSWER_CODES: Record<Exclude<PaymentCancelOutcome, 'cancelled'>, st
   needs_authorisation: 'PAYMENT_CANCEL_NEEDS_SIGNING',
   too_late: 'PAYMENT_CANCEL_TOO_LATE',
   not_cancelled: 'PAYMENT_CANCEL_NOT_CONFIRMED',
+}
+
+/**
+ * A cancel the bank refused as too late for a payment nobody signed: the bank
+ * reports it unsigned (PaymentCancelResult.unsigned) and no signing of it has
+ * finished here (submitted, or awaiting_signature in a signing still open).
+ * A bank may refuse to cancel such a payment while a BankID for it is open
+ * (crm#1282: 405 with RCVD): nothing was paid, and nothing is paid unless
+ * someone signs it, so "too late" would be wrong. A signing that finished
+ * while the bank still answers RCVD is signed (isBankConfirming), and a
+ * refusal then stays too late, as it does when the signing cannot be read.
+ */
+async function refusedWhileUnsigned(ctx: OperationContext, order: PaymentOrderRow, answer: PaymentCancelResult): Promise<boolean> {
+  if (answer.outcome !== 'too_late' || answer.unsigned !== true) return false
+  if (order.status === 'submitted') return true
+  if (order.status !== 'awaiting_signature' || !order.batch_id) return false
+  const { data, error } = await ctx.supabase
+    .from('payment_order_batches')
+    .select('status')
+    .eq('company_id', ctx.companyId)
+    .eq('id', order.batch_id)
+    .maybeSingle()
+  if (error || !data) return false
+  return !SIGNING_FINISHED_BATCH_STATUSES.has((data as { status: string }).status)
 }
 
 const RESOLVE_CODES: Record<string, string> = {
@@ -299,7 +324,8 @@ export async function cancelPaymentOrder(
         detail: { code: 'BANK_CANCEL_NOT_CONFIRMED', answer: answer.outcome, provider_payment_id: order.provider_payment_id },
       },
     ], ctx.log)
-    return { ok: false, code: CANCEL_ANSWER_CODES[answer.outcome], details: { payment_order_id: order.id, provider_status: answer.providerStatus } }
+    const code = (await refusedWhileUnsigned(ctx, order, answer)) ? 'PAYMENT_CANCEL_UNSIGNED_REFUSED' : CANCEL_ANSWER_CODES[answer.outcome]
+    return { ok: false, code, details: { payment_order_id: order.id, provider_status: answer.providerStatus } }
   }
   const done = await markCancelled(order.status, { providerStatus: answer.providerStatus })
   if (!done) {

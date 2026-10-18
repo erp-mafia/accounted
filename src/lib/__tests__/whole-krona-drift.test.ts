@@ -47,10 +47,9 @@ describe('whole-krona rounding survives double drift (#2597)', () => {
     { surplus: 4721.11, priorSchablon: 1915.69, priorActual: 1804.80, net: 4832, expected: 1208 },
     { surplus: 3507.45, priorSchablon: 466.53, priorActual: 421.98, net: 3552, expected: 888 },
   ])('keeps R43 at $expected for net surplus $net', ({ surplus, priorSchablon, priorActual, net, expected }) => {
+    // R42 as a caller sums it (+ R40 - R41), in doubles.
     const result = calculateEgenavgifter({
-      surplusBeforeEgenavgifter: surplus,
-      priorYearSchablonavdrag: priorSchablon,
-      priorYearActualCharged: priorActual,
+      surplusBeforeEgenavgifter: surplus + priorSchablon - priorActual,
     })
     expect(result.ne_ruta).toBe('R43')
     expect(result.amount).toBe(expected)
@@ -62,9 +61,7 @@ describe('whole-krona rounding survives double drift (#2597)', () => {
     { category: 'passive' as const, expected: 2404 },
   ])('keeps the $category schablonavdrag at $expected', ({ category, expected }) => {
     const result = calculateEgenavgifter({
-      surplusBeforeEgenavgifter: 10209.31,
-      priorYearSchablonavdrag: 1854.55,
-      priorYearActualCharged: 43.86,
+      surplusBeforeEgenavgifter: 10209.31 + 1854.55 - 43.86,
       category,
     })
     expect(result.amount).toBe(expected)

@@ -4,7 +4,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { preparePaymentOrders } from '@/lib/payments/orders/prepare'
-import { isBankConfirming, PAYMENT_ORDER_STATUSES } from '@/lib/payments/orders/status'
+import { isBankConfirming, isSignableAgain, PAYMENT_ORDER_STATUSES } from '@/lib/payments/orders/status'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { INVOICE_DOCUMENT_COLUMNS } from '@/lib/payments/orders/invoice-document'
 
@@ -21,6 +21,7 @@ const PrepareSchema = z.object({
  * GET /api/payments/orders: the company's bank payment orders, newest first.
  * ?status=draft,approved narrows; ?supplier_invoice_id=... finds one invoice's orders.
  * bank_confirming: signed, and the bank has not confirmed the payment yet.
+ * sign_again: unsigned at the bank in a signing nobody is in (isSignableAgain).
  */
 export const GET = withRouteContext('payment_orders.list', async (request, { supabase, companyId }) => {
   const url = new URL(request.url)
@@ -33,11 +34,12 @@ export const GET = withRouteContext('payment_orders.list', async (request, { sup
   // Named columns: what a person needs to follow a payment, never internals
   // such as the idempotency key. provider_error_message is a sanitised text.
   // The invoice brings what its document states, so the approver checks the
-  // payment against the supplier's own invoice.
+  // payment against the supplier's own invoice. provider_payment_id is read
+  // for sign_again only and left out of the answer.
   let query = supabase
     .from('payment_orders')
     .select(
-      `id, supplier_invoice_id, batch_id, status, amount, currency, requested_execution_date, cash_account_id, payee_type, payee_bankgiro, payee_plusgiro, payee_clearing, payee_account, payee_iban, payee_name, payee_source, payee_check, reference_type, reference, end_to_end_id, provider, provider_status, provider_status_at, provider_error_code, provider_error_message, create_started_at, outcome_unknown_at, approved_by, approved_at, submitted_at, signed_at, executed_at, cancelled_at, matched_at, created_at, updated_at, supplier_invoice:supplier_invoices(supplier_invoice_number, supplier:suppliers(name), ${INVOICE_DOCUMENT_COLUMNS})`,
+      `id, supplier_invoice_id, batch_id, status, amount, currency, requested_execution_date, cash_account_id, payee_type, payee_bankgiro, payee_plusgiro, payee_clearing, payee_account, payee_iban, payee_name, payee_source, payee_check, reference_type, reference, end_to_end_id, provider, provider_payment_id, provider_status, provider_status_at, provider_error_code, provider_error_message, create_started_at, outcome_unknown_at, approved_by, approved_at, submitted_at, signed_at, executed_at, cancelled_at, matched_at, created_at, updated_at, supplier_invoice:supplier_invoices(supplier_invoice_number, supplier:suppliers(name), ${INVOICE_DOCUMENT_COLUMNS})`,
     )
     .eq('company_id', companyId)
     .order('created_at', { ascending: false })
@@ -49,9 +51,17 @@ export const GET = withRouteContext('payment_orders.list', async (request, { sup
   const rows = data ?? []
 
   // An order still awaiting_signature in a signing that finished is not
-  // waiting for anyone: the bank is confirming it (isBankConfirming). Only
-  // those orders' signings are read.
-  const signingIds = [...new Set(rows.filter((r) => r.status === 'awaiting_signature' && r.batch_id).map((r) => r.batch_id as string))]
+  // waiting for anyone: the bank is confirming it (isBankConfirming). A
+  // submitted order whose payment waits at the bank can be signed again when
+  // nobody is in its signing (isSignableAgain). Only those orders' signings
+  // are read.
+  const signingIds = [
+    ...new Set(
+      rows
+        .filter((r) => r.batch_id && (r.status === 'awaiting_signature' || (r.status === 'submitted' && r.provider_payment_id)))
+        .map((r) => r.batch_id as string),
+    ),
+  ]
   const signingStatus = new Map<string, string>()
   if (signingIds.length > 0) {
     const { data: batches, error: batchError } = await supabase
@@ -63,7 +73,11 @@ export const GET = withRouteContext('payment_orders.list', async (request, { sup
     for (const b of (batches ?? []) as Array<{ id: string; status: string }>) signingStatus.set(b.id, b.status)
   }
   return NextResponse.json({
-    data: rows.map((r) => ({ ...r, bank_confirming: isBankConfirming(r, r.batch_id ? signingStatus.get(r.batch_id) : null) })),
+    data: rows.map((row) => {
+      const { provider_payment_id: _bankPaymentId, ...r } = row
+      const signing = row.batch_id ? signingStatus.get(row.batch_id) : null
+      return { ...r, bank_confirming: isBankConfirming(row, signing), sign_again: isSignableAgain(row, signing) }
+    }),
   })
 })
 

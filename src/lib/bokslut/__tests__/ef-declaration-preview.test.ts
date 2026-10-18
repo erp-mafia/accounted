@@ -13,6 +13,7 @@ import { getStructuredError } from '@/lib/errors/get-structured-error'
 import {
   computeEfDeclarationPreview,
   EfDeclarationNotApplicableError,
+  R29_FROM_BOOKED_RESULT,
 } from '../enskild-firma/ef-declaration-preview'
 
 // The real NE engine runs on top of a mocked trial balance, so the preview
@@ -159,10 +160,12 @@ describe('computeEfDeclarationPreview: base is NE R11', () => {
   it('computes egenavgifter on that base', async () => {
     const { supabase } = makeSupabase('enskild_firma')
 
-    const preview = await computeEfDeclarationPreview(supabase, 'co-1', 'fp-1')
+    // No periodiseringsfond, so nothing stands between R29 and R42.
+    const preview = await computeEfDeclarationPreview(supabase, 'co-1', 'fp-1', { pfondDesiredAmount: 0 })
     const egenavgifter = preview.items.find((i) => i.kind === 'egenavgifter')
 
     expect(egenavgifter?.computation).toMatchObject({ surplusBeforeEgenavgifter: 130_000 })
+    expect(preview.rutor).toMatchObject({ R29: 130_000, R42: 130_000, R43: 32_500 })
   })
 })
 
@@ -190,25 +193,28 @@ describe('computeEfDeclarationPreview: periodiseringsfond base is NE R33 (IL 30 
   it('deducts positiv räntefördelning (R30) before the 30 % cap', async () => {
     const { supabase } = makeSupabase('enskild_firma')
 
-    // 1 000 000 x 8,55 % = 85 500 in R30; R33 = 120 000 - 85 500 = 34 500.
+    // Inkomstår 2025: 1 000 000 x 7,96 % = 79 600 in R30 (8,55 % is the
+    // 2026 rate); R33 = 120 000 - 79 600 = 40 400.
     const preview = await computeEfDeclarationPreview(supabase, 'co-1', 'fp-1', {
       kapitalunderlag: 1_000_000,
     })
 
-    expect(pfondOf(preview.items)?.computation).toMatchObject({ surplus: 34_500 })
-    expect(pfondOf(preview.items)?.amount).toBe(10_350)
+    expect(preview.rutor).toMatchObject({ R30: 79_600, R33: 40_400 })
+    expect(pfondOf(preview.items)?.computation).toMatchObject({ surplus: 40_400 })
+    expect(pfondOf(preview.items)?.amount).toBe(12_120)
   })
 
   it('adds negativ räntefördelning (R31) before the 30 % cap', async () => {
     const { supabase } = makeSupabase('enskild_firma')
 
-    // 600 000 x 3,55 % = 21 300 in R31; R33 = 120 000 + 21 300 = 141 300.
+    // Inkomstår 2025: 600 000 x 2,96 % = 17 760 in R31; R33 = 137 760.
     const preview = await computeEfDeclarationPreview(supabase, 'co-1', 'fp-1', {
       kapitalunderlag: -600_000,
     })
 
-    expect(pfondOf(preview.items)?.computation).toMatchObject({ surplus: 141_300 })
-    expect(pfondOf(preview.items)?.amount).toBe(42_390)
+    expect(preview.rutor).toMatchObject({ R31: 17_760, R33: 137_760 })
+    expect(pfondOf(preview.items)?.computation).toMatchObject({ surplus: 137_760 })
+    expect(pfondOf(preview.items)?.amount).toBe(41_328)
   })
 })
 
@@ -222,17 +228,50 @@ describe('computeEfDeclarationPreview: expansionsfond uses the closing kapitalun
     const { supabase } = makeSupabase('enskild_firma')
 
     const preview = await computeEfDeclarationPreview(supabase, 'co-1', 'fp-1', {
-      // Opening, for räntefördelning (IL 33 kap): cap would be 125 940.
-      kapitalunderlag: 100_000,
+      // Opening, for räntefördelning (IL 33 kap): cap would be 12 594.
+      kapitalunderlag: 10_000,
       // Closing, for expansionsfond: cap is 503 760.
       expansionsfondKapitalunderlag: 400_000,
-      expansionsfondDesiredChange: 300_000,
+      expansionsfondDesiredChange: 50_000,
     })
 
     const exp = expansionsfondOf(preview.items)
     expect(exp?.computation).toMatchObject({ kapitalunderlag: 400_000, maxTotalBalance: 503_760 })
-    expect(exp?.amount).toBe(300_000)
+    expect(exp?.amount).toBe(50_000)
     expect(exp?.ne_ruta).toBe('R36')
+  })
+
+  it('caps the ökning (R36) at the result before it (R35)', async () => {
+    const { supabase } = makeSupabase('enskild_firma')
+
+    // R11 = 120 000, no räntefördelning, no periodiseringsfond: R35 = 120 000.
+    // Before this fix R36 was the asked 300 000, an underskott the form
+    // forbids ("dock högst överskott vid R35").
+    const preview = await computeEfDeclarationPreview(supabase, 'co-1', 'fp-1', {
+      pfondDesiredAmount: 0,
+      expansionsfondKapitalunderlag: 400_000,
+      expansionsfondDesiredChange: 300_000,
+    })
+
+    expect(expansionsfondOf(preview.items)?.amount).toBe(120_000)
+    expect(preview.rutor).toMatchObject({ R35: 120_000, R36: 120_000, R42: 0, R43: 0 })
+  })
+
+  it('returns the part of an earlier fund above the cap in R37 without being asked', async () => {
+    const { supabase } = makeSupabase('enskild_firma')
+
+    const preview = await computeEfDeclarationPreview(supabase, 'co-1', 'fp-1', {
+      pfondDesiredAmount: 0,
+      expansionsfondKapitalunderlag: 100_000,
+      expansionsfondExistingBalance: 200_000,
+    })
+
+    expect(expansionsfondOf(preview.items)).toMatchObject({ kind: 'expansionsfond_ateforing', amount: 74_060 })
+    // R42 = 120 000 + 74 060; R43 = 25 %.
+    expect(preview.rutor).toMatchObject({ R37: 74_060, R42: 194_060, R43: 48_515 })
+    expect(preview.ovrigaUppgifter).toEqual([
+      { faltkod: '8012', label: 'Kapitalunderlag expansionsfond (positivt)', amount: 100_000 },
+    ])
   })
 
   it('never borrows the opening kapitalunderlag when the closing one is missing', async () => {
@@ -245,7 +284,7 @@ describe('computeEfDeclarationPreview: expansionsfond uses the closing kapitalun
 
     const exp = expansionsfondOf(preview.items)
     expect(exp?.kind).toBe('expansionsfond_avsattning')
-    expect(exp?.computation).toMatchObject({ kapitalunderlag: 0, actualChange: 0 })
+    expect(exp?.computation).toMatchObject({ kapitalunderlag: null, actualChange: 0 })
     expect(exp?.amount).toBe(0)
   })
 })
@@ -327,5 +366,91 @@ describe('computeEfDeclarationPreview: återföring (R32) of earlier periodiseri
     expect(ateforing?.warnings).toEqual(
       expect.arrayContaining([expect.stringContaining('senast i 2024 års deklaration')]),
     )
+  })
+})
+
+describe('computeEfDeclarationPreview: NE sida 2 from R29 to R43 (SKV 2161)', () => {
+  // The form's sums: R33 = R29 - R30 + R31 + R32, R35 = R33 - R34,
+  // R42 = R35 - R36 + R37 - R38 - R39 + R40 - R41, and R43 at most 25 % of
+  // "det resultat som näringsverksamheten visar före ruta R43" (Skatteverket,
+  // NE hjälptext). Inkomstår 2025.
+  it('fills every ruta from one worked example', async () => {
+    useRows(() => [row('3001', 'credit', 500_000)])
+    const { supabase } = makeSupabase('enskild_firma')
+
+    const preview = await computeEfDeclarationPreview(supabase, 'co-1', 'fp-1', {
+      kapitalunderlag: 1_000_000,
+      pfondExistingFonder: [{ cohort_year: 2019, balance: 50_000 }],
+      expansionsfondKapitalunderlag: 400_000,
+      expansionsfondExistingBalance: 100_000,
+      expansionsfondDesiredChange: 200_000,
+      priorYearSchablonavdrag: 30_000,
+      priorYearActualCharged: 25_000,
+    })
+
+    expect(preview.rutor).toEqual({
+      R29: 500_000,
+      R30: 79_600, // 7,96 % of 1 000 000
+      R31: 0,
+      R32: 50_000, // the 2019 fund, in its sixth year
+      R33: 470_400,
+      R34: 141_120, // 30 % of R33
+      R35: 329_280,
+      R36: 200_000, // under both R35 and the 125,94 % room (403 760)
+      R37: 0,
+      R40: 30_000,
+      R41: 25_000,
+      R42: 134_280,
+      // Before this fix R43 was 25 % of R11 + R40 - R41 = 126 250, with
+      // every deduction above it left out.
+      R43: 33_570,
+    })
+    expect(preview.items.map((i) => [i.ne_ruta, i.amount])).toEqual([
+      ['R30', 79_600],
+      ['R32', 50_000],
+      ['R34', 141_120],
+      ['R36', 200_000],
+      ['R43', 33_570],
+    ])
+    expect(preview.ovrigaUppgifter).toEqual([
+      { faltkod: '8009', label: 'Kapitalunderlag för räntefördelning (positivt)', amount: 1_000_000 },
+      { faltkod: '8012', label: 'Kapitalunderlag expansionsfond (positivt)', amount: 400_000 },
+    ])
+  })
+
+  it('caps R30 at R29 and reports the saved fördelningsbelopp under Övriga uppgifter', async () => {
+    useRows(() => [row('3001', 'credit', 50_000)])
+    const { supabase } = makeSupabase('enskild_firma')
+
+    const preview = await computeEfDeclarationPreview(supabase, 'co-1', 'fp-1', { kapitalunderlag: 1_000_000 })
+
+    expect(preview.rutor).toMatchObject({ R29: 50_000, R30: 50_000, R33: 0, R34: 0, R42: 0, R43: 0 })
+    expect(preview.ovrigaUppgifter).toEqual([
+      { faltkod: '8009', label: 'Kapitalunderlag för räntefördelning (positivt)', amount: 1_000_000 },
+      { faltkod: '8011', label: 'Positivt fördelningsbelopp som sparas till nästa beskattningsår', amount: 29_600 },
+    ])
+  })
+
+  it('uses a sparat fördelningsbelopp and states a negative kapitalunderlag in 8010', async () => {
+    const { supabase } = makeSupabase('enskild_firma')
+
+    const preview = await computeEfDeclarationPreview(supabase, 'co-1', 'fp-1', {
+      kapitalunderlag: -100_000,
+      sparatFordelningsbelopp: 20_000,
+    })
+
+    expect(preview.rutor).toMatchObject({ R30: 20_000, R31: 0, R33: 100_000 })
+    expect(preview.ovrigaUppgifter).toEqual([
+      { faltkod: '8010', label: 'Kapitalunderlag för räntefördelning (negativt)', amount: 100_000 },
+    ])
+  })
+
+  it('tells the owner that R13-R28 are not included', async () => {
+    const { supabase } = makeSupabase('enskild_firma')
+
+    const preview = await computeEfDeclarationPreview(supabase, 'co-1', 'fp-1')
+
+    expect(preview.warnings).toEqual([R29_FROM_BOOKED_RESULT])
+    expect(preview.ovrigaUppgifter).toEqual([])
   })
 })

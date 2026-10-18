@@ -20,6 +20,7 @@ import {
   cancelIdempotencyKey,
   paymentIdempotencyKey,
   createConnectPaymentsProvider,
+  isUnsignedProviderStatus,
   registerConnectPaymentsProvider,
   toConnectorParty,
   toPaymentProviderError,
@@ -334,7 +335,7 @@ describe('the operations', () => {
   it('cancelPayment keys the cancel by payment id and returns the bank answer', async () => {
     const fetchMock = fetchAnswering(200, { outcome: 'too_late', providerStatus: 'ACSC' })
     const result = await provider(fetchMock).cancelPayment(CTX, 'pay-1', 'swedish-giro')
-    expect(result).toEqual({ outcome: 'too_late', providerStatus: 'ACSC' })
+    expect(result).toEqual({ outcome: 'too_late', providerStatus: 'ACSC', unsigned: false })
     expect(sentUrl(fetchMock)).toBe('https://connect.example.se/api/connect/payments/payments/cancel')
     const body = sentBody(fetchMock)
     expect(body).toEqual({ idempotencyKey: expect.any(String), party: toConnectorParty(CTX), providerPaymentId: 'pay-1', product: 'swedish-giro' })
@@ -352,13 +353,29 @@ describe('the operations', () => {
     await provider(person).cancelPayment(CTX, 'pay-1', 'swedish-giro')
     const agent = fetchAnswering(200, { outcome: 'cancelled', providerStatus: 'CANC' })
     const result = await provider(agent).cancelPayment({ ...CTX, psuIpAddress: null, psuUserAgent: null }, 'pay-1', 'swedish-giro')
-    expect(result).toEqual({ outcome: 'cancelled', providerStatus: 'CANC' })
+    expect(result).toEqual({ outcome: 'cancelled', providerStatus: 'CANC', unsigned: false })
     expect(sentBody(agent).idempotencyKey).toMatch(/^cancel:pay-1:/)
     expect(sentBody(agent).idempotencyKey).not.toBe(sentBody(person).idempotencyKey)
     // The same caller asking again is a new cancel too: the first answer is not replayed.
     const again = fetchAnswering(200, { outcome: 'cancelled', providerStatus: 'CANC' })
     await provider(again).cancelPayment(CTX, 'pay-1', 'swedish-giro')
     expect(sentBody(again).idempotencyKey).not.toBe(sentBody(person).idempotencyKey)
+  })
+
+  it('says whether the bank holds the payment unsigned when it refuses a cancel (crm#1282)', async () => {
+    for (const [providerStatus, unsigned] of [
+      ['RCVD', true],
+      ['PDNG', true],
+      ['rcvd', true],
+      ['ACTC', false],
+      ['PATC', false],
+      ['ACSC', false],
+      [null, false],
+    ] as const) {
+      const result = await provider(fetchAnswering(200, { outcome: 'too_late', providerStatus })).cancelPayment(CTX, 'pay-1', 'swedish-giro')
+      expect(result, String(providerStatus)).toEqual({ outcome: 'too_late', providerStatus, unsigned })
+    }
+    expect(isUnsignedProviderStatus(undefined)).toBe(false)
   })
 
   it('keeps a cancel key for an Open Payments payment id inside the contract', () => {

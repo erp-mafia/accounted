@@ -166,7 +166,9 @@ export interface BankSigningCapabilities {
  * anyone knows:
  *   - needs_authorisation: the bank wants the cancel signed, which is not
  *     offered here (the person cancels in the online bank);
- *   - too_late: executed already, or past the bank's cut-off;
+ *   - too_late: the bank does not allow a cancel now: executed already, past
+ *     its cut-off, or (with `unsigned`) not signed while a signing of it is
+ *     still open at the bank (crm#1282);
  *   - not_cancelled: anything else.
  */
 export type PaymentCancelOutcome = 'cancelled' | 'needs_authorisation' | 'too_late' | 'not_cancelled'
@@ -175,6 +177,12 @@ export interface PaymentCancelResult {
   outcome: PaymentCancelOutcome
   /** The provider's status code for the payment after the answer, when it gave one. */
   providerStatus: string | null
+  /**
+   * The bank reports the payment received and not signed (its status maps to
+   * 'submitted'): nothing is paid unless someone signs it. Absent or false
+   * when the status says otherwise or the bank gave none.
+   */
+  unsigned?: boolean
 }
 
 /** The code of the PaymentProviderError for a payment id the bank does not know. */

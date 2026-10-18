@@ -914,6 +914,7 @@ export const paymentOrdersCancel = defineOperation({
     pitfalls: [
       'PAYMENT_CANCEL_NEEDS_SIGNING: the bank wants the cancel signed; cancel it in the online bank.',
       'PAYMENT_CANCEL_TOO_LATE: executed, or past the bank\'s cut-off.',
+      'PAYMENT_CANCEL_UNSIGNED_REFUSED: the bank holds the payment unsigned and refused the cancel, typically while a signing of it is open; nothing is paid unless someone signs it. Retry in a few minutes.',
       'PAYMENT_CANCEL_NOT_CONFIRMED: the bank did not confirm; check the payment in the online bank. The order is unchanged.',
       'PAYMENT_CANCEL_CONFIRMATION_REQUIRED: the bank may hold the payment but its answer was lost; a person resolves the order in Accounted.',
       'PAYMENT_ORDER_CREATE_IN_PROGRESS: the payment is on its way to the bank right now; wait a few minutes.',
@@ -935,6 +936,7 @@ export const paymentOrdersCancel = defineOperation({
     'PAYMENT_CANCEL_CONFIRMATION_REQUIRED',
     'PAYMENT_CANCEL_NEEDS_SIGNING',
     'PAYMENT_CANCEL_TOO_LATE',
+    'PAYMENT_CANCEL_UNSIGNED_REFUSED',
     'PAYMENT_CANCEL_NOT_CONFIRMED',
     'PAYMENTS_UNAVAILABLE',
     'PAYMENT_ORG_NUMBER_MISSING',
