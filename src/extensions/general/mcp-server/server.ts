@@ -6641,7 +6641,7 @@ export const tools: McpTool[] = [
             accounting_method: {
               type: ['string', 'null'],
               enum: ['accrual', 'cash', null],
-              description: 'accrual = faktureringsmetoden: payment debits 19xx AND credits 1510 (both sides). cash = kontantmetoden: payment debits 19xx and books revenue + moms (an invoice carried over the year end clears 1510, no moms). Drives the settlement posting. Null defaults to accrual.',
+              description: 'accrual = faktureringsmetoden: payment debits 19xx AND credits 1510 (both sides). cash = kontantmetoden: payment debits 19xx and books revenue + moms (a carried invoice clears 1510). Drives the settlement posting. Null defaults to accrual.',
             },
           },
           required: ['id', 'company_id'],
@@ -13287,7 +13287,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_find_voucher_candidates_for_invoice',
     keywords: ['verifikat', 'kundfaktura', 'koppla faktura'],
     title: 'Find Voucher Candidates (Invoice)',
-    description: "List posted verifikat that could be this invoice's payment (credit 1510; a kontantmetod invoice never booked: debit 19xx). Call before gnubok_link_invoice_to_voucher to mark the faktura paid (no new bokföring).",
+    description: "List posted verifikat that could be this invoice's payment (credit 1510; unbooked kontantmetod invoice: debit 19xx). Call before gnubok_link_invoice_to_voucher to mark the faktura paid (no new bokföring).",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -13353,7 +13353,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_link_invoice_to_voucher',
     keywords: ['koppla faktura', 'verifikat', 'kundfaktura'],
     title: 'Link Invoice to Voucher',
-    description: 'Markera en faktura som betald via länk till en befintlig verifikation (krediterar 1510; en obokförd faktura under kontantmetoden: debiterar 19xx). Kör gnubok_find_voucher_candidates_for_invoice först. Stages for approval.',
+    description: 'Markera en faktura som betald via länk till en befintlig verifikation (krediterar 1510; obokförd kontantmetodfaktura: debiterar 19xx). Kör gnubok_find_voucher_candidates_for_invoice först. Stages for approval.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -18148,7 +18148,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_agi_submit',
     keywords: ['arbetsgivardeklaration', 'lämna in agi'],
     title: 'Submit AGI Declaration (Arbetsgivardeklaration)',
-    description: "Stage filing a salary run's AGI with Skatteverket. High-risk: approval rebuilds the XML underlag from current data (unless filed), posts it and returns a BankID signing link; it is not filed until you sign. Always staged.",
+    description: "Stage filing a salary run's AGI with Skatteverket. High-risk: approval rebuilds the XML underlag (unless filed), posts it and returns a BankID signing link; it is not filed until you sign. Always staged.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
