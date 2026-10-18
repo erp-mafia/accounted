@@ -82,7 +82,12 @@ import { CreateGrantParamsSchema, GRANT_OPERATION_TYPES, RevokeGrantParamsSchema
 import { grantsEnabled } from '@/lib/grants/flag'
 import { runInOperationCommit } from './commit-scope'
 import { recordOperationDecision } from '@/lib/suggestion-log/operation'
-import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
+import {
+  correctionBusinessEvents,
+  manualVoucherBusinessEvent,
+  voucherStornoBusinessEvent,
+} from '@/lib/bookkeeping/ledger-business-events'
+import { ownRowsStornoBusinessEvent } from '@/lib/bookkeeping/bank-line-business-events'
 import {
   existingOpeningBalanceMessage,
   findExistingOpeningBalance,
@@ -5509,11 +5514,22 @@ async function commitCreateVoucher(
   }
 
   try {
-    const entry = await createJournalEntry(
+    // Posting port (step 2i): while POSTING_EVENTS is on, the voucher's
+    // event (the kind its source type names; agent_proposed_user_approved,
+    // this approval as evidence) is linked before a number is drawn.
+    const entry = await postingPort.postJournalEntry({
       supabase,
       companyId,
       userId,
-      {
+      event: () =>
+        manualVoucherBusinessEvent({
+          sourceType,
+          entryDate,
+          linkBasis: linkBasisColumns('user_created'),
+          inboxItemId,
+          documentId: inboxItemId ? (params.document_id as string | undefined) : undefined,
+        }),
+      input: {
         fiscal_period_id: fiscalPeriodId,
         entry_date: entryDate,
         description,
@@ -5527,8 +5543,8 @@ async function commitCreateVoucher(
       // passes 'api_key'/'agent' so agent-relayed acknowledgments are
       // distinguishable in the immutable layer. The DB CHECK constraint
       // rejects anything else (migrations 20260420120001, 20260618120001).
-      opts.commitMethod ?? 'user_accept'
-    )
+      commitMethod: opts.commitMethod ?? 'user_accept',
+    })
 
     // Claim the inbox item for this verifikat. Two approvals of different
     // staged ops for the same item can both pass the read above; the
@@ -5538,6 +5554,9 @@ async function commitCreateVoucher(
     if (inboxItemId) {
       const claim = await claimInboxItemOrReverseEntry(supabase, companyId, userId, inboxItemId, entry.id, {
         expected: replacesEntryId,
+        // The storno of a lost claim through the port too: ledger.storno of
+        // the inbox item, made of the door's own accord (system_derived).
+        stornoEvent: () => ownRowsStornoBusinessEvent({ type: 'inbox_item', id: inboxItemId }, todayIsoStockholm(), linkBasisColumns('system_derived')),
       })
       if (claim.status !== 'claimed') {
         // Posted, then reversed: the voucher number is used, so the op lands
@@ -5676,14 +5695,26 @@ async function commitCorrectEntry(
     // made in May 2026 for a December 2025 voucher correctly lands in 2025,
     // keeping that period's balances consistent. The is_closed pre-flight
     // above is what blocks corrections to already-locked periods.
-    const result = await correctEntry(supabase, companyId, userId, entryId, lines, {
-      // Staged by the MCP tool when the agent explicitly overrode the
-      // chain-depth guard; the guard re-checks here so a stale approval of a
-      // chain that grew deeper in the meantime still stops.
-      allowDeepChain: params.allow_deep_chain === true,
-      // The corrected entry's text when the agent gave one; rows staged
-      // without it keep correctEntry's "Rättelse: <original text>".
-      description: typeof params.description === 'string' ? params.description : undefined,
+    // Posting port (step 2i): ledger.storno and ledger.correction of the
+    // verifikat while POSTING_EVENTS is on, this approval as evidence.
+    const result = await postingPort.correctJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      entryId,
+      ...correctionBusinessEvents({ entryId, occurredOn: todayIsoStockholm, linkBasis: () => linkBasisColumns('user_created') }),
+      correction: {
+        lines,
+        options: {
+          // Staged by the MCP tool when the agent explicitly overrode the
+          // chain-depth guard; the guard re-checks here so a stale approval of a
+          // chain that grew deeper in the meantime still stops.
+          allowDeepChain: params.allow_deep_chain === true,
+          // The corrected entry's text when the agent gave one; rows staged
+          // without it keep correctEntry's "Rättelse: <original text>".
+          description: typeof params.description === 'string' ? params.description : undefined,
+        },
+      },
     })
     return {
       data: {
@@ -5756,8 +5787,17 @@ async function commitReverseEntry(
   }
 
   try {
-    const reversal = await reverseEntry(supabase, companyId, userId, entryId, reversalDate, {
-      allowDeepChain: params.allow_deep_chain === true,
+    // Posting port (step 2i): ledger.storno of the verifikat while
+    // POSTING_EVENTS is on, this approval as evidence.
+    const reversal = await postingPort.reverseJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      entryId,
+      reversalDate,
+      options: { allowDeepChain: params.allow_deep_chain === true },
+      event: () => voucherStornoBusinessEvent({ entryId, occurredOn: todayIsoStockholm(), linkBasis: linkBasisColumns('user_created') }),
+      role: 'reversal',
     })
     // Invariant per BFL 5 kap 5§: the storno must land in the same fiscal period
     // as the original entry. reverseEntry() at lib/bookkeeping/engine.ts:492 uses

@@ -110,6 +110,9 @@ describe('bookResidualAndLink', () => {
       COMPANY,
       USER,
       expect.objectContaining({ fiscal_period_id: 'fp-1', entry_date: '2026-08-05', source_type: 'manual' }),
+      // The posting port's ledger adapter passes the commitMethod and rubricVersion positions.
+      undefined,
+      undefined,
     )
     expect(findCall('transaction_voucher_links', 'insert')?.[0]).toMatchObject({
       transaction_id: T1,

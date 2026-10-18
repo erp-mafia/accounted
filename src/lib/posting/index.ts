@@ -43,6 +43,8 @@ export {
 export type {
   BusinessEventDraft,
   CommitJournalEntryRequest,
+  CorrectJournalEntryRequest,
+  CorrectJournalEntryResult,
   DraftJournalEntryRequest,
   PostJournalEntryRequest,
   PostJournalEntrySetRequest,

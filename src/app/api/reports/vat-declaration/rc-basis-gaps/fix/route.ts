@@ -9,7 +9,11 @@ import {
   EntryAlreadyReversedError,
   isBookkeepingError,
 } from '@/lib/bookkeeping/errors'
-import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
+import { correctionBusinessEvents } from '@/lib/bookkeeping/ledger-business-events'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { mappingVersion } from '@/lib/posting/mapping-version'
+import { postingPort } from '@/lib/posting/port'
 import { postedLineAsInput } from '@/lib/core/bookkeeping/posted-line-input'
 import { fetchDynamicVatAccounts, type DynamicVatAccounts } from '@/lib/reports/vat-revenue-accounts'
 import {
@@ -295,7 +299,22 @@ export const POST = withRouteContext(
     ]
 
     try {
-      const correction = await correctEntry(supabase, companyId, user.id, entryId, correctedLines)
+      // Posting port (step 2i): ledger.storno and ledger.correction of the
+      // verifikat while POSTING_EVENTS is on, the person's click
+      // (user_created); the correction names the rule its basis pair came from.
+      const correction = await postingPort.correctJournalEntry({
+        supabase,
+        companyId,
+        userId: user.id,
+        entryId,
+        ...correctionBusinessEvents({
+          entryId,
+          occurredOn: todayIsoStockholm,
+          linkBasis: () => linkBasisColumns('user_created'),
+          mappingVersion: () => mappingVersion('vatRcBasisFix'),
+        }),
+        correction: { lines: correctedLines },
+      })
       return NextResponse.json({
         data: {
           reversalId: correction.reversal.id,

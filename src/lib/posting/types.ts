@@ -1,8 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 import type { CreateEntryOptions } from '@/lib/bookkeeping/engine'
+import type { CorrectionBusinessEvents, correctEntry, recordateEntry } from '@/lib/core/bookkeeping/storno-service'
 import type { HandleType } from '@/lib/handles/registry'
-import type { CreateJournalEntryInput, JournalEntry } from '@/types'
+import type { CreateJournalEntryInput, CreateJournalEntryLineInput, JournalEntry } from '@/types'
 import type { BusinessEventCategory } from './categories'
 import type { BusinessEventKind } from './kinds'
 import type { BusinessEventEntryRole, BusinessEventLink, BusinessEventPartyType, BusinessEventTaxAmount } from './store'
@@ -118,6 +119,41 @@ export interface CommitJournalEntryRequest {
   rubricVersion?: string
 }
 
+/** correctEntry's options (storno-service), without the event links the port adds. */
+export type CorrectEntryOptions = Omit<NonNullable<Parameters<typeof correctEntry>[5]>, 'businessEvents'>
+
+/** recordateEntry's options (storno-service), without the event links the port adds. */
+export type RecordateEntryOptions = Omit<NonNullable<Parameters<typeof recordateEntry>[5]>, 'businessEvents'>
+
+/** What a correction answers: the storno and the corrected verifikat (correctEntry's result). */
+export type CorrectJournalEntryResult = Awaited<ReturnType<typeof correctEntry>>
+
+/**
+ * A rättelse through the port (BFL 5 kap 5 §, lib/core/bookkeeping/storno-service.ts):
+ * the storno of a posted verifikat and the corrected verifikat that replaces
+ * it, with new lines (correctEntry) or the same lines on another date
+ * (recordateEntry). Two verifikat, two events: the storno's (ledger.storno,
+ * linked with role reversal) and the corrected verifikat's
+ * (ledger.correction, role correction). Both are recorded before the storno
+ * is drafted, and each is linked to its own draft before that draft's number
+ * is drawn.
+ */
+export interface CorrectJournalEntryRequest {
+  supabase: SupabaseClient
+  companyId: string
+  userId: string
+  /** The posted verifikat corrected. */
+  entryId: string
+  /** The storno's event; a function is called only while the port is on (see PostJournalEntryRequest). */
+  stornoEvent: BusinessEventDraft | (() => BusinessEventDraft)
+  /** The corrected verifikat's event; a function is called only while the port is on. */
+  correctionEvent: BusinessEventDraft | (() => BusinessEventDraft)
+  /** What is corrected: the lines (correctEntry's arguments), or only the date (recordateEntry's). */
+  correction:
+    | { lines: CreateJournalEntryLineInput[]; options?: CorrectEntryOptions }
+    | { newDate: string; options?: RecordateEntryOptions }
+}
+
 /** A storno through the port: the event it answers, and reverseEntry's own arguments. */
 export interface ReverseJournalEntryRequest {
   supabase: SupabaseClient
@@ -173,6 +209,8 @@ export interface PostingPort {
   /** The draft of a producer that commits itself; see DraftJournalEntryRequest. */
   draftJournalEntry(request: DraftJournalEntryRequest): Promise<JournalEntry>
   commitJournalEntry(request: CommitJournalEntryRequest): Promise<JournalEntry>
+  /** A storno and its corrected verifikat, one event each; see CorrectJournalEntryRequest. */
+  correctJournalEntry(request: CorrectJournalEntryRequest): Promise<CorrectJournalEntryResult>
   reverseJournalEntry(request: ReverseJournalEntryRequest): Promise<JournalEntry>
   /** The event alone, linked to no verifikat: its id, or null when none was recorded; see RecordBusinessEventRequest. */
   recordEvent(request: RecordBusinessEventRequest): Promise<string | null>
@@ -229,4 +267,13 @@ export interface PostingAdapter {
     options?: { allowDeepChain?: boolean }
     businessEvent?: BusinessEventLink
   }): Promise<JournalEntry>
+  /** correctEntry or recordateEntry (lib/core/bookkeeping/storno-service.ts): the storno and the corrected verifikat. */
+  correctEntry(args: {
+    supabase: SupabaseClient
+    companyId: string
+    userId: string
+    entryId: string
+    correction: CorrectJournalEntryRequest['correction']
+    businessEvents?: CorrectionBusinessEvents
+  }): Promise<CorrectJournalEntryResult>
 }

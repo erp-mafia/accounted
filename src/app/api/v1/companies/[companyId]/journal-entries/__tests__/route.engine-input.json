@@ -1,0 +1,558 @@
+[
+  {
+    "name": "create: a manual draft",
+    "calls": {
+      "createDraftEntry": [
+        [
+          4,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "entry_date": "2026-05-12",
+            "description": "Bankavgift maj 2026",
+            "source_type": "manual",
+            "notes": "Från bankens avgiftsavi",
+            "lines": [
+              {
+                "account_number": "6570",
+                "debit_amount": 50,
+                "credit_amount": 0
+              },
+              {
+                "account_number": "1930",
+                "debit_amount": 0,
+                "credit_amount": 50
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "outcome": {
+      "status": 201,
+      "body": {
+        "data": {
+          "id": "00000000-0000-4000-8000-0000000e0001-1",
+          "status": "draft",
+          "voucher_series": "A",
+          "voucher_number": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "create: a draft an integration labels as its own (webshop_order)",
+    "calls": {
+      "createDraftEntry": [
+        [
+          4,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "entry_date": "2026-05-12",
+            "description": "Order 1001",
+            "source_type": "webshop_order",
+            "source_id": "shop-1001",
+            "lines": [
+              {
+                "account_number": "6570",
+                "debit_amount": 50,
+                "credit_amount": 0
+              },
+              {
+                "account_number": "1930",
+                "debit_amount": 0,
+                "credit_amount": 50
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "outcome": {
+      "status": 201,
+      "body": {
+        "data": {
+          "id": "00000000-0000-4000-8000-0000000e0002-1",
+          "status": "draft",
+          "voucher_series": "A",
+          "voucher_number": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "create: the engine refuses the draft",
+    "calls": {
+      "createDraftEntry": [
+        [
+          4,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "entry_date": "2026-05-12",
+            "description": "Bankavgift maj 2026",
+            "source_type": "manual",
+            "lines": [
+              {
+                "account_number": "6570",
+                "debit_amount": 50,
+                "credit_amount": 0
+              },
+              {
+                "account_number": "1930",
+                "debit_amount": 0,
+                "credit_amount": 50
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "outcome": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ACCOUNTS_NOT_IN_CHART"
+        }
+      }
+    }
+  },
+  {
+    "name": "batch-create: two drafts, history replayed and a manual one",
+    "calls": {
+      "createDraftEntry": [
+        [
+          4,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "entry_date": "2026-01-02",
+            "description": "Historik 2025-12",
+            "source_type": "import",
+            "lines": [
+              {
+                "account_number": "6570",
+                "debit_amount": 50,
+                "credit_amount": 0
+              },
+              {
+                "account_number": "1930",
+                "debit_amount": 0,
+                "credit_amount": 50
+              }
+            ]
+          }
+        ],
+        [
+          4,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "entry_date": "2026-06-01",
+            "description": "Bankavgift juni",
+            "source_type": "manual",
+            "voucher_series": "B",
+            "lines": [
+              {
+                "account_number": "6570",
+                "debit_amount": 50,
+                "credit_amount": 0
+              },
+              {
+                "account_number": "1930",
+                "debit_amount": 0,
+                "credit_amount": 50
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "outcome": {
+      "status": 200,
+      "body": {
+        "data": {
+          "results": [
+            {
+              "ok": true,
+              "request_index": 0,
+              "data": {
+                "id": "00000000-0000-4000-8000-0000000e0004-1",
+                "status": "draft",
+                "voucher_series": "A",
+                "voucher_number": 0
+              }
+            },
+            {
+              "ok": true,
+              "request_index": 1,
+              "data": {
+                "id": "00000000-0000-4000-8000-0000000e0004-2",
+                "status": "draft",
+                "voucher_series": "A",
+                "voucher_number": 0
+              }
+            }
+          ],
+          "summary": {
+            "total": 2,
+            "succeeded": 2,
+            "failed": 0
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "batch-create: the engine refuses one draft of two",
+    "calls": {
+      "createDraftEntry": [
+        [
+          4,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "entry_date": "2026-05-12",
+            "description": "Bankavgift maj 2026",
+            "source_type": "manual",
+            "lines": [
+              {
+                "account_number": "6570",
+                "debit_amount": 50,
+                "credit_amount": 0
+              },
+              {
+                "account_number": "1930",
+                "debit_amount": 0,
+                "credit_amount": 50
+              }
+            ]
+          }
+        ],
+        [
+          4,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "entry_date": "2026-05-12",
+            "description": "Andra",
+            "source_type": "manual",
+            "lines": [
+              {
+                "account_number": "6570",
+                "debit_amount": 50,
+                "credit_amount": 0
+              },
+              {
+                "account_number": "1930",
+                "debit_amount": 0,
+                "credit_amount": 50
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "outcome": {
+      "status": 200,
+      "body": {
+        "data": {
+          "results": [
+            {
+              "ok": false,
+              "request_index": 0,
+              "error": {
+                "code": "ACCOUNTS_NOT_IN_CHART",
+                "message": "Följande konton behöver aktiveras: 6570"
+              }
+            },
+            {
+              "ok": true,
+              "request_index": 1,
+              "data": {
+                "id": "00000000-0000-4000-8000-0000000e0005-2",
+                "status": "draft",
+                "voucher_series": "A",
+                "voucher_number": 0
+              }
+            }
+          ],
+          "summary": {
+            "total": 2,
+            "succeeded": 1,
+            "failed": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "commit: a draft posted",
+    "calls": {
+      "commitEntry": [
+        [
+          4,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          "00000000-0000-4000-8000-0000000e0006"
+        ]
+      ]
+    },
+    "outcome": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "00000000-0000-4000-8000-0000000e0006",
+          "handle": "je_000000000000400080000000000e0006",
+          "status": "draft",
+          "entry_date": "2026-05-12",
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "voucher_series": "A",
+          "voucher_number": 0,
+          "reversed_by_id": null,
+          "correction_of_id": null,
+          "reverses_id": null
+        }
+      }
+    }
+  },
+  {
+    "name": "reverse: a posted voucher reversed on its own date",
+    "calls": {
+      "reverseEntry": [
+        [
+          6,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          "00000000-0000-4000-8000-0000000e0007",
+          "2026-05-12",
+          {
+            "allowDeepChain": false
+          }
+        ]
+      ]
+    },
+    "outcome": {
+      "status": 200,
+      "body": {
+        "data": {
+          "reversal_id": "storno-00000000-0000-4000-8000-0000000e0007",
+          "original_id": "00000000-0000-4000-8000-0000000e0007",
+          "voucher_series": "A",
+          "voucher_number": 7,
+          "entry_date": "2026-05-12",
+          "status": "posted"
+        }
+      }
+    }
+  },
+  {
+    "name": "reverse: on a date inside the year, deep in a chain",
+    "calls": {
+      "reverseEntry": [
+        [
+          6,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          "00000000-0000-4000-8000-0000000e0008",
+          "2026-05-31",
+          {
+            "allowDeepChain": true
+          }
+        ]
+      ]
+    },
+    "outcome": {
+      "status": 200,
+      "body": {
+        "data": {
+          "reversal_id": "storno-00000000-0000-4000-8000-0000000e0008",
+          "original_id": "00000000-0000-4000-8000-0000000e0008",
+          "voucher_series": "A",
+          "voucher_number": 7,
+          "entry_date": "2026-05-12",
+          "status": "posted"
+        }
+      }
+    }
+  },
+  {
+    "name": "reverse: the engine refuses the storno",
+    "calls": {
+      "reverseEntry": [
+        [
+          6,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          "00000000-0000-4000-8000-0000000e0009",
+          "2026-05-12",
+          {
+            "allowDeepChain": false
+          }
+        ]
+      ]
+    },
+    "outcome": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "CANNOT_REVERSE_NON_POSTED"
+        }
+      }
+    }
+  },
+  {
+    "name": "correct: new lines and text",
+    "calls": {
+      "correctEntry": [
+        [
+          6,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          "00000000-0000-4000-8000-0000000e0010",
+          [
+            {
+              "account_number": "6064",
+              "debit_amount": 50,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 50
+            }
+          ],
+          {
+            "description": "Rättelse: kortavgift"
+          }
+        ]
+      ]
+    },
+    "outcome": {
+      "status": 200,
+      "body": {
+        "data": {
+          "reversal_id": "storno-00000000-0000-4000-8000-0000000e0010",
+          "corrected_id": "correction-00000000-0000-4000-8000-0000000e0010",
+          "original_id": "00000000-0000-4000-8000-0000000e0010",
+          "voucher_series": "A",
+          "reversal_voucher_number": 7,
+          "corrected_voucher_number": 7
+        }
+      }
+    }
+  },
+  {
+    "name": "correct: the storno service refuses",
+    "calls": {
+      "correctEntry": [
+        [
+          6,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          "00000000-0000-4000-8000-0000000e0011",
+          [
+            {
+              "account_number": "6570",
+              "debit_amount": 50,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 50
+            }
+          ],
+          {
+            "allowDeepChain": true
+          }
+        ]
+      ]
+    },
+    "outcome": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "MEANINGLESS_CORRECTION"
+        }
+      }
+    }
+  },
+  {
+    "name": "redate: moved to another date",
+    "calls": {
+      "recordateEntry": [
+        [
+          6,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          "00000000-0000-4000-8000-0000000e0012",
+          "2026-04-30",
+          {}
+        ]
+      ]
+    },
+    "outcome": {
+      "status": 200,
+      "body": {
+        "data": {
+          "original_id": "00000000-0000-4000-8000-0000000e0012",
+          "reversal_id": "storno-00000000-0000-4000-8000-0000000e0012",
+          "corrected_id": "correction-00000000-0000-4000-8000-0000000e0012",
+          "voucher_series": "A",
+          "reversal_voucher_number": 7,
+          "corrected_voucher_number": 7,
+          "new_entry_date": "2026-04-30"
+        }
+      }
+    }
+  },
+  {
+    "name": "redate: the storno service refuses",
+    "calls": {
+      "recordateEntry": [
+        [
+          6,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          "00000000-0000-4000-8000-0000000e0013",
+          "2026-04-29",
+          {
+            "allowDeepChain": true
+          }
+        ]
+      ]
+    },
+    "outcome": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "MEANINGLESS_CORRECTION"
+        }
+      }
+    }
+  }
+]

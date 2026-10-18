@@ -1,0 +1,1 @@
+[2026-10-18] The worksheet residual records ledger.manual, its source type's kind, filed under its kind (bank fee expense.bank_fees, interest finance.banking, öresavrundning none), its bank line as subject and se.reconciliation-residual as rule: the person picks the kind, a rule the account.

@@ -518,3 +518,40 @@ numbered already. An undo records nothing new. `commit_opening_balance_replaceme
 functions; their proof is `tests/pg/posting-parity-opening-balances.pg.test.ts`,
 `tests/pg/posting-parity-sie-import.pg.test.ts` and
 `service.engine-input.test.ts`.
+
+Step 2i moves the ledger's own doors. A voucher written by hand (the
+dashboard form and its draft, the v1 create and batch-create, the staged
+`create_voucher`) records the kind its source type names: `ledger.manual`
+unless the writer labels it (`vat.settled`, `sale.webshop_order`,
+`ledger.opening_balance`), so the event and the projection agree. A draft
+records its event when it is made, linked to the draft (`draftJournalEntry`,
+as kassa and webbshop), and both commit doors go through
+`commitJournalEntry`, which records nothing. The storno doors (dashboard, v1,
+staged `reverse_entry`) record `ledger.storno` of the verifikat reversed. A
+rättelse goes through the port's `correctJournalEntry`: two events, recorded
+before the storno is drafted, `ledger.storno` linked to the storno (role
+reversal) and `ledger.correction` to the corrected verifikat (role
+correction), both of the verifikat corrected, which `correctEntry` and
+`recordateEntry` (lib/core, handed the links) write right after each draft's
+header; the correction doors (dashboard, v1, staged `correct_entry`,
+recordate and its v1 and staged redate, the momsdeklaration's basis fix,
+whose added rows name `se.vat-rc-basis-fix`) all use it. The storno is
+numbered and posted before the corrected verifikat is drafted, so under
+strict a refused correction link cancels the posted storno, which keeps its
+number, as any later failure of a rättelse does. The owner's reopen of a
+closed year records `ledger.storno` of the year per storno, the sandbox seed
+`ledger.system` (system_derived) per verifikat, the reconciliation residual
+`ledger.manual` filed under its kind with its bank line as subject
+(`se.reconciliation-residual`), and a compensation storno of a verifikat a
+door could not keep always goes through the port (system_derived of the
+verifikat when its door names no event). The kernel's doors take their link
+basis as a function, and lib/posting is a kernel inner module (as in step
+2g). The staged uncategorize (`commitUncategorizeTransaction`, a bank line's
+storno) still calls the engine directly and follows in its own change. Still
+on SQL: the inline rättelse (`correct_entry_metadata`,
+`correct_entry_lines_inline`, inside the same verifikat, no new number),
+`bulk_book_transactions`, `match_batch_allocate`, `link_invoice_to_voucher`,
+`link_supplier_invoice_to_voucher`, `create_expense_payout_batch`,
+`commit_opening_balance_replacement` and the SIE import and undo writers.
+Their proof is `tests/pg/posting-parity-ledger.pg.test.ts` and the doors'
+`*.engine-input.test.ts`.

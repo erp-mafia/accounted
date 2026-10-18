@@ -1,0 +1,1 @@
+[2026-10-18] A voucher written by hand (form, v1, create_voucher) records the kind its source type names, ledger.manual unless the writer labels it, so event and projection agree; a draft records it when made, its commit nothing; no category, amount or rule version.

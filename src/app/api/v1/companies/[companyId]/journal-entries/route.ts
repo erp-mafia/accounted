@@ -29,7 +29,10 @@ import { readV1JsonBody } from '@/lib/api/v1/body'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { ownsFiscalPeriod } from '@/lib/api/v1/owns-fiscal-period'
 import { CreateApiJournalEntrySchema } from '@/lib/api/schemas'
-import { createDraftEntry, validateBalance } from '@/lib/bookkeeping/engine'
+import { validateBalance } from '@/lib/bookkeeping/engine'
+import { manualVoucherBusinessEvent } from '@/lib/bookkeeping/ledger-business-events'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { postingPort } from '@/lib/posting/port'
 import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { DIM_COST_CENTER, DIM_PROJECT, normalizeLineDimensions } from '@/lib/bookkeeping/dimension-resolver'
@@ -406,7 +409,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
 
     try {
-      const entry = await createDraftEntry(ctx.supabase, ctx.companyId!, ctx.userId, { ...input, lines })
+      // Posting port (step 2i): the draft through the port, its event (the
+      // kind its source type names, client_asserted on a key) linked to the
+      // draft now; the commit at /{id}/commit records nothing.
+      const entry = await postingPort.draftJournalEntry({
+        supabase: ctx.supabase,
+        companyId: ctx.companyId!,
+        userId: ctx.userId,
+        event: () =>
+          manualVoucherBusinessEvent({ sourceType: input.source_type, entryDate: input.entry_date, linkBasis: linkBasisColumns('user_created') }),
+        input: { ...input, lines },
+      })
       // Refetch with lines to return the full detail shape.
       const { data: complete } = await ctx.supabase
         .from('journal_entries')

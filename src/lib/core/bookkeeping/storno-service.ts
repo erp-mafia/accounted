@@ -6,6 +6,7 @@ import type {
   JournalEntryLine,
 } from '@/types'
 import { validateBalance, cancelOrphanedEntry, commitStornoOrCorrectionDraft } from '@/lib/bookkeeping/engine'
+import { linkBusinessEventToDraft, type BusinessEventLink } from '@/lib/bookkeeping/business-event-link'
 import { buildStornoLines } from '@/lib/bookkeeping/line-side'
 import {
   dimensionsBagKey,
@@ -122,6 +123,41 @@ async function cancelEntry(
   return true
 }
 
+/**
+ * Posting port (src/lib/posting, correctJournalEntry): the business events a
+ * correction's two new verifikat come from, already recorded by the port.
+ * The storno's (ledger.storno) is linked with role reversal, the corrected
+ * verifikat's (ledger.correction) with role correction, each right after its
+ * draft header and before commit_journal_entry draws its number. Absent
+ * (every caller outside the port, and every correction while POSTING_EVENTS
+ * is off), nothing is written and the drafts are exactly what they were.
+ */
+export interface CorrectionBusinessEvents {
+  reversal?: BusinessEventLink
+  correction?: BusinessEventLink
+}
+
+/**
+ * Link a correction's draft to its business event, as the engine links its
+ * own drafts (lib/bookkeeping/engine.ts, linkDraftToBusinessEvent). A
+ * refusal under strict mode cancels the draft, which has no number yet,
+ * through the same cleanup door as every other failure here, and stops the
+ * correction; shadow mode and a missing table were already answered as a
+ * success by the writer.
+ */
+async function linkCorrectionDraft(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  draftId: string,
+  link: BusinessEventLink,
+): Promise<void> {
+  const linked = await linkBusinessEventToDraft(supabase, companyId, draftId, link)
+  if (linked.ok) return
+  await cancelEntry(supabase, companyId, userId, draftId)
+  throw new BookkeepingDatabaseError('link_business_event', linked.message, linked.code)
+}
+
 /** Journal entry row fetched together with its lines (the embedded select). */
 type OriginalWithLines = JournalEntry & { lines?: JournalEntryLine[] | null }
 
@@ -169,6 +205,8 @@ export async function correctEntry(
      * layer of storno+rättelse.
      */
     allowDeepChain?: boolean
+    /** Posting port: the events of the two new verifikat (CorrectionBusinessEvents). */
+    businessEvents?: CorrectionBusinessEvents
   }
 ): Promise<{
   reversal: JournalEntry
@@ -332,6 +370,11 @@ export async function correctEntry(
     throw new BookkeepingDatabaseError('create_reversal_entry', reversalError?.message)
   }
 
+  // Posting port: the storno's event, linked before its lines and its number.
+  if (options?.businessEvents?.reversal) {
+    await linkCorrectionDraft(supabase, companyId, userId, reversalEntry.id, options.businessEvents.reversal)
+  }
+
   // Insert reversed lines, the engine's storno of each (buildStornoLines: the
   // opposite side, swapped on the net, so a legacy negative-side line
   // reverses to a well-formed one), preserving dimensions.
@@ -418,6 +461,14 @@ export async function correctEntry(
     }
 
     correctedEntry = newEntry
+
+    // Posting port: the corrected verifikat's event, linked before its lines
+    // and its number. Refused under strict, the draft is cancelled here and
+    // the catch below cancels the posted storno, as for any failure in this
+    // step: the storno keeps its number as a cancelled verifikat.
+    if (options?.businessEvents?.correction) {
+      await linkCorrectionDraft(supabase, companyId, userId, correctedEntry.id, options.businessEvents.correction)
+    }
 
     // Insert corrected lines
     const correctedLineInserts = correctedLines.map((line, index) => {
@@ -592,6 +643,8 @@ export async function recordateEntry(
      * 3+ links deep needs the same explicit confirmation.
      */
     allowDeepChain?: boolean
+    /** Posting port: the events of the storno and the moved verifikat, handed to correctEntry. */
+    businessEvents?: CorrectionBusinessEvents
   }
 ): Promise<{ reversal: JournalEntry; corrected: JournalEntry }> {
   // Fetch original with lines
@@ -648,6 +701,7 @@ export async function recordateEntry(
       // doesn't re-read the same row.
       preloadedOriginal: original as OriginalWithLines,
       allowDeepChain: options?.allowDeepChain,
+      ...(options?.businessEvents ? { businessEvents: options.businessEvents } : {}),
     }
   )
 

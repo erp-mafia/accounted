@@ -26,7 +26,10 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
-import { recordateEntry } from '@/lib/core/bookkeeping/storno-service'
+import { correctionBusinessEvents } from '@/lib/bookkeeping/ledger-business-events'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import type { LinkBasisColumns } from '@/lib/links/link-basis'
+import { postingPort } from '@/lib/posting/port'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
@@ -608,16 +611,33 @@ function bookkeepingFailure(err: unknown): Failure {
   return { ok: false, code: typeof code === 'string' ? code : 'BOOKKEEPING_DATABASE_ERROR', error: err }
 }
 
+/**
+ * Move a posted verifikat to another date (recordateEntry: storno and the
+ * same lines on the new date).
+ *
+ * Posting port (step 2i): through postingPort.correctJournalEntry, which
+ * hands recordateEntry its arguments unchanged and, while POSTING_EVENTS is
+ * shadow or strict, records ledger.storno and ledger.correction of the
+ * verifikat, each linked to its new verifikat before its number is drawn.
+ * `options.posting` is what the door saw (its link basis, which reads the
+ * approval being committed: the kernel may not), called only while the port
+ * is on.
+ */
 export async function redateJournalEntry(
   ctx: OperationContext,
   entryId: string,
   input: RedateInput,
-  options: { dryRun?: boolean } = {},
+  options: { dryRun?: boolean; posting?: () => { linkBasis?: LinkBasisColumns } } = {},
 ): Promise<OperationOutcome<RedateResult>> {
   if (options.dryRun) return previewRedate(ctx, entryId, input)
   try {
-    const result = await recordateEntry(ctx.supabase, ctx.companyId, ctx.userId, entryId, input.new_entry_date, {
-      allowDeepChain: input.allow_deep_chain,
+    const result = await postingPort.correctJournalEntry({
+      supabase: ctx.supabase,
+      companyId: ctx.companyId,
+      userId: ctx.userId,
+      entryId,
+      ...correctionBusinessEvents({ entryId, occurredOn: todayIsoStockholm, linkBasis: () => options.posting?.().linkBasis }),
+      correction: { newDate: input.new_entry_date, options: { allowDeepChain: input.allow_deep_chain } },
     })
     return { ok: true, data: result }
   } catch (err) {

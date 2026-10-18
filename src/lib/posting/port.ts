@@ -16,7 +16,7 @@ import {
   type BusinessEventLink,
   type BusinessEventRow,
 } from './store'
-import type { BusinessEventDraft, PostingAdapter, PostingPort } from './types'
+import type { BusinessEventDraft, CorrectJournalEntryResult, PostingAdapter, PostingPort } from './types'
 
 /**
  * The posting port (Phase 2 of the building-blocks plan, step 1).
@@ -35,7 +35,14 @@ import type { BusinessEventDraft, PostingAdapter, PostingPort } from './types'
  * A set of verifikat that is one business act (postJournalEntrySet: a
  * salary run) records ONE event in 1 and links it to every draft of the set
  * in 2, all before the first number is drawn in 3.
- * A failure in 1 or 2 therefore never costs a number. Under shadow it is
+ * A correction (correctJournalEntry) records TWO events in 1, the storno's and
+ * the corrected verifikat's, and the storno service links each to its own
+ * draft in 2. The storno is numbered and posted before the corrected
+ * verifikat is drafted, so the corrected verifikat's link is the one write in
+ * 2 that comes after a number: refused under strict, the posted storno is
+ * cancelled as any later failure of a correction cancels it, and keeps its
+ * number as a cancelled verifikat (the series has no gap).
+ * Any other failure in 1 or 2 never costs a number. Under shadow it is
  * logged and the posting goes ahead without the event (or without its link);
  * under strict it stops the posting (BookkeepingDatabaseError). With
  * POSTING_EVENTS off, nothing in 1 or 2 runs and the adapter is called with
@@ -176,6 +183,20 @@ export function createPostingPort(deps: PostingPortDeps = {}): PostingPort {
       const { supabase, companyId, userId, entryId, commitMethod, rubricVersion } = request
       // The draft carries its event link already: nothing to record here.
       return adapter.commitEntry({ supabase, companyId, userId, entryId, commitMethod, rubricVersion })
+    },
+
+    async correctJournalEntry(request): Promise<CorrectJournalEntryResult> {
+      const { supabase, companyId, userId, entryId, stornoEvent, correctionEvent, correction } = request
+      const mode = modeOf()
+      // Both events before the storno's draft, so under strict a refused
+      // event stops the correction before either number is drawn. Lines the
+      // storno service refuses on its own first check (an unbalanced
+      // correction) get no event, as a posting's do.
+      const record = mode !== 'off' && (!('lines' in correction) || validateBalance(correction.lines).valid)
+      const reversal = record ? await recordFor(mode, supabase, companyId, stornoEvent, 'reversal') : undefined
+      const corrected = record ? await recordFor(mode, supabase, companyId, correctionEvent, 'correction') : undefined
+      const businessEvents = reversal || corrected ? { reversal, correction: corrected } : undefined
+      return adapter.correctEntry({ supabase, companyId, userId, entryId, correction, businessEvents })
     },
 
     async reverseJournalEntry(request): Promise<JournalEntry> {

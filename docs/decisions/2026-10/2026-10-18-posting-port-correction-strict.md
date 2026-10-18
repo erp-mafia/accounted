@@ -1,0 +1,1 @@
+[2026-10-18] The port records a rättelse's two events before the storno is drafted; under strict a correction link refused after the storno is numbered cancels the posted storno as any later correction failure does (it keeps its number): reordering the drafts would change output.

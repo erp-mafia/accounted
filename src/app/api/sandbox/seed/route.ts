@@ -1,6 +1,9 @@
 import crypto from 'crypto'
-import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { sandboxSeedBusinessEvent } from '@/lib/bookkeeping/ledger-business-events'
+import { scopeFreeLinkBasisColumns } from '@/lib/links/link-basis'
+import { postingPort } from '@/lib/posting/port'
+import type { CreateJournalEntryInput } from '@/types'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { NextResponse } from 'next/server'
 import { createLogger } from '@/lib/logger'
@@ -47,6 +50,22 @@ import {
 export const maxDuration = 300
 
 const RATE_LIMIT = { maxRequests: 5, windowMs: 60 * 60 * 1000 }
+
+/**
+ * A demo verifikat of the sandbox company, through the posting port (step
+ * 2i): the engine gets the input unchanged and, while POSTING_EVENTS is
+ * shadow or strict, records ledger.system (system_derived: the seed made the
+ * demo up), linked before the number is drawn.
+ */
+function postSeedEntry(supabase: SupabaseClient, companyId: string, userId: string, input: CreateJournalEntryInput) {
+  return postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    event: () => sandboxSeedBusinessEvent({ entryDate: input.entry_date, linkBasis: scopeFreeLinkBasisColumns('system_derived') }),
+    input,
+  })
+}
 
 /**
  * POST /api/sandbox/seed
@@ -504,7 +523,7 @@ export async function POST(request: Request) {
 
     const historyEntryIds: string[] = []
     for (const [index, entry] of ledgerHistory.entries.entries()) {
-      const posted = await createJournalEntry(supabase, companyId, userId, {
+      const posted = await postSeedEntry(supabase, companyId, userId, {
         fiscal_period_id: entry.fiscal_period_id,
         voucher_series: entry.voucher_series,
         entry_date: entry.entry_date,
@@ -532,7 +551,7 @@ export async function POST(request: Request) {
     )
 
     // 10. Invoice vouchers use the engine's draft + atomic commit path.
-    const invoiceEntry = await createJournalEntry(supabase, companyId, userId, {
+    const invoiceEntry = await postSeedEntry(supabase, companyId, userId, {
       fiscal_period_id: fiscalPeriod.id,
       voucher_series: 'A',
       entry_date: toDateStr(thirtyDaysAgo),
@@ -545,7 +564,7 @@ export async function POST(request: Request) {
         { account_number: '2611', debit_amount: 0, credit_amount: 3750, dimensions: {} },
       ],
     })
-    const je2 = await createJournalEntry(supabase, companyId, userId, {
+    const je2 = await postSeedEntry(supabase, companyId, userId, {
       fiscal_period_id: fiscalPeriod.id,
       voucher_series: 'A',
       entry_date: toDateStr(fifteenDaysAgo),
@@ -1086,7 +1105,7 @@ export async function POST(request: Request) {
 
     const runEntryLinks: Record<string, string> = {}
     for (const voucher of salaryVouchers) {
-      const posted = await createJournalEntry(supabase, companyId, userId, {
+      const posted = await postSeedEntry(supabase, companyId, userId, {
         fiscal_period_id: voucher.entry.fiscal_period_id,
         voucher_series: voucher.entry.voucher_series,
         entry_date: voucher.entry.entry_date,

@@ -22,6 +22,7 @@
 import { z } from 'zod'
 import { CreateJournalEntrySchema, InlineRattelseLineSchema } from '@/lib/api/schemas'
 import { isoDateSchema } from '@/lib/invariants/zod'
+import { linkBasisColumns } from '@/lib/links/stamp'
 import {
   correctJournalEntryMetadata,
   getJournalEntryRattelseLog,
@@ -353,7 +354,13 @@ export const journalEntriesRedate = defineOperation({
     },
   },
   run: async (ctx, { journal_entry_id, new_entry_date, allow_deep_chain }, { dryRun }) => {
-    const outcome = await redateJournalEntry(ctx, journal_entry_id, { new_entry_date, allow_deep_chain }, { dryRun })
+    // The posting port's events, while POSTING_EVENTS is on: the caller moved
+    // the verifikat (client_asserted on a key, agent_proposed_user_approved
+    // when an approval commits the staged redate_entry).
+    const outcome = await redateJournalEntry(ctx, journal_entry_id, { new_entry_date, allow_deep_chain }, {
+      dryRun,
+      posting: () => ({ linkBasis: linkBasisColumns('user_created') }),
+    })
     if (!outcome.ok || outcome.dryRun) return outcome
     const { reversal, corrected } = outcome.data
     return {
