@@ -5380,8 +5380,12 @@ export const CompanyMigrationResetSchema = z.object({
     .trim()
     .min(20, 'Beskriv varför migreringen behöver göras om med minst 20 tecken')
     .max(1000, 'Beskrivningen får vara högst 1 000 tecken'),
+  // The attestation covers filings made on the basis of this company's
+  // bookkeeping in Accounted, through any channel; filings a company made
+  // from its previous system rest on that system's books (decision
+  // 2026-10-18-migration-reset-attestation-reading).
   confirm_no_filed_declarations: z.literal(true, {
-    error: 'Bekräfta att inga deklarationer eller årsredovisningar har lämnats in',
+    error: 'Bekräfta att inga deklarationer eller årsredovisningar har lämnats in med den här bokföringen som underlag',
   }),
   confirm_retained_archive: z.literal(true, {
     error: 'Bekräfta att den tidigare företagskopian sparas som arkiv',

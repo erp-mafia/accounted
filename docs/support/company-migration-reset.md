@@ -54,8 +54,15 @@ The self-service boundary is intentionally narrow:
   workflow state blocks even when an older direct action has no audit row.
   Every generated ROT/RUT payout file blocks because upload and signing happen
   outside Accounted before the local request can be marked submitted.
-- The owner must separately attest that nothing was filed outside Accounted.
-  Accounted cannot verify that external fact. If the owner is unsure, support
+- The owner must separately attest that no tax return, control statement,
+  ROT/RUT request or annual report was filed on the basis of the bookkeeping
+  in Accounted, through Accounted or any other channel (for example a
+  momsdeklaration typed into skatteverket.se from Accounted's reports).
+  Accounted cannot verify that external fact. Filings a company made from its
+  previous system (still the books of record while the migration is being
+  tried) rest on that system's räkenskapsinformation, which the company keeps
+  there for seven years (BFL 7 kap. 1-2 §§), so they do not prevent the
+  attestation (founder decision 2026-10-18). If the owner is unsure, support
   must stop the reset and escalate instead of interpreting silence as consent.
 - The owner must acknowledge that the source copy is retained, provide an
   audit reason, and type the exact displayed company name.
@@ -257,7 +264,8 @@ applied migration file.
 ## Escalation boundary
 
 Escalate to Emil and an accounting/legal reviewer when the owner cannot make
-the external-filing attestation, the company is outside the 30-day window, a
+the filing attestation (a filing made on the basis of the bookkeeping in
+Accounted, through any channel), the company is outside the 30-day window, a
 period is closed or locked, or a known authority submission exists. A
 live bank connection is operational, not a legal override case: disconnect it
 before retrying. The safe fallback is to

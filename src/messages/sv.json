@@ -2263,7 +2263,7 @@
     "reset_reason_label": "Varför behöver migreringen göras om?",
     "reset_reason_placeholder": "Beskriv felet i den tidigare migreringen...",
     "reset_reason_help": "{count}/1 000 tecken, minst 20",
-    "reset_confirm_no_filings": "Jag bekräftar att inga deklarationer, kontrolluppgifter, ROT/RUT-begäranden eller årsredovisningar har lämnats in från företaget, varken via {appName} eller på annat sätt.",
+    "reset_confirm_no_filings": "Jag bekräftar att inga deklarationer, kontrolluppgifter, ROT/RUT-begäranden eller årsredovisningar har lämnats in med bokföringen i {appName} som underlag, varken via {appName} eller på annat sätt.",
     "reset_confirm_archive": "Jag förstår att den gamla företagskopian sparas som ett låst arkiv för spårbarhet och lagstadgad bevaring, och att den inte raderas.",
     "reset_confirm_name": "Skriv <strong>{companyName}</strong> för att bekräfta",
     "reset_submit": "Arkivera och börja om",
