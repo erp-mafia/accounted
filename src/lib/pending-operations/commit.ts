@@ -56,7 +56,7 @@ import { buildInvoiceMatchClearingLines } from '@/lib/bookkeeping/invoice-paymen
 import { booksInvoicesOnIssue, cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { ensureManualCashAccount, resolveDefaultCashAccount } from '@/lib/cash-accounts/service'
 import { ingestTransactions } from '@/lib/transactions/ingest'
-import { createJournalEntry, findFiscalPeriod, getSwedishLocalDate, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
+import { findFiscalPeriod, getSwedishLocalDate, validateBalance } from '@/lib/bookkeeping/engine'
 import {
   invoicePaymentBusinessEvent,
   matchedBankLineStornoBusinessEvent,
@@ -87,7 +87,7 @@ import {
   manualVoucherBusinessEvent,
   voucherStornoBusinessEvent,
 } from '@/lib/bookkeeping/ledger-business-events'
-import { ownRowsStornoBusinessEvent } from '@/lib/bookkeeping/bank-line-business-events'
+import { bankLineStornoBusinessEvent, ownRowsStornoBusinessEvent } from '@/lib/bookkeeping/bank-line-business-events'
 import {
   existingOpeningBalanceMessage,
   findExistingOpeningBalance,
@@ -3774,7 +3774,17 @@ async function commitUncategorizeTransaction(
   if (!txId || !journalEntryId) return { error: 'transaction_id and journal_entry_id are required', status: 400 }
 
   try {
-    await reverseEntry(supabase, companyId, userId, journalEntryId)
+    // Posting port: the storno records ledger.storno of the bank line, as both
+    // uncategorize routes do; inside the approval the link basis resolves to
+    // agent_proposed_user_approved.
+    await postingPort.reverseJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      entryId: journalEntryId,
+      event: () => bankLineStornoBusinessEvent(txId, todayIsoStockholm(), linkBasisColumns('user_created')),
+      role: 'reversal',
+    })
   } catch (err) {
     return failUnlessBookkeepingError(err, 'Reversal failed', 500)
   }
