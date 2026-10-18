@@ -1,0 +1,1 @@
+[2026-10-15] A partner delivery's external_ref is its arrival's source_ref, and the business-key lookup reads arrivals (unique on company, source, source_ref): no new column, index or migration. The lookup fails open; content dedupe still returns the item for the same file.

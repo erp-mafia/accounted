@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
@@ -18,6 +18,7 @@ import {
 import { useCompany } from '@/contexts/CompanyContext'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import type { AvailabilityStatus } from '@/lib/modules/capabilities'
+import { cn } from '@/lib/utils'
 
 /** One package as the Anpassa page shows it, resolved on the server. */
 export interface AnpassaPackage {
@@ -37,6 +38,8 @@ interface AnpassaSettingsContentProps {
   profileName: string
   /** Null when the capabilities could not be read. */
   packages: AnpassaPackage[] | null
+  /** The package to open the page at (?package=<id>, from the Inkorg); null or unknown opens it at the top. */
+  focusPackageId?: string | null
 }
 
 type OffPreview = { state: 'loading' } | { state: 'ready'; obligations: string[] } | { state: 'failed' }
@@ -50,7 +53,7 @@ type OffPreview = { state: 'loading' } | { state: 'ready'; obligations: string[]
  * its receipt and its dated line in behandlingshistorik. Owners and admins
  * switch; everyone else sees the same statuses read-only.
  */
-export function AnpassaSettingsContent({ profileNameSv, profileName, packages }: AnpassaSettingsContentProps) {
+export function AnpassaSettingsContent({ profileNameSv, profileName, packages, focusPackageId = null }: AnpassaSettingsContentProps) {
   const t = useTranslations('settings_anpassa')
   const locale = useLocale() as ErrorLocale
   const router = useRouter()
@@ -60,6 +63,14 @@ export function AnpassaSettingsContent({ profileNameSv, profileName, packages }:
   const [busy, setBusy] = useState<string | null>(null)
   const [offTarget, setOffTarget] = useState<AnpassaPackage | null>(null)
   const [offPreview, setOffPreview] = useState<OffPreview>({ state: 'loading' })
+
+  // The asked-for package's row: scrolled to, with the keyboard on its switch. A ref
+  // callback, so it runs once, when the row exists.
+  const focusRow = useCallback((node: HTMLDivElement | null) => {
+    if (!node) return
+    node.scrollIntoView({ block: 'nearest' })
+    node.querySelector<HTMLElement>('[role="switch"]')?.focus({ preventScroll: true })
+  }, [])
 
   if (!packages) return <SettingsLoadError onRetry={() => router.refresh()} />
 
@@ -163,8 +174,14 @@ export function AnpassaSettingsContent({ profileNameSv, profileName, packages }:
               : blocked
                 ? t(`blocked_${pkg.switchOnBlocked}`)
                 : t(`packages.${pkg.id}.description`)
-          return (
-            <SettingsRow key={pkg.id} label={<PackageLabel name={name} note={note} />}>
+          const focused = pkg.id === focusPackageId
+          const row = (
+            <SettingsRow
+              key={pkg.id}
+              label={<PackageLabel name={name} note={note} />}
+              // The asked-for package stands out on a quiet band; its text stays in line with the others.
+              className={cn(focused && '-mx-3 rounded-lg border-transparent bg-secondary/50 px-3')}
+            >
               {pkg.availability === 'winding_down' ? <Badge variant="warning">{t('winding_down_badge')}</Badge> : null}
               {pkg.availability === 'not_in_plan' ? <Badge variant="outline">{t('not_in_plan_badge')}</Badge> : null}
               {pkg.availability === 'not_in_country' ? <Badge variant="outline">{t('not_in_country_badge')}</Badge> : null}
@@ -178,6 +195,13 @@ export function AnpassaSettingsContent({ profileNameSv, profileName, packages }:
                 }}
               />
             </SettingsRow>
+          )
+          return focused ? (
+            <div key={pkg.id} ref={focusRow}>
+              {row}
+            </div>
+          ) : (
+            row
           )
         })}
       </SettingsGroup>

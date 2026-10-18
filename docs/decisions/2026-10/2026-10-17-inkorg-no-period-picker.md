@@ -1,0 +1,1 @@
+[2026-10-17] The Inkorg top bar has no period picker: Behöver dig is a queue of decisions whatever their date, and Saknar underlag already bands by month, so a period filter would only hide work that waits on a person.

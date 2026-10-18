@@ -22,6 +22,7 @@ import { WEBHOOKS_EVENT_CONSUMER } from '@/lib/composition/async-event-consumers
 import { eventConsumer, type EventConsumer } from '@/lib/events/consumers'
 import { relayAgentFeedback } from '@/lib/events/handlers/agent-feedback-relay-handler'
 import { enqueueDocumentRead } from '@/lib/events/handlers/document-read-handler'
+import { proposeInboxBankMatches } from '@/lib/events/handlers/inbox-bank-match-handler'
 import { PERSISTED_EVENT_TYPES, writeEventLog } from '@/lib/events/handlers/event-log-handler'
 import { detectorsByEventType, runEventDetectors } from '@/lib/suggestions/handler'
 import { handleSupplierInvoiceRegistered } from '@/lib/supplier-invoices/attest-notify'
@@ -65,6 +66,15 @@ export const EVENT_CONSUMERS: readonly EventConsumer[] = Object.freeze([
     owner: 'inbox',
     eventTypes: ['document.uploaded'],
     handle: (event) => enqueueDocumentRead(event.payload),
+  }),
+  // Match on arrival, the bank's side: arriving bank rows are offered to the
+  // open inbox items they could pay, as a proposal a person confirms (a row
+  // the ingest matchers claimed is never proposed).
+  eventConsumer({
+    id: 'inbox-bank-match',
+    owner: 'inbox',
+    eventTypes: ['transaction.synced'],
+    handle: (event) => proposeInboxBankMatches(event.payload),
   }),
   // An agent's gnubok_feedback report becomes a support ticket.
   eventConsumer({

@@ -89,6 +89,9 @@ interface DashboardNavProps {
   // Whether the company is in the Arkiv rollout (ARKIV_COMPANY_IDS). Computed by the layout.
   arkivEnabled?: boolean
   agentsEnabled?: boolean
+  // Whether the company is in the new Inkorg page's rollout (INKORG_V2_COMPANY_IDS): Inkorg
+  // at the top, Underlag out of Inköp. Computed by the layout.
+  inkorgV2Enabled?: boolean
   isSandbox?: boolean
   extensionNavItems?: ExtensionNavItem[]
   // Signed-in user's full name + email: drives the bottom-left account
@@ -119,7 +122,7 @@ const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
   skatt: 'group_tax',
 }
 
-export default function DashboardNav({ companyName: _companyName, entityType, capabilitySurface, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, hasPosSales = false, arkivEnabled = false, agentsEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
+export default function DashboardNav({ companyName: _companyName, entityType, capabilitySurface, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, hasPosSales = false, arkivEnabled = false, agentsEnabled = false, inkorgV2Enabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
   const pathname = usePathname()
   const navRowClaim = useNavRowClaim(pathname)
   const router = useRouter()
@@ -364,6 +367,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
     hasPosSales,
     arkivEnabled,
     agentsEnabled,
+    inkorgV2Enabled,
     capabilities,
     hiddenNavHrefs,
   }

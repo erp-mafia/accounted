@@ -1,0 +1,354 @@
+'use client'
+
+import { useEffect, useState, type Dispatch, type SetStateAction } from 'react'
+import { useLocale, useTranslations } from 'next-intl'
+import { Check, FileQuestion } from 'lucide-react'
+import { InboxArrivalProvenance } from '@/components/extensions/general/InboxArrivalProvenance'
+import { PurchaseCategoryChip } from '@/components/inbox/PurchaseCategoryChip'
+import BookingWhy from '@/components/bookkeeping/BookingWhy'
+import { BrandMark, GlyphMark } from '@/components/parties/BrandMark'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { Skeleton } from '@/components/ui/skeleton'
+import type { InboxPurchaseCategory } from '@/lib/categories/inbox-purchase-category'
+import type { DocumentReading } from '@/lib/documents/reading/types'
+import type { BankMatch } from '@/lib/documents/inbox-bank-match'
+import { formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
+import { shortDate, shortDateTime } from '@/lib/inkorg/dates'
+import { bookedOnAccount, focusDecision, type InkorgStartable } from '@/lib/inkorg/decision'
+import { doorOf, itemHeadline, type InkorgItem } from '@/lib/inkorg/items'
+import { formatCurrency } from '@/lib/utils'
+import { FocusDecision, type DecisionDone, type SuggestedBooking } from './FocusDecision'
+import { FocusDocumentFields } from './FocusDocumentFields'
+import { FocusDocumentPreview, useDocumentMeta } from './FocusDocumentPreview'
+import { Fold } from './motion'
+import { useDoorName } from './door-icon'
+
+const ITEM_URL = (id: string) => `/api/extensions/ext/invoice-inbox/items/${id}`
+
+interface ItemDetail {
+  purchase_category?: InboxPurchaseCategory | null
+  reading?: DocumentReading
+  /** The bank row the Inkorg found when the document arrived (match on arrival), or null. */
+  bank_match?: BankMatch | null
+  /** The supplier card the reading matched, whose accounts the document's are checked against. */
+  matched_supplier_id?: string | null
+}
+
+type DetailState = { key: string; detail: ItemDetail | null; readingFailed: boolean }
+
+/**
+ * The item's detail read: the one reading (?include=reading) and what it
+ * bought. When the reading cannot be assembled the route answers 500 for the
+ * whole read, so the plain read follows and only the field list says it
+ * failed.
+ */
+function useItemDetail(itemId: string, revision: number): { detail: ItemDetail | null; loading: boolean; readingFailed: boolean } {
+  const key = `${itemId}:${revision}`
+  const [answer, setAnswer] = useState<DetailState | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const read = async (url: string) => {
+        const res = await fetch(url)
+        if (!res.ok) throw new Error(String(res.status))
+        return ((await res.json()) as { data?: ItemDetail }).data ?? null
+      }
+      try {
+        const detail = await read(`${ITEM_URL(itemId)}?include=reading`)
+        if (!cancelled) setAnswer({ key, detail, readingFailed: !detail?.reading })
+      } catch {
+        try {
+          const detail = await read(ITEM_URL(itemId))
+          if (!cancelled) setAnswer({ key, detail, readingFailed: true })
+        } catch {
+          if (!cancelled) setAnswer({ key, detail: null, readingFailed: true })
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [itemId, key])
+
+  const current = answer?.key === key ? answer : null
+  return { detail: current?.detail ?? null, loading: current === null, readingFailed: current?.readingFailed ?? false }
+}
+
+/** The proposal for a matched purchase, read only while the item asks to book one. */
+function useSuggestion(itemId: string, transactionId: string | null, wanted: boolean): SuggestedBooking | null {
+  const key = wanted && transactionId ? `${itemId}:${transactionId}` : null
+  const [answer, setAnswer] = useState<{ key: string; data: SuggestedBooking | null } | null>(null)
+
+  useEffect(() => {
+    if (!key) return
+    const controller = new AbortController()
+    fetch(`${ITEM_URL(itemId)}/suggest-booking`, { method: 'POST', signal: controller.signal })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(String(res.status))
+        const json = (await res.json()) as { data?: SuggestedBooking }
+        setAnswer({ key, data: json.data ?? null })
+      })
+      .catch(() => {
+        // No proposal is not the user's doing: the editor opens empty instead.
+        if (!controller.signal.aborted) setAnswer({ key, data: null })
+      })
+    return () => controller.abort()
+  }, [itemId, key])
+
+  return key && answer?.key === key ? answer.data : null
+}
+
+export interface FinePrintOpen {
+  booking: boolean
+  fields: boolean
+}
+
+/**
+ * One item in focus, laid out like a desk: the document as a sheet of paper
+ * on the left (with "Öppna i full storlek" and "Visa originalet" under it),
+ * on the right who sent it, the one question with its evidence, where it
+ * will be booked, the answers, and the fine print folded away. On a phone
+ * the question comes first and the document under it.
+ */
+export function FocusStage({
+  item,
+  revision,
+  finishing,
+  finePrint,
+  onFinePrint,
+  onBankMatch,
+  onDone,
+  startable,
+  ownerAccount = null,
+  onBack,
+}: {
+  item: InkorgItem
+  /** Bumped after every action, so the detail is read again. */
+  revision: number
+  /** The item just finished: "Klart" sits over it while it leaves. */
+  finishing: boolean
+  finePrint: FinePrintOpen
+  /** Takes an update, so two folds toggled in one moment both count. */
+  onFinePrint: Dispatch<SetStateAction<FinePrintOpen>>
+  /** What the detail read says about the bank row it looks paid by (null: none), for the list to say too. */
+  onBankMatch?: (itemId: string, match: BankMatch | null) => void
+  onDone: DecisionDone
+  /** What the company can start (its switched-on packages); every package on when absent. */
+  startable?: InkorgStartable
+  /** The account a cost paid with the owner's own money is booked against (enskild firma: 2018). */
+  ownerAccount?: string | null
+  /** Back to the list, the item untouched: an answer that writes nothing. */
+  onBack?: () => void
+}) {
+  const t = useTranslations('inkorg')
+  const tWork = useTranslations('inbox_workspace')
+  const doorName = useDoorName(item.channel_context?.mail_provider ?? null)
+  const locale = useLocale()
+  const [docGeneration, setDocGeneration] = useState(0)
+  const { meta, state: docState } = useDocumentMeta(item.document_id, docGeneration)
+  const { detail, loading: detailLoading, readingFailed } = useItemDetail(item.id, revision)
+  // Until the detail lands, the match the list read carried: the question does not change under the person.
+  const decision = focusDecision(item, { bankMatch: detail ? (detail.bank_match ?? null) : (item.bank_match ?? null), startable })
+  const suggestion = useSuggestion(item.id, item.matched_transaction_id, decision.question === 'book_purchase')
+  const headline = itemHeadline(item)
+  const account = bookedOnAccount(suggestion?.lines)
+
+  // The list says "Ser redan betald ut" for what the detail read found.
+  const bankMatch = detailLoading ? undefined : (detail?.bank_match ?? null)
+  useEffect(() => {
+    if (bankMatch !== undefined) onBankMatch?.(item.id, bankMatch)
+  }, [item.id, bankMatch, onBankMatch])
+
+  // The verifikat that says why: the item's own, or the one that books its matched
+  // transaction (also when this underlag has not reached it yet, which is why it is here).
+  const whyEntryId = item.created_journal_entry_id ?? item.matched_transaction_journal_entry_id ?? null
+  // Each part stays whole when the line wraps: a date never breaks inside.
+  const metaParts = [
+    headline.kind ? tWork(`doc_kind_${headline.kind}`) : null,
+    doorName(doorOf(item)),
+    shortDateTime(item.created_at, locale),
+  ].filter((part): part is string => Boolean(part))
+
+  const category =
+    item.extracted_data && detail?.purchase_category !== undefined ? (
+      <PurchaseCategoryChip
+        itemId={item.id}
+        value={detail.purchase_category}
+        locked={!!item.created_supplier_invoice_id}
+        label={account ? null : undefined}
+      />
+    ) : null
+
+  // Where it will be booked, on the page rather than in the fold: the account when a
+  // proposal names one, and what it bought, with Ändra.
+  const bookingLine = detailLoading ? (
+    <Skeleton className="h-5 w-56 rounded-sm" />
+  ) : account || category ? (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px]">
+      {account && (
+        <>
+          <span className="text-muted-foreground">{t('booked_on')}</span>
+          <span className="font-medium tabular-nums">{formatAccountWithName(account)}</span>
+        </>
+      )}
+      {category}
+    </div>
+  ) : null
+
+  return (
+    <div className="relative">
+      {/* The sheet takes its width from its height (A4), so the document fills it; the answers take the rest. */}
+      <div className="flex flex-col gap-8 lg:grid lg:grid-cols-[auto_minmax(0,1fr)] lg:items-start lg:gap-10">
+        <div className="order-2 space-y-3 lg:order-1">
+          <FocusDocumentPreview
+            meta={meta}
+            state={docState}
+            onRetry={() => setDocGeneration((g) => g + 1)}
+            className="aspect-[210/297] lg:h-[calc(100vh-12rem)] lg:w-auto lg:max-w-[40rem]"
+            paper
+          />
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12.5px]">
+            {meta && (
+              <a href={meta.url} target="_blank" rel="noopener noreferrer" className={QUIET_LINK_CLASS}>
+                {t('open_full_size')}
+              </a>
+            )}
+            <InboxArrivalProvenance documentId={item.document_id} mailProvider={item.channel_context?.mail_provider ?? null} variant="original_link" />
+          </div>
+        </div>
+
+        <div className="@container order-1 min-w-0 space-y-6 lg:order-2 lg:max-w-[36rem]">
+          <header className="flex items-start gap-3 border-b border-border pb-6">
+            {headline.name ? (
+              <BrandMark name={headline.name} variant="mark" size={40} logoUrl={item.logo_url} />
+            ) : (
+              <GlyphMark size={40}>
+                <FileQuestion aria-hidden="true" className="h-5 w-5 text-muted-foreground" />
+              </GlyphMark>
+            )}
+            <div className="min-w-0 flex-1">
+              {/* Sized by the column, not the window: the large step only where the name and the amount fit side by side. */}
+              <h2 data-ph-mask="" className="font-display text-2xl leading-8 tracking-[-0.02em] [overflow-wrap:anywhere] @lg:text-3xl @lg:leading-9">
+                {headline.name ?? t('row_unknown')}
+              </h2>
+              <p className="mt-1 text-[12.5px] text-muted-foreground">
+                {metaParts.map((part, i) => (
+                  <span key={i} className="whitespace-nowrap">
+                    {i > 0 && ' · '}
+                    {part}
+                  </span>
+                ))}
+              </p>
+              {/* A narrow column puts the amount under the name instead of squeezing the name beside it. */}
+              {headline.amount != null && (
+                <p data-ph-mask="" className="mt-2 font-display text-2xl leading-8 tracking-[-0.02em] tabular-nums @lg:hidden">
+                  {formatCurrency(headline.amount, headline.currency)}
+                </p>
+              )}
+            </div>
+            {headline.amount != null && (
+              <p data-ph-mask="" className="hidden shrink-0 pt-1 font-display text-3xl leading-9 tracking-[-0.02em] tabular-nums @lg:block">
+                {formatCurrency(headline.amount, headline.currency)}
+              </p>
+            )}
+          </header>
+
+          <FocusDecision
+            item={item}
+            decision={decision}
+            suggestion={suggestion}
+            documentMeta={meta}
+            bookingLine={bookingLine}
+            onDone={onDone}
+            ownerAccount={ownerAccount}
+            matchedSupplierId={detail?.matched_supplier_id ?? null}
+            onBack={onBack}
+          />
+
+          <div className="border-t border-border">
+            <Fold
+              className="border-b border-border"
+              label={t('fine_booking')}
+              open={finePrint.booking}
+              onToggle={(booking) => onFinePrint((current) => ({ ...current, booking }))}
+            >
+              <div className="space-y-3 pb-4">
+                {suggestion && suggestion.lines.length > 0 && <ProposalLines lines={suggestion.lines} />}
+                {whyEntryId && <BookingWhy journalEntryId={whyEntryId} variant="inline" />}
+                {/* Where it came from, read off its arrivals; the rail's own chrome is flattened here. */}
+                <div className="[&>div]:border-b-0 [&>div]:px-0 [&>div]:py-0">
+                  <InboxArrivalProvenance
+                    documentId={item.document_id}
+                    mailProvider={item.channel_context?.mail_provider ?? null}
+                    formatDate={(iso) => shortDate(iso, locale)}
+                    fallback={
+                      item.email_from || item.email_subject ? (
+                        <p data-ph-mask="" className="text-[12.5px] text-muted-foreground">
+                          {[item.email_from, item.email_subject].filter(Boolean).join(' · ')}
+                        </p>
+                      ) : null
+                    }
+                  />
+                </div>
+              </div>
+            </Fold>
+            <Fold
+              className="border-b border-border"
+              label={t('fine_fields')}
+              open={finePrint.fields}
+              onToggle={(fields) => onFinePrint((current) => ({ ...current, fields }))}
+            >
+              <div className="pb-4">
+                <FocusDocumentFields
+                  itemId={item.id}
+                  reading={detail?.reading ?? null}
+                  loading={detailLoading}
+                  failed={!detailLoading && readingFailed}
+                  locked={!!item.created_supplier_invoice_id}
+                  onChanged={() => void onDone({ leaves: false })}
+                />
+              </div>
+            </Fold>
+          </div>
+        </div>
+      </div>
+
+      {finishing && (
+        <div className="absolute inset-0 flex items-start justify-center bg-background/70 pt-12 animate-fade-in" aria-live="polite">
+          <span className="flex items-center gap-2 rounded-full border border-border bg-background px-4 py-2 text-[13px] font-medium">
+            <Check aria-hidden="true" className="h-4 w-4" />
+            {t('done')}
+          </span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** The proposed kontering, read-only: what "Granska och bokför" opens with. */
+function ProposalLines({ lines }: { lines: SuggestedBooking['lines'] }) {
+  const t = useTranslations('inkorg')
+  return (
+    <table className="w-full border-collapse text-[12.5px]">
+      <caption className="pb-1 text-left text-[12.5px] text-muted-foreground">{t('proposal_caption')}</caption>
+      <tbody>
+        {lines.map((line, i) => (
+          <tr key={`${line.account_number}-${i}`} className="border-b border-border last:border-0">
+            <td className="w-12 py-1 pr-2 tabular-nums text-muted-foreground">{line.account_number}</td>
+            <td data-ph-mask="" className="truncate py-1 pr-2">
+              {line.description}
+            </td>
+            {/* Journal lines are in SEK whatever the document's currency. */}
+            <td data-ph-mask="" className="w-24 py-1 text-right tabular-nums">
+              {line.debit_amount ? formatCurrency(line.debit_amount, 'SEK') : ''}
+            </td>
+            <td data-ph-mask="" className="w-24 py-1 pl-2 text-right tabular-nums text-muted-foreground">
+              {line.credit_amount ? formatCurrency(line.credit_amount, 'SEK') : ''}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}

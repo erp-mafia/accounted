@@ -127,10 +127,10 @@ describe('EVENT_OUTBOX_MODE shadow', () => {
 
   it('enqueues nothing for an event whose only consumer is event-log', async () => {
     const handler = consumer('event-log', () => undefined)
-    eventBus.on('transaction.synced', handler)
+    eventBus.on('bank_connection.revoked', handler)
     await eventBus.emit({
-      type: 'transaction.synced',
-      payload: { transactions: [], userId: 'u1', companyId: 'c1' },
+      type: 'bank_connection.revoked',
+      payload: { connectionId: 'bc1', bankName: null, userId: 'u1', companyId: 'c1' },
     } as unknown as CoreEvent)
     expect(handler).toHaveBeenCalledTimes(1)
     expect(writer).not.toHaveBeenCalled()

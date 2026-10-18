@@ -20,6 +20,10 @@ Bundled or vendored code that package-lock.json does not show:
 - shadcn/ui, MIT: component source copied into src/components/ui.
 - Source Sans 3 and Source Serif 4 (Adobe), SIL Open Font License 1.1: the
   invoice PDF fonts in public/fonts/invoice, shipped with their license files.
+- Simple Icons (simple-icons contributors, simpleicons.org), CC0-1.0: the
+  SVG path data and brand colours of the vendor marks in
+  src/lib/vendor-marks/marks.ts. The names and marks are trademarks of their
+  owners and are shown only to say which vendor a document or payment is from.
 
 Copyleft and dual-license notes:
 

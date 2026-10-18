@@ -19,6 +19,11 @@ vi.mock('@/lib/core/documents/document-service', () => ({
 const mockResolveBankIngestRoute = vi.fn()
 vi.mock('@/lib/bank-sync/ingest-route', () => ({ resolveBankIngestRoute: (...args: unknown[]) => mockResolveBankIngestRoute(...args) }))
 
+const mockRecordPageArrival = vi.fn()
+vi.mock('@/lib/bank-feed/page-arrival', () => ({
+  recordBankFeedPageArrival: (...args: unknown[]) => mockRecordPageArrival(...args),
+}))
+
 // Mock ingest
 const mockIngest = vi.fn()
 
@@ -118,6 +123,12 @@ describe('syncAccountTransactions', () => {
 
     const secondCall = mockUploadDocument.mock.calls[1]
     expect(secondCall[3].name).toMatch(/^psd2-response_conn-1_acc-uid-1_.*_p2\.json$/)
+
+    // Each archived page is recorded as a bank_feed arrival.
+    expect(mockRecordPageArrival.mock.calls.map((call) => call[1])).toEqual([1, 2].map((page) => ({
+      companyId: COMPANY_ID, userId: USER_ID, documentId: 'doc-1', connectionId: CONNECTION_ID,
+      accountUid: 'acc-uid-1', page, aggregator: 'enable_banking',
+    })))
   })
 
   it('links every row to the archived page it came in and keeps the bank fields', async () => {

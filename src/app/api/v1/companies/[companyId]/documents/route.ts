@@ -17,6 +17,17 @@
  *   upload_source     (optional)        : 'file_upload' (default) | 'camera' | 'email' | 'api'
  *   journal_entry_id  (optional UUID)   : link the document to a JE at upload time
  *   journal_entry_line_id (optional UUID): link to a specific JE line
+ *   dedupe_by_content (optional)        : 'true' | 'false' (default)
+ *
+ * Content dedupe, opt-in: with dedupe_by_content=true an upload that names
+ * no verifikat answers the archived document when the same bytes are already
+ * there (deduplicated: true, duplicate_of: its id) instead of storing a copy.
+ * Off by default, so a client that relies on one row per upload (upload the
+ * same statement twice, link each copy to its own verifikat) keeps working.
+ * Ignored when the upload names a verifikat or a line: the same underlag
+ * legitimately sits on several verifikat as one row each
+ * (enforce_document_journal_entry_immutability never moves a link), so a hit
+ * held by another verifikat could not be linked here.
  *
  * Idempotent (mandatory Idempotency-Key: the SHA-256 of the bytes is the
  * deduplication anchor on retry inside the engine's `upsert: false` storage
@@ -24,7 +35,8 @@
  *
  * Dry-run is NOT supported on this endpoint: the engine hashes + stores +
  * inserts atomically; the "dry-run" equivalent is a client-side
- * size+MIME check before submitting. Future iteration may add a header-only
+ * size+MIME check before submitting. A request asking for one
+ * (?dry_run=true or X-Dry-Run) is refused with 400, never stored. Future iteration may add a header-only
  * preflight; held back to keep the multipart contract minimal.
  *
  * WORM (BFL 7 kap): once inserted, the row cannot be modified or deleted
@@ -50,6 +62,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { v1OperationHandler } from '@/lib/operations/v1'
 import { documentsList } from '@/lib/operations/documents'
 import { linkBasisColumns } from '@/lib/links/stamp'
+import { apiKeyArrivalActor, recordDocumentArrival } from '@/lib/intake/arrivals'
 
 const DocumentUploaded = z.object({
   id: z.string().uuid(),
@@ -63,6 +76,11 @@ const DocumentUploaded = z.object({
   journal_entry_id: z.string().uuid().nullable(),
   journal_entry_line_id: z.string().uuid().nullable(),
   created_at: z.string(),
+  deduplicated: z
+    .literal(true)
+    .optional()
+    .describe('Present when the same bytes were already archived: this is that document and nothing new was stored.'),
+  duplicate_of: z.string().uuid().optional().describe('With deduplicated: the archived document the bytes already are (same as id).'),
 })
 
 // For the registry, the Zod body is a metadata-only shape (everything the
@@ -73,6 +91,10 @@ const MultipartBodySchema = z.object({
   upload_source: z.enum(['file_upload', 'camera', 'email', 'api']).optional(),
   journal_entry_id: z.string().uuid().optional(),
   journal_entry_line_id: z.string().uuid().optional(),
+  dedupe_by_content: z
+    .enum(['true', 'false'])
+    .optional()
+    .describe('true: answer the archived document when the same bytes are already there. Ignored with journal_entry_id or journal_entry_line_id. Default false.'),
 })
 
 registerEndpoint({
@@ -90,7 +112,8 @@ registerEndpoint({
     `Max size ${MAX_DOCUMENT_SIZE / 1024 / 1024} MB enforced server-side: DOC_UPLOAD_TOO_LARGE on overrun.`,
     `Only ${ALLOWED_DOCUMENT_TYPES.join(' / ')} accepted: DOC_UPLOAD_UNSUPPORTED_TYPE otherwise.`,
     'WORM: once linked to a posted journal entry, the document row cannot be modified or deleted (DB trigger). Upload-then-link is reversible (the document exists with journal_entry_id=null until linked); once linked, treat as immutable.',
-    'Dry-run is not supported on this endpoint: the engine hashes + stores + inserts in one atomic flow.',
+    'Every upload stores its own row unless dedupe_by_content=true: then, without journal_entry_id, bytes already in the archive answer that document (deduplicated: true, duplicate_of = id, still 201), whose journal_entry_id may already be set. To put it on another verifikat too, POST /documents/{id}/link with copy: true.',
+    'Dry-run is not supported on this endpoint: the engine hashes + stores + inserts in one atomic flow. ?dry_run=true (or X-Dry-Run: true) answers 400 VALIDATION_ERROR and stores nothing; test keys are refused with TEST_KEY_WRITE_BLOCKED.',
   ],
   example: {
     request: {
@@ -125,6 +148,18 @@ registerEndpoint({
 export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
   'documents.upload',
   async (request, ctx) => {
+    // The archive write is the side effect; there is nothing to simulate.
+    // Test keys never get here (the wrapper refuses them on an endpoint that
+    // cannot dry-run). A live key asking for one used to have its file
+    // archived for real (WORM: it cannot be taken back) while it believed it
+    // previewed; it is told so instead.
+    if (ctx.dryRun) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { field: 'dry_run', message: 'dry_run is not supported: the archive write is the side effect.' },
+      })
+    }
+
     let formData: FormData
     try {
       formData = await request.formData()
@@ -184,6 +219,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         })
       }
       uploadSource = parsed.data
+    }
+
+    const dedupeRaw = formData.get('dedupe_by_content')
+    if (dedupeRaw !== null && dedupeRaw !== 'true' && dedupeRaw !== 'false') {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { field: 'dedupe_by_content', message: 'dedupe_by_content must be true or false.' },
+      })
     }
 
     const journalEntryIdRaw = formData.get('journal_entry_id')
@@ -288,8 +331,24 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           // underlag over links thousands of files in a row and paid one
           // extraction call per file. An unlinked upload is still read.
           ...(journalEntryId ? { extractionOwner: 'none' as const } : {}),
+          // Opt-in, and free-floating only: an upload aimed at a verifikat
+          // keeps its own copy, since a hit another verifikat holds could not
+          // be linked to it.
+          ...(dedupeRaw === 'true' && !journalEntryId && !journalEntryLineId ? { dedupeByContent: true } : {}),
         },
       )
+      // How it came in (best effort, never fails the upload). The document
+      // id is the reference: the idempotency layer above already replays a
+      // repeated key, and a key reused after it expired must not fold a new
+      // file into an old arrival.
+      const idempotencyKey = request.headers.get('idempotency-key')
+      await recordDocumentArrival(ctx.supabase, {
+        companyId: ctx.companyId!,
+        source: 'partner_api',
+        documentId: document.id,
+        fetchedBy: apiKeyArrivalActor(ctx),
+        sourceMeta: idempotencyKey ? { idempotency_key: idempotencyKey.slice(0, 255) } : {},
+      })
       // `storage_path` is deliberately omitted from the public response:
       // the path encodes internal layout (userId prefix + timestamp) which
       // /download deliberately keeps hidden. Use /download/{id} to fetch
@@ -307,6 +366,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           journal_entry_id: document.journal_entry_id,
           journal_entry_line_id: document.journal_entry_line_id,
           created_at: document.created_at,
+          ...(document.deduplicated ? { deduplicated: true as const, duplicate_of: document.id } : {}),
         },
         { requestId: ctx.requestId },
       )

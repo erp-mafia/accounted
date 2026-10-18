@@ -90,6 +90,41 @@ describe('snapshotInboxExtraction', () => {
     expect(snap).toMatchObject({ extraction: edited, model: null })
   })
 
+  it("takes the kept model reading over a document a person's correction was mirrored onto", async () => {
+    const { client } = fakeClient({
+      document_attachments: {
+        data: {
+          extracted_data: edited,
+          extraction_model: 'claude-sonnet',
+          extracted_at: '2026-10-01T08:00:00.000Z',
+          model_reading: { extracted_data: reading, extraction_model: 'claude-sonnet', extracted_at: '2026-10-01T08:00:00.000Z' },
+        },
+      },
+    })
+
+    const snap = await snapshotInboxExtraction(client as never, 'company-1', { id: 'item-1', document_id: 'doc-1', extracted_data: edited })
+
+    expect(snap).toMatchObject({ extraction: reading, model: 'claude-sonnet' })
+  })
+
+  it('ignores a kept reading a newer extraction replaced', async () => {
+    const fresh = { ...reading, totals: { total: 510 } }
+    const { client } = fakeClient({
+      document_attachments: {
+        data: {
+          extracted_data: fresh,
+          extraction_model: 'gemma',
+          extracted_at: '2026-10-02T08:00:00.000Z',
+          model_reading: { extracted_data: reading, extraction_model: 'claude-sonnet', extracted_at: '2026-10-01T08:00:00.000Z' },
+        },
+      },
+    })
+
+    const snap = await snapshotInboxExtraction(client as never, 'company-1', { id: 'item-1', document_id: 'doc-1', extracted_data: edited })
+
+    expect(snap).toMatchObject({ extraction: fresh, model: 'gemma' })
+  })
+
   it('never throws on a failed read, and then records no inputs hash: the document is unknown', async () => {
     const { client } = fakeClient({ document_attachments: { data: null, error: { message: 'timeout' } } })
 

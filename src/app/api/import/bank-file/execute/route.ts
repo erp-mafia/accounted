@@ -9,6 +9,7 @@ import { loadFileAccountMatch, type FileAccountMatch } from '@/lib/cash-accounts
 import { BankFileAccountIdentitySchema } from '@/lib/api/schemas'
 import { accountIdentity } from '@/lib/import/bank-file/account-identity'
 import { dominantCurrency } from '@/lib/import/bank-file/currency-summary'
+import { recordBankFileArrival } from '@/lib/import/bank-file/arrival'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { ParsedBankTransaction, BankFileFormatId, BankFileAccountIdentity } from '@/lib/import/bank-file/types'
@@ -42,7 +43,8 @@ interface ExecuteRequest {
  * POST /api/import/bank-file/execute
  *
  * Executes the import of confirmed bank transactions. Records the import in
- * `bank_file_imports`, calls `ingestTransactions`, and emits `transaction.synced`.
+ * `bank_file_imports`, calls `ingestTransactions`, emits `transaction.synced`,
+ * and records the file's arrival (the original parse archived).
  */
 export const POST = withRouteContext(
   'bank_file.execute',
@@ -323,6 +325,24 @@ export const POST = withRouteContext(
         } catch (err) {
           opLog.warn('transaction.synced event emission failed', err as Error)
         }
+      }
+
+      // How the file came in: the original parse archived, now that its rows
+      // entered. Not for an import where every row failed. Best effort.
+      if (!(ingestResult.errors > 0 && ingestResult.imported === 0)) {
+        await recordBankFileArrival(supabase, {
+          companyId,
+          importId: importRecord.id,
+          fileHash: file_hash,
+          filename,
+          format,
+          transactionCount: transactions.length,
+          importedCount: ingestResult.imported,
+          dateFrom: fileDateFrom ?? null,
+          dateTo: fileDateTo ?? null,
+          fetchedBy: { type: 'user', user_id: user.id },
+          via: 'app',
+        })
       }
 
       // The per-row skip list stays server-side: a statement re-exported with

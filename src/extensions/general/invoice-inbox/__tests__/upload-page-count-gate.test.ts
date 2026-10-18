@@ -56,6 +56,9 @@ vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
 // The deferred extraction worker builds its own cookieless service client
 // (the request-scoped one may be gone once the response is flushed). Route
 // it to the same mock supabase so the CAS flip is observable.
+// Match on arrival runs after the flip; its own reads and writes are tested
+// in lib/documents/bank-match, not by this file's hand-built client.
+vi.mock('@/lib/operations/inbox-bank-match', () => ({ proposeBankMatchForInboxItem: vi.fn() }))
 vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/api-keys')>()
   return { ...actual, createServiceClientNoCookies: vi.fn() }
@@ -66,6 +69,7 @@ import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { processArchivedDocument, uploadAndExtract } from '../lib/upload-and-extract'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
+import { proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
 
 function findRoute(method: string, path: string) {
   return invoiceInboxExtension.apiRoutes!.find(
@@ -87,6 +91,9 @@ interface FlipCapture {
 function makeSupabase(
   captured: { row?: Record<string, unknown> },
   flip: FlipCapture = { filters: [] },
+  // The row's reading when the worker reads it before the flip (a person
+  // may have chosen a purchase category meanwhile). Undefined: no read path.
+  currentReading?: Record<string, unknown> | null,
 ) {
   const supplierChain = {
     select: vi.fn().mockReturnThis(),
@@ -118,6 +125,17 @@ function makeSupabase(
       flip.payload = payload
       return updateChain
     }),
+    ...(currentReading !== undefined
+      ? {
+          select: vi.fn(() => {
+            const read = {
+              eq: vi.fn(() => read),
+              maybeSingle: vi.fn().mockResolvedValue({ data: { extracted_data: currentReading }, error: null }),
+            }
+            return read
+          }),
+        }
+      : {}),
   }
   return {
     from: vi.fn((table: string) => {
@@ -288,3 +306,23 @@ describe('POST /upload: staged extraction + page-count gate (issue #553)', () =>
     expect((flip.payload?.extracted_data as { pages?: unknown })?.pages).toBeUndefined()
   })
 })
+
+describe('POST /upload: the deferred worker keeps a person\'s purchase category', () => {
+  it('carries a choice made while the row waited onto the flipped reading', async () => {
+    const captured: { row?: Record<string, unknown> } = {}
+    const flip: FlipCapture = { filters: [] }
+    const choice = { code: 'expense.office.supplies', source: 'person', set_at: '2026-10-15T09:00:00.000Z', set_via: 'dashboard' }
+    const supabase = makeSupabase(captured, flip, { totals: { total: 1 }, purchaseCategory: choice })
+    vi.mocked(createServiceClientNoCookies).mockReturnValue(supabase as never)
+    vi.mocked(extractInvoiceFields).mockResolvedValueOnce({ data: emptyResult(), rawText: 'ok' })
+
+    const res = await uploadRoute.handler(await makeUploadRequest(6), buildCtx(supabase))
+    expect(res.status).toBe(200)
+
+    await vi.waitFor(() => expect(flip.payload).toBeDefined())
+    expect((flip.payload?.extracted_data as { purchaseCategory?: unknown }).purchaseCategory).toEqual(choice)
+    // Then the bank is checked for the item's payment, with the worker's client.
+    await vi.waitFor(() => expect(proposeBankMatchForInboxItem).toHaveBeenCalledWith(supabase, 'company-1', 'inbox-1'))
+  })
+})
+

@@ -1,0 +1,232 @@
+/**
+ * The new Inkorg page's view of the inbox items GET
+ * /api/extensions/ext/invoice-inbox/items answers: where each item stands,
+ * which views it belongs to, the doors in use and the order a queue runs in.
+ *
+ * Pure: no client, no I/O, no React. The page reads the extension only over
+ * HTTP, so these types describe the wire rows, not the table.
+ */
+import type { InboxChannelContext, InvoiceExtractionResult } from '@/types'
+import { INTAKE_SOURCE_IDS, intakeSourceForInboxItem, type IntakeSourceId } from '@/lib/intake/sources'
+import { resolveInboxKind, type InboxDocumentKind } from '@/lib/documents/inbox-kind'
+import type { BankMatch } from '@/lib/documents/inbox-bank-match'
+import { readableName } from './names'
+
+/**
+ * Whether the item's own underlag reached the verifikat that books its
+ * matched transaction (#1548). The list route derives it; null when there is
+ * nothing to derive.
+ */
+export type UnderlagStatus = 'anchored' | 'unlinked' | 'unlinked_locked' | 'anchored_elsewhere' | 'unknown'
+
+/** One row of GET /items, as far as the page reads it. */
+export interface InkorgItem {
+  id: string
+  status: 'received' | 'processing' | 'error'
+  source: string
+  created_at: string
+  channel_context?: InboxChannelContext | null
+  document_id: string | null
+  extracted_data: InvoiceExtractionResult | null
+  kind_hint?: string | null
+  routed_to_arkiv_at?: string | null
+  matched_transaction_id: string | null
+  created_supplier_invoice_id: string | null
+  created_journal_entry_id: string | null
+  matched_transaction_journal_entry_id?: string | null
+  underlag_status?: UnderlagStatus | null
+  email_from: string | null
+  email_subject: string | null
+  error_message: string | null
+  /** The vendor's own icon from our logos bucket (lib/vendor-logos), when one is stored. */
+  logo_url?: string | null
+  /** The bank row it looks already paid by (match on arrival), checked when the list was read; null for none. */
+  bank_match?: BankMatch | null
+}
+
+/**
+ * Where an item stands:
+ *   - booked: it became a supplier invoice or a verifikat, or its matched
+ *     transaction is booked with this item's underlag on the verifikat;
+ *   - processing: the reading has not landed yet (seconds);
+ *   - linked: matched to a bank transaction that still needs booking, or
+ *     whose verifikat does not carry this underlag (a person decides);
+ *   - error: the reading failed;
+ *   - needs_action: everything else, waiting for its first decision.
+ *
+ * The same precedence as the Underlag workspace (deriveInboxStatus in
+ * InvoiceInboxWorkspace.tsx), so an item never stands differently on the
+ * two pages.
+ */
+export type InkorgStage = 'needs_action' | 'processing' | 'linked' | 'booked' | 'error'
+
+/** A booked matched transaction whose verifikat does not carry this item's underlag. */
+export function isUnderlagDivergent(item: Pick<InkorgItem, 'matched_transaction_journal_entry_id' | 'underlag_status'>): boolean {
+  return !!item.matched_transaction_journal_entry_id && !!item.underlag_status && item.underlag_status !== 'anchored'
+}
+
+export function itemStage(item: InkorgItem): InkorgStage {
+  if (item.created_supplier_invoice_id || item.created_journal_entry_id) return 'booked'
+  if (item.matched_transaction_journal_entry_id && !isUnderlagDivergent(item)) return 'booked'
+  if (item.status === 'processing') return 'processing'
+  if (item.matched_transaction_id) return 'linked'
+  if (item.status === 'error') return 'error'
+  return 'needs_action'
+}
+
+/** Arkiv took it: classified as something not booked from the inbox. It left the queue for its own page. */
+function routedAway(item: InkorgItem): boolean {
+  return !!item.routed_to_arkiv_at
+}
+
+/** Waiting for a person's decision: the Behöver dig view. A reading in flight waits for nobody. */
+export function needsYou(item: InkorgItem): boolean {
+  if (routedAway(item)) return false
+  const stage = itemStage(item)
+  return stage === 'needs_action' || stage === 'linked' || stage === 'error'
+}
+
+/** Still in the inbox: came in and is not handled yet. Booked items live in Dokument and on their verifikat. */
+export function stillInInbox(item: InkorgItem): boolean {
+  return !routedAway(item) && itemStage(item) !== 'booked'
+}
+
+/** The door the item came through, by the one vocabulary (lib/intake/sources.ts). */
+export function doorOf(item: InkorgItem): IntakeSourceId {
+  return (
+    intakeSourceForInboxItem({
+      source: item.source,
+      channel_context: (item.channel_context ?? null) as { intake_source?: unknown; channel?: unknown } | null,
+    }) ?? 'upload'
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Views
+// ---------------------------------------------------------------------------
+
+/**
+ * What the content area shows: Behöver dig (the decisions waiting), Saknar
+ * underlag (purchases with no document, from its own endpoint), Saknar
+ * underlag for one supplier's portal (a row under Portaler: `portal` is the
+ * supplier as the portal directory names it) or one door.
+ */
+export type InkorgView =
+  | { kind: 'need' }
+  | { kind: 'missing'; portal?: string }
+  | { kind: 'door'; door: IntakeSourceId }
+
+export const DEFAULT_VIEW: InkorgView = { kind: 'need' }
+
+/** The longest supplier name a `?view=portal:` value may carry; the directory's are far shorter. */
+const MAX_PORTAL_NAME = 80
+
+/** A stable string for a view: the `?view=` value and a React key. */
+export function viewKey(view: InkorgView): string {
+  if (view.kind === 'door') return `door:${view.door}`
+  if (view.kind === 'missing' && view.portal) return `portal:${view.portal}`
+  return view.kind
+}
+
+/** The view a `?view=` value names; anything unknown is Behöver dig. */
+export function parseViewKey(value: string | null | undefined): InkorgView {
+  if (value === 'missing') return { kind: 'missing' }
+  if (value?.startsWith('portal:')) {
+    const portal = value.slice('portal:'.length).trim()
+    if (portal && portal.length <= MAX_PORTAL_NAME) return { kind: 'missing', portal }
+  }
+  if (value?.startsWith('door:')) {
+    const door = value.slice('door:'.length)
+    if ((INTAKE_SOURCE_IDS as readonly string[]).includes(door)) return { kind: 'door', door: door as IntakeSourceId }
+  }
+  return DEFAULT_VIEW
+}
+
+/** Newest first, then by id: the order the list route answers in, so a refetch never reshuffles a queue. */
+export function orderByArrival<T extends Pick<InkorgItem, 'id' | 'created_at'>>(items: readonly T[]): T[] {
+  return [...items].sort((a, b) => {
+    if (a.created_at !== b.created_at) return a.created_at < b.created_at ? 1 : -1
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+  })
+}
+
+/**
+ * The items a view lists, in queue order. Saknar underlag lists purchases,
+ * not items, so its queue is empty here.
+ */
+export function queueFor(items: readonly InkorgItem[], view: InkorgView): InkorgItem[] {
+  if (view.kind === 'missing') return []
+  const inView =
+    view.kind === 'need'
+      ? items.filter(needsYou)
+      : items.filter((item) => stillInInbox(item) && doorOf(item) === view.door)
+  return orderByArrival(inView)
+}
+
+/** One row of the rail's Brevlådor: a door in use, and how many of its items are still in the inbox. */
+export interface DoorRow {
+  door: IntakeSourceId
+  waiting: number
+}
+
+/**
+ * The doors this company uses: every door any item came through, booked
+ * ones included (a door in use stays listed when everything from it is
+ * handled), in the vocabulary's order. Items Arkiv took are not the inbox's.
+ */
+export function doorsInUse(items: readonly InkorgItem[]): DoorRow[] {
+  const waiting = new Map<IntakeSourceId, number>()
+  for (const item of items) {
+    if (routedAway(item)) continue
+    const door = doorOf(item)
+    waiting.set(door, (waiting.get(door) ?? 0) + (stillInInbox(item) ? 1 : 0))
+  }
+  return INTAKE_SOURCE_IDS.filter((door) => waiting.has(door)).map((door) => ({ door, waiting: waiting.get(door) ?? 0 }))
+}
+
+/** How many decisions wait: the count beside Behöver dig. */
+export function needCount(items: readonly InkorgItem[]): number {
+  return items.filter(needsYou).length
+}
+
+// ---------------------------------------------------------------------------
+// What a row says
+// ---------------------------------------------------------------------------
+
+export interface ItemHeadline {
+  /** The supplier as read, else the mail subject, else null (the row says "Okänt dokument"). */
+  name: string | null
+  kind: InboxDocumentKind | null
+  amount: number | null
+  currency: string
+  /** The document's own date (invoice or receipt date), when read. */
+  documentDate: string | null
+}
+
+/**
+ * The amount to show: the read total; for a document without one (a
+ * bankintyg, a letter), the one distinct amount read off it, when there is
+ * exactly one. Two or more stay ambiguous and show no amount.
+ */
+function headlineAmount(data: InvoiceExtractionResult | null): number | null {
+  const total = data?.totals?.total
+  if (total != null && Number.isFinite(total)) return total
+  const distinct = [
+    ...new Set((data?.prominentAmounts ?? []).map((a) => a.amount).filter((a) => Number.isFinite(a) && a !== 0)),
+  ]
+  return distinct.length === 1 ? distinct[0] : null
+}
+
+export function itemHeadline(item: InkorgItem): ItemHeadline {
+  const data = item.extracted_data
+  const supplier = data?.supplier?.name?.trim() || null
+  const subject = item.email_subject?.trim() || null
+  return {
+    // A supplier that prints its name in capitals is set as a person reads it (lib/inkorg/names).
+    name: readableName(supplier ?? subject),
+    kind: resolveInboxKind({ kind_hint: item.kind_hint ?? null, extracted_data: data }),
+    amount: headlineAmount(data),
+    currency: data?.invoice?.currency || 'SEK',
+    documentDate: data?.invoice?.invoiceDate ?? null,
+  }
+}

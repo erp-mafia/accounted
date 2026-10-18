@@ -6,6 +6,7 @@ import {
   syncInboundPeppolDocuments,
 } from '@/lib/invoices/peppol-inbound'
 import { deliverPeppolDocumentToInbox } from '@/lib/invoices/peppol-inbox-delivery'
+import { proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
 import {
   getPeppolTransport,
   getPeppolTransportAvailability,
@@ -43,8 +44,13 @@ export const GET = withCronContext('cron.peppol_inbound', async (_request, ctx) 
   }
 
   const service = createServiceClientNoCookies()
-  const deliver = (delivery: Parameters<typeof deliverPeppolDocumentToInbox>[1]) =>
-    deliverPeppolDocumentToInbox(service, delivery)
+  // Each delivered e-invoice is checked against the bank at once (match on
+  // arrival): a payment already in the bank becomes a proposal on the item.
+  const deliver = async (delivery: Parameters<typeof deliverPeppolDocumentToInbox>[1]) => {
+    const delivered = await deliverPeppolDocumentToInbox(service, delivery)
+    if (delivered.inboxItemId) await proposeBankMatchForInboxItem(service, delivery.companyId, delivered.inboxItemId, ctx.log)
+    return delivered
+  }
   const summary = await syncInboundPeppolDocuments({ service, transport, deliver, log: ctx.log })
   ctx.log.info('peppol inbound sync complete', { ...summary, errors: summary.errors.length })
 

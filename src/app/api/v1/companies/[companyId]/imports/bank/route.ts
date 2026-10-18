@@ -16,6 +16,8 @@
  *   5. Emits `transaction.synced` per ingested transaction.
  *   6. Records the result on the `operations` table for consistent
  *      polling-shape with SIE imports.
+ *   7. Keeps the file as it came and records the import's arrival
+ *      (lib/import/bank-file/arrival.ts).
  *
  * Runs INLINE today. The dashboard's /api/import/bank-file/execute backs
  * the same `ingestTransactions` helper, so a v1 import is byte-equivalent.
@@ -41,7 +43,9 @@ import { ingestTransactions } from '@/lib/transactions/ingest'
 import { decodeBankFile } from '@/lib/import/bank-file/workbook'
 import { headerLikeCells, unrecognizedColumnsMessages } from '@/lib/import/bank-file/columns'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
+import { archiveBankFileOriginal, recordBankFileArrival } from '@/lib/import/bank-file/arrival'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { apiKeyArrivalActor } from '@/lib/intake/arrivals'
 
 const BankImportAccepted = z.object({
   operation_id: z.string().uuid(),
@@ -370,6 +374,30 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         },
         ctx.log,
       )
+
+      // How the file came in: the statement as it came, and the arrival of
+      // this import, whose reference is the bank_file_imports row (so none
+      // without one). Not for an import where every row failed. Best effort:
+      // never fails the import.
+      if (importRow?.id && !(ingestResult.errors > 0 && ingestResult.imported === 0)) {
+        const original = await archiveBankFileOriginal(ctx.supabase, {
+          companyId: ctx.companyId!, fileHash, filename: file.name, bytes: buffer, mime: file.type,
+        })
+        await recordBankFileArrival(ctx.supabase, {
+          companyId: ctx.companyId!,
+          importId: importRow.id as string,
+          fileHash,
+          filename: file.name,
+          format: effectiveFormat,
+          transactionCount: parseResult.transactions.length,
+          importedCount: ingestResult.imported,
+          dateFrom: parseResult.date_from ?? null,
+          dateTo: parseResult.date_to ?? null,
+          fetchedBy: apiKeyArrivalActor(ctx),
+          via: 'partner_api',
+          original,
+        })
+      }
     } catch (err) {
       ctx.log.error('bank file import failed', err as Error, {
         operationId: op.id,

@@ -1,0 +1,1 @@
+[2026-10-17] The Inkorg offers only answers the switched-on packages allow: no Leverantörsfakturor means kontantmetoden pays from the document and books at payment, faktureringsmetoden goes to Anpassa; no Utlägg means an EF's private payment is 2018, an AB goes to Anpassa (founder call).

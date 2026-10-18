@@ -2,8 +2,7 @@ import { Suspense } from 'react'
 import { redirect } from 'next/navigation'
 import { cookies, headers } from 'next/headers'
 import DashboardNav from '@/components/dashboard/DashboardNav'
-import { isArkivSectionEnabled } from '@/lib/arkiv/flag'
-import { isAgentsPageEnabled } from '@/lib/agent-skills/flag'
+import { navRollouts } from '@/lib/navigation/nav-rollouts'
 import { DashboardRouteShell } from '@/components/dashboard/DashboardRouteShell'
 import { MainContainer } from '@/components/dashboard/MainContainer'
 import CompanyTabSync from '@/components/dashboard/CompanyTabSync'
@@ -634,8 +633,7 @@ export default async function DashboardLayout({
             hasMileage={hasMileage}
             hasExpenseClaims={hasExpenseClaims}
             hasPosSales={hasPosSales}
-            arkivEnabled={isArkivSectionEnabled(companyId)}
-            agentsEnabled={isAgentsPageEnabled(companyId)}
+            {...navRollouts(companyId)}
             isSandbox={isSandbox}
             extensionNavItems={getExtensionNavItems()}
             userName={userProfile?.full_name ?? null}
@@ -669,7 +667,8 @@ export default async function DashboardLayout({
               initialAcknowledged={!!uiState.trial_expired_ack?.[companyId]}
             />
           )}
-          <LazyCommandPalette />
+          {/* The palette's inbox entry goes where the menu puts the inbox (lib/inkorg/flag.ts). */}
+          <LazyCommandPalette inkorgV2Enabled={navRollouts(companyId).inkorgV2Enabled} />
           <SettingsHotkey />
         </div>
         {/* Outside #dash-shell on purpose: non-modal dialogs (booking,

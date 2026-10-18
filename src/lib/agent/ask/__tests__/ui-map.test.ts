@@ -71,6 +71,8 @@ describe('renderUiGrounding: the menu', () => {
   it('lists every sidebar entry from nav-v2.ts with its sv.json label: one source, no second list', () => {
     const out = renderUiGrounding({ ctx: gateContext(), labels: SV_LABELS })
     for (const section of [...NAV_V2_TOP, ...NAV_V2_COMPANY]) {
+      // The new Inkorg page shows only in its rollout (its own test below).
+      if (section.requiresInkorgV2) continue
       expect(out).toContain(`${nav[section.labelKey]} (${section.href})`)
       for (const sub of section.sub ?? []) {
         // Entity-gated twins (INK2 for aktiebolag, NE for enskild firma) show one side only.
@@ -99,6 +101,16 @@ describe('renderUiGrounding: the menu', () => {
     expect(out).not.toContain('(/expenses)')
     expect(out).not.toContain('(/reports/ink2-declaration)')
     expect(out).toContain('(/reports/ne-declaration)')
+  })
+
+  it('moves the inbox for a company in the new Inkorg rollout: Inkorg at the top, Underlag out of Inköp', () => {
+    const before = renderUiGrounding({ ctx: gateContext({ inkorgV2Enabled: false }), labels: SV_LABELS })
+    expect(before).not.toContain('(/inkorg)')
+    expect(before).toContain(`${nav.invoice_inbox} (/e/general/invoice-inbox)`)
+
+    const after = renderUiGrounding({ ctx: gateContext({ inkorgV2Enabled: true }), labels: SV_LABELS })
+    expect(after).toContain(`${nav.inkorg} (/inkorg)`)
+    expect(after).not.toContain('(/e/general/invoice-inbox)')
   })
 
   it('offers INK2 and the årsredovisning to an ekonomisk förening, as the sidebar does', () => {

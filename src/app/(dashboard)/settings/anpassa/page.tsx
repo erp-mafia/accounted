@@ -9,9 +9,16 @@ import { getDashboardAuthContext, getDashboardCompanyId, getDashboardOpenObligat
  * same resolved capabilities the menu reads; the open obligations of a
  * switched-off package come from the request's shared probe, so the menu and
  * this page never disagree about what winds down.
+ *
+ * ?package=<id> opens the page at that package (the Inkorg links here when an
+ * answer needs a package that is switched off); an unknown id is ignored.
  */
-export default async function AnpassaSettingsPage() {
-  const [{ supabase }, companyId] = await Promise.all([getDashboardAuthContext(), getDashboardCompanyId()])
+export default async function AnpassaSettingsPage({ searchParams }: { searchParams: Promise<{ package?: string }> }) {
+  const [{ supabase }, companyId, { package: focusPackageId }] = await Promise.all([
+    getDashboardAuthContext(),
+    getDashboardCompanyId(),
+    searchParams,
+  ])
   const capabilities = companyId
     ? await loadCompanyCapabilities(supabase, companyId, {
         loadObligations: (ids) => getDashboardOpenObligations(ids.join(',')),
@@ -33,6 +40,7 @@ export default async function AnpassaSettingsPage() {
       profileNameSv={capabilities.profile.name_sv}
       profileName={capabilities.profile.name}
       packages={packages}
+      focusPackageId={focusPackageId ?? null}
     />
   )
 }

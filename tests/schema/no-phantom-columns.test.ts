@@ -273,10 +273,14 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // one over, so the ceiling rises by exactly that one site.
 // 433 (2026-10-15): +1 for the v1 pending-operations list's keyset cursor,
 // the same (created_at, id) .or() predicate every v1 list builds at runtime.
-// 434 (2026-10-18): +1 for the webhook fan-out from the event outbox
+// 434 (2026-10-17): +1 for lib/vendor-logos/run.ts queueDomains, which
+// upserts one { domain } row per new vendor domain, built by a map in
+// chunks of 500 (the payment_order_events shape above); one row per request
+// would be hundreds of requests a run.
+// 435 (2026-10-18): +1 for the webhook fan-out from the event outbox
 // (lib/webhooks/handler.ts): the upsert keyed by outbox id writes the same
 // per-webhook rows the inline insert beside it already builds at runtime.
-const UNRESOLVED_CEILING = 434
+const UNRESOLVED_CEILING = 435
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

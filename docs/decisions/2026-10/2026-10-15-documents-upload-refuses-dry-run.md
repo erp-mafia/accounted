@@ -1,0 +1,1 @@
+[2026-10-15] POST /documents answers 400 VALIDATION_ERROR to ?dry_run=true or X-Dry-Run instead of archiving: the endpoint cannot simulate, the archive is WORM, and a caller that asked for a preview must never get a stored file. A real dry run stays out of scope.

@@ -15,6 +15,9 @@ vi.mock('@/lib/transactions/purchases-without-underlag', () => ({
   fetchPurchasesWithoutUnderlag: (...a: unknown[]) => fetchPurchases(...a),
 }))
 
+const vendorLogoUrls = vi.fn()
+vi.mock('@/lib/vendor-logos/read', () => ({ vendorLogoUrls: (...a: unknown[]) => vendorLogoUrls(...a) }))
+
 const route = testRoutes(invoiceInboxExtension).find(
   (r) => r.method === 'GET' && r.path === '/purchases',
 )!
@@ -53,6 +56,7 @@ function purchase(over: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks()
   fetchPurchases.mockResolvedValue([])
+  vendorLogoUrls.mockResolvedValue(new Map())
 })
 
 describe('GET /purchases', () => {
@@ -64,6 +68,25 @@ describe('GET /purchases', () => {
     )
     expect(body.data.count).toBe(2)
     expect(body.data.purchases).toHaveLength(2)
+  })
+
+  it("carries the vendor's stored icon when there is one, read from the bank's merchant and text", async () => {
+    fetchPurchases.mockResolvedValue([
+      purchase({ id: 'tx-1', merchant_name: 'Loopia AB', description: 'LOOPIA AB' }),
+      purchase({ id: 'tx-2' }),
+    ])
+    vendorLogoUrls.mockResolvedValue(new Map([['tx-1', 'https://db.example/storage/v1/object/public/logos/vendor-icons/abc.png']]))
+    const { body } = await parseJsonResponse<{ data: { purchases: { id: string; logo_url: string | null }[] } }>(
+      await route.handler(req(), buildCtx()),
+    )
+    expect(vendorLogoUrls).toHaveBeenCalledWith([
+      { key: 'tx-1', name: 'Loopia AB', texts: ['LOOPIA AB'] },
+      { key: 'tx-2', name: 'OPENAI  CHATGPT SUBSCR', texts: ['OPENAI  CHATGPT SUBSCR'] },
+    ])
+    expect(body.data.purchases.map((p) => p.logo_url)).toEqual([
+      'https://db.example/storage/v1/object/public/logos/vendor-icons/abc.png',
+      null,
+    ])
   })
 
   it('says where the invoice lives when the supplier keeps it behind a login', async () => {

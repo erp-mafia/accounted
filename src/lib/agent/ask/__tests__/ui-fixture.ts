@@ -19,7 +19,10 @@ export const SV_LABELS: UiLabels = {
   settings: table(sv.settings_nav as Record<string, unknown>),
 }
 
-/** An aktiebolag with every opt-in surface on: the widest menu there is. */
+/**
+ * An aktiebolag with every opt-in surface on: the widest menu there is. The
+ * new Inkorg rollout is off: it moves the inbox rather than adding a page.
+ */
 export function gateContext(overrides: Partial<NavGateContext> = {}): NavGateContext {
   return {
     entityType: 'aktiebolag',
@@ -33,6 +36,7 @@ export function gateContext(overrides: Partial<NavGateContext> = {}): NavGateCon
     hasPosSales: true,
     arkivEnabled: true,
     agentsEnabled: true,
+    inkorgV2Enabled: false,
     capabilities: [CAPABILITY.ai],
     hiddenNavHrefs: new Set(),
     ...overrides,

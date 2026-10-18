@@ -23,10 +23,12 @@ import { REPRESENTATIVE_COMPANIES, representativeCompanyTables } from '@/tests/f
 const FIRST = REPRESENTATIVE_COMPANIES[0].id
 
 beforeEach(() => {
-  // The two per-company rollouts, pinned so the snapshot does not depend on
-  // the environment the suite runs in: both on for the first company only.
+  // The per-company rollouts, pinned so the snapshot does not depend on
+  // the environment the suite runs in: Arkiv and Agenter on for the first
+  // company only, the new Inkorg page for nobody (the menu as it is today).
   vi.stubEnv('ARKIV_COMPANY_IDS', FIRST)
   vi.stubEnv('AGENTS_PAGE_COMPANY_IDS', FIRST)
+  vi.stubEnv('INKORG_V2_COMPANY_IDS', '')
   vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
 })
 

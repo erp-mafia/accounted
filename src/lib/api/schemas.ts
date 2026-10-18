@@ -3035,6 +3035,18 @@ export const MatchSupplierInvoiceSchema = z.object({
   })).min(2).optional(),
 })
 
+// The Inkorg's "Registrera och koppla till betalningen": the inbox convert
+// body (as POST /items/:id/convert takes it) and the bank row the item looks
+// already paid by. The company paid it from that row, so a person paying it
+// privately is a different answer (the utlägg), never this one.
+export const RegisterAndSettleInboxItemSchema = z.object({
+  transaction_id: uuid,
+  invoice: CreateSupplierInvoiceSchema,
+}).refine((body) => body.invoice.paid_with_private_funds !== true, {
+  message: 'A privately paid invoice is an utlägg, not a payment from the bank row',
+  path: ['invoice', 'paid_with_private_funds'],
+})
+
 
 // ============================================================
 // Settings schemas

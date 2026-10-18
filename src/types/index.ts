@@ -3090,6 +3090,14 @@ export interface InvoiceInboxItem {
   // Audit chain (processing_history correlation)
   correlation_id: string | null
 
+  // Match on arrival (migration 20261017010000): the bank row the item looks
+  // already paid by, a proposal and never a link (lib/documents/inbox-bank-match.ts).
+  bank_match_transaction_id?: string | null
+  bank_match_basis?: 'rule_ocr_reference' | 'rule_counterparty' | 'rule_amount_date' | null
+  bank_match_evidence_level?: 'exakt' | 'stark' | 'trolig' | null
+  bank_match_checked_at?: string | null
+  bank_match_source_key?: string | null
+
   created_at: string
   updated_at: string
 
@@ -3099,15 +3107,31 @@ export interface InvoiceInboxItem {
   supplier_invoice?: SupplierInvoice
 }
 
+import type { IntakeSourceId } from '@/lib/intake/sources'
+
 // Chat-sourced context attached to an inbox item. `raw_answer` + timestamps
 // double as the Skatteverket representation documentation trail.
 export interface InboxChannelContext {
   /**
    * Which intake wrote this. 'mail_hunt' rows carry the mail_* fields below;
    * everything else on this type belongs to the WhatsApp branch and is absent
-   * on them.
+   * on them. Absent on a row whose only context is intake_source (an item
+   * Arkiv queued, an MCP upload).
    */
-  channel: 'whatsapp' | 'mail_hunt' | 'peppol'
+  channel?: 'whatsapp' | 'mail_hunt' | 'peppol' | 'partner_api'
+  /**
+   * The canonical door (lib/intake/sources.ts), stamped by a writer that knows
+   * it when the source column cannot say: Arkiv queueing a document that came
+   * in through another door, the MCP upload tools, a partner delivery
+   * (POST /api/v1/companies/{id}/inbox-items is source 'upload' with
+   * intake_source 'partner_api'). Readers resolve it with
+   * intakeSourceForInboxItem, which falls back to the legacy columns.
+   */
+  intake_source?: IntakeSourceId
+  /** Partner delivery: the name of the API key that delivered it. */
+  partner_key_label?: string | null
+  /** Partner delivery: the partner's own id for it (external_ref). */
+  external_ref?: string | null
   /** Set by lib/invoices/peppol-inbox-delivery.ts: provenance of a received e-invoice. */
   peppol_provider?: string | null
   /** The provider's id for the received document (Qvalia integrationId). */

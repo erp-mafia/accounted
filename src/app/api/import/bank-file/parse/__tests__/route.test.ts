@@ -177,6 +177,49 @@ describe('POST /api/import/bank-file/parse (account match)', () => {
   })
 })
 
+// The statement as it came: parse is the one request that holds the file, so
+// it keeps the original under the content hash; execute records the arrival.
+describe('POST /api/import/bank-file/parse (original archive)', () => {
+  const COMPANY = '11111111-1111-4111-8111-111111111111'
+  const bucket = supabase.storage.from('documents') as unknown as { upload: ReturnType<typeof vi.fn> }
+
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    reset()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
+    const { getActiveCompanyId } = await import('@/lib/company/context')
+    vi.mocked(getActiveCompanyId).mockResolvedValueOnce(COMPANY)
+  })
+
+  it('archives a file with rows under its content hash, without overwriting', async () => {
+    enqueue({ data: null }) // no prior bank_file_imports row
+    const response = await POST(makeFileRequest(SEB_BANK_CSV, 'kontoutdrag oktober.csv'), emptyParams)
+    const body = await response.json()
+    expect(response.status).toBe(200)
+
+    expect(supabase.storage.from).toHaveBeenCalledWith('documents')
+    expect(bucket.upload).toHaveBeenCalledTimes(1)
+    const [path, bytes, options] = bucket.upload.mock.calls[0] as [string, Uint8Array, Record<string, unknown>]
+    expect(path).toBe(`documents/${COMPANY}/arrivals/bank_file/${body.data.file_hash}/kontoutdrag_oktober.csv`)
+    expect(new TextDecoder().decode(bytes)).toBe(SEB_BANK_CSV)
+    expect(options).toEqual({ contentType: 'text/csv', upsert: false })
+  })
+
+  it('still answers the preview when the archive fails', async () => {
+    enqueue({ data: null })
+    bucket.upload.mockRejectedValueOnce(new Error('storage down'))
+    const response = await POST(makeFileRequest(SEB_BANK_CSV, 'kontoutdrag.csv'), emptyParams)
+    expect(response.status).toBe(200)
+  })
+
+  it('keeps nothing for a file refused before parsing (a skattekontoutdrag)', async () => {
+    enqueue({ data: null })
+    const response = await POST(makeFileRequest(SKATTEKONTO_CSV, 'skattekonto.csv'), emptyParams)
+    expect(response.status).toBe(400)
+    expect(bucket.upload).not.toHaveBeenCalled()
+  })
+})
+
 // crm#1236: Länsförsäkringar's kontoutdrag comes as one .xls file per month.
 describe('POST /api/import/bank-file/parse (Excel files and unrecognized columns)', () => {
   function monthStatementXlsx(): ArrayBuffer {

@@ -1,0 +1,1 @@
+[2026-10-15] A reading an agent supplied (set_inbox_extracted_data, confidence 0.95) is a machine reading in the one reading, never Ditt val: no person chose those values, and the source list has no agent value (founder call whether it should).

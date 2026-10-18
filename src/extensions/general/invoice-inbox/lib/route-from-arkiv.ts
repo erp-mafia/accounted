@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { arkivSectionRollout, isArkivSectionEnabled } from '@/lib/arkiv/flag'
 import { resolveInboxKind, type InboxKindSource } from '@/lib/documents/inbox-kind'
+import { inboxSourceForIntake, intakeSourceFromUploadSource } from '@/lib/intake/sources'
 
 /**
  * Arkiv phase 7: the queue is decided by what the document is, not by the
@@ -77,6 +78,8 @@ interface DocumentRow {
   created_at?: string | null
   journal_entry_id: string | null
   extracted_data: Record<string, unknown> | null
+  upload_source?: string | null
+  file_name?: string | null
 }
 
 interface ItemRow {
@@ -97,7 +100,7 @@ export async function routeClassifiedDocument(
 ): Promise<RouteOutcome> {
   const { data: doc, error: docError } = await supabase
     .from('document_attachments')
-    .select('id, user_id, journal_entry_id, extracted_data, created_at')
+    .select('id, user_id, journal_entry_id, extracted_data, created_at, upload_source, file_name')
     .eq('id', input.documentId)
     .eq('company_id', input.companyId)
     .maybeSingle()
@@ -144,11 +147,15 @@ export async function routeClassifiedDocument(
       return open.routed_to_arkiv_at ? 'requeued' : 'retyped'
     }
     if (d.created_at && Date.now() - new Date(d.created_at).getTime() > QUEUE_NEW_WITHIN_MS) return 'left'
+    // The door the document came through, not 'upload' for all of them: the source column keeps the closest value
+    // its CHECK allows, and the canonical door rides beside it in channel_context (lib/intake/sources.ts).
+    const intakeSource = intakeSourceFromUploadSource(d.upload_source, { fileName: d.file_name }) ?? 'upload'
     const { error } = await supabase.from('invoice_inbox_items').insert({
       company_id: input.companyId,
       user_id: input.userId || d.user_id,
       status: 'received',
-      source: 'upload',
+      source: inboxSourceForIntake(intakeSource),
+      channel_context: { intake_source: intakeSource },
       document_id: input.documentId,
       kind_hint: kindHintFor(input.docType),
       // A credit note is a supplier document (the hint) that credits an

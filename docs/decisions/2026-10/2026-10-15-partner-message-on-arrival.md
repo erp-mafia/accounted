@@ -1,0 +1,1 @@
+[2026-10-15] A partner delivery's sender_name, subject and received_at go on the inbox item (email_from, email_subject, email_received_at, as a Peppol item shows its supplier); the free-text message stays on the arrival only, not in email_body_text, which the item reserves for mail.

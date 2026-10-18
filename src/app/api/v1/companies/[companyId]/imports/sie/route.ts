@@ -19,6 +19,7 @@ import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
 import type { SIEAccountMappingRecord } from '@/lib/import/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { SIEJobOptionsSchema } from '@/lib/api/schemas'
+import { apiKeyArrivalActor } from '@/lib/intake/arrivals'
 
 const SieImportAccepted = z.object({
   operation_id: z.string().uuid(),
@@ -197,7 +198,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     let job
     try {
-      job = await submitSIEJob(ctx.supabase,ctx.companyId!,ctx.userId,content,mappings,{filename:file.name,...options},file)
+      job = await submitSIEJob(ctx.supabase,ctx.companyId!,ctx.userId,content,mappings,{filename:file.name,...options},file,'sie_file',{
+        source:'sie', via:'partner_api',
+        fetchedBy:apiKeyArrivalActor(ctx),
+      })
     } catch (err) {
       // Both numbers travel in details so the caller can show them; every
       // other refusal keeps the wrapper's mapping.

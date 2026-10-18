@@ -32,6 +32,8 @@ export interface NavGateContext {
   hasPosSales: boolean
   arkivEnabled: boolean
   agentsEnabled: boolean
+  /** The company is in the new Inkorg page's rollout (lib/inkorg/flag.ts). */
+  inkorgV2Enabled: boolean
   capabilities: readonly string[]
   hiddenNavHrefs: ReadonlySet<string>
 }
@@ -74,6 +76,10 @@ export function passesNavGates(item: NavGateFlags, ctx: NavGateContext): boolean
   if (item.requiresArkiv && !ctx.arkivEnabled) return false
   // The Agenter page is hidden in production while it is finished.
   if (item.requiresAgents && !ctx.agentsEnabled) return false
+  // The new Inkorg page rolls out per company, and Underlag under Inköp
+  // hides for the same companies: the inbox has one place either way.
+  if (item.requiresInkorgV2 && !ctx.inkorgV2Enabled) return false
+  if (item.hiddenWithInkorgV2 && ctx.inkorgV2Enabled) return false
   // Paywalled surfaces (e.g. the AI-only Dokumentinkorg) are hidden unless
   // the active company holds the capability. The page + API gates enforce
   // the paywall; this keeps the sidebar from advertising a dead workspace.

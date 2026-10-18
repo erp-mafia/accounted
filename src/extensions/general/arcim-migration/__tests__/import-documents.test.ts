@@ -47,6 +47,8 @@ vi.mock('@/lib/providers/fortnox/attachments', () => ({
   fetchFortnoxSupplierInvoiceBookings: vi.fn(async () => new Map()),
   fetchFortnoxSupplierInvoiceBookingVoucher: vi.fn(async () => null),
 }))
+const { mockRecordDocumentArrival } = vi.hoisted(() => ({ mockRecordDocumentArrival: vi.fn() }))
+vi.mock('@/lib/intake/arrivals', () => ({ recordDocumentArrival: mockRecordDocumentArrival }))
 vi.mock('@/lib/core/documents/document-service', () => ({
   uploadDocument: vi.fn(),
   computeSHA256: vi.fn(),
@@ -215,6 +217,14 @@ describe('importProviderDocuments', () => {
       extractionOwner: 'none',
     })
     expect(result).toMatchObject({ total: 1, partial: false, nextCursor: null })
+    // How it came in: a 'migration' arrival pointing at the archived document.
+    expect(mockRecordDocumentArrival).toHaveBeenCalledWith(supabase, {
+      companyId: COMPANY,
+      source: 'migration',
+      documentId: 'doc-1',
+      fetchedBy: { type: 'user', user_id: USER, label: 'bokio-migration' },
+      sourceMeta: { provider: 'bokio', provider_attachment_id: 'up-1', journal_entry_id: 'je-1' },
+    })
   })
 
   it('skips a receipt already archived on the same verifikat (sha256 + journal entry idempotency)', async () => {
@@ -233,6 +243,7 @@ describe('importProviderDocuments', () => {
     })
     expect(mockDownload).toHaveBeenCalledTimes(1)
     expect(mockUpload).not.toHaveBeenCalled()
+    expect(mockRecordDocumentArrival).not.toHaveBeenCalled()
   })
 
   it('still archives content already attached to a DIFFERENT verifikat (same contract, several vouchers)', async () => {

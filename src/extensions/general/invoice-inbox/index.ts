@@ -20,6 +20,12 @@ import { dbError } from '@/lib/errors/db-error'
 import { matchSupplierId } from '@/lib/suppliers/match-supplier'
 import { fetchOwnCompanyIdentity } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
 import { extractAndMirror } from '@/lib/documents/inbox-extraction/extract-and-mirror'
+import { loadDocumentReading } from '@/lib/documents/reading/load'
+import { peppolReader } from '@/lib/invoices/peppol-reading'
+import { proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
+import { bankMatchLinkEvidence, readInboxBankMatch, readInboxBankMatches, type BankMatch, type BankMatchItemRow } from '@/lib/documents/inbox-bank-match'
+import type { ReadingItemRow } from '@/lib/documents/reading/resolve'
+import type { DocumentReading } from '@/lib/documents/reading/types'
 import {
   uploadAndExtract,
   processArchivedDocument,
@@ -32,7 +38,10 @@ import {
   ensureHtmlDocument,
 } from './lib/upload-and-extract'
 import { emailBodyToText, isSignatureImage, isSubstantiveBody, renderEmailBodyUnderlag } from './lib/email-body-underlag'
+import { fileInboxDelivery } from './lib/inbox-delivery'
 import type { RenderedEmailBodyUnderlag } from './lib/email-body-underlag'
+import { recordInboundMailArrivals } from './lib/inbound-arrival'
+import { recordDocumentArrival } from '@/lib/intake/arrivals'
 import {
   verifyInboundWebhook,
   fetchReceivingEmail,
@@ -80,6 +89,7 @@ import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import type { Transaction, EntityType } from '@/types'
 import { createLogger } from '@/lib/logger'
 import { fetchPurchasesWithoutUnderlag } from '@/lib/transactions/purchases-without-underlag'
+import { vendorLogoUrls } from '@/lib/vendor-logos/read'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { matchInboxItemTransaction } from '@/lib/documents/inbox-match'
 import type { OperationContext } from '@/lib/operations/types'
@@ -92,6 +102,10 @@ import {
   type UpdateInboxItemFieldsInput,
 } from '@/lib/documents/inbox-item-actions'
 import { convertInboxItemToSupplierInvoice } from '@/lib/documents/inbox-convert'
+import { setInboxItemPurchaseCategory, SetInboxPurchaseCategorySchema } from '@/lib/documents/inbox-purchase-category'
+import { resolveInboxPurchaseCategories } from '@/lib/categories/inbox-purchase-category'
+import { carriedPersonFields, keepPersonChoices } from '@/lib/documents/person-corrections'
+import { mirrorCorrectedReadingToDocument } from '@/lib/documents/reading-correction'
 import { resolveInboxKind, type InboxKindSource } from '@/lib/documents/inbox-kind'
 import { resolveInboxCreditTarget } from '@/lib/supplier-invoices/credit-target'
 import { lookupPortal } from '@/lib/receipt-hunt/portal-directory'
@@ -249,6 +263,13 @@ export const invoiceInboxExtension: Extension = {
   name: 'Dokumentinkorg',
   version: '3.0.0',
 
+  // Registry-resolved services for core callers (core cannot import
+  // @/extensions). Contract: lib/intake/partner-delivery.ts.
+  services: {
+    // The v1 partner door, POST /api/v1/companies/{id}/inbox-items.
+    fileInboxDelivery,
+  },
+
   eventHandlers: [
     {
       // Arkiv said what a document is: queue a receipt or invoice that came in another way, release what is not booked
@@ -337,6 +358,14 @@ export const invoiceInboxExtension: Extension = {
             null,
             { deferExtraction: true },
           )
+          // How it came in (best effort, never fails the upload).
+          await recordDocumentArrival(ctx.supabase, {
+            companyId: ctx.companyId,
+            source: 'upload',
+            documentId: result.document_id,
+            inboxItemId: result.inbox_item_id,
+            fetchedBy: { type: 'user', user_id: ctx.userId },
+          })
           return NextResponse.json({ data: result })
         } catch (error) {
           console.error('[invoice-inbox/upload] Failed:', error)
@@ -495,6 +524,13 @@ export const invoiceInboxExtension: Extension = {
             null,
             { deferExtraction: true },
           )
+          await recordDocumentArrival(ctx.supabase, {
+            companyId: ctx.companyId,
+            source: 'upload',
+            documentId: result.document_id,
+            inboxItemId: result.inbox_item_id,
+            fetchedBy: { type: 'user', user_id: ctx.userId },
+          })
           return NextResponse.json({ data: result })
         } catch (error) {
           return signedUploadFailureResponse(error, ctx, 'upload/complete')
@@ -526,7 +562,8 @@ export const invoiceInboxExtension: Extension = {
               created_supplier_invoice_id,
               matched_transaction_id, created_journal_entry_id,
               resend_email_id, extraction_skipped, channel_context, kind_hint,
-              routed_to_arkiv_at, routed_doc_type
+              routed_to_arkiv_at, routed_doc_type,
+              bank_match_transaction_id, bank_match_basis, bank_match_evidence_level, bank_match_source_key
             `)
             .eq('company_id', ctx.companyId)
             .order('created_at', { ascending: false })
@@ -562,10 +599,23 @@ export const invoiceInboxExtension: Extension = {
         }
         const rows = (data ?? []) as ItemRow[]
         const bookedState = await resolveInboxBookedState(ctx.supabase, ctx.companyId, rows)
+
+        // Match on arrival, for the whole list in a few reads (never one per
+        // item): the bank row each open item looks already paid by, checked
+        // again now, as the detail read below does. Read from the rows as
+        // stored, before the document's reading stands in.
+        let bankMatches = new Map<string, BankMatch>()
+        try {
+          bankMatches = await readInboxBankMatches(ctx.supabase, ctx.companyId, rows as unknown as BankMatchItemRow[])
+        } catch (err) {
+          extensionLog.warn('inbox list bank match read failed', { err: err instanceof Error ? err.message : String(err) })
+        }
+
         const items = rows.map((r) => ({
           ...r,
           matched_transaction_journal_entry_id: bookedState.get(r.id)?.journalEntryId ?? null,
           underlag_status: bookedState.get(r.id)?.underlag ?? null,
+          bank_match: bankMatches.get(r.id) ?? null,
         }))
 
         // A receipt dropped into Dokument is routed here the moment the
@@ -593,9 +643,24 @@ export const invoiceInboxExtension: Extension = {
           }
         }
 
+        // The vendor's own icon, when the logo cron stored one (lib/vendor-logos): resolved from
+        // the supplier as read and the sender, served from our bucket. No icon is no logo_url.
+        const logos = await vendorLogoUrls(
+          items.map((i) => {
+            const supplier = (i.extracted_data as { supplier?: { name?: unknown } } | null)?.supplier?.name
+            const row = i as { email_from?: string | null; email_subject?: string | null }
+            return {
+              key: i.id,
+              name: (typeof supplier === 'string' && supplier.trim()) || row.email_subject || null,
+              emails: [row.email_from],
+            }
+          }),
+        )
+        const withLogos = items.map((i) => ({ ...i, logo_url: logos.get(i.id) ?? null }))
+
         // arkiv_section: whether the Dokument section is open for this company, so the
         // "routed to the archive" line links there only when the link leads somewhere.
-        return NextResponse.json({ data: { items, count: items.length, arkiv_section: isArkivSectionEnabled(ctx.companyId) } })
+        return NextResponse.json({ data: { items: withLogos, count: withLogos.length, arkiv_section: isArkivSectionEnabled(ctx.companyId) } })
       },
     },
 
@@ -674,6 +739,29 @@ export const invoiceInboxExtension: Extension = {
         const matchedTransactionJournalEntryId = bookedState?.journalEntryId ?? null
         const underlagStatus = bookedState?.underlag ?? null
 
+        // ?include=reading: the one reading (lib/documents/reading), each
+        // field with its source and evidence level. Read from the row as
+        // stored, before the document's reading stands in below.
+        let documentReading: DocumentReading | null = null
+        if (url.searchParams.get('include') === 'reading') {
+          try {
+            documentReading = await loadDocumentReading(ctx.supabase, ctx.companyId, { item: { ...(data as ReadingItemRow) } }, peppolReader)
+          } catch (err) {
+            extensionLog.warn('inbox item reading failed', { inboxItemId: id, err: err instanceof Error ? err.message : String(err) })
+            return NextResponse.json({ error: 'Kunde inte läsa underlagets fält' }, { status: 500 })
+          }
+        }
+
+        // Match on arrival: the bank row it looks already paid by, checked
+        // again now (lib/documents/inbox-bank-match.ts). A proposal, never a
+        // booking; read from the row as stored, before the stand-in below.
+        let bankMatch: BankMatch | null = null
+        try {
+          bankMatch = await readInboxBankMatch(ctx.supabase, ctx.companyId, { ...(data as BankMatchItemRow) })
+        } catch (err) {
+          extensionLog.warn('inbox item bank match read failed', { inboxItemId: id, err: err instanceof Error ? err.message : String(err) })
+        }
+
         // Same stand-in as the list: the document's reading when the item has none.
         if (row.extracted_data == null && row.document_id) {
           const { data: doc } = await ctx.supabase.from('document_attachments').select('id, extracted_data').eq('id', row.document_id).maybeSingle()
@@ -684,11 +772,17 @@ export const invoiceInboxExtension: Extension = {
           }
         }
 
+        // What the underlag bought, computed at read time (null when ambiguous).
+        const purchaseCategory = (await resolveInboxPurchaseCategories(ctx.supabase, ctx.companyId, [row])).get(row.id) ?? null
+
         return NextResponse.json({
           data: {
             ...row,
             matched_transaction_journal_entry_id: matchedTransactionJournalEntryId,
             underlag_status: underlagStatus,
+            purchase_category: purchaseCategory,
+            bank_match: bankMatch,
+            ...(documentReading ? { reading: documentReading } : {}),
           },
         })
       },
@@ -718,6 +812,38 @@ export const invoiceInboxExtension: Extension = {
         }
 
         const outcome = await updateInboxItemFields(operationContext(ctx), id, body)
+        if (!outcome.ok) return sessionFailureResponse(outcome, extensionLog, ctx.requestId ?? '')
+        if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
+        // A corrected amount, OCR or giro can pair another bank row, or none.
+        await proposeBankMatchForInboxItem(ctx.supabase, ctx.companyId, id, extensionLog)
+        return NextResponse.json({ data: outcome.data })
+      },
+    },
+
+    // ── Set or clear the purchase category (a person's choice) ────
+    // Rules in lib/documents/inbox-purchase-category.ts, shared with the v1
+    // operation inbox-items.set-purchase-category. every_time makes it the
+    // matched supplier's instruction ("varje gång"). Books nothing.
+    {
+      method: 'PUT',
+      path: '/items/:id/purchase-category',
+      // A viewer is refused by the dispatcher with a clear 403, not by RLS
+      // matching zero rows.
+      requireWrite: true,
+      handler: async (request: Request, ctx: ExtensionContext) => {
+        const url = new URL(request.url)
+        const id = url.searchParams.get('_id')
+        if (!id) return errorResponseFromCode('VALIDATION_ERROR', ctx.log, { requestId: ctx.requestId, reason: 'missing id' })
+
+        const parsed = SetInboxPurchaseCategorySchema.safeParse(await request.json().catch(() => undefined))
+        if (!parsed.success) {
+          return errorResponseFromCode('VALIDATION_ERROR', ctx.log, { requestId: ctx.requestId, reason: 'invalid purchase category' })
+        }
+
+        const outcome = await setInboxItemPurchaseCategory(operationContext(ctx), id, parsed.data.code, {
+          via: 'dashboard',
+          everyTime: parsed.data.every_time,
+        })
         if (!outcome.ok) return sessionFailureResponse(outcome, extensionLog, ctx.requestId ?? '')
         if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
         return NextResponse.json({ data: outcome.data })
@@ -768,6 +894,8 @@ export const invoiceInboxExtension: Extension = {
         const outcome = await unmatchInboxItemTransaction(operationContext(ctx), id)
         if (!outcome.ok) return sessionFailureResponse(outcome, extensionLog, ctx.requestId ?? '')
         if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
+        // Open again: look in the bank for its payment.
+        await proposeBankMatchForInboxItem(ctx.supabase, ctx.companyId, id, extensionLog)
         return NextResponse.json({ data: { id: outcome.data.id, matched_transaction_id: null } })
       },
     },
@@ -800,7 +928,7 @@ export const invoiceInboxExtension: Extension = {
 
         const { data: item } = await ctx.supabase
           .from('invoice_inbox_items')
-          .select('id, document_id, correlation_id, created_supplier_invoice_id')
+          .select('id, document_id, correlation_id, created_supplier_invoice_id, extracted_data')
           .eq('id', id)
           .eq('company_id', ctx.companyId)
           .maybeSingle()
@@ -869,7 +997,9 @@ export const invoiceInboxExtension: Extension = {
             fileName: doc.file_name,
             ownCompany: await fetchOwnCompanyIdentity(ctx.supabase, ctx.companyId),
           })
-          const { data: extracted } = extraction
+          // What a person decided is final: the new reading carries their
+          // corrected fields and their purchase category.
+          const extracted = keepPersonChoices(item.extracted_data, extraction.data)
 
           // Re-running the extraction has to re-run the match too, or the one
           // affordance the user reaches for when an item failed to auto-link
@@ -915,6 +1045,16 @@ export const invoiceInboxExtension: Extension = {
             return NextResponse.json({ error: updateError.message }, { status: 500 })
           }
 
+          // extractAndMirror wrote the model's fresh reading onto the document;
+          // a person's carried corrections follow it there, as after an edit.
+          if (carriedPersonFields(item.extracted_data)) {
+            await mirrorCorrectedReadingToDocument({
+              documentId: item.document_id,
+              companyId: ctx.companyId,
+              reading: extracted as unknown as Record<string, unknown>,
+            })
+          }
+
           if (item.correlation_id) {
             try {
               await appendProcessingHistory({
@@ -934,6 +1074,9 @@ export const invoiceInboxExtension: Extension = {
               console.error('[invoice-inbox/retry-extraction] history append failed:', logErr)
             }
           }
+
+          // The new reading may be paid by another bank row, or by none.
+          await proposeBankMatchForInboxItem(ctx.supabase, ctx.companyId, id, extensionLog)
 
           return NextResponse.json({ data: { extracted_data: extracted } })
         } catch (error) {
@@ -1747,6 +1890,22 @@ export const invoiceInboxExtension: Extension = {
           }
         }
 
+        // The mail itself, per company that took it in: sender, text,
+        // headers and the whole .eml. After the filing so what it produced is
+        // known; best effort, it never changes the answer below.
+        await recordInboundMailArrivals(serviceSupabase, {
+          email: fullEmail,
+          event: { email_id, from, to, subject, message_id, created_at },
+          targets: outcomes.map(({ target, outcome }) => ({
+            companyId: target.companyId,
+            inboxId: target.inboxId,
+            tags: target.tags,
+            reason: outcome.reason,
+            inbox_item_id: outcome.inbox_item_id,
+            attachments: outcome.attachments,
+          })),
+        })
+
         if (outcomes.length === 1 && deferredTargets.length === 0) {
           const { processed, reason, inbox_item_id, results } = outcomes[0].outcome
           return NextResponse.json({
@@ -1926,7 +2085,7 @@ export const invoiceInboxExtension: Extension = {
 
         const { data: item, error: fetchError } = await ctx.supabase
           .from('invoice_inbox_items')
-          .select('id, document_id, status, created_supplier_invoice_id, created_journal_entry_id, matched_transaction_id, correlation_id, channel_context, extracted_data')
+          .select('id, document_id, status, created_supplier_invoice_id, created_journal_entry_id, matched_transaction_id, correlation_id, channel_context, extracted_data, bank_match_transaction_id, bank_match_basis')
           .eq('id', id)
           .eq('company_id', ctx.companyId)
           .maybeSingle()
@@ -2090,6 +2249,9 @@ export const invoiceInboxExtension: Extension = {
         // resolved while the bank line stayed open forever. Both are read and
         // checked above, so `transaction` is set whenever there is one.
         const bookedTransactionId = transaction?.id ?? null
+        // Booking the bank row match on arrival proposed for this item: its
+        // links keep the rule that proposed the pair as evidence.
+        const proposalEvidence = bankMatchLinkEvidence(item as BankMatchItemRow, bookedTransactionId)
 
         if (transaction) {
           // CAS on the pointer value read above (NULL, or a stale pointer at a
@@ -2103,7 +2265,7 @@ export const invoiceInboxExtension: Extension = {
               is_business: true,
               category: 'uncategorized',
               // The verifikat was booked for this bank row from the document.
-              ...linkBasisColumns('user_created'),
+              ...linkBasisColumns('user_created', proposalEvidence),
             })
             .eq('id', transaction.id)
             .eq('company_id', ctx.companyId)
@@ -2176,7 +2338,7 @@ export const invoiceInboxExtension: Extension = {
               item.document_id,
               journalEntry.id,
               // The verifikat was booked from this document.
-              linkBasisColumns('user_created')
+              linkBasisColumns('user_created', proposalEvidence)
             )
           } catch (err) {
             console.error('[invoice-inbox/book-direct] Document link failed:', err)
@@ -2521,6 +2683,9 @@ export const invoiceInboxExtension: Extension = {
       handler: async (_request: Request, ctx: ExtensionContext) => {
         try {
           const purchases = await fetchPurchasesWithoutUnderlag(ctx.supabase, ctx.companyId)
+          const logos = await vendorLogoUrls(
+            purchases.map((p) => ({ key: p.id, name: p.merchant_name || p.description, texts: [p.description] })),
+          )
 
           return NextResponse.json({
             data: {
@@ -2539,6 +2704,7 @@ export const invoiceInboxExtension: Extension = {
                   currency: p.currency,
                   amount_sek: p.amount_sek,
                   portal: portal ? { vendor: portal.vendor, url: portal.url, note: portal.note ?? null } : null,
+                  logo_url: logos.get(p.id) ?? null,
                 }
               }),
             },

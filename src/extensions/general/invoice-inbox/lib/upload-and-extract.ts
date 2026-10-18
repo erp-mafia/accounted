@@ -3,6 +3,8 @@ import { uploadDocument } from '@/lib/core/documents/document-service'
 import { INBOX_UPLOAD_TYPES } from '@/lib/documents/upload-types'
 import { extractInvoiceFields, emptyResult, fetchOwnCompanyIdentity } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
 import { mirrorExtractionToDocument } from '@/lib/documents/inbox-extraction/mirror-extraction'
+import { keepStoredPersonChoices } from '@/lib/documents/person-corrections'
+import { mirrorCorrectedReadingToDocument } from '@/lib/documents/reading-correction'
 import type { InboxKindHint } from './resend-inbound'
 import { getAiStatus } from '@/lib/ai'
 import { hasCapability } from '@/lib/entitlements/has-capability'
@@ -11,7 +13,8 @@ import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { routeClassifiedDocument, VOUCHER_TYPES } from './route-from-arkiv'
 import { matchSupplierId } from '@/lib/suppliers/match-supplier'
-import type { InvoiceExtractionResult } from '@/types'
+import { proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
+import type { InboxChannelContext, InvoiceExtractionResult } from '@/types'
 import path from 'node:path'
 
 // Verdicts decidable before touching the file. `ai_unconfigured` is the
@@ -196,6 +199,12 @@ function sanitiseCaption(raw: string | null | undefined): string | null {
 export interface ArchivedDocumentProcessingOptions {
   skipExtraction?: boolean
   channelMeta?: ChannelMeta
+  /**
+   * Provenance for a door that is not a chat (a partner delivery): written
+   * as the new row's channel_context when channelMeta is absent. An item
+   * adopted for duplicate content keeps its own.
+   */
+  channelContext?: InboxChannelContext
   /** Overrides the system actor id on the DocumentIngested history event.
    *  Omitted = today's behavior (resend-inbound for email, user otherwise). */
   actorId?: string
@@ -516,7 +525,7 @@ async function processArchivedDocumentInner(
         whatsapp_message_id: opts.channelMeta?.whatsappMessageId ?? null,
         channel_context: opts.channelMeta
           ? { channel: 'whatsapp', caption: sanitiseCaption(opts.channelMeta.caption) }
-          : null,
+          : (opts.channelContext ?? null),
       })
       .select('*')
       .single()
@@ -614,7 +623,7 @@ async function processArchivedDocumentInner(
       whatsapp_message_id: opts.channelMeta?.whatsappMessageId ?? null,
       channel_context: opts.channelMeta
         ? { channel: 'whatsapp', caption: sanitiseCaption(opts.channelMeta.caption) }
-        : null,
+        : (opts.channelContext ?? null),
     })
     .select('*')
     .single()
@@ -654,6 +663,10 @@ async function processArchivedDocumentInner(
   } catch (err) {
     console.error('[invoice-inbox] Failed to append DocumentExtractionAttempted:', err)
   }
+
+  // Match on arrival: a bank row that already paid it becomes a proposal on
+  // the item, never a booking. Best effort, logged inside.
+  await proposeBankMatchForInboxItem(supabase, companyId, inbox.id)
 
   return {
     document_id: doc.id,
@@ -747,13 +760,17 @@ function scheduleDeferredExtraction(job: DeferredExtractionJob): void {
         extracted.supplier,
       )
 
+      // A person may have corrected a field and chosen a purchase category
+      // while the row waited; what they decided is final and rides along.
+      const { reading, carriedFields } = await keepStoredPersonChoices(supabase, job.itemId, job.companyId, extracted)
+
       // CAS: only the row still waiting on THIS worker flips. A user retry
       // or the sweep cron may have claimed it first; their result wins.
       const { data: claimed, error: updateError } = await supabase
         .from('invoice_inbox_items')
         .update({
           status: 'received',
-          extracted_data: extracted as unknown as Record<string, unknown>,
+          extracted_data: reading as unknown as Record<string, unknown>,
           extraction_skipped: extractionSkipped,
           matched_supplier_id: matchedSupplierId,
         })
@@ -773,6 +790,15 @@ function scheduleDeferredExtraction(job: DeferredExtractionJob): void {
         model,
         skipped: skipReason,
       })
+      // The document holds the model's reading now; a person's carried
+      // corrections follow it there, as after an edit.
+      if (carriedFields) {
+        await mirrorCorrectedReadingToDocument({
+          documentId: job.documentId,
+          companyId: job.companyId,
+          reading: reading as unknown as Record<string, unknown>,
+        })
+      }
 
       try {
         await appendProcessingHistory({
@@ -798,6 +824,9 @@ function scheduleDeferredExtraction(job: DeferredExtractionJob): void {
       } catch (err) {
         console.error('[invoice-inbox] Failed to append DocumentExtractionAttempted:', err)
       }
+
+      // Match on arrival, now that the item has its reading.
+      await proposeBankMatchForInboxItem(supabase, job.companyId, job.itemId)
     } catch (err) {
       console.error('[invoice-inbox] Deferred extraction worker crashed:', err)
       // Best-effort flip so the row does not sit in 'processing' until the

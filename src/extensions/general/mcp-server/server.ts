@@ -378,10 +378,19 @@ import { findSupplierCandidates, type SupplierRow } from './supplier-candidates'
 import { creditNoteHandoff } from './inbox-credit-note'
 import { resolveInboxKind } from '@/lib/documents/inbox-kind'
 import { resolveInboxAddress } from '@/lib/documents/inbox-address'
+import { intakeSourceForInboxItem, type IntakeSourceId } from '@/lib/intake/sources'
+import { loadDocumentReading } from '@/lib/documents/reading/load'
+import { peppolReader } from '@/lib/invoices/peppol-reading'
+import { readInboxBankMatch, type BankMatch, type BankMatchItemRow } from '@/lib/documents/inbox-bank-match'
+import { proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
+import type { ReadingItemRow } from '@/lib/documents/reading/resolve'
+import type { DocumentReading } from '@/lib/documents/reading/types'
 import { isPeriodLocked } from '@/lib/documents/underlag-import'
 import { documentHeldElsewhereReasonEn } from '@/lib/documents/link-holder'
 import { checkDocumentLink } from '@/lib/documents/link-document'
 import { resolveInboxCreditTarget } from '@/lib/supplier-invoices/credit-target'
+import { resolveInboxPurchaseCategories } from '@/lib/categories/inbox-purchase-category'
+import { keepPersonChoices } from '@/lib/documents/person-corrections'
 import { CreditSupplierInvoiceInputSchema, creditSupplierInvoice } from '@/lib/supplier-invoices/credit'
 import { resolveSupplierInvoiceReverseCharge } from '@/lib/supplier-invoices/create'
 import { OperationError, throwOutcomeFailure } from '@/lib/operations/errors'
@@ -586,7 +595,11 @@ import {
   DOCUMENTS_BUCKET,
 } from '@/lib/core/documents/document-service'
 import { toSameOriginStorageUrl } from '@/lib/core/documents/storage-proxy'
+import { apiKeyArrivalActor, readInboxItemArrivals, recordDocumentArrival, type ArrivalActor } from '@/lib/intake/arrivals'
+import { DOCUMENT_DETAIL_PARTS, parseDocumentDetailParts, readDocumentDetail } from '@/lib/documents/read/document-detail'
+import { readTransactionWithVouchers } from '@/lib/transactions/read-with-vouchers'
 import { createArkivTools } from './arkiv-tools'
+import { createPurchaseCategoryTools } from './purchase-category-tools'
 import { createOperationTools, toolOutputSchema } from './operation-tools'
 import { ALL_OPERATIONS, OPERATIONS } from '@/lib/operations/registry'
 import { startPackageForTool } from '@/lib/modules/package-doors'
@@ -595,6 +608,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { ExtractionSchema as InvoiceExtractionSchema, AgentExtractionSchema, fetchOwnCompanyIdentity } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
 import { extractAndMirror } from '@/lib/documents/inbox-extraction/extract-and-mirror'
 import { mirrorExtractionToDocument } from '@/lib/documents/inbox-extraction/mirror-extraction'
+import { mirrorCorrectedReadingToDocument } from '@/lib/documents/reading-correction'
 import { emptyResult } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
 // Skatteverket filing tools (PR5). Cross-extension lib import, same sanctioned
 // pattern as invoice-inbox above: the CI guard only checks lib/, app/api/,
@@ -1398,6 +1412,8 @@ interface DocumentInboxResult {
   matched_supplier_id: string | null
   /** The bytes were already in the archive: this is the existing document, nothing new was created. */
   deduplicated?: boolean
+  /** With deduplicated: the archived document the bytes already are (the same id as document_id). */
+  duplicate_of?: string
   /** No AI reading was made (the company lacks the AI capability): extracted_data is the empty skeleton. */
   extraction_skipped?: boolean
 }
@@ -1419,6 +1435,29 @@ function embeddedDocumentFileName(embed: unknown): string | null {
 function embeddedDocumentJournalEntryId(embed: unknown): string | null {
   const attachment = (Array.isArray(embed) ? embed[0] : embed) as { journal_entry_id?: string | null } | null | undefined
   return attachment?.journal_entry_id ?? null
+}
+
+/**
+ * The canonical door an inbox row came through (lib/intake/sources.ts), from
+ * its source, its channel_context (whole, or the intake_stamp/intake_channel
+ * JSON paths a list selects) and the upload_source of its embedded document.
+ */
+function inboxRowIntakeSource(row: {
+  source?: unknown
+  channel_context?: unknown
+  intake_stamp?: unknown
+  intake_channel?: unknown
+  document_attachments?: unknown
+}): IntakeSourceId | null {
+  const embed = row.document_attachments
+  const attachment = (Array.isArray(embed) ? embed[0] : embed) as { upload_source?: string | null; file_name?: string | null } | null | undefined
+  const context = (row.channel_context ?? { intake_source: row.intake_stamp, channel: row.intake_channel }) as { intake_source?: unknown; channel?: unknown }
+  return intakeSourceForInboxItem({
+    source: typeof row.source === 'string' ? row.source : null,
+    channel_context: context,
+    document_upload_source: attachment?.upload_source ?? null,
+    document_file_name: attachment?.file_name ?? null,
+  })
 }
 
 /**
@@ -1445,6 +1484,7 @@ async function alreadyArchivedResult(supabase: SupabaseClient, companyId: string
     extracted_data: item?.extracted_data ?? {},
     matched_supplier_id: item?.matched_supplier_id ?? null,
     deduplicated: true,
+    duplicate_of: documentId,
   }
 }
 
@@ -1473,6 +1513,39 @@ async function findCompletedDocumentInboxItem(
     extracted_data: (data.extracted_data ?? {}) as Record<string, unknown>,
     matched_supplier_id: data.matched_supplier_id,
   }
+}
+
+/** Who fetched an MCP upload, in the arrival's actor shape. */
+function mcpArrivalActor(actor: ActorContext | undefined, userId: string): ArrivalActor {
+  if (actor?.serviceAccountId) {
+    return apiKeyArrivalActor({ userId, apiKeyId: actor.id, serviceAccount: { id: actor.serviceAccountId, name: actor.label ?? '' } })
+  }
+  const type: ArrivalActor['type'] =
+    actor?.type === 'mcp_oauth' || actor?.type === 'user' || actor?.type === 'cron' ? actor.type : 'api_key'
+  return {
+    type,
+    user_id: userId,
+    ...(actor?.id && (type === 'api_key' || type === 'mcp_oauth') ? { api_key_id: actor.id } : {}),
+    ...(actor?.label ? { label: actor.label } : {}),
+  }
+}
+
+/** Record how an MCP upload came in (best effort), then hand the result on. */
+async function withMcpUploadArrival(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  actor: ActorContext | undefined,
+  result: DocumentInboxResult,
+): Promise<DocumentInboxResult> {
+  await recordDocumentArrival(supabase, {
+    companyId,
+    source: 'mcp',
+    documentId: result.document_id,
+    inboxItemId: result.inbox_item_id,
+    fetchedBy: mcpArrivalActor(actor, userId),
+  })
+  return result
 }
 
 async function createDocumentInboxItem(
@@ -1534,6 +1607,8 @@ async function createDocumentInboxItem(
       user_id: userId,
       status: 'received',
       source: 'upload',
+      // The door, which source 'upload' over an 'api' document cannot name by itself (lib/intake/sources.ts).
+      channel_context: { intake_source: 'mcp' },
       document_id: documentId,
       extracted_data: extracted as unknown as Record<string, unknown>,
       extraction_skipped: !aiEntitled,
@@ -7645,6 +7720,47 @@ export const tools: McpTool[] = [
       })
       const total = result.total_count ?? 0
       return { transactions: rows, ...pageTail(rows, total, offset) }
+    },
+  },
+
+  {
+    name: 'gnubok_get_transaction',
+    keywords: ['banktransaktion', 'transaktion', 'bokförd transaktion', 'verifikat för transaktion', 'underlag för transaktion', 'vad bokades'],
+    title: 'Get Transaction',
+    description:
+      'One bank transaction, booked or not: its fields, every verifikat that books it (pointer, bulk link or batch payment) with its lines, and every document on it or on them. Read a document with gnubok_get_document_content.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        transaction_id: { type: 'string', format: 'uuid' },
+      },
+      required: ['transaction_id'],
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        transaction_id: { type: 'string' },
+        booked: { type: 'boolean' },
+        verifikat: { type: 'array', items: { type: 'object' } },
+        documents: { type: 'array', items: { type: 'object' } },
+      },
+      required: ['transaction_id', 'booked', 'verifikat', 'documents'],
+    },
+    annotations: ANNOTATIONS_READ_ONLY,
+    // Search-only: costs tools/list nothing, reached through gnubok_call_tool.
+    catalogVisibility: 'search',
+    async execute(args, companyId, _userId, supabase) {
+      const transactionId = typeof args.transaction_id === 'string' ? args.transaction_id.trim() : ''
+      if (!transactionId) throw badArgument('transaction_id', 'transaction_id is required')
+      if (!UUID_RE.test(transactionId)) {
+        throw codedRefusal('NOT_FOUND', `Transaction not found: ${transactionId} is not a transaction id (a UUID).`)
+      }
+      const transaction = await readTransactionWithVouchers(supabase, companyId, transactionId)
+      if (!transaction) {
+        throw codedRefusal('NOT_FOUND', `Transaction not found: no bank transaction with id ${transactionId} in this company.`)
+      }
+      return transaction
     },
   },
 
@@ -15329,7 +15445,7 @@ export const tools: McpTool[] = [
       required: ['document_id', 'status'],
     },
     annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
-    async execute(args, companyId, userId, supabase) {
+    async execute(args, companyId, userId, supabase, actor) {
       const uploadId = args.upload_id as string
       const fileName = args.file_name as string
       const mimeType = resolveMcpDocumentMimeType(fileName, args.mime_type)
@@ -15352,8 +15468,10 @@ export const tools: McpTool[] = [
         undefined,
         { extractionOwner: 'invoice-inbox', dedupeByContent: true },
       )
-      if (completed.document.deduplicated) return alreadyArchivedResult(supabase, companyId, completed.document.id)
-      return createDocumentInboxItem(
+      if (completed.document.deduplicated) {
+        return withMcpUploadArrival(supabase, companyId, userId, actor, await alreadyArchivedResult(supabase, companyId, completed.document.id))
+      }
+      return withMcpUploadArrival(supabase, companyId, userId, actor, await createDocumentInboxItem(
         supabase,
         companyId,
         userId,
@@ -15362,7 +15480,7 @@ export const tools: McpTool[] = [
         completed.document.mime_type ?? mimeType,
         Buffer.from(completed.buffer),
         uploadId,
-      )
+      ))
     },
   },
 
@@ -15385,7 +15503,7 @@ export const tools: McpTool[] = [
       type: 'object',
       properties: {
         document_id: { type: 'string' },
-        inbox_item_id: { type: 'string' },
+        inbox_item_id: { type: ['string', 'null'] },
         status: { type: 'string' },
         extracted_data: { type: 'object' },
         matched_supplier_id: { type: ['string', 'null'] },
@@ -15393,7 +15511,7 @@ export const tools: McpTool[] = [
       required: ['document_id', 'inbox_item_id', 'status'],
     },
     annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
-    async execute(args, companyId, userId, supabase) {
+    async execute(args, companyId, userId, supabase, actor) {
       const fileName = args.file_name as string
       const base64Content = args.file_content_base64 as string
       const mimeType = resolveMcpDocumentMimeType(fileName, args.mime_type)
@@ -15403,12 +15521,19 @@ export const tools: McpTool[] = [
         throw new Error(`File too large (max ${MAX_DOCUMENT_SIZE / 1024 / 1024} MB)`)
       }
 
+      // Content dedupe, as gnubok_complete_document_upload: the upload is
+      // free-floating (no verifikat named), so the same bytes again are the
+      // archived document, not a second one with a second inbox item. A second
+      // verifikat on the same underlag is gnubok_link_document_to_voucher with
+      // copy: true.
       const doc = await uploadDocument(supabase, userId, companyId, {
         name: fileName,
         buffer: buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
         type: mimeType,
-      }, { upload_source: 'api', extractionOwner: 'invoice-inbox' })
-      return createDocumentInboxItem(
+      }, { upload_source: 'api', extractionOwner: 'invoice-inbox', dedupeByContent: true })
+      // A repeat is still a delivery: its arrival lands on the archived copy ("Kom även via").
+      if (doc.deduplicated) return withMcpUploadArrival(supabase, companyId, userId, actor, await alreadyArchivedResult(supabase, companyId, doc.id))
+      return withMcpUploadArrival(supabase, companyId, userId, actor, await createDocumentInboxItem(
         supabase,
         companyId,
         userId,
@@ -15416,7 +15541,7 @@ export const tools: McpTool[] = [
         fileName,
         doc.mime_type ?? mimeType,
         buffer,
-      )
+      ))
     },
   }),
 
@@ -15495,7 +15620,8 @@ export const tools: McpTool[] = [
         .select(`
           id, status, source, created_at, extracted_data, matched_supplier_id,
           matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id,
-          email_from, email_subject, error_message, document_attachments(file_name, journal_entry_id)
+          email_from, email_subject, error_message, document_attachments(file_name, journal_entry_id, upload_source),
+          intake_stamp:channel_context->>intake_source, intake_channel:channel_context->>channel
         `)
         .eq('company_id', companyId)
         .order('created_at', { ascending: false })
@@ -15552,6 +15678,7 @@ export const tools: McpTool[] = [
           id: item.id,
           status: item.status,
           source: item.source,
+          intake_source: inboxRowIntakeSource(item),
           created_at: item.created_at,
           file_name: embeddedDocumentFileName(item.document_attachments),
           vendor_name: vendorName,
@@ -15583,8 +15710,12 @@ export const tools: McpTool[] = [
         nextCursor = `${last.created_at}__${last.id}`
       }
 
+      // What each item bought, computed at read time (null when ambiguous).
+      const pageIds = new Set(items.map((i) => i.id))
+      const purchaseCategories = await resolveInboxPurchaseCategories(supabase, companyId, (data || []).filter((row) => pageIds.has(row.id)))
+
       return {
-        items,
+        items: items.map((i) => ({ ...i, purchase_category: purchaseCategories.get(i.id) ?? null })),
         count: items.length,
         ...(nextCursor ? { next_cursor: nextCursor } : {}),
         // Where mail lands that becomes these items (crm#1174): the list is
@@ -15614,7 +15745,7 @@ export const tools: McpTool[] = [
 
       const { data, error } = await supabase
         .from('invoice_inbox_items')
-        .select('*, document_attachments(id, file_name, mime_type, file_size_bytes, created_at)')
+        .select('*, document_attachments(id, file_name, mime_type, file_size_bytes, created_at, upload_source)')
         .eq('id', id)
         .eq('company_id', companyId)
         .single()
@@ -15622,9 +15753,34 @@ export const tools: McpTool[] = [
       if (error) throw dbError(error)
       if (!data) throw new Error('Inbox item not found')
 
-      return data
+      // How it came in: each delivery's sender, text and the original as it came.
+      const arrivals = await readInboxItemArrivals(supabase, companyId, data, { rewriteUrl: toSameOriginStorageUrl })
+      const purchaseCategories = await resolveInboxPurchaseCategories(supabase, companyId, [data])
+      // The one reading (lib/documents/reading): every field with its source
+      // and evidence level. Undeclared in the outputSchema, which costs the
+      // tools/list budget nothing, and best effort: a failed reading leaves
+      // it null rather than failing the item.
+      let reading: DocumentReading | null = null
+      try {
+        reading = await loadDocumentReading(supabase, companyId, { item: data as ReadingItemRow }, peppolReader)
+      } catch (err) {
+        log.warn('get_inbox_item: reading failed', { inboxItemId: id, err: err instanceof Error ? err.message : String(err) })
+      }
+      // Match on arrival: the bank row it looks already paid by, re-checked
+      // now; a proposal, never a booking. Undeclared like the reading (the
+      // tools/list budget is full), and null when it cannot be read.
+      let bankMatch: BankMatch | null = null
+      try {
+        bankMatch = await readInboxBankMatch(supabase, companyId, data as BankMatchItemRow)
+      } catch (err) {
+        log.warn('get_inbox_item: bank match failed', { inboxItemId: id, err: err instanceof Error ? err.message : String(err) })
+      }
+
+      return { ...data, intake_source: inboxRowIntakeSource(data), arrivals, purchase_category: purchaseCategories.get(data.id) ?? null, reading, bank_match: bankMatch }
     },
   },
+
+  ...createPurchaseCategoryTools({ readOnly: ANNOTATIONS_READ_ONLY }),
 
   {
     name: 'gnubok_create_supplier_invoice_from_inbox',
@@ -16732,14 +16888,21 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_document_content',
-    keywords: ['dokument', 'underlag', 'kvitto', 'läs underlag'],
+    keywords: ['dokument', 'underlag', 'kvitto', 'läs underlag', 'dokumenttext', 'vad är detta dokument', 'kom in via'],
     title: 'Get Document Content',
-    description: 'Get a 5-minute signed download URL for a document so the agent can read its contents (e.g. with vision). Use after gnubok_list_unmatched_documents to inspect a specific PDF before deciding which transaction it matches.',
+    // include and its paging pay for themselves in tools/list
+    // (payload-size.bench.test.ts): document_id lost its restating note,
+    // the output its required list, and what the parts carry is said in
+    // the response (text.hint, reading.note, notice), declared nowhere.
+    description: "A document's 5-minute signed URL (vision). include adds page text (from_page, max_chars), type and model reading, links (verifikat, bank, inbox, supplier invoice), arrivals.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        document_id: { type: 'string', description: 'UUID of the document_attachments row' },
+        document_id: { type: 'string' },
+        include: { type: 'array', items: { type: 'string', enum: [...DOCUMENT_DETAIL_PARTS] } },
+        from_page: { type: 'integer' },
+        max_chars: { type: 'integer' },
       },
       required: ['document_id'],
     },
@@ -16753,16 +16916,25 @@ export const tools: McpTool[] = [
         signed_url: { type: 'string' },
         expires_at: { type: 'string' },
       },
-      required: ['document_id', 'file_name', 'signed_url', 'expires_at'],
     },
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
       const documentId = args.document_id as string
       if (!documentId) throw badArgument('document_id', 'document_id is required')
+      const { parts, invalid } = parseDocumentDetailParts(args.include)
+      if (invalid.length > 0) {
+        throw badArgument('include', `include: unknown part ${invalid.join(', ')}. Valid parts: ${DOCUMENT_DETAIL_PARTS.join(', ')}.`)
+      }
+      for (const field of ['from_page', 'max_chars'] as const) {
+        const value = args[field]
+        if (value !== undefined && (typeof value !== 'number' || !Number.isInteger(value) || value < 1)) {
+          throw badArgument(field, `${field} must be a positive integer`)
+        }
+      }
 
       const { data: doc, error: docError } = await supabase
         .from('document_attachments')
-        .select('id, file_name, mime_type, file_size_bytes, storage_path')
+        .select('id, file_name, mime_type, file_size_bytes, storage_path, original_id, page_count, pages_read_at, read_error, doc_type, admission_state, extracted_data, extracted_at, extraction_model, journal_entry_id, journal_entry_line_id')
         .eq('id', documentId)
         .eq('company_id', companyId)
         .maybeSingle()
@@ -16781,6 +16953,30 @@ export const tools: McpTool[] = [
 
       const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString()
 
+      // The opt-in parts, undeclared in the outputSchema (open at the top):
+      // the same service GET /api/v1/.../documents/{id}?include= answers from.
+      const detail = await readDocumentDetail(supabase, companyId, {
+        id: doc.id,
+        original_id: doc.original_id ?? null,
+        mime_type: doc.mime_type ?? null,
+        page_count: doc.page_count ?? null,
+        pages_read_at: doc.pages_read_at ?? null,
+        read_error: doc.read_error ?? null,
+        doc_type: doc.doc_type ?? null,
+        admission_state: doc.admission_state ?? null,
+        extracted_data: doc.extracted_data ?? null,
+        extracted_at: doc.extracted_at ?? null,
+        extraction_model: doc.extraction_model ?? null,
+        journal_entry_id: doc.journal_entry_id ?? null,
+        journal_entry_line_id: doc.journal_entry_line_id ?? null,
+      }, {
+        include: parts,
+        fromPage: args.from_page as number | undefined,
+        maxChars: args.max_chars as number | undefined,
+        rewriteUrl: toSameOriginStorageUrl,
+        hints: { file: 'signed_url', readNow: 'gnubok_read_document reads it now (a scan or photo by the model)' },
+      })
+
       return {
         document_id: doc.id,
         file_name: doc.file_name,
@@ -16788,6 +16984,7 @@ export const tools: McpTool[] = [
         size_bytes: doc.file_size_bytes,
         signed_url: toSameOriginStorageUrl(signed.signedUrl),
         expires_at: expiresAt,
+        ...detail,
       }
     },
   },
@@ -25313,11 +25510,11 @@ export const tools: McpTool[] = [
       // can render the provenance differently (ISO 27001 A.8.12).
       // AgentExtractionSchema (unlike InvoiceExtractionSchema) preserves
       // accountSuggestion so agents can pin a BAS cost account per line.
-      const extracted = { ...parsed, confidence: 0.95 }
+      const agentReading = { ...parsed, confidence: 0.95 }
 
       const { data: item, error: fetchError } = await supabase
         .from('invoice_inbox_items')
-        .select('id, company_id, created_supplier_invoice_id')
+        .select('id, company_id, created_supplier_invoice_id, document_id, extracted_data')
         .eq('id', inboxItemId)
         .eq('company_id', companyId)
         .maybeSingle()
@@ -25333,6 +25530,10 @@ export const tools: McpTool[] = [
       if (item.created_supplier_invoice_id) {
         throw new Error('Inbox item is already linked to a supplier invoice and cannot be modified')
       }
+      // What a person decided is final: the replacement carries their
+      // corrected fields and their purchase category (the schema strips any
+      // purchaseCategory or personFields an agent sends).
+      const extracted = keepPersonChoices(item.extracted_data, agentReading)
 
       // Re-run supplier match so agent-supplied fields trigger the same
       // auto-link the AI path does (org-nr → VAT number → name, ILIKE).
@@ -25348,6 +25549,14 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
 
       if (updateError) throw new Error(`Failed to update inbox item: ${updateError.message}`)
+
+      // The document row's reading follows (Arkiv, the classifier and the
+      // agent intents read it there). Best effort: a locked period is skipped.
+      await mirrorCorrectedReadingToDocument({
+        documentId: (item as { document_id?: string | null }).document_id,
+        companyId,
+        reading: extracted as unknown as Record<string, unknown>,
+      })
 
       // Audit the BYO override so financial-data provenance is traceable
       // (GDPR Art. 5(1)(f), SOC 2 CC9.2). Failure must not block the user
@@ -25377,6 +25586,9 @@ export const tools: McpTool[] = [
       } catch (auditErr) {
         log.warn('Failed to append DocumentExtractionOverridden audit event', auditErr)
       }
+
+      // Match on arrival looks in the bank again for the corrected reading.
+      await proposeBankMatchForInboxItem(supabase, companyId, inboxItemId, log)
 
       return {
         inbox_item_id: inboxItemId,

@@ -36,7 +36,8 @@ export function PageHeader({ title, description, action, help }: PageHeaderProps
           <p data-ph-unmask="" className="page-header-desc text-muted-foreground mt-1 text-balance">{description}</p>
         )}
       </div>
-      {action && <div className="page-header-action w-full sm:w-auto [&>*]:w-full [&>*]:sm:w-auto">{action}</div>}
+      {/* ml-auto: at the bar's end edge on a phone too, where the row is not spread. */}
+      {action && <div className="page-header-action ml-auto w-full sm:w-auto [&>*]:w-full [&>*]:sm:w-auto">{action}</div>}
     </div>
   )
 }

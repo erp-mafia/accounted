@@ -1,0 +1,1 @@
+[2026-10-15] The purchase-category override ships on the dashboard and v1, not MCP: an MCP write must stage, a new pending type needs a pending_operations CHECK migration this slice may not carry, and a listed direct write costs the zero-headroom tools/list budget.

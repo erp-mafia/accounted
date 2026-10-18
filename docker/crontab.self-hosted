@@ -66,6 +66,7 @@
 0 5 * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/peppol/daily-report/cron
 */15 * * * *        curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/payments/orders/status/cron
 45 5 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/parties/resolver/cron
+20 * * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/vendor-logos/cron
 */5 * * * *         curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/documents/read/cron
 2-59/5 * * * *      curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/documents/classify/cron
 * * * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/documents/jobs/cron

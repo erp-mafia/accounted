@@ -1,0 +1,1 @@
+[2026-10-17] Vendor logos are fetched once per domain by our server from the brand's own site into our logos bucket: replaces the 2026-08-31 logo.dev choice (rehosting needs Enterprise) and the 2026-08-31 achromatic tile (founder asked for coloured logos 2026-10-17).

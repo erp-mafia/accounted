@@ -26,6 +26,8 @@ interface Tracked {
   failed: string | null
   done: boolean
   leaving: boolean
+  /** The bytes were already in the archive: the row tracks that document, nothing new was stored. */
+  duplicate?: boolean
 }
 
 const POLL_MS = 1500
@@ -88,10 +90,13 @@ export function UploadDrop({ onLanded, className }: { onLanded?: (view: Pipeline
           const fd = new FormData()
           fd.append('file', file)
           fd.append('upload_source', 'file_upload')
+          // Free-floating: the same file dropped again is the document already archived, not a second copy (and a second
+          // receipt in Underlag). Uploads aimed at a verifikat keep their own copy (POST /api/documents).
+          fd.append('dedupe_by_content', 'true')
           const res = await fetch('/api/documents', { method: 'POST', body: fd })
           if (!res.ok) throw new Error(String(res.status))
-          const { data } = (await res.json()) as { data: { id: string } }
-          patch(key, { documentId: data.id })
+          const { data } = (await res.json()) as { data: { id: string; deduplicated?: boolean } }
+          patch(key, { documentId: data.id, duplicate: data.deduplicated === true })
           void track(key, data.id)
         } catch {
           patch(key, { failed: t('upload_failed') })
@@ -181,6 +186,7 @@ export function UploadDrop({ onLanded, className }: { onLanded?: (view: Pipeline
                   {r.view?.title && r.view.title !== r.fileName ? r.view.title : r.fileName}
                 </span>
                 {type ? <Badge variant="secondary">{type}</Badge> : null}
+                {r.duplicate ? <span className="text-xs text-muted-foreground">{t('upload_already_archived')}</span> : null}
                 {r.failed ? (
                   <span className="text-attn">{r.failed}</span>
                 ) : r.done && r.view?.landed ? (

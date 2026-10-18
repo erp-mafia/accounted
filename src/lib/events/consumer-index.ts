@@ -77,7 +77,7 @@ const INDEX: Partial<Record<CoreEventType, readonly string[]>> = {
   'supplier_invoice.uncredited': ['event-log', 'webhooks'],
   'transaction.categorized': ['event-log', 'webhooks', 'suggestion-detectors'],
   'transaction.reconciled': ['event-log', 'webhooks'],
-  'transaction.synced': ['event-log'],
+  'transaction.synced': ['event-log', 'inbox-bank-match'],
   'woocommerce.connected': ['suggestion-detectors'],
   'zettle.connected': ['suggestion-detectors'],
 }

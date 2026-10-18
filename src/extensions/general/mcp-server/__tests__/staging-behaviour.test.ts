@@ -940,6 +940,12 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   gnubok_unmatch_inbox_item_transaction: {
     rows: { invoice_inbox_items: { document_id: SOME_UUID, matched_transaction_id: SOME_UUID } },
   },
+  // An item with its own reading, not yet a supplier invoice; the code is a
+  // taxonomy code (the synthesized 'test' is refused by the enum).
+  gnubok_set_inbox_purchase_category: {
+    args: { code: 'expense.software.saas' },
+    rows: { invoice_inbox_items: { extracted_data: { supplier: { name: 'Leverantör AB' } }, created_supplier_invoice_id: null } },
+  },
   // Årsredovisning workflow (wave 4): a period of the company with no
   // registrerad submission and no duplicate signer; the version model is the
   // fixed one mocked at the top.

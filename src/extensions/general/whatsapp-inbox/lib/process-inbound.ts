@@ -29,6 +29,7 @@ import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { computeSHA256 } from '@/lib/core/documents/document-service'
 import { createLogger } from '@/lib/logger'
 import { uploadAndExtract } from '@/extensions/general/invoice-inbox/lib/upload-and-extract'
+import { recordWhatsAppArrival } from './arrival'
 import type {
   InboxChannelContext,
   InvoiceExtractionResult,
@@ -647,6 +648,8 @@ async function processMediaMessage(
       .limit(1)
       .maybeSingle()
     if (duplicate) {
+      // The receipt is already archived; the message still arrived.
+      await recordWhatsAppArrival(supabase, { row, link, companyId, documentId: (duplicate as { id: string }).id })
       await sendText(supabase, { to, body: copy.m4Duplicate(), template: TEMPLATE.m4Duplicate, ...replyBase })
       await markStatus(supabase, row.id, 'skipped', { errorMessage: 'Duplicate document (sha256)' })
       return { kind: 'media_processed', conversationId: conversation?.id ?? null }
@@ -669,6 +672,7 @@ async function processMediaMessage(
         },
       )
       inboxItemId = result.inbox_item_id
+      await recordWhatsAppArrival(supabase, { row, link, companyId, documentId: result.document_id, inboxItemId })
     } catch (uploadErr) {
       // invoice_inbox_items_whatsapp_msg is a unique index: a concurrent
       // worker that got there first is a success, not a failure.

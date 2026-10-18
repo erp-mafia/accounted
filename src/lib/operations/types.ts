@@ -47,6 +47,11 @@ export interface OperationContext {
   companyId: string
   userId: string
   log: Logger
+  /**
+   * Set only by the staged-operation commit path: this run is the approval
+   * of that pending operation, not a direct call through a door.
+   */
+  pendingOperationId?: string
 }
 
 /** A non-blocking note about a write that went through, in both languages. */

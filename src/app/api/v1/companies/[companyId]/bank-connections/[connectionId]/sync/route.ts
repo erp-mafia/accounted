@@ -143,6 +143,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; connectionI
     if (!services?.triggerConnectionSync) {
       return v1ErrorResponseFromCode('EXTENSION_DISABLED', ctx.log, {
         requestId: ctx.requestId,
+        details: { extension: 'enable-banking' },
       })
     }
 

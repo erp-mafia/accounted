@@ -474,11 +474,43 @@ export async function claimV1IdempotencyKey(
   }
 }
 
+/**
+ * A multipart body as the hash sees it: each part by name, a text part by its
+ * value, a file part by its name, type, size and SHA-256. Never the raw text:
+ * a client picks a fresh random boundary for every request it encodes, so a
+ * resent upload never matched the first one byte for byte and the documented
+ * retry (same key, same request) answered IDEMPOTENCY_KEY_REUSE instead of
+ * replaying. Parts are ordered by name (a stable sort, so repeated names keep
+ * their order).
+ */
+async function multipartForHash(form: FormData): Promise<{ multipart: Array<[string, unknown]> }> {
+  const parts: Array<[string, unknown]> = []
+  for (const [name, value] of form.entries()) {
+    if (typeof value === 'string') {
+      parts.push([name, value])
+      continue
+    }
+    const digest = await crypto.subtle.digest('SHA-256', await value.arrayBuffer())
+    const sha256 = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('')
+    parts.push([name, { file_name: value.name, type: value.type, size: value.size, sha256 }])
+  }
+  parts.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+  return { multipart: parts }
+}
+
 async function readBodyForHash(request: Request): Promise<{ body: unknown; cloned: Request }> {
   // We need the body to hash it, but the handler also needs it. Read from a
   // CLONE for the hash and pass the original through to the handler: that
   // way the handler's `await request.json()` still works regardless of how
   // the runtime implements stream teeing.
+  if (/^multipart\/form-data/i.test(request.headers.get('content-type') ?? '')) {
+    try {
+      return { body: await multipartForHash(await request.clone().formData()), cloned: request }
+    } catch {
+      // Not parseable as multipart: hash the raw text as before; the handler
+      // refuses the body itself.
+    }
+  }
   const reader = request.clone()
   const text = await reader.text()
   if (!text) return { body: null, cloned: request }

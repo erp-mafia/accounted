@@ -1,0 +1,1 @@
+[2026-10-16] Saknar underlag has no Inget underlag behövs: the only endpoint that records it marks a posted verifikat, and these bank purchases are unbooked; a mark on the bank row needs a founder decision and its own endpoint first.

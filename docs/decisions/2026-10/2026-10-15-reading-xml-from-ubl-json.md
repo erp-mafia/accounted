@@ -1,0 +1,1 @@
+[2026-10-15] The reading's xml source parses peppol_inbound_documents.ubl_json with the existing reader, not the archived XML: the JSON is the Access Point's rendering of the same document, and reading the XML would need a parser dependency.

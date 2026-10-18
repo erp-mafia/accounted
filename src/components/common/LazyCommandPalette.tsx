@@ -12,7 +12,7 @@ const CommandPalette = dynamic(() => import('./CommandPalette'), { ssr: false })
  * Once mounted, the palette's own global key listener takes over toggling;
  * this wrapper's listener only fires the first time.
  */
-export default function LazyCommandPalette() {
+export default function LazyCommandPalette({ inkorgV2Enabled = false }: { inkorgV2Enabled?: boolean }) {
   const [mounted, setMounted] = useState(false)
 
   useEffect(() => {
@@ -27,5 +27,5 @@ export default function LazyCommandPalette() {
     return () => document.removeEventListener('keydown', onKey)
   }, [mounted])
 
-  return mounted ? <CommandPalette initialOpen /> : null
+  return mounted ? <CommandPalette initialOpen inkorgV2Enabled={inkorgV2Enabled} /> : null
 }

@@ -23,6 +23,7 @@ export {
   categoryForTransactionCategory,
   isBusinessEventCategory,
   type BusinessEventCategory,
+  type BusinessEventCategoryKey,
 } from './categories'
 export {
   BusinessEventEvidenceSchema,

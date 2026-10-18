@@ -40,6 +40,7 @@ import { AttnLine } from '@/components/ui/attn-line'
 import { HelpPopover } from '@/components/ui/help-popover'
 import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttachments'
 import JournalEntryTransactionLinks from '@/components/bookkeeping/JournalEntryTransactionLinks'
+import BookingWhy from '@/components/bookkeeping/BookingWhy'
 import JournalEntryStatusBadge, { useSourceTypeLabels } from '@/components/bookkeeping/JournalEntryStatusBadge'
 import CorrectionEntryDialog from '@/components/bookkeeping/CorrectionEntryDialog'
 import CorrectOpeningBalanceDialog from '@/components/bookkeeping/CorrectOpeningBalanceDialog'
@@ -957,6 +958,11 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           variant="section"
         />
       </DetailSection>
+
+      {/* Därför bokades den så: who booked it, how and when, from the
+          recorded decision receipts; the detail starts collapsed. Booked
+          entries only: a draft has not been decided yet. */}
+      {(entry.status === 'posted' || entry.status === 'reversed') && <BookingWhy journalEntryId={entry.id} />}
 
       {/* Correction chain (storno/rättelse pairs). The explanatory copy sits
           behind the kicker's "?" instead of an always-visible info box. */}

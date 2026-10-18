@@ -83,6 +83,7 @@ export const SESSION_SEGMENT_PACKAGES: Readonly<Record<string, SwitchablePackage
   koppla: 'bank',
   arkiv: 'receipts-and-documents',
   'receipt-hunt': 'receipts-and-documents',
+  inkorg: 'receipts-and-documents',
   // Outside the switchable packages: Bokföring's own surface, the platform,
   // the agent, the byrå tools and the machine endpoints.
   account: null,
@@ -313,6 +314,8 @@ const CUSTOMER_INVOICES: PackageDoors = {
 const SUPPLIER_INVOICES_AND_PAYMENTS: PackageDoors = {
   start: [
     'POST /api/extensions/ext/invoice-inbox/items/:id/convert',
+    // The Inkorg's "Redan betald" registers a new supplier invoice and settles it in one step.
+    'POST /api/inkorg/items/:id/register-and-settle',
     'POST /api/supplier-invoices',
     'POST /api/v1/companies/:companyId/supplier-invoices',
     'op:inbox-items.convert-to-supplier-invoice',
@@ -402,6 +405,7 @@ const RECEIPTS_AND_DOCUMENTS: PackageDoors = {
     'POST /api/extensions/ext/invoice-inbox/items/:id/book-direct',
     'PATCH /api/extensions/ext/invoice-inbox/items/:id/fields',
     'POST /api/extensions/ext/invoice-inbox/items/:id/match-transaction',
+    'PUT /api/extensions/ext/invoice-inbox/items/:id/purchase-category',
     'POST /api/extensions/ext/invoice-inbox/items/:id/retry-extraction',
     'POST /api/extensions/ext/invoice-inbox/items/:id/suggest-booking',
     'POST /api/extensions/ext/invoice-inbox/items/:id/unmatch-transaction',
@@ -415,10 +419,12 @@ const RECEIPTS_AND_DOCUMENTS: PackageDoors = {
     'POST /api/extensions/ext/whatsapp-inbox/link/start',
     'POST /api/extensions/ext/whatsapp-inbox/link/unmute',
     'POST /api/receipt-hunt/run',
+    'POST /api/v1/companies/:companyId/inbox-items',
     'POST /api/v1/companies/:companyId/inbox-items/:id/stamp',
     'op:inbox-items.delete',
     'op:inbox-items.match-supplier',
     'op:inbox-items.match-transaction',
+    'op:inbox-items.set-purchase-category',
     'op:inbox-items.unmatch-transaction',
     'op:inbox-items.update-extracted-data',
     'mcp:gnubok_bulk_book_inbox_items',

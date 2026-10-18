@@ -13,6 +13,7 @@
  */
 import { z } from 'zod'
 import { matchInboxItemSupplier, matchInboxItemTransaction } from '@/lib/documents/inbox-match'
+import { proposeBankMatchForInboxItem } from './inbox-bank-match'
 import { defineOperation } from './types'
 
 const META = { request_id: 'req_…', api_version: '2026-05-12' }
@@ -56,6 +57,8 @@ export const inboxItemsMatchSupplier = defineOperation({
   run: async (ctx, { inbox_item_id, supplier_id }, { dryRun }) => {
     const outcome = await matchInboxItemSupplier(ctx, inbox_item_id, supplier_id, { dryRun })
     if (!outcome.ok || outcome.dryRun) return outcome
+    // The supplier's name and giro are part of what match on arrival compares.
+    await proposeBankMatchForInboxItem(ctx.supabase, ctx.companyId, inbox_item_id, ctx.log)
     return { ok: true, data: { inbox_item_id: outcome.data.id, matched_supplier_id: outcome.data.matched_supplier_id } }
   },
 })

@@ -1,0 +1,1 @@
+[2026-10-16] Inkorg expectations read cadence and door only from the company's bank rows, supplier invoices and where their documents arrived, never from Arkiv agreements or bank e-faktura text: the founder rule of 2026-09-27, and an e-faktura in the bank says nothing about Peppol.

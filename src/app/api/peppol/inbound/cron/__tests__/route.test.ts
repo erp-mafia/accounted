@@ -25,6 +25,10 @@ vi.mock('@/lib/invoices/peppol-inbound', () => ({
 vi.mock('@/lib/invoices/peppol-inbox-delivery', () => ({
   deliverPeppolDocumentToInbox: (...args: unknown[]) => deliverMock(...args),
 }))
+const proposeMock = vi.fn()
+vi.mock('@/lib/operations/inbox-bank-match', () => ({
+  proposeBankMatchForInboxItem: (...args: unknown[]) => proposeMock(...args),
+}))
 
 import { GET } from '../route'
 
@@ -110,8 +114,14 @@ describe('GET /api/peppol/inbound/cron', () => {
     expect(syncArgs.transport).toBe(transport)
     expect(reprocessArgs.transport).toBe(transport)
     expect(reprocessArgs.deliver).toBe(syncArgs.deliver)
+    deliverMock.mockResolvedValueOnce({ inboxItemId: 'item-1', xmlDocumentId: null })
     await reprocessArgs.deliver({ row: {}, companyId: 'c', document: {}, xml: null })
     expect(deliverMock).toHaveBeenCalledTimes(1)
+    // Match on arrival: the delivered e-invoice is checked against the bank at once.
+    expect(proposeMock).toHaveBeenCalledWith(expect.anything(), 'c', 'item-1', expect.anything())
+    deliverMock.mockResolvedValueOnce({ inboxItemId: null, xmlDocumentId: null, holdReason: 'awaiting_xml' })
+    await syncArgs.deliver({ row: {}, companyId: 'c', document: {}, xml: null })
+    expect(proposeMock).toHaveBeenCalledTimes(1)
 
     expect(logMock.info).toHaveBeenCalledWith('peppol inbound reprocess complete', expect.objectContaining({ candidates: 2, errors: 0 }))
     expect(logMock.error).not.toHaveBeenCalled()

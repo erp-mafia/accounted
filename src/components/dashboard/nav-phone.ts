@@ -53,6 +53,7 @@ export type NavLabelKey =
   | 'agent_knowledge'
   | 'kpi'
   | 'invoice_inbox'
+  | 'inkorg'
   | 'arkiv'
   | 'arkiv_all'
   | 'arkiv_history'
@@ -139,6 +140,10 @@ export interface NavItem {
   // Utlägg row: visible only when the company already has expense claims
   // (same "data stays reachable" gate as Körjournal). UI-visibility only.
   requiresExpenses?: boolean
+  // The new Inkorg page (/inkorg) and what it replaces (Underlag under
+  // Arbeta): per company while it rolls out (lib/inkorg/flag.ts).
+  requiresInkorgV2?: boolean
+  hiddenWithInkorgV2?: boolean
   // Paywall surfaces: hidden unless the active company holds this paid
   // capability. Cosmetic only, the page and API gates are the real
   // enforcement; this just keeps the sidebar honest for non-payers.
@@ -161,6 +166,9 @@ export const navItems: NavItem[] = [
   // Top section: flat list, always visible, no header. (Flöden joins here
   // when the flow engine exists.)
   { href: '/', module: 'platform', labelKey: 'home', icon: Home, group: 'top' },
+  // Inkorg right under Hem for the companies in its rollout, as on desktop;
+  // Underlag leaves Arbeta for the same companies.
+  { href: '/inkorg', module: 'inbox', labelKey: 'inkorg', icon: Inbox, group: 'top', requiresInkorgV2: true, requiredCapability: EXTENSION_REQUIRED_CAPABILITY['general/invoice-inbox'] },
   // Byrå cockpit (WL-14): the client list, byrå team members only.
   { href: '/clients', module: 'byra', labelKey: 'clients', icon: Briefcase, group: 'top', byraOnly: true },
   { href: '/chat', module: 'agent', labelKey: 'assistant', icon: Sparkles, group: 'top' },
@@ -168,7 +176,7 @@ export const navItems: NavItem[] = [
   // (Bokföring · Underlag · Transaktioner · Granskning), then the
   // transactional flows. Payroll shows where the company is offered it. #782
   { href: '/bookkeeping', module: 'ledger', labelKey: 'bookkeeping', icon: BookOpen, group: 'arbeta' },
-  { href: '/e/general/invoice-inbox', module: 'inbox', labelKey: 'invoice_inbox', icon: Inbox, group: 'arbeta', requiredCapability: EXTENSION_REQUIRED_CAPABILITY['general/invoice-inbox'] },
+  { href: '/e/general/invoice-inbox', module: 'inbox', labelKey: 'invoice_inbox', icon: Inbox, group: 'arbeta', requiredCapability: EXTENSION_REQUIRED_CAPABILITY['general/invoice-inbox'], hiddenWithInkorgV2: true },
   { href: '/transactions', module: 'transactions', labelKey: 'transactions', icon: ArrowLeftRight, group: 'arbeta' },
   { href: '/reconciliation', module: 'transactions', labelKey: 'reconciliation', icon: Scale, group: 'arbeta' },
   { href: '/pending', module: 'platform', labelKey: 'review', icon: ClipboardCheck, group: 'arbeta' },

@@ -9,13 +9,15 @@ import {
   DialogVeil,
   useDashShellInert,
 } from '@/components/ui/dialog'
-import NewSupplierInvoiceForm from '@/components/supplier-invoices/NewSupplierInvoiceForm'
+import NewSupplierInvoiceForm, { type SettleWithBankRow } from '@/components/supplier-invoices/NewSupplierInvoiceForm'
 
 interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
   /** Invoice-inbox item to convert; prefills the form from its AI extraction. */
   inboxItemId?: string | null
+  /** With an inbox item: the bank row that paid it, settled against on registration. */
+  settleWith?: SettleWithBankRow | null
   /**
    * Fired after a successful create. Hosts close the dialog and either
    * navigate to the invoice detail (id given) or refresh their list in place.
@@ -40,6 +42,7 @@ export default function NewSupplierInvoiceDialog({
   open,
   onOpenChange,
   inboxItemId,
+  settleWith = null,
   onCreated,
 }: Props) {
   const t = useTranslations('supplier_invoice_editor')
@@ -76,9 +79,11 @@ export default function NewSupplierInvoiceDialog({
           <DialogTitle>{t('page_title')}</DialogTitle>
         </DialogHeader>
         <NewSupplierInvoiceForm
-          key={inboxItemId ?? 'fresh'}
+          // A new bank row is a new form: the payer starts from it.
+          key={`${inboxItemId ?? 'fresh'}:${settleWith?.transactionId ?? ''}`}
           bare
           inboxItemId={inboxItemId}
+          settleWith={settleWith}
           onCreated={onCreated}
           onCancel={() => onOpenChange(false)}
         />

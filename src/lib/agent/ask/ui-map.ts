@@ -17,8 +17,7 @@ import {
   withOpenObligations,
   resolveCapabilities,
 } from '@/lib/modules/capabilities'
-import { isArkivSectionEnabled } from '@/lib/arkiv/flag'
-import { isAgentsPageEnabled } from '@/lib/agent-skills/flag'
+import { navRollouts } from '@/lib/navigation/nav-rollouts'
 import { getBranding } from '@/lib/branding/service'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { isEntityType } from '@/lib/company/entity-type'
@@ -133,8 +132,7 @@ export async function loadNavGateContext(
     hasMileage: (settings?.mileage_enabled ?? false) || navFlags.hasMileageTrips,
     hasExpenseClaims: navFlags.hasExpenseClaims,
     hasPosSales: navFlags.hasPosSales,
-    arkivEnabled: isArkivSectionEnabled(companyId),
-    agentsEnabled: isAgentsPageEnabled(companyId),
+    ...navRollouts(companyId),
     capabilities: entitlements.capabilities,
     hiddenNavHrefs: new Set(getBranding().hiddenNavHrefs),
   }

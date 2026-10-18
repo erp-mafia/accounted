@@ -1,0 +1,1 @@
+[2026-10-15] Partner deliveries count against the same per-company Inkorg quota as uploads (30/min, 500/day, 429 with Retry-After): each may cost an extraction. A business-key repeat is answered before the quota and spends none.

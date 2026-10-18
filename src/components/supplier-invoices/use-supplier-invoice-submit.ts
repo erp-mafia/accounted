@@ -40,6 +40,16 @@ export interface CreateResult {
       }
 }
 
+/** What POST /api/inkorg/items/:id/register-and-settle answers. */
+interface RegisterAndSettleResult extends Omit<CreateResult, 'data'> {
+  data?: {
+    supplier_invoice_id: string
+    arrival_number: number
+    settled: boolean
+    settlement_error: { code: string; message: string; message_en?: string } | null
+  }
+}
+
 interface UseSupplierInvoiceSubmitParams {
   t: ReturnType<typeof useTranslations>
   ta: ReturnType<typeof useTranslations>
@@ -58,6 +68,12 @@ interface UseSupplierInvoiceSubmitParams {
   invoiceNumberInputRef: RefObject<HTMLInputElement | null>
   /** After an utlägg booked: the host refreshes server data (the Utlägg nav gate). */
   onExpenseRegistered?: () => void
+  /**
+   * The bank row this inbox invoice was paid by, when the Inkorg already
+   * knows it (match on arrival). "Företaget" then needs no picker: the
+   * invoice is registered and settled against that row in one request.
+   */
+  settleTransactionId?: string | null
   /**
    * Focus router for the always-enabled primary: called instead of a toast
    * when a required field is missing (supplier, invoice number, row account),
@@ -95,6 +111,7 @@ export function useSupplierInvoiceSubmit({
   invoiceNumberInputRef,
   onExpenseRegistered,
   onMissingField,
+  settleTransactionId = null,
 }: UseSupplierInvoiceSubmitParams) {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [showReview, setShowReview] = useState(false)
@@ -306,10 +323,18 @@ export function useSupplierInvoiceSubmit({
     }
 
     if (data.payer === 'company') {
+      setPendingData(data)
+      if (settleTransactionId && inboxItemId) {
+        // The bank row is already known: no picker. AB reviews first, as
+        // after a pick; EF goes straight through.
+        setPendingTransactionId(settleTransactionId)
+        if (isEF) void handleRegisterAndSettle(data, settleTransactionId)
+        else setShowReview(true)
+        return
+      }
       // "Företaget" is register-and-match: open the bank-transaction picker;
       // the actual create happens on pick. For AB the review dialog is shown
       // after a transaction is picked.
-      setPendingData(data)
       setShowBankPicker(true)
       return
     }
@@ -388,10 +413,60 @@ export function useSupplierInvoiceSubmit({
     setIsSubmitting(false)
   }
 
+  // Registered and settled against the known bank row in one request
+  // (POST /api/inkorg/items/:id/register-and-settle). When the settlement
+  // fails the invoice stays registered and unpaid, and the toast says why.
+  async function handleRegisterAndSettle(data: SupplierInvoiceFormData, transactionId: string) {
+    if (!inboxItemId) return
+    setIsSubmitting(true)
+    await patchInboxFieldsIfChanged(data)
+    const res = await fetch(`/api/inkorg/items/${inboxItemId}/register-and-settle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transaction_id: transactionId, invoice: buildPayload(data) }),
+    })
+    const result = (await res.json()) as RegisterAndSettleResult
+    if (!res.ok || !result.data) {
+      setShowReview(false)
+      const failure: CreateResult = { error: result.error }
+      if (!tryHandleDuplicateConflict(res.status, failure)) handleCreateError(res.status, failure)
+      setIsSubmitting(false)
+      return
+    }
+    const answer = result.data
+    setShowReview(false)
+    setPendingTransactionId(null)
+    // Clear dirty state: see comment in handleDirectSubmit.
+    reset(data)
+    if (result.warnings?.some((warning) => warning.code === 'SUPPLIER_PAYEE_CHANGED' || warning.code === 'SUPPLIER_PAYEE_NEW')) {
+      toast({ title: t('payee_alert_toast_title'), description: t('payee_alert_toast_description') })
+    }
+    if (answer.settled) {
+      toast({
+        title: t('invoice_registered_and_matched_title'),
+        description: t('invoice_registered_and_matched_description', { number: answer.arrival_number }),
+      })
+    } else {
+      toast({
+        title: t('invoice_registered_match_failed_title'),
+        description: getErrorMessage({ error: answer.settlement_error }, { context: 'supplier_invoice' }),
+        variant: 'destructive',
+      })
+      // An EF registration is attested at once (handleDirectSubmit); a paid one has nothing left to attest.
+      if (isEF) await fetch(`/api/supplier-invoices/${answer.supplier_invoice_id}/approve`, { method: 'POST' }).catch(() => undefined)
+    }
+    finishCreate(answer.supplier_invoice_id)
+    setIsSubmitting(false)
+  }
+
   // AB: create after review dialog. If a bank transaction was picked first
   // (register-and-match flow), also match the new invoice to it.
   async function handleConfirm() {
     if (!pendingData) return
+    if (settleTransactionId && pendingTransactionId === settleTransactionId && pendingData.payer === 'company') {
+      await handleRegisterAndSettle(pendingData, settleTransactionId)
+      return
+    }
     setIsSubmitting(true)
     await patchInboxFieldsIfChanged(pendingData)
     const { ok, status, result } = await postCreate(pendingData)

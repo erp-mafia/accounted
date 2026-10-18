@@ -409,6 +409,66 @@ describe('withApiV1: idempotent replay of real commits (must not regress)', () =
   })
 })
 
+describe('withApiV1: a resent multipart upload replays under its key', () => {
+  // Every FormData encoding gets a fresh random boundary, so the raw body of a
+  // resend never equals the first one. Hashing that text answered every
+  // honest multipart retry with IDEMPOTENCY_KEY_REUSE.
+  function makeUploadRoute() {
+    const stored: string[] = []
+    const route = withApiV1<{ params: Promise<{ companyId: string }> }>(
+      'invoices.create',
+      async (request, ctx) => {
+        const form = await request.formData()
+        const file = form.get('file') as File
+        stored.push(file.name)
+        return created({ id: `doc-${stored.length}`, file_name: file.name }, { requestId: ctx.requestId })
+      },
+      { requireScope: 'invoices:write' },
+    )
+    return { route, stored }
+  }
+
+  function postUpload(bytes: string, fields: Record<string, string> = {}): Request {
+    const form = new FormData()
+    for (const [name, value] of Object.entries(fields)) form.append(name, value)
+    form.append('file', new File([new TextEncoder().encode(bytes)], 'faktura.pdf', { type: 'application/pdf' }))
+    return new Request(INVOICES_URL, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer gnubok_sk_x', 'Idempotency-Key': 'upload-key' },
+      body: form,
+    })
+  }
+
+  it('replays a resend whose encoding differs only in its boundary', async () => {
+    const { route, stored } = makeUploadRoute()
+    const first = postUpload('%PDF-1.4 a', { external_ref: 'billo-1' })
+    const second = postUpload('%PDF-1.4 a', { external_ref: 'billo-1' })
+    // Precondition: the two encodings really differ.
+    expect(await first.clone().text()).not.toBe(await second.clone().text())
+
+    const a = await route(first, companyParams(COMPANY_ID))
+    const b = await route(second, companyParams(COMPANY_ID))
+
+    expect(a.status).toBe(201)
+    expect(b.headers.get('Idempotent-Replayed')).toBe('true')
+    expect((await b.json()).data.id).toBe('doc-1')
+    expect(stored).toEqual(['faktura.pdf'])
+  })
+
+  it('still refuses the same key with another file or another field value', async () => {
+    const { route, stored } = makeUploadRoute()
+    await route(postUpload('%PDF-1.4 a', { external_ref: 'billo-1' }), companyParams(COMPANY_ID))
+
+    const otherFile = await route(postUpload('%PDF-1.4 b', { external_ref: 'billo-1' }), companyParams(COMPANY_ID))
+    const otherField = await route(postUpload('%PDF-1.4 a', { external_ref: 'billo-2' }), companyParams(COMPANY_ID))
+
+    expect(otherFile.status).toBe(409)
+    expect((await otherFile.json()).error.code).toBe('IDEMPOTENCY_KEY_REUSE')
+    expect(otherField.status).toBe(409)
+    expect(stored).toEqual(['faktura.pdf'])
+  })
+})
+
 describe('withApiV1: dry-run query flag is case-insensitive', () => {
   // '?dry_run=True' used to fall through the exact-match check and COMMIT for
   // real while the caller believed it previewed: the one direction this flag

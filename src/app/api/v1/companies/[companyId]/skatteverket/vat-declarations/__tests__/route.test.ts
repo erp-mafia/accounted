@@ -150,6 +150,7 @@ describe('GET /api/v1/companies/:companyId/skatteverket/vat-declarations', () =>
     expect(res.status).toBe(503)
     const body = await res.json()
     expect(body.error.code).toBe('EXTENSION_DISABLED')
+    expect(body.error.details).toMatchObject({ extension: 'skatteverket' })
   })
 
   it('passes structured service failures through (SKATTEVERKET_NOT_CONNECTED → 401)', async () => {

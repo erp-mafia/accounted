@@ -1,0 +1,1 @@
+[2026-10-16] "Varje gång" stores the purchase category on suppliers.default_purchase_category, not a new table or the counterparty template: the supplier card holds the supplier's defaults and the inbox already reads it; an item without a matched supplier cannot hold one.

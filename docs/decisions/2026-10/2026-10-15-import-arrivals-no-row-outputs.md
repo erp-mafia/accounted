@@ -1,0 +1,1 @@
+[2026-10-15] SIE, bank file and bank feed arrivals link no arrival_outputs per verifikat or bank row: each row already carries its import or page (sie import id, bank_file_import_id, raw_document_id), and thousands of one-row link writes per import cost more than that join.

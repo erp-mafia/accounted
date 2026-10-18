@@ -7,6 +7,15 @@
  */
 
 /**
+ * Whether an amount in `currency` is already kronor: SEK, or no code at all
+ * (transactions.currency defaults to SEK, and a legacy row may carry none).
+ * The same answer as the first step of resolveSekAmountOrNull below.
+ */
+export function isKronorCurrency(currency: string | null | undefined): boolean {
+  return !currency || currency.toUpperCase() === 'SEK'
+}
+
+/**
  * Resolve the SEK amount for a journal entry line, or null when the row carries
  * no honest way to express it in kronor.
  *

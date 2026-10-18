@@ -201,7 +201,8 @@
     "webhooks"
   ],
   "transaction.synced": [
-    "event-log"
+    "event-log",
+    "inbox-bank-match"
   ],
   "woocommerce.connected": [
     "suggestion-detectors"

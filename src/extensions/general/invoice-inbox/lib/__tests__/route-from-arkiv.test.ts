@@ -64,11 +64,39 @@ describe('routeClassifiedDocument', () => {
       user_id: 'user-1',
       status: 'received',
       source: 'upload',
+      channel_context: { intake_source: 'upload' },
       document_id: 'doc-1',
       kind_hint: 'receipt',
       extracted_data: { lineItems: [] },
       extraction_skipped: false,
     })
+  })
+
+  it.each([
+    ['file_upload', 'upload', 'upload'],
+    ['camera', 'upload', 'upload'],
+    ['scan', 'upload', 'upload'],
+    ['api', 'upload', 'partner_api'],
+    ['email', 'email', 'intake_email'],
+    ['mail_hunt', 'mail_hunt', 'mailbox'],
+    ['whatsapp', 'whatsapp', 'whatsapp'],
+    ['e_invoice', 'peppol', 'peppol'],
+    ['system', 'upload', 'system'],
+    [null, 'upload', 'upload'],
+  ])('keeps the door a %s document came through: source %s, intake_source %s', async (uploadSource, source, intakeSource) => {
+    enqueue({ data: { ...doc, upload_source: uploadSource, file_name: 'kvitto.pdf' } })
+    enqueue({ data: [] })
+    enqueue({})
+    expect(await classified('receipt')).toBe('queued')
+    expect(findCall('invoice_inbox_items', 'insert')?.[0]).toMatchObject({ source, channel_context: { intake_source: intakeSource } })
+  })
+
+  it('reads the upload door from the document row it fetched', async () => {
+    enqueue({ data: doc })
+    enqueue({ data: [] })
+    enqueue({})
+    await classified('receipt')
+    expect(findCall('document_attachments', 'select')?.[0]).toContain('upload_source')
   })
 
   it('queues a credit note as a supplier document whose reading says credit note (issue #2980)', async () => {

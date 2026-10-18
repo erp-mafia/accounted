@@ -16,8 +16,9 @@
  *     received Peppol XML, a bank transaction) is refused too, each with its
  *     own code (documentDeleteRefusal, lib/documents/deletion.ts).
  *
- * Reads return metadata only: never the file bytes (GET .../download) and
- * never the extracted text (the Arkiv reading tools serve that).
+ * Reads return metadata, never the file bytes (GET .../download). The page
+ * text, the reading, the links and the arrivals come only when asked for
+ * (include, lib/documents/read/document-detail.ts).
  *
  * A dry run reads and checks; it writes nothing.
  */
@@ -26,6 +27,8 @@ import { decodeDefaultCursor, encodeDefaultCursor } from '@/lib/api/v1/paginatio
 import { deleteDocument } from '@/lib/core/documents/document-service'
 import { canDeleteDocument, documentDeleteRefusal, readDocumentDeletePins } from '@/lib/documents/deletion'
 import { UUID_RE } from '@/lib/invariants/uuid'
+import { toSameOriginStorageUrl } from '@/lib/core/documents/storage-proxy'
+import type { DocumentDetail, DocumentDetailPart, readDocumentDetail } from '@/lib/documents/read/document-detail'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -53,6 +56,14 @@ interface DocumentDetailRow extends DocumentRow {
   original_id: string | null
   superseded_by_id: string | null
   digitization_date: string | null
+  page_count: number | null
+  pages_read_at: string | null
+  read_error: string | null
+  doc_type: string | null
+  admission_state: string | null
+  extracted_data: unknown
+  extracted_at: string | null
+  extraction_model: string | null
 }
 
 export interface DocumentPublic {
@@ -70,12 +81,25 @@ export interface DocumentPublic {
   created_at: string
 }
 
-export interface DocumentDetailPublic extends DocumentPublic {
+export interface DocumentDetailPublic extends DocumentPublic, DocumentDetail {
   original_id: string | null
   superseded_by_id: string | null
   digitization_date: string | null
   transaction_ids: string[]
   inbox_item_id: string | null
+}
+
+/** The opt-in parts of one document's read (lib/documents/read/document-detail.ts). */
+export interface DocumentDetailRequest {
+  include?: readonly DocumentDetailPart[]
+  fromPage?: number
+  maxChars?: number
+  /**
+   * The reader of those parts, passed in by the caller: it reads Arkiv's
+   * pages and flag (the inbox block), which the ledger kernel may not import.
+   * Required whenever include names a part.
+   */
+  readDetail?: typeof readDocumentDetail
 }
 
 function toPublic(row: DocumentRow): DocumentPublic {
@@ -161,11 +185,12 @@ export async function listDocumentsPage(
 export async function getDocumentMetadata(
   ctx: OperationContext,
   documentId: string,
+  request: DocumentDetailRequest = {},
 ): Promise<OperationOutcome<DocumentDetailPublic>> {
   if (!UUID_RE.test(documentId)) return NOT_FOUND
   const { data, error } = await ctx.supabase
     .from('document_attachments')
-    .select('id, file_name, mime_type, file_size_bytes, sha256_hash, version, is_current_version, upload_source, journal_entry_id, journal_entry_line_id, created_at, original_id, superseded_by_id, digitization_date')
+    .select('id, file_name, mime_type, file_size_bytes, sha256_hash, version, is_current_version, upload_source, journal_entry_id, journal_entry_line_id, created_at, original_id, superseded_by_id, digitization_date, page_count, pages_read_at, read_error, doc_type, admission_state, extracted_data, extracted_at, extraction_model')
     .eq('id', documentId)
     .eq('company_id', ctx.companyId)
     .maybeSingle()
@@ -189,6 +214,40 @@ export async function getDocumentMetadata(
   if (txError) return failed(txError)
   if (inboxError) return failed(inboxError)
 
+  let detail: DocumentDetail = {}
+  if (request.include?.length && request.readDetail) {
+    try {
+      detail = await request.readDetail(
+        ctx.supabase,
+        ctx.companyId,
+        {
+          id: row.id,
+          original_id: row.original_id ?? null,
+          mime_type: row.mime_type ?? null,
+          page_count: row.page_count ?? null,
+          pages_read_at: row.pages_read_at ?? null,
+          read_error: row.read_error ?? null,
+          doc_type: row.doc_type ?? null,
+          admission_state: row.admission_state ?? null,
+          extracted_data: row.extracted_data ?? null,
+          extracted_at: row.extracted_at ?? null,
+          extraction_model: row.extraction_model ?? null,
+          journal_entry_id: row.journal_entry_id ?? null,
+          journal_entry_line_id: row.journal_entry_line_id ?? null,
+        },
+        {
+          include: request.include,
+          fromPage: request.fromPage,
+          maxChars: request.maxChars,
+          rewriteUrl: toSameOriginStorageUrl,
+          hints: { file: 'the file (GET /documents/{id}/download)' },
+        },
+      )
+    } catch (err) {
+      return failed(err)
+    }
+  }
+
   return {
     ok: true,
     data: {
@@ -198,6 +257,7 @@ export async function getDocumentMetadata(
       digitization_date: row.digitization_date ?? null,
       transaction_ids: ((txs ?? []) as Array<{ id: string }>).map((t) => t.id),
       inbox_item_id: ((inbox ?? []) as Array<{ id: string }>)[0]?.id ?? null,
+      ...detail,
     },
   }
 }

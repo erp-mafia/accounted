@@ -1,0 +1,1 @@
+[2026-10-15] include=reading serves what a document is (type, classification) to every company but its extracted fields only where the company brain is on: the 2026-09-24 raw-only rule stands until the founder reopens it; agents read the page text for what is in it.

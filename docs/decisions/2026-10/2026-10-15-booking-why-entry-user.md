@@ -1,0 +1,1 @@
+[2026-10-15] Without a receipt, a person's commit is named by journal_entries.user_id, the reading behandlingshistoriken makes: the commit RPC stamps no committing user, and an audit_log read per verifikat could name someone the legal report does not.
