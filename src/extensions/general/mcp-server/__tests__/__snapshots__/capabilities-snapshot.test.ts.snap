@@ -73,7 +73,7 @@ exports[`the agent briefing for each representative company > aktiebolag missing
         {
           "callable": true,
           "name": "gnubok_link_transaction_to_journal_entry",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -125,12 +125,12 @@ exports[`the agent briefing for each representative company > aktiebolag missing
         {
           "callable": true,
           "name": "gnubok_reconcile_residual",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
           "name": "gnubok_reconcile_signoff",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -170,12 +170,12 @@ exports[`the agent briefing for each representative company > aktiebolag missing
         {
           "callable": true,
           "name": "gnubok_reconcile_unmatch",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
           "name": "gnubok_reconcile_residual",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -184,7 +184,7 @@ exports[`the agent briefing for each representative company > aktiebolag missing
         {
           "callable": true,
           "name": "gnubok_link_transaction_to_journal_entry",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -193,7 +193,7 @@ exports[`the agent briefing for each representative company > aktiebolag missing
         {
           "callable": true,
           "name": "gnubok_reconcile_signoff",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -265,7 +265,7 @@ exports[`the agent briefing for each representative company > aktiebolag missing
         {
           "callable": true,
           "name": "gnubok_mark_vat_check_reviewed",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -275,7 +275,7 @@ exports[`the agent briefing for each representative company > aktiebolag missing
         {
           "callable": true,
           "name": "gnubok_book_vat_settlement",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -296,7 +296,7 @@ exports[`the agent briefing for each representative company > aktiebolag missing
         {
           "callable": true,
           "name": "gnubok_prepare_payments",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
       ],
       "workflow": "vat_declaration",
@@ -436,7 +436,7 @@ exports[`the agent briefing for each representative company > aktiebolag, every 
         {
           "callable": true,
           "name": "gnubok_link_transaction_to_journal_entry",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -488,12 +488,12 @@ exports[`the agent briefing for each representative company > aktiebolag, every 
         {
           "callable": true,
           "name": "gnubok_reconcile_residual",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
           "name": "gnubok_reconcile_signoff",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -533,12 +533,12 @@ exports[`the agent briefing for each representative company > aktiebolag, every 
         {
           "callable": true,
           "name": "gnubok_reconcile_unmatch",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
           "name": "gnubok_reconcile_residual",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -547,7 +547,7 @@ exports[`the agent briefing for each representative company > aktiebolag, every 
         {
           "callable": true,
           "name": "gnubok_link_transaction_to_journal_entry",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -556,7 +556,7 @@ exports[`the agent briefing for each representative company > aktiebolag, every 
         {
           "callable": true,
           "name": "gnubok_reconcile_signoff",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -628,7 +628,7 @@ exports[`the agent briefing for each representative company > aktiebolag, every 
         {
           "callable": true,
           "name": "gnubok_mark_vat_check_reviewed",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -638,7 +638,7 @@ exports[`the agent briefing for each representative company > aktiebolag, every 
         {
           "callable": true,
           "name": "gnubok_book_vat_settlement",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -659,7 +659,7 @@ exports[`the agent briefing for each representative company > aktiebolag, every 
         {
           "callable": true,
           "name": "gnubok_prepare_payments",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
       ],
       "workflow": "vat_declaration",
@@ -799,7 +799,7 @@ exports[`the agent briefing for each representative company > archived ekonomisk
         {
           "callable": true,
           "name": "gnubok_link_transaction_to_journal_entry",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -851,12 +851,12 @@ exports[`the agent briefing for each representative company > archived ekonomisk
         {
           "callable": true,
           "name": "gnubok_reconcile_residual",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
           "name": "gnubok_reconcile_signoff",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -896,12 +896,12 @@ exports[`the agent briefing for each representative company > archived ekonomisk
         {
           "callable": true,
           "name": "gnubok_reconcile_unmatch",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
           "name": "gnubok_reconcile_residual",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -910,7 +910,7 @@ exports[`the agent briefing for each representative company > archived ekonomisk
         {
           "callable": true,
           "name": "gnubok_link_transaction_to_journal_entry",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -919,7 +919,7 @@ exports[`the agent briefing for each representative company > archived ekonomisk
         {
           "callable": true,
           "name": "gnubok_reconcile_signoff",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -991,7 +991,7 @@ exports[`the agent briefing for each representative company > archived ekonomisk
         {
           "callable": true,
           "name": "gnubok_mark_vat_check_reviewed",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -1001,7 +1001,7 @@ exports[`the agent briefing for each representative company > archived ekonomisk
         {
           "callable": true,
           "name": "gnubok_book_vat_settlement",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -1022,7 +1022,7 @@ exports[`the agent briefing for each representative company > archived ekonomisk
         {
           "callable": true,
           "name": "gnubok_prepare_payments",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
       ],
       "workflow": "vat_declaration",
@@ -1170,7 +1170,7 @@ exports[`the agent briefing for each representative company > enskild firma that
         {
           "callable": true,
           "name": "gnubok_link_transaction_to_journal_entry",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -1222,12 +1222,12 @@ exports[`the agent briefing for each representative company > enskild firma that
         {
           "callable": true,
           "name": "gnubok_reconcile_residual",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
           "name": "gnubok_reconcile_signoff",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -1267,12 +1267,12 @@ exports[`the agent briefing for each representative company > enskild firma that
         {
           "callable": true,
           "name": "gnubok_reconcile_unmatch",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
           "name": "gnubok_reconcile_residual",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -1281,7 +1281,7 @@ exports[`the agent briefing for each representative company > enskild firma that
         {
           "callable": true,
           "name": "gnubok_link_transaction_to_journal_entry",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -1290,7 +1290,7 @@ exports[`the agent briefing for each representative company > enskild firma that
         {
           "callable": true,
           "name": "gnubok_reconcile_signoff",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -1362,7 +1362,7 @@ exports[`the agent briefing for each representative company > enskild firma that
         {
           "callable": true,
           "name": "gnubok_mark_vat_check_reviewed",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -1372,7 +1372,7 @@ exports[`the agent briefing for each representative company > enskild firma that
         {
           "callable": true,
           "name": "gnubok_book_vat_settlement",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -1393,7 +1393,7 @@ exports[`the agent briefing for each representative company > enskild firma that
         {
           "callable": true,
           "name": "gnubok_prepare_payments",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
       ],
       "workflow": "vat_declaration",
@@ -1569,7 +1569,7 @@ exports[`the agent briefing for each representative company > enskild firma with
         {
           "callable": true,
           "name": "gnubok_link_transaction_to_journal_entry",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -1621,12 +1621,12 @@ exports[`the agent briefing for each representative company > enskild firma with
         {
           "callable": true,
           "name": "gnubok_reconcile_residual",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
           "name": "gnubok_reconcile_signoff",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -1666,12 +1666,12 @@ exports[`the agent briefing for each representative company > enskild firma with
         {
           "callable": true,
           "name": "gnubok_reconcile_unmatch",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
           "name": "gnubok_reconcile_residual",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -1680,7 +1680,7 @@ exports[`the agent briefing for each representative company > enskild firma with
         {
           "callable": true,
           "name": "gnubok_link_transaction_to_journal_entry",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -1689,7 +1689,7 @@ exports[`the agent briefing for each representative company > enskild firma with
         {
           "callable": true,
           "name": "gnubok_reconcile_signoff",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -1761,7 +1761,7 @@ exports[`the agent briefing for each representative company > enskild firma with
         {
           "callable": true,
           "name": "gnubok_mark_vat_check_reviewed",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -1771,7 +1771,7 @@ exports[`the agent briefing for each representative company > enskild firma with
         {
           "callable": true,
           "name": "gnubok_book_vat_settlement",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -1792,7 +1792,7 @@ exports[`the agent briefing for each representative company > enskild firma with
         {
           "callable": true,
           "name": "gnubok_prepare_payments",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
       ],
       "workflow": "vat_declaration",
@@ -1940,7 +1940,7 @@ exports[`the agent briefing for each representative company > ideell förening o
         {
           "callable": true,
           "name": "gnubok_link_transaction_to_journal_entry",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -1992,12 +1992,12 @@ exports[`the agent briefing for each representative company > ideell förening o
         {
           "callable": true,
           "name": "gnubok_reconcile_residual",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
           "name": "gnubok_reconcile_signoff",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -2037,12 +2037,12 @@ exports[`the agent briefing for each representative company > ideell förening o
         {
           "callable": true,
           "name": "gnubok_reconcile_unmatch",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
           "name": "gnubok_reconcile_residual",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -2051,7 +2051,7 @@ exports[`the agent briefing for each representative company > ideell förening o
         {
           "callable": true,
           "name": "gnubok_link_transaction_to_journal_entry",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -2060,7 +2060,7 @@ exports[`the agent briefing for each representative company > ideell förening o
         {
           "callable": true,
           "name": "gnubok_reconcile_signoff",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -2132,7 +2132,7 @@ exports[`the agent briefing for each representative company > ideell förening o
         {
           "callable": true,
           "name": "gnubok_mark_vat_check_reviewed",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -2142,7 +2142,7 @@ exports[`the agent briefing for each representative company > ideell förening o
         {
           "callable": true,
           "name": "gnubok_book_vat_settlement",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -2163,7 +2163,7 @@ exports[`the agent briefing for each representative company > ideell förening o
         {
           "callable": true,
           "name": "gnubok_prepare_payments",
-          "note": "not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
       ],
       "workflow": "vat_declaration",

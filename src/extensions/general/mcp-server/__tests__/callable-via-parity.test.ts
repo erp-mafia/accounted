@@ -222,14 +222,18 @@ describe('a client holding an older tools/list is told what unblocks it', () => 
 
 // gnubok_stage_tool was listed weeks after gnubok_call_tool: a connector
 // added in between read payment orders through one bridge and told its user
-// the other was "not available" (support case 2026-10-18).
+// the other was "not available", and a reconnect did not refresh its list
+// (support case 2026-10-18). gnubok_call_tool now carries the same writes, and
+// what the agent reads at runtime has to say so: its cached description of
+// gnubok_call_tool still says writes are refused.
 describe('a client whose older tools/list lacks a bridge is told what unblocks it', () => {
   beforeEach(() => useCaller(CALLERS[0]))
 
-  it('a search with a bridged hit carries the bridge note once', async () => {
+  it('a search with a bridged hit carries the bridge note once, naming the fallback bridge', async () => {
     const result = await search('gnubok_prepare_payments', 1)
     expect(result.tools[0]).toMatchObject({ name: 'gnubok_prepare_payments', callable_via: 'stage_tool' })
-    expect(result.bridge_note).toContain('gnubok_stage_tool')
+    expect(result.tools[0].note).toContain('gnubok_call_tool if your client lacks it')
+    expect(result.bridge_note).toMatch(/Without gnubok_stage_tool, stage the same tool through gnubok_call_tool/)
     expect(result.bridge_note).toMatch(/refresh or reconnect/)
     expect(result.bridge_note).toMatch(/do not report it as unavailable/)
   })
@@ -245,15 +249,12 @@ describe('a client whose older tools/list lacks a bridge is told what unblocks i
     expect(body).not.toHaveProperty('bridge_note')
   })
 
-  it('gnubok_call_tool pointed at a staged write names the stale-copy fix next to "use gnubok_stage_tool"', async () => {
-    const { body, isError } = await callTool('gnubok_call_tool', {
+  it('gnubok_call_tool carries the payment proposal to the tool itself instead of refusing it', async () => {
+    const { body } = await callTool('gnubok_call_tool', {
       tool: 'gnubok_prepare_payments',
       arguments: {},
     })
-    expect(isError).toBe(true)
-    const text = JSON.stringify(body)
-    expect(text).toContain('use gnubok_stage_tool')
-    expect(text).toContain('If your client does not show gnubok_stage_tool')
+    expect(JSON.stringify(body)).not.toMatch(/will not (invoke|carry) it/)
   })
 
   it('the briefing carries the bridge note when a loadout entry is reached through a bridge', async () => {
@@ -266,5 +267,6 @@ describe('a client whose older tools/list lacks a bridge is told what unblocks i
   it('the initialize instructions say the same', async () => {
     const json = await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } })
     expect(json.result.instructions).toMatch(/A bridge your client does not show means it kept an older copy of tools\/list/)
+    expect(json.result.instructions).toMatch(/without gnubok_stage_tool, stage the same tool through gnubok_call_tool/)
   })
 })

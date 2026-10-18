@@ -182,19 +182,80 @@ describe('gnubok_call_tool bridge', () => {
     expect(event.latencyMs).toBe(0)
   })
 
-  it('still refuses a staging write, and names the bridge that carries it', async () => {
-    // gnubok_call_tool is annotated read-only and may be always-allowed in a
-    // client. It must never start staging writes under that consent
-    // (issue #2800): the write half is a separate tool with a separate name.
+  it('stages an unlisted staging write too, for a client whose tools/list lacks gnubok_stage_tool', async () => {
+    // A client that kept a tools/list from before gnubok_stage_tool was
+    // listed has only this bridge, and a reconnect did not refresh it
+    // (support case 2026-10-18).
+    keyWithScopes(['payroll:write'])
+    const eventPromise = captureNextToolCalled()
+
+    await handleMcpRequest(
+      mcpToolCall('gnubok_call_tool', { tool: 'gnubok_log_mileage_trip', arguments: MILEAGE_TRIP_ARGS }),
+    )
+
+    const event = await eventPromise
+    expect(event.tool).toBe('gnubok_log_mileage_trip')
+    expect(event.errorKind).not.toBe('bridge_refused')
+    expect(event.errorKind).not.toBe('scope_denied')
+  })
+
+  it('a READ-scoped key stages nothing through it: the INNER scope is enforced', async () => {
+    keyWithScopes(['transactions:read', 'reports:read', 'reconciliation:read', 'payroll:read'])
     const eventPromise = captureNextToolCalled()
 
     const response = await handleMcpRequest(
-      mcpToolCall('gnubok_call_tool', { tool: 'gnubok_reconcile_unmatch', arguments: {} }),
+      mcpToolCall('gnubok_call_tool', { tool: 'gnubok_log_mileage_trip', arguments: MILEAGE_TRIP_ARGS }),
+    )
+    const { isError } = await parsedToolResult(response)
+
+    expect(isError).toBe(true)
+    const event = await eventPromise
+    expect(event.errorKind).toBe('scope_denied')
+    expect(event.tool).toBe('gnubok_log_mileage_trip')
+    expect(event.latencyMs).toBe(0)
+  })
+
+  it('a TEST-mode key stages nothing through it: the write block sees the inner tool', async () => {
+    keyWithScopes(['payroll:write'], 'test')
+    const eventPromise = captureNextToolCalled()
+
+    const response = await handleMcpRequest(
+      mcpToolCall('gnubok_call_tool', {
+        tool: 'gnubok_update_salary_run',
+        arguments: { salary_run_id: '33333333-3333-4333-8333-333333333333', notes: 'x' },
+      }),
+    )
+    const { isError } = await parsedToolResult(response)
+
+    expect(isError).toBe(true)
+    expect((await eventPromise).errorKind).toBe('test_key_write_blocked')
+  })
+
+  it('refuses a write that commits directly', async () => {
+    keyWithScopes(['transactions:write'])
+    const eventPromise = captureNextToolCalled()
+
+    const response = await handleMcpRequest(
+      mcpToolCall('gnubok_call_tool', { tool: 'gnubok_create_transactions', arguments: {} }),
     )
     const { isError, payload } = await parsedToolResult(response)
 
     expect(isError).toBe(true)
-    expect(JSON.stringify(payload)).toContain('gnubok_stage_tool')
+    expect(JSON.stringify(payload)).toMatch(/commits directly/)
+    expect((await eventPromise).errorKind).toBe('bridge_refused')
+  })
+
+  it('refuses a LISTED staging write: that tool keeps its own per-tool permission in the client', async () => {
+    keyWithScopes(['invoices:write'])
+    const eventPromise = captureNextToolCalled()
+
+    const response = await handleMcpRequest(
+      mcpToolCall('gnubok_call_tool', { tool: 'gnubok_create_invoice', arguments: {} }),
+    )
+    const { isError, payload } = await parsedToolResult(response)
+
+    expect(isError).toBe(true)
+    expect(JSON.stringify(payload)).toMatch(/call it directly/)
     expect((await eventPromise).errorKind).toBe('bridge_refused')
   })
 
@@ -316,9 +377,10 @@ describe('gnubok_stage_tool registration', () => {
     expect(stageBridgeTool.annotations.readOnlyHint).toBe(false)
   })
 
-  it('leaves gnubok_call_tool read-only, so consent given to it keeps its meaning', () => {
-    // The reason the write half is a second tool. A client may always-allow
-    // the read bridge; that consent must never come to cover staging writes.
+  it('leaves gnubok_call_tool annotated read-only although it also carries staging writes', () => {
+    // A client holding an older tools/list never sees a new hint, flipping it
+    // would make every bridged read prompt elsewhere, and the most the bridge
+    // adds is a pending operation that posts nothing until a separate approval.
     expect(bridgeTool.annotations.readOnlyHint).toBe(true)
   })
 

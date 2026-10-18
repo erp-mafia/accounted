@@ -7,7 +7,9 @@
  * gates only what tools/list SHOWS. The gap is on the client: claude.ai,
  * Cursor, grok and Claude Code cannot name a tool they never saw. Two listed
  * bridges close it: gnubok_call_tool carries reads, gnubok_stage_tool carries
- * writes that only STAGE a pending operation (issue #2800). Search results and
+ * writes that only STAGE a pending operation (issue #2800), and since
+ * 2026-10-18 gnubok_call_tool carries those staging writes too, for a client
+ * whose copy of tools/list predates gnubok_stage_tool. Search results and
  * the briefing's recommended_tools used to be computed from the full catalog
  * while callability depends on the key's scopes and on the client, so agents
  * chased search-only writes and reported them as missing tools (feedback seq
@@ -29,9 +31,10 @@ export function isDefaultCatalogTool(tool: { catalogVisibility?: 'default' | 'se
  *   tools_list: in THIS caller's tools/list.
  *   call_tool:  a READ outside it, reachable through gnubok_call_tool.
  *   stage_tool: a WRITE outside the default catalog that only stages a pending
- *               operation, reachable through gnubok_stage_tool. Nothing
- *               reaches the books until gnubok_approve_pending_operation, a
- *               separate listed step.
+ *               operation, reachable through gnubok_stage_tool (and through
+ *               gnubok_call_tool, for a client that does not show the
+ *               former). Nothing reaches the books until
+ *               gnubok_approve_pending_operation, a separate listed step.
  *   none:       a WRITE outside it that neither bridge carries: it commits
  *               directly, or it is a default-catalog write this caller's list
  *               omits (gnubok_stage_tool carries only what is absent from the
@@ -65,7 +68,7 @@ export const SEARCH_ONLY_READ_NOTE = 'not in tools/list: invoke it through gnubo
 
 /** Reach note for a search-only staging WRITE: callable, but not through tools/list. */
 export const SEARCH_ONLY_STAGED_NOTE =
-  'not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation'
+  'not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation'
 
 /**
  * What callable_via "tools_list" cannot know: the server lists the tool today,
@@ -84,11 +87,14 @@ export const STALE_TOOLS_LIST_NOTE =
  * if the client shows the bridge. gnubok_stage_tool was listed on 2026-09-21,
  * weeks after gnubok_call_tool, so a connector added in between read payment
  * orders through one bridge and told its user the other was "not available",
- * with no word on what unblocks it (support case 2026-10-18). Said once per
- * search response and briefing that names a bridge.
+ * with no word on what unblocks it (support case 2026-10-18). A reconnect did
+ * not fetch a new list either, so the note now names the bridge that works
+ * with the old copy: gnubok_call_tool carries every stage_tool target, and
+ * the client's cached description of it still says writes are refused. Said
+ * once per search response and briefing that names a bridge.
  */
 export const STALE_BRIDGE_NOTE =
-  'A bridge named in callable_via or a note (gnubok_call_tool, gnubok_stage_tool) that your client does not show means it kept an older copy of tools/list: ask the user to refresh or reconnect the Accounted connector. The tool exists, so do not report it as unavailable.'
+  'A bridge named in callable_via or a note that your client does not show means it kept an older copy of tools/list. Without gnubok_stage_tool, stage the same tool through gnubok_call_tool({tool, arguments}): it carries every stage_tool target and only stages, whatever its older description says. For anything else, ask the user to refresh or reconnect the Accounted connector. The tool exists, so do not report it as unavailable.'
 
 /** The same advice for one named tool, appended to a refusal that says "call it directly". */
 export function staleToolsListAdvice(toolName: string): string {
