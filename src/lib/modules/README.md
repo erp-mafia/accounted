@@ -423,3 +423,28 @@ deduction's reclassification) follow in their own merge request; their proof
 is `tests/pg/posting-parity-invoices.pg.test.ts`, which also runs the payment
 sync and RUT reclaim reversal hooks on invoices booked through the port, and
 `invoice-entries.engine-input.test.ts`.
+
+Step 2e moves the supplier payments, the supplier bank matches, the single
+bank-line booking and the inbox book-direct. The payment generators
+(`createSupplierInvoicePaymentEntry`, the 2440 clearing, and
+`createSupplierInvoiceCashEntry`, kontantmetoden) post through
+`postJournalEntry` and record `purchase.paid`: the invoice as subject, the
+supplier as party, the debt settled in the invoice's currency and the kronor
+that left the payment account, kontantmetoden's moms. Every door hands down
+its link basis and the debt settled: both mark-paid routes,
+`createSupplierBankMatchEntry` (the dashboard bank match through
+`bookSupplierBankMatch`, the debit of a signed payment order, the v1 bank
+match), and the person's own rows on each of them, which record no rule
+source. The book route (`POST /api/transactions/[id]/book`) records
+`bank.categorized`, the inbox book-direct the kind its source type names
+(`bank.categorized` of the bank line, else `purchase.document_booked` of the
+inbox item), both without category or rule source. Both uncategorize routes,
+the v1 mark-paid storno of its own payment, the v1 match's storno of a row's
+earlier booking and the stornos of a booking that could not be linked
+(`reverseOrphanedJournalEntry` and `claimInboxItemOrReverseEntry`, given the
+door's event) go through `reverseJournalEntry` as `ledger.storno`. Still on
+SQL, waiting for an event id: `link_supplier_invoice_to_voucher` (supplier
+voucher matching's kursdifferens verifikat), `bulk_book_transactions` and
+`match_batch_allocate`. Their proof is
+`tests/pg/posting-parity-supplier-payments.pg.test.ts` and the producers'
+`*.engine-input.test.ts`.

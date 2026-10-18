@@ -2,6 +2,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { cancelOrphanedEntry, reverseEntry } from '@/lib/bookkeeping/engine'
 import { getUnusedVoucherAllocation } from '@/lib/bookkeeping/errors'
+import { postingPort } from '@/lib/posting/port'
+import type { BusinessEventDraft } from '@/lib/posting/types'
 
 const log = createLogger('cancel-orphaned-entry')
 
@@ -80,6 +82,13 @@ export async function recordVoucherGapExplanation(
  * that CAS definitively fails, the entry is immutable and must be reversed,
  * never edited or cancelled in place. Compensation is best-effort so the
  * caller can preserve the original conflict response.
+ *
+ * A door that posts through the posting port passes `stornoEvent` (step 2e:
+ * ledger.storno of the record it could not link), and the storno goes
+ * through the port too: while POSTING_EVENTS is on, the event is linked to
+ * the storno's draft before its number is drawn, and under strict a failed
+ * event write stops the storno like any other failure here. Without it the
+ * engine is called directly, exactly as before.
  */
 export async function reverseOrphanedJournalEntry(
   supabase: SupabaseClient,
@@ -87,10 +96,22 @@ export async function reverseOrphanedJournalEntry(
   userId: string,
   journalEntryId: string,
   gapExplanation: string,
+  stornoEvent?: () => BusinessEventDraft,
 ): Promise<void> {
   let unusedVoucher: ReturnType<typeof getUnusedVoucherAllocation> = null
   try {
-    await reverseEntry(supabase, companyId, userId, journalEntryId)
+    if (stornoEvent) {
+      await postingPort.reverseJournalEntry({
+        supabase,
+        companyId,
+        userId,
+        entryId: journalEntryId,
+        event: stornoEvent,
+        role: 'reversal',
+      })
+    } else {
+      await reverseEntry(supabase, companyId, userId, journalEntryId)
+    }
     return
   } catch (reverseError) {
     unusedVoucher = getUnusedVoucherAllocation(reverseError)

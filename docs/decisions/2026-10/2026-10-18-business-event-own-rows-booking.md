@@ -1,0 +1,1 @@
+[2026-10-18] A bank line or underlag booked on a person's own rows records the kind its source type names (bank.categorized, purchase.document_booked) with no category or rule version; a door's storno of a booking it could not keep records ledger.storno, system_derived, of that record.

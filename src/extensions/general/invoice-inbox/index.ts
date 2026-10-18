@@ -50,7 +50,13 @@ import {
   getActiveInbox,
   composeInboxAddress,
 } from './lib/inbox-provisioning'
-import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import {
+  bankLineBookingBusinessEvent,
+  inboxItemBookingBusinessEvent,
+  ownRowsStornoBusinessEvent,
+} from '@/lib/bookkeeping/bank-line-business-events'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { postingPort } from '@/lib/posting/port'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { claimInboxItemOrReverseEntry } from '@/lib/documents/inbox-item-claim'
@@ -2028,23 +2034,46 @@ export const invoiceInboxExtension: Extension = {
           ? await snapshotSuggestions(ctx.supabase, ctx.companyId, [settledTransactionId])
           : null
 
-        // Create the journal entry via the engine. Source-tracks back to
-        // the inbox item so the audit trail is preserved even when no
-        // transaction is involved.
+        // Create the journal entry through the posting port (step 2e), which
+        // hands the input to the engine unchanged. Source-tracks back to the
+        // inbox item so the audit trail is preserved even when no transaction
+        // is involved. While POSTING_EVENTS is on, the event its source type
+        // names is recorded first and linked to the draft before a voucher
+        // number is drawn: bank.categorized of the bank line the person
+        // named, else purchase.document_booked of the inbox item; booked from
+        // this underlag by the person (user_created).
+        const stornoSubject = body.transaction_id
+          ? ({ type: 'transaction', id: transaction!.id } as const)
+          : ({ type: 'inbox_item', id: item.id } as const)
         let journalEntry
         try {
-          journalEntry = await createJournalEntry(ctx.supabase, ctx.companyId, ctx.userId, {
-            fiscal_period_id: body.fiscal_period_id,
-            entry_date: body.entry_date,
-            description: body.description,
-            source_type: body.transaction_id ? 'bank_transaction' : 'inbox_item',
-            source_id: body.transaction_id ? transaction!.id : item.id,
-            ...(transaction ? { bank_booking_context: [bankBookingContext(transaction,
-              await resolveSettlementAccount(ctx.supabase, ctx.companyId, transaction.cash_account_id,
-                createLogger('invoice-inbox.book-direct'), transaction.currency),
-            )] } : {}),
-            notes: effectiveNotes,
-            lines: body.lines,
+          journalEntry = await postingPort.postJournalEntry({
+            supabase: ctx.supabase,
+            companyId: ctx.companyId,
+            userId: ctx.userId,
+            event: () => {
+              const context = {
+                linkBasis: linkBasisColumns('user_created'),
+                inboxItemId: item.id,
+                documentId: item.document_id ?? null,
+              }
+              return body.transaction_id
+                ? bankLineBookingBusinessEvent(transaction!, context)
+                : inboxItemBookingBusinessEvent(item.id, body.entry_date, context)
+            },
+            input: {
+              fiscal_period_id: body.fiscal_period_id,
+              entry_date: body.entry_date,
+              description: body.description,
+              source_type: body.transaction_id ? 'bank_transaction' : 'inbox_item',
+              source_id: body.transaction_id ? transaction!.id : item.id,
+              ...(transaction ? { bank_booking_context: [bankBookingContext(transaction,
+                await resolveSettlementAccount(ctx.supabase, ctx.companyId, transaction.cash_account_id,
+                  createLogger('invoice-inbox.book-direct'), transaction.currency),
+              )] } : {}),
+              notes: effectiveNotes,
+              lines: body.lines,
+            },
           })
         } catch (err) {
           const typed = bookkeepingErrorResponse(err)
@@ -2090,6 +2119,9 @@ export const invoiceInboxExtension: Extension = {
               ctx.userId,
               journalEntry.id,
               'Bokföringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
+              // ledger.storno of the verifikat's own record, system_derived
+              // (no one chose it), dated the day, while POSTING_EVENTS is on.
+              () => ownRowsStornoBusinessEvent(stornoSubject, todayIsoStockholm(), linkBasisColumns('system_derived')),
             )
             if (txUpdateError) return errorResponse(txUpdateError, ctx.log, { requestId: ctx.requestId })
             return errorResponseFromCode('TX_CATEGORIZE_RACE', ctx.log, { requestId: ctx.requestId })
@@ -2117,7 +2149,11 @@ export const invoiceInboxExtension: Extension = {
           ctx.userId,
           id,
           journalEntry.id,
-          { also: { matched_transaction_id: bookedTransactionId } },
+          {
+            also: { matched_transaction_id: bookedTransactionId },
+            // A lost claim's storno, as the bank line's above.
+            stornoEvent: () => ownRowsStornoBusinessEvent(stornoSubject, todayIsoStockholm(), linkBasisColumns('system_derived')),
+          },
         )
         if (claim.status === 'taken') {
           return errorResponseFromCode('INBOX_ITEM_ALREADY_BOOKED', ctx.log, {
@@ -2223,7 +2259,7 @@ export const invoiceInboxExtension: Extension = {
     //
     // Read-only. Nothing here writes, and nothing here is authoritative: the
     // answer is a suggestion the user approves, edits or ignores, and the
-    // actual posting still goes through book-direct → createJournalEntry.
+    // actual posting still goes through book-direct → the posting port.
     //
     // Derived on demand rather than stored on the row, so it cannot go stale
     // against a corrected amount, a re-matched transaction or a template the

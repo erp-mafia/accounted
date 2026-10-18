@@ -4,8 +4,13 @@ import {
   createSupplierInvoicePaymentEntry,
   createSupplierInvoiceCashEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
-import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { buildSupplierDescription, supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
+import {
+  supplierInvoicePaymentBusinessEvent,
+  type SupplierPaymentPostingContext,
+} from '@/lib/bookkeeping/supplier-invoice-business-events'
+import { postingPort } from '@/lib/posting/port'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
@@ -22,7 +27,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { findDuplicatePaymentCandidatesForSupplierInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import { recordSupplierInvoiceDuplicateGuardBypass } from '@/lib/invoices/duplicate-guard-history'
-import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
+import type { CreateJournalEntryInput, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { findSignedBankPayment, signedBankPaymentDetails } from '@/lib/payments/orders/signed-payment'
@@ -193,6 +198,12 @@ export const POST = withRouteContext(
     }
 
     let journalEntryId: string | null = null
+    // Posting port (step 2e): the door's side of the purchase.paid event,
+    // read only while POSTING_EVENTS is on. The person marked it paid.
+    const posting = (): SupplierPaymentPostingContext => ({
+      linkBasis: linkBasisColumns('user_created'),
+      settledAmount: paymentAmount,
+    })
 
     try {
       if (body.lines) {
@@ -217,13 +228,26 @@ export const POST = withRouteContext(
           supplierInvoiceReference(invoice.supplier_invoice_number, invoice.arrival_number),
           invoice.supplier?.name || undefined,
         )
-        const je = await createJournalEntry(supabase, companyId!, user.id, {
+        const input: CreateJournalEntryInput = {
           fiscal_period_id: fiscalPeriodId,
           entry_date: paymentDate,
           description: desc,
           source_type: sourceType,
           source_id: invoice.id,
           lines: body.lines,
+        }
+        const je = await postingPort.postJournalEntry({
+          supabase,
+          companyId: companyId!,
+          userId: user.id,
+          event: () =>
+            supplierInvoicePaymentBusinessEvent(
+              invoice as SupplierInvoice,
+              input,
+              { paymentAccount, generated: false, bankLine: false },
+              posting(),
+            ),
+          input,
         })
         if (je) journalEntryId = je.id
       } else if (useCashEntry) {
@@ -238,6 +262,9 @@ export const POST = withRouteContext(
           // Foreign invoice: the SEK that left the account pins the entry to
           // the payment-date rate, as a bank match does.
           body.amount_sek,
+          undefined, // bankTransaction: no bank line on this door
+          undefined, // bankFeeSek
+          posting,
         )
         if (journalEntry) journalEntryId = journalEntry.id
       } else {
@@ -248,6 +275,10 @@ export const POST = withRouteContext(
           exchangeRateDifference,
           invoice.supplier?.name,
           paymentAccount,
+          undefined, // bankTransaction: no bank line on this door
+          undefined, // bankFeeSek
+          undefined, // sekClearingDebt
+          posting,
         )
         if (journalEntry) journalEntryId = journalEntry.id
       }

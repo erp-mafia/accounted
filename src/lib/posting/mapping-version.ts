@@ -33,7 +33,12 @@ import { currentAppVersion } from '@/lib/reports/app-version'
  * supplier invoice's registration and credit note lines (the moms,
  * reverse-charge, SLP and 2440 rows of
  * lib/bookkeeping/supplier-invoice-registration-lines.ts, which the credit
- * note books on the other side) and the customer invoice's registration and
+ * note books on the other side) and its payment lines (the 2440 clearing
+ * with its kursdifferens, 3740 öresavrundning and 6570 bank fee, and the
+ * kontantmetoden payment verifikat: buildSupplierInvoicePaymentLines and
+ * buildSupplierInvoiceCashLines in lib/bookkeeping/supplier-invoice-entries.ts
+ * and lib/bookkeeping/supplier-payment-lines.ts),
+ * and the customer invoice's registration and
  * kreditfaktura lines (lib/bookkeeping/invoice-lines.ts: the revenue account
  * per VAT treatment and rate, utgående moms, the 1510 and 1513 split of a
  * ROT/RUT invoice and the 29xx deferral of a periodisering; lines a person
@@ -64,6 +69,7 @@ export const MAPPING_SOURCES = {
   vacationYearClose: 'se.vacation-year-close',
   supplierInvoice: 'se.supplier-invoice-lines',
   customerInvoice: 'se.customer-invoice-lines',
+  supplierPayment: 'se.supplier-payment-lines',
 } as const
 
 export type MappingSource = keyof typeof MAPPING_SOURCES

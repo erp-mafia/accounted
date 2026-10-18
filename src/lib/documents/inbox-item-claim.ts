@@ -24,6 +24,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { createLogger } from '@/lib/logger'
+import type { BusinessEventDraft } from '@/lib/posting/types'
 
 const log = createLogger('documents/inbox-item-claim')
 
@@ -56,6 +57,13 @@ export interface ClaimOptions {
    * always allowed it; a booking door never sets this.
    */
   ignoreSupplierInvoice?: boolean
+  /**
+   * The posting port's event for the storno a lost claim makes (step 2e),
+   * from a door that posted its verifikat through the port: the storno then
+   * goes through the port too (reverseOrphanedJournalEntry). Read only while
+   * POSTING_EVENTS is on.
+   */
+  stornoEvent?: () => BusinessEventDraft
 }
 
 /**
@@ -150,7 +158,11 @@ export async function claimInboxItemOrReverseEntry(
     journalEntryId,
     outcome: claim.status,
   })
-  await reverseOrphanedJournalEntry(supabase, companyId, userId, journalEntryId, LOSER_GAP_EXPLANATION)
+  if (options.stornoEvent) {
+    await reverseOrphanedJournalEntry(supabase, companyId, userId, journalEntryId, LOSER_GAP_EXPLANATION, options.stornoEvent)
+  } else {
+    await reverseOrphanedJournalEntry(supabase, companyId, userId, journalEntryId, LOSER_GAP_EXPLANATION)
+  }
   return claim
 }
 

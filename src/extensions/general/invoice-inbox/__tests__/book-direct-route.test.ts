@@ -199,6 +199,7 @@ describe('POST /items/:id/book-direct', () => {
         source_type: 'inbox_item',
         fiscal_period_id: PERIOD_UUID,
       }),
+      undefined, undefined, // the ledger adapter's commitMethod and rubricVersion positions (posting port)
     )
     expect(linkToJournalEntryMock).toHaveBeenCalledWith(
       expect.anything(),
@@ -414,6 +415,7 @@ describe('POST /items/:id/book-direct', () => {
       'user-1',
       'je-1',
       expect.any(String),
+      expect.any(Function), // the storno's business event, read by the posting port only while POSTING_EVENTS is on
     )
     expect(linkToJournalEntryMock).not.toHaveBeenCalled()
     expect(findCalls('invoice_inbox_items', 'update')).toHaveLength(0)
@@ -443,6 +445,7 @@ describe('POST /items/:id/book-direct', () => {
       'user-1',
       'je-1',
       expect.any(String),
+      expect.any(Function), // the storno's business event, read by the posting port only while POSTING_EVENTS is on
     )
     expect(findCalls('invoice_inbox_items', 'update')).toHaveLength(0)
   })
@@ -495,6 +498,7 @@ describe('POST /items/:id/book-direct', () => {
       'user-1',
       'je-1',
       expect.any(String),
+      expect.any(Function), // the storno's business event, read by the posting port only while POSTING_EVENTS is on
     )
     // The winner keeps the underlag: the loser never links the document,
     // never records a decision, and never releases a claim that is not its own.
@@ -527,6 +531,7 @@ describe('POST /items/:id/book-direct', () => {
       'user-1',
       'je-1',
       expect.any(String),
+      expect.any(Function), // the storno's business event, read by the posting port only while POSTING_EVENTS is on
     )
     expect(linkToJournalEntryMock).not.toHaveBeenCalled()
   })
@@ -579,6 +584,7 @@ describe('POST /items/:id/book-direct', () => {
       expect.objectContaining({
         notes: 'Representation: Anna Berg (Volvo), Jakob W · Syfte: uppföljning av avtal',
       }),
+      undefined, undefined, // the ledger adapter's commitMethod and rubricVersion positions (posting port)
     )
   })
 
@@ -608,6 +614,7 @@ describe('POST /items/:id/book-direct', () => {
       'company-1',
       'user-1',
       expect.objectContaining({ notes: 'Min egen anteckning' }),
+      undefined, undefined, // the ledger adapter's commitMethod and rubricVersion positions (posting port)
     )
   })
 
@@ -642,6 +649,7 @@ describe('POST /items/:id/book-direct', () => {
       'company-1',
       'user-1',
       expect.objectContaining({ notes: undefined }),
+      undefined, undefined, // the ledger adapter's commitMethod and rubricVersion positions (posting port)
     )
     const [, , , input] = createJournalEntryMock.mock.calls[0] as [unknown, string, string, { notes?: string }]
     expect(input.notes ?? '').not.toContain('Representation')
@@ -674,6 +682,7 @@ describe('POST /items/:id/book-direct', () => {
       'company-1',
       'user-1',
       expect.objectContaining({ notes: undefined }),
+      undefined, undefined, // the ledger adapter's commitMethod and rubricVersion positions (posting port)
     )
   })
 
@@ -708,6 +717,7 @@ describe('POST /items/:id/book-direct', () => {
       'company-1',
       'user-1',
       expect.objectContaining({ notes: undefined }),
+      undefined, undefined, // the ledger adapter's commitMethod and rubricVersion positions (posting port)
     )
   })
 
@@ -731,6 +741,7 @@ describe('POST /items/:id/book-direct', () => {
       'company-1',
       'user-1',
       expect.objectContaining({ notes: undefined }),
+      undefined, undefined, // the ledger adapter's commitMethod and rubricVersion positions (posting port)
     )
   })
 
@@ -772,6 +783,7 @@ describe('POST /items/:id/book-direct', () => {
         bank_booking_context: [expect.objectContaining({ transaction_id: TX_UUID,
           cash_account_id: null, amount: -99, currency: 'SEK', settlement_account: '1930' })],
       }),
+      undefined, undefined, // the ledger adapter's commitMethod and rubricVersion positions (posting port)
     )
   })
 
@@ -931,6 +943,7 @@ describe('POST /items/:id/book-direct', () => {
       'company-1',
       'user-1',
       expect.objectContaining({ source_type: 'inbox_item' }),
+      undefined, undefined, // the ledger adapter's commitMethod and rubricVersion positions (posting port)
     )
   })
 
@@ -1055,6 +1068,7 @@ describe('POST /items/:id/book-direct', () => {
       'company-1',
       'user-1',
       expect.objectContaining({ source_type: 'inbox_item' }),
+      undefined, undefined, // the ledger adapter's commitMethod and rubricVersion positions (posting port)
     )
   })
 

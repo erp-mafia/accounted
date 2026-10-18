@@ -1,0 +1,1 @@
+[2026-10-18] A supplier payment records purchase.paid (2440 clearing and kontantmetoden alike) with the invoice as subject, the debt settled in its currency and the kronor that left the payment account; moms only under kontantmetoden: the 2440 clearing books no moms.
