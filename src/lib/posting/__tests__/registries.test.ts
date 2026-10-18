@@ -163,6 +163,7 @@ describe('mapping_version', () => {
     expect(mappingVersion('salaryRun', 'r1')).toBe('se.salary-run@r1')
     expect(mappingVersion('vacationYearClose', 'r1')).toBe('se.vacation-year-close@r1')
     expect(mappingVersion('supplierInvoice', 'r1')).toBe('se.supplier-invoice-lines@r1')
+    expect(mappingVersion('customerInvoice', 'r1')).toBe('se.customer-invoice-lines@r1')
     const before = { sha: process.env.VERCEL_GIT_COMMIT_SHA, build: process.env.NEXT_PUBLIC_BUILD_ID }
     try {
       process.env.VERCEL_GIT_COMMIT_SHA = 'abcdef1234567890'

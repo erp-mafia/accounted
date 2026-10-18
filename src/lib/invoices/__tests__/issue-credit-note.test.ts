@@ -109,6 +109,7 @@ describe('issueCreditNote', () => {
       'enskild_firma',
       'Testkund',
       'A-42',
+      expect.any(Function), // what the door saw, read by the posting port only while POSTING_EVENTS is on
     )
     expect(mockCancelSchedulesForSource).toHaveBeenCalledWith(
       expect.anything(),
@@ -311,6 +312,7 @@ describe('issueCreditNote: a deferred original that was never booked', () => {
       'aktiebolag',
       'Testkund',
       'A-7',
+      expect.any(Function), // what the door saw, read by the posting port only while POSTING_EVENTS is on
     )
   })
 

@@ -213,6 +213,7 @@ describe('POST /api/invoices/[id]/book', () => {
       expect.objectContaining({ id: 'inv-1' }),
       'aktiebolag',
       'Kunden AB',
+      { posting: expect.any(Function) }, // what the door saw, read by the posting port only while POSTING_EVENTS is on
     )
     expect(mockCreateSchedules).toHaveBeenCalled()
   })

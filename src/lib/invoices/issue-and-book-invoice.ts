@@ -291,6 +291,10 @@ export async function markInvoiceSentAndBook(
           lineCount: customLines.length,
         })
       }
+      // The posting port's event, while POSTING_EVENTS is on: the person
+      // issued the invoice (a staged approval, an API key or the recurring
+      // run resolve to their own basis in linkBasisColumns).
+      const posting = () => ({ linkBasis: linkBasisColumns('user_created') })
       const journalEntry = customLines
         ? await createInvoiceJournalEntry(
             supabase,
@@ -299,7 +303,7 @@ export async function markInvoiceSentAndBook(
             invoice as Invoice,
             entityType,
             invoice.customer?.name,
-            { customLines },
+            { customLines, posting },
           )
         : await createInvoiceJournalEntry(
             supabase,
@@ -308,6 +312,7 @@ export async function markInvoiceSentAndBook(
             invoice as Invoice,
             entityType,
             invoice.customer?.name,
+            { posting },
           )
       if (journalEntry) {
         journalEntryId = journalEntry.id

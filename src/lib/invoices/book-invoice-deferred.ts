@@ -70,6 +70,9 @@ export async function bookInvoiceDeferred(opts: {
       invoice as Invoice,
       entityType,
       invoice.customer?.name,
+      // The posting port's event, while POSTING_EVENTS is on: the person (or
+      // the approved operation) booked the invoice with the Bokför step.
+      { posting: () => ({ linkBasis: linkBasisColumns('user_created') }) },
     )
   } catch (err) {
     if (isBookkeepingError(err)) {

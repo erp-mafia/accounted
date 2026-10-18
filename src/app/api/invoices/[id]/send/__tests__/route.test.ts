@@ -596,6 +596,7 @@ describe('POST /api/invoices/[id]/send', () => {
       expect.objectContaining({ id: 'inv-1' }),
       'enskild_firma',
       customer.name,
+      { posting: expect.any(Function) }, // what the door saw, read by the posting port only while POSTING_EVENTS is on
     )
     // Issued and booked BEFORE the email leaves (the one issue ordering).
     expect(mockCreateInvoiceJournalEntry.mock.invocationCallOrder[0]).toBeLessThan(
@@ -946,6 +947,7 @@ describe('POST /api/invoices/[id]/send', () => {
       expect.objectContaining({ invoice_number: 'F-2026010' }),
       'enskild_firma',
       customer.name,
+      { posting: expect.any(Function) }, // what the door saw, read by the posting port only while POSTING_EVENTS is on
     )
   })
 
