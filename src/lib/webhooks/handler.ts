@@ -23,9 +23,17 @@
  *     emit() call site to capture the prior row.
  *   - Service-role client because this code runs from the bus, outside any
  *     authenticated Supabase context.
+ *   - From the event outbox (EVENT_DELIVERY_WEBHOOKS=outbox, step E3) the
+ *     dispatcher calls fanOutEvent with the delivery: it runs on the
+ *     dispatcher's client, writes each row with the event's outbox id and
+ *     inserts or ignores on (webhook_id, outbox_id), so a delivery the outbox
+ *     runs twice (at least once: a crash after the fan-out, an expired lease)
+ *     fans out once; and it throws on a failure, so the outbox retries it.
  */
 
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events/bus'
+import type { OutboxDeliveryContext } from '@/lib/events/consumers'
 import type { CoreEventType } from '@/lib/events/types'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { createLogger } from '@/lib/logger'
@@ -66,10 +74,20 @@ export function registerWebhookHandler(): void {
 
 /**
  * The handler for one PUBLIC_WEBHOOK_EVENTS event: one webhook_deliveries row
- * per matching webhook of the company. Never throws. lib/init subscribes it
- * through EVENT_CONSUMERS (lib/composition/event-consumers.ts).
+ * per matching webhook of the company. lib/init subscribes it through
+ * EVENT_CONSUMERS (lib/composition/event-consumers.ts).
+ *
+ * Inline (no outbox delivery): never throws, as before step E3. From the
+ * outbox: keyed by outbox.outboxId (insert or ignore per webhook) and throws
+ * when the lookup or the insert fails, so the dispatcher retries the
+ * delivery; an event without a company is logged and finished, since no
+ * retry can give it one.
  */
-export async function fanOutEvent(eventType: CoreEventType, payload: unknown): Promise<void> {
+export async function fanOutEvent(
+  eventType: CoreEventType,
+  payload: unknown,
+  outbox?: OutboxDeliveryContext,
+): Promise<void> {
   // payload type depends on eventType but every variant carries
   // companyId: the only field we structurally need here.
   const companyId = (payload as { companyId?: string }).companyId
@@ -88,9 +106,21 @@ export async function fanOutEvent(eventType: CoreEventType, payload: unknown): P
       eventType,
       companyId,
       payload: minimisePayload(payload as Record<string, unknown>),
+      outbox,
     })
   } catch (err) {
+    if (outbox) throw err
     log.error('webhook fanout failed', err as Error, { eventType, companyId })
+  }
+}
+
+/** A fan-out from the outbox that failed and is to be retried. */
+export class WebhookFanOutError extends Error {
+  readonly code: string | undefined
+  constructor(step: 'lookup' | 'insert', error: { code?: string | null; message?: string }) {
+    super(`webhook fanout ${step} failed: ${error.message ?? 'unknown error'}${error.code ? ` (${error.code})` : ''}`)
+    this.name = 'WebhookFanOutError'
+    this.code = error.code ?? undefined
   }
 }
 
@@ -150,14 +180,17 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 /**
  * Look up the company's active webhooks that list eventType and insert one
  * webhook_deliveries row per match. Pending rows are picked up by the
- * dispatcher cron at next-minute boundary.
+ * dispatcher cron at next-minute boundary. From the outbox: on its client,
+ * keyed by the outbox id, and a lookup or insert failure throws.
  */
 async function fanOutToWebhooks(args: {
   eventType: string
   companyId: string
   payload: Record<string, unknown>
+  outbox?: OutboxDeliveryContext
 }): Promise<void> {
-  const supabase = createServiceClientNoCookies()
+  const { outbox } = args
+  const supabase: SupabaseClient = outbox?.supabase ?? createServiceClientNoCookies()
 
   const { data: found, error: fetchErr } = await supabase
     .from('webhooks')
@@ -175,6 +208,7 @@ async function fanOutToWebhooks(args: {
       companyId: args.companyId,
       eventType: args.eventType,
     })
+    if (outbox) throw new WebhookFanOutError('lookup', fetchErr)
     return
   }
   // Ownership gate (ADA CASA 7.1.2): nothing is enqueued for an endpoint that
@@ -213,13 +247,32 @@ async function fanOutToWebhooks(args: {
     request_id: fanoutId,
   }))
 
-  const { error: insertErr } = await supabase.from('webhook_deliveries').insert(rows)
+  // From the outbox: insert or ignore on (webhook_id, outbox_id), the unique
+  // key of migration 20261018110200, so a rerun of the same outbox delivery
+  // adds no second row for a webhook that already has one. Inline rows never
+  // name outbox_id: code can be live before that migration is.
+  const { error: insertErr } = outbox
+    ? await supabase.from('webhook_deliveries').upsert(
+        rows.map((row) => ({
+          webhook_id: row.webhook_id,
+          company_id: row.company_id,
+          event_type: row.event_type,
+          payload: row.payload,
+          api_version: row.api_version,
+          previous_attributes: row.previous_attributes,
+          request_id: row.request_id,
+          outbox_id: outbox.outboxId,
+        })),
+        { onConflict: 'webhook_id,outbox_id', ignoreDuplicates: true },
+      )
+    : await supabase.from('webhook_deliveries').insert(rows)
   if (insertErr) {
     log.error('webhook_deliveries insert failed', insertErr as Error, {
       companyId: args.companyId,
       eventType: args.eventType,
       webhookCount: rows.length,
     })
+    if (outbox) throw new WebhookFanOutError('insert', insertErr)
     return
   }
 

@@ -69,6 +69,8 @@ const SERVICE_ROLE_ONLY = [
   'fail_event_delivery(bigint,text,integer,text,integer,integer)',
   'prune_event_outbox(interval,interval,integer)',
   'event_outbox_shadow_counts(timestamp with time zone,timestamp with time zone)',
+  // The async reconciliation (20261018110300): the operator's switch-on check.
+  'event_outbox_async_counts(timestamp with time zone,timestamp with time zone)',
 ]
 
 // Called on the user's session client by the app, so authenticated keeps

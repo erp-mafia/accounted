@@ -15,8 +15,9 @@
  * consumers lib/init subscribes (the declared consumers and
  * subscriptions.fixture.json): add a consumer there and here together.
  *
- * Also here, because the bus reads it and may import nothing else:
- * EVENT_OUTBOX_MODE (eventOutboxMode below).
+ * Also here, because the bus reads them and may import nothing else:
+ * EVENT_OUTBOX_MODE (eventOutboxMode below) and the per-consumer delivery
+ * switches (eventDelivery below).
  */
 import type { CoreEventType } from './types'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
@@ -126,10 +127,52 @@ export function isIndexedConsumer(eventType: string, consumerId: string): boolea
  *           also enqueues each event for its outbox consumers after the
  *           handlers settled, and the dispatcher marks the deliveries done
  *           without running anything. For comparing the two (step E2).
+ *           The one exception is a consumer whose own switch says outbox
+ *           (eventDelivery below, step E3): it is deferred to the outbox
+ *           instead of run inline, and the dispatcher runs it.
  * Read on every call, so a test or a redeploy changes it without a restart.
  */
 export type EventOutboxMode = 'off' | 'shadow'
 
 export function eventOutboxMode(): EventOutboxMode {
   return process.env.EVENT_OUTBOX_MODE?.trim().toLowerCase() === 'shadow' ? 'shadow' : 'off'
+}
+
+/**
+ * The consumers that can be delivered from the outbox instead of inline
+ * (step E3), each with the environment variable that switches it. The outbox
+ * dispatcher runs exactly these (ASYNC_EVENT_CONSUMERS,
+ * lib/composition/async-event-consumers.ts; consumer-index.test.ts keeps the
+ * two equal). Webhooks only: one consumer at a time, each with its own
+ * idempotency key.
+ */
+export const ASYNC_CONSUMER_SWITCHES: Readonly<Record<string, string>> = Object.freeze({
+  webhooks: 'EVENT_DELIVERY_WEBHOOKS',
+})
+
+/**
+ * A consumer's delivery switch, EVENT_DELIVERY_<CONSUMER>:
+ *   inline  (the default, also for an unset or unknown value, and for every
+ *           consumer without a switch) the consumer runs in the emitting
+ *           request, as before step E3.
+ *   outbox  with EVENT_OUTBOX_MODE=shadow, the bus does not run the consumer
+ *           inline: it enqueues its delivery as 'deferred' and the outbox
+ *           dispatcher runs it. With the outbox mode off the switch is
+ *           ignored and the consumer stays inline (the bus logs that once).
+ * Read on every call: the bus decides per event, on the instance that emits
+ * it, and records the decision in the delivery (inline_result 'deferred'),
+ * so a rolling deploy or a switch flipped back never runs one event both
+ * inline and from the queue.
+ */
+export type EventDelivery = 'inline' | 'outbox'
+
+export function eventDelivery(consumerId: string): EventDelivery {
+  if (!Object.hasOwn(ASYNC_CONSUMER_SWITCHES, consumerId)) return 'inline'
+  const value = process.env[ASYNC_CONSUMER_SWITCHES[consumerId]]
+  return value?.trim().toLowerCase() === 'outbox' ? 'outbox' : 'inline'
+}
+
+/** The consumers whose switch says outbox, whatever the outbox mode. */
+export function outboxSwitchedConsumerIds(): string[] {
+  return Object.keys(ASYNC_CONSUMER_SWITCHES).filter((consumerId) => eventDelivery(consumerId) === 'outbox')
 }

@@ -1,3 +1,4 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ModuleId } from '@/lib/modules/manifest'
 import { eventBus } from './bus'
 import type { CoreEvent, CoreEventType, EventPayload } from './types'
@@ -12,7 +13,10 @@ import type { CoreEvent, CoreEventType, EventPayload } from './types'
  *
  * Delivery is the bus's: inline in the request that emits, every
  * subscription of an event concurrently through Promise.allSettled
- * (bus.ts), in the order the consumers were subscribed.
+ * (bus.ts), in the order the consumers were subscribed. A consumer switched
+ * to the outbox (lib/events/consumer-index.ts, eventDelivery) is instead run
+ * by the outbox dispatcher after the request, with ctx.outbox set; its
+ * handle() then throws on a failure the dispatcher should retry.
  */
 export interface EventConsumer<T extends CoreEventType = CoreEventType> {
   /** Stable and unique: `ext:<extension id>` for an extension. Named in handler failure logs. */
@@ -25,9 +29,25 @@ export interface EventConsumer<T extends CoreEventType = CoreEventType> {
 
 export type EventConsumerOwner = ModuleId | `ext:${string}`
 
-/** What a delivery knows beyond the event: today only which consumer it is for. */
+/** What a delivery knows beyond the event: which consumer it is for, and whether it comes from the outbox. */
 export interface EventConsumerContext {
   readonly consumerId: string
+  /** Set when the outbox dispatcher delivers the event (lib/events/outbox-dispatcher.ts); absent inline. */
+  readonly outbox?: OutboxDeliveryContext
+}
+
+/**
+ * An outbox delivery. The outbox delivers at least once: the same delivery
+ * can run again after a crash or an expired lease, so what the consumer
+ * writes is keyed by outboxId and written insert-or-ignore.
+ */
+export interface OutboxDeliveryContext {
+  /** event_outbox.id: the event's idempotency key. */
+  readonly outboxId: number
+  /** The claim's attempt, 1 on the first run. */
+  readonly attempt: number
+  /** The service-role client the dispatcher runs on. */
+  readonly supabase: SupabaseClient
 }
 
 /**
