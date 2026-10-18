@@ -17,6 +17,7 @@ import {
   PAYMENT_REFUSED,
   PAYMENTS_CONNECT_TIMEOUT_MS,
   basketIdempotencyKey,
+  cancelIdempotencyKey,
   paymentIdempotencyKey,
   createConnectPaymentsProvider,
   registerConnectPaymentsProvider,
@@ -234,6 +235,24 @@ describe('the operations', () => {
     expect(sentBody(fetchMock)).toEqual({ idempotencyKey: basketIdempotencyKey(['p-1', 'p-2']), party: toConnectorParty(CTX), providerPaymentIds: ['p-2', 'p-1'] })
   })
 
+  it('keys a basket by the signing it is made for: a new signing over the same payments is a new basket (crm#1282)', async () => {
+    // A signing that failed while the bank kept its payments is restarted as
+    // a new signing over the same payments. Keyed by the payments alone, it
+    // got the dead basket of the first signing replayed, or a mismatch when
+    // the party differed.
+    const signingId = '3f2a1b0c-9d8e-4f7a-8b6c-5d4e3f2a1b0c'
+    const first = fetchAnswering(200, { providerBasketId: 'bask-1' })
+    await provider(first).createSigningBasket(CTX, ['p-2', 'p-1'], signingId)
+    const key = sentBody(first).idempotencyKey as string
+    expect(key).toBe(basketIdempotencyKey(['p-1', 'p-2'], signingId))
+    expect(key.startsWith(`basket:${signingId}:`)).toBe(true)
+    expect(key.length).toBeLessThanOrEqual(128)
+    // A retry of the same signing names the same basket, in any order.
+    expect(basketIdempotencyKey(['p-2', 'p-1'], signingId)).toBe(key)
+    // Another signing over the same payments does not.
+    expect(basketIdempotencyKey(['p-1', 'p-2'], '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d')).not.toBe(key)
+  })
+
   it('startSigning sends a fresh key every time and maps the challenge without the image', async () => {
     const answer = { state: 'pending', challenge: CHALLENGE, failureCode: null, providerAuthorisationId: 'auth-1', method: 'qr' }
     const first = fetchAnswering(200, answer)
@@ -317,7 +336,34 @@ describe('the operations', () => {
     const result = await provider(fetchMock).cancelPayment(CTX, 'pay-1', 'swedish-giro')
     expect(result).toEqual({ outcome: 'too_late', providerStatus: 'ACSC' })
     expect(sentUrl(fetchMock)).toBe('https://connect.example.se/api/connect/payments/payments/cancel')
-    expect(sentBody(fetchMock)).toEqual({ idempotencyKey: 'cancel:pay-1', party: toConnectorParty(CTX), providerPaymentId: 'pay-1', product: 'swedish-giro' })
+    const body = sentBody(fetchMock)
+    expect(body).toEqual({ idempotencyKey: expect.any(String), party: toConnectorParty(CTX), providerPaymentId: 'pay-1', product: 'swedish-giro' })
+    expect(body.idempotencyKey).toMatch(/^cancel:pay-1:[0-9a-f-]{36}$/)
+  })
+
+  it('asks the bank again on every cancel of a payment, whoever asks (crm#1282)', async () => {
+    // A person's cancel was answered "too late" while the payment's signing
+    // was open; the agent's cancel minutes later carried another party (no
+    // IP, another user agent). Under one key per payment the service refused
+    // it as CONNECTOR_IDEMPOTENCY_MISMATCH without asking the bank, for the
+    // 30 days it keeps the key, and replayed the first answer to a caller
+    // that sent the same body.
+    const person = fetchAnswering(200, { outcome: 'too_late', providerStatus: 'RCVD' })
+    await provider(person).cancelPayment(CTX, 'pay-1', 'swedish-giro')
+    const agent = fetchAnswering(200, { outcome: 'cancelled', providerStatus: 'CANC' })
+    const result = await provider(agent).cancelPayment({ ...CTX, psuIpAddress: null, psuUserAgent: null }, 'pay-1', 'swedish-giro')
+    expect(result).toEqual({ outcome: 'cancelled', providerStatus: 'CANC' })
+    expect(sentBody(agent).idempotencyKey).toMatch(/^cancel:pay-1:/)
+    expect(sentBody(agent).idempotencyKey).not.toBe(sentBody(person).idempotencyKey)
+    // The same caller asking again is a new cancel too: the first answer is not replayed.
+    const again = fetchAnswering(200, { outcome: 'cancelled', providerStatus: 'CANC' })
+    await provider(again).cancelPayment(CTX, 'pay-1', 'swedish-giro')
+    expect(sentBody(again).idempotencyKey).not.toBe(sentBody(person).idempotencyKey)
+  })
+
+  it('keeps a cancel key for an Open Payments payment id inside the contract', () => {
+    const key = cancelIdempotencyKey('7b0e2c1a-5d4f-4e8a-9c3b-2a1f0e9d8c7b')
+    expect(key.length).toBeLessThanOrEqual(128)
   })
 
   it('getBankCapabilities asks for the debtor bank and keeps only what the port needs', async () => {

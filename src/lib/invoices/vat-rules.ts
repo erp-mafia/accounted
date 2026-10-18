@@ -93,7 +93,9 @@ export function getAvailableVatRates(
  * export): an article's stored rate is its DOMESTIC rate, and adopting it
  * there would silently put Swedish VAT on a reverse-charge or export invoice
  * even though the wider permitted set would accept it. This governs PREFILL
- * only; every validation gate keeps using getPermittedVatRates().
+ * only; every validation gate keeps using getPermittedVatRates(). A recurring
+ * schedule line's stored rate is such a prefill too (executeRecurringSchedule,
+ * crm#1285).
  */
 export function getArticleVatRateAdoptionSet(
   customerType: CustomerType,

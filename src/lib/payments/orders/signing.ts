@@ -645,6 +645,7 @@ async function createBasket(
     basket = await provider.createSigningBasket(
       party,
       orders.map((o) => o.provider_payment_id as string),
+      batch.id,
     )
   } catch (error) {
     // A basket nobody signs is harmless; the payments in it are cancelled.

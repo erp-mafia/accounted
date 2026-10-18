@@ -113,7 +113,8 @@ describe('startPaymentSigning', () => {
       expect.objectContaining({ provider_payment_id: 'pay-2', create_started_at: null, outcome_unknown_at: null }),
     ])
     expect(db.findCalls('payment_orders', 'is')).toEqual(expect.arrayContaining([['create_started_at', null], ['outcome_unknown_at', null], ['provider_payment_id', null]]))
-    expect(provider.createSigningBasket).toHaveBeenCalledWith(expect.anything(), ['pay-1', 'pay-2'])
+    // The basket is made for this signing: a later signing over the same payments makes its own (crm#1282).
+    expect(provider.createSigningBasket).toHaveBeenCalledWith(expect.anything(), ['pay-1', 'pay-2'], 'batch-1')
     expect(provider.startSigning).toHaveBeenCalledWith(
       expect.objectContaining({ signerPersonalNumber: '199001011239', debtorBic: 'ESSESESS', companyOrgNumber: '5566778899', accountContext: 'corporate', affiliatedAspspId: null }),
       { kind: 'basket', providerBasketId: 'basket-at-bank' },

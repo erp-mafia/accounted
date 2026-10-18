@@ -316,6 +316,12 @@ interface MigrationOptions {
   importPaidSupplierInvoices: boolean
   importAssets: boolean
   voucherSeries: string
+  /**
+   * Fiscal years a completed import already holds that this run imports
+   * again, each ticked by hand (PH 185, PH 180). Empty by default and reset
+   * with the options on every run, so a replacement is never carried over.
+   */
+  replaceImportedYears: number[]
 }
 
 const DEFAULT_OPTIONS: MigrationOptions = {
@@ -328,6 +334,7 @@ const DEFAULT_OPTIONS: MigrationOptions = {
   importPaidSupplierInvoices: false,
   importAssets: true,
   voucherSeries: 'B',
+  replaceImportedYears: [],
 }
 
 /**
@@ -338,6 +345,44 @@ const DEFAULT_OPTIONS: MigrationOptions = {
  */
 export function optionsAfterPreview(options: MigrationOptions, sieAvailable: boolean): MigrationOptions {
   return { ...options, importSIEData: sieAvailable }
+}
+
+/**
+ * The options once /sie-data has said which fetched years a completed
+ * import already holds: the ledger is ticked only when at least one year is
+ * new, and no year is set to be replaced. Replacing a year reverses
+ * (makulerar) every verifikat of the earlier import and books the year again
+ * under new numbers, so it is never what a re-run does by itself: a Fortnox
+ * run after an SIE upload, or a run to add older years or underlag, left
+ * hundreds to thousands of reversed verifikat (PH 185, PH 180, PH 163). The
+ * onboarding books act skips those years the same way (planProviderYears).
+ */
+export function optionsAfterSieData(
+  options: MigrationOptions,
+  fileStatuses: Pick<SIEFileStatus, 'previousImport'>[],
+): MigrationOptions {
+  return {
+    ...options,
+    importSIEData: fileStatuses.some((fs) => !fs.previousImport),
+    replaceImportedYears: [],
+  }
+}
+
+/**
+ * The fetched years the ledger phase imports, oldest first: each new year
+ * while the ledger is ticked, and each already imported year only when its
+ * replacement was ticked by hand. A replaced year carries the import it
+ * supersedes; a new one never does.
+ */
+export function sieFilesToImport<T extends Pick<SIEFileStatus, 'fiscalYear' | 'previousImport'>>(
+  fileStatuses: T[],
+  options: Pick<MigrationOptions, 'importSIEData' | 'replaceImportedYears'>,
+): T[] {
+  return fileStatuses
+    .filter((fs) => fs.previousImport
+      ? options.replaceImportedYears.includes(fs.fiscalYear)
+      : options.importSIEData)
+    .sort((a, b) => a.fiscalYear - b.fiscalYear)
 }
 
 interface PreviewData {
@@ -1479,7 +1524,7 @@ function MappingStep({
 
 // ── Options step ────────────────────────────────────────────────
 
-function OptionsStep({
+export function OptionsStep({
   options,
   sieAvailable,
   sieData,
@@ -1510,16 +1555,30 @@ function OptionsStep({
   }
 
   const fileStatuses = sieData?.fileStatuses ?? []
-  const newFileCount = sieData?.newFileCount ?? 0
-  const replacedFileCount = fileStatuses.filter(fs => fs.previousImport).length
-  const yearsToReplace = fileStatuses
-    .filter(fs => fs.previousImport)
-    .map(fs => fs.fiscalYear)
+  const newFileCount = fileStatuses.filter(fs => !fs.previousImport).length
+  // Years a completed import already holds: kept as they are unless the
+  // user ticks one to import it again (PH 185, PH 180).
+  const importedYears = fileStatuses.filter(fs => fs.previousImport).map(fs => fs.fiscalYear)
+  const yearsToReplace = importedYears.filter(year => options.replaceImportedYears.includes(year))
+  const yearsKept = importedYears.filter(year => !options.replaceImportedYears.includes(year))
+  // Without a fetched file list (no SIE data yet) the toggle alone decides.
+  const importsLedger = fileStatuses.length > 0
+    ? sieFilesToImport(fileStatuses, options).length > 0
+    : options.importSIEData
   const failedYears = sieData?.failedYears ?? []
+
+  const toggleReplaceYear = (year: number) => {
+    onChange({
+      ...options,
+      replaceImportedYears: options.replaceImportedYears.includes(year)
+        ? options.replaceImportedYears.filter(y => y !== year)
+        : [...options.replaceImportedYears, year],
+    })
+  }
 
   const selectedItems: string[] = []
   if (options.importCompanyInfo) selectedItems.push('Företagsinformation')
-  if (sieAvailable && options.importSIEData) selectedItems.push('Bokföringsdata (SIE)')
+  if (sieAvailable && importsLedger) selectedItems.push('Bokföringsdata (SIE)')
   if (options.importCustomers) selectedItems.push('Kunder')
   if (options.importSuppliers) selectedItems.push('Leverantörer')
   if (options.importSalesInvoices) selectedItems.push('Kundfakturor')
@@ -1569,38 +1628,58 @@ function OptionsStep({
 
         {sieAvailable && (
           <div>
+            {/* The toggle covers the new years. With none, there is nothing
+                for it to import: an already imported year is only imported
+                again through its own checkbox below. */}
             <OptionRow
               label="Bokföringsdata (SIE)"
               description={
-                replacedFileCount > 0 && newFileCount > 0
-                  ? `${newFileCount} nya och ${replacedFileCount} uppdaterade räkenskapsår`
-                  : replacedFileCount > 0
-                    ? `${replacedFileCount} räkenskapsår med uppdaterad data: tidigare import ersätts`
-                    : newFileCount > 0
-                      ? `${newFileCount} ny(a) räkenskapsår att importera`
-                      : 'Kontoplan, ingående balanser och verifikationer'
+                fileStatuses.length === 0
+                  ? 'Kontoplan, ingående balanser och verifikationer'
+                  : newFileCount === 0
+                    ? t('ext_arcim_option_sie_desc_all_kept')
+                    : importedYears.length > 0
+                      ? t('ext_arcim_option_sie_desc_new_and_kept', { newCount: newFileCount, keptCount: importedYears.length })
+                      : t('ext_arcim_option_sie_desc_new', { count: newFileCount })
               }
-              checked={options.importSIEData}
+              checked={fileStatuses.length > 0 && newFileCount === 0 ? false : options.importSIEData}
+              disabled={fileStatuses.length > 0 && newFileCount === 0}
               onChange={() => toggleOption('importSIEData')}
             />
-            {/* Per-file import status: quiet muted lines. */}
+            {/* Per-file import status: quiet muted lines. A year that is
+                already imported is kept unless its box is ticked: importing
+                it again makulerar the earlier import's verifikat. */}
             {fileStatuses.length > 0 && (
               <div className="space-y-1 pb-3">
-                {fileStatuses.map((fs) => (
+                {fileStatuses.map((fs) => fs.previousImport ? (
+                  <label
+                    key={fs.fiscalYear}
+                    htmlFor={`arcim-replace-year-${fs.fiscalYear}`}
+                    className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground tabular-nums"
+                  >
+                    <Checkbox
+                      id={`arcim-replace-year-${fs.fiscalYear}`}
+                      checked={options.replaceImportedYears.includes(fs.fiscalYear)}
+                      onCheckedChange={() => toggleReplaceYear(fs.fiscalYear)}
+                    />
+                    <span>
+                      {options.replaceImportedYears.includes(fs.fiscalYear)
+                        ? t('ext_arcim_option_sie_year_replacing', { year: fs.fiscalYear })
+                        : t('ext_arcim_option_sie_year_kept', { year: fs.fiscalYear })}
+                    </span>
+                  </label>
+                ) : (
                   <p key={fs.fiscalYear} className="text-xs text-muted-foreground tabular-nums">
-                    {fs.previousImport
-                      ? `Räkenskapsår ${fs.fiscalYear}: ersätter tidigare import${
-                          fs.previousImport.importedAt
-                            ? ` från ${new Date(fs.previousImport.importedAt).toLocaleDateString('sv-SE')}`
-                            : ''
-                        }`
-                      : `Räkenskapsår ${fs.fiscalYear}: ny data att importera`}
+                    {t('ext_arcim_option_sie_year_new', { year: fs.fiscalYear })}
                   </p>
                 ))}
+                {importedYears.length > 0 && (
+                  <p className="pt-1 text-xs text-muted-foreground">{t('ext_arcim_option_sie_replace_help')}</p>
+                )}
               </div>
             )}
             {/* Verifikationsserie: one aligned row, not a nested box. */}
-            {options.importSIEData && (
+            {importsLedger && (
               <div className="flex items-center gap-3 border-t border-border py-3">
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium">Verifikationsserie</p>
@@ -1699,7 +1778,8 @@ function OptionsStep({
         confirmLabel="Starta migrering"
       >
         {/* One sentence naming what happens, the selection as a compact muted
-            line list, no caution: nothing here needs one. */}
+            line list. The one consequence spelled out in full text is a year
+            ticked to be imported again: its earlier verifikat are makulerade. */}
         <div className="space-y-4">
           <div className="space-y-2">
             <p className="text-sm">
@@ -1712,14 +1792,19 @@ function OptionsStep({
             </ul>
           </div>
 
-          {options.importSIEData && yearsToReplace.length > 0 && (
+          {sieAvailable && yearsKept.length > 0 && (
             <p className="text-sm text-muted-foreground">
-              {yearsToReplace.length === 1
-                ? `Räkenskapsår ${yearsToReplace[0]} ersätts:`
-                : `Räkenskapsår ${yearsToReplace.join(', ')} ersätts:`}{' '}
-              tidigare importerade verifikationer markeras som annullerade och ersätts av
-              uppdaterad data från källsystemet. Verifikationer som du själv skapat i {branding.appName.toLowerCase()}{' '}
-              (kategoriserade banktransaktioner, fakturor m.m.) påverkas inte.
+              {t('ext_arcim_confirm_sie_kept', { count: yearsKept.length, years: yearsKept.join(', ') })}
+            </p>
+          )}
+
+          {sieAvailable && yearsToReplace.length > 0 && (
+            <p className="text-sm">
+              {t('ext_arcim_confirm_sie_replace', {
+                count: yearsToReplace.length,
+                years: yearsToReplace.join(', '),
+                appName: branding.appName.toLowerCase(),
+              })}
             </p>
           )}
         </div>
@@ -3676,10 +3761,11 @@ export default function ArcimMigrationWorkspace({
       const enrichedMappings = enrichAccountMappingsWithVat(data.mappings, companyAccounts)
       setSieData({ ...data, mappings: enrichedMappings })
 
-      // If all SIE files are already imported, disable SIE import by default
-      if (data.allImported) {
-        setMigrationOptions(prev => ({ ...prev, importSIEData: false }))
-      }
+      // A year a completed import already holds is kept unless the user
+      // ticks it on the options step (PH 185, PH 180). The route always
+      // answered allImported: false, so the old check here never fired and
+      // every re-run replaced the years it found.
+      setMigrationOptions(prev => optionsAfterSieData(prev, data.fileStatuses))
 
       // Auto-skip only when the page has nothing to ask: no blank target, no
       // VAT review, and no class 9 account suggested onto 2999 OBS-konto.
@@ -3761,20 +3847,24 @@ export default function ArcimMigrationWorkspace({
     setError(null)
     dispatchDocumentImport({ type: 'reset' })
 
-    // The theater /sie-data built over every selected year. Without one
-    // the plain progress card stays.
-    setTheaterModel(sieData?.theater ?? null)
+    // The theater /sie-data built over every selected year. Without one, or
+    // when every year is already imported and kept, the plain progress card
+    // stays: a run that books no ledger must not animate one.
+    setTheaterModel(sieData && sieFilesToImport(sieData.fileStatuses, migrationOptions).length > 0
+      ? sieData.theater
+      : null)
 
     try {
       // ── Phase 1: SIE import ──────────────────────────────────
-      if (migrationOptions.importSIEData && sieData && sieData.fileStatuses.length > 0) {
+      // Complete fiscal years chronologically: the new years, plus only
+      // those already imported years the user ticked to replace (PH 185,
+      // PH 180). Replacement is pinned to the execution reviewed in the
+      // preview, including on retries.
+      const filesToImport = sieData ? sieFilesToImport(sieData.fileStatuses, migrationOptions) : []
+      if (sieData && filesToImport.length > 0) {
         setMigrationStep('Importerar bokföringsdata (SIE)...')
         setMigrationProgress(10)
         setSieImportResults([])
-
-        // Complete fiscal years chronologically. Replacement is pinned to
-        // the execution reviewed in the preview, including on retries.
-        const filesToImport = [...sieData.fileStatuses].sort((a,b) => a.fiscalYear-b.fiscalYear)
 
         for (let i = 0; i < filesToImport.length; i++) {
           const progress = 10 + Math.round((i / filesToImport.length) * 40)

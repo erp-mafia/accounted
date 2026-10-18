@@ -191,8 +191,12 @@ export interface PaymentInitiationProvider {
   isAvailableFor(companyId: string): boolean
   createPayment(ctx: PaymentPartyContext, instruction: PaymentInstruction): Promise<CreatedPayment>
   getPaymentState(ctx: PaymentPartyContext, providerPaymentId: string, product: string): Promise<ProviderPaymentState>
-  /** One BankID for several payments. Only for providers/banks that support baskets. */
-  createSigningBasket(ctx: PaymentPartyContext, providerPaymentIds: string[]): Promise<{ providerBasketId: string }>
+  /**
+   * One BankID for several payments. Only for providers/banks that support
+   * baskets. signingId names the signing (payment_order_batches.id) the
+   * basket is made for: a new signing over the same payments is a new basket.
+   */
+  createSigningBasket(ctx: PaymentPartyContext, providerPaymentIds: string[], signingId?: string): Promise<{ providerBasketId: string }>
   /** Start BankID: in our screen (same_device, qr) or on the bank's own page (redirect, with where to come back). */
   startSigning(ctx: PaymentPartyContext, target: SigningTarget, method: 'same_device' | 'qr' | 'redirect', redirect?: SigningRedirectReturn | null): Promise<StartedSigning>
   pollSigning(

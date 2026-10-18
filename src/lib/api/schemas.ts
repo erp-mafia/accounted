@@ -1162,11 +1162,13 @@ export const CreateSelfBillingInvoiceSchema = z.object({
 // Swedish VAT rates per ML 17 kap 24§ p.9. null means "use the customer's
 // default rate" (getAvailableVatRates), which is 0% for a VAT-validated EU
 // business or an export customer: huvudregeln, ML 6 kap. 34 §, taxes a B2B
-// service where the buyer is established. An explicit 25/12/6 is still lawful
-// for those customers when the supply is taxed where it is performed
-// (fastighetstjänst, persontransport, korttidsuthyrning, restaurang/catering,
-// admission to cultural and sports events), so cron-time validation in
-// executeRecurringSchedule gates on getPermittedVatRates, not on the default.
+// service where the buyer is established. At spawn, executeRecurringSchedule
+// adopts a stored rate only when it is in that default set (the invoice
+// editor's rule, getArticleVatRateAdoptionSet), so a stored 25/12/6 on a line
+// to such a customer bills 0% (crm#1285); a supply taxed where it is performed
+// (fastighetstjänst, persontransport, restaurang/catering, ...) is invoiced
+// from the editor, where the rate is picked per line. A stored rate outside
+// getPermittedVatRates still refuses the run.
 // A rate outside 0/6/12/25 is rejected here: there is no such Swedish rate, and
 // the buyer could not deduct ingående moms on it.
 export const RecurringScheduleItemSchema = z

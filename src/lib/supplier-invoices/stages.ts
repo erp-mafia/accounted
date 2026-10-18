@@ -77,8 +77,20 @@ export function stagesFor(accountingMethod: 'accrual' | 'cash' | null | undefine
 export interface OpenPaymentInstruction {
   /** The open payment batch carrying the invoice, if any. */
   batch: { id: string; created_at: string } | null
-  /** The open bank payment order carrying the invoice, if any. */
-  payment_order: { id: string; status: string; created_at: string } | null
+  /**
+   * The open bank payment order carrying the invoice, if any, with what the
+   * bank last said about it (provider_status, e.g. RCVD for a payment at the
+   * bank that nobody has signed) and the code of a failure that holds it
+   * (provider_error_code), so a reader outside the app (the agent, the API)
+   * sees what the app shows.
+   */
+  payment_order: {
+    id: string
+    status: string
+    created_at: string
+    provider_status: string | null
+    provider_error_code: string | null
+  } | null
 }
 
 /**

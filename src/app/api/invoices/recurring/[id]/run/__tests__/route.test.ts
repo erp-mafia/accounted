@@ -147,4 +147,42 @@ describe('POST /api/invoices/recurring/[id]/run: billing period', () => {
     expect(updatePayloads[0].period_start).toBe('2027-10-01')
     expect(updatePayloads[0]).not.toHaveProperty('next_run_date')
   })
+
+  it('records an unnumbered draft run: last_invoice_id points at the draft so removing it can give the period back (crm#1285)', async () => {
+    const updatePayloads: Record<string, unknown>[] = []
+    const scheduleRow = {
+      id: 's-1',
+      company_id: 'company-1',
+      generated_count: 0,
+      interval_months: 1,
+      next_run_date: '2026-11-01',
+      period_start: '2026-10-01',
+      items: [],
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const chain: any = {
+      select: () => chain,
+      update: (payload: Record<string, unknown>) => {
+        updatePayloads.push(payload)
+        return chain
+      },
+      eq: () => chain,
+      single: () => Promise.resolve({ data: scheduleRow, error: null }),
+      then: (resolve: (v: unknown) => void) => resolve({ error: null }),
+    }
+    activeSupabase = {
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
+      from: vi.fn(() => chain),
+    }
+    // No auto_send: the draft is created unnumbered (numbered when issued).
+    executeRecurringSchedule.mockResolvedValue({ invoiceId: 'inv-draft', invoiceNumber: null, autoSent: false, warning: null })
+
+    const { status, body } = await parseJsonResponse<{ data: { invoiceNumber: string | null } }>(
+      await POST(req(), params),
+    )
+    expect(status).toBe(200)
+    expect(body.data.invoiceNumber).toBeNull()
+    expect(updatePayloads[0]).toMatchObject({ last_invoice_id: 'inv-draft', period_start: '2026-11-01' })
+    expect(updatePayloads[0]).not.toHaveProperty('next_run_date')
+  })
 })

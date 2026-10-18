@@ -9,6 +9,7 @@ import {
 } from '@/lib/invoices/recurring-schedule-service'
 import { createQueuedMockSupabase, makeCustomer, makeCompanySettings } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
+import { InvoiceNumberSeriesBehindError } from '@/lib/invoices/ensure-invoice-number'
 import {
   DimensionValidationError,
   MandatoryDimensionMissingError,
@@ -112,7 +113,9 @@ vi.mock('@/lib/entitlements/has-capability', () => ({
 }))
 
 const mockEnsureNumber = vi.fn()
-vi.mock('@/lib/invoices/ensure-invoice-number', () => ({
+vi.mock('@/lib/invoices/ensure-invoice-number', async (importActual) => ({
+  // The real InvoiceNumberSeriesBehindError, so the service's instanceof check holds.
+  ...(await importActual<typeof import('@/lib/invoices/ensure-invoice-number')>()),
   ensureInvoiceNumber: (...args: unknown[]) => mockEnsureNumber(...args),
 }))
 
@@ -623,7 +626,7 @@ describe('executeRecurringSchedule auto-send', () => {
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
-  it('never auto-sends from a sandbox company; invoice stays a numbered draft', async () => {
+  it('never auto-sends from a sandbox company; invoice stays an unnumbered draft', async () => {
     mockIsSandbox.mockResolvedValue(true)
     // Sandbox bails before the send path's company_settings/payment-link/
     // render/email, so the queue only covers invoice creation.
@@ -641,6 +644,7 @@ describe('executeRecurringSchedule auto-send', () => {
     expect(mockSendEmail).not.toHaveBeenCalled()
     expect(mockApplyPaymentLink).not.toHaveBeenCalled()
     expect(mockCreateJE).not.toHaveBeenCalled()
+    expect(mockEnsureNumber).not.toHaveBeenCalled()
   })
 
   it('books the invoice before the email leaves', async () => {
@@ -779,30 +783,124 @@ describe('executeRecurringSchedule auto-send', () => {
     expect(mockIsSandbox).not.toHaveBeenCalled()
     expect(mockCreateJE).not.toHaveBeenCalled()
   })
+
+  describe('numbering follows issue, not spawn (crm#1285)', () => {
+    function unnumberedCompleteInvoice() {
+      return { ...makeCompleteInvoice(), invoice_number: null }
+    }
+    function collect(type: 'invoice.created' | 'recurring_invoice.executed') {
+      const seen: Array<{ invoice: { invoice_number: string | null } }> = []
+      eventBus.on(type, async (payload) => {
+        seen.push(payload as unknown as { invoice: { invoice_number: string | null } })
+      })
+      return seen
+    }
+
+    it('a draft without auto_send is created unnumbered: no number taken, no invoice.created', async () => {
+      enqueue({ data: customer, error: null })
+      enqueue({ data: { vat_registered: true }, error: null }) // company_settings VAT gate
+      enqueue({ data: makeInsertedInvoice(), error: null })
+      enqueue({ data: null, error: null })
+      enqueue({ data: unnumberedCompleteInvoice(), error: null })
+      const created = collect('invoice.created')
+      const executed = collect('recurring_invoice.executed')
+      const schedule = { ...makeSchedule(), auto_send: false } as Parameters<typeof executeRecurringSchedule>[1]
+
+      const result = await executeRecurringSchedule(client, schedule, today)
+
+      expect(findCalls('invoices', 'insert')[0][0]).toMatchObject({ invoice_number: null })
+      expect(mockEnsureNumber).not.toHaveBeenCalled()
+      expect(result).toMatchObject({ invoiceId: 'inv-1', invoiceNumber: null, autoSent: false, warning: null })
+      // Removable with no gap: nothing was issued, so nothing announces it.
+      expect(created).toEqual([])
+      expect(executed).toHaveLength(1)
+    })
+
+    it('auto-send takes the number after the delivery reservation, before the payment link and the PDF, then emits invoice.created', async () => {
+      enqueue({ data: customer, error: null })
+      enqueue({ data: { vat_registered: true }, error: null }) // company_settings VAT gate
+      enqueue({ data: makeInsertedInvoice(), error: null })
+      enqueue({ data: null, error: null })
+      enqueue({ data: unnumberedCompleteInvoice(), error: null })
+      enqueue({ data: company, error: null }) // company_settings (auto-send)
+      enqueue({ data: [{ id: 'inv-1' }], error: null }) // status flip draft -> sent
+      enqueue({ data: null, error: null }) // journal_entry_id write-back
+      const created = collect('invoice.created')
+
+      const result = await executeRecurringSchedule(client, makeSchedule(), today)
+
+      expect(result).toMatchObject({ autoSent: true, invoiceNumber: 'F-1' })
+      expect(mockEnsureNumber).toHaveBeenCalledTimes(1)
+      const numbered = mockEnsureNumber.mock.invocationCallOrder[0]
+      expect(mockReserveInvoiceDelivery.mock.invocationCallOrder[0]).toBeLessThan(numbered)
+      expect(numbered).toBeLessThan(mockApplyPaymentLink.mock.invocationCallOrder[0])
+      expect(numbered).toBeLessThan(mockRenderToBuffer.mock.invocationCallOrder[0])
+      expect(created).toHaveLength(1)
+      expect(created[0].invoice.invoice_number).toBe('F-1')
+    })
+
+    it('an auto-send stopped by a guard before numbering leaves an unnumbered draft', async () => {
+      const customerWithoutEmail = { ...customer, email: '' }
+      enqueue({ data: customerWithoutEmail, error: null })
+      enqueue({ data: { vat_registered: true }, error: null }) // company_settings VAT gate
+      enqueue({ data: makeInsertedInvoice(), error: null })
+      enqueue({ data: null, error: null })
+      enqueue({ data: { ...unnumberedCompleteInvoice(), customer: customerWithoutEmail }, error: null })
+      const created = collect('invoice.created')
+
+      const result = await executeRecurringSchedule(client, makeSchedule(), today)
+
+      expect(result).toMatchObject({ autoSent: false, invoiceNumber: null })
+      expect(result.warning).toContain('Auto-utskick misslyckades')
+      expect(mockEnsureNumber).not.toHaveBeenCalled()
+      expect(created).toEqual([])
+    })
+
+    it('a series refusal stops the auto-send with its own sentence before anything is printed', async () => {
+      enqueue({ data: customer, error: null })
+      enqueue({ data: { vat_registered: true }, error: null }) // company_settings VAT gate
+      enqueue({ data: makeInsertedInvoice(), error: null })
+      enqueue({ data: null, error: null })
+      enqueue({ data: unnumberedCompleteInvoice(), error: null })
+      enqueue({ data: company, error: null }) // company_settings (auto-send)
+      const refusal = new InvoiceNumberSeriesBehindError({ prefix: '', highest_number: 21, first_allowed: 22 })
+      mockEnsureNumber.mockRejectedValueOnce(refusal)
+      const created = collect('invoice.created')
+
+      const result = await executeRecurringSchedule(client, makeSchedule(), today)
+
+      expect(result).toMatchObject({ autoSent: false, invoiceNumber: null })
+      expect(result.warning).toContain('Auto-utskick misslyckades')
+      expect(result.warning).toContain(refusal.message)
+      expect(mockApplyPaymentLink).not.toHaveBeenCalled()
+      expect(mockRenderToBuffer).not.toHaveBeenCalled()
+      expect(mockSendEmail).not.toHaveBeenCalled()
+      expect(created).toEqual([])
+    })
+  })
 })
 
-describe('executeRecurringSchedule VAT rate gate', () => {
-  const { supabase, enqueue, reset } = createQueuedMockSupabase()
+describe('executeRecurringSchedule line VAT follows the customer (crm#1285)', () => {
+  const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
   const client = supabase as unknown as SupabaseClient
   const today = new Date('2026-07-06T06:30:00Z')
 
-  // Validated EU business: the picker default is a single locked 0%
-  // (huvudregeln, ML 6 kap. 34 §), while the ML 6 kap. supplies taxed where they
-  // are performed carry Swedish VAT to that same customer. The cron-time gate
-  // reads the wider permitted set, exactly like buildInvoiceWriteData.
-  const euCustomer = makeCustomer({
-    id: 'cust-1',
-    customer_type: 'eu_business',
-    vat_number_validated: true,
-  })
+  // A foreign business customer's DEFAULT set is a single 0% (huvudregeln,
+  // ML 6 kap. 33 §: a B2B service is taxed where the buyer is established).
+  // A stored line rate is adopted only inside that default set, the invoice
+  // editor's rule (getArticleVatRateAdoptionSet), so the dialog's former
+  // hardcoded 25 no longer lands under an export or reverse-charge header.
+  const nonEuCustomer = makeCustomer({ id: 'cust-1', customer_type: 'non_eu_business', country: 'GB' })
+  const euCustomer = makeCustomer({ id: 'cust-1', customer_type: 'eu_business', vat_number_validated: true, country: 'DE' })
+  const domesticCustomer = makeCustomer({ id: 'cust-1', customer_type: 'swedish_business' })
 
-  function makeScheduleWithRate(vatRate: number) {
+  function makeScheduleWithRates(...vatRates: Array<number | null>) {
     return {
       id: 'sched-1',
       company_id: 'company-1',
       user_id: 'user-1',
       customer_id: 'cust-1',
-      name: 'Monthly hotel retainer',
+      name: 'Monthly retainer',
       day_of_month: 6,
       send_hour: 8,
       payment_terms_days: 30,
@@ -817,43 +915,77 @@ describe('executeRecurringSchedule VAT rate gate', () => {
       last_invoice_id: null,
       last_run_warning: null,
       generated_count: 0,
-      items: [
-        {
-          id: 'si-1',
-          schedule_id: 'sched-1',
-          sort_order: 0,
-          description: 'Hotellnatt Stockholm',
-          quantity: 10,
-          unit: 'st',
-          unit_price: 1000,
-          vat_rate: vatRate,
-        },
-      ],
+      items: vatRates.map((vatRate, index) => ({
+        id: `si-${index}`,
+        schedule_id: 'sched-1',
+        sort_order: index,
+        description: `Rad ${index + 1}`,
+        quantity: 10,
+        unit: 'st',
+        unit_price: 1000,
+        vat_rate: vatRate,
+      })),
     } as unknown as Parameters<typeof executeRecurringSchedule>[1]
+  }
+
+  function enqueueCreatePath(customer: ReturnType<typeof makeCustomer>) {
+    enqueue({ data: customer, error: null }) // customers select
+    enqueue({ data: { vat_registered: true }, error: null }) // company_settings VAT gate
+    enqueue({ data: { id: 'inv-1', invoice_number: null, document_type: 'invoice' }, error: null }) // invoices insert
+    enqueue({ data: null, error: null }) // invoice_items insert
+    enqueue({ data: { id: 'inv-1', invoice_number: null, customer, items: [] }, error: null }) // re-fetch
+  }
+
+  function insertedHeader() {
+    return findCalls('invoices', 'insert')[0][0] as Record<string, unknown>
+  }
+  function insertedLines() {
+    return findCalls('invoice_items', 'insert')[0][0] as Array<Record<string, unknown>>
   }
 
   beforeEach(() => {
     vi.clearAllMocks()
     reset()
     eventBus.clear()
-    mockEnsureNumber.mockResolvedValue('F-1')
   })
 
-  it('generates the invoice for a 12% schedule to a validated EU business', async () => {
-    enqueue({ data: euCustomer, error: null })                                    // customers select
-    enqueue({ data: { vat_registered: true }, error: null })                      // company_settings VAT gate
-    enqueue({ data: { id: 'inv-1', invoice_number: null, document_type: 'invoice' }, error: null }) // invoices insert
-    enqueue({ data: null, error: null })                                          // invoice_items insert
-    enqueue({
-      data: { id: 'inv-1', invoice_number: 'F-1', customer: euCustomer, items: [] },
-      error: null,
-    })                                                                            // re-fetch
+  it('bills a stored 25% line to a non-EU business at 0% under the export header', async () => {
+    enqueueCreatePath(nonEuCustomer)
 
-    const result = await executeRecurringSchedule(client, makeScheduleWithRate(12), today, {
-      suppressAutoSend: true,
+    await executeRecurringSchedule(client, makeScheduleWithRates(25), today)
+
+    expect(insertedHeader()).toMatchObject({
+      vat_treatment: 'export',
+      moms_ruta: '40',
+      vat_rate: 0,
+      vat_amount: 0,
+      subtotal: 10000,
+      total: 10000,
     })
+    expect(insertedLines()[0]).toMatchObject({ vat_rate: 0, vat_amount: 0 })
+  })
 
-    expect(result.invoiceId).toBe('inv-1')
+  it('bills a stored 12% line to a validated EU business at 0% under reverse charge', async () => {
+    enqueueCreatePath(euCustomer)
+
+    await executeRecurringSchedule(client, makeScheduleWithRates(12), today)
+
+    expect(insertedHeader()).toMatchObject({ vat_treatment: 'reverse_charge', moms_ruta: '39', vat_amount: 0 })
+    expect(insertedLines()[0]).toMatchObject({ vat_rate: 0, vat_amount: 0 })
+  })
+
+  it('keeps a domestic customer\'s stored rates (25 and 12) and gives a null line the 25% default', async () => {
+    enqueueCreatePath(domesticCustomer)
+
+    await executeRecurringSchedule(client, makeScheduleWithRates(25, 12, null), today)
+
+    expect(insertedLines().map((line) => line.vat_rate)).toEqual([25, 12, 25])
+    expect(insertedHeader()).toMatchObject({
+      vat_treatment: 'standard_25',
+      moms_ruta: '05',
+      vat_rate: null, // mixed rates
+      vat_amount: 2500 + 1200 + 2500,
+    })
   })
 
   it('still throws for a rate that is not a Swedish VAT rate', async () => {
@@ -861,7 +993,7 @@ describe('executeRecurringSchedule VAT rate gate', () => {
     enqueue({ data: { vat_registered: true }, error: null }) // company_settings VAT gate; throws before any insert
 
     await expect(
-      executeRecurringSchedule(client, makeScheduleWithRate(10), today, { suppressAutoSend: true }),
+      executeRecurringSchedule(client, makeScheduleWithRates(10), today, { suppressAutoSend: true }),
     ).rejects.toThrow(/VAT rate 10% not allowed/)
   })
 })

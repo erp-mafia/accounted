@@ -235,7 +235,8 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
         // The invoice just billed this period: point the schedule at the
         // next one. A stale roll-forward above deliberately leaves it alone
         // (nothing was billed), so "Skapa faktura nu" still bills the missed
-        // period and advances it then.
+        // period and advances it then. A draft removed before it is issued
+        // gives the period back (lib/invoices/recurring-draft-period.ts).
         ...(schedule.period_start
           ? { period_start: advancePeriodStart(schedule.period_start, schedule.interval_months ?? 1) }
           : {}),

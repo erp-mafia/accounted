@@ -17,7 +17,11 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
-import { getVatRules, getPermittedVatRates } from '@/lib/invoices/vat-rules'
+import {
+  getArticleVatRateAdoptionSet,
+  getPermittedVatRates,
+  getVatRules,
+} from '@/lib/invoices/vat-rules'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { ensureInvoiceNumber, InvoiceNumberSeriesBehindError } from '@/lib/invoices/ensure-invoice-number'
 import {
@@ -215,16 +219,20 @@ export interface ExecuteScheduleOptions {
    * `isSandboxCompany` at the route level pass true to skip the auto-send
    * path outright, so the sandbox invariant does not hinge solely on the
    * chokepoint inside sendInvoiceFromSchedule. Freeze-and-retain semantics
-   * are unchanged: the invoice is still created as a numbered draft.
+   * are unchanged: the invoice is still created as an (unnumbered) draft.
    */
   suppressAutoSend?: boolean
 }
 
 /**
- * Spawn one invoice from a schedule. Always creates the invoice; auto_send
- * additionally renders, issues (status sent + verifikat, fail closed), then
- * emails and archives the PDF. A verifikat the engine refuses stops the send
- * and comes back as the warning the schedule shows.
+ * Spawn one invoice from a schedule. Always creates the invoice as an
+ * unnumbered draft, exactly like "Spara som utkast": the F-series number is
+ * taken when the draft is issued (finalize, send, mark-sent, Peppol), so a
+ * draft removed before that is hard-deleted and leaves no gap (ML 17 kap.
+ * 24 § p. 2, crm#1285). auto_send additionally numbers, renders, issues
+ * (status sent + verifikat, fail closed), then emails and archives the PDF.
+ * A verifikat the engine refuses stops the send and comes back as the
+ * warning the schedule shows.
  *
  * Idempotency: caller must check schedule.last_run_at >= today before calling
  * to prevent double-spawn on cron retries within the same UTC day.
@@ -250,15 +258,24 @@ export async function executeRecurringSchedule(
   }
 
   const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, customer.country)
-  // Gate on the PERMITTED set, not the picker default, exactly like
-  // buildInvoiceWriteData: the ML 6 kap. supplies taxed where they are performed
-  // (hotel/restaurang 12%, persontransport and event admission 6%,
-  // fastighetstjänst and korttidsuthyrning 25%) carry Swedish VAT even to a
-  // foreign business customer. A monthly hotel or catering retainer to a German
-  // company is such a schedule. The default is still 0% (vatRules.rate is the
-  // fallback below), so a Swedish rate only lands here when the schedule set it.
+  // A stored rate that is not a Swedish rate this customer may lawfully carry
+  // (getPermittedVatRates, the set buildInvoiceWriteData gates on) refuses the
+  // run, as before.
   const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated, customer.country)
   const allowedRates = new Set(permittedRates.map((r) => r.rate))
+  // The line's rate follows the customer's VAT treatment, by the invoice
+  // editor's rule (components/invoices/line-vat-rates.ts): a stored rate is
+  // adopted only when it is in the customer's DEFAULT set
+  // (getArticleVatRateAdoptionSet), otherwise the customer's default applies.
+  // The schedule dialog never asked for a rate (it stored 25 on every line),
+  // so a stored rate is a prefill, not a choice: under huvudregeln (ML 6 kap.
+  // 33 §) a service to a foreign business is taxed where the buyer is
+  // established, and a stored 25 must not put Swedish VAT under an export
+  // (ruta 40) or reverse-charge header (crm#1285). A domestic customer's
+  // default set holds 25/12/6/0, so its stored rates are kept as they are.
+  const adoptableRates = getArticleVatRateAdoptionSet(customer.customer_type, customer.vat_number_validated, customer.country)
+  const lineRate = (item: RecurringInvoiceScheduleItem): number =>
+    item.vat_rate != null && adoptableRates.has(item.vat_rate) ? item.vat_rate : vatRules.rate
 
   // 2. Compute amounts (mirrors POST /api/invoices). Text rows carry no
   //    amounts and never book: they are copied onto the invoice as text rows
@@ -272,8 +289,8 @@ export async function executeRecurringSchedule(
   // VAT registration gate, mirroring buildInvoiceWriteData (issue #1719): a
   // non-momsregistrerad company books no output VAT, so the spawned invoice
   // must be momsfri regardless of what the schedule template says. Both a
-  // stored template rate (the dialog defaults new lines to 25%, and older
-  // schedules may predate a deregistration) and the null-rate fallback to the
+  // stored template rate (older lines carry the dialog's former 25% default,
+  // and schedules may predate a deregistration) and the null-rate fallback to the
   // customer default below (25% for Swedish customers) would otherwise put
   // VAT on the cron-generated invoice even though momskrysset is off. Zero
   // every line at spawn time; 0% is a permitted rate for every customer type,
@@ -293,18 +310,18 @@ export async function executeRecurringSchedule(
   const subtotal = roundOre(items.reduce((sum, it) => sum + computeLineNet(it.quantity, it.unit_price), 0))
   let vatAmount = 0
   for (const item of items) {
-    const itemRate = item.vat_rate != null ? item.vat_rate : vatRules.rate
-    if (!allowedRates.has(itemRate)) {
+    if (item.vat_rate != null && !allowedRates.has(item.vat_rate)) {
       throw new Error(
-        `VAT rate ${itemRate}% not allowed for customer type ${customer.customer_type}`,
+        `VAT rate ${item.vat_rate}% not allowed for customer type ${customer.customer_type}`,
       )
     }
+    const itemRate = lineRate(item)
     const lineTotal = computeLineNet(item.quantity, item.unit_price)
     vatAmount = roundOre(vatAmount + Math.round((lineTotal * itemRate) / 100 * 100) / 100)
   }
   const total = roundOre(subtotal + vatAmount)
 
-  const uniqueRates = new Set(items.map((it) => (it.vat_rate != null ? it.vat_rate : vatRules.rate)))
+  const uniqueRates = new Set(items.map(lineRate))
   const isMixedRate = uniqueRates.size > 1
 
   // 3. Dates: invoice_date = today (UTC), due_date = +payment_terms_days.
@@ -422,7 +439,7 @@ export async function executeRecurringSchedule(
         dimensions: {},
       }
     }
-    const itemRate = item.vat_rate != null ? item.vat_rate : vatRules.rate
+    const itemRate = lineRate(item)
     const lineTotal = computeLineNet(item.quantity, item.unit_price)
     const itemVat = Math.round((lineTotal * itemRate) / 100 * 100) / 100
     return {
@@ -441,42 +458,19 @@ export async function executeRecurringSchedule(
   })
   const { error: itemsError } = await supabase.from('invoice_items').insert(itemRows)
   if (itemsError) {
-    // Hard-delete is safe here only because step 5 inserted invoice_number: null,
-    // no F-series slot has been consumed yet (step 7 calls ensureInvoiceNumber).
-    // Once a number is assigned, the soft-cancel path in step 7 must be used to
-    // preserve the sequence per BFL 5 kap 6§ / ML 17 kap 24§.
+    // Hard-delete is safe: the draft is unnumbered (step 5 inserted
+    // invoice_number: null), so no F-series slot has been consumed.
     await supabase.from('invoices').delete().eq('id', invoice.id)
     throw new Error(`failed to insert invoice items: ${itemsError.message}`)
   }
 
-  // 7. Allocate F-series number.
-  try {
-    await ensureInvoiceNumber(supabase, schedule.company_id, invoice as Invoice)
-  } catch (err) {
-    // The series refusal used up nothing, so the unnumbered row can go (no
-    // number, no gap), and the refusal itself is the run's reason: it names
-    // the number the company sets for the series to continue.
-    if (err instanceof InvoiceNumberSeriesBehindError) {
-      await supabase
-        .from('invoices')
-        .delete()
-        .eq('id', invoice.id)
-        .eq('company_id', schedule.company_id)
-        .eq('status', 'draft')
-        .is('invoice_number', null)
-      throw err
-    }
-    // Soft-cancel to preserve the F-series sequence (ML 17 kap 24§).
-    await supabase
-      .from('invoices')
-      .update({ status: 'cancelled' })
-      .eq('id', invoice.id)
-      .eq('company_id', schedule.company_id)
-      .eq('status', 'draft')
-    throw new Error(
-      `failed to assign invoice number: ${err instanceof Error ? err.message : String(err)}`,
-    )
-  }
+  // 7. No number here. The draft stays unnumbered until it is issued, the
+  //    lifecycle of a "Spara som utkast" draft: finalize, send, mark-sent and
+  //    Peppol each take the number (ensureInvoiceNumber), and the auto-send
+  //    path below takes it after its guards. A draft removed before then is
+  //    hard-deleted with no gap in the series (crm#1285). invoice.created,
+  //    which drives webhooks and the audit log, follows the number too: it
+  //    fires at finalize, or in the auto-send path once the number is taken.
 
   // 8. Re-fetch with relations so downstream PDF/email/event have full data.
   const { data: completeInvoice } = await supabase
@@ -489,23 +483,14 @@ export async function executeRecurringSchedule(
     throw new Error('failed to reload created invoice')
   }
 
-  // Always emit invoice.created so existing consumers (event_log, etc.) see it.
-  await eventBus.emit({
-    type: 'invoice.created',
-    payload: {
-      invoice: completeInvoice as Invoice,
-      companyId: schedule.company_id,
-      userId: schedule.user_id,
-    },
-  })
-
   let autoSent = false
   let warning: string | null = null
 
-  // 9. Auto-send path. If anything below fails, we keep the invoice (now a
-  //    numbered draft, or issued and booked when only the email failed) and
-  //    surface a Swedish warning on the schedule (last_run_warning): the user
-  //    can act on it from /invoices/[id].
+  // 9. Auto-send path. If anything below fails, we keep the invoice (an
+  //    unnumbered draft when it stopped before numbering, a numbered draft
+  //    after, or issued and booked when only the email failed) and surface a
+  //    Swedish warning on the schedule (last_run_warning): the user can act
+  //    on it from /invoices/[id].
   if (schedule.auto_send && options.suppressAutoSend) {
     // Route-level sandbox suppression: same outcome as the internal sandbox
     // chokepoint below (no email, invoice retained as draft, manual-send
@@ -671,6 +656,32 @@ async function sendInvoiceFromSchedule(
     })
     return { sent: false }
   }
+
+  // The F-series number is taken here, at the point the send route takes it
+  // (after the delivery reservation, before the payment link, PDF and email
+  // that print it): every stop above leaves an unnumbered draft that can be
+  // deleted with no gap (crm#1285). Mutates invoice.invoice_number.
+  try {
+    await ensureInvoiceNumber(supabase, companyId, invoice)
+  } catch (err) {
+    log.error('failed to assign invoice number for recurring auto-send', err as Error, {
+      invoiceId: invoice.id,
+    })
+    // The series refusal used up nothing and is a sentence the company can
+    // act on: it names where the series continues.
+    return {
+      sent: false,
+      ...(err instanceof InvoiceNumberSeriesBehindError
+        ? { warning: `${MANUAL_SEND_WARNING} ${err.message}` }
+        : {}),
+    }
+  }
+  // Numbered from here on: invoice.created, the event that drives webhooks
+  // and the audit log, fires now, as it does at finalize.
+  await eventBus.emit({
+    type: 'invoice.created',
+    payload: { invoice, companyId, userId },
+  })
 
   const items = (invoice.items || []).slice().sort((a, b) => a.sort_order - b.sort_order)
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { addDaysIso, addMonthsIso, daysBetweenIso, endOfDayIsoStockholm, todayIsoStockholm, toIsoDate } from '../iso'
+import { addDaysIso, addMonthsIso, daysBetweenIso, endOfDayIsoStockholm, stockholmWallTimeToUtc, todayIsoStockholm, toIsoDate } from '../iso'
 
 describe('todayIsoStockholm', () => {
   it('rolls over to the next Swedish calendar day before UTC midnight (CEST, UTC+2)', () => {
@@ -62,5 +62,19 @@ describe('endOfDayIsoStockholm', () => {
   it('is still inside the Swedish day it names', () => {
     expect(todayIsoStockholm(new Date(endOfDayIsoStockholm('2027-04-10')))).toBe('2027-04-10')
     expect(todayIsoStockholm(new Date(new Date(endOfDayIsoStockholm('2027-04-10')).getTime() + 1000))).toBe('2027-04-11')
+  })
+})
+
+describe('stockholmWallTimeToUtc', () => {
+  it('reads a Swedish wall-clock time in winter and in summer', () => {
+    expect(stockholmWallTimeToUtc('2027-02-12', '09:00').toISOString()).toBe('2027-02-12T08:00:00.000Z')
+    expect(stockholmWallTimeToUtc('2027-06-30', '09:00').toISOString()).toBe('2027-06-30T07:00:00.000Z')
+    expect(stockholmWallTimeToUtc('2027-02-12', '14:30:00').toISOString()).toBe('2027-02-12T13:30:00.000Z')
+  })
+
+  it('lands right on the days the clocks change', () => {
+    // Summer time starts 2027-03-28 at 02:00 local, ends 2027-10-31 at 03:00 local.
+    expect(stockholmWallTimeToUtc('2027-03-28', '09:00').toISOString()).toBe('2027-03-28T07:00:00.000Z')
+    expect(stockholmWallTimeToUtc('2027-10-31', '09:00').toISOString()).toBe('2027-10-31T08:00:00.000Z')
   })
 })

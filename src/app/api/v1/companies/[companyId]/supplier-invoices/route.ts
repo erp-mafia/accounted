@@ -35,6 +35,9 @@ import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/l
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
 import { createSupplierInvoice } from '@/lib/supplier-invoices/create'
+import { loadOpenPaymentInstructions } from '@/lib/supplier-invoices/lifecycle-stages'
+import { SETTLED_SUPPLIER_INVOICE_STATUSES } from '@/lib/supplier-invoices/stages'
+import { PAYMENT_ORDER_STATUSES } from '@/lib/payments/orders/status'
 
 const SupplierInvoiceStatus = z.enum([
   'registered',
@@ -46,6 +49,24 @@ const SupplierInvoiceStatus = z.enum([
   'credited',
   'reversed',
 ])
+
+// The payment instruction already covering an unsettled invoice, read the
+// way the app reads "I betalning" (loadOpenPaymentInstructions): an open bank
+// payment order or a payment file. Null when nothing covers it (crm#1282).
+const OpenPayment = z.object({
+  batch: z.object({ id: z.string().uuid(), created_at: z.string() }).nullable(),
+  payment_order: z
+    .object({
+      id: z.string().uuid(),
+      status: z.enum(PAYMENT_ORDER_STATUSES),
+      created_at: z.string(),
+      // What the bank last answered (RCVD: at the bank, not signed).
+      provider_status: z.string().nullable(),
+      // The code of a failure that holds the order (an unknown outcome).
+      provider_error_code: z.string().nullable(),
+    })
+    .nullable(),
+})
 
 const SupplierInvoiceSummary = z.object({
   id: z.string().uuid(),
@@ -72,6 +93,7 @@ const SupplierInvoiceSummary = z.object({
   // Cleared when a payment lands; books nothing.
   bank_entered_at: z.string().nullable(),
   created_at: z.string(),
+  open_payment: OpenPayment.nullable(),
 })
 
 const SupplierInvoicesListResponse = listEnvelope(SupplierInvoiceSummary)
@@ -119,6 +141,7 @@ registerEndpoint({
     'Credit notes (is_credit_note=true) appear in the same list as the originals; filter by status=credited or check the flag to separate.',
     'remaining_amount is the unpaid portion; a partially_paid SI has remaining_amount > 0.',
     'status does not say whether an invoice is attested (an attested invoice past its due date is overdue): read approved_at, which kontantmetoden companies leave null (no attest step there). bank_entered_at is set while a payment entered at the bank by hand has not landed; it clears itself when a payment is recorded on the invoice.',
+    'An invoice a bank payment or a payment file already covers keeps its status (approved, overdue) and remaining_amount until the payment lands: read open_payment, null when nothing covers it. payment_order.provider_status RCVD means the payment waits at the bank unsigned.',
     'arrival_number is internal book-keeping, not the seller\'s invoice number: use supplier_invoice_number for matching to received documents.',
     'Ordering is by created_at (registration time), not invoice_date. A late-registered invoice appears where it was registered: filter on ?date_from / ?date_to when you care about the seller\'s invoice date.',
     'Cursor pagination: pass ?cursor=<next_cursor> from the previous response. A stale or tampered cursor is ignored and the first page is returned again.',
@@ -146,6 +169,7 @@ registerEndpoint({
           approved_at: null,
           bank_entered_at: null,
           created_at: '2026-05-13T15:00:00Z',
+          open_payment: null,
         },
       ],
       meta: { request_id: 'req_…', api_version: '2026-05-12', next_cursor: null },
@@ -245,6 +269,19 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       return Array.isArray(s) ? (s[0] ?? null) : s
     }
 
+    // The same read as the app's "I betalning": a failed read fails the call,
+    // since a null open_payment would say nothing pays the invoice.
+    let openPayments: Awaited<ReturnType<typeof loadOpenPaymentInstructions>>
+    try {
+      openPayments = await loadOpenPaymentInstructions(
+        ctx.supabase,
+        ctx.companyId!,
+        trimmed.filter((r) => !SETTLED_SUPPLIER_INVOICE_STATUSES.has(r.status)).map((r) => r.id),
+      )
+    } catch (openError) {
+      return v1ErrorResponse(openError, ctx.log, { requestId: ctx.requestId })
+    }
+
     const supplier_invoices = trimmed.map((r) => {
       const s = pickSupplier(r.supplier)
       return {
@@ -267,6 +304,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
         approved_at: r.approved_at,
         bank_entered_at: r.bank_entered_at,
         created_at: r.created_at,
+        open_payment: openPayments.get(r.id) ?? null,
       }
     })
 
