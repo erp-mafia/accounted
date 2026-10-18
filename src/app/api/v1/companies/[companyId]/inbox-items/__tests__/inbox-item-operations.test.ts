@@ -237,7 +237,105 @@ describe('GET /inbox-items/:id', () => {
       file_name: 'kvitto.pdf',
       email_body_text: 'Hej Anna, tack för ditt köp',
       extracted_data: { documentKind: 'receipt' },
+      intake_source: 'intake_email',
     })
+  })
+
+  it.each([
+    ['an Arkiv-queued item by its stamp', { source: 'upload', channel_context: { intake_source: 'partner_api' } }, 'api', 'partner_api'],
+    ['an unstamped upload over an api document as mcp', { source: 'upload' }, 'api', 'mcp'],
+    ['a dashboard upload', { source: 'upload' }, 'file_upload', 'upload'],
+    ['a receipt-hunt item by its channel', { source: 'mail_hunt', channel_context: { channel: 'mail_hunt' } }, 'mail_hunt', 'mailbox'],
+  ])('names the door it came through: %s', async (_label, overrides, uploadSource, intakeSource) => {
+    const client = makeClient({
+      company_members: MEMBER,
+      invoice_inbox_items: { data: itemRow(overrides), error: null },
+      document_attachments: { data: { id: DOC_ID, file_name: 'kvitto.pdf', extracted_data: null, upload_source: uploadSource }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await get()
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.source).toBe(overrides.source)
+    expect(body.data.intake_source).toBe(intakeSource)
+    const docSelect = client.calls.find((c) => c.table === 'document_attachments' && c.method === 'select')
+    expect(docSelect?.args[0]).toContain('upload_source')
+  })
+})
+
+describe('GET /inbox-items/:id?include=reading', () => {
+  const get = (query: string) => getItem(request(`${BASE}/${ITEM_ID}${query}`, { method: 'GET' }), itemParams())
+  const MODEL = 'claude-sonnet-4-6'
+  const READ_AT = '2026-09-02T07:41:20.000Z'
+
+  it('400 for an include it does not know', async () => {
+    mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER }))
+    expect((await get('?include=everything')).status).toBe(400)
+  })
+
+  it('leaves the reading out, and reads nothing for it, unless asked', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      invoice_inbox_items: { data: itemRow(), error: null },
+      document_attachments: { data: { id: DOC_ID, file_name: 'kvitto.pdf', extracted_data: null }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const body = await (await get('')).json()
+    expect(body.data.reading).toBeUndefined()
+    expect(client.calls.some((c) => c.table === 'document_extractions')).toBe(false)
+  })
+
+  it("answers each field's source and evidence: the model's reading, a person's correction as Ditt val", async () => {
+    const corrected = { ...READING, invoice: { ...READING.invoice, invoiceNumber: 'F-2' } }
+    const document = {
+      id: DOC_ID,
+      file_name: 'kvitto.pdf',
+      mime_type: 'application/pdf',
+      upload_source: 'email',
+      extracted_data: corrected,
+      extraction_model: MODEL,
+      extracted_at: READ_AT,
+      model_reading: { extracted_data: READING, extraction_model: MODEL, extracted_at: READ_AT },
+    }
+    const client = makeClient({
+      company_members: MEMBER,
+      invoice_inbox_items: { data: itemRow({ extracted_data: corrected }), error: null },
+      document_attachments: { data: document, error: null },
+      document_extractions: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await get('?include=reading')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.reading).toMatchObject({
+      inbox_item_id: ITEM_ID,
+      document_id: DOC_ID,
+      fields: {
+        seller_name: { value: 'Clas Ohlson AB', source: 'vision', evidence: 'trolig' },
+        invoice_number: { value: 'F-2', source: 'person', evidence: 'ditt_val' },
+        amount_due_for_payment: { value: 499, source: 'vision' },
+        document_type: { value: 'receipt', source: 'vision' },
+      },
+      door: { intake_source: 'intake_email', sender: 'kvitto@clasohlson.se' },
+      notes: [],
+    })
+    expect(body.data.extracted_data).toMatchObject({ invoice: { invoiceNumber: 'F-2' } })
+    const extractionReads = client.calls.filter((c) => c.table === 'document_extractions' && c.method === 'eq')
+    expect(extractionReads).toContainEqual(expect.objectContaining({ args: ['company_id', COMPANY_ID] }))
+  })
+
+  it('500 when the reading cannot be read, rather than a partial one', async () => {
+    mockServiceClient.mockReturnValue(
+      makeClient({
+        company_members: MEMBER,
+        invoice_inbox_items: { data: itemRow(), error: null },
+        document_attachments: [
+          { data: { id: DOC_ID, file_name: 'kvitto.pdf', extracted_data: null }, error: null },
+          { data: null, error: { message: 'statement timeout' } },
+        ],
+      }),
+    )
+    expect((await get('?include=reading')).status).toBe(500)
   })
 })
 

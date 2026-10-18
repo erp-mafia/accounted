@@ -14,6 +14,7 @@ import { SIELegacyReviewRequiredError } from './sie-legacy-recovery'
 import { checkSIEOrgNumber } from './sie-org-number'
 import { getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
 import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
+import { appSIEArrivalDoor, recordSIEImportArrival, type SIEArchivedOriginal, type SIEArrivalDoor } from './sie-arrival'
 
 export interface SIEJobOptions {
   filename: string
@@ -338,10 +339,15 @@ export async function getSIEJob(supabase: SupabaseClient, companyId: string, imp
   return data?.job_state ? data as SIEJob : null
 }
 
-/** Archive before reserving the execution. The path is immutable and tenant scoped. */
+/**
+ * Archive before reserving the execution. The path is immutable and tenant
+ * scoped. `arrival` names the door the file came through (the app's by
+ * default); the admitted job is recorded as an arrival pointing at the
+ * archived original, best effort.
+ */
 export async function submitSIEJob(supabase: SupabaseClient, companyId: string, userId: string,
   content: string, mappings: AccountMapping[], options: SIEJobOptions,
-  originalFile?: File, source: SIEImportSource = 'sie_file',
+  originalFile?: File, source: SIEImportSource = 'sie_file', arrival?: SIEArrivalDoor,
 ): Promise<SIEJob> {
   if (!acceptsSIEJobs()) throw new SIEJobValidationError(sieAdmissionRefusal())
   const checkedOptions = SIEJobOptionsSchema.safeParse(options)
@@ -382,6 +388,8 @@ export async function submitSIEJob(supabase: SupabaseClient, companyId: string, 
   // which an identical retry must match byte for byte.
   const orgNumber = orgCheck.fileOrgNumber
   let originalSource:Record<string,unknown> = {format:'provided_text',path,sha256:sourceHash,orgNumber}
+  let archived:SIEArchivedOriginal = {format:'provided_text',path,sha256:sourceHash,
+    size:Buffer.byteLength(content,'utf8'),mime:'text/plain'}
   if (originalFile) {
     if (originalFile.size > SIE_LIMITS.fileBytes) throw new SIEJobValidationError('SIE-filen är större än 50 MB.')
     const bytes = await originalFile.arrayBuffer()
@@ -395,6 +403,8 @@ export async function submitSIEJob(supabase: SupabaseClient, companyId: string, 
       }
     }
     originalSource = {format:'original_bytes',path:originalPath,sha256:rawHash,bytes:originalFile.size,filename:originalFile.name,orgNumber}
+    archived = {format:'original_bytes',path:originalPath,sha256:rawHash,size:bytes.byteLength,
+      mime:originalFile.type || 'application/octet-stream'}
   }
   let periodId: string
   if (options.createFiscalPeriod) {
@@ -424,7 +434,15 @@ export async function submitSIEJob(supabase: SupabaseClient, companyId: string, 
     p_supersedes_import_id: replacing ? options.supersedesImportId : predecessor?.id ?? null,
   })
   if (error) throw jobDatabaseError(error)
-  return data as SIEJob
+  const job = data as SIEJob
+  // How the file came in. An identical retry gets this job back and finds
+  // its arrival; nothing here can fail the submission.
+  if (job?.id) {
+    await recordSIEImportArrival(supabase, { companyId, importId: job.id, filename: options.filename,
+      fileHash: sourceHash, fiscalYear: input.fiscalYear ?? null, original: archived,
+      door: arrival ?? appSIEArrivalDoor(userId) })
+  }
+  return job
 }
 
 /** Reject untracked legacy attempts before forwarding durable actions to guarded RPCs. */

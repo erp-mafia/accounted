@@ -175,6 +175,10 @@
       "schedule": "45 5 * * *"
     },
     {
+      "path": "/api/vendor-logos/cron",
+      "schedule": "20 * * * *"
+    },
+    {
       "path": "/api/documents/read/cron",
       "schedule": "*/5 * * * *"
     },

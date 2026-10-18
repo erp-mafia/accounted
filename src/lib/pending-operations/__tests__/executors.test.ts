@@ -898,7 +898,10 @@ describe('commitPendingOperation: import_sie', () => {
       'user-1',
       expect.anything(),
       [],
-      expect.objectContaining({ updateAccountNames: true })
+      expect.objectContaining({ updateAccountNames: true }),
+      undefined,
+      'sie_file',
+      expect.objectContaining({ source: 'sie', via: 'mcp' }),
     )
   })
 
@@ -931,7 +934,10 @@ describe('commitPendingOperation: import_sie', () => {
       'user-1',
       expect.anything(),
       [],
-      expect.objectContaining({ updateAccountNames: false })
+      expect.objectContaining({ updateAccountNames: false }),
+      undefined,
+      'sie_file',
+      expect.objectContaining({ source: 'sie', via: 'mcp' }),
     )
   })
 
@@ -961,7 +967,8 @@ describe('commitPendingOperation: import_sie', () => {
     // Only a literal true confirms: submitSIEJob re-checks the file's #ORGNR.
     expect(submitSIEJob).toHaveBeenCalledWith(
       expect.anything(), 'company-1', 'user-1', expect.anything(), [],
-      expect.objectContaining({ confirmOrgNumberMismatch: expected }),
+      expect.objectContaining({ confirmOrgNumberMismatch: expected }), undefined, 'sie_file',
+      expect.objectContaining({ source: 'sie', via: 'mcp' }),
     )
   })
 
@@ -988,7 +995,8 @@ describe('commitPendingOperation: import_sie', () => {
 
     expect(submitSIEJob).toHaveBeenCalledWith(
       expect.anything(), 'company-1', 'user-1', expect.anything(), [],
-      expect.objectContaining(expected),
+      expect.objectContaining(expected), undefined, 'sie_file',
+      expect.objectContaining({ source: 'sie', via: 'mcp' }),
     )
   })
 

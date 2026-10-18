@@ -129,6 +129,33 @@ describe('POST /api/v1/companies/:companyId/documents', () => {
     expect(uploadDocumentMock).not.toHaveBeenCalled()
   })
 
+  // The archive is WORM: a "preview" that stored the file could not be undone.
+  it.each([
+    ['?dry_run=true', `${URL}?dry_run=true`, {}],
+    ['X-Dry-Run: true', URL, { 'X-Dry-Run': 'true' }],
+  ])('refuses a dry run (%s) with 400 and stores nothing', async (_label, url, extra) => {
+    const form = new FormData()
+    form.append('file', pdf())
+    const res = await POST(
+      new Request(url, {
+        method: 'POST',
+        body: form,
+        headers: {
+          Authorization: 'Bearer test-fixture-not-a-real-key',
+          'Idempotency-Key': 'abcd1234-2222-4abc-8def-1234567890ab',
+          ...extra,
+        },
+      }),
+      params(),
+    )
+    const body = await res.json()
+
+    expect(res.status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.field).toBe('dry_run')
+    expect(uploadDocumentMock).not.toHaveBeenCalled()
+  })
+
   it('returns 404 when journal_entry_id does not belong to the company', async () => {
     mockServiceClient.mockReturnValue(
       createTableMockSupabase({ ...MEMBER, journal_entries: { data: null, error: null } }).supabase,
@@ -195,5 +222,114 @@ describe('POST /api/v1/companies/:companyId/documents', () => {
     const [, , , , metadata] = uploadDocumentMock.mock.calls[0]
     expect(metadata).not.toHaveProperty('extractionOwner')
     expect(metadata.deferUploadedEvent).toBe(true)
+  })
+
+  it('records the upload as a partner_api arrival pointing at the stored document', async () => {
+    const DOC_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+    const db = createTableMockSupabase({
+      ...MEMBER,
+      document_attachments: {
+        data: { id: DOC_ID, storage_path: 'documents/x/y/kvitto.pdf', sha256_hash: 'e'.repeat(64), mime_type: 'application/pdf', file_size_bytes: 24, file_name: 'kvitto.pdf' },
+      },
+      arrivals: (calls) => {
+        const upsert = calls.find((c) => c.method === 'upsert')
+        return upsert ? { data: [{ ...(upsert.args[0] as Record<string, unknown>), created_at: '2026-10-15T08:00:00Z' }] } : { data: null }
+      },
+      arrival_outputs: { data: null },
+    })
+    mockServiceClient.mockReturnValue(db.supabase)
+    uploadDocumentMock.mockResolvedValue(makeDocumentAttachment({ id: DOC_ID, file_name: 'kvitto.pdf', journal_entry_id: null }))
+
+    const res = await POST(makeUpload({ file: pdf() }), params())
+
+    expect(res.status).toBe(201)
+    const [arrival] = db.payloads('arrivals', 'upsert') as Array<Record<string, unknown>>
+    expect(arrival).toMatchObject({
+      company_id: COMPANY_ID,
+      source: 'partner_api',
+      source_ref: DOC_ID,
+      original_path: 'documents/x/y/kvitto.pdf',
+      fetched_by: { type: 'api_key', user_id: 'user-1', api_key_id: 'ak_1' },
+      source_meta: { document_id: DOC_ID, file_name: 'kvitto.pdf', idempotency_key: 'abcd1234-1111-4abc-8def-1234567890ab' },
+    })
+  })
+
+  it('answers 201 even when the arrival cannot be recorded', async () => {
+    const DOC_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({ ...MEMBER, document_attachments: { data: null, error: { message: 'boom' } } }).supabase,
+    )
+    uploadDocumentMock.mockResolvedValue(makeDocumentAttachment({ id: DOC_ID, file_name: 'kvitto.pdf', journal_entry_id: null }))
+
+    const res = await POST(makeUpload({ file: pdf() }), params())
+    expect(res.status).toBe(201)
+  })
+
+  it.each([
+    ['no dedupe_by_content', {}],
+    ['dedupe_by_content=false', { dedupe_by_content: 'false' }],
+  ])('stores every upload as its own row by default (%s), as before the dedupe existed', async (_label, fields) => {
+    mockServiceClient.mockReturnValue(createTableMockSupabase({ ...MEMBER }).supabase)
+    uploadDocumentMock.mockResolvedValue(makeDocumentAttachment({ id: 'doc-3', journal_entry_id: null }))
+
+    const res = await POST(makeUpload({ file: pdf(), ...fields }), params())
+    const body = await res.json()
+
+    expect(res.status).toBe(201)
+    expect(uploadDocumentMock.mock.calls[0][4]).not.toHaveProperty('dedupeByContent')
+    expect(body.data).not.toHaveProperty('deduplicated')
+    expect(body.data).not.toHaveProperty('duplicate_of')
+  })
+
+  it('asks for the content dedupe when the caller opts in on an upload that names no verifikat', async () => {
+    mockServiceClient.mockReturnValue(createTableMockSupabase({ ...MEMBER }).supabase)
+    uploadDocumentMock.mockResolvedValue(makeDocumentAttachment({ id: 'doc-5', journal_entry_id: null }))
+
+    const res = await POST(makeUpload({ file: pdf(), dedupe_by_content: 'true' }), params())
+    const body = await res.json()
+
+    expect(res.status).toBe(201)
+    expect(uploadDocumentMock.mock.calls[0][4]).toEqual(expect.objectContaining({ dedupeByContent: true }))
+    expect(body.data).not.toHaveProperty('deduplicated')
+  })
+
+  it('returns 400 for a dedupe_by_content that is not true or false', async () => {
+    const res = await POST(makeUpload({ file: pdf(), dedupe_by_content: 'yes' }), params())
+    const body = await res.json()
+
+    expect(res.status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(uploadDocumentMock).not.toHaveBeenCalled()
+  })
+
+  it('answers the archived document with deduplicated and duplicate_of when the bytes are already there', async () => {
+    mockServiceClient.mockReturnValue(createTableMockSupabase({ ...MEMBER }).supabase)
+    uploadDocumentMock.mockResolvedValue({
+      ...makeDocumentAttachment({ id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', journal_entry_id: JE_ID }),
+      deduplicated: true,
+    })
+
+    const res = await POST(makeUpload({ file: pdf(), dedupe_by_content: 'true' }), params())
+    const body = await res.json()
+
+    expect(res.status).toBe(201)
+    expect(body.data).toMatchObject({
+      id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      journal_entry_id: JE_ID,
+      deduplicated: true,
+      duplicate_of: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    })
+  })
+
+  it('ignores dedupe_by_content on an upload that names a verifikat: the same underlag sits on several verifikat as one copy each', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({ ...MEMBER, journal_entries: { data: { id: JE_ID }, error: null } }).supabase,
+    )
+    uploadDocumentMock.mockResolvedValue(makeDocumentAttachment({ id: 'doc-4', journal_entry_id: JE_ID }))
+
+    const res = await POST(makeUpload({ file: pdf(), journal_entry_id: JE_ID, dedupe_by_content: 'true' }), params())
+
+    expect(res.status).toBe(201)
+    expect(uploadDocumentMock.mock.calls[0][4]).not.toHaveProperty('dedupeByContent')
   })
 })

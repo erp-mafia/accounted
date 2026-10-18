@@ -114,7 +114,7 @@ describe('gnubok_list_inbox_items', () => {
     }
 
     const select = findCall('invoice_inbox_items', 'select')?.[0]
-    expect(select).toContain('document_attachments(file_name, journal_entry_id)')
+    expect(select).toContain('document_attachments(file_name, journal_entry_id')
     expect(result.items.map((item) => item.file_name)).toEqual([
       'leverantor-export-2026-07.pdf',
       null,

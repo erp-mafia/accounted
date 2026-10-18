@@ -93,7 +93,14 @@ export interface SkatteverketActionServices {
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
-const DISABLED: Failure = { ok: false, code: 'EXTENSION_DISABLED' }
+// EXTENSION_DISABLED's registry copy names no feature (several raise it):
+// these doors say which one, in the copy the extension itself uses.
+const DISABLED: Failure = {
+  ok: false,
+  code: 'EXTENSION_DISABLED',
+  messageSv: 'Skatteverket-integrationen är inte aktiverad i denna miljö.',
+  details: { extension: 'skatteverket' },
+}
 
 async function services<K extends keyof SkatteverketActionServices>(key: K): Promise<SkatteverketActionServices[K] | null> {
   const wired = (await extensionRegistry.get('skatteverket'))?.services as Partial<SkatteverketActionServices> | undefined

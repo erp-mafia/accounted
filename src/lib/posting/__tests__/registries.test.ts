@@ -86,6 +86,7 @@ describe('business event categories (a closed, add-only list)', () => {
       'expense.personnel', 'finance.banking', 'finance.other', 'owner.transfer', 'se.tax.settlement',
       'se.closing.appropriations',
     ])
+    expect(BUSINESS_EVENT_CATEGORIES.slice(28, 29).map((c) => c.key)).toEqual(['expense.fees'])
   })
 
   it('files every transaction category but uncategorized under exactly one key', () => {

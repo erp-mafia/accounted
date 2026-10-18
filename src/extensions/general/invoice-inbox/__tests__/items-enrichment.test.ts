@@ -17,6 +17,7 @@ import {
   testRoutes,
 } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
+import { bankMatchSourceKey, type BankMatchItemRow } from '@/lib/documents/inbox-bank-match'
 
 const resolveBooked = vi.fn()
 const resolveAnchoring = vi.fn()
@@ -25,6 +26,9 @@ vi.mock('@/lib/transactions/inbox-underlag', async (importOriginal) => ({
   resolveBookedJournalEntryIds: (...a: unknown[]) => resolveBooked(...a),
   resolveUnderlagAnchoring: (...a: unknown[]) => resolveAnchoring(...a),
 }))
+
+const vendorLogoUrls = vi.fn()
+vi.mock('@/lib/vendor-logos/read', () => ({ vendorLogoUrls: (...a: unknown[]) => vendorLogoUrls(...a) }))
 
 function findRoute(method: string, path: string) {
   return testRoutes(invoiceInboxExtension).find((r) => r.method === method && r.path === path)!
@@ -64,6 +68,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   resolveBooked.mockResolvedValue(new Map())
   resolveAnchoring.mockResolvedValue(new Map())
+  vendorLogoUrls.mockResolvedValue(new Map())
 })
 
 describe('GET /items', () => {
@@ -134,6 +139,73 @@ describe('GET /items', () => {
     const byId = Object.fromEntries(body.data.items.map((i) => [i.id as string, i]))
     expect(byId.routed).toMatchObject({ extracted_data: { documentKind: 'receipt' }, extraction_skipped: false })
     expect(byId.bare).toMatchObject({ extracted_data: null, extraction_skipped: true })
+  })
+
+  it("carries the vendor's stored icon, resolved from the supplier as read and the sender", async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        { ...makeInvoiceInboxItem({ id: 'telia' }), extracted_data: { supplier: { name: 'Telia Sverige AB' } }, email_from: 'faktura@telia.se' },
+        { ...makeInvoiceInboxItem({ id: 'unknown' }), extracted_data: null, email_from: null, email_subject: 'Kvitto' },
+      ],
+    })
+    vendorLogoUrls.mockResolvedValue(new Map([['telia', 'https://db.example/storage/v1/object/public/logos/vendor-icons/abc.png']]))
+    const { body } = await parseJsonResponse<{ data: { items: Array<{ id: string; logo_url: string | null }> } }>(
+      await route.handler(req(), buildCtx(supabase)),
+    )
+    expect(vendorLogoUrls).toHaveBeenCalledWith([
+      { key: 'telia', name: 'Telia Sverige AB', emails: ['faktura@telia.se'] },
+      { key: 'unknown', name: 'Kvitto', emails: [null] },
+    ])
+    const byId = Object.fromEntries(body.data.items.map((i) => [i.id, i]))
+    expect(byId.telia!.logo_url).toBe('https://db.example/storage/v1/object/public/logos/vendor-icons/abc.png')
+    expect(byId.unknown!.logo_url).toBeNull()
+  })
+
+  it('carries the bank row each open item looks already paid by, read for the whole list at once', async () => {
+    const reading = { documentKind: 'supplier_invoice', supplier: { name: 'Leverantören AB' }, invoice: { dueDate: '2026-10-15', currency: 'SEK' }, totals: { total: 1250 } }
+    const proposed = (id: string, tx: string) => {
+      const row = {
+        ...makeInvoiceInboxItem({ id, document_id: `doc-${id}`, extracted_data: reading as never }),
+        bank_match_transaction_id: tx,
+        bank_match_basis: 'rule_ocr_reference',
+        bank_match_evidence_level: 'exakt',
+      }
+      return { ...row, bank_match_source_key: bankMatchSourceKey(row as BankMatchItemRow) }
+    }
+    const bankRow = (id: string) => ({ id, date: '2026-10-03', amount: -1250, currency: 'SEK', merchant_name: 'LEVERANTOREN', description: 'Betalning', journal_entry_id: null, is_ignored: false, transaction_voucher_links: [] })
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [proposed('a', 'tx-a'), proposed('b', 'tx-b'), makeInvoiceInboxItem({ id: 'c', extracted_data: reading as never })] })
+    enqueue({ data: [bankRow('tx-a'), { ...bankRow('tx-b'), journal_entry_id: 'je-booked' }] }) // the proposed rows, together
+    enqueue({ data: [] }) // invoice payments
+    enqueue({ data: [] }) // supplier payments
+    enqueue({ data: [] }) // other inbox items paired with them
+
+    const { status, body } = await parseJsonResponse<{ data: { items: Array<{ id: string; bank_match: unknown }> } }>(
+      await route.handler(req(), buildCtx(supabase)),
+    )
+    expect(status).toBe(200)
+    const byId = Object.fromEntries(body.data.items.map((i) => [i.id, i]))
+    expect(byId.a!.bank_match).toMatchObject({ transaction_id: 'tx-a', amount: -1250, basis: 'rule_ocr_reference', evidence_level: 'exakt' })
+    // Booked since the proposal was written: the list says nothing.
+    expect(byId.b!.bank_match).toBeNull()
+    expect(byId.c!.bank_match).toBeNull()
+    // One read of the bank rows for the page, never one per row.
+    expect(findCalls('transactions', 'select')).toHaveLength(1)
+    expect(findCalls('transactions', 'in')).toEqual([['id', ['tx-a', 'tx-b']]])
+  })
+
+  it('still answers the list when the bank rows cannot be read, without proposals', async () => {
+    const reading = { documentKind: 'receipt', supplier: { name: 'Clas Ohlson' }, totals: { total: 499 } }
+    const row = { ...makeInvoiceInboxItem({ id: 'a', document_id: 'doc-a', extracted_data: reading as never }), bank_match_transaction_id: 'tx-a', bank_match_basis: 'rule_amount_date', bank_match_evidence_level: 'trolig' }
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ ...row, bank_match_source_key: bankMatchSourceKey(row as BankMatchItemRow) }] })
+    enqueue({ data: null, error: { message: 'timeout' } })
+    const { status, body } = await parseJsonResponse<{ data: { items: Array<{ id: string; bank_match: unknown }> } }>(
+      await route.handler(req(), buildCtx(supabase)),
+    )
+    expect(status).toBe(200)
+    expect(body.data.items[0]!.bank_match).toBeNull()
   })
 
   it('reports unknown (never booked on a guess) when the anchoring read could not classify the item', async () => {
@@ -257,5 +329,106 @@ describe('GET /items/:id', () => {
     )
     expect(body.data).toMatchObject({ matched_transaction_journal_entry_id: null, underlag_status: null })
     expect(resolveAnchoring).not.toHaveBeenCalled()
+  })
+})
+
+describe('GET /items/:id?include=reading', () => {
+  const route = findRoute('GET', '/items/:id')
+  const reading = {
+    documentKind: 'receipt',
+    supplier: { name: 'Kafé Exempel' },
+    invoice: { invoiceDate: '2026-10-02', currency: 'SEK' },
+    totals: { total: 148 },
+  }
+  const req = (query: string) => createMockRequest(`/items/i1?_id=i1${query}`, { method: 'GET' })
+
+  it('leaves the reading out unless asked', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ id: 'i1', document_id: 'doc-a', extracted_data: reading }) })
+    const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await route.handler(req(''), buildCtx(supabase)))
+    expect(body.data.reading).toBeUndefined()
+    expect(findCall('document_extractions', 'select')).toBeUndefined()
+  })
+
+  it("adds the one reading, each field with its source and evidence", async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ id: 'i1', document_id: 'doc-a', extracted_data: reading }) })
+    enqueue({ data: { id: 'doc-a', mime_type: 'image/jpeg', extracted_data: reading, extraction_model: 'claude-sonnet-4-6', extracted_at: null } })
+    enqueue({ data: null }) // no Arkiv record
+    const { status, body } = await parseJsonResponse<{ data: { reading: Record<string, unknown> } }>(await route.handler(req('&include=reading'), buildCtx(supabase)))
+    expect(status).toBe(200)
+    expect(body.data.reading).toMatchObject({
+      inbox_item_id: 'i1',
+      fields: {
+        seller_name: { value: 'Kafé Exempel', source: 'vision', evidence: 'trolig' },
+        amount_due_for_payment: { value: 148, source: 'vision', evidence: 'trolig' },
+      },
+    })
+  })
+
+  it('answers 500 when the reading cannot be read', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ id: 'i1', document_id: 'doc-a', extracted_data: reading }) })
+    enqueue({ data: null, error: { message: 'boom' } })
+    expect((await route.handler(req('&include=reading'), buildCtx(supabase))).status).toBe(500)
+  })
+})
+
+describe('GET /items/:id bank_match', () => {
+  const route = findRoute('GET', '/items/:id')
+  const reading = {
+    documentKind: 'receipt',
+    supplier: { name: 'Clas Ohlson' },
+    invoice: { invoiceDate: '2026-09-10', currency: 'SEK' },
+    totals: { total: 499 },
+  }
+  const req = () => createMockRequest('/items/i1?_id=i1', { method: 'GET' })
+  function proposed(overrides: Record<string, unknown> = {}) {
+    const row = {
+      ...makeInvoiceInboxItem({ id: 'i1', document_id: 'doc-a', extracted_data: reading }),
+      bank_match_transaction_id: 'tx-9',
+      bank_match_basis: 'rule_amount_date',
+      bank_match_evidence_level: 'trolig',
+      ...overrides,
+    }
+    return { ...row, bank_match_source_key: bankMatchSourceKey(row as BankMatchItemRow) }
+  }
+  const bankRow = { id: 'tx-9', date: '2026-09-12', amount: -499, currency: 'SEK', merchant_name: 'CLAS OHLSON', description: 'Kortköp', journal_entry_id: null, is_ignored: false, transaction_voucher_links: [] }
+
+  it('null for an item with no proposal, without reading the bank', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ id: 'i1', document_id: 'doc-a', extracted_data: reading }) })
+    const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await route.handler(req(), buildCtx(supabase)))
+    expect(body.data.bank_match).toBeNull()
+    expect(findCall('transactions', 'select')).toBeUndefined()
+  })
+
+  it('answers the proposal, re-checked against the bank row', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: proposed() })
+    enqueue({ data: bankRow })
+    enqueue({ data: [] }) // invoice payments
+    enqueue({ data: [] }) // supplier payments
+    enqueue({ data: [] }) // other inbox items paired with it
+    const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await route.handler(req(), buildCtx(supabase)))
+    expect(status).toBe(200)
+    expect(body.data.bank_match).toEqual({
+      transaction_id: 'tx-9',
+      date: '2026-09-12',
+      amount: -499,
+      currency: 'SEK',
+      counterparty: 'CLAS OHLSON',
+      basis: 'rule_amount_date',
+      evidence_level: 'trolig',
+    })
+  })
+
+  it('null when the bank row was booked since, and the item still answers', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: proposed() })
+    enqueue({ data: { ...bankRow, journal_entry_id: 'je-7' } })
+    const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await route.handler(req(), buildCtx(supabase)))
+    expect(status).toBe(200)
+    expect(body.data.bank_match).toBeNull()
   })
 })

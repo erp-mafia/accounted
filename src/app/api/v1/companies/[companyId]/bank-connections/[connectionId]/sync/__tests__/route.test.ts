@@ -152,8 +152,11 @@ describe('v1 bank-connections sync', () => {
     authOk(['transactions:write'])
     registryGetMock.mockReturnValue(undefined)
     const res = await POST(req(), params)
-    const body = (await res.json()) as { error: { code: string } }
+    const body = (await res.json()) as { error: { code: string; message: string; details?: Record<string, unknown> } }
     expect(body.error.code).toBe('EXTENSION_DISABLED')
+    // The copy names no feature; details say which one is off.
+    expect(body.error.message).not.toMatch(/skatteverket/i)
+    expect(body.error.details).toMatchObject({ extension: 'enable-banking' })
     expect(triggerSyncMock).not.toHaveBeenCalled()
   })
 

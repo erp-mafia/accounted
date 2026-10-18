@@ -1,0 +1,1 @@
+[2026-10-15] The provenance line takes the mailbox provider from the item's channel_context and says "Uppladdad av dig" from the local session, instead of widening the arrivals route: it returns no source_meta or member names, and that contract is MR !466's to change.

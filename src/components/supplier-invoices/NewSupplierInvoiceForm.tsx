@@ -128,9 +128,25 @@ function SectionLabel({ children }: { children: ReactNode }) {
   )
 }
 
+/** The bank row an inbox invoice was paid by, when the Inkorg found it on arrival. */
+export interface SettleWithBankRow {
+  transactionId: string
+  date: string
+  /** As the bank row carries it: signed, in `currency`. */
+  amount: number
+  currency: string
+  counterparty: string | null
+}
+
 export interface NewSupplierInvoiceFormProps {
   /** Invoice-inbox item to convert; prefills the form from its AI extraction. */
   inboxItemId?: string | null
+  /**
+   * With an inbox item: the bank row that paid it. "Vem betalade?" starts on
+   * Företaget, and Registrera registers the invoice and settles it against
+   * this row in one step instead of asking for the row.
+   */
+  settleWith?: SettleWithBankRow | null
   /**
    * Render without page chrome (back button + h1) for use inside
    * NewSupplierInvoiceDialog: the same convention as JournalEntryForm's
@@ -150,6 +166,7 @@ export interface NewSupplierInvoiceFormProps {
 
 export default function NewSupplierInvoiceForm({
   inboxItemId = null,
+  settleWith = null,
   bare = false,
   onCreated,
   onCancel,
@@ -267,7 +284,7 @@ export default function NewSupplierInvoiceForm({
       reverse_charge: false,
       payment_reference: '',
       notes: '',
-      payer: 'unpaid',
+      payer: settleWith && inboxItemId ? 'company' : 'unpaid',
       claimant_name: '',
       employee_id: '',
       // The table starts empty: the ghost entry row (never part of form
@@ -1395,6 +1412,7 @@ export default function NewSupplierInvoiceForm({
     // The Utlägg nav row is gated on existing claims in the server layout.
     onExpenseRegistered: () => router.refresh(),
     onMissingField: focusMissingField,
+    settleTransactionId: inboxItemId ? (settleWith?.transactionId ?? null) : null,
   })
 
   async function discardUploadedDocument() {
@@ -1781,6 +1799,15 @@ export default function NewSupplierInvoiceForm({
                   />
                 )}
               />
+              {settleWith && inboxItemId && watchedPayer === 'company' && (
+                <p data-ph-mask="" className="text-[12.5px] text-muted-foreground">
+                  {t('settle_with_bank_row', {
+                    date: formatDate(settleWith.date),
+                    amount: formatCurrency(Math.abs(settleWith.amount), settleWith.currency),
+                    counterparty: settleWith.counterparty ?? t('settle_with_bank_row_unknown'),
+                  })}
+                </p>
+              )}
               {isPersonPayer(watchedPayer) && (
                 <ExpenseClaimantFields
                   payer={watchedPayer}

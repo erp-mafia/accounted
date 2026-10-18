@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { getActor } from '@/lib/bookkeeping/actor-context'
 import { committingOperationId } from '@/lib/pending-operations/commit-scope'
 import { createLogger } from '@/lib/logger'
+import { modelReadingOf, type DocumentReadingRow } from '@/lib/documents/model-reading'
 import {
   INBOX_EXTRACTION_RULES_REVISION,
   classifyInboxDecision,
@@ -20,10 +21,12 @@ import { inboxInputHash, withProgramVersion } from './provenance'
  * Two steps around the registration or booking, as for bank lines
  * (./record.ts):
  *   1. snapshotInboxExtraction() before it: the model's ORIGINAL reading.
- *      That is document_attachments.extracted_data, which only the model
- *      writes (the inbox mirrors each extraction onto the document); the
- *      inbox item's own extracted_data takes the person's edits, so it is
- *      the fallback only for an item whose document carries no reading. It
+ *      That is document_attachments.extracted_data until a person corrects
+ *      the reading: the correction is mirrored onto the document too, and
+ *      the model's reading is kept in document_attachments.model_reading
+ *      first (lib/documents/model-reading.ts). The inbox
+ *      item's own extracted_data takes the person's edits, so it is the
+ *      fallback only for an item whose document carries no model reading. It
  *      also fixes the rules version and the hash of the inputs (the
  *      document's own hash and the suggestion, ./provenance.ts).
  *   2. recordInboxDecision() after it succeeded, with the guards the door
@@ -82,18 +85,20 @@ export async function snapshotInboxExtraction(
   }
   if (!snapshot.documentId) return withInputs(snapshot, null)
   try {
+    // '*' rather than a column list: a model_reading column a deploy reaches
+    // before its migration must not turn every snapshot into a failed read.
     const { data, error } = await supabase
       .from('document_attachments')
-      .select('extracted_data, extraction_model, sha256_hash')
+      .select('*')
       .eq('id', snapshot.documentId)
       .eq('company_id', companyId)
       .maybeSingle()
     if (error) throw new Error(error.message)
-    const model = (data?.extraction_model as string | null | undefined) ?? null
     // 'skipped:<reason>' and 'failed:<reason>' mark a reading that never happened.
-    if (data?.extracted_data && model && !/^(skipped|failed):/.test(model)) {
-      snapshot.extraction = data.extracted_data
-      snapshot.model = model
+    const reading = modelReadingOf(data as DocumentReadingRow | null)
+    if (reading) {
+      snapshot.extraction = reading.extracted_data
+      snapshot.model = reading.extraction_model
     }
     return withInputs(snapshot, (data?.sha256_hash as string | null | undefined) ?? null)
   } catch (err) {

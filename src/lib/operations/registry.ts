@@ -152,6 +152,7 @@ import {
   inboxItemsMatchSupplier,
   inboxItemsMatchTransaction,
 } from './inbox-matches'
+import { inboxItemsSetPurchaseCategory } from './inbox-purchase-category'
 import {
   transactionsBulkBook,
   transactionsDelete,
@@ -377,6 +378,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   // inbox-matches
   inboxItemsMatchSupplier,
   inboxItemsMatchTransaction,
+  // inbox purchase category
+  inboxItemsSetPurchaseCategory,
   // transactions
   transactionsDelete,
   transactionsUpdate,

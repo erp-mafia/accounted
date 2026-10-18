@@ -731,6 +731,15 @@ describe('tools/list payload size guard', () => {
     //     pattern 135 times. With the team_ prefix, gnubok_create_company's
     //     team_id is a typed id field too. Measured 65 693 (was 66 083).
     //     Ceiling unchanged.
+    //   * One document read (2026-10-15): gnubok_get_document_content gains
+    //     include (text, reading, links, arrivals), from_page and max_chars,
+    //     so a client that cannot open the signed URL still reads the
+    //     document. Paid for inside the tool: document_id lost its restating
+    //     note, the output its required list and the description its worked
+    //     use; what the parts carry travels in the response (text.hint,
+    //     reading.note, notice) and is declared in no outputSchema. The tool's
+    //     projection is 6 characters shorter than before. Measured 66 081
+    //     (single-company 61 072). Ceiling unchanged.
     expect(approxTokens).toBeLessThan(66_100)
   })
 
@@ -803,6 +812,8 @@ describe('tools/list payload size guard', () => {
     // 61 006 but tell an agent nothing about the id's shape (the ten
     // fiscal-period tools traded a "UUID of" note for that format).
     // Measured 61 224.
+    // 2026-10-15, include on gnubok_get_document_content (see the case
+    // above): measured 61 072. Ceiling unchanged.
     // 61 300 to 61 400 on 2026-10-18, the support-queue landings: gnubok_agi_submit
     // says approval rebuilds an unfiled underlag (#69), the kontantmetod payment
     // notes name the year-end carry (#3440) and gnubok_mark_invoice_as_sent gains

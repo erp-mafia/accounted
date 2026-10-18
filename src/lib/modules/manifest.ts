@@ -135,6 +135,10 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     dependsOn: ['platform'],
     libFolders: [
       'bookkeeping',
+      // The purchase-category list (what was bought) and its proposal: the
+      // jurisdiction-neutral category key every booking carries, read by the
+      // inbox, the ledger's analysis and later the posting port.
+      'categories',
       'core',
       'company',
       'invariants',
@@ -142,6 +146,10 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
       'export',
       'dimensions',
       'documents',
+      // Arrivals: how every document, bank page and file entered the books,
+      // with the original kept (BFL 7 kap). Written by the blocks' doors,
+      // read with the archive, so it sits beside documents.
+      'intake',
       'processing-history',
       // The decision log behind each booking proposal (suggestion_log): part of
       // the company's bookkeeping (privacy policy section 5) and read by the
@@ -348,6 +356,10 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     dependsOn: [],
     libFolders: [
       'arkiv',
+      // The new Inkorg page's rollout flag and its pure view logic (views,
+      // doors, queue order, the focus view's decision and keyboard map, the
+      // field panel's labels, formatting and correction payloads).
+      'inkorg',
       'mail-search',
       'receipt-hunt',
       // Document reading, classification and extraction: one cycle with arkiv.
@@ -356,6 +368,12 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
       'documents/jobs',
       'documents/read',
       'documents/inbox-extraction',
+      // The one reading of an inbox item: assembled from the inbox's readings,
+      // its Peppol reader passed in by the caller.
+      'documents/reading',
+      // Match on arrival: the bank row an arriving underlag looks already paid
+      // by, decided with the supplier-invoice and giro rules the caller passes in.
+      'documents/bank-match',
     ],
     operationPrefixes: ['inbox-items'],
     v1Segments: ['inbox-items'],
@@ -445,7 +463,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     nameSv: 'Motparter',
     summary: 'Counterparties observed in the books and the company register lookups that identify them.',
     dependsOn: [],
-    libFolders: ['parties', 'company-lookup'],
+    // vendor-logos: each counterpart's own icon, fetched once per domain from its website.
+    libFolders: ['parties', 'company-lookup', 'vendor-logos'],
     operationPrefixes: [],
     v1Segments: [],
     jurisdictions: SE,
@@ -537,6 +556,7 @@ export const INFRA_LIB_FOLDERS: readonly string[] = Object.freeze([
   'support',
   'theme',
   'ui-state',
+  'vendor-marks',
   // The unexplained queue: expected-zero checks that read across the ledger
   // and the blocks (reconciliation, VAT filings, bank rows), like the worklist.
   'unexplained',

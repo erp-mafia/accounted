@@ -18,6 +18,7 @@ function ctx(overrides: Partial<NavGateContext> = {}): NavGateContext {
     hasPosSales: true,
     arkivEnabled: true,
     agentsEnabled: true,
+    inkorgV2Enabled: true,
     capabilities: ['ai'],
     hiddenNavHrefs: new Set(),
     ...overrides,
@@ -39,6 +40,7 @@ describe('passesNavGates', () => {
     ['requiresPosSales', item({ requiresPosSales: true }), { hasPosSales: false }],
     ['requiresArkiv', item({ requiresArkiv: true }), { arkivEnabled: false }],
     ['requiresAgents', item({ requiresAgents: true }), { agentsEnabled: false }],
+    ['requiresInkorgV2', item({ requiresInkorgV2: true }), { inkorgV2Enabled: false }],
     ['requiredCapability', item({ requiredCapability: 'ai' }), { capabilities: [] }],
     ['entityOnly', item({ entityOnly: 'aktiebolag' }), { entityType: 'enskild_firma' }],
     ['entityOnly list', item({ entityOnly: ['aktiebolag', 'ekonomisk_forening'] }), { entityType: 'enskild_firma' }],
@@ -57,6 +59,12 @@ describe('passesNavGates', () => {
 
   it('always shows the Assistent entry: before the agent is built it leads to building it (crm#1135)', () => {
     expect(passesNavGates(item({ href: '/chat' }), ctx())).toBe(true)
+  })
+
+  it('hides what the new Inkorg replaces for a company in its rollout, and only then', () => {
+    const underlag = item({ href: '/e/general/invoice-inbox', hiddenWithInkorgV2: true })
+    expect(passesNavGates(underlag, ctx({ inkorgV2Enabled: false }))).toBe(true)
+    expect(passesNavGates(underlag, ctx({ inkorgV2Enabled: true }))).toBe(false)
   })
 
   it('never shows hidden or byrå-only entries in the company nav', () => {

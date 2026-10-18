@@ -1,0 +1,1 @@
+[2026-10-17] New port key expense.fees: the inbox's authority, royalty and patent/trademark fees (was expense.other), memberships (was education) and collection fees (was professional_services) move under it: BAS keeps them on 6061-6062, 6560 and 69xx, apart from advice and training.

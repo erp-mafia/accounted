@@ -480,6 +480,7 @@ async function commitRegisteredOperation(
   userId: string,
   companyId: string,
   params: Record<string, unknown>,
+  pendingOperationId: string,
 ): Promise<ExecutorResult> {
   const upgrade = operation.mcp?.stage?.upgradeParams
   const parsed = (operation.input as unknown as z.ZodTypeAny).safeParse(upgrade ? upgrade(params) : params)
@@ -492,7 +493,7 @@ async function commitRegisteredOperation(
     }
   }
   const outcome = await operation.run(
-    { supabase, companyId, userId, log: log.child({ operation: operation.id }) },
+    { supabase, companyId, userId, log: log.child({ operation: operation.id }), pendingOperationId },
     parsed.data,
     { dryRun: false },
   )
@@ -5423,12 +5424,13 @@ async function commitImportSie(
     return { error: 'file_content, filename, and mappings are required', status: 400 }
   }
 
+  // Only an MCP tool stages import_sie: the agent sent the file, the person approved it.
   let job: Awaited<ReturnType<typeof submitSIEJob>>
   try {
     job = await submitSIEJob(supabase,companyId,userId,fileContent,mappings,{
       filename,createFiscalPeriod,importOpeningBalances,importTransactions,voucherSeries,openingBalanceSeries,updateAccountNames,
       confirmOrgNumberMismatch,
-    })
+    },undefined,'sie_file',{source:'sie',via:'mcp',fetchedBy:{type:'user',user_id:userId,label:'mcp-approval'}})
   } catch (err) {
     // A refusal the job RPC raised rolled back: nothing started. It answers
     // with its code, the reader's sentence and the registry's remediation,
@@ -7525,7 +7527,7 @@ async function commitPendingOperationInner(
             http_status: 400,
           }
         }
-        result = await commitRegisteredOperation(operation, supabase, userId, companyId, pendingOp.params)
+        result = await commitRegisteredOperation(operation, supabase, userId, companyId, pendingOp.params, pendingOp.id)
         break
       }
     }

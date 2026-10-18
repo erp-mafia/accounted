@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react'
-import { Archive, ArrowLeftRight, BarChart3, BookOpen, CheckSquare, FileCheck, HandCoins, Landmark, Percent, ReceiptText, Sparkles, Wallet, Workflow } from 'lucide-react'
+import { Archive, ArrowLeftRight, BarChart3, BookOpen, CheckSquare, FileCheck, HandCoins, Inbox, Landmark, Percent, ReceiptText, Sparkles, Wallet, Workflow } from 'lucide-react'
 import { EXTENSION_REQUIRED_CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
 import type { ModuleId } from '@/lib/modules/manifest'
 import type { EntityType } from '@/types'
@@ -35,6 +35,10 @@ export interface NavGateFlags {
   requiresArkiv?: boolean
   /** The Agenter page (/skills); hidden in production while it is finished (lib/agent-skills/flag.ts). */
   requiresAgents?: boolean
+  /** The new Inkorg page (/inkorg): shown only for companies in the INKORG_V2_COMPANY_IDS rollout (lib/inkorg/flag.ts). */
+  requiresInkorgV2?: boolean
+  /** What the new Inkorg page replaces (Underlag under Inköp): hidden for the companies in that rollout. */
+  hiddenWithInkorgV2?: boolean
   requiredCapability?: CapabilityKey
   /** Show only for these legal forms (one or several). */
   entityOnly?: EntityType | readonly EntityType[]
@@ -66,6 +70,19 @@ export const NAV_V2_TOP: NavV2Item[] = [
     labelKey: 'v2_todo',
     icon: CheckSquare,
     sub: [{ href: '/pending', module: 'platform', labelKey: 'v2_proposals' }],
+  },
+  // Inkorg, lifted out of Inköp to sit under Att göra (founder decision
+  // 2026-10-16): what arrives is not only purchases, and an inbox that feeds
+  // supplier invoices, utlägg and verifikat should not live inside one of
+  // them. Per company while it rolls out; Underlag under Inköp hides for the
+  // same companies, so the inbox is in one place either way.
+  {
+    href: '/inkorg',
+    module: 'inbox',
+    labelKey: 'inkorg',
+    icon: Inbox,
+    requiresInkorgV2: true,
+    requiredCapability: EXTENSION_REQUIRED_CAPABILITY['general/invoice-inbox'],
   },
   {
     href: '/chat',
@@ -134,6 +151,7 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
         module: 'inbox',
         labelKey: 'invoice_inbox',
         requiredCapability: EXTENSION_REQUIRED_CAPABILITY['general/invoice-inbox'],
+        hiddenWithInkorgV2: true,
       },
       { href: '/expenses', module: 'expenses', labelKey: 'expenses', requiresExpenses: true },
       { href: '/mileage', module: 'expenses', labelKey: 'mileage', requiresMileage: true },

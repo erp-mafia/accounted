@@ -1,0 +1,1 @@
+[2026-10-15] gnubok_get_inbox_item returns the one reading on every call, undeclared, while v1 and the dashboard return it only on include=reading: an MCP opt-in argument would spend tools/list tokens the catalog does not have, and a single-item read is where an agent wants it.

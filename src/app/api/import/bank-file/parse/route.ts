@@ -10,6 +10,7 @@ import type { BankFileFormatId } from '@/lib/import/bank-file/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { loadFileAccountMatch, type FileAccountMatch } from '@/lib/cash-accounts/file-account'
 import { dominantCurrency } from '@/lib/import/bank-file/currency-summary'
+import { archiveBankFileOriginal } from '@/lib/import/bank-file/arrival'
 
 /**
  * POST /api/import/bank-file/parse
@@ -18,6 +19,8 @@ import { dominantCurrency } from '@/lib/import/bank-file/currency-summary'
  * FormData, auto-detects format, and returns a parsed transactions preview
  * with duplicate detection. A workbook is converted to semicolon text first
  * and returned as `file_content`, the text the manual column mapping reads.
+ * The file itself is archived here as the import's original
+ * (lib/import/bank-file/arrival.ts).
  */
 export const POST = withRouteContext(
   'bank_file.parse',
@@ -103,6 +106,18 @@ export const POST = withRouteContext(
             found_columns: columns.found,
             expected_columns: columns.expected,
           },
+        })
+      }
+
+      // Keep the statement as it came: execute receives only the parsed rows,
+      // so this is the one request that holds the file. Keyed by file_hash,
+      // so previewing the same file again reuses the object; execute records
+      // the arrival when the rows enter. A file with nothing to import is not
+      // kept (generic CSV is mapped in the browser, so it always is).
+      // Best effort: never fails the preview.
+      if (parseResult.transactions.length > 0 || parseResult.format === 'generic_csv') {
+        await archiveBankFileOriginal(supabase, {
+          companyId, fileHash, filename: file.name, bytes: arrayBuffer, mime: file.type,
         })
       }
 

@@ -1,0 +1,1 @@
+[2026-10-15] The receipt hunt's door is mailbox, not gmail (mail_provider says Gmail or Microsoft); bare upload_source 'api' reads as partner_api and an 'upload' item over an 'api' document as mcp, since MCP alone files its own item over one; writers that know stamp intake_source.

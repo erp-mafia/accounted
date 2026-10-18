@@ -26,6 +26,7 @@ import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { getMailSearchService, type MailCandidate } from '@/lib/mail-search/service'
 import { matchSupplierId, supplierIdentityFrom } from '@/lib/suppliers/match-supplier'
 import { createLogger } from '@/lib/logger'
+import { linkArrivalOutputs, recordArrival } from '@/lib/intake/arrivals'
 
 const log = createLogger('receipt-hunt-ingest')
 
@@ -102,6 +103,50 @@ function buildChannelContext(candidate: MailCandidate, attachmentId: string) {
     mail_from: candidate.from,
     mail_received_at: candidate.receivedAt,
     fetched_at: new Date().toISOString(),
+  }
+}
+
+/**
+ * The arrival of a hunted mail: one per message, each filed attachment
+ * linked to it. The hunt reads the body to extract fields and never keeps it
+ * (see MailCandidate.bodyText), so the arrival holds the envelope (sender,
+ * subject) and no message text or original. Source 'mailbox' names the door,
+ * not the vendor: the provider (gmail, microsoft) and the mailbox address go
+ * in source_meta. Best effort: never throws.
+ */
+async function recordHuntArrival(
+  supabase: SupabaseClient,
+  companyId: string,
+  candidate: MailCandidate,
+  output: { position: number; documentId: string; inboxItemId: string },
+): Promise<void> {
+  try {
+    const recorded = await recordArrival(supabase, {
+      companyId,
+      source: 'mailbox',
+      sourceRef: candidate.messageId,
+      receivedAt: candidate.receivedAt ?? new Date(),
+      sender: { from: candidate.from },
+      subject: candidate.subject,
+      fetchedBy: { type: 'system', label: 'receipt-hunt' },
+      sourceMeta: {
+        provider: candidate.provider,
+        mailbox: candidate.mailbox,
+        connection_id: candidate.connectionId,
+        attachment_ids: candidate.attachmentIds,
+        original_missing: 'hunt_keeps_no_mail_body',
+      },
+    })
+    if (!recorded) return
+    await linkArrivalOutputs(supabase, recorded.arrival, [
+      { kind: 'document', id: output.documentId, role: 'attachment', position: output.position },
+      { kind: 'inbox_item', id: output.inboxItemId, role: 'attachment', position: output.position },
+    ])
+  } catch (error) {
+    log.warn('could not record the hunted mail as an arrival', {
+      messageId: candidate.messageId,
+      error: error instanceof Error ? error.message : String(error),
+    })
   }
 }
 
@@ -232,6 +277,12 @@ export async function ingestMailCandidate(
             messageId: candidate.messageId,
             documentId: document.id,
           })
+          // Not filed twice, but it did arrive again: "Kom även via".
+          await recordHuntArrival(supabase, companyId, candidate, {
+            position: index,
+            documentId: document.id,
+            inboxItemId: (dupItem as { id: string }).id,
+          })
           continue
         }
       }
@@ -314,6 +365,12 @@ export async function ingestMailCandidate(
           error: histErr instanceof Error ? histErr.message : String(histErr),
         })
       }
+
+      await recordHuntArrival(supabase, companyId, candidate, {
+        position: index,
+        documentId: document.id,
+        inboxItemId,
+      })
 
       return {
         documentId: document.id,

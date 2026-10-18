@@ -113,6 +113,7 @@ import { supportsUnderlagImport } from '@/lib/providers/underlag-import'
 import { isPeriodLocked } from '@/lib/documents/underlag-import'
 import { createLogger } from '@/lib/logger'
 import { linkBasisColumns } from '@/lib/links/stamp'
+import { recordDocumentArrival } from '@/lib/intake/arrivals'
 
 const log = createLogger('extensions/arcim-migration/import-documents')
 
@@ -785,6 +786,15 @@ export async function importProviderDocuments(
 
       seenAttachments.set(attachmentKey(sha256, journalEntryId), document.id)
       await recordUpload(attachment.id, document.id)
+      // How it came in: the provider's file, fetched by the migration. The
+      // document is its own original; best effort, never fails the sweep.
+      await recordDocumentArrival(supabase, {
+        companyId,
+        source: 'migration',
+        documentId: document.id,
+        fetchedBy: { type: 'user', user_id: userId, label: `${provider}-migration` },
+        sourceMeta: { provider, provider_attachment_id: attachment.id, journal_entry_id: journalEntryId },
+      })
       result.linked++
     }
 

@@ -1,0 +1,1 @@
+[2026-10-15] Inbox corrections are mirrored onto document_attachments.extracted_data, and the model's own reading moves to a new model_reading column first: the suggestion log pairs what the model read with what was booked and read it from extracted_data, so a plain mirror would erase that signal.

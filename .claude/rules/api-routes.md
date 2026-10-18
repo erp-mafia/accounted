@@ -72,6 +72,6 @@ Per-family `route.ts` counts in parentheses are a 2026-08-26 snapshot and drift;
 - `/api/customers/*` (3, incl. `[id]/personal-number`), `/api/suppliers/*` (2), `/api/articles/*` (2), `/api/assets/*` (3), `/api/cash-accounts`, `/api/export/*` (3: articles, customers, suppliers)
 - `/api/billing/*` (3: checkout, portal, status), `/api/stripe/webhook`
 - `/api/peppol/*` (2: inbound, outbound), `/api/webhooks/*` (2: dispatch cron, peppol/qvalia callback)
-- `/api/receipt-hunt/*` (2: run, cron), `/api/sandbox/*` (2: seed, cleanup), `/api/events/*` (2), `/api/notices/dismiss`, `/api/idempotency/cleanup/cron`
+- `/api/receipt-hunt/*` (2: run, cron), `/api/sandbox/*` (2: seed, cleanup), `/api/events/*` (2), `/api/notices/dismiss`, `/api/idempotency/cleanup/cron`, `/api/vendor-logos/cron`
 - `/api/mcp-oauth/*` (3: authorize, token, register), `/api/calendar/feed/[token]`, `/api/payslip/[token]/pdf`, `/api/storage/[...path]`
 - Singletons: `/api/auth/heartbeat`, `/api/currency/rate`, `/api/health`, `/api/kpi/preferences`, `/api/log`, `/api/onboarding/state`, `/api/support/contact`, `/api/vat/validate`, `/api/version`, `/api/worklist/counts`

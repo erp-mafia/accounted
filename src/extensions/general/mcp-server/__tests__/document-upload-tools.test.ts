@@ -301,9 +301,61 @@ describe('MCP model-free document upload tools', () => {
       userId,
       { from } as never,
     )
-    expect(result).toEqual({ document_id: existingDocumentId, inbox_item_id: 'inbox-old', status: 'booked', extracted_data: { invoice: { number: 'A-1' } }, matched_supplier_id: null, deduplicated: true })
+    expect(result).toEqual({ document_id: existingDocumentId, inbox_item_id: 'inbox-old', status: 'booked', extracted_data: { invoice: { number: 'A-1' } }, matched_supplier_id: null, deduplicated: true, duplicate_of: existingDocumentId })
     expect(mocks.extractInvoiceFields).not.toHaveBeenCalled()
     expect(inboxLookups).toHaveLength(0)
+  })
+
+  it('the legacy inline upload asks for the content dedupe and files its item as an MCP arrival', async () => {
+    mocks.uploadDocument.mockResolvedValueOnce(makeDocumentAttachment({ id: uploadId, file_name: 'invoice.pdf', mime_type: 'application/pdf' }))
+    const insert = makeQueryBuilder({ data: { id: 'inbox-new', status: 'received' }, error: null })
+    const empty = makeQueryBuilder({ data: null, error: null })
+    const from = vi.fn((table: string) => (table === 'invoice_inbox_items' ? insert : empty))
+
+    const result = await findTool('gnubok_upload_document').execute(
+      { file_name: 'invoice.pdf', file_content_base64: Buffer.from('%PDF-1.4\n%%EOF\n').toString('base64') },
+      companyId,
+      userId,
+      { from } as never,
+    )
+
+    expect(mocks.uploadDocument.mock.calls[0][4]).toEqual({ upload_source: 'api', extractionOwner: 'invoice-inbox', dedupeByContent: true })
+    expect(insert.insert).toHaveBeenCalledWith(expect.objectContaining({ source: 'upload', channel_context: { intake_source: 'mcp' } }))
+    expect(result).toMatchObject({ document_id: uploadId, inbox_item_id: 'inbox-new', status: 'received' })
+    expect(result).not.toHaveProperty('deduplicated')
+  })
+
+  it.each([
+    ['its inbox item', { id: 'inbox-old', status: 'received', extracted_data: { invoice: { number: 'A-1' } }, matched_supplier_id: null }, 'inbox-old', 'received'],
+    ['no inbox item (archived another way)', null, null, 'archived'],
+  ])('the legacy inline upload answers the archived document with %s when the bytes are already there, creating nothing', async (_label, item, inboxItemId, status) => {
+    const existingDocumentId = '55555555-5555-4555-8555-555555555555'
+    mocks.uploadDocument.mockResolvedValueOnce({ ...makeDocumentAttachment({ id: existingDocumentId, file_name: 'kvitto.pdf', mime_type: 'application/pdf' }), deduplicated: true })
+    const lookup = makeQueryBuilder({ data: item, error: null })
+    const from = vi.fn((table: string) => {
+      if (table === 'invoice_inbox_items') return lookup
+      throw new Error(`Unexpected table: ${table}`)
+    })
+
+    const result = await findTool('gnubok_upload_document').execute(
+      { file_name: 'kvitto.pdf', file_content_base64: Buffer.from('%PDF-1.4\n%%EOF\n').toString('base64') },
+      companyId,
+      userId,
+      { from } as never,
+    )
+
+    expect(result).toMatchObject({ document_id: existingDocumentId, inbox_item_id: inboxItemId, status, deduplicated: true, duplicate_of: existingDocumentId })
+    expect(lookup.insert).not.toHaveBeenCalled()
+    expect(mocks.extractInvoiceFields).not.toHaveBeenCalled()
+  })
+
+  it('the legacy inline upload declares inbox_item_id nullable: a deduplicated upload may have no inbox item', () => {
+    // Strict clients validate structuredContent against outputSchema (see the
+    // matched_supplier_id case below); the dedupe fields are additive and
+    // undeclared, which an open object schema allows.
+    const schema = findTool('gnubok_upload_document').outputSchema as { properties: Record<string, { type: unknown }>; additionalProperties?: unknown }
+    expect(schema.properties.inbox_item_id.type).toEqual(['string', 'null'])
+    expect(schema.additionalProperties).not.toBe(false)
   })
 
   it('returns an already completed inbox item without downloading or extracting again', async () => {

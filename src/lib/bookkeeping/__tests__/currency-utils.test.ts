@@ -1,10 +1,28 @@
 import { describe, it, expect } from 'vitest'
 import {
+  isKronorCurrency,
   resolveSekAmount,
   resolveSekAmountOrNull,
   buildCurrencyMetadata,
   isLedgerCurrency,
 } from '../currency-utils'
+
+describe('isKronorCurrency', () => {
+  it('kronor is SEK in any case, or no code at all', () => {
+    expect(isKronorCurrency('SEK')).toBe(true)
+    expect(isKronorCurrency('sek')).toBe(true)
+    expect(isKronorCurrency(null)).toBe(true)
+    expect(isKronorCurrency(undefined)).toBe(true)
+    expect(isKronorCurrency('')).toBe(true)
+    expect(isKronorCurrency('EUR')).toBe(false)
+  })
+
+  it('agrees with the first step of the conversion ladder', () => {
+    for (const code of ['SEK', null, 'EUR', 'USD']) {
+      expect(isKronorCurrency(code)).toBe(resolveSekAmountOrNull(10, null, code, null) === 10)
+    }
+  })
+})
 
 /**
  * The strict ladder. Booking code must use this one: it answers "no SEK value

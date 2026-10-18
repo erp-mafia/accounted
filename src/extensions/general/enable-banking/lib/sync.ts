@@ -23,6 +23,7 @@ import { aggregatorOf } from '@/lib/bank-sync/aggregator'
 import { ConsentOverError, ProviderUnavailableError, RateLimitedError } from '@/lib/bank-feed/connect'
 import { buildBankFeedParty, UNATTENDED_SIGNER, type BankFeedSignerInput } from '@/lib/bank-feed/party'
 import { syncOpenPaymentsAccount } from '@/lib/bank-feed/sync'
+import { recordBankFeedPageArrival } from '@/lib/bank-feed/page-arrival'
 import type { RawTransaction, IngestResult, IngestOptions } from '@/types'
 import type { StoredAccount, TransactionsFetchStrategy } from '../types'
 
@@ -481,7 +482,8 @@ export async function syncAccountTransactions(
   )
 
   // Archive raw PSD2 API responses as räkenskapsinformation (BFL 7 kap). The
-  // id of each archived page is kept, so every row links to the page it came in.
+  // id of each archived page is kept, so every row links to the page it came
+  // in, and each page is recorded as a bank_feed arrival.
   const archivedPageIds: Array<string | null> = []
   for (let i = 0; i < rawPages.length; i++) {
     archivedPageIds.push(null)
@@ -496,6 +498,13 @@ export async function syncAccountTransactions(
     } catch (archiveError) {
       console.error(`[enable-banking] Failed to archive raw response page ${i + 1}:`, archiveError)
       // Archival failure must not fail the sync
+    }
+    // How the page came in (best effort, never fails the sync).
+    const pageId = archivedPageIds[i]
+    if (pageId) {
+      await recordBankFeedPageArrival(supabase, {
+        companyId, userId, documentId: pageId, connectionId, accountUid: account.uid, page: i + 1, aggregator: 'enable_banking',
+      })
     }
   }
 

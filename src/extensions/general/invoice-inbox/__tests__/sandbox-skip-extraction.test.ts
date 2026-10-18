@@ -63,10 +63,13 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/api-keys')>()
   return { ...actual, createServiceClientNoCookies: vi.fn() }
 })
+// Match on arrival runs once the item has its reading; tested in lib/documents/bank-match.
+vi.mock('@/lib/operations/inbox-bank-match', () => ({ proposeBankMatchForInboxItem: vi.fn() }))
 
 import { extractInvoiceFields } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
 
 function findRoute(method: string, path: string) {
   return invoiceInboxExtension.apiRoutes!.find(
@@ -177,6 +180,8 @@ describe('Sandbox companies skip Bedrock extraction', () => {
       expect(body.data.extraction_skipped).toBe(true)
       expect(body.data.skip_reason).toBe('sandbox')
       expect(captured.row?.extraction_skipped).toBe(true)
+      // The item has its (empty) reading: the bank is checked for its payment.
+      expect(proposeBankMatchForInboxItem).toHaveBeenCalledWith(supabase, 'company-1', body.data.inbox_item_id)
     })
 
     it('defers extraction for non-sandbox companies: responds processing, then flips', async () => {

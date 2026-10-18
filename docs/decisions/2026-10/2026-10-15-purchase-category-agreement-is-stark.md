@@ -1,0 +1,1 @@
+[2026-10-15] A counterparty's clean history on a shared account (5420, 5831) plus the document's lines or merchant kind picking one of its categories is Stark, source counterparty (founder): two independent sources agree, and without it a SaaS on 5420 could never be Stark.

@@ -1,0 +1,1 @@
+[2026-10-15] Därför bokades den så has its own read route (journal-entries/[id]/decision-receipts), not a field on the chain route: the Inkorg needs it without the chain, names need the service client, and a failed receipt read must answer null without failing the verifikat.

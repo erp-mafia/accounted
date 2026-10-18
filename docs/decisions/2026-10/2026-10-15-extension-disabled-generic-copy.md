@@ -1,0 +1,1 @@
+[2026-10-15] EXTENSION_DISABLED gets generic copy (it is raised for bank sync, the Inkorg and Skatteverket); raisers name the feature in details.extension, and the Skatteverket operation doors keep their own Swedish text through the existing messageSv variant.

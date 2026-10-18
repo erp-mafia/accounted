@@ -20,7 +20,7 @@
   },
   "undeclaredBlockToBlock": {
     "agent -> deadlines": 1,
-    "agent -> inbox": 2,
+    "agent -> inbox": 1,
     "agent -> transactions": 2,
     "bank-feed -> payments": 1,
     "byra -> bank-feed": 1,
@@ -91,6 +91,7 @@
       "lib/composition/event-consumers.ts -> lib/events/handlers/agent-feedback-relay-handler",
       "lib/composition/event-consumers.ts -> lib/events/handlers/document-read-handler",
       "lib/composition/event-consumers.ts -> lib/events/handlers/event-log-handler",
+      "lib/composition/event-consumers.ts -> lib/events/handlers/inbox-bank-match-handler",
       "lib/composition/event-consumers.ts -> lib/suggestions/handler",
       "lib/composition/event-consumers.ts -> lib/supplier-invoices/attest-notify",
       "lib/composition/ingest-matchers.ts -> lib/collections/ingest-matcher",

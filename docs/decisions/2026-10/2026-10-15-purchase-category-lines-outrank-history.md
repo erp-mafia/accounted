@@ -1,0 +1,1 @@
+[2026-10-15] proposePurchaseCategory lets the document's own lines (one category carrying 60 % of the line value) outrank a counterparty's single-category history, at Trolig: a mixed store is booked on one account whatever was bought, and no brand list is kept to spot one.

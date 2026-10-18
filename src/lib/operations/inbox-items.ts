@@ -25,6 +25,13 @@ import {
   UpdateInboxItemFieldsSchema,
 } from '@/lib/documents/inbox-item-actions'
 import { convertInboxItemToSupplierInvoice } from '@/lib/documents/inbox-convert'
+import { INTAKE_SOURCE_IDS } from '@/lib/intake/sources'
+import { InboxPurchaseCategorySchema } from '@/lib/categories/inbox-purchase-category'
+import { DocumentReadingSchema } from '@/lib/documents/reading/schema'
+import { loadDocumentReading } from '@/lib/documents/reading/load'
+import { peppolReader } from '@/lib/invoices/peppol-reading'
+import { BankMatchSchema } from '@/lib/documents/inbox-bank-match'
+import { proposeBankMatchForInboxItem } from './inbox-bank-match'
 import { defineOperation } from './types'
 
 const META = { request_id: 'req_…', api_version: '2026-05-12' }
@@ -135,35 +142,65 @@ export const inboxItemsGet = defineOperation({
   docs: {
     summary: 'Read one inbox item with its full reading and e-mail text.',
     description:
-      'Returns the item\'s summary plus the complete extracted_data (supplier, invoice, totals, line items, VAT breakdown), the e-mail body text and the document\'s file name. When the item has no reading of its own, the document\'s reading stands in.',
+      'Returns the item\'s summary plus the complete extracted_data (supplier, invoice, totals, line items, VAT breakdown), the e-mail body text and the document\'s file name. When the item has no reading of its own, the document\'s reading stands in. include=reading adds the one reading: each field under its EN 16931 name with its source (xml, vision, text, door, person) and evidence (exakt, stark, trolig, ditt_val). bank_match is the bank transaction the item looks already paid by (match on arrival), or null: a proposal, never a booking or a link.',
     useWhen: 'You are about to correct the reading, convert the item to a supplier invoice or match it, and need every field.',
     doNotUseFor: 'Scanning the queue (GET /inbox-items) or downloading the file (GET /documents/{id}/download).',
     pitfalls: [
       'extracted_data is what was read, not what was booked: check it against the document before converting.',
       'email_body_text can carry personal data: do not copy it into notes or descriptions.',
       'An id from another company answers 404 INBOX_ITEM_NOT_FOUND.',
+      'reading.fields holds only fields something read; evidence is never the model\'s own confidence, and a value a person cleared is null with source person.',
+      'bank_match is only a proposal, re-checked on every read (the bank transaction still unbooked and claimed by nothing else). To accept it for a receipt, pair it (POST /inbox-items/{id}/match-transaction) and book the transaction; for a supplier invoice, convert it (POST /inbox-items/{id}/convert), then POST /transactions/{bank_match.transaction_id}/match-supplier-invoice.',
     ],
     example: {
       response: {
         data: {
           ...EXAMPLE_ITEM,
           extracted_data: { supplier: { name: 'Clas Ohlson AB' }, invoice: { invoiceDate: '2026-09-01', currency: 'SEK' }, totals: { total: 499 } },
+          purchase_category: { code: 'expense.office.supplies', source: 'counterparty', level: 'Stark', version: 'pc-2026-10' },
           extraction_skipped: false,
           email_body_text: null,
           file_name: 'kvitto.pdf',
           updated_at: '2026-09-02T07:41:30Z',
+          intake_source: 'intake_email',
+          bank_match: {
+            transaction_id: '7d3a…',
+            date: '2026-09-01',
+            amount: -499,
+            currency: 'SEK',
+            counterparty: 'CLAS OHLSON',
+            basis: 'rule_amount_date',
+            evidence_level: 'trolig',
+          },
         },
         meta: META,
       },
     },
   },
-  input: z.object({ inbox_item_id: INBOX_ITEM_ID }),
+  input: z.object({
+    inbox_item_id: INBOX_ITEM_ID,
+    include: z
+      .enum(['reading'])
+      .optional()
+      .describe('reading = add the one reading of the document: every field with its source and evidence level.'),
+  }),
   output: InboxItemSummaryOut.extend({
     extracted_data: z.record(z.string(), z.unknown()).nullable(),
+    purchase_category: InboxPurchaseCategorySchema.nullable(),
     extraction_skipped: z.boolean(),
     email_body_text: z.string().nullable(),
     file_name: z.string().nullable(),
     updated_at: z.string(),
+    intake_source: z
+      .enum(INTAKE_SOURCE_IDS)
+      .nullable()
+      .describe(
+        'The door it came through, one id across every channel: intake_email, mailbox, whatsapp, upload, peppol, partner_api, mcp, migration, system, ... `source` keeps the legacy value (upload covers several doors).',
+      ),
+    reading: DocumentReadingSchema.optional().describe('Only with include=reading.'),
+    bank_match: BankMatchSchema.nullable().describe(
+      'Match on arrival: the bank transaction the item looks already paid by, or null. evidence_level is exakt (OCR and amount), stark (amount and the payee\'s giro) or trolig (amount, date and name), never a score.',
+    ),
   }),
   errorCodes: ['INBOX_ITEM_NOT_FOUND'],
   http: {
@@ -171,7 +208,8 @@ export const inboxItemsGet = defineOperation({
     path: '/api/v1/companies/:companyId/inbox-items/:id',
     pathParams: { id: 'inbox_item_id' },
   },
-  run: (ctx, { inbox_item_id }) => getInboxItem(ctx, inbox_item_id),
+  run: (ctx, { inbox_item_id, include }) =>
+    getInboxItem(ctx, inbox_item_id, include === 'reading' ? { reading: (supabase, companyId, target) => loadDocumentReading(supabase, companyId, target, peppolReader) } : {}),
 })
 
 export const inboxItemsDelete = defineOperation({
@@ -259,6 +297,8 @@ export const inboxItemsUnmatchTransaction = defineOperation({
   run: async (ctx, { inbox_item_id }, { dryRun }) => {
     const outcome = await unmatchInboxItemTransaction(ctx, inbox_item_id, { dryRun })
     if (!outcome.ok || outcome.dryRun) return outcome
+    // Open again: match on arrival looks in the bank for its payment.
+    await proposeBankMatchForInboxItem(ctx.supabase, ctx.companyId, inbox_item_id, ctx.log)
     return {
       ok: true,
       data: {
@@ -316,6 +356,8 @@ export const inboxItemsUpdateExtractedData = defineOperation({
   run: async (ctx, { inbox_item_id, ...fields }, { dryRun }) => {
     const outcome = await updateInboxItemFields(ctx, inbox_item_id, fields, { dryRun })
     if (!outcome.ok || outcome.dryRun) return outcome
+    // A corrected amount, OCR or giro can pair another bank row, or none.
+    await proposeBankMatchForInboxItem(ctx.supabase, ctx.companyId, inbox_item_id, ctx.log)
     return { ok: true, data: { inbox_item_id: outcome.data.id, extracted_data: outcome.data.extracted_data } }
   },
 })

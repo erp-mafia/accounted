@@ -1,4 +1,5 @@
 import type { TemplateGroup } from '@/lib/bookkeeping/booking-templates'
+import { isPurchaseCategoryCode, portCategoryFor, type PurchaseCategoryCode } from '@/lib/categories/purchase-categories'
 import type { TransactionCategory } from '@/types'
 
 /**
@@ -17,6 +18,12 @@ import type { TransactionCategory } from '@/types'
  * seven years, BFL 7 kap.), each new key with a decision record
  * (docs/decisions). The database checks the shape only
  * (business_events_category_check), so adding one needs no migration.
+ *
+ * A key has children: the inbox's purchase categories
+ * (lib/categories/purchase-categories.ts), '<key>.<item>' such as
+ * expense.software.saas. An event stores the finest key its producer knows,
+ * a key of this list or a known child of one (isBusinessEventCategory), and
+ * its key here is the child without its last segment.
  */
 export interface BusinessEventCategoryDefinition {
   readonly key: string
@@ -77,33 +84,48 @@ export const BUSINESS_EVENT_CATEGORIES = [
   },
   { key: 'se.tax.settlement', label: 'Skattekonto and VAT settlement', transactionCategories: [], templateGroups: ['tax'] },
   { key: 'se.closing.appropriations', label: 'Year-end appropriations', transactionCategories: [], templateGroups: ['closing'] },
+  // No transaction category or template family of its own (the catalogue
+  // files its membership template under education): the inbox's children
+  // (expense.fees.memberships and its siblings) are what carry it.
+  { key: 'expense.fees', label: 'Fees, royalties and memberships', transactionCategories: [], templateGroups: [] },
 ] as const satisfies readonly BusinessEventCategoryDefinition[]
 
-export type BusinessEventCategory = (typeof BUSINESS_EVENT_CATEGORIES)[number]['key']
+/** A key of the closed list: the top level. */
+export type BusinessEventCategoryKey = (typeof BUSINESS_EVENT_CATEGORIES)[number]['key']
+
+/** What an event's category holds: a key of the closed list, or a known child of one (a purchase code). */
+export type BusinessEventCategory = BusinessEventCategoryKey | PurchaseCategoryCode
 
 /** The shape business_events_category_check enforces. */
 export const BUSINESS_EVENT_CATEGORY_PATTERN = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$/
 
 const BY_KEY = new Map<string, BusinessEventCategoryDefinition>(BUSINESS_EVENT_CATEGORIES.map((c) => [c.key, c]))
-const BY_TRANSACTION_CATEGORY = new Map<string, BusinessEventCategory>(
+const BY_TRANSACTION_CATEGORY = new Map<string, BusinessEventCategoryKey>(
   BUSINESS_EVENT_CATEGORIES.flatMap((c) => c.transactionCategories.map((t) => [t, c.key] as const)),
 )
-const BY_TEMPLATE_GROUP = new Map<string, BusinessEventCategory>(
+const BY_TEMPLATE_GROUP = new Map<string, BusinessEventCategoryKey>(
   BUSINESS_EVENT_CATEGORIES.flatMap((c) => c.templateGroups.map((g) => [g, c.key] as const)),
 )
 
+/**
+ * A key of the closed list, or a child of one: a purchase code of the current
+ * list whose parent is a key here. An unknown child, or a known item under
+ * another parent (expense.travel.saas), is refused.
+ */
 export function isBusinessEventCategory(value: unknown): value is BusinessEventCategory {
-  return typeof value === 'string' && BY_KEY.has(value)
+  if (typeof value !== 'string') return false
+  if (BY_KEY.has(value)) return true
+  return isPurchaseCategoryCode(value) && BY_KEY.has(portCategoryFor(value))
 }
 
 /** The key a transaction category books under; null for 'uncategorized' (no business meaning yet). */
-export function categoryForTransactionCategory(category: TransactionCategory | string | null | undefined): BusinessEventCategory | null {
+export function categoryForTransactionCategory(category: TransactionCategory | string | null | undefined): BusinessEventCategoryKey | null {
   if (!category) return null
   return BY_TRANSACTION_CATEGORY.get(category) ?? null
 }
 
 /** The key a booking template family is filed under. */
-export function categoryForTemplateGroup(group: TemplateGroup | string | null | undefined): BusinessEventCategory | null {
+export function categoryForTemplateGroup(group: TemplateGroup | string | null | undefined): BusinessEventCategoryKey | null {
   if (!group) return null
   return BY_TEMPLATE_GROUP.get(group) ?? null
 }

@@ -58,6 +58,7 @@ import EditKonteringDialog from '@/components/extensions/general/EditKonteringDi
 import InvoiceInboxSkeleton from '@/components/extensions/general/InvoiceInboxSkeleton'
 import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'
 import { InboxMailDoor } from '@/components/extensions/general/InboxMailDoor'
+import { InboxArrivalProvenance } from '@/components/extensions/general/InboxArrivalProvenance'
 import { summarizeMailboxes } from '@/components/extensions/general/mail-connections'
 import { useMailConnections } from '@/components/extensions/general/use-mail-connections'
 import { useReceiptHunt } from '@/components/extensions/general/use-receipt-hunt'
@@ -82,6 +83,8 @@ import NewSupplierInvoiceDialog from '@/components/supplier-invoices/NewSupplier
 import BulkBookInboxDialog from '@/components/extensions/general/BulkBookInboxDialog'
 import TransactionMatchPicker from '@/components/inbox/TransactionMatchPicker'
 import { InboxCreditNotePanel } from './InboxCreditNotePanel'
+import { PurchaseCategoryChip } from '@/components/inbox/PurchaseCategoryChip'
+import type { InboxPurchaseCategory } from '@/lib/categories/inbox-purchase-category'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import {
   getErrorMessage as getUserErrorMessage,
@@ -99,6 +102,7 @@ import { INBOX_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { documentPreviewKind } from '@/lib/documents/preview-kind'
 import { DocumentPreview as DocumentPreviewBody } from '@/components/bookkeeping/DocumentPreview'
+import BookingWhy from '@/components/bookkeeping/BookingWhy'
 import { parseAmountInput } from '@/lib/money'
 
 /**
@@ -213,6 +217,9 @@ interface InboxItem {
   // client-side placeholders.
   underlag_status?: UnderlagStatus | null
   error_message: string | null
+  // What the underlag bought, computed by GET /items/:id (null when
+  // ambiguous). Absent on list rows and client-side placeholders.
+  purchase_category?: InboxPurchaseCategory | null
   // True when AI extraction was skipped: either because the upload caller
   // passed skip_extraction=true (MCP/agent path) or because the server's
   // page-count gate skipped a PDF above the auto-extract limit (issue #553).
@@ -3017,29 +3024,39 @@ function FieldsRail({
           <QuestionCard question={arkivQuestion} compact onMore={onArkivMore} />
         </div>
       )}
-      {/* Email metadata */}
-      {item.source === 'email' && (item.email_from || item.email_subject) && (
-        <div className="border-b px-4 py-3 text-xs space-y-1">
-          {item.email_from && (
-            <div className="flex gap-2">
-              <span className="text-muted-foreground w-14 shrink-0">Från</span>
-              <span className="truncate">{item.email_from}</span>
+      {/* Where the item came from: the provenance line from its arrivals
+          (GET /api/documents/:id/arrivals, read when the item opens), with
+          "Kom även via" and "Visa originalet". Items with no arrival
+          recorded (from before arrivals existed), a failed read, and the
+          moment before the answer keep the email metadata below. */}
+      <InboxArrivalProvenance
+        documentId={item.isPlaceholder ? null : item.document_id}
+        mailProvider={item.channel_context?.mail_provider ?? null}
+        fallback={
+          item.source === 'email' && (item.email_from || item.email_subject) ? (
+            <div className="border-b px-4 py-3 text-xs space-y-1">
+              {item.email_from && (
+                <div className="flex gap-2">
+                  <span className="text-muted-foreground w-14 shrink-0">Från</span>
+                  <span className="truncate">{item.email_from}</span>
+                </div>
+              )}
+              {item.email_subject && (
+                <div className="flex gap-2">
+                  <span className="text-muted-foreground w-14 shrink-0">Ämne</span>
+                  <span className="truncate">{item.email_subject}</span>
+                </div>
+              )}
+              {item.email_received_at && (
+                <div className="flex gap-2">
+                  <span className="text-muted-foreground w-14 shrink-0">Mottaget</span>
+                  <span>{new Date(item.email_received_at).toLocaleString('sv-SE')}</span>
+                </div>
+              )}
             </div>
-          )}
-          {item.email_subject && (
-            <div className="flex gap-2">
-              <span className="text-muted-foreground w-14 shrink-0">Ämne</span>
-              <span className="truncate">{item.email_subject}</span>
-            </div>
-          )}
-          {item.email_received_at && (
-            <div className="flex gap-2">
-              <span className="text-muted-foreground w-14 shrink-0">Mottaget</span>
-              <span>{new Date(item.email_received_at).toLocaleString('sv-SE')}</span>
-            </div>
-          )}
-        </div>
-      )}
+          ) : null
+        }
+      />
 
       {/* WhatsApp chat context (see waCtx derivation above). */}
       {showWaBlock && (
@@ -3249,6 +3266,16 @@ function FieldsRail({
             scrolling past nine values to reach the one thing to approve.
             Suppressed while extraction is in flight: a proposal computed from
             empty fields would be an invitation to book nothing. */}
+        {/* What was bought, beside how it is booked: a label, never the booking. */}
+        {!inFlight && data && item.purchase_category !== undefined && (
+          <PurchaseCategoryChip
+            itemId={item.id}
+            value={item.purchase_category}
+            locked={isProcessed}
+            supplierName={item.matched_supplier_id ? pickSupplierName(item) : null}
+          />
+        )}
+
         {showBookingBridge && !inFlight && (
           <ProposedBooking itemId={item.id} onLoaded={setProposal} />
         )}
@@ -3339,12 +3366,16 @@ function FieldsRail({
             </Button>
           </Link>
         ) : isBookedDirectly && bookedEntryId ? (
-          <Link href={`/bookkeeping/${bookedEntryId}`} className="block">
-            <Button variant="default" size="sm" className="w-full">
-              <ArrowRight className="h-3.5 w-3.5 mr-1.5" />
-              Öppna verifikation
-            </Button>
-          </Link>
+          <>
+            <Link href={`/bookkeeping/${bookedEntryId}`} className="block">
+              <Button variant="default" size="sm" className="w-full">
+                <ArrowRight className="h-3.5 w-3.5 mr-1.5" />
+                Öppna verifikation
+              </Button>
+            </Link>
+            {/* Who booked it, how and when: the verifikat's "Därför bokades den så" line. */}
+            <BookingWhy journalEntryId={bookedEntryId} variant="inline" />
+          </>
         ) : isLinkedToTransaction && item.matched_transaction_id ? (
           <>
             {/* The transaction is booked but this item's underlag is not on

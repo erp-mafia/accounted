@@ -237,6 +237,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_list_uncategorized_transactions:     'transactions:read',
   gnubok_list_cash_accounts:                  'transactions:read',
   gnubok_list_transactions_without_documents: 'transactions:read',
+  gnubok_get_transaction:                     'transactions:read',
   gnubok_create_transactions:                 'transactions:write',
   gnubok_categorize_transaction:              'transactions:write',
   gnubok_ignore_transaction:                  'transactions:write',
@@ -368,6 +369,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_detach_document_from_transaction: 'transactions:write',
   gnubok_delete_inbox_item: 'documents:write',
   gnubok_unmatch_inbox_item_transaction: 'documents:write',
+  gnubok_set_inbox_purchase_category: 'documents:write',
   gnubok_undo_bank_import: 'transactions:write',
   gnubok_correct_entry_metadata: 'bookkeeping:write',
   gnubok_correct_entry_lines: 'bookkeeping:write',
@@ -487,6 +489,8 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_upload_document:                 'transactions:write',
   gnubok_list_inbox_items:                'transactions:read',
   gnubok_get_inbox_item:                  'transactions:read',
+  // The purchase-category taxonomy inbox items read as purchase_category.
+  gnubok_list_purchase_categories:        'transactions:read',
   gnubok_list_unmatched_documents:        'transactions:read',
   gnubok_get_document_content:            'transactions:read',
   // Arkiv: the record behind documents, agreements and facts (reads), and

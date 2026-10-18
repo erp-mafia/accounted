@@ -60,6 +60,7 @@ export const HAND_WRITTEN_TOOL_MODULES: Readonly<Partial<Record<ModuleId, readon
     'gnubok_get_document_content',
     'gnubok_list_accrual_schedules',
     'gnubok_run_currency_revaluation',
+    'gnubok_list_purchase_categories',
   ],
   transactions: [
     'gnubok_list_uncategorized_transactions',
@@ -79,6 +80,7 @@ export const HAND_WRITTEN_TOOL_MODULES: Readonly<Partial<Record<ModuleId, readon
     'gnubok_list_reconciliation_items',
     'gnubok_get_reconciliation_status',
     'gnubok_get_counterparty_templates',
+    'gnubok_get_transaction',
   ],
   'bank-feed': ['gnubok_connect_bank', 'gnubok_sync_bank'],
   invoicing: [

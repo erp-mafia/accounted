@@ -396,6 +396,44 @@ describe('POST /api/v1/companies/:companyId/imports/bank', () => {
     expect(completeOperationMock).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps the file as it came and records the import as a bank_file arrival', async () => {
+    const upload = vi.fn().mockResolvedValue({ data: {}, error: null })
+    const storageFrom = vi.fn().mockReturnValue({ upload, download: vi.fn() })
+    supabase = makeSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      bank_file_imports: { data: { id: 'import-1' }, error: null },
+    })
+    mockServiceClient.mockReturnValue({ ...supabase, storage: { from: storageFrom } })
+
+    const res = await callRoute()
+    expect(res.status).toBe(202)
+
+    expect(storageFrom).toHaveBeenCalledWith('documents')
+    const [path, bytes, options] = upload.mock.calls[0] as [string, Uint8Array, Record<string, unknown>]
+    expect(path).toMatch(new RegExp(`^documents/${COMPANY_ID}/arrivals/bank_file/[0-9a-f]{64}/kontoutdrag\\.csv$`))
+    expect(new TextDecoder().decode(bytes)).toBe(SEB_CSV)
+    expect(options).toEqual({ contentType: 'text/csv', upsert: false })
+
+    const arrival = supabase.calls.find((c) => c.table === 'arrivals' && c.method === 'upsert')?.args[0] as Record<string, unknown>
+    expect(arrival).toMatchObject({
+      company_id: COMPANY_ID,
+      source: 'bank_file',
+      source_ref: 'import-1',
+      fetched_by: { type: 'api_key', user_id: 'user-1', api_key_id: 'ak_1' },
+      original_path: path,
+      original_size: new TextEncoder().encode(SEB_CSV).byteLength,
+      original_mime: 'text/csv',
+    })
+    expect(arrival.source_meta).toMatchObject({ via: 'partner_api', bank_file_import_id: 'import-1', format: 'seb', imported_count: 3 })
+  })
+
+  it('records no arrival without a bank_file_imports row to point at', async () => {
+    // Default beforeEach supabase: the upsert returns no row.
+    const res = await callRoute()
+    expect(res.status).toBe(202)
+    expect(supabase.from).not.toHaveBeenCalledWith('arrivals')
+  })
+
   it('fails the operation and returns an error envelope when ingest throws', async () => {
     ingestMock.mockRejectedValue(new Error('ingest exploded'))
 

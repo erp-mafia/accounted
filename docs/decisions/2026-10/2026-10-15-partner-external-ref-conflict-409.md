@@ -1,0 +1,1 @@
+[2026-10-15] The same external_ref with a different file answers 409 INBOX_DELIVERY_REF_CONFLICT instead of replaying the first item: a replay would silently drop the new underlag, and filing it would hide it behind the old reference.

@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
-const { supabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase, enqueue, reset, findCall } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -540,5 +540,77 @@ describe('POST /api/import/bank-file/execute (row fields)', () => {
       value_date: '2025-03-11', end_to_end_id: 'E2E-1', provider_transaction_id: 'ACSR-1',
       counterparty_iban: 'SE4550000000058398257466', bank_transaction_code: 'PMNT-RCDT-DMCT',
     }])
+  })
+})
+
+// The import's arrival: recorded once its rows entered, pointing at the
+// original the parse step archived under the file's content hash.
+describe('POST /api/import/bank-file/execute (arrival)', () => {
+  const COMPANY = '11111111-1111-4111-8111-111111111111'
+  const IMPORT_ID = '33333333-3333-4333-8333-333333333333'
+  const FILE_HASH = 'e'.repeat(64)
+  const bucket = supabase.storage.from('documents') as unknown as { download: ReturnType<typeof vi.fn> }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
+    getCompanyRoleMock.mockResolvedValue({ ok: true, role: 'owner', companyId: COMPANY })
+    ingestMock.mockResolvedValue(emptyIngestResult())
+  })
+
+  function execute(arrivalAnswers: Array<{ data?: unknown; error?: unknown }> = []) {
+    enqueue({ data: { id: IMPORT_ID } }) // bank_file_imports upsert
+    enqueue({ data: null }) // sie_imports overlap: none
+    enqueue({ data: null }) // bank_file_imports status update
+    enqueue({ data: [{ id: 't-1' }, { id: 't-2' }] }) // imported tx for event
+    for (const answer of arrivalAnswers) enqueue(answer)
+    return POST(createMockRequest('/api/import/bank-file/execute', {
+      method: 'POST',
+      body: makeBody({ file_hash: FILE_HASH, filename: 'kontoutdrag.csv' }),
+    }), emptyParams)
+  }
+
+  it('records a bank_file arrival for the import, pointing at the archived original', async () => {
+    bucket.download.mockResolvedValueOnce({ data: new Blob(['statement'], { type: 'text/csv' }), error: null })
+    // The arrivals lookup finds none; the insert answers with the row.
+    const response = await execute([{ data: null }, { data: [{ id: 'arrival-1' }] }])
+    expect(response.status).toBe(200)
+
+    expect(bucket.download).toHaveBeenCalledWith(`documents/${COMPANY}/arrivals/bank_file/${FILE_HASH}/kontoutdrag.csv`)
+    const [row] = findCall('arrivals', 'upsert') as [Record<string, unknown>]
+    expect(row).toMatchObject({
+      company_id: COMPANY,
+      source: 'bank_file',
+      source_ref: IMPORT_ID,
+      fetched_by: { type: 'user', user_id: 'user-1' },
+      original_path: `documents/${COMPANY}/arrivals/bank_file/${FILE_HASH}/kontoutdrag.csv`,
+      original_size: 9,
+      original_mime: 'text/csv',
+    })
+    expect(row.source_meta).toMatchObject({
+      via: 'app', bank_file_import_id: IMPORT_ID, format: 'seb', transaction_count: 2, imported_count: 2,
+      date_from: '2025-01-05', date_to: '2025-03-10',
+    })
+  })
+
+  it('records no arrival when every row failed', async () => {
+    ingestMock.mockResolvedValue(emptyIngestResult({ imported: 0, errors: 2, transaction_ids: [] }))
+    enqueue({ data: { id: IMPORT_ID } })
+    enqueue({ data: null })
+    enqueue({ data: null })
+    const response = await POST(createMockRequest('/api/import/bank-file/execute', {
+      method: 'POST',
+      body: makeBody({ file_hash: FILE_HASH }),
+    }), emptyParams)
+    expect(response.status).toBe(200)
+    expect(supabase.from).not.toHaveBeenCalledWith('arrivals')
+    expect(bucket.download).not.toHaveBeenCalled()
+  })
+
+  it('answers the import when the arrival cannot be recorded', async () => {
+    bucket.download.mockRejectedValueOnce(new Error('storage down'))
+    const response = await execute()
+    expect(response.status).toBe(200)
   })
 })

@@ -16,7 +16,7 @@ import {
   parseJsonResponse,
 } from '@/tests/helpers'
 
-const { supabase, reset } = createQueuedMockSupabase()
+const { supabase, reset, enqueue, findCall } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -157,6 +157,83 @@ describe('POST /api/documents', () => {
       linkBasis: { link_basis: 'user_confirmed', link_evidence: null },
       deferUploadedEvent: true,
     })
+  })
+
+  it('asks for the content dedupe when the free-floating Arkiv drop sends dedupe_by_content', async () => {
+    uploadDocumentMock.mockResolvedValue(makeDocumentAttachment({ id: 'doc-3' }))
+
+    const res = await POST(makeRequest({ file: pdf(), dedupe_by_content: 'true' }) as never, createMockRouteParams({}))
+    const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(res)
+
+    expect(status).toBe(200)
+    expect(uploadDocumentMock.mock.calls[0][4]).toEqual(expect.objectContaining({ dedupeByContent: true }))
+    expect(body.data.id).toBe('doc-3')
+    expect(body.data).not.toHaveProperty('deduplicated')
+    expect(body.data).not.toHaveProperty('duplicate_of')
+  })
+
+  it('answers the archived document with deduplicated and duplicate_of when the bytes already sit in Underlag', async () => {
+    uploadDocumentMock.mockResolvedValue({ ...makeDocumentAttachment({ id: 'doc-old', journal_entry_id: null }), deduplicated: true })
+    enqueue({ data: [{ id: 'item-1' }] })
+
+    const res = await POST(makeRequest({ file: pdf(), dedupe_by_content: 'true' }) as never, createMockRouteParams({}))
+    const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(res)
+
+    expect(status).toBe(200)
+    expect(body.data).toMatchObject({ id: 'doc-old', deduplicated: true, duplicate_of: 'doc-old' })
+    expect(uploadDocumentMock).toHaveBeenCalledOnce()
+    expect(findCall('invoice_inbox_items', 'eq')).toEqual(['company_id', 'company-1'])
+  })
+
+  it('answers the archived document when a verifikat already holds it, without looking for an inbox item', async () => {
+    uploadDocumentMock.mockResolvedValue({ ...makeDocumentAttachment({ id: 'doc-booked', journal_entry_id: JE_ID }), deduplicated: true })
+
+    const res = await POST(makeRequest({ file: pdf(), dedupe_by_content: 'true' }) as never, createMockRouteParams({}))
+    const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(res)
+
+    expect(body.data).toMatchObject({ id: 'doc-booked', journal_entry_id: JE_ID, deduplicated: true, duplicate_of: 'doc-booked' })
+    expect(findCall('invoice_inbox_items', 'select')).toBeUndefined()
+    expect(uploadDocumentMock).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ['no inbox item carries it', { data: [] }],
+    ['the inbox lookup fails', { error: { message: 'boom' } }],
+  ])('stores the upload again when the archived copy reached nothing (%s): Arkiv left it out of Underlag', async (_label, lookup) => {
+    uploadDocumentMock
+      .mockResolvedValueOnce({ ...makeDocumentAttachment({ id: 'doc-orphan', journal_entry_id: null }), deduplicated: true })
+      .mockResolvedValueOnce(makeDocumentAttachment({ id: 'doc-new' }))
+    enqueue(lookup)
+
+    const res = await POST(makeRequest({ file: pdf(), dedupe_by_content: 'true' }) as never, createMockRouteParams({}))
+    const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(res)
+
+    expect(body.data.id).toBe('doc-new')
+    expect(body.data).not.toHaveProperty('deduplicated')
+    expect(uploadDocumentMock).toHaveBeenCalledTimes(2)
+    expect(uploadDocumentMock.mock.calls[0][4]).toEqual(expect.objectContaining({ dedupeByContent: true }))
+    expect(uploadDocumentMock.mock.calls[1][4]).not.toHaveProperty('dedupeByContent')
+  })
+
+  it.each([
+    ['a verifikat', { journal_entry_id: JE_ID }],
+    ['a line', { journal_entry_line_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' }],
+  ])('never dedupes an upload that names %s: the same underlag sits on several verifikat as one copy each', async (_label, target) => {
+    uploadDocumentMock.mockResolvedValue(makeDocumentAttachment({ id: 'doc-4', journal_entry_id: JE_ID }))
+
+    await POST(makeRequest({ file: pdf(), dedupe_by_content: 'true', ...target }) as never, createMockRouteParams({}))
+
+    expect(uploadDocumentMock.mock.calls[0][4]).not.toHaveProperty('dedupeByContent')
+  })
+
+  it('leaves the dedupe off unless asked for, as the verifikat attachment zone and the supplier invoice form upload', async () => {
+    uploadDocumentMock.mockResolvedValue(makeDocumentAttachment({ id: 'doc-5' }))
+
+    await POST(makeRequest({ file: pdf(), upload_source: 'file_upload' }) as never, createMockRouteParams({}))
+    await POST(makeRequest({ file: pdf(), dedupe_by_content: 'yes' }) as never, createMockRouteParams({}))
+
+    expect(uploadDocumentMock.mock.calls[0][4]).not.toHaveProperty('dedupeByContent')
+    expect(uploadDocumentMock.mock.calls[1][4]).not.toHaveProperty('dedupeByContent')
   })
 
   it('falls back to file_upload for an upload_source outside the whitelist', async () => {

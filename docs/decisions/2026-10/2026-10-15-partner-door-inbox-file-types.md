@@ -1,0 +1,1 @@
+[2026-10-15] The partner door takes the Inkorg's file types (PDF, JPEG, PNG, HEIC, WebP), not the documents upload's office formats: it files into the inbox pipeline, which reads PDFs and photos only. The 10 MB cap is the same on both.

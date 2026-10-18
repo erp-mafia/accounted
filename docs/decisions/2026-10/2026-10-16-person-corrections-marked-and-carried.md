@@ -1,0 +1,1 @@
+[2026-10-16] A person's field corrections are marked in extracted_data.personFields and carried by every write that replaces the reading, not inferred from a diff a re-read erases: a new reading never overwrites a person's value.

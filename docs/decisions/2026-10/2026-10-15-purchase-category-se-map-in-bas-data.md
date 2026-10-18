@@ -1,0 +1,1 @@
+[2026-10-15] The SE purchase-category to BAS map lives in lib/bookkeeping/bas-data/: it is Swedish chart knowledge, so it sits inside the weld ratchet's SE_PACK_TERRITORY (MR !438) and the taxonomy in lib/categories stays BAS-free; bas-data is server-only, which the map never needs to escape.

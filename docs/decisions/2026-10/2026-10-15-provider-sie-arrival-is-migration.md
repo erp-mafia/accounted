@@ -1,0 +1,1 @@
+[2026-10-15] An SIE file a provider migration fetched is a 'migration' arrival, 'sie' is one a person, a v1 client or an agent handed over: the door is the provider import (kind ledger in the source registry). Both use the sie_imports id as source_ref, so a retry finds its arrival.

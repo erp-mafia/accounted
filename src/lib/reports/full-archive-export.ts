@@ -1169,6 +1169,11 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
       'id, created_at, source, status, document_id, matched_transaction_id, ' +
       'created_journal_entry_id, created_supplier_invoice_id, channel_context',
   },
+  // How each underlag came in (the mail, the chat message, the e-invoice, the
+  // upload) and what each delivery produced. The originals' bytes stay in
+  // Storage under documents/<company>/arrivals/; the rows say where.
+  { name: 'arrivals', file: 'arrivals.json', orderBy: 'received_at' },
+  { name: 'arrival_outputs', file: 'arrival_outputs.json', orderBy: 'created_at' },
   // Arkiv: what each archived document is and whether it belongs to the
   // company, the model's reading and every person's decision, oldest first.
   { name: 'document_classifications', file: 'document_classifications.json', orderBy: 'created_at' },

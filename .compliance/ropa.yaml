@@ -989,3 +989,75 @@ processing_activities:
       - undo_via_security_definer_rpc_with_writer_gate
       - changed_fields_only_never_whole_rows
       - counts_only_summary_in_immutable_audit_log
+
+  - id: intake.arrivals
+    name: Ankomster till bolaget (hur underlag, bankrader och importer kom in)
+    purpose: >-
+      Bevara hur varje underlag kom in i bolaget och originalet i det skick
+      det kom: hela mejlet (.eml) till inkorgsadressen, e-fakturans XML, den
+      uppladdade filen, kuvertet (avsändare, ämne, tid) för underlag som
+      hämtats ur en kopplad mejlbox, och vem eller vad som hämtade det. Ett
+      underlag som kommer in flera vägar visas en gång med alla vägar.
+      Originalet och den korrespondens som förklarar bokföringen bevaras som
+      räkenskapsinformation enligt BFL 7 kap. WhatsApp-ankomster sparar ingen
+      chattext och inget meddelandeinnehåll (chattranskript rensas efter 90
+      dagar enligt whatsapp.receipt_intake), bara maskerat nummer och en
+      hänvisning till meddelanderaden.
+      Samma sak gäller allt annat som förs in i bokföringen: bankfiler
+      (kontoutdrag i CSV eller XML, sparade som de laddades upp), bankflödets
+      råa svar från banken (sidorna som redan arkiveras som underlag),
+      SIE-filer (ankomsten pekar på importens arkivkopia i sie-files och
+      sparar ingen ny) och underlag som hämtas vid en flytt från en annan
+      leverantör. Kontoutdrag och bankflödets sidor innehåller motparternas
+      namn, kontonummer, belopp och meddelanden; en SIE-fil hela bokföringen
+      med verifikationstexter. En bankfil sparas redan när den
+      förhandsgranskas, eftersom importen därefter bara får de tolkade
+      raderna; en fil som förhandsgranskas men aldrig importeras ligger kvar
+      utan ankomst.
+    # art 6.1 b: tjänsten (inkorgen och dess underlag).
+    # art 6.1 c: BFL 7 kap: räkenskapsinformation och korrespondens som
+    #            behövs för att förstå bokföringen bevaras 7 år.
+    lawful_basis: art_6_1_b_and_c
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: supabase
+    data_subjects:
+      - business_owner
+      - company_member
+      - supplier_contact            # avsändare av mejlade fakturor och kvitton
+      - counterparty                # motparter i kontoutdrag, bankflöde och SIE-filer
+    data_categories:
+      - user.contact.email          # avsändare och mottagare i mejlets kuvert
+      - user.name
+      - user.communication_content  # mejlets text och hela .eml-filen, 7 år
+      - user.document               # originalfilen, 7 år
+      - user.financial.transaction  # bankrader i kontoutdrag och bankflödets sidor
+      - user.financial.bank_account # motpartens kontonummer eller IBAN i samma rader
+      - user.activity_timestamp
+    recipients:
+      - name: Supabase
+        country: EU
+        role: processor
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: EU-only processor.
+    retention:
+      duration: 7_years_after_fiscal_year_end
+      basis: bfl_7_kap
+      note: >-
+        Raderna kan inte ändras eller tas bort (append-only) medan bolaget
+        finns; de följer bolaget vid radering (ON DELETE CASCADE).
+        Kontoradering (art 17) når inte avsändaruppgifterna i ankomsterna,
+        eftersom de är räkenskapsinformation som BFL kräver bevarad.
+      stored_in:
+        - arrivals
+        - arrival_outputs
+        - storage:documents/{company}/arrivals/
+        - storage:documents/{company}/arrivals/bank_file/{file_hash}/
+        - storage:sie-files/{company}/   # pekas på, sparas inte igen
+    security_measures:
+      - rls_company_scoped
+      - append_only_triggers_no_update_or_delete_while_company_exists
+      - originals_in_private_company_scoped_bucket
+      - short_lived_signed_urls_for_originals

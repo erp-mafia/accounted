@@ -132,7 +132,13 @@ describe('POST /skatteverket/agi/validate-huvuduppgift', () => {
     registryGet.mockReturnValue(undefined)
     const res = await post(HU)
     expect(res.status).toBe(503)
-    expect((await res.json()).error.code).toBe('EXTENSION_DISABLED')
+    const body = await res.json()
+    expect(body.error.code).toBe('EXTENSION_DISABLED')
+    // The generic code, with this door's own copy and feature in details.
+    expect(body.error.details).toMatchObject({
+      extension: 'skatteverket',
+      reason: 'Skatteverket-integrationen är inte aktiverad i denna miljö.',
+    })
   })
 
   it('answers Skatteverket\'s kontrollsvar', async () => {

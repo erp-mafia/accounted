@@ -1,0 +1,1 @@
+[2026-10-16] The menu's per-company page rollouts (Dokument, Agenter, Inkorg) resolve in one function, lib/navigation/nav-rollouts.ts, read by the layout and the assistant's UI map: the two cannot disagree about where the inbox is, and no block imports another block's flag.

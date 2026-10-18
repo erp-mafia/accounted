@@ -13,7 +13,8 @@
  *            enrichment adds (organisationsnummer, the instructed amount of
  *            a foreign purchase, the balance after, the enriched flag);
  *   archive  every raw page as räkenskapsinformation (BFL 7 kap), each row
- *            linked to the page it arrived in;
+ *            linked to the page it arrived in, each page recorded as a
+ *            bank_feed arrival (./page-arrival.ts);
  *   ingest   lib/transactions/ingest.ts with the route, so every row goes
  *            through insert_bank_transaction and its dedupe layers, and a
  *            re-read row that arrives richer updates its stored row;
@@ -36,6 +37,7 @@ import { buildStableExternalIds, dropRepeatedBankRows, FALLBACK_DESCRIPTION } fr
 import { OPEN_PAYMENTS_AGGREGATOR } from '@/lib/bank-sync/aggregator'
 import type { BankIngestRoute, IngestOptions, IngestResult, RawTransaction } from '@/types'
 import { ConsentOverError, getBankFeedConnect, type BankFeedConnect } from './connect'
+import { recordBankFeedPageArrival } from './page-arrival'
 
 /** Two balance reads a day at most: the consent's unattended budget is small. */
 export const BALANCE_MAX_AGE_MS = 12 * 60 * 60 * 1000
@@ -233,6 +235,13 @@ export async function syncOpenPaymentsAccount(supabase: SupabaseClient, input: B
       archivedPageIds[i] = archived.id
     } catch (archiveError) {
       console.error(`[bank-feed] Failed to archive raw response page ${i + 1}:`, archiveError)
+    }
+    // How the page came in (best effort, never fails the sync).
+    const pageId = archivedPageIds[i]
+    if (pageId) {
+      await recordBankFeedPageArrival(supabase, {
+        companyId, userId, documentId: pageId, connectionId, accountUid: account.uid, page: i + 1, aggregator: 'open_payments',
+      })
     }
   }
 

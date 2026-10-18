@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 351 endpoints.
+  pagination, scopes), and all 353 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -215,7 +215,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 351 operations. Paths are shown without
+API version `2026-05-12`, 353 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (22)
@@ -421,24 +421,26 @@ DELETE /companies/{companyId}/suppliers/{id} : Archive a supplier (soft-delete) 
 POST /companies/{companyId}/suppliers/bulk-create : Create up to 50 suppliers in one call (partial-success) [scope:suppliers:write risk:low idempotent dry-run reversible]
 ```
 
-### Documents (15)
+### Documents (17)
 
 Full detail: [references/documents.md](references/documents.md)
 
 ```text
 GET /companies/{companyId}/documents : List documents in the archive, linked or not, newest upload first [scope:documents:read risk:low idempotent]
 POST /companies/{companyId}/documents : Upload a document to the WORM archive [scope:documents:write risk:medium idempotent]
-GET /companies/{companyId}/documents/{id} : Read one document's metadata and what holds it [scope:documents:read risk:low idempotent]
+GET /companies/{companyId}/documents/{id} : Read one document's metadata and what holds it, and on request its text, reading, links and arrivals [scope:documents:read risk:low idempotent]
 DELETE /companies/{companyId}/documents/{id} : Delete a document that no verifikat or registered record holds [scope:documents:write risk:medium idempotent dry-run]
 GET /companies/{companyId}/documents/{id}/download : Get a time-limited signed download URL for a document [scope:documents:read risk:low idempotent]
 POST /companies/{companyId}/documents/{id}/link : Link a document to a journal entry [scope:documents:write risk:medium idempotent dry-run]
 GET /companies/{companyId}/inbox-items : List invoice-inbox items (Underlag) with a summary of what was read from each [scope:documents:read risk:low idempotent]
+POST /companies/{companyId}/inbox-items : Deliver a supplier invoice or receipt into the Inkorg for a person to book [scope:documents:write risk:low idempotent]
 GET /companies/{companyId}/inbox-items/{id} : Read one inbox item with its full reading and e-mail text [scope:documents:read risk:low idempotent]
 PATCH /companies/{companyId}/inbox-items/{id} : Correct fields of an inbox item's reading (supplier, invoice, totals) [scope:documents:write risk:low idempotent dry-run reversible]
 DELETE /companies/{companyId}/inbox-items/{id} : Discard an inbox item that was never converted or booked [scope:documents:write risk:medium idempotent dry-run]
 POST /companies/{companyId}/inbox-items/{id}/convert : Register a supplier invoice from an inbox item, with its document as underlag [scope:suppliers:write risk:medium idempotent dry-run]
 POST /companies/{companyId}/inbox-items/{id}/match-supplier : Set which supplier an inbox item comes from [scope:documents:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/inbox-items/{id}/match-transaction : Pair an inbox item with the bank transaction it documents [scope:documents:write risk:low idempotent dry-run reversible]
+PUT /companies/{companyId}/inbox-items/{id}/purchase-category : Set, or clear, what an inbox item bought (its purchase category) [scope:documents:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/inbox-items/{id}/stamp : Mark an inbox item as consumed by a journal entry [scope:documents:write risk:low idempotent]
 POST /companies/{companyId}/inbox-items/{id}/unmatch-transaction : Release an inbox item's bank transaction match [scope:documents:write risk:low idempotent dry-run reversible]
 ```

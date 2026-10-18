@@ -1,0 +1,1 @@
+[2026-10-17] Inkorg owner_paid opens the Bokför direkt prefill (the document's own VAT, payment on the profile's owner account, 2018 for an EF) in EditKonteringDialog, not suggest-booking: suggest-booking proposes only for an item matched to a bank row.

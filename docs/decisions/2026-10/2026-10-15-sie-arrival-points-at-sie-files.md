@@ -1,0 +1,1 @@
+[2026-10-15] An SIE import's arrival points at the original already archived in sie-files (source_meta.original_bucket) instead of a copy in documents: that archive is WORM and company-scoped, files reach 50 MB, and a reader signs sie-files only under the arrival's own company.

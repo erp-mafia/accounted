@@ -35,6 +35,14 @@ import type { InvoiceExtractionResult } from '@/types'
 import { INBOX_DOCUMENT_KINDS } from '@/lib/documents/inbox-kind'
 import { recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
 import { passed } from '@/lib/suggestion-log/checks'
+import { intakeSourceForInboxItem, type IntakeSourceId } from '@/lib/intake/sources'
+import { mirrorCorrectedReadingToDocument } from '@/lib/documents/reading-correction'
+import { correctionPaths, withPersonFields } from '@/lib/documents/person-corrections'
+import { resolveInboxPurchaseCategories, type InboxPurchaseCategory } from '@/lib/categories/inbox-purchase-category'
+import type { DocumentReadingLoader } from '@/lib/documents/reading/load'
+import type { ReadingItemRow } from '@/lib/documents/reading/resolve'
+import type { DocumentReading } from '@/lib/documents/reading/types'
+import { readInboxBankMatch, type BankMatch, type BankMatchItemRow } from '@/lib/documents/inbox-bank-match'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -251,14 +259,28 @@ interface InboxItemDetailRow extends InboxItemSummaryRow {
   email_body_text: string | null
   extraction_skipped: boolean | null
   updated_at: string
+  channel_context?: { intake_source?: unknown; channel?: unknown } | null
+  routed_to_arkiv_at: string | null
+  bank_match_transaction_id: string | null
+  bank_match_basis: string | null
+  bank_match_evidence_level: string | null
+  bank_match_source_key: string | null
 }
 
 export interface InboxItemDetail extends InboxItemSummary {
   extracted_data: Record<string, unknown> | null
+  /** What was bought, computed at read time (lib/categories/inbox-purchase-category.ts). */
+  purchase_category: InboxPurchaseCategory | null
   extraction_skipped: boolean
   email_body_text: string | null
   file_name: string | null
   updated_at: string
+  /** The canonical door it came through (lib/intake/sources.ts); null when nothing on the row names one. */
+  intake_source: IntakeSourceId | null
+  /** The one reading (lib/documents/reading), only when the caller asked for it. */
+  reading?: DocumentReading
+  /** Match on arrival: the bank row it looks already paid by, a proposal (lib/documents/inbox-bank-match.ts). */
+  bank_match: BankMatch | null
 }
 
 /**
@@ -269,45 +291,77 @@ export interface InboxItemDetail extends InboxItemSummary {
 export async function getInboxItem(
   ctx: OperationContext,
   inboxItemId: string,
+  /** reading: the loader of the one reading (the inbox block's, passed in by the caller: the ledger may not import it). */
+  options: { reading?: DocumentReadingLoader } = {},
 ): Promise<OperationOutcome<InboxItemDetail>> {
   if (!UUID_RE.test(inboxItemId)) return NOT_FOUND
   const { data, error } = await ctx.supabase
     .from('invoice_inbox_items')
-    .select('id, status, source, created_at, updated_at, document_id, extracted_data, extraction_skipped, matched_supplier_id, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id, email_from, email_subject, email_received_at, email_body_text, error_message, kind_hint')
+    .select('id, status, source, created_at, updated_at, document_id, extracted_data, extraction_skipped, matched_supplier_id, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id, email_from, email_subject, email_received_at, email_body_text, error_message, kind_hint, channel_context, routed_to_arkiv_at, bank_match_transaction_id, bank_match_basis, bank_match_evidence_level, bank_match_source_key')
     .eq('id', inboxItemId)
     .eq('company_id', ctx.companyId)
     .maybeSingle()
   if (error) return failed(error)
   if (!data) return NOT_FOUND
   const row = data as unknown as InboxItemDetailRow
+  // As stored, before the document's reading stands in below: the reading tells the two apart itself.
+  const storedItem = { ...row } as unknown as ReadingItemRow
+  // The proposal is read from the row as stored too: it is a hint, so a failed read answers none.
+  let bankMatch: BankMatch | null = null
+  try {
+    bankMatch = await readInboxBankMatch(ctx.supabase, ctx.companyId, { ...row } as BankMatchItemRow)
+  } catch (err) {
+    ctx.log.warn('inbox item bank match read failed', { inboxItemId, reason: err instanceof Error ? err.message : String(err) })
+  }
 
   let fileName: string | null = null
+  let uploadSource: string | null = null
   if (row.document_id) {
     const { data: doc, error: docError } = await ctx.supabase
       .from('document_attachments')
-      .select('id, file_name, extracted_data')
+      .select('id, file_name, extracted_data, upload_source')
       .eq('id', row.document_id)
       .eq('company_id', ctx.companyId)
       .maybeSingle()
     if (docError) return failed(docError)
-    const document = doc as { file_name?: string | null; extracted_data?: Record<string, unknown> | null } | null
+    const document = doc as { file_name?: string | null; extracted_data?: Record<string, unknown> | null; upload_source?: string | null } | null
     fileName = document?.file_name ?? null
+    uploadSource = document?.upload_source ?? null
     if (row.extracted_data == null && document?.extracted_data) {
       row.extracted_data = document.extracted_data
       row.extraction_skipped = false
     }
   }
 
+  let reading: DocumentReading | undefined
+  if (options.reading) {
+    try {
+      reading = await options.reading(ctx.supabase, ctx.companyId, { item: storedItem })
+    } catch (err) {
+      return failed(err)
+    }
+  }
+
   const extras = await resolveInboxBookedState(ctx.supabase, ctx.companyId, [row])
+  const purchaseCategories = await resolveInboxPurchaseCategories(ctx.supabase, ctx.companyId, [row])
   return {
     ok: true,
     data: {
       ...toSummary(row, extras.get(row.id)),
       extracted_data: row.extracted_data ?? null,
+      purchase_category: purchaseCategories.get(row.id) ?? null,
       extraction_skipped: row.extraction_skipped === true,
       email_body_text: row.email_body_text ?? null,
       file_name: fileName,
       updated_at: row.updated_at,
+      intake_source: intakeSourceForInboxItem({
+        source: row.source,
+        channel_context: row.channel_context ?? null,
+        document_upload_source: uploadSource,
+        document_file_name: fileName,
+      }),
+      ...(reading ? { reading } : {}),
+      bank_match: bankMatch,
     },
   }
 }
@@ -492,6 +546,9 @@ export type UpdateInboxItemFieldsInput = z.infer<typeof UpdateInboxItemFieldsSch
  * reading comes first on purpose: naming surviving keys one by one once
  * wiped documentKind, merchantCategory, legibility and more on the first
  * manual edit. A hand-set TOTALT stops being a promoted prominent amount.
+ * The paths the correction names are recorded beside the reading
+ * (personFields, lib/documents/person-corrections.ts), so a new reading
+ * never overwrites them.
  */
 export function mergeInboxItemFields(
   current: InvoiceExtractionResult,
@@ -512,7 +569,7 @@ export function mergeInboxItemFields(
   if (body.documentKind !== undefined) {
     merged.documentKind = body.documentKind
   }
-  return merged
+  return withPersonFields(merged, correctionPaths(body))
 }
 
 /**
@@ -520,6 +577,10 @@ export function mergeInboxItemFields(
  * updated_at: the write is read-merge-write over the whole jsonb, so a racing
  * save must not restore its stale copy of every field; zero rows updated
  * answers INBOX_ITEM_EDIT_CONFLICT and the caller re-reads.
+ *
+ * The corrected reading is then mirrored onto the document's extracted_data
+ * (mirrorCorrectedReadingToDocument), best effort: a document in a locked
+ * period, or a failed write, is logged and the edit still stands.
  */
 export async function updateInboxItemFields(
   ctx: OperationContext,
@@ -529,7 +590,7 @@ export async function updateInboxItemFields(
 ): Promise<OperationOutcome<{ id: string; extracted_data: Record<string, unknown> }>> {
   const { data: item, error: fetchError } = await ctx.supabase
     .from('invoice_inbox_items')
-    .select('id, extracted_data, created_supplier_invoice_id, updated_at')
+    .select('id, document_id, extracted_data, created_supplier_invoice_id, updated_at')
     .eq('id', inboxItemId)
     .eq('company_id', ctx.companyId)
     .maybeSingle()
@@ -559,6 +620,11 @@ export async function updateInboxItemFields(
     .maybeSingle()
   if (updateError) return failed(updateError)
   if (!updated) return { ok: false, code: 'INBOX_ITEM_EDIT_CONFLICT' }
+  await mirrorCorrectedReadingToDocument({
+    documentId: (item as { document_id?: string | null }).document_id,
+    companyId: ctx.companyId,
+    reading: updated.extracted_data as Record<string, unknown>,
+  })
   return {
     ok: true,
     data: { id: updated.id as string, extracted_data: updated.extracted_data as Record<string, unknown> },

@@ -29,6 +29,7 @@ import { cn } from '@/lib/utils'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { requiredCapabilityForExtension } from '@/lib/entitlements/keys'
+import { inboxHref, LEGACY_INBOX_HREF } from '@/lib/inkorg/flag'
 
 type Entry = {
   id: string
@@ -37,6 +38,8 @@ type Entry = {
   icon: LucideIcon
   href: string
   keywords?: string
+  /** The extension a page outside /e/ needs, for the capability gate below. */
+  extension?: { sector: string; id: string }
 }
 
 const ACTION_ENTRIES: Entry[] = [
@@ -75,18 +78,43 @@ const PAGE_ENTRIES: Entry[] = [
   { id: 'granskning', label: 'Granskning', icon: ClipboardCheck, href: '/pending', keywords: 'pending review' },
   { id: 'löner', label: 'Löner', icon: HandCoins, href: '/salary' },
   { id: 'anställda', label: 'Anställda', icon: Users, href: '/salary/employees' },
-  { id: 'dokumentinkorg', label: 'Dokumentinkorg', icon: Inbox, href: '/e/general/invoice-inbox' },
+  { id: 'dokumentinkorg', label: 'Dokumentinkorg', icon: Inbox, href: LEGACY_INBOX_HREF },
   { id: 'nyckeltal', label: 'Nyckeltal', icon: TrendingUp, href: '/kpi' },
   { id: 'inställningar', label: 'Inställningar', icon: Settings, href: '/settings' },
   { id: 'hjälp', label: 'Hjälp', icon: HelpCircle, href: '/help' },
 ]
+
+/**
+ * The inbox's entry goes where the menu puts the inbox (lib/inkorg/flag.ts):
+ * the new Inkorg page for the companies in its rollout, under its menu
+ * name, still found by the old one; the workspace under Inköp for everyone
+ * else. It needs the invoice-inbox extension either way.
+ */
+function withInbox(entries: Entry[], inkorgV2Enabled: boolean): Entry[] {
+  if (!inkorgV2Enabled) return entries
+  return entries.map((entry) =>
+    entry.id === 'dokumentinkorg'
+      ? {
+          ...entry,
+          id: 'inkorg',
+          label: 'Inkorg',
+          href: inboxHref(true),
+          keywords: 'dokumentinkorg underlag kvitton fakturor saknar underlag inbox',
+          extension: { sector: 'general', id: 'invoice-inbox' },
+        }
+      : entry,
+  )
+}
 
 function matches(entry: Entry, q: string): boolean {
   const hay = `${entry.label} ${entry.hint ?? ''} ${entry.keywords ?? ''}`.toLowerCase()
   return q.split(/\s+/).filter(Boolean).every(t => hay.includes(t))
 }
 
-export default function CommandPalette({ initialOpen = false }: { initialOpen?: boolean } = {}) {
+export default function CommandPalette({
+  initialOpen = false,
+  inkorgV2Enabled = false,
+}: { initialOpen?: boolean; inkorgV2Enabled?: boolean } = {}) {
   const router = useRouter()
   // initialOpen: LazyCommandPalette mounts this component on the first ⌘K,
   // so the palette must come up already open rather than waiting for a
@@ -104,8 +132,9 @@ export default function CommandPalette({ initialOpen = false }: { initialOpen?: 
   const allowedByCapability = useMemo(() => {
     return (entry: Entry) => {
       const m = entry.href.match(/^\/e\/([^/]+)\/([^/?#]+)/)
-      if (!m) return true
-      const required = requiredCapabilityForExtension(m[1], m[2])
+      const extension = entry.extension ?? (m ? { sector: m[1], id: m[2] } : null)
+      if (!extension) return true
+      const required = requiredCapabilityForExtension(extension.sector, extension.id)
       return !required || capabilities.includes(required)
     }
   }, [capabilities])
@@ -143,9 +172,9 @@ export default function CommandPalette({ initialOpen = false }: { initialOpen?: 
     return q ? visible.filter(e => matches(e, q)) : visible
   }, [q, allowedByCapability])
   const filteredPages = useMemo(() => {
-    const visible = PAGE_ENTRIES.filter(allowedByCapability)
+    const visible = withInbox(PAGE_ENTRIES, inkorgV2Enabled).filter(allowedByCapability)
     return q ? visible.filter(e => matches(e, q)) : visible.slice(0, 6)
-  }, [q, allowedByCapability])
+  }, [q, allowedByCapability, inkorgV2Enabled])
 
   // The hand-off-to-assistant entries use the agent name the user chose in
   // /onboarding/agent, and hide entirely until that onboarding is done: the

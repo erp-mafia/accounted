@@ -23,6 +23,7 @@ import { AttachDocumentPreview } from '@/components/bookkeeping/AttachDocumentPr
 import { MatchTransactionInvoicePreview } from '@/components/bookkeeping/MatchTransactionInvoicePreview'
 import { LinkDocumentsPreview } from './LinkDocumentsPreview'
 import { ReconciliationMatchPreview, hasReconciliationMatchDetails } from './ReconciliationMatchPreview'
+import { PurchaseCategoryPreview } from './PurchaseCategoryPreview'
 import { DocumentViewButton } from '@/components/bookkeeping/DocumentViewButton'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
@@ -1153,6 +1154,8 @@ export function OperationPreview({ op, detail = false }: { op: OperationPreviewI
         return hasReconciliationMatchDetails(op.preview_data)
           ? <ReconciliationMatchPreview data={op.preview_data} detail={detail} />
           : <GenericPreview data={op.preview_data} detail={detail} />
+      case 'set_inbox_purchase_category':
+        return <PurchaseCategoryPreview data={op.preview_data} />
       default:
         return <GenericPreview data={op.preview_data} detail={detail} />
     }

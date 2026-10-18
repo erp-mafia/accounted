@@ -1,6 +1,9 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 @custom-variant dark (&:where(.dark, .dark *));
+/* Translucent chrome turns solid for people who ask for less transparency
+   (macOS and iOS "Reduce transparency"): reduced-transparency:bg-background. */
+@custom-variant reduced-transparency (@media (prefers-reduced-transparency: reduce));
 
 /* ─────────────────────────────────────────────────────────────────────────
  * Spacing scale: locked.

@@ -120,6 +120,16 @@ describe('POST /imports/sie', () => {
     expect(m1930.sourceName).toBe('Företagskonto Swedbank')
   })
 
+  it('names the v1 door and the API key for the import\'s arrival', async () => {
+    await callRoute()
+    expect(submitSIEJobMock.mock.calls[0][7]).toBe('sie_file')
+    expect(submitSIEJobMock.mock.calls[0][8]).toEqual({
+      source: 'sie',
+      via: 'partner_api',
+      fetchedBy: { type: 'api_key', user_id: 'user-1', api_key_id: 'ak_1' },
+    })
+  })
+
   it('defaults updateAccountNames to true', async () => {
     await callRoute()
 

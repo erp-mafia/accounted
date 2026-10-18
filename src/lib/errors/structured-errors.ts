@@ -53,6 +53,16 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
     message_sv: 'Något gick fel. Försök igen.',
     message_en: 'An unexpected error occurred.',
   },
+  // An opt-in extension this request needs is not enabled on the deployment
+  // (extensions.config.json, or its env flag). Raised for several features
+  // (bank sync, the Inkorg, Skatteverket), so the copy names none: details
+  // carry which one where the raiser knows it. A raiser's own Swedish message
+  // (the Skatteverket extension's results) still passes through verbatim.
+  EXTENSION_DISABLED: {
+    httpStatus: 503,
+    message_sv: 'Funktionen är inte aktiverad i den här installationen.',
+    message_en: 'This feature is not enabled on this installation.',
+  },
   // Unclassified-but-transient failures (DB deadlock/timeout, connection
   // drop, upstream 5xx/429) inferred by isTransientFailure() when no
   // specific code applies. Stable code so agents can dispatch on it.
@@ -5231,6 +5241,37 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
     message_en: 'The inbox item was changed by someone else at the same time. Try again.',
     retryable: true,
   },
+  // A purchase category is stored on the item's own reading; an item whose
+  // document's reading only stands in for display has none to hold it.
+  INBOX_ITEM_NO_READING: {
+    httpStatus: 409,
+    message_sv: 'Posten har ingen egen tolkning än. Vänta tills den är läst, eller rätta fälten först.',
+    message_en: 'The inbox item has no reading of its own yet. Wait for it to be read, or correct its fields first.',
+  },
+  // "Varje gång" stores the purchase category on the item's matched supplier
+  // (suppliers.default_purchase_category); without one there is nobody to
+  // hold the instruction.
+  INBOX_ITEM_NO_SUPPLIER: {
+    httpStatus: 409,
+    message_sv: 'Posten är inte kopplad till någon leverantör. Koppla en leverantör först, så kan kategorin gälla varje gång.',
+    message_en: 'The inbox item is not matched to a supplier. Match a supplier first, then the category can apply every time.',
+    remediation: {
+      description:
+        'every_time stores the category on the item\'s matched supplier (matched_supplier_id). Match the item to a supplier (POST /inbox-items/{id}/match-supplier), or send the category without every_time to set it on this item only.',
+    },
+  },
+  // A staged every_time is approved for the supplier its card named
+  // (expected_supplier_id); the item has been matched to another one since.
+  INBOX_ITEM_SUPPLIER_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Posten är kopplad till en annan leverantör än när förslaget gjordes. Inget har ändrats.',
+    message_en: 'The inbox item is matched to another supplier than when the proposal was made. Nothing was changed.',
+    remediation: {
+      description:
+        'details.matched_supplier_id is the supplier the item is matched to now. Read the item again and, if the category should still hold every time, stage it again for that supplier.',
+      tool: 'gnubok_get_inbox_item',
+    },
+  },
   INBOX_ITEM_DELETE_CONVERTED: {
     httpStatus: 409,
     message_sv: 'Posten är kopplad till en leverantörsfaktura och kan inte tas bort.',
@@ -5252,6 +5293,24 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
       description:
         'Nothing new stays in the books: either nothing was posted, or the verifikat this call posted was reversed with a storno because another call booked the item first. Read the item (created_journal_entry_id) to find the booking. Do not retry.',
     },
+  },
+  // The Inkorg's "Registrera och koppla till betalningen" settles against the
+  // bank row match on arrival proposed. Refused before anything is written
+  // when that proposal no longer stands (the row was booked or claimed since,
+  // or the item no longer reads the same).
+  INBOX_BANK_MATCH_STALE: {
+    httpStatus: 409,
+    message_sv: 'Bankraden är inte längre förslaget för underlaget, till exempel för att den har bokförts sedan. Ladda om och välj bankraden själv.',
+    message_en: 'The bank row is no longer the proposal for this document, for example because it was booked since. Reload and pick the bank row yourself.',
+  },
+  // Registered without a verifikat because the company books supplier
+  // invoices in a separate Bokför step (defer_invoice_booking). A payment
+  // matched now would clear 2440 for a debt never booked, and the Bokför step
+  // refuses a paid invoice, so the cost would never reach the books.
+  INBOX_SETTLE_INVOICE_NOT_BOOKED: {
+    httpStatus: 409,
+    message_sv: 'Fakturan är registrerad men inte bokförd, eftersom företaget bokför leverantörsfakturor i ett eget steg. Bokför fakturan först och koppla sedan betalningen.',
+    message_en: 'The invoice is registered but not booked, because the company books supplier invoices in a separate step. Book the invoice first, then link the payment.',
   },
   // Book-direct on a foreign-currency underlag (crm#1146). The lines arrive as
   // bare numbers that are stored as SEK, so a receipt for 100 EUR used to post
@@ -5302,6 +5361,18 @@ const INBOX_UPLOAD: Record<string, StructuredErrorEntry> = {
     httpStatus: 403,
     message_sv: 'Du har inte behörighet att ladda upp underlag i det här företaget. Medlemmar med läsbehörighet kan inte lägga till dokument.',
     message_en: 'You do not have permission to upload documents to this company. Read-only members cannot add documents.',
+  },
+  // A partner delivery (POST /api/v1/.../inbox-items) whose external_ref was
+  // already delivered with other content: filing the new file under the old
+  // reference would hide it, replaying the old answer would lose it.
+  INBOX_DELIVERY_REF_CONFLICT: {
+    httpStatus: 409,
+    message_sv: 'Referensen har redan använts för en annan fil i det här företaget.',
+    message_en: 'This external_ref was already delivered with a different file for this company.',
+    remediation: {
+      description:
+        'Send the same file to replay the first delivery, or give the new document an external_ref of its own.',
+    },
   },
 }
 
@@ -7582,11 +7653,6 @@ const BULK_BOOK: Record<string, StructuredErrorEntry> = {
 // ─────────────────────────────────────────────────────────────────
 
 const SKATTEVERKET: Record<string, StructuredErrorEntry> = {
-  EXTENSION_DISABLED: {
-    httpStatus: 503,
-    message_sv: 'Skatteverket-integrationen är inte aktiverad i denna miljö.',
-    message_en: 'The Skatteverket integration is not enabled in this environment.',
-  },
   // One code covers both never-connected and expired: splitting it would
   // ripple through every consumer, and the declaration-status path already
   // differentiates in its message (DECISIONS.md 2026-08-25). The copy is

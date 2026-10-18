@@ -1,0 +1,166 @@
+'use client'
+
+import { useEffect } from 'react'
+import { useLocale, useTranslations } from 'next-intl'
+import { FileQuestion, Inbox } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
+import { EmptyState } from '@/components/ui/empty-state'
+import { Skeleton } from '@/components/ui/skeleton'
+import { AttnLine } from '@/components/ui/attn-line'
+import { BrandMark, GlyphMark } from '@/components/parties/BrandMark'
+import { cn, formatCurrency } from '@/lib/utils'
+import type { BankMatch } from '@/lib/documents/inbox-bank-match'
+import { shortDate, shortDateTime } from '@/lib/inkorg/dates'
+import { rowStatus } from '@/lib/inkorg/decision'
+import { doorOf, itemHeadline, type InkorgItem, type InkorgView } from '@/lib/inkorg/items'
+import { useDoorName } from './door-icon'
+import { ROW_CLASS, RowChevron, RowTitle } from './row-parts'
+import type { LoadState } from './use-inkorg-data'
+
+/**
+ * The selected view as rows: the sender's mark, its name over the door and
+ * the time it came, the document's own line (the mail subject, else its
+ * number), where it stands and the amount. A row opens the focus view.
+ */
+export function InkorgList({
+  view,
+  items,
+  state,
+  onOpen,
+  onRetry,
+  lastOpenedId,
+  bankMatches,
+}: {
+  view: InkorgView
+  items: InkorgItem[]
+  state: LoadState
+  onOpen: (id: string) => void
+  onRetry: () => void
+  /** The row the focus view was left on, scrolled into view and marked. */
+  lastOpenedId: string | null
+  /** What the focus view read since about each item's bank row (a match, null for none); it wins over the list's own. */
+  bankMatches: ReadonlyMap<string, BankMatch | null>
+}) {
+  const t = useTranslations('inkorg')
+
+  // Back from the focus view: the row it was left on comes into view, once.
+  useEffect(() => {
+    if (lastOpenedId) document.getElementById(`inkorg-row-${lastOpenedId}`)?.scrollIntoView({ block: 'nearest' })
+  }, [lastOpenedId])
+
+  if (state === 'loading') {
+    return (
+      <div className="space-y-3" aria-busy="true">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <Skeleton key={i} className="h-12 w-full rounded-lg" />
+        ))}
+      </div>
+    )
+  }
+
+  if (state === 'failed') {
+    return <AttnLine action={{ label: t('retry'), onClick: onRetry }}>{t('load_failed')}</AttnLine>
+  }
+
+  if (items.length === 0) {
+    return view.kind === 'need' ? (
+      <EmptyState icon={Inbox} title={t('empty_need_title')} description={t('empty_need_body')} />
+    ) : (
+      <EmptyState icon={Inbox} title={t('empty_door_title')} description={t('empty_door_body')} />
+    )
+  }
+
+  return (
+    <ul className="stagger-enter border-t border-border">
+      {items.map((item) => (
+        <InkorgRow key={item.id} item={item} onOpen={onOpen} marked={item.id === lastOpenedId} bankMatch={bankMatches.get(item.id)} />
+      ))}
+    </ul>
+  )
+}
+
+function InkorgRow({
+  item,
+  onOpen,
+  marked,
+  bankMatch,
+}: {
+  item: InkorgItem
+  onOpen: (id: string) => void
+  marked: boolean
+  bankMatch: BankMatch | null | undefined
+}) {
+  const t = useTranslations('inkorg')
+  const tKind = useTranslations('inbox_workspace')
+  const doorName = useDoorName(item.channel_context?.mail_provider ?? null)
+  const locale = useLocale()
+  const headline = itemHeadline(item)
+  const status = rowStatus(item, bankMatch)
+  const invoiceNumber = item.extracted_data?.invoice?.invoiceNumber?.trim() || null
+  const subject = item.email_subject?.trim() || null
+
+  // The document's own line: what the mail said, else its kind and number.
+  const docLine =
+    subject && subject !== headline.name
+      ? subject
+      : invoiceNumber && headline.kind
+        ? t('row_doc_number', { kind: tKind(`doc_kind_${headline.kind}`), number: invoiceNumber })
+        : headline.kind
+          ? tKind(`doc_kind_${headline.kind}`)
+          : null
+
+  const pill =
+    status.kind === 'looks_paid' ? (
+      <Badge variant="warning">{t('q_already_paid')}</Badge>
+    ) : status.kind === 'to_pay' ? (
+      <Badge variant="secondary">{t('status_to_pay', { date: shortDate(status.dueDate, locale) })}</Badge>
+    ) : status.kind === 'unreadable' ? (
+      <Badge variant="destructive">{t('row_unreadable')}</Badge>
+    ) : status.kind === 'linked' ? (
+      <Badge variant="secondary">{t('status_linked')}</Badge>
+    ) : status.kind === 'waiting' ? (
+      <Badge variant="secondary">{t('status_waiting')}</Badge>
+    ) : status.kind === 'reading' ? (
+      <span className="text-[12.5px] text-muted-foreground">{t('row_reading')}</span>
+    ) : null
+
+  const amount = headline.amount != null ? formatCurrency(headline.amount, headline.currency) : ''
+
+  return (
+    <li id={`inkorg-row-${item.id}`}>
+      <button
+        type="button"
+        onClick={() => onOpen(item.id)}
+        className={cn(
+          ROW_CLASS,
+          'grid-cols-[28px_minmax(0,1fr)_auto] sm:grid-cols-[28px_minmax(8rem,15rem)_minmax(0,1fr)_auto_7.5rem_1rem]',
+          marked && 'bg-secondary/35',
+        )}
+      >
+        {headline.name ? (
+          <BrandMark name={headline.name} variant="mark" size={28} logoUrl={item.logo_url} />
+        ) : (
+          <GlyphMark size={28}>
+            <FileQuestion aria-hidden="true" className="h-3.5 w-3.5 text-muted-foreground" />
+          </GlyphMark>
+        )}
+        <RowTitle
+          name={headline.name ?? t('row_unknown')}
+          meta={`${doorName(doorOf(item))} · ${shortDateTime(item.created_at, locale)}`}
+        />
+        <span data-ph-mask="" className="hidden truncate text-muted-foreground sm:block">
+          {docLine}
+        </span>
+        {/* On a phone the status rides under the amount. */}
+        <span className="hidden justify-end sm:flex">{pill}</span>
+        <span className="flex flex-col items-end gap-1">
+          <span data-ph-mask="" className="font-medium tabular-nums">
+            {amount}
+          </span>
+          <span className="sm:hidden">{pill}</span>
+        </span>
+        <RowChevron />
+      </button>
+    </li>
+  )
+}

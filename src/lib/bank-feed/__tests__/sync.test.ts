@@ -3,8 +3,9 @@ import type { NormalizedBankTransaction } from '@accounted/connect-contract'
 import { buildStableExternalIds } from '@/lib/transactions/external-id'
 import type { BankIngestRoute } from '@/types'
 
-const mocks = vi.hoisted(() => ({ upload: vi.fn(), ingest: vi.fn() }))
+const mocks = vi.hoisted(() => ({ upload: vi.fn(), ingest: vi.fn(), arrival: vi.fn() }))
 vi.mock('@/lib/core/documents/document-service', () => ({ uploadDocument: (...a: unknown[]) => mocks.upload(...a) }))
+vi.mock('../page-arrival', () => ({ recordBankFeedPageArrival: (...a: unknown[]) => mocks.arrival(...a) }))
 vi.mock('@/lib/transactions/ingest', () => ({ ingestTransactions: (...a: unknown[]) => mocks.ingest(...a) }))
 
 import { ConsentOverError, type BankFeedConnect } from '../connect'
@@ -133,6 +134,16 @@ describe('syncOpenPaymentsAccount', () => {
     expect(connect.balances).toHaveBeenCalledWith('co-1', { party: PARTY, consentId: 'consent-1', accountUid: 'ACC003' })
     expect(acc).toMatchObject({ dedup_scope: 'SE8050000000052131234567', balance: 1000, available_balance: 900, balance_updated_at: '2026-10-12T10:00:00.000Z' })
     expect(result).toMatchObject({ imported: 1, duplicates: 0, errors: 0, transactionIds: ['tx-1'], returnedMinBookingDate: '2026-10-01', requestedFromDate: '2026-09-01', historyNarrowed: false, truncated: false })
+  })
+
+  it('records each archived page as a bank_feed arrival, and none for a page the archive lost', async () => {
+    mocks.upload.mockResolvedValueOnce({ id: 'doc-1' }).mockRejectedValueOnce(new Error('storage down'))
+    const connect = fakeConnect({ syncTransactions: vi.fn().mockResolvedValue(page([row()], { raw_pages: ['{"page":1}', '{"page":2}'] })) })
+    await syncOpenPaymentsAccount({} as never, { companyId: 'co-1', userId: 'user-1', connectionId: 'conn-1', account: account(), fromDate: '2026-09-01', toDate: '2026-10-12', bankRoute: ROUTE, party: PARTY, connect })
+    expect(mocks.arrival).toHaveBeenCalledTimes(1)
+    expect(mocks.arrival).toHaveBeenCalledWith({}, {
+      companyId: 'co-1', userId: 'user-1', documentId: 'doc-1', connectionId: 'conn-1', accountUid: 'ACC003', page: 1, aggregator: 'open_payments',
+    })
   })
 
   it('links rows to the page they arrived in, and to nothing when the archive failed', async () => {

@@ -80,6 +80,10 @@ const RISK_TIERS = {
   delete_inbox_item: 'medium',
   detach_document_from_transaction: 'low',
   unmatch_inbox_item_transaction: 'low',
+  // What an underlag bought (its purchase category), and with every_time the
+  // matched supplier's instruction: a label beside the kontering, no
+  // verifikat, undone by setting it again.
+  set_inbox_purchase_category: 'low',
   undo_bank_import: 'high',
   correct_entry_metadata: 'high',
   correct_entry_lines_inline: 'high',

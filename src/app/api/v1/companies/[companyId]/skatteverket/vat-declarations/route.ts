@@ -116,6 +116,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     if (!services?.fetchVatDeclarationStatus) {
       return v1ErrorResponseFromCode('EXTENSION_DISABLED', ctx.log, {
         requestId: ctx.requestId,
+        details: { extension: 'skatteverket' },
       })
     }
 

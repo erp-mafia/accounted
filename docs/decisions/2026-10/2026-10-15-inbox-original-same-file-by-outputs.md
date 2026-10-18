@@ -1,0 +1,1 @@
+[2026-10-15] "Visa originalet" hides an original that is the previewed file, judged by the document the arrival links (attachment for upload, MCP, API; xml for Peppol), not by path: the summary has no paths, and an earlier version's as-received file still shows.

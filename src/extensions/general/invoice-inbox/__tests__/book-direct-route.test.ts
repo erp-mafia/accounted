@@ -787,6 +787,45 @@ describe('POST /items/:id/book-direct', () => {
     )
   })
 
+  // ── Accepting match on arrival's proposal ───────────────────
+  // Booking the bank row the item's bank_match proposed is how a receipt's
+  // proposal is accepted: the links keep the rule that proposed the pair.
+  it.each([
+    ['the proposed bank row records the proposing rule as link evidence', TX_UUID, { rule_id: 'inbox_bank_match:rule_amount_date' }],
+    ['another bank row records none', '00000000-0000-4000-8000-000000000099', null],
+  ])('booking %s', async (_label, proposedTxId, evidence) => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        ...makeInvoiceInboxItem({ document_id: 'doc-1' }),
+        bank_match_transaction_id: proposedTxId,
+        bank_match_basis: 'rule_amount_date',
+      },
+    })
+    enqueue({ data: { ...makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: -99 }), transaction_voucher_links: [] } })
+    enqueue({ data: [{ ledger_account: '1930' }] }) // settlement account
+    enqueue({ data: [{ id: TX_UUID }] }) // transaction link
+    enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)
+
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: { ...VALID_BODY, transaction_id: TX_UUID },
+      searchParams: { _id: 'item-1' },
+    })
+    const { status } = await parseJsonResponse(await route.handler(request, buildCtx(supabase)))
+    expect(status).toBe(200)
+
+    const [txLink] = findCalls('transactions', 'update').map((args) => args[0] as Record<string, unknown>)
+    expect(txLink).toMatchObject({ journal_entry_id: 'je-1', link_basis: 'user_created', link_evidence: evidence })
+    expect(linkToJournalEntryMock).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      'doc-1',
+      'je-1',
+      { link_basis: 'user_created', link_evidence: evidence },
+    )
+  })
+
   // ── Foreign-currency underlag (crm#1146) ────────────────────
   // The lines are bare numbers the engine stores as SEK. A receipt read as
   // 100 EUR used to be booked from the dialog's prefill as 100 kr. Kronor

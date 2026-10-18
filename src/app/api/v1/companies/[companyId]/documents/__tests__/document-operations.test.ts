@@ -212,6 +212,40 @@ describe('GET /api/v1/companies/:companyId/documents/:id', () => {
       transaction_ids: [TX_ID],
       inbox_item_id: '22222222-2222-4222-8222-222222222222',
     })
+    // Metadata only without include: no part is read or answered.
+    for (const part of ['text', 'reading', 'links', 'arrivals', 'notice']) expect(body.data).not.toHaveProperty(part)
+  })
+
+  it('adds the parts named in include: page text, paged and capped, and the records that hold it', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      document_attachments: { data: docRow({ journal_entry_id: JE_ID, page_count: 2, pages_read_at: '2026-09-02T07:42:00Z' }), error: null },
+      document_pages: { data: [{ page_no: 1, text: 'Kvitto 349,50 kr', reader: 'pdf_text', has_text_layer: true }], error: null },
+      journal_entries: { data: { id: JE_ID, voucher_series: 'A', voucher_number: 12, entry_date: '2026-09-02', status: 'posted', description: 'Kontorsmaterial' }, error: null },
+      transactions: { data: [{ id: TX_ID }], error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await getDocument(request(`${BASE}/${DOC_ID}?include=text,links&max_chars=1000`, { method: 'GET' }), docParams())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.text).toMatchObject({ status: 'read', max_chars: 1000, pages_needing_vision: [2], next_page: null })
+    expect(body.data.text.pages[0].text).toContain('Kvitto 349,50 kr')
+    expect(body.data.text.hint).toContain('GET /documents/{id}/download')
+    expect(body.data.links.journal_entry).toMatchObject({ journal_entry_id: JE_ID, voucher: 'A12', status: 'posted' })
+    expect(body.data.links.transactions.map((t: { transaction_id: string }) => t.transaction_id)).toEqual([TX_ID])
+    expect(body.data.notice).toBeDefined()
+    expect(body.data.reading).toBeUndefined()
+    // The page read is the company's own.
+    expect(client.calls).toContainEqual({ table: 'document_pages', method: 'eq', args: ['company_id', COMPANY_ID] })
+  })
+
+  it('400 on an unknown include part or a max_chars out of range', async () => {
+    mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER }))
+    const unknown = await getDocument(request(`${BASE}/${DOC_ID}?include=text,bytes`, { method: 'GET' }), docParams())
+    expect(unknown.status).toBe(400)
+    expect((await unknown.json()).error.code).toBe('VALIDATION_ERROR')
+    const tiny = await getDocument(request(`${BASE}/${DOC_ID}?include=text&max_chars=10`, { method: 'GET' }), docParams())
+    expect(tiny.status).toBe(400)
   })
 })
 

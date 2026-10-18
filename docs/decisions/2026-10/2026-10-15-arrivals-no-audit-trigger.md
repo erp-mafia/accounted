@@ -1,0 +1,1 @@
+[2026-10-15] arrivals carry no write_audit_log trigger: the table is itself the append-only record, and an audit row would copy sender addresses and mail text into audit_log, which is immutable and outside the erasure path.

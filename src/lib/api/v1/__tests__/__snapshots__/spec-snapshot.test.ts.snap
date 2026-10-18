@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `351`;
+exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `353`;
 
 exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-keys 1`] = `
 [
@@ -244,6 +244,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/imports/sie/:id/undo",
   "POST /api/v1/companies/:companyId/imports/sie/upload",
   "POST /api/v1/companies/:companyId/imports/skattekonto-file",
+  "POST /api/v1/companies/:companyId/inbox-items",
   "POST /api/v1/companies/:companyId/inbox-items/:id/convert",
   "POST /api/v1/companies/:companyId/inbox-items/:id/match-supplier",
   "POST /api/v1/companies/:companyId/inbox-items/:id/match-transaction",
@@ -354,6 +355,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "PUT /api/v1/companies/:companyId/employees/:id/opening-balances",
   "PUT /api/v1/companies/:companyId/employees/:id/worked-days",
   "PUT /api/v1/companies/:companyId/employees/opening-balances",
+  "PUT /api/v1/companies/:companyId/inbox-items/:id/purchase-category",
   "PUT /api/v1/companies/:companyId/supplier-invoices/attest-policy",
 ]
 `;
@@ -365,7 +367,7 @@ exports[`v1 spec snapshot > matches the recorded module catalogue > endpoint-mod
   "byra": 1,
   "expenses": 5,
   "import": 7,
-  "inbox": 9,
+  "inbox": 11,
   "invoicing": 28,
   "ledger": 110,
   "payments": 20,
