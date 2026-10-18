@@ -248,6 +248,7 @@ import {
 import {
   SEARCH_ONLY_STAGED_NOTE,
   SEARCH_ONLY_WRITE_NOTE,
+  STALE_BRIDGE_NOTE,
   STALE_TOOLS_LIST_NOTE,
   isDefaultCatalogTool,
   staleToolsListAdvice,
@@ -2994,7 +2995,7 @@ function bridgeRefusalReason(
   if (bridge === 'call_tool') {
     if (isRead) return null
     return isStagingTool(target) && !isDefaultCatalogTool(target)
-      ? `${requestedToolName} is a write, so gnubok_call_tool will not invoke it. It only stages a pending operation: use gnubok_stage_tool.`
+      ? `${requestedToolName} is a write, so gnubok_call_tool will not invoke it. It only stages a pending operation: use gnubok_stage_tool. ${staleToolsListAdvice('gnubok_stage_tool')}`
       : directCall(`${requestedToolName} is not a read-only tool, so gnubok_call_tool will not invoke it.`)
   }
   if (isRead) return `${requestedToolName} is read-only: invoke it through gnubok_call_tool, not gnubok_stage_tool.`
@@ -4663,14 +4664,16 @@ export const tools: McpTool[] = [
 
       // Response-only, like the report definitions: declared in no
       // outputSchema, so it costs tools/list nothing (payload-size.bench).
-      const anyListedHit =
-        detail !== 'name' && sliced.some((t) => callableViaFor(t, viewer) === 'tools_list')
+      const vias = detail === 'name' ? [] : sliced.map((t) => callableViaFor(t, viewer))
+      const anyListedHit = vias.includes('tools_list')
+      const anyBridgedHit = vias.includes('call_tool') || vias.includes('stage_tool')
       return {
         tools: projected,
         count: projected.length,
         total_matched: totalMatched,
         detail,
         ...(anyListedHit ? { tools_list_note: STALE_TOOLS_LIST_NOTE } : {}),
+        ...(anyBridgedHit ? { bridge_note: STALE_BRIDGE_NOTE } : {}),
       }
     },
   },
@@ -7121,6 +7124,16 @@ export const tools: McpTool[] = [
       if (capabilities && viewer.simpleCompanyMode) {
         viewer.hiddenModules = new Set(capabilitySurface(capabilities).hidden)
       }
+      const recommendedTools = RECOMMENDED_WORKFLOW_LOADOUTS.map((w) => ({
+        workflow: w.workflow,
+        description: w.description,
+        skill: w.skill,
+        tools: annotateLoadoutTools(w.tools, classifyRecommendedTool, grantedScopes),
+      }))
+      // A callable entry with a note is reached through a bridge (see the
+      // initialize instructions), which a client holding an older tools/list
+      // may not show.
+      const anyBridgedEntry = recommendedTools.some((w) => w.tools.some((t) => t.callable && t.note))
 
       return {
         company,
@@ -7200,12 +7213,8 @@ export const tools: McpTool[] = [
         // Each tool is flagged callable for this key and a tools/list-only
         // client; blocked entries stay in the list with the reason, so the
         // agent knows what exists and why it is out of reach.
-        recommended_tools: RECOMMENDED_WORKFLOW_LOADOUTS.map((w) => ({
-          workflow: w.workflow,
-          description: w.description,
-          skill: w.skill,
-          tools: annotateLoadoutTools(w.tools, classifyRecommendedTool, grantedScopes),
-        })),
+        recommended_tools: recommendedTools,
+        ...(anyBridgedEntry ? { bridge_note: STALE_BRIDGE_NOTE } : {}),
         // The feedback tool was previously discoverable only by scanning
         // tools/list; agents that never scan never report. Surface it here,
         // once, in the call every session starts with.
@@ -26821,7 +26830,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
                 ]
               : []),
             'Discovery:',
-            '• tools/list returns common tool schemas. Call gnubok_search_tools(query="…") for specialized tools: it ranks all capabilities; pass detail="name"|"summary"|"full" to control payload size. If your client cannot invoke a tool that is not in tools/list, each search hit says how to reach it in callable_via: "call_tool" is a READ, invoke it through gnubok_call_tool({tool, arguments}); "stage_tool" is a WRITE that only stages a pending operation, stage it through gnubok_stage_tool({tool, arguments}) and then approve with gnubok_approve_pending_operation as for any staged write; "none" commits directly and is out of reach from such a client.',
+            '• tools/list returns common tool schemas. Call gnubok_search_tools(query="…") for specialized tools: it ranks all capabilities; pass detail="name"|"summary"|"full" to control payload size. If your client cannot invoke a tool that is not in tools/list, each search hit says how to reach it in callable_via: "call_tool" is a READ, invoke it through gnubok_call_tool({tool, arguments}); "stage_tool" is a WRITE that only stages a pending operation, stage it through gnubok_stage_tool({tool, arguments}) and then approve with gnubok_approve_pending_operation as for any staged write; "none" commits directly and is out of reach from such a client. A bridge your client does not show means it kept an older copy of tools/list: ask the user to refresh or reconnect the Accounted connector.',
             '• gnubok_get_agent_briefing returns recommended_tools: ordered per-workflow tool loadouts (categorize_month, close_period, invoice_run, vat_declaration, payroll_month). If your harness defers tool loading, batch-load a whole workflow in one call (e.g. Claude Code ToolSearch select:a,b,c) instead of searching cluster by cluster. Each loadout tool carries callable; when false, blocked_by and note say why (a missing scope, or a write no bridge carries). A callable tool with a note is not in tools/list: the note names the bridge that reaches it.',
             ...(pinnedCompanyId
               ? [`• Companies: this connection is pinned to ${pinnedCompanyName} (${pinnedCompanyId}). Every tool runs for it; do not pass company_id. The company switch (gnubok_list_companies) and the cross-company tools are not available on this connection.`]

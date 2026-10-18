@@ -79,6 +79,17 @@ export const SEARCH_ONLY_STAGED_NOTE =
 export const STALE_TOOLS_LIST_NOTE =
   'tools_list = in this server\'s tools/list now. A client that kept an older copy of the list (some connectors fetch it once, when added) does not show tools listed since: ask the user to refresh or reconnect the Accounted connector, then call the tool by name.'
 
+/**
+ * The same gap one step out: a tool reached through a bridge is reachable only
+ * if the client shows the bridge. gnubok_stage_tool was listed on 2026-09-21,
+ * weeks after gnubok_call_tool, so a connector added in between read payment
+ * orders through one bridge and told its user the other was "not available",
+ * with no word on what unblocks it (support case 2026-10-18). Said once per
+ * search response and briefing that names a bridge.
+ */
+export const STALE_BRIDGE_NOTE =
+  'A bridge named in callable_via or a note (gnubok_call_tool, gnubok_stage_tool) that your client does not show means it kept an older copy of tools/list: ask the user to refresh or reconnect the Accounted connector. The tool exists, so do not report it as unavailable.'
+
 /** The same advice for one named tool, appended to a refusal that says "call it directly". */
 export function staleToolsListAdvice(toolName: string): string {
   return `If your client does not show ${toolName}, it kept an older copy of tools/list: ask the user to refresh or reconnect the Accounted connector.`
