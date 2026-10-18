@@ -28,6 +28,8 @@ interface OrderRow {
   status: string
   created_at: string
   supplier_invoice_payment_id: string | null
+  provider_status: string | null
+  provider_error_code: string | null
 }
 
 interface TxRow {
@@ -55,8 +57,10 @@ async function inChunks<T>(ids: string[], run: (chunk: string[]) => Promise<T[]>
 /**
  * The open payment instructions covering these invoices, keyed by invoice id
  * (invoices nothing covers are left out). The one reading of "in payment":
- * the lifecycle stage, the supplier invoice list and its Att betala queue all
- * come from here.
+ * the lifecycle stage, the supplier invoice list and its Att betala queue,
+ * the agent's gnubok_list_supplier_invoices and the v1 supplier invoice list
+ * all come from here (crm#1282: the agent saw approved while the app showed
+ * I betalning).
  *
  * A payment file is open while its batch is 'created' (the only other status
  * is 'cancelled'). A bank payment order is open by isOpenPaymentOrder: not
@@ -103,7 +107,7 @@ export async function loadOpenPaymentInstructions(
   const orders = await inChunks(ids, async (chunk) => {
     const { data, error } = await supabase
       .from('payment_orders')
-      .select('id, supplier_invoice_id, status, created_at, supplier_invoice_payment_id')
+      .select('id, supplier_invoice_id, status, created_at, supplier_invoice_payment_id, provider_status, provider_error_code')
       .eq('company_id', companyId)
       .in('supplier_invoice_id', chunk)
       .in('status', OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES)
@@ -112,7 +116,13 @@ export async function loadOpenPaymentInstructions(
   })
   for (const order of orders) {
     if (!isOpenPaymentOrder(order)) continue
-    entry(order.supplier_invoice_id).payment_order = { id: order.id, status: order.status, created_at: order.created_at }
+    entry(order.supplier_invoice_id).payment_order = {
+      id: order.id,
+      status: order.status,
+      created_at: order.created_at,
+      provider_status: order.provider_status ?? null,
+      provider_error_code: order.provider_error_code ?? null,
+    }
   }
   return out
 }

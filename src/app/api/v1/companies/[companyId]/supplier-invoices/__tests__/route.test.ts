@@ -320,6 +320,79 @@ describe('GET /api/v1/companies/:companyId/supplier-invoices/:id', () => {
  * nothing paid", nor an attested overdue invoice from an unattested one: the
  * two timestamps that say so were in no read projection.
  */
+// crm#1282: the app showed an invoice as "I betalning" (an open bank payment
+// order, unsigned at the bank) while the API said approved with the full
+// remaining_amount.
+describe('GET supplier invoices: open_payment, read as the app reads it (crm#1282)', () => {
+  const ORDER_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
+  const PAID_ID = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
+
+  it('carries the open bank payment order of an unsettled invoice and null where nothing covers it', async () => {
+    const mock = supabaseFor({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      supplier_invoices: {
+        data: [
+          { ...SAMPLE_SI, status: 'approved', supplier: { id: SUPPLIER_ID, name: 'Office Depot AB' } },
+          { ...SAMPLE_SI, id: JE_ID, status: 'approved', supplier: null },
+          { ...SAMPLE_SI, id: PAID_ID, status: 'paid', remaining_amount: 0, supplier: null },
+        ],
+        error: null,
+      },
+      supplier_payment_batch_items: { data: [], error: null },
+      payment_orders: {
+        data: [
+          {
+            id: ORDER_ID,
+            supplier_invoice_id: SI_ID,
+            status: 'submitted',
+            created_at: '2026-10-01T08:52:46Z',
+            supplier_invoice_payment_id: null,
+            provider_status: 'RCVD',
+            provider_error_code: null,
+          },
+        ],
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(mock.supabase)
+    const res = await listSIs(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices`),
+      companyParams(COMPANY_ID),
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data[0]).toMatchObject({
+      id: SI_ID,
+      status: 'approved',
+      remaining_amount: 1250,
+      open_payment: {
+        batch: null,
+        payment_order: { id: ORDER_ID, status: 'submitted', created_at: '2026-10-01T08:52:46Z', provider_status: 'RCVD', provider_error_code: null },
+      },
+    })
+    expect(body.data[1]).toMatchObject({ id: JE_ID, open_payment: null })
+    expect(body.data[2]).toMatchObject({ id: PAID_ID, open_payment: null })
+    // Only the unsettled invoices are asked about.
+    expect(mock.findCalls('payment_orders', 'in')).toContainEqual(['supplier_invoice_id', [SI_ID, JE_ID]])
+  })
+
+  it('returns 500 when the payment instructions cannot be read', async () => {
+    mockServiceClient.mockReturnValue(
+      supabaseFor({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        supplier_invoices: { data: [{ ...SAMPLE_SI, status: 'approved', supplier: null }], error: null },
+        supplier_payment_batch_items: { data: [], error: null },
+        payment_orders: { data: null, error: { message: 'DB error' } },
+      }).supabase,
+    )
+    const res = await listSIs(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices`),
+      companyParams(COMPANY_ID),
+    )
+    expect(res.status).toBe(500)
+  })
+})
+
 describe('GET supplier invoices: approved_at and bank_entered_at (crm#1229)', () => {
   const APPROVED_AT = '2026-06-01T08:00:00Z'
   const BANK_ENTERED_AT = '2026-06-05T09:30:00Z'

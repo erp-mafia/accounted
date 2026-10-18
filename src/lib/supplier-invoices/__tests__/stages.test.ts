@@ -44,7 +44,7 @@ describe('supplier invoice stages', () => {
 })
 
 describe('openPaymentMarker (crm#1243)', () => {
-  const order = { id: 'order-1', status: 'accepted', created_at: '2026-10-15T13:54:35Z' }
+  const order = { id: 'order-1', status: 'accepted', created_at: '2026-10-15T13:54:35Z', provider_status: 'ACSP', provider_error_code: null }
   const batch = { id: 'batch-1', created_at: '2026-10-01T08:00:00Z' }
 
   it('marks an unsettled invoice a bank payment covers, before a file', () => {

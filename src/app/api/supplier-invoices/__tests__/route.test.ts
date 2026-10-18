@@ -159,7 +159,7 @@ describe('GET /api/supplier-invoices', () => {
     const byId = new Map(body.data.map((row) => [row.id, row.open_payment]))
     expect(byId.get('si-bank')).toEqual({
       batch: null,
-      payment_order: { id: 'order-1', status: 'accepted', created_at: '2026-10-15T13:54:35Z' },
+      payment_order: { id: 'order-1', status: 'accepted', created_at: '2026-10-15T13:54:35Z', provider_status: null, provider_error_code: null },
     })
     expect(byId.get('si-file')).toEqual({ batch: { id: 'batch-1', created_at: '2026-10-01T08:00:00Z' }, payment_order: null })
     expect(byId.get('si-rejected')).toBeNull()

@@ -67,7 +67,9 @@ export const POST = withRouteContext(
           last_run_warning: result.warning,
           generated_count: typed.generated_count + 1,
           // Unlike next_run_date, the period DOES advance: the invoice just
-          // created covers it, and the cron must bill the next one.
+          // created covers it, and the cron must bill the next one. A draft
+          // removed before it is issued gives the period back
+          // (lib/invoices/recurring-draft-period.ts).
           ...(typed.period_start
             ? { period_start: advancePeriodStart(typed.period_start, typed.interval_months ?? 1) }
             : {}),

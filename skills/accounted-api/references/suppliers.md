@@ -1514,6 +1514,7 @@ Cursor-paginated supplier-invoice list ordered by created_at DESC, id ASC (newes
 - Credit notes (is_credit_note=true) appear in the same list as the originals; filter by status=credited or check the flag to separate.
 - remaining_amount is the unpaid portion; a partially_paid SI has remaining_amount > 0.
 - status does not say whether an invoice is attested (an attested invoice past its due date is overdue): read approved_at, which kontantmetoden companies leave null (no attest step there). bank_entered_at is set while a payment entered at the bank by hand has not landed; it clears itself when a payment is recorded on the invoice.
+- An invoice a bank payment or a payment file already covers keeps its status (approved, overdue) and remaining_amount until the payment lands: read open_payment, null when nothing covers it. payment_order.provider_status RCVD means the payment waits at the bank unsigned.
 - arrival_number is internal book-keeping, not the seller's invoice number: use supplier_invoice_number for matching to received documents.
 - Ordering is by created_at (registration time), not invoice_date. A late-registered invoice appears where it was registered: filter on ?date_from / ?date_to when you care about the seller's invoice date.
 - Cursor pagination: pass ?cursor=<next_cursor> from the previous response. A stale or tampered cursor is ignored and the first page is returned again.
@@ -1532,7 +1533,7 @@ Cursor-paginated supplier-invoice list ordered by created_at DESC, id ASC (newes
 Response `200`:
 ```ts
 {
-  data: { id: string, handle?: string, supplier_id: string, supplier_name: string, arrival_number: number, supplier_invoice_number: string | null, invoice_date: string, due_date: string, status: "registered" | "approved" | "paid" | "partially_paid" | "overdue" | "disputed" | "credited" | "reversed", currency: string, subtotal: number, vat_amount: number, total: number, paid_amount: number, remaining_amount: number, is_credit_note: boolean, paid_at: string | null, approved_at: string | null, bank_entered_at: string | null, created_at: string }[],
+  data: { id: string, handle?: string, supplier_id: string, supplier_name: string, arrival_number: number, supplier_invoice_number: string | null, invoice_date: string, due_date: string, status: "registered" | "approved" | "paid" | "partially_paid" | "overdue" | "disputed" | "credited" | "reversed", currency: string, subtotal: number, vat_amount: number, total: number, paid_amount: number, remaining_amount: number, is_credit_note: boolean, paid_at: string | null, approved_at: string | null, bank_entered_at: string | null, created_at: string, open_payment: { batch: { id: string, created_at: string } | null, payment_order: { id: string, status: "draft" | "approved" | "submitted" | "awaiting_signature" | "awaiting_second_signer" | "accepted" | "executed" | "rejected" | "cancelled" | "failed", created_at: string, provider_status: string | null, provider_error_code: string | null } | null } | null }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -1568,7 +1569,8 @@ Example response `200`:
       "paid_at": null,
       "approved_at": null,
       "bank_entered_at": null,
-      "created_at": "2026-05-13T15:00:00Z"
+      "created_at": "2026-05-13T15:00:00Z",
+      "open_payment": null
     }
   ],
   "meta": {

@@ -91,6 +91,8 @@ describe('GET /api/supplier-invoices/lifecycle', () => {
           status: 'awaiting_signature',
           created_at: '2026-09-30T08:00:00Z',
           supplier_invoice_payment_id: null,
+          provider_status: 'RCVD',
+          provider_error_code: null,
         },
       ],
     })
@@ -105,6 +107,8 @@ describe('GET /api/supplier-invoices/lifecycle', () => {
       id: 'order-1',
       status: 'awaiting_signature',
       created_at: '2026-09-30T08:00:00Z',
+      provider_status: 'RCVD',
+      provider_error_code: null,
     })
   })
 

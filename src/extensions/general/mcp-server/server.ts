@@ -150,6 +150,8 @@ import {
 import { rejectPendingOperations } from '@/lib/pending-operations/reject'
 import { canApproveSupplierInvoice, companyAttestsSupplierInvoices } from '@/lib/supplier-invoices/lifecycle'
 import { inboxStatedPaymentDetails, planSupplierPaymentBackfill, type SupplierPaymentColumns } from '@/lib/supplier-invoices/payment-details-backfill'
+import { loadOpenPaymentInstructions } from '@/lib/supplier-invoices/lifecycle-stages'
+import { SETTLED_SUPPLIER_INVOICE_STATUSES } from '@/lib/supplier-invoices/stages'
 import { assessRegisteredPayee, payeeAlertWarning } from '@/lib/payments/payee-registration'
 import { eventBus } from '@/lib/events/bus'
 import {
@@ -11101,6 +11103,22 @@ export const tools: McpTool[] = [
       } catch (alertError) {
         log.warn('payee alerts for the supplier invoice list failed', { error: alertError instanceof Error ? alertError.message : String(alertError) })
       }
+      // open_payment: the bank payment order or payment file already paying
+      // an unsettled invoice, read as the app reads it for "I betalning"
+      // (loadOpenPaymentInstructions); null when nothing covers it. Without it
+      // an invoice in a bank payment listed as approved with its full
+      // remaining_amount (crm#1282). A failed read fails the call: a null
+      // would say nothing pays the invoice.
+      let openPayments: Awaited<ReturnType<typeof loadOpenPaymentInstructions>>
+      try {
+        openPayments = await loadOpenPaymentInstructions(
+          supabase,
+          companyId,
+          rows.filter((row) => !SETTLED_SUPPLIER_INVOICE_STATUSES.has(row.status)).map((row) => row.id as string),
+        )
+      } catch (openError) {
+        throw dbError(openError)
+      }
       const invoices = rows.map((row) => {
         const {
           payee_bankgiro: _bg,
@@ -11118,6 +11136,7 @@ export const tools: McpTool[] = [
           ...rest,
           supplier: supplier ? { id: supplier.id, name: supplier.name } : null,
           payee_alert: hold === 'payee_rejected' ? 'rejected' : hold === 'payee_unconfirmed' ? 'changed' : null,
+          open_payment: openPayments.get(row.id as string) ?? null,
         }
       })
       const totalCount = count ?? invoices.length
@@ -25325,7 +25344,7 @@ export const tools: McpTool[] = [
               vat_rate: {
                 type: ['number', 'null'],
                 enum: [0, 6, 12, 25, null],
-                description: 'Omit or null to use the customer default VAT rate at spawn time.',
+                description: 'Omit or null to use the customer default VAT rate at spawn time. A rate outside that default set (any non-zero rate to a foreign business customer) bills the default instead.',
               },
               dimensions: {
                 type: 'object',
@@ -25539,7 +25558,7 @@ export const tools: McpTool[] = [
               vat_rate: {
                 type: ['number', 'null'],
                 enum: [0, 6, 12, 25, null],
-                description: 'Omit or null to use the customer default VAT rate at spawn time.',
+                description: 'Omit or null to use the customer default VAT rate at spawn time. A rate outside that default set (any non-zero rate to a foreign business customer) bills the default instead.',
               },
               dimensions: {
                 type: 'object',

@@ -77,6 +77,24 @@ function stockholmOffsetMinutes(at: Date): number {
 }
 
 /**
+ * A Swedish wall-clock time (`YYYY-MM-DD`, `HH:MM`) as the instant it is:
+ * 09:00 is 07:00Z in summer and 08:00Z in winter. The offset is read again
+ * at the first estimate so a time just after a clock change lands right.
+ */
+export function stockholmWallTimeToUtc(isoDate: string, time: string): Date {
+  const [hours, minutes] = time.split(':').map(Number)
+  const asUtc = Date.UTC(
+    Number(isoDate.slice(0, 4)),
+    Number(isoDate.slice(5, 7)) - 1,
+    Number(isoDate.slice(8, 10)),
+    hours,
+    minutes,
+  )
+  const estimate = new Date(asUtc - stockholmOffsetMinutes(new Date(asUtc)) * 60_000)
+  return new Date(asUtc - stockholmOffsetMinutes(estimate) * 60_000)
+}
+
+/**
  * The last second of a Swedish calendar day (`YYYY-MM-DD`) as an ISO
  * instant: 21:59:59Z in summer, 22:59:59Z in winter. For things a Swedish
  * bank grants "through" a date, such as a consent's validUntil: its day ends

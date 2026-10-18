@@ -11,12 +11,14 @@
  *     (paid plan, pilot list) is the orders domain's question, answered in
  *     lib/payments/orders/switched-on.ts, never at the service.
  *   - Idempotency keys are derived here from the order's own identifiers (the
- *     end-to-end id, the provider's payment id, the sorted payment ids of a
- *     basket), so the reviewed orders domain keeps calling the port exactly
- *     once per write and a retry at the service answers with the first
- *     result. A signing start is the one write without replay: a restarted
- *     signing must create a new authorisation at the bank, and an unused
- *     authorisation costs nothing.
+ *     end-to-end id, a basket's signing and payment ids), so the reviewed
+ *     orders domain keeps calling the port exactly once per write and a retry
+ *     at the service answers with the first result. A signing start and a
+ *     cancel are the writes without replay, one key per call: a restarted
+ *     signing must create a new authorisation at the bank (an unused one
+ *     costs nothing), and a cancel's answer (too late, needs signing) holds
+ *     only for the moment it was given, so a later cancel must ask the bank
+ *     again (cancelIdempotencyKey).
  *   - Every failure becomes a PaymentProviderError that says what the bank
  *     may hold (toPaymentProviderError): the service's OUTCOME_UNKNOWN, an
  *     unreachable service on a write and an in-flight idempotency row all
@@ -80,10 +82,32 @@ export function paymentIdempotencyKey(instruction: Pick<PaymentInstruction, 'end
   return attempt > 1 ? `pay:${instruction.endToEndId}:${attempt}` : `pay:${instruction.endToEndId}`
 }
 
-/** The idempotency key of a basket: the sorted payment ids, hashed, so the same set always names the same basket. */
-export function basketIdempotencyKey(providerPaymentIds: readonly string[]): string {
+/**
+ * The idempotency key of a basket: the sorted payment ids, hashed, under the
+ * signing it is made for. A signing makes its basket once, so a retry of that
+ * signing names the same basket; a new signing over the same payments (a
+ * restart after a signing that failed while the bank kept its payments) makes
+ * a new one. Keyed by the payments alone, that restart got the dead basket of
+ * the earlier signing replayed, or a CONNECTOR_IDEMPOTENCY_MISMATCH when the
+ * party differed (crm#1282).
+ */
+export function basketIdempotencyKey(providerPaymentIds: readonly string[], signingId?: string | null): string {
   const digest = createHash('sha256').update([...providerPaymentIds].sort().join(',')).digest('hex')
-  return `basket:${digest.slice(0, 64)}`
+  return signingId ? `basket:${signingId}:${digest.slice(0, 64)}` : `basket:${digest.slice(0, 64)}`
+}
+
+/**
+ * The idempotency key of one cancel: the payment id and a fresh suffix, so
+ * every cancel asks the bank. A key made of the payment id alone named every
+ * cancel of the payment one request (crm#1282): the service replayed the
+ * first answer to a later cancel with the same body, and refused one from
+ * another caller (another party: the browser, an agent, the status sync) as
+ * CONNECTOR_IDEMPOTENCY_MISMATCH, without asking the bank, for the 30 days it
+ * keeps the key. Asking the bank to cancel twice cannot pay anything; the
+ * adapter calls the service once per cancel, so one call is one attempt.
+ */
+export function cancelIdempotencyKey(providerPaymentId: string): string {
+  return `cancel:${providerPaymentId}:${randomUUID()}`
 }
 
 function signingTargetId(target: SigningTarget): string {
@@ -220,9 +244,9 @@ export function createConnectPaymentsProvider(upstream: ConnectorUpstream, deps:
       return { providerStatus: state.providerStatus, status: state.status, messages: state.messages }
     },
 
-    async createSigningBasket(ctx, providerPaymentIds) {
+    async createSigningBasket(ctx, providerPaymentIds, signingId) {
       const basket = await call('createBasket', ctx.companyId, {
-        idempotencyKey: basketIdempotencyKey(providerPaymentIds),
+        idempotencyKey: basketIdempotencyKey(providerPaymentIds, signingId),
         party: toConnectorParty(ctx),
         providerPaymentIds,
       })
@@ -260,7 +284,7 @@ export function createConnectPaymentsProvider(upstream: ConnectorUpstream, deps:
 
     async cancelPayment(ctx, providerPaymentId, product) {
       const result = await call('cancelPayment', ctx.companyId, {
-        idempotencyKey: `cancel:${providerPaymentId}`,
+        idempotencyKey: cancelIdempotencyKey(providerPaymentId),
         party: toConnectorParty(ctx),
         providerPaymentId,
         product,

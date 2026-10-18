@@ -283,6 +283,26 @@ describe('GET /api/invoices/recurring/cron: billing period', () => {
     expect(bump!.payload.period_start).toBe('2026-10-01')
   })
 
+  it('records an unnumbered draft run: last_invoice_id points at the draft so removing it can give the period back (crm#1285)', async () => {
+    vi.setSystemTime(new Date('2026-10-01T08:30:00Z'))
+    enqueue({
+      data: [makeSchedule({ day_of_month: 1, next_run_date: '2026-10-01', period_start: '2026-10-01' })],
+      error: null,
+    })
+    enqueue({ data: [{ id: 's-1' }], error: null }) // atomic claim
+    // No auto_send: the draft is created unnumbered (numbered when issued).
+    executeRecurringSchedule.mockResolvedValue({ invoiceId: 'inv-draft', invoiceNumber: null, autoSent: false, warning: null })
+
+    const { body } = await parseJsonResponse<CronBody>(await GET(req()))
+    expect(body.succeeded).toBe(1)
+    const bump = updatePayloads.find((u) => u.table === 'recurring_invoice_schedules' && 'next_run_date' in u.payload)
+    expect(bump!.payload).toMatchObject({
+      last_invoice_id: 'inv-draft',
+      period_start: '2026-11-01',
+      next_run_date: '2026-11-01',
+    })
+  })
+
   it('never writes period_start for a schedule without one', async () => {
     vi.setSystemTime(new Date('2026-07-06T08:30:00Z'))
     enqueue({ data: [makeSchedule({ period_start: null })], error: null })

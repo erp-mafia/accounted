@@ -166,6 +166,9 @@ function NewRecurringScheduleForm({
         quantity: z.number(),
         unit: z.string(),
         unit_price: z.number(),
+        // The dialog has no Moms field: new lines carry null, which follows
+        // the customer's VAT treatment at spawn (25 % domestic, 0 % export or
+        // reverse charge). A stored rate round-trips untouched (crm#1285).
         vat_rate: z
           .union([z.literal(0), z.literal(6), z.literal(12), z.literal(25)])
           .nullable()
@@ -305,7 +308,7 @@ function NewRecurringScheduleForm({
                     // the full item list back and would otherwise erase it.
                     dimensions: hasDimensionValues(it.dimensions) ? { ...it.dimensions } : undefined,
                   }))
-              : [{ line_type: 'product' as const, description: '', quantity: 1, unit: 'st', unit_price: 0, vat_rate: 25 }],
+              : [{ line_type: 'product' as const, description: '', quantity: 1, unit: 'st', unit_price: 0, vat_rate: null }],
         }
       : {
           customer_id: '',
@@ -318,7 +321,7 @@ function NewRecurringScheduleForm({
           currency: 'SEK',
           auto_send: false,
           period_start: '',
-          items: [{ line_type: 'product' as const, description: '', quantity: 1, unit: 'st', unit_price: 0, vat_rate: 25 }],
+          items: [{ line_type: 'product' as const, description: '', quantity: 1, unit: 'st', unit_price: 0, vat_rate: null }],
         },
   })
 
@@ -877,7 +880,7 @@ function NewRecurringScheduleForm({
               variant="secondary"
               size="sm"
               onClick={() =>
-                append({ line_type: 'product', description: '', quantity: 1, unit: 'st', unit_price: 0, vat_rate: 25 })
+                append({ line_type: 'product', description: '', quantity: 1, unit: 'st', unit_price: 0, vat_rate: null })
               }
             >
               <Plus className="mr-2 h-4 w-4" />

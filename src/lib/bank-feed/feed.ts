@@ -32,6 +32,7 @@ import {
   persistBankSyncFailure,
   persistBankSyncResult,
 } from '@/lib/bank-sync/persist-sync-result'
+import { sweepAfterOverlappingSync } from '@/lib/bank-sync/post-sync-sweep'
 import { SYNC_COOLDOWN_MS, type TriggerSyncInput, type TriggerSyncResult } from '@/lib/bank-sync/trigger-sync-contract'
 import { eventBus } from '@/lib/events/bus'
 import type { Transaction } from '@/types'
@@ -371,9 +372,11 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
     let returnedMin: string | null = null
     let returnedMax: string | null = null
     const transactionIds: string[] = []
+    const ledgerAccounts: string[] = []
     const includeEnrichment = shouldAskForEnrichment(connection, input.unattended === true, now)
     for (const account of accounts) {
       const bankRoute = await resolveBankIngestRoute(supabase, companyId, connectionId, account.uid, account.currency)
+      ledgerAccounts.push(bankRoute.ledgerAccount)
       if (account.ledger_account && account.ledger_account !== bankRoute.ledgerAccount) {
         throw Object.assign(new Error('Bank account configuration changed before sync; reload the connection'), { code: 'PT409' })
       }
@@ -396,6 +399,15 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
       if (result.returnedMinBookingDate && (!returnedMin || result.returnedMinBookingDate < returnedMin)) returnedMin = result.returnedMinBookingDate
       if (result.returnedMaxBookingDate && (!returnedMax || result.returnedMaxBookingDate > returnedMax)) returnedMax = result.returnedMaxBookingDate
       if (result.truncated) log.warn('open payments sync: the bank had more pages than the service read', { connectionId, accountUid: account.uid })
+    }
+    // History the books already hold (a completed SIE import over the window)
+    // is linked to its verifikat, never left as unhandled rows. A viewer
+    // cannot update transactions, so a viewer's sync never sweeps.
+    if (sieOverlap && imported > 0 && !rawInsertOnly) {
+      await sweepAfterOverlappingSync(supabase, {
+        companyId, userId, connectionId, ledgerAccounts,
+        fromDate: window.fromDate, toDate: window.toDate, returnedMin, log,
+      })
     }
     const completedAt = new Date().toISOString()
     await persistBankSyncResult(supabase, {

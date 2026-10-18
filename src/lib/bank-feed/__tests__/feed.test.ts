@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   takeOverHold: vi.fn(),
   party: vi.fn(),
   emit: vi.fn(),
+  sweep: vi.fn(),
 }))
 vi.mock('@/lib/bank-sync/ingest-route', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/bank-sync/ingest-route')>()),
@@ -34,6 +35,7 @@ vi.mock('../party', async (importOriginal) => ({
   buildBankFeedParty: (...a: unknown[]) => mocks.party(...a),
 }))
 vi.mock('@/lib/events/bus', () => ({ eventBus: { emit: (...a: unknown[]) => mocks.emit(...a) } }))
+vi.mock('@/lib/bank-sync/post-sync-sweep', () => ({ sweepAfterOverlappingSync: (...a: unknown[]) => mocks.sweep(...a) }))
 
 import { createTableMockSupabase, type TableMockResult } from '@/tests/helpers'
 import { BankSyncResultObsoleteError } from '@/lib/bank-sync/persist-sync-result'
@@ -96,6 +98,7 @@ beforeEach(() => {
   mocks.takeOverHold.mockResolvedValue(true)
   mocks.party.mockResolvedValue({ ok: true, party: { orgNumber: '5595386219', accountContext: 'corporate', bic: 'SWEDSESS', personalNumber: null, psuIpAddress: null, psuUserAgent: null, affiliatedAspspId: null } })
   mocks.emit.mockResolvedValue(undefined)
+  mocks.sweep.mockResolvedValue(0)
 })
 
 describe('windows', () => {
@@ -261,8 +264,33 @@ describe('runOpenPaymentsSync', () => {
     expect(result).toMatchObject({ ok: true, from_date: '2026-09-24', history_window: 'extended' })
     expect(mocks.syncAccount).toHaveBeenCalledWith(supabase, expect.objectContaining({ fromDate: '2026-09-24', options: { rawInsertOnly: true, skipAutoCategorization: true } }))
     expect(mocks.persistResult).toHaveBeenCalledWith(supabase, expect.objectContaining({ initialSync: expect.objectContaining({ requestedFrom: '2026-09-24', returnedMin: '2026-10-05', lookbackDays: 18 }) }))
-    // Viewers get raw inserts: no synced event for them.
+    // Viewers get raw inserts: no synced event and no sweep for them.
     expect(mocks.emit).not.toHaveBeenCalled()
+    expect(mocks.sweep).not.toHaveBeenCalled()
+  })
+
+  it('links a first import over SIE-imported books to the existing verifikat (crm#1282)', async () => {
+    const { supabase } = stub({
+      bank_connections: [{ data: row({ initial_sync_completed_at: null, last_synced_at: null, consent_attempt: { selection: { extended_history_days: 760 } } }), error: null }],
+      transactions: [{ data: null, error: null }],
+      sie_imports: [{ data: { id: 'sie' }, error: null }],
+    })
+    mocks.syncAccount.mockResolvedValue({ imported: 327, duplicates: 0, errors: 0, transactionIds: ['t1'], returnedMinBookingDate: '2024-09-23', returnedMaxBookingDate: '2026-05-29', requestedFromDate: '2024-09-15', historyNarrowed: false, truncated: false })
+    const result = await run(supabase, { trigger: 'cron', unattended: true })
+    expect(result).toMatchObject({ ok: true })
+    expect(mocks.sweep).toHaveBeenCalledWith(supabase, expect.objectContaining({
+      companyId: 'co-1', userId: 'user-1', connectionId: 'conn-1', ledgerAccounts: ['1930'], returnedMin: '2024-09-23',
+    }))
+  })
+
+  it('does not sweep when no completed SIE import covers the window', async () => {
+    const { supabase } = stub({
+      bank_connections: [{ data: row({ initial_sync_completed_at: null, last_synced_at: null, consent_attempt: { selection: { extended_history_days: 760 } } }), error: null }],
+      transactions: [{ data: null, error: null }],
+      sie_imports: [{ data: null, error: null }],
+    })
+    await run(supabase, { trigger: 'cron', unattended: true })
+    expect(mocks.sweep).not.toHaveBeenCalled()
   })
 
   it('a first import the cron retries after the extended window closed asks for the ordinary window and says so', async () => {

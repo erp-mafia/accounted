@@ -21,10 +21,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { INITIAL_SYNC_TIMEOUT } from '@/lib/bank-sync/initial-sync-error'
 import { persistBankSyncResult } from '@/lib/bank-sync/persist-sync-result'
-import {
-  runUnattendedReconciliationSweep,
-  toSweepSummary,
-} from '@/lib/reconciliation/unattended-sweep'
+import { sweepAfterOverlappingSync } from '@/lib/bank-sync/post-sync-sweep'
 import { syncAccountTransactions, type IngestFn, type SyncOptions, type SyncResult } from './sync'
 import type { StoredAccount } from '../types'
 
@@ -149,46 +146,16 @@ export async function runConnectionSync(input: ConnectionSyncInput): Promise<Con
   // A viewer cannot update transactions, so a viewer's sync never sweeps.
   let autoMatched = 0
   if (sieOverlap && imported > 0 && !rawInsertOnly) {
-    // Some banks over-return history: rows older than the requested window
-    // were ingested too and must be swept, or they surface as unhandled.
-    const sweepFrom = returnedMin && returnedMin < fromDate ? returnedMin : fromDate
-    try {
-      // Only the accounts this sync fetched, each in its own cash-account
-      // scope, never the pooled form that can cross-link accounts (#1290).
-      const ledgerAccounts = Array.from(
-        new Set(accounts.map((a) => a.ledger_account).filter((l): l is string => typeof l === 'string' && l.length > 0)),
-      )
-      const sweep = await runUnattendedReconciliationSweep(supabase, companyId, userId, {
-        dateFrom: sweepFrom,
-        dateTo: toDate,
-        ledgerAccounts,
-      })
-      autoMatched = sweep.applied
-      // Stamped so the UI can say "Vi matchade X av Y" and the review surface
-      // knows there is something to granska.
-      await supabase
-        .from('bank_connections')
-        .update({ last_sie_sweep: toSweepSummary(sweep, { dateFrom: sweepFrom, dateTo: toDate }) })
-        .eq('id', connection.id)
-      if (sweep.applied > 0 || sweep.skippedBelowThreshold > 0) {
-        log.info('Post-sync reconciliation linked imported rows to existing verifikat', {
-          connectionId: connection.id,
-          applied: sweep.applied,
-          skippedBelowThreshold: sweep.skippedBelowThreshold,
-          accounts: sweep.accounts.map((a) => ({
-            accountNumber: a.accountNumber,
-            applied: a.applied,
-            skippedBelowThreshold: a.skippedBelowThreshold,
-          })),
-        })
-      }
-    } catch (sweepError) {
-      // Non-critical: the rows stay unmatched for manual review.
-      log.warn('Post-sync reconciliation sweep failed', {
-        connectionId: connection.id,
-        message: sweepError instanceof Error ? sweepError.message : String(sweepError),
-      })
-    }
+    autoMatched = await sweepAfterOverlappingSync(supabase, {
+      companyId,
+      userId,
+      connectionId: connection.id,
+      ledgerAccounts: accounts.map((a) => a.ledger_account),
+      fromDate,
+      toDate,
+      returnedMin,
+      log,
+    })
   }
 
   const completedAt = new Date().toISOString()

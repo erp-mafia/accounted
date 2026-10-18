@@ -295,3 +295,73 @@ describe('gnubok_list_supplier_invoices: attest and "I banken" marks', () => {
     expect(result.invoices[1]).toMatchObject({ approved_at: null, bank_entered_at: null })
   })
 })
+
+// crm#1282: the app showed two invoices as "I betalning" (an open bank
+// payment order, unsigned at the bank) while this listing said approved with
+// the full remaining_amount, so the agent could not tell what had happened.
+describe('gnubok_list_supplier_invoices: open_payment, read as the app reads it', () => {
+  it('carries the open bank payment order of an unsettled invoice, with the bank status and failure code', async () => {
+    const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        invoiceRow({ id: 'si-in-bank', status: 'approved' }),
+        invoiceRow({ id: 'si-free', status: 'approved' }),
+        invoiceRow({ id: 'si-paid', status: 'paid', remaining_amount: 0 }),
+      ],
+      count: 3,
+    })
+    enqueue({ data: [] }) // supplier_payment_batch_items: no payment file
+    enqueue({
+      data: [
+        {
+          id: 'order-1',
+          supplier_invoice_id: 'si-in-bank',
+          status: 'submitted',
+          created_at: '2026-10-01T08:52:46Z',
+          supplier_invoice_payment_id: null,
+          provider_status: 'RCVD',
+          provider_error_code: null,
+        },
+      ],
+    })
+
+    const result = (await tool().execute({}, COMPANY, USER, supabase as never)) as ListResult
+
+    const byId = new Map(result.invoices.map((invoice) => [invoice.id, invoice]))
+    expect(byId.get('si-in-bank')).toMatchObject({
+      status: 'approved',
+      open_payment: {
+        batch: null,
+        payment_order: { id: 'order-1', status: 'submitted', created_at: '2026-10-01T08:52:46Z', provider_status: 'RCVD', provider_error_code: null },
+      },
+    })
+    expect(byId.get('si-free')).toMatchObject({ open_payment: null })
+    expect(byId.get('si-paid')).toMatchObject({ open_payment: null })
+    // Only the unsettled invoices are asked about, inside the company, among the open statuses.
+    expect(findCall('payment_orders', 'in')).toEqual(['supplier_invoice_id', ['si-in-bank', 'si-free']])
+    expect(findCalls('payment_orders', 'eq')).toContainEqual(['company_id', COMPANY])
+    expect(findCalls('payment_orders', 'in')).toContainEqual(['status', expect.arrayContaining(['submitted', 'awaiting_signature', 'executed'])])
+  })
+
+  it('carries the payment file an invoice sits in, and leaves a failed order out', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [invoiceRow({ id: 'si-file' }), invoiceRow({ id: 'si-failed' })], count: 2 })
+    enqueue({ data: [{ supplier_invoice_id: 'si-file', batch: { id: 'file-1', status: 'created', created_at: '2026-10-02T08:00:00Z' } }] })
+    // The read asks for open statuses only; a row the database still returned in a final status counts for nothing.
+    enqueue({ data: [{ id: 'order-2', supplier_invoice_id: 'si-failed', status: 'failed', created_at: '2026-10-02T09:00:00Z', supplier_invoice_payment_id: null, provider_status: null, provider_error_code: 'EXECUTION_DATE_INVALID' }] })
+
+    const result = (await tool().execute({}, COMPANY, USER, supabase as never)) as ListResult
+
+    expect(result.invoices[0]).toMatchObject({ id: 'si-file', open_payment: { batch: { id: 'file-1', created_at: '2026-10-02T08:00:00Z' }, payment_order: null } })
+    expect(result.invoices[1]).toMatchObject({ id: 'si-failed', open_payment: null })
+  })
+
+  it('fails the call when the payment instructions cannot be read: a null would say nothing pays the invoice', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [invoiceRow()], count: 1 })
+    enqueue({ data: [] })
+    enqueue({ data: null, error: { message: 'DB error', code: '57014' } })
+
+    await expect(tool().execute({}, COMPANY, USER, supabase as never)).rejects.toThrow(/DB error/)
+  })
+})

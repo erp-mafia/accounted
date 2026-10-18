@@ -150,6 +150,11 @@ function makeKeysetSupabase(tables: Record<string, Row[]>) {
         rows = rows.filter((r) => (r[column] ?? null) === value)
         return builder
       },
+      // The supplier invoice list reads open payments for the page's ids.
+      in: (column: string, values: unknown[]) => {
+        rows = rows.filter((r) => values.some((v) => cmp(r[column], v) === 0))
+        return builder
+      },
       not: (column: string, operator: string, value: unknown) => {
         if (operator !== 'is') {
           throw new Error(`in-memory PostgREST: unsupported not() operator "${operator}"`)
