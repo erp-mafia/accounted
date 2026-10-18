@@ -238,7 +238,10 @@ async function postRoute(
   return json
 }
 
-async function stageOperation(seed: Seed, companyId: string, operationType: string, params: Record<string, unknown>): Promise<PendingOperation> {
+/** Who stages and approves, and through which client: every seed below has both. */
+type Owner = Pick<Seed, 'userId' | 'supabase'>
+
+async function stageOperation(seed: Owner, companyId: string, operationType: string, params: Record<string, unknown>): Promise<PendingOperation> {
   const { rows } = await getPool().query(
     `INSERT INTO public.pending_operations (user_id, company_id, operation_type, title, params)
      VALUES ($1, $2, $3, $3, $4) RETURNING *`,
@@ -248,7 +251,7 @@ async function stageOperation(seed: Seed, companyId: string, operationType: stri
 }
 
 /** Approve a staged operation as a person in Accounted does. */
-async function approve(seed: Seed, companyId: string, op: PendingOperation): Promise<Record<string, unknown>> {
+async function approve(seed: Owner, companyId: string, op: PendingOperation): Promise<Record<string, unknown>> {
   const result = await commitPendingOperation(seed.supabase, seed.userId, companyId, op, {
     commitMethod: 'user_accept',
     actor: { type: 'user' },
@@ -261,7 +264,7 @@ async function approve(seed: Seed, companyId: string, op: PendingOperation): Pro
  * The kontantmetod cut-off as the MCP preview stages it (gnubok_post_kontantmetod_cutoff):
  * the carries and corrections it would post, fingerprinted at staging.
  */
-async function stageCutoff(seed: Seed, company: Company): Promise<PendingOperation> {
+async function stageCutoff(seed: Owner, company: Company): Promise<PendingOperation> {
   const assessment = await assessKontantmetodCutoff(
     seed.supabase,
     company.companyId,
@@ -1124,6 +1127,206 @@ describe('posting port parity, year-end (pg)', () => {
         7,
       )
       await expectNoVoucherGaps(companiesOf(seed))
+    },
+  )
+})
+
+/**
+ * Posting port, step 3: the cut-off's correction of a cash verifikat booked
+ * before it (edge case 1, #3440) goes through the port's
+ * correctJournalEntry. On its own enskild firma, so the flows above and
+ * their fixture are untouched: an invoice F-20 open on 31 December 2025 and
+ * paid on 14 January 2026 through a kontantmetod cash verifikat E (revenue
+ * and moms booked at payment) before the cut-off was run. The cut-off,
+ * approved from a staged operation, carries F-20 and corrects E with a
+ * storno and a rättelse on E's own date.
+ *
+ *   1. With POSTING_EVENTS=shadow it books exactly what it books with it off
+ *      (the carry, the storno of E and the rättelse K, every line), and the
+ *      storno is linked to ledger.storno (role reversal) and K to
+ *      ledger.correction (role correction), both of E, dated the day,
+ *      naming the operation; K names the cut-off's rule version.
+ *   2. Under strict a refused correction event stops the correction before
+ *      the storno is drafted: the carry stands, no number is drawn for it,
+ *      the operation reports the correction failed, and a re-run makes only
+ *      the correction, with both events linked and no voucher gap.
+ */
+interface CorrectionSeed extends Owner {
+  company: Company
+  /** E: the kontantmetod cash verifikat booked at the payment. */
+  cashEntryId: string
+}
+
+async function seedCorrection(): Promise<CorrectionSeed> {
+  const userId = await insertAuthUser()
+  const company = await insertPeriods(userId, await insertCompanyWithSettings(userId, 'Rättelse Firma', 'enskild_firma', 'cash'))
+  const supabase = createServiceClientNoCookies()
+  const customer = randomUUID()
+  await getPool().query(
+    `INSERT INTO public.customers (id, user_id, company_id, name, customer_type) VALUES ($1, $2, $3, 'Kund AB', 'swedish_business')`,
+    [customer, userId, company.companyId],
+  )
+  const invoiceId = randomUUID()
+  await getPool().query(
+    `INSERT INTO public.invoices (id, user_id, company_id, customer_id, invoice_number, invoice_date, due_date, status, currency,
+                                  subtotal, vat_amount, total, vat_treatment, document_type)
+     VALUES ($1, $2, $3, $4, 'F-20', '2025-12-15', '2026-01-14', 'sent', 'SEK', 8000, 2000, 10000, 'standard_25', 'invoice')`,
+    [invoiceId, userId, company.companyId, customer],
+  )
+  // E, posted through the engine directly (never dumped, never linked).
+  const cash = await runWithActor({ type: 'user' }, () =>
+    createJournalEntry(supabase, company.companyId, userId, {
+      fiscal_period_id: company.next,
+      entry_date: '2026-01-14',
+      description: 'Kontantbetalning F-20',
+      source_type: 'invoice_cash_payment',
+      source_id: invoiceId,
+      lines: [
+        { account_number: '1930', debit_amount: 10000, credit_amount: 0 },
+        { account_number: '3001', debit_amount: 0, credit_amount: 8000 },
+        { account_number: '2611', debit_amount: 0, credit_amount: 2000 },
+      ],
+    }),
+  )
+  await getPool().query(
+    `INSERT INTO public.invoice_payments (user_id, company_id, invoice_id, payment_date, amount, currency, journal_entry_id)
+     VALUES ($1, $2, $3, '2026-01-14', 10000, 'SEK', $4)`,
+    [userId, company.companyId, invoiceId, cash.id],
+  )
+  return { userId, supabase, company, cashEntryId: cash.id }
+}
+
+/** The cut-off approved from a staged operation, and what it wrote, dumped as the flows above are. */
+async function runCorrection(seed: CorrectionSeed): Promise<{ data: Record<string, unknown>; entries: Array<DumpEntry & { id: string }> }> {
+  const before = await entryIdsOf(seed.company.companyId)
+  const data = await runWithActor({ type: 'user' }, async () =>
+    approve(seed, seed.company.companyId, await stageCutoff(seed, seed.company)),
+  )
+  const written = [...(await entryIdsOf(seed.company.companyId))].filter((id) => !before.has(id))
+  return { data, entries: await dumpEntries(seed.company.companyId, written) }
+}
+
+/** A trigger that refuses every business event of these kinds. */
+async function failEventKinds(kinds: string[]): Promise<() => Promise<void>> {
+  const fn = 'pg_test_year_end_fail_event_kinds'
+  await getPool().query(`
+    CREATE OR REPLACE FUNCTION public.${fn}() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+      IF NEW.kind = ANY (ARRAY[${kinds.map((k) => `'${k}'`).join(', ')}]) THEN RAISE EXCEPTION 'pg-test: % refused', NEW.kind; END IF;
+      RETURN NEW;
+    END; $$;
+    CREATE TRIGGER ${fn} BEFORE INSERT ON public.business_events FOR EACH ROW EXECUTE FUNCTION public.${fn}();`)
+  return async () => {
+    await getPool().query(`DROP TRIGGER IF EXISTS ${fn} ON public.business_events; DROP FUNCTION IF EXISTS public.${fn}();`)
+  }
+}
+
+const withoutIds = (entries: Array<DumpEntry & { id: string }>) => entries.map(({ id: _id, ...entry }) => entry)
+
+describe('posting port, step 3: the kontantmetod cut-off corrects a cash verifikat through correctJournalEntry (pg)', () => {
+  it(
+    'books the same carry, storno and rättelse with POSTING_EVENTS=shadow and links the rättelse\'s two events',
+    { timeout: FLOW_TIMEOUT },
+    async () => {
+      vi.stubEnv('POSTING_EVENTS', 'off')
+      const offSeed = await seedCorrection()
+      const off = await runCorrection(offSeed)
+      expect(off.data, JSON.stringify(off.data)).toMatchObject({ compensated: [], correction_failed: [], remaining: 0 })
+      expect(off.data.corrected).toEqual([expect.objectContaining({ cash_entry_id: offSeed.cashEntryId })])
+      expect(off.entries.map((e) => [e.source_type, e.status, e.entry_date]).sort()).toEqual([
+        ['correction', 'posted', '2026-01-14'],
+        ['storno', 'posted', '2026-01-14'],
+        ['year_end', 'posted', '2025-12-31'],
+      ])
+      expect(await eventLinks([offSeed.company.companyId])).toEqual([])
+
+      vi.stubEnv('POSTING_EVENTS', 'shadow')
+      const seed = await seedCorrection()
+      const shadow = await runCorrection(seed)
+      expect(withoutIds(shadow.entries)).toEqual(withoutIds(off.entries))
+
+      const written = (sourceType: string) => shadow.entries.find((e) => e.source_type === sourceType)
+      const [carry, storno, rattelse] = [written('year_end'), written('storno'), written('correction')]
+      const corrected = (shadow.data.corrected as Array<Record<string, string>>)[0]!
+      expect(corrected).toMatchObject({ cash_entry_id: seed.cashEntryId, storno_entry_id: storno!.id, correction_entry_id: rattelse!.id })
+      const links = await eventLinks([seed.company.companyId])
+      const linkedTo = (id: string) => links.filter((l) => l.journal_entry_id === id)
+      // One event per verifikat; E, booked before, has none.
+      expect(linkedTo(seed.cashEntryId)).toEqual([])
+      expect(linkedTo(carry!.id)).toEqual([expect.objectContaining({ kind: 'year_end.closing', role: 'produced', subject_type: 'fiscal_period' })])
+      const today = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Stockholm' }).format(new Date())
+      const operation = linkedTo(carry!.id)[0]!.pending_operation_id
+      expect(operation).toMatch(/^[0-9a-f-]{36}$/)
+      for (const [entry, kind, role] of [[storno!, 'ledger.storno', 'reversal'], [rattelse!, 'ledger.correction', 'correction']] as const) {
+        const linked = linkedTo(entry.id)
+        expect(linked, kind).toHaveLength(1)
+        expect(linked[0], kind).toMatchObject({
+          kind,
+          role,
+          category: null,
+          occurred_on: today,
+          subject_type: 'journal_entry',
+          subject_id: seed.cashEntryId,
+          party_type: null,
+          currency: null,
+          amount: null,
+          tax_amounts: [],
+          jurisdiction: 'SE',
+          actor_type: 'user',
+          entry_status: 'posted',
+          pending_operation_id: operation,
+          evidence: { link_basis: STAGED, link_evidence: { pending_operation_id: operation } },
+        })
+      }
+      expect(linkedTo(storno!.id)[0]!.mapping_version).toBeNull()
+      expect(linkedTo(rattelse!.id)[0]!.mapping_version).toMatch(/^se\.kontantmetod-cutoff@/)
+      await expectNoVoucherGaps([seed.company.companyId])
+    },
+  )
+
+  it(
+    'under strict a refused correction event stops the correction before a voucher number is drawn; a re-run corrects',
+    { timeout: FLOW_TIMEOUT },
+    async () => {
+      vi.stubEnv('POSTING_EVENTS', 'strict')
+      for (const kind of ['ledger.storno', 'ledger.correction']) {
+        const seed = await seedCorrection()
+        const drawn = await lastVoucherNumber(seed.company.companyId)
+        const restore = await failEventKinds([kind])
+        let run: Awaited<ReturnType<typeof runCorrection>>
+        try {
+          run = await runCorrection(seed)
+        } finally {
+          await restore()
+        }
+        // The carry stands, linked; both correction events come before the
+        // storno's draft, so neither refusal draws a number.
+        expect(run.data, kind).toMatchObject({ compensated: [], corrected: [], remaining: 0 })
+        expect(run.data.posted, kind).toHaveLength(1)
+        expect(run.data.correction_failed, kind).toEqual([
+          expect.objectContaining({ cash_entry_id: seed.cashEntryId, code: 'BOOKKEEPING_DATABASE_ERROR' }),
+        ])
+        expect(run.entries.map((e) => [e.source_type, e.status]), kind).toEqual([['year_end', 'posted']])
+        expect(await lastVoucherNumber(seed.company.companyId), kind).toBe(drawn + 1)
+        expect((await entriesOf(seed.company.companyId)).find((e) => e.id === seed.cashEntryId)?.status, kind).toBe('posted')
+        await expectNoVoucherGaps([seed.company.companyId])
+
+        // The next run finds E still posted against a carry that stands and
+        // makes only the correction, with both events linked.
+        const rerun = await runCorrection(seed)
+        expect(rerun.data, kind).toMatchObject({ posted: [], compensated: [], correction_failed: [] })
+        expect(rerun.entries.map((e) => [e.source_type, e.status]).sort(), kind).toEqual([['correction', 'posted'], ['storno', 'posted']])
+        expect(await lastVoucherNumber(seed.company.companyId), kind).toBe(drawn + 3)
+        const links = await eventLinks([seed.company.companyId])
+        expect(
+          rerun.entries.map((e) => [e.source_type, links.filter((l) => l.journal_entry_id === e.id).map((l) => [l.kind, l.role])]).sort(),
+          kind,
+        ).toEqual([
+          ['correction', [['ledger.correction', 'correction']]],
+          ['storno', [['ledger.storno', 'reversal']]],
+        ])
+        await expectNoVoucherGaps([seed.company.companyId])
+      }
     },
   )
 })

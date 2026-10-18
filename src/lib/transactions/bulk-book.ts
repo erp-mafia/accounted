@@ -2,8 +2,9 @@
  * Bulk-book N bank transactions into one combined verifikat
  * (samlingsverifikation per BFL 5 kap 6 §), atomically through the
  * bulk_book_transactions RPC behind the engine door commitBulkBooking
- * (lib/bookkeeping/engine.ts), which also emits journal_entry.committed for a
- * new verifikat. Three paths, exactly one per call:
+ * (lib/bookkeeping/engine.ts, reached through the posting port's
+ * commitSqlPosting), which also emits journal_entry.committed for a new
+ * verifikat. Three paths, exactly one per call:
  *
  *   1. existing_journal_entry_id: link the rows to an already-posted voucher
  *      (no new entry; the voucher's bank net must equal the row sum, measured
@@ -54,7 +55,6 @@ import {
   libraryLinesTouchSkattekonto,
 } from '@/lib/bookkeeping/template-library'
 import { resolveSkattekontoAccount } from '@/lib/skatteverket/skattekonto-account'
-import { commitBulkBooking } from '@/lib/bookkeeping/engine'
 import type { SqlBusinessEventLink } from '@/lib/bookkeeping/business-event-link'
 import { bulkBookedBankLineBusinessEvent } from '@/lib/bookkeeping/sql-posting-business-events'
 import { linkBasisColumns } from '@/lib/links/stamp'
@@ -421,14 +421,23 @@ export async function bulkBookTransactions(
     }
   }
 
-  // The engine door: it also emits journal_entry.committed for a new
-  // samlingsverifikat, which the RPC alone never announces.
-  const { data, error } = await commitBulkBooking(supabase, companyId, userId, {
-    txIds: body.tx_ids,
-    existingJournalEntryId: body.existing_journal_entry_id ?? null,
-    newEntry: newEntryPayload,
-    commitMethod: 'bulk_accept',
-    ...(businessEvents ? { businessEvents } : {}),
+  // The engine door, through the posting port: it also emits
+  // journal_entry.committed for a new samlingsverifikat, which the RPC alone
+  // never announces.
+  const { data, error } = await postingPort.commitSqlPosting({
+    supabase,
+    companyId,
+    userId,
+    fn: 'bulk_book_transactions',
+    args: [
+      {
+        txIds: body.tx_ids,
+        existingJournalEntryId: body.existing_journal_entry_id ?? null,
+        newEntry: newEntryPayload,
+        commitMethod: 'bulk_accept',
+        ...(businessEvents ? { businessEvents } : {}),
+      },
+    ],
   })
   if (error) {
     opLog.error('bulk_book_transactions RPC error', error)

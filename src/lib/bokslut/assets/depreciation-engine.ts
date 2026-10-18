@@ -1,5 +1,4 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { commitAssetDepreciation } from '@/lib/bookkeeping/engine'
 import { AssetDepreciationRefusedError } from '@/lib/bookkeeping/errors'
 import type { LinkBasisColumns } from '@/lib/links/link-basis'
 import { linkBasisColumns } from '@/lib/links/stamp'
@@ -515,11 +514,20 @@ export async function commitAnnualPostings(
           lines,
         },
       })
-      const { entry, scheduleId } = await commitAssetDepreciation(supabase, companyId, userId, draft, {
-        asset_id: item.asset.id,
-        planned_depreciation: item.amount,
-        opening_accumulated_depreciation: Number(item.asset.opening_accumulated_depreciation ?? 0),
-        opening_depreciation_date: item.asset.opening_depreciation_date ?? null,
+      const { entry, scheduleId } = await postingPort.commitSqlPosting({
+        supabase,
+        companyId,
+        userId,
+        fn: 'commit_asset_depreciation',
+        args: [
+          draft,
+          {
+            asset_id: item.asset.id,
+            planned_depreciation: item.amount,
+            opening_accumulated_depreciation: Number(item.asset.opening_accumulated_depreciation ?? 0),
+            opening_depreciation_date: item.asset.opening_depreciation_date ?? null,
+          },
+        ],
       })
       posted.push({ assetId: item.asset.id, entry, scheduleId })
     } catch (error) {

@@ -44,6 +44,7 @@ export {
 export type {
   BusinessEventDraft,
   CommitJournalEntryRequest,
+  CommitSqlPostingRequest,
   CorrectJournalEntryRequest,
   CorrectJournalEntryResult,
   DraftJournalEntryRequest,
@@ -54,4 +55,7 @@ export type {
   RecordBusinessEventRequest,
   RecordSqlPostingEventsRequest,
   ReverseJournalEntryRequest,
+  SqlPostingDoors,
+  SqlPostingFunction,
+  SqlPostingResult,
 } from './types'

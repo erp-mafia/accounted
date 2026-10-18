@@ -1,7 +1,21 @@
-import { commitEntry, createDraftEntry, createJournalEntry, reverseEntry } from '@/lib/bookkeeping/engine'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import {
+  commitAssetDepreciation,
+  commitAssetDisposal,
+  commitBulkBooking,
+  commitEntry,
+  commitExpensePayoutBatch,
+  commitInvoiceVoucherLink,
+  commitMatchBatchAllocation,
+  commitSupplierInvoiceVoucherLink,
+  createDraftEntry,
+  createJournalEntry,
+  replaceOpeningBalanceEntry,
+  reverseEntry,
+} from '@/lib/bookkeeping/engine'
 import { createJournalEntries } from '@/lib/bookkeeping/journal-entry-batch'
 import { correctEntry, recordateEntry } from '@/lib/core/bookkeeping/storno-service'
-import type { PostingAdapter } from './types'
+import type { PostingAdapter, SqlPostingDoors, SqlPostingFunction, SqlPostingResult } from './types'
 
 /**
  * The ledger adapter: the engine, called with the producer's own arguments.
@@ -15,6 +29,10 @@ import type { PostingAdapter } from './types'
  * rubricVersion positions (the pilot's own six-argument call), which a
  * four-argument producer receives as undefined, the value its omitted
  * optional parameters already had.
+ *
+ * commitSqlPosting hands a SQL posting function's wrapper the producer's
+ * arguments as they came, spread, so the function gets the request a direct
+ * call sent (pinned by sql-posting-doors.rpc-input.test.ts).
  */
 export const ledgerAdapter: PostingAdapter = {
   id: 'ledger',
@@ -66,4 +84,46 @@ export const ledgerAdapter: PostingAdapter = {
       ? correctEntry(supabase, companyId, userId, entryId, correction.lines)
       : correctEntry(supabase, companyId, userId, entryId, correction.lines, options)
   },
+
+  commitSqlPosting({ supabase, companyId, userId, fn, args }) {
+    // The request ties fn to its wrapper's arguments; the call itself is generic.
+    const door = sqlPostingDoor(fn) as (
+      supabase: SupabaseClient,
+      companyId: string,
+      userId: string,
+      ...rest: unknown[]
+    ) => Promise<SqlPostingResult<typeof fn>>
+    return door(supabase, companyId, userId, ...args)
+  },
+}
+
+/**
+ * The engine wrapper of a SQL posting function, looked up when it is called
+ * (not captured when this module loads), as every other door here reads its
+ * engine function.
+ */
+function sqlPostingDoor<F extends SqlPostingFunction>(fn: F): SqlPostingDoors[F]
+function sqlPostingDoor(fn: SqlPostingFunction): SqlPostingDoors[SqlPostingFunction] {
+  switch (fn) {
+    case 'bulk_book_transactions':
+      return commitBulkBooking
+    case 'match_batch_allocate':
+      return commitMatchBatchAllocation
+    case 'link_invoice_to_voucher':
+      return commitInvoiceVoucherLink
+    case 'link_supplier_invoice_to_voucher':
+      return commitSupplierInvoiceVoucherLink
+    case 'create_expense_payout_batch':
+      return commitExpensePayoutBatch
+    case 'commit_opening_balance_replacement':
+      return replaceOpeningBalanceEntry
+    case 'commit_asset_depreciation':
+      return commitAssetDepreciation
+    case 'commit_asset_disposal':
+      return commitAssetDisposal
+    default: {
+      const unknown: never = fn
+      throw new Error(`no engine wrapper for SQL posting function ${String(unknown)}`)
+    }
+  }
 }

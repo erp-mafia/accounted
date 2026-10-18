@@ -20,7 +20,9 @@ const client = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.S
 const company = await client.from('companies').select('name').eq('id', fixture.company).single()
 assert.ok(company.data?.name.startsWith('SIE acceptance'))
 assert.ok(fixture.email.endsWith('@test.invalid'))
-const { createJournalEntry } = await import('../../src/lib/bookkeeping/engine')
+const { postingPort } = await import('../../src/lib/posting/port')
+const { openingBalanceBusinessEvent } = await import('../../src/lib/import/import-business-events')
+const { scopeFreeLinkBasisColumns } = await import('../../src/lib/links/link-basis')
 const { submitSIEJob, requestSIEJobAction } = await import('../../src/lib/import/sie-jobs')
 const { runSIEWorker } = await import('../../src/lib/import/sie-job-worker')
 const reportPath = '.env.sie-manual-review.json'
@@ -33,10 +35,15 @@ else {
       name:String(year),period_start:`${year}-01-01`,period_end:`${year}-12-31`})
     if(period.error) throw period.error
   }
-  const opening=await createJournalEntry(client,fixture.company,fixture.user,{
-    fiscal_period_id:nextPeriod,entry_date:'2031-01-01',description:'Synthetic retained opening balance',
-    source_type:'opening_balance',voucher_series:'IB',
-    lines:[{account_number:'1930',debit_amount:100,credit_amount:0},{account_number:'2091',debit_amount:0,credit_amount:100}],
+  // Through the posting port, so the staging run books what production books: off, the engine's own
+  // call; on, a ledger.opening_balance of the synthetic year, system_derived (the fixture made it up).
+  const opening=await postingPort.postJournalEntry({supabase:client,companyId:fixture.company,userId:fixture.user,
+    event:()=>openingBalanceBusinessEvent(nextPeriod,'2031-01-01',scopeFreeLinkBasisColumns('system_derived')),
+    input:{
+      fiscal_period_id:nextPeriod,entry_date:'2031-01-01',description:'Synthetic retained opening balance',
+      source_type:'opening_balance',voucher_series:'IB',
+      lines:[{account_number:'1930',debit_amount:100,credit_amount:0},{account_number:'2091',debit_amount:0,credit_amount:100}],
+    },
   })
   const linked=await client.from('fiscal_periods').update({opening_balance_entry_id:opening.id,opening_balances_set:true}).eq('company_id',fixture.company).eq('id',nextPeriod)
   if(linked.error) throw linked.error

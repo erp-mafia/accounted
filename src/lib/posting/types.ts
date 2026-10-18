@@ -1,6 +1,16 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CommitActor } from '@/lib/bookkeeping/actor-context'
-import type { CreateEntryOptions } from '@/lib/bookkeeping/engine'
+import type {
+  commitAssetDepreciation,
+  commitAssetDisposal,
+  commitBulkBooking,
+  commitExpensePayoutBatch,
+  commitInvoiceVoucherLink,
+  commitMatchBatchAllocation,
+  commitSupplierInvoiceVoucherLink,
+  CreateEntryOptions,
+  replaceOpeningBalanceEntry,
+} from '@/lib/bookkeeping/engine'
 import type { CorrectionBusinessEvents, correctEntry, recordateEntry } from '@/lib/core/bookkeeping/storno-service'
 import type { HandleType } from '@/lib/handles/registry'
 import type { CreateJournalEntryInput, CreateJournalEntryLineInput, JournalEntry } from '@/types'
@@ -223,6 +233,54 @@ export interface RecordSqlPostingEventsRequest {
 }
 
 /**
+ * The SQL posting functions, each with the engine wrapper that is its one
+ * application door (lib/bookkeeping/engine.ts). Each numbers a verifikat in
+ * SQL through commit_journal_entry, in one transaction with its own writes:
+ * the first six draft and commit theirs (their events come from
+ * recordEventsForSql and travel in the wrapper's own arguments, as
+ * `businessEvents`); commit_asset_depreciation and commit_asset_disposal
+ * commit a draft made through draftJournalEntry, which linked its event
+ * already.
+ */
+export interface SqlPostingDoors {
+  bulk_book_transactions: typeof commitBulkBooking
+  match_batch_allocate: typeof commitMatchBatchAllocation
+  link_invoice_to_voucher: typeof commitInvoiceVoucherLink
+  link_supplier_invoice_to_voucher: typeof commitSupplierInvoiceVoucherLink
+  create_expense_payout_batch: typeof commitExpensePayoutBatch
+  commit_opening_balance_replacement: typeof replaceOpeningBalanceEntry
+  commit_asset_depreciation: typeof commitAssetDepreciation
+  commit_asset_disposal: typeof commitAssetDisposal
+}
+
+/** A SQL posting function by its database name. */
+export type SqlPostingFunction = keyof SqlPostingDoors
+
+/** A wrapper's arguments after its leading supabase, companyId and userId. */
+type ArgumentsAfterUser<F> = F extends (supabase: SupabaseClient, companyId: string, userId: string, ...rest: infer R) => unknown
+  ? R
+  : never
+
+/** What a SQL posting function's wrapper answers. */
+export type SqlPostingResult<F extends SqlPostingFunction> = Awaited<ReturnType<SqlPostingDoors[F]>>
+
+/**
+ * A SQL posting function called through the port: its wrapper's own
+ * arguments, handed to it unchanged and in the same number (a producer that
+ * omits an optional one omits it here too), so the function gets exactly the
+ * request a direct call sent. Nothing is recorded here in any mode: the
+ * events were recorded before (recordEventsForSql, or the draft's).
+ */
+export interface CommitSqlPostingRequest<F extends SqlPostingFunction> {
+  supabase: SupabaseClient
+  companyId: string
+  userId: string
+  fn: F
+  /** The wrapper's arguments after userId. */
+  args: ArgumentsAfterUser<SqlPostingDoors[F]>
+}
+
+/**
  * The posting port: every new posting records its business event here. Step
  * 1 moves one producer (bank-line booking) onto it; step 2 moves the rest.
  * A producer that drafts, does its own work and then commits (kassa,
@@ -233,7 +291,9 @@ export interface RecordSqlPostingEventsRequest {
  * job's one event with recordEvent; a producer whose verifikat a SQL
  * function drafts and commits (a bulk booking, a batch allocation, a voucher
  * link's kursdifferens, an utlägg payout, the IB cascade) records its events
- * with recordEventsForSql and hands their ids to the function.
+ * with recordEventsForSql and hands their ids to the function through
+ * commitSqlPosting, the door every SQL posting function is called through
+ * (the asset doors' commit of their draft included).
  */
 export interface PostingPort {
   postJournalEntry(request: PostJournalEntryRequest): Promise<JournalEntry>
@@ -249,6 +309,8 @@ export interface PostingPort {
   recordEvent(request: RecordBusinessEventRequest): Promise<string | null>
   /** The events a SQL posting function links to its own drafts; see RecordSqlPostingEventsRequest. */
   recordEventsForSql(request: RecordSqlPostingEventsRequest): Promise<SqlBusinessEventLink | undefined>
+  /** A SQL posting function, through its engine wrapper with the producer's own arguments; see CommitSqlPostingRequest. */
+  commitSqlPosting<F extends SqlPostingFunction>(request: CommitSqlPostingRequest<F>): Promise<SqlPostingResult<F>>
 }
 
 /**
@@ -311,4 +373,6 @@ export interface PostingAdapter {
     correction: CorrectJournalEntryRequest['correction']
     businessEvents?: CorrectionBusinessEvents
   }): Promise<CorrectJournalEntryResult>
+  /** The SQL posting function's engine wrapper (SqlPostingDoors), called with exactly these arguments. */
+  commitSqlPosting<F extends SqlPostingFunction>(args: CommitSqlPostingRequest<F>): Promise<SqlPostingResult<F>>
 }

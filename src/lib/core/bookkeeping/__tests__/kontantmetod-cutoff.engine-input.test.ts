@@ -18,17 +18,21 @@
  * with POSTING_EVENTS=shadow, with the link basis its only door (the staged
  * operation's executor) hands down: the engine must get the same arguments
  * plus only the event link, one event per carry and per storno, and a
- * refused event write must still post. The correction stays on correctEntry
- * (storno-service), which records no event. Trailing undefined arguments (the
- * ledger adapter's commitMethod and rubricVersion positions) are dropped
- * before the comparison with the fixture, nothing else.
+ * refused event write must still post. The correction goes through the
+ * port's correctJournalEntry since step 3: correctEntry gets the same
+ * arguments plus only its two links beside its own options (businessEvents),
+ * ledger.storno and ledger.correction of the cash verifikat, both recorded
+ * before correctEntry runs, and under strict a refused one stops the
+ * correction before correctEntry drafts anything. Trailing undefined
+ * arguments (the ledger adapter's commitMethod and rubricVersion positions)
+ * are dropped before the comparison with the fixture, nothing else.
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTableMockSupabase } from '@/tests/helpers'
 import type { CreateJournalEntryInput, CreateJournalEntryLineInput } from '@/types'
-import type { KontantmetodCarryPlan, PaidBeforePosting } from '../kontantmetod-cutoff'
+import type { KontantmetodCarryPlan, PaidBeforePosting, PostKontantmetodCutoffResult } from '../kontantmetod-cutoff'
 
 vi.mock('@/lib/bookkeeping/engine', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/bookkeeping/engine')>()),
@@ -225,14 +229,20 @@ function trimTrailingUndefined(call: unknown[]): unknown[] {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
-/** A shadow call without its event link, trimmed as the off call is, and the link it carried. */
+/**
+ * A shadow call without its event link (a posting's businessEvent, a
+ * correction's businessEvents), trimmed as the off call is, and the link it
+ * carried.
+ */
 function splitLink(call: unknown[]): { call: unknown[]; link: unknown } {
   const args = call.slice(1)
   const last = args[args.length - 1]
-  if (last && typeof last === 'object' && 'businessEvent' in last) {
-    const { businessEvent, ...rest } = last as Record<string, unknown>
-    args[args.length - 1] = Object.keys(rest).length > 0 ? rest : '<undefined>'
-    return { call: trimTrailingUndefined([args.length, ...args]), link: businessEvent }
+  for (const key of ['businessEvent', 'businessEvents']) {
+    if (last && typeof last === 'object' && key in last) {
+      const { [key]: link, ...rest } = last as Record<string, unknown>
+      args[args.length - 1] = Object.keys(rest).length > 0 ? rest : '<undefined>'
+      return { call: trimTrailingUndefined([args.length, ...args]), link }
+    }
   }
   return { call: trimTrailingUndefined(call), link: undefined }
 }
@@ -241,12 +251,34 @@ interface Run {
   name: string
   /** Every call in order: ['createJournalEntry' | 'reverseEntry' | 'correctEntry', ...args]. */
   calls: unknown[][]
+  /** Every business_events write tried, in order (refused ones included). */
   events: Array<Record<string, unknown>>
+  /** What postKontantmetodCutoff answered; undefined when it threw. */
+  result?: PostKontantmetodCutoffResult
 }
 
-async function runScenarios(opts: { refuseEvent?: boolean } = {}): Promise<Run[]> {
+/**
+ * The cash verifikat E's id in the shadow and strict runs. The fixture's E is
+ * 'je-cash', which is no UUID, and an event's subject must be one (the port
+ * refuses it as a producer bug, which shadow only logs), so the runs that
+ * read the correction's events give E a UUID; off runs compare like with like.
+ */
+const CASH_ENTRY_UUID = '00000000-0000-4000-8000-0000000ca5e1'
+
+async function runScenarios(
+  opts: {
+    refuseEvent?: boolean
+    /** Refuse only the event writes of these kinds. */
+    refuseKinds?: string[]
+    /** E's id instead of the fixture's 'je-cash'. */
+    cashEntryId?: string
+    /** Only the scenarios with these names. */
+    only?: string[]
+  } = {},
+): Promise<Run[]> {
   const out: Run[] = []
-  for (const s of SCENARIOS) {
+  const cashEntryId = opts.cashEntryId ?? CASH_ENTRY.id
+  for (const s of SCENARIOS.filter((sc) => !opts.only || opts.only.includes(sc.name))) {
     mockedCreate.mockReset()
     mockedReverse.mockReset()
     mockedCorrect.mockReset()
@@ -274,7 +306,7 @@ async function runScenarios(opts: { refuseEvent?: boolean } = {}): Promise<Run[]
       'rpc:record_kontantmetod_cutoff_link': () => links.shift() ?? LINKED,
       journal_entries: (chain: Chain) => {
         // The cash verifikat E (maybeSingle), else the carries it is corrected against.
-        if (chain.some((c) => c.method === 'maybeSingle')) return { data: CASH_ENTRY }
+        if (chain.some((c) => c.method === 'maybeSingle')) return { data: { ...CASH_ENTRY, id: cashEntryId } }
         const ids = (chain.find((c) => c.method === 'in')?.args[1] as string[] | undefined) ?? []
         return {
           data: ids.map((id) => ({
@@ -287,23 +319,28 @@ async function runScenarios(opts: { refuseEvent?: boolean } = {}): Promise<Run[]
           })),
         }
       },
-      business_events: opts.refuseEvent ? { error: { message: 'business_events refused', code: '42501' } } : { data: null },
+      business_events: (chain: Chain) => {
+        const kind = (chain.find((c) => c.method === 'insert')?.args[0] as { kind?: string } | undefined)?.kind
+        const refused = opts.refuseEvent || (kind !== undefined && (opts.refuseKinds ?? []).includes(kind))
+        return refused ? { error: { message: 'business_events refused', code: '42501' } } : { data: null }
+      },
     })
     const posting = postKontantmetodCutoff(supabase as never, COMPANY, USER, {
       fiscalPeriodId: PERIOD,
       periodEnd: '2025-12-31',
       plans: s.plans,
-      paidBeforePosting: s.paidBeforePosting,
+      paidBeforePosting: s.paidBeforePosting?.map((item) => ({ ...item, entryId: cashEntryId })),
       posting: () => ({ linkBasis: STAGED }),
     })
+    let result: Awaited<typeof posting> | undefined
     if (s.partial) {
       await expect(posting, s.name).rejects.toBeInstanceOf(KontantmetodCutoffPartialError)
     } else {
-      const result = await posting
+      result = await posting
       expect(result.posted.length + result.compensated.length, s.name).toBe(s.plans.length)
-      expect(result.corrected.length, s.name).toBe(s.paidBeforePosting?.length ?? 0)
+      if (!opts.refuseKinds) expect(result.corrected.length, s.name).toBe(s.paidBeforePosting?.length ?? 0)
     }
-    out.push({ name: s.name, calls, events: payloads('business_events', 'insert') as Array<Record<string, unknown>> })
+    out.push({ name: s.name, calls, events: payloads('business_events', 'insert') as Array<Record<string, unknown>>, result })
   }
   return out
 }
@@ -330,9 +367,9 @@ describe('postKontantmetodCutoff engine input (posting port parity)', () => {
 
   it('with POSTING_EVENTS=shadow hands the engine the same arguments, plus only the event link', async () => {
     vi.stubEnv('POSTING_EVENTS', 'off')
-    const off = await runScenarios()
+    const off = await runScenarios({ cashEntryId: CASH_ENTRY_UUID })
     vi.stubEnv('POSTING_EVENTS', 'shadow')
-    const shadow = await runScenarios()
+    const shadow = await runScenarios({ cashEntryId: CASH_ENTRY_UUID })
     for (const [i, run] of shadow.entries()) {
       expect(run.calls.map(([fn]) => fn), run.name).toEqual(off[i]!.calls.map(([fn]) => fn))
       const links = run.calls.flatMap(([fn, ...call], j) => {
@@ -340,9 +377,14 @@ describe('postKontantmetodCutoff engine input (posting port parity)', () => {
         const [, ...offCall] = off[i]!.calls[j]!
         expect(bare, `${run.name} #${j}`).toEqual(trimTrailingUndefined(offCall))
         if (fn === 'correctEntry') {
-          // storno-service, not the port: no event and no link.
-          expect(link, `${run.name} #${j}`).toBeUndefined()
-          return []
+          // Through the port's correctJournalEntry: the storno's and the
+          // corrected verifikat's links, beside correctEntry's own options.
+          expect(link, `${run.name} #${j}`).toEqual({
+            reversal: { id: expect.stringMatching(UUID), role: 'reversal', onFailure: 'log' },
+            correction: { id: expect.stringMatching(UUID), role: 'correction', onFailure: 'log' },
+          })
+          const links = link as { reversal: { id: string }; correction: { id: string } }
+          return [links.reversal.id, links.correction.id]
         }
         expect(link, `${run.name} #${j}`).toEqual({
           id: expect.stringMatching(UUID),
@@ -351,7 +393,7 @@ describe('postKontantmetodCutoff engine input (posting port parity)', () => {
         })
         return [(link as { id: string }).id]
       })
-      // One event per carry and per storno, each recorded before its call.
+      // One event per carry and per storno, two per correction, each recorded before its call.
       expect(new Set(links).size, run.name).toBe(links.length)
       expect(run.events.map((e) => e.id), run.name).toEqual(links)
     }
@@ -359,18 +401,42 @@ describe('postKontantmetodCutoff engine input (posting port parity)', () => {
 
   it('with POSTING_EVENTS=shadow a refused event write still posts, with exactly the off call', async () => {
     vi.stubEnv('POSTING_EVENTS', 'off')
-    const off = await runScenarios()
+    const off = await runScenarios({ cashEntryId: CASH_ENTRY_UUID })
     vi.stubEnv('POSTING_EVENTS', 'shadow')
-    const refused = await runScenarios({ refuseEvent: true })
+    const refused = await runScenarios({ refuseEvent: true, cashEntryId: CASH_ENTRY_UUID })
     expect(refused.map((r) => r.calls)).toEqual(off.map((r) => r.calls))
     expect(refused.map((r) => r.events.length)).toEqual(
-      off.map((r) => r.calls.filter(([fn]) => fn !== 'correctEntry').length),
+      off.map((r) => r.calls.reduce((n, [fn]) => n + (fn === 'correctEntry' ? 2 : 1), 0)),
     )
+  })
+
+  it('with POSTING_EVENTS=strict a refused correction event stops the correction before correctEntry drafts anything', async () => {
+    vi.stubEnv('POSTING_EVENTS', 'strict')
+    const only = [SCENARIOS.find((s) => s.paidBeforePosting)!.name]
+    // Either event refused: both are recorded before the storno is drafted, so
+    // correctEntry never runs and no voucher number is drawn for the rättelse.
+    for (const refuseKinds of [['ledger.storno'], ['ledger.correction']]) {
+      const [run] = await runScenarios({ refuseKinds, cashEntryId: CASH_ENTRY_UUID, only })
+      expect(run!.calls.map(([fn]) => fn), refuseKinds[0]).toEqual(['createJournalEntry'])
+      // The carry stands, linked; the correction is reported failed, so readiness keeps it and a re-run retries.
+      expect(run!.result, refuseKinds[0]).toMatchObject({
+        posted: [{ invoiceId: 'inv-1', entryId: 'je-1' }],
+        corrected: [],
+        correctionFailed: [{ side: 'customer', invoiceId: 'inv-1', entryId: CASH_ENTRY_UUID, code: 'BOOKKEEPING_DATABASE_ERROR' }],
+      })
+    }
+    // Strict with nothing refused: correctEntry gets both links, from strict ('abort').
+    const [passed] = await runScenarios({ cashEntryId: CASH_ENTRY_UUID, only })
+    const [, ...call] = passed!.calls.find(([fn]) => fn === 'correctEntry')!
+    expect(splitLink(call).link).toEqual({
+      reversal: { id: expect.stringMatching(UUID), role: 'reversal', onFailure: 'abort' },
+      correction: { id: expect.stringMatching(UUID), role: 'correction', onFailure: 'abort' },
+    })
   })
 
   it('records what happened in business terms', async () => {
     vi.stubEnv('POSTING_EVENTS', 'shadow')
-    const runs = await runScenarios()
+    const runs = await runScenarios({ cashEntryId: CASH_ENTRY_UUID })
     const staged = {
       evidence: { link_basis: 'agent_proposed_user_approved', link_evidence: { pending_operation_id: OPERATION } },
       pending_operation_id: OPERATION,
@@ -415,7 +481,8 @@ describe('postKontantmetodCutoff engine input (posting port parity)', () => {
 
     // A storno the writer makes of its own carry: system_derived, naming the approval, dated the day.
     const today = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Stockholm' }).format(new Date())
-    const stornos = runs.flatMap((r) => r.events.filter((e) => e.kind === 'ledger.storno'))
+    // (The correction's own storno, of the cash verifikat, is the last scenario's, below.)
+    const stornos = runs.slice(0, 5).flatMap((r) => r.events.filter((e) => e.kind === 'ledger.storno'))
     expect(stornos).toHaveLength(2)
     for (const storno of stornos) {
       expect(storno).toMatchObject({
@@ -430,7 +497,27 @@ describe('postKontantmetodCutoff engine input (posting port parity)', () => {
       })
     }
 
-    // The correction of E records nothing: one event, the carry's.
-    expect(runs[5]!.events.map((e) => e.kind)).toEqual(['year_end.closing'])
+    // The correction of E: the carry's event, then the rättelse's two, both of
+    // E (the verifikat corrected), dated the day, with the door's basis; the
+    // corrected verifikat's lines are the cut-off rule's, so it names its version.
+    const [carryEvent, stornoOfE, correctionOfE] = runs[5]!.events
+    expect(runs[5]!.events.map((e) => e.kind)).toEqual(['year_end.closing', 'ledger.storno', 'ledger.correction'])
+    expect(carryEvent).toMatchObject({ kind: 'year_end.closing', subject_type: 'fiscal_period', subject_id: PERIOD })
+    for (const event of [stornoOfE, correctionOfE]) {
+      expect(event).toMatchObject({
+        category: null,
+        occurred_on: today,
+        subject_type: 'journal_entry',
+        subject_id: CASH_ENTRY_UUID,
+        party_type: null,
+        currency: null,
+        amount: null,
+        tax_amounts: [],
+        jurisdiction: 'SE',
+        ...staged,
+      })
+    }
+    expect(stornoOfE!.mapping_version).toBeNull()
+    expect(correctionOfE!.mapping_version).toMatch(/^se\.kontantmetod-cutoff@/)
   })
 })

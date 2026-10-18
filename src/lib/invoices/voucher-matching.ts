@@ -30,7 +30,6 @@ import { autoReconcileTransactionForLinkedVoucher } from '@/lib/reconciliation/b
 import { clearSettledInvoiceSuggestions } from './clear-settled-invoice-suggestions'
 import { anchorCustomerInvoiceDocument } from '@/lib/core/documents/customer-invoice-underlag'
 import { documentCurrency, ledgerLineSideAmountIn } from '@/lib/bookkeeping/ledger-line-amount'
-import { commitInvoiceVoucherLink } from '@/lib/bookkeeping/engine'
 import type { SqlBusinessEventLink } from '@/lib/bookkeeping/business-event-link'
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import { voucherLinkKursdifferensBusinessEvent } from '@/lib/bookkeeping/sql-posting-business-events'
@@ -477,13 +476,22 @@ export async function linkInvoiceToVoucher(
     return { ok: false, code: 'LINK_VOUCHER_DB_ERROR', details: { reason: err instanceof Error ? err.message : String(err) } }
   }
 
-  // Through the engine door, which announces the kursdifferens verifikat the
-  // RPC posts for a foreign-currency invoice with journal_entry.committed.
-  const { data: rpcData, error: rpcError } = await commitInvoiceVoucherLink(supabase, companyId, userId, {
-    invoiceId: params.invoiceId,
-    journalEntryId: params.journalEntryId,
-    notes: params.notes ?? null,
-    ...(businessEvents ? { businessEvents } : {}),
+  // Through the engine door (commitInvoiceVoucherLink, reached through the
+  // posting port), which announces the kursdifferens verifikat the RPC posts
+  // for a foreign-currency invoice with journal_entry.committed.
+  const { data: rpcData, error: rpcError } = await postingPort.commitSqlPosting({
+    supabase,
+    companyId,
+    userId,
+    fn: 'link_invoice_to_voucher',
+    args: [
+      {
+        invoiceId: params.invoiceId,
+        journalEntryId: params.journalEntryId,
+        notes: params.notes ?? null,
+        ...(businessEvents ? { businessEvents } : {}),
+      },
+    ],
   })
 
   if (rpcError) {
