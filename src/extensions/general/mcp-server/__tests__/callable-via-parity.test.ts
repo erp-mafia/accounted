@@ -123,7 +123,7 @@ async function callTool(name: string, args: Record<string, unknown>) {
 
 async function search(query: string, limit = 5) {
   const { body } = await callTool('gnubok_search_tools', { query, limit })
-  return body as { tools: Hit[]; tools_list_note?: string }
+  return body as { tools: Hit[]; tools_list_note?: string; bridge_note?: string }
 }
 
 beforeEach(() => {
@@ -217,5 +217,54 @@ describe('a client holding an older tools/list is told what unblocks it', () => 
       expect(text, bridge).toContain('directly by name')
       expect(text, bridge).toContain('older copy of tools/list')
     }
+  })
+})
+
+// gnubok_stage_tool was listed weeks after gnubok_call_tool: a connector
+// added in between read payment orders through one bridge and told its user
+// the other was "not available" (support case 2026-10-18).
+describe('a client whose older tools/list lacks a bridge is told what unblocks it', () => {
+  beforeEach(() => useCaller(CALLERS[0]))
+
+  it('a search with a bridged hit carries the bridge note once', async () => {
+    const result = await search('gnubok_prepare_payments', 1)
+    expect(result.tools[0]).toMatchObject({ name: 'gnubok_prepare_payments', callable_via: 'stage_tool' })
+    expect(result.bridge_note).toContain('gnubok_stage_tool')
+    expect(result.bridge_note).toMatch(/refresh or reconnect/)
+    expect(result.bridge_note).toMatch(/do not report it as unavailable/)
+  })
+
+  it('no bridge note when every hit is in tools/list', async () => {
+    const result = await search('gnubok_update_invoice', 1)
+    expect(result.tools[0].callable_via).toBe('tools_list')
+    expect(result).not.toHaveProperty('bridge_note')
+  })
+
+  it('no bridge note on detail=name, which reports no reach', async () => {
+    const { body } = await callTool('gnubok_search_tools', { query: 'gnubok_prepare_payments', limit: 1, detail: 'name' })
+    expect(body).not.toHaveProperty('bridge_note')
+  })
+
+  it('gnubok_call_tool pointed at a staged write names the stale-copy fix next to "use gnubok_stage_tool"', async () => {
+    const { body, isError } = await callTool('gnubok_call_tool', {
+      tool: 'gnubok_prepare_payments',
+      arguments: {},
+    })
+    expect(isError).toBe(true)
+    const text = JSON.stringify(body)
+    expect(text).toContain('use gnubok_stage_tool')
+    expect(text).toContain('If your client does not show gnubok_stage_tool')
+  })
+
+  it('the briefing carries the bridge note when a loadout entry is reached through a bridge', async () => {
+    const { body } = await callTool('gnubok_get_agent_briefing', {})
+    const loadouts = body.recommended_tools as Array<{ tools: Array<{ callable: boolean; note?: string }> }>
+    expect(loadouts.some((w) => w.tools.some((t) => t.callable && t.note))).toBe(true)
+    expect(body.bridge_note).toMatch(/refresh or reconnect/)
+  })
+
+  it('the initialize instructions say the same', async () => {
+    const json = await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } })
+    expect(json.result.instructions).toMatch(/A bridge your client does not show means it kept an older copy of tools\/list/)
   })
 })
