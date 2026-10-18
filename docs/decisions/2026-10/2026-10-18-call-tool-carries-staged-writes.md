@@ -1,0 +1,1 @@
+[2026-10-18] gnubok_call_tool also carries the unlisted staging writes gnubok_stage_tool carries, reversing the stale-bridge-note choice: a ChatGPT connector kept its pre-stage_tool list after a reconnect. Stays read-only-annotated; adds only proposals that post nothing until approved.
