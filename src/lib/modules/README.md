@@ -547,7 +547,8 @@ door could not keep always goes through the port (system_derived of the
 verifikat when its door names no event). The kernel's doors take their link
 basis as a function, and lib/posting is a kernel inner module (as in step
 2g). The staged uncategorize (`commitUncategorizeTransaction`, a bank line's
-storno) still calls the engine directly and follows in its own change. Still
+storno) records `ledger.storno` of the bank line through the port, as both
+uncategorize routes do (`uncategorize-executor.engine-input.test.ts`). Still
 on SQL: the inline rättelse (`correct_entry_metadata`,
 `correct_entry_lines_inline`, inside the same verifikat, no new number),
 `bulk_book_transactions`, `match_batch_allocate`, `link_invoice_to_voucher`,
