@@ -38,6 +38,16 @@ describe('business event evidence', () => {
     expect(jsonbTextBytes({})).toBe(2)
   })
 
+  it('keeps an import job\'s file hash and voucher count, and nothing that is not one', () => {
+    expect(cleanBusinessEventEvidence({ link_basis: 'import_carried_over', file_hash: 'a'.repeat(64), voucher_count: 4 })).toEqual({
+      link_basis: 'import_carried_over',
+      file_hash: 'a'.repeat(64),
+      voucher_count: 4,
+    })
+    expect(cleanBusinessEventEvidence({ file_hash: 'paritet-2026.se', voucher_count: -1 })).toEqual({})
+    expect(cleanBusinessEventEvidence({ file_hash: 'A'.repeat(64), voucher_count: 2.5 })).toEqual({})
+  })
+
   it('stays under the database cap', () => {
     const big = cleanBusinessEventEvidence({
       document_id: DOC,
@@ -76,6 +86,23 @@ describe('projectBusinessEvent (history, no backfill)', () => {
     expect(
       projectBusinessEvent({ id: 'je-5', source_type: 'correction', source_id: null, entry_date: '2025-05-01' }),
     ).toMatchObject({ kind: 'ledger.correction', role: 'correction', subject: null })
+  })
+
+  it('names the import job of an imported verifikat and of the IB the import booked, from its import batch', () => {
+    const JOB = '6a6a6a6a-6a6a-46a6-86a6-6a6a6a6a6a6a'
+    expect(
+      projectBusinessEvent({ id: 'je-8', source_type: 'import', source_id: null, entry_date: '2025-02-10', import_batch_id: JOB }),
+    ).toMatchObject({ kind: 'ledger.history_import', role: 'produced', subject: { type: 'sie_import', id: JOB } })
+    expect(
+      projectBusinessEvent({ id: 'je-9', source_type: 'opening_balance', source_id: null, entry_date: '2025-01-01', import_batch_id: JOB }),
+    ).toMatchObject({ kind: 'ledger.opening_balance', subject: { type: 'sie_import', id: JOB } })
+    // An IB typed by hand has no import batch; an undo's storno is a storno.
+    expect(
+      projectBusinessEvent({ id: 'je-10', source_type: 'opening_balance', source_id: null, entry_date: '2025-01-01' }),
+    ).toMatchObject({ kind: 'ledger.opening_balance', subject: null })
+    expect(
+      projectBusinessEvent({ id: 'je-11', source_type: 'storno', source_id: null, entry_date: '2025-02-10', import_batch_id: JOB }),
+    ).toMatchObject({ kind: 'ledger.storno', role: 'reversal', subject: null })
   })
 
   it('projects a manual voucher as ledger.manual and an unknown source type as no kind', () => {

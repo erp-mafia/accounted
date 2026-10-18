@@ -20,6 +20,17 @@ export const BusinessEventEvidenceSchema = z
     link_basis: z.enum(LINK_BASES).optional().describe('Why the record and its verifikat are linked (lib/links).'),
     link_evidence: LinkEvidenceSchema.optional().describe('The link evidence recorded with that basis.'),
     direction: z.enum(['in', 'out']).optional().describe('Money into or out of the business, for a bank line.'),
+    file_hash: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .optional()
+      .describe('The SHA-256 of the file an import job read (sie_imports.file_hash), never its name or path.'),
+    voucher_count: z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe('How many verifikat an import job posted, its IB and migration adjustment included.'),
   })
   .strict()
 

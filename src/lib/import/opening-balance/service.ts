@@ -19,6 +19,11 @@
  *   - the IB verifikat is posted through the engine (source_type
  *     opening_balance, series A) and linked to the year.
  *
+ * Every verifikat here goes through the posting port: while POSTING_EVENTS is
+ * shadow or strict the IB records ledger.opening_balance and each storno
+ * ledger.storno, subject the year (lib/import/import-business-events.ts);
+ * with it off the engine gets exactly the calls it always got.
+ *
  * A correction never edits the posted IB (BFL 5 kap 5 §, hard rule 1): the
  * corrected IB is booked first, the old one is stornoed with reverseEntry,
  * and the year is relinked with the replace_period_opening_balance_link RPC.
@@ -30,12 +35,15 @@
  * (it is also the MCP staging preview): no account activation, no entry, no
  * voucher number.
  */
-import { createJournalEntry, reverseEntry } from '@/lib/bookkeeping/engine'
 import { toEntryPreview } from '@/lib/bookkeeping/entry-preview'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { linkBasisColumns } from '@/lib/links/stamp'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
+import { postingPort } from '@/lib/posting/port'
 import type { CreateJournalEntryInput } from '@/types'
+import { openingBalanceBusinessEvent, openingBalanceStornoBusinessEvent } from '../import-business-events'
 import {
   cascadeOpeningBalanceCorrection,
   computeAccountDeltas,
@@ -231,7 +239,14 @@ export async function setOpeningBalances(
       return { ok: false, code: 'OB_ACCOUNT_ACTIVATION_FAILED', details: { reason: activation.reason } }
     }
 
-    const entry = await createJournalEntry(supabase, companyId, userId, entryInput)
+    const entry = await postingPort.postJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      // Built only while the port is on: off, createJournalEntry gets the call it always did.
+      event: () => openingBalanceBusinessEvent(fiscal_period_id, row.period_start, linkBasisColumns('user_created')),
+      input: entryInput,
+    })
 
     const linkError = await linkOpeningBalance(supabase, companyId, fiscal_period_id, entry.id)
     if (linkError) {
@@ -388,7 +403,13 @@ export async function correctOpeningBalances(
 
     // Book the corrected IB BEFORE the storno, so a failure midway never
     // leaves the year without an IB.
-    const newEntry = await createJournalEntry(supabase, companyId, userId, entryInput)
+    const newEntry = await postingPort.postJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      event: () => openingBalanceBusinessEvent(fiscal_period_id, row.period_start, linkBasisColumns('user_created')),
+      input: entryInput,
+    })
 
     // Durable audit trail for a failed correction: the structured logger,
     // tagged audit, with both entry ids so an operator can reconcile by hand.
@@ -409,7 +430,15 @@ export async function correctOpeningBalances(
     // failure, compensate by stornoing the NEW entry so the year keeps its
     // original IB and no second live one.
     try {
-      await reverseEntry(supabase, companyId, userId, oldEntryId)
+      // The storno of the old IB is the person's correction (user_created).
+      await postingPort.reverseJournalEntry({
+        supabase,
+        companyId,
+        userId,
+        entryId: oldEntryId,
+        event: () => openingBalanceStornoBusinessEvent(fiscal_period_id, todayIsoStockholm(), linkBasisColumns('user_created')),
+        role: 'reversal',
+      })
       const { error: relinkError } = await supabase.rpc('replace_period_opening_balance_link', {
         p_company_id: companyId,
         p_period_id: fiscal_period_id,
@@ -425,7 +454,15 @@ export async function correctOpeningBalances(
       // finish the recovery.
       auditCorrectionFailure({ phase: 'sequence_failed', reason })
       try {
-        await reverseEntry(supabase, companyId, userId, newEntry.id)
+        // The compensation: no one chose this storno (system_derived).
+        await postingPort.reverseJournalEntry({
+          supabase,
+          companyId,
+          userId,
+          entryId: newEntry.id,
+          event: () => openingBalanceStornoBusinessEvent(fiscal_period_id, todayIsoStockholm(), linkBasisColumns('system_derived')),
+          role: 'reversal',
+        })
         auditCorrectionFailure({ phase: 'compensated', reason })
       } catch (compErr) {
         auditCorrectionFailure({

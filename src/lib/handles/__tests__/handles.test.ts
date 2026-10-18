@@ -51,6 +51,7 @@ describe('the prefix table (a public contract)', () => {
       voucher_gap_explanation: 'vgap',
       team: 'team',
       business_event: 'bev',
+      sie_import: 'sie',
     })
   })
 

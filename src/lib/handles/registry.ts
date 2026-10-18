@@ -86,6 +86,10 @@ export const HANDLE_RESOURCES = [
   // What a posting meant in business terms (posting port, business_events).
   // No v1 route reads one yet; the field base types business_event_id.
   { type: 'business_event', prefix: 'bev', label: 'business event', segments: [], fields: ['business_event'] },
+  // An SIE import job (a sie_imports row: a file upload or a provider
+  // migration), the subject of its ledger.history_import business event.
+  // Types no v1 path or field yet: the import routes keep their plain UUIDs.
+  { type: 'sie_import', prefix: 'sie', label: 'SIE import', segments: [], fields: [] },
 ] as const satisfies readonly HandleResource[]
 
 export type HandleType = (typeof HANDLE_RESOURCES)[number]['type']

@@ -17,6 +17,9 @@ import { isoDay, sweepBankRowsAfterSIEImport } from './sie-post-import-sweep'
 import { diagnoseUntransferredResults, learnFromCompletedSIEImport, vouchersForLearning } from './sie-import-learning'
 import { continuityNotices, diagnoseCarriedForwardDifferences } from './sie-continuity'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import type { CommitActor } from '@/lib/bookkeeping/actor-context'
+import { postingPort } from '@/lib/posting/port'
+import { sieImportBusinessEvent } from './import-business-events'
 
 const log = createLogger('sie-worker')
 
@@ -159,11 +162,38 @@ async function finalize(supabase: SupabaseClient, job: SIEJob, deadline: number,
         {companyId:job.company_id,importId:job.id,message:err instanceof Error ? err.message : String(err)})
     }
   }
+  // Posting port (step 2h): the job's ONE business event, written here, after
+  // every verifikat is posted and before the job completes, outside the SQL
+  // writers' transactions. Idempotent per job, so a completion retried after
+  // an interruption records none twice. Under shadow a failed write is logged
+  // and the job completes; under strict it throws: the worker records a job
+  // failure (reconciling, its phase still finalize) and the job is retried,
+  // its verifikat posted and numbered already (no number is drawn here),
+  // until the event is written, so a completed import always has its event.
+  if (isImport) {
+    await postingPort.recordEvent({supabase,companyId:job.company_id,actor:sieJobCommitActor(job),
+      event:() => sieImportBusinessEvent(job,entries.length,todayIsoStockholm())})
+  }
   await sieJobRPC(supabase,job,'complete_sie_import_job',{p_result:result,p_documentation:{...documentation,
     accountRenamesTruncated:renames.length > 200,
     voucherNumberMappingTruncated:entries.length > 200,entryManifest:{table:'sie_import_chunks',importId:job.id}}})
   learning.completed = true
   return true
+}
+
+const COMMIT_ACTOR_TYPES: ReadonlySet<string> = new Set<CommitActor['type']>(
+  ['user','api_key','mcp_oauth','cron','system','agent_chat','service_account'])
+
+/**
+ * Who submitted the job, as its verifikat record it (the commit_actor
+ * submitSIEJob sealed into the manifest, which import_sie_chunk stamps), or
+ * null for a job sealed without one: the worker may run under a cron, so
+ * the job's business event names the submitter, never the worker's scope.
+ */
+function sieJobCommitActor(job: SIEJob): CommitActor | null {
+  const sealed = job.manifest.commit_actor as { type?: unknown; label?: unknown } | undefined
+  if (!sealed || typeof sealed.type !== 'string' || !COMMIT_ACTOR_TYPES.has(sealed.type)) return null
+  return { type: sealed.type as CommitActor['type'], ...(typeof sealed.label === 'string' ? {label:sealed.label} : {}) }
 }
 
 /** after() is only a fast path. Cron owns recovery, independent of the browser. */

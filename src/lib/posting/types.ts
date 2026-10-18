@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 import type { CreateEntryOptions } from '@/lib/bookkeeping/engine'
 import type { HandleType } from '@/lib/handles/registry'
 import type { CreateJournalEntryInput, JournalEntry } from '@/types'
@@ -132,12 +133,38 @@ export interface ReverseJournalEntryRequest {
 }
 
 /**
+ * A business act whose verifikat the port does not post: an SIE import job,
+ * whose vouchers import_sie_chunk writes in SQL, chunk by chunk, long before
+ * the job completes. ONE event stands for the whole job and is linked to no
+ * verifikat (design call 1: imports are about 88 % of all postings, and the
+ * read-side projection, ./project.ts, answers per entry from the entry's own
+ * import batch). With POSTING_EVENTS off nothing is built or written; under
+ * shadow a failed write is logged and answers null; under strict it throws
+ * (BookkeepingDatabaseError), and the producer decides what that stops.
+ */
+export interface RecordBusinessEventRequest {
+  supabase: SupabaseClient
+  companyId: string
+  /** What happened; a function is called only while the port is on (see PostJournalEntryRequest). */
+  event: BusinessEventDraft | (() => BusinessEventDraft)
+  /**
+   * Who the event names as actor. Undefined: the surrounding runWithActor
+   * scope, as for a posting. A worker that runs a job for someone else (the
+   * SIE import worker, under a cron) names the actor the job recorded, null
+   * for none, so the event names whoever its verifikat name.
+   */
+  actor?: CommitActor | null
+}
+
+/**
  * The posting port: every new posting records its business event here. Step
  * 1 moves one producer (bank-line booking) onto it; step 2 moves the rest.
  * A producer that drafts, does its own work and then commits (kassa,
  * webbshop) uses draftJournalEntry and commitJournalEntry instead of
  * postJournalEntry; a producer whose one business act is several verifikat
- * posted all or none (a salary run) uses postJournalEntrySet.
+ * posted all or none (a salary run) uses postJournalEntrySet; a producer
+ * whose verifikat are written in SQL as one job (an SIE import) records the
+ * job's one event with recordEvent.
  */
 export interface PostingPort {
   postJournalEntry(request: PostJournalEntryRequest): Promise<JournalEntry>
@@ -147,6 +174,8 @@ export interface PostingPort {
   draftJournalEntry(request: DraftJournalEntryRequest): Promise<JournalEntry>
   commitJournalEntry(request: CommitJournalEntryRequest): Promise<JournalEntry>
   reverseJournalEntry(request: ReverseJournalEntryRequest): Promise<JournalEntry>
+  /** The event alone, linked to no verifikat: its id, or null when none was recorded; see RecordBusinessEventRequest. */
+  recordEvent(request: RecordBusinessEventRequest): Promise<string | null>
 }
 
 /**

@@ -1,4 +1,4 @@
-import { getActor } from '@/lib/bookkeeping/actor-context'
+import { getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
 import { assertLinesWellFormed, validateBalance } from '@/lib/bookkeeping/engine'
 import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 import { isHandleType } from '@/lib/handles/registry'
@@ -41,6 +41,12 @@ import type { BusinessEventDraft, PostingAdapter, PostingPort } from './types'
  * POSTING_EVENTS off, nothing in 1 or 2 runs and the adapter is called with
  * the producer's arguments as they were.
  *
+ * An import job (recordEvent) records ONE event in 1 and links nothing: its
+ * verifikat are written in SQL by import_sie_chunk, chunk by chunk, and the
+ * read-side projection (./project.ts) names the job per entry. Under strict a
+ * failed write throws and the producer decides what it stops; the import
+ * worker holds the job's completion, as its verifikat are numbered already.
+ *
  * Kept free of the event bus and lib/init (the antipattern guard counts
  * lib/init's reach); the engine announces the posting as it always has.
  */
@@ -73,25 +79,26 @@ export function createPostingPort(deps: PostingPortDeps = {}): PostingPort {
   const newId = deps.newId ?? (() => globalThis.crypto.randomUUID())
 
   /**
-   * Record the event for a posting under shadow or strict. Answers the link
-   * the engine writes, or undefined when nothing is to be linked (a missing
-   * table, a shadow failure, lines the engine will refuse anyway).
+   * Write the event under shadow or strict. Answers its id, or undefined when
+   * none was recorded (a missing table, a shadow failure). `actor`, when not
+   * undefined, names the event's actor instead of the surrounding scope's
+   * (recordEvent's request); null names none.
    */
-  async function recordFor(
+  async function writeEvent(
     mode: Exclude<PostingEventsMode, 'off'>,
     supabase: Parameters<typeof recordBusinessEvent>[0],
     companyId: string,
     event: BusinessEventDraft | (() => BusinessEventDraft),
-    role: BusinessEventEntryRole,
-  ): Promise<BusinessEventLink | undefined> {
+    actor?: CommitActor | null,
+  ): Promise<string | undefined> {
     let kind: string | undefined
     try {
       const draft = typeof event === 'function' ? event() : event
       kind = draft.kind
-      const row = buildRow(companyId, draft, newId)
+      const row = buildRow(companyId, draft, newId, actor)
       const recorded = await recordBusinessEvent(supabase, row)
       if (recorded.status === 'missing_table') return undefined
-      return { id: recorded.id, role, onFailure: mode === 'strict' ? 'abort' : 'log' }
+      return recorded.id
     } catch (err) {
       if (mode === 'strict') {
         if (err instanceof BusinessEventWriteError) {
@@ -107,6 +114,22 @@ export function createPostingPort(deps: PostingPortDeps = {}): PostingPort {
       })
       return undefined
     }
+  }
+
+  /**
+   * Record the event for a posting under shadow or strict. Answers the link
+   * the engine writes, or undefined when nothing is to be linked (a missing
+   * table, a shadow failure, lines the engine will refuse anyway).
+   */
+  async function recordFor(
+    mode: Exclude<PostingEventsMode, 'off'>,
+    supabase: Parameters<typeof recordBusinessEvent>[0],
+    companyId: string,
+    event: BusinessEventDraft | (() => BusinessEventDraft),
+    role: BusinessEventEntryRole,
+  ): Promise<BusinessEventLink | undefined> {
+    const id = await writeEvent(mode, supabase, companyId, event)
+    return id === undefined ? undefined : { id, role, onFailure: mode === 'strict' ? 'abort' : 'log' }
   }
 
   return {
@@ -162,6 +185,15 @@ export function createPostingPort(deps: PostingPortDeps = {}): PostingPort {
         mode !== 'off' ? await recordFor(mode, supabase, companyId, event, role ?? 'reversal') : undefined
       return adapter.reverseEntry({ supabase, companyId, userId, entryId, reversalDate, options, businessEvent })
     },
+
+    async recordEvent(request): Promise<string | null> {
+      const { supabase, companyId, event } = request
+      const mode = modeOf()
+      if (mode === 'off') return null
+      // No verifikat to link and no adapter call: the event is the whole
+      // write. A named actor (null for none) replaces the scope's.
+      return (await writeEvent(mode, supabase, companyId, event, request.actor)) ?? null
+    },
   }
 }
 
@@ -177,8 +209,17 @@ function linesPassEngineChecks(lines: CreateJournalEntryLineInput[]): boolean {
   return validateBalance(lines).valid
 }
 
-/** The business_events row for an event, or BusinessEventInvalidError. Pure. */
-export function buildRow(companyId: string, event: BusinessEventDraft, newId: () => string): BusinessEventRow {
+/**
+ * The business_events row for an event, or BusinessEventInvalidError. Pure
+ * but for the actor: the surrounding runWithActor scope's unless the caller
+ * names one (null for none).
+ */
+export function buildRow(
+  companyId: string,
+  event: BusinessEventDraft,
+  newId: () => string,
+  actorOverride?: CommitActor | null,
+): BusinessEventRow {
   if (!isBusinessEventKind(event.kind)) throw new BusinessEventInvalidError(`unknown kind ${JSON.stringify(event.kind)}`)
   const category = event.category ?? null
   if (category !== null && !isBusinessEventCategory(category)) {
@@ -212,7 +253,7 @@ export function buildRow(companyId: string, event: BusinessEventDraft, newId: ()
     if (t.tax !== 'vat' || !(t.amount_sek >= 0)) throw new BusinessEventInvalidError(`tax amount ${JSON.stringify(t)}`)
     return { tax: t.tax, treatment: t.treatment ?? null, amount_sek: t.amount_sek }
   })
-  const actor = getActor()
+  const actor = actorOverride === undefined ? getActor() : (actorOverride ?? undefined)
 
   return {
     id,
