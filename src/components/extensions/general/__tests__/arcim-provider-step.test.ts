@@ -93,24 +93,36 @@ describe('ProviderStep, a company without a completed ledger import (crm#1118)',
 })
 
 describe('ProviderStep, a company with an imported ledger', () => {
-  it('keeps Synka igen, the underlag import and the heading for another system', () => {
+  it('keeps the re-run, the underlag import and the heading for another system', () => {
     const html = render(status(true))
     expect(html).toContain(sv.extensions.ext_arcim_resync)
     expect(html).toContain(fetchDocuments)
-    expect(html).toContain(`Använd &quot;${sv.extensions.ext_arcim_resync}&quot; ovan`)
     expect(html).toContain(connectAnother)
     expect(html).not.toContain(sv.extensions.ext_arcim_continue_import)
     expect(html).not.toContain(sv.extensions.ext_arcim_continue_import_heading)
   })
+
+  // Customers re-ran the whole migration to get their files (PH 185, PH 180):
+  // the underlag import is the row's first, filled action, the re-run says
+  // what it is, and the provider list no longer points at the re-run.
+  it('leads with Hämta underlag and names the re-run for what it is', () => {
+    const html = render(status(true))
+    expect(sv.extensions.ext_arcim_resync).toBe('Kör migreringen igen')
+    expect(html.indexOf(fetchDocuments)).toBeLessThan(html.indexOf(sv.extensions.ext_arcim_resync))
+    const fetchButton = html.slice(html.lastIndexOf('<button', html.indexOf(fetchDocuments)), html.indexOf(fetchDocuments))
+    expect(fetchButton).toContain('bg-primary')
+    expect(html).toContain(sv.extensions.ext_arcim_connected_above)
+    expect(html).not.toContain(`Använd &quot;${sv.extensions.ext_arcim_resync}&quot; ovan`)
+  })
 })
 
 describe('ProviderStep, a Visma or Bokio connection before the SIE upload', () => {
-  it('keeps Synka igen, since the ledger has to come in as a SIE file first', () => {
+  it('keeps the re-run, since the ledger has to come in as a SIE file first', () => {
     const html = render(status(false, [BOKIO_CONSENT]))
     expect(html).toContain(sv.extensions.ext_arcim_resync)
     expect(html).not.toContain(sv.extensions.ext_arcim_continue_import)
     expect(html).toContain('Ladda upp SIE-fil')
-    expect(html).toContain(`Använd &quot;${sv.extensions.ext_arcim_resync}&quot; ovan`)
+    expect(html).toContain(sv.extensions.ext_arcim_connected_above)
   })
 
   it('labels each connection by what it can do when Fortnox and Bokio sit side by side', () => {
@@ -121,13 +133,14 @@ describe('ProviderStep, a Visma or Bokio connection before the SIE upload', () =
 })
 
 describe('ProviderStep in English', () => {
-  it('names the connection action and points at it in the same language, imported or not', () => {
-    for (const imported of [false, true]) {
-      const action = imported ? en.extensions.ext_arcim_resync : en.extensions.ext_arcim_continue_import
-      const html = render(status(imported), 'en')
-      expect(html).toContain(`Use &quot;${action}&quot; above`)
-      expect(html).not.toContain(sv.extensions.ext_arcim_resync)
-    }
+  it('names the connection action and points at the row in the same language, imported or not', () => {
+    const continuing = render(status(false), 'en')
+    expect(continuing).toContain(`Use &quot;${en.extensions.ext_arcim_continue_import}&quot; above`)
+
+    const imported = render(status(true), 'en')
+    expect(imported).toContain(en.extensions.ext_arcim_resync)
+    expect(imported).toContain(en.extensions.ext_arcim_connected_above)
+    expect(imported).not.toContain(sv.extensions.ext_arcim_resync)
   })
 })
 
