@@ -595,3 +595,32 @@ in place and drafts none; the SIE import writers keep one event per job
 `tests/pg/posting-parity-sql-producers.pg.test.ts` (fixture taken before the
 move, the requests to the six functions included) and
 `tests/pg/sql-posting-business-events.pg.test.ts`.
+
+Step 3 is the ratchet: only the posting port may call the engine's posting
+functions. `posting-port-bypass` in `npm run check:guards`
+(`scripts/checks/posting-port-bypass.mjs`) fails on an import of a guarded
+export of `lib/bookkeeping/engine.ts`, `lib/core/bookkeeping/storno-service.ts`
+or `lib/bookkeeping/journal-entry-batch.ts` anywhere under `src/` or
+`scripts/` outside `lib/posting`, the engine, the storno service and the
+engine's set posting: named, aliased, `@/` or relative, a namespace member,
+`import()`, `require()` or a re-export. Tests and type-only imports do not
+count. Guarded is every export that creates, numbers, reverses or corrects a
+verifikat (`createJournalEntry`, `createDraftEntry`, `commitEntry`,
+`reverseEntry`, `correctEntry`, `recordateEntry`, `createJournalEntries`,
+`allocateVoucherNumber` and the SQL commit wrappers); the reads, pure checks
+and the draft upkeep that numbers nothing (`findFiscalPeriod`,
+`validateBalance`, `updateDraftEntry`, `cancelDraftEntry`,
+`cancelOrphanedEntry`, ...) stay open, and a test fails on an export in
+neither list. The SIE import job's chunk writers (`commitSIEImportChunk`,
+`reverseSIEImportChunk` in `lib/import/sie-job-worker.ts`) are allowed for
+good, with the reason, in `PERMANENT_ALLOWLIST`: the job is one
+`recordEvent`, its verifikat are written in SQL. What still bypasses the port
+is `postingPortBypass` in `scripts/checks/antipatterns-baseline.json`, as
+(file, name) edges: the callers of the SQL wrappers (bulk booking, the match
+batch, both voucher links, the utlägg payout batch, the opening balance
+cascade, the asset depreciation and disposal commits) and two scripts. A new
+edge fails; a caller that moves behind the ledger adapter passes and is
+reported, and `node scripts/checks/no-new-antipatterns.mjs --update` locks the
+drop in and never adds an edge. The guard reads imports, not database calls:
+a direct `.rpc()` of a posting function is outside it. The engine's reversal
+hooks becoming a registry, the other half of step 3, is not part of it.
