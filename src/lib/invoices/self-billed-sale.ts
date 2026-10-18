@@ -24,6 +24,7 @@ import { eventBus } from '@/lib/events'
 import { roundOre } from '@/lib/money'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
 import { createLogger } from '@/lib/logger'
+import { linkBasisColumns } from '@/lib/links/stamp'
 import type { EntityType, Invoice } from '@/types'
 
 const log = createLogger('self-billed-sale')
@@ -335,7 +336,13 @@ export async function createSelfBilledSaleInvoice(
         completeInvoice as Invoice,
         entityType,
         draft.customer.name,
-        { descriptionPrefix: 'Självfaktura', numberOverride: input.external_invoice_number },
+        {
+          descriptionPrefix: 'Självfaktura',
+          numberOverride: input.external_invoice_number,
+          // The posting port's event, while POSTING_EVENTS is on: the person
+          // (or the API client) registered the received självfaktura.
+          posting: () => ({ linkBasis: linkBasisColumns('user_created') }),
+        },
       )
       if (!journalEntry) {
         // No open fiscal period: roll back so we never leave an unbooked sale.

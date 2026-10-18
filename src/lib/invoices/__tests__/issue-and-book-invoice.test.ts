@@ -246,6 +246,7 @@ describe('issueAndBookInvoice', () => {
       expect.objectContaining({ id: 'inv-1' }),
       'enskild_firma',
       customer.name,
+      { posting: expect.any(Function) }, // what the door saw, read by the posting port only while POSTING_EVENTS is on
     )
     expect(mockCreateSchedules).toHaveBeenCalled()
     expect(mockUploadDocument).toHaveBeenCalledTimes(1)

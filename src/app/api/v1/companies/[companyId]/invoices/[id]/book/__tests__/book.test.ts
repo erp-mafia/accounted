@@ -310,6 +310,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/book', () => {
       expect.objectContaining({ id: INV_ID }),
       'aktiebolag',
       'Kunden AB',
+      { posting: expect.any(Function) }, // what the door saw, read by the posting port only while POSTING_EVENTS is on
     )
     // The CAS-guarded claim: only an unbooked, bookable, uncredited row.
     expect(client.calls).toContainEqual({ table: 'invoices', method: 'is', args: ['journal_entry_id', null] })

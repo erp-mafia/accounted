@@ -4,6 +4,12 @@ import { coerceDimensionsBag } from './dimension-resolver'
 import { fxDifferenceLine } from './ore-rounding'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
+import { postingPort } from '@/lib/posting/port'
+import {
+  creditNoteBusinessEvent,
+  invoiceRegistrationBusinessEvent,
+  type InvoicePostingContext,
+} from './invoice-business-events'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   CreateJournalEntryInput,
@@ -54,6 +60,13 @@ export { buildInvoiceCashLines } from './invoice-lines'
  * Export (non-EU):
  *   Debit  1510 Kundfordringar     [subtotal]
  *   Credit 3305 Försäljning tjänst Export [subtotal]
+ *
+ * Posting port (step 2f): the verifikat goes through lib/posting, which
+ * hands `input` to the engine unchanged and, while POSTING_EVENTS is shadow
+ * or strict, records the sale.invoiced event first and has the engine link
+ * it to the draft before a voucher number is drawn. `options.posting` is what
+ * the door saw (its link basis), called only while the port is on: off, the
+ * engine gets the call it always did.
  */
 export async function createInvoiceJournalEntry(
   supabase: SupabaseClient,
@@ -72,11 +85,18 @@ export async function createInvoiceJournalEntry(
    * customLines: user-edited rows from the send dialog. Booked verbatim
    * (caller validates balance); line generation is skipped entirely.
    */
-  options?: InvoiceJournalEntryOptions
+  options?: InvoiceJournalEntryOptions & { posting?: () => InvoicePostingContext }
 ): Promise<JournalEntry | null> {
   const input = await buildInvoiceJournalEntryInput(supabase, companyId, invoice, entityType, customerName, options)
   if (!input) return null
-  return createJournalEntry(supabase, companyId, userId, input)
+  const userEditedLines = !!options?.customLines && options.customLines.length > 0
+  return postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    event: () => invoiceRegistrationBusinessEvent(invoice, options?.posting?.(), { userEditedLines }),
+    input,
+  })
 }
 
 export interface InvoiceJournalEntryOptions {
@@ -341,7 +361,9 @@ export async function createCreditNoteJournalEntry(
    * to the corrected verifikation; the invoice number alone is insufficient
    * because it doesn't identify the entry in the verifikationsserie.
    */
-  originalVoucherRef?: string
+  originalVoucherRef?: string,
+  /** What the door saw, read by the posting port only while POSTING_EVENTS is on. */
+  posting?: () => InvoicePostingContext,
 ): Promise<JournalEntry | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, creditNote.invoice_date)
   if (!fiscalPeriodId) {
@@ -363,7 +385,15 @@ export async function createCreditNoteJournalEntry(
     lines,
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  // Posting port (step 2f), as the registration: the sale.credited event is
+  // recorded and linked to the draft only while POSTING_EVENTS is on.
+  return postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    event: () => creditNoteBusinessEvent(creditNote, posting?.()),
+    input,
+  })
 }
 
 /**

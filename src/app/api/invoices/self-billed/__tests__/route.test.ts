@@ -260,7 +260,11 @@ describe('POST /api/invoices/self-billed', () => {
     // Booked as a sale with the self-billing label + the counterparty's number.
     expect(mockCreateInvoiceJournalEntry).toHaveBeenCalledTimes(1)
     const opts = mockCreateInvoiceJournalEntry.mock.calls[0][6]
-    expect(opts).toEqual({ descriptionPrefix: 'Självfaktura', numberOverride: 'KUND-55012' })
+    expect(opts).toEqual({
+      descriptionPrefix: 'Självfaktura',
+      numberOverride: 'KUND-55012',
+      posting: expect.any(Function), // what the door saw, read by the posting port only while POSTING_EVENTS is on
+    })
 
     // Never consumes our own invoice-number series.
     expect(mockSupabase.rpc).not.toHaveBeenCalledWith('generate_invoice_number', expect.anything())

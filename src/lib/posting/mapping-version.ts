@@ -29,11 +29,15 @@ import { currentAppVersion } from '@/lib/reports/app-version'
  * plan with its jämkning (buildAssetDisposalPlan in asset-service.ts), the
  * salary run's verifikat (buildSalaryRunEntryLines and the account mapping
  * in lib/salary), the semesterårsavslut's drift adjustment
- * (commitVacationYearClose in lib/salary/semesterberedning.ts) and the
+ * (commitVacationYearClose in lib/salary/semesterberedning.ts), the
  * supplier invoice's registration and credit note lines (the moms,
  * reverse-charge, SLP and 2440 rows of
  * lib/bookkeeping/supplier-invoice-registration-lines.ts, which the credit
- * note books on the other side).
+ * note books on the other side) and the customer invoice's registration and
+ * kreditfaktura lines (lib/bookkeeping/invoice-lines.ts: the revenue account
+ * per VAT treatment and rate, utgående moms, the 1510 and 1513 split of a
+ * ROT/RUT invoice and the 29xx deferral of a periodisering; lines a person
+ * edited in the send dialog name no rule).
  *
  * The version is the rubric version the producer already records on the
  * verifikat (journal_entries.rubric_version: the proposal rule revision plus
@@ -59,6 +63,7 @@ export const MAPPING_SOURCES = {
   salaryRun: 'se.salary-run',
   vacationYearClose: 'se.vacation-year-close',
   supplierInvoice: 'se.supplier-invoice-lines',
+  customerInvoice: 'se.customer-invoice-lines',
 } as const
 
 export type MappingSource = keyof typeof MAPPING_SOURCES

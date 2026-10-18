@@ -7,6 +7,7 @@ import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { bookInvoice } from '@/lib/invoices/book-service'
+import { linkBasisColumns } from '@/lib/links/stamp'
 import type { Logger } from '@/lib/logger'
 import type { OperationOutcome } from '@/lib/operations/types'
 import type { AccountingMethod, CreditNote, EntityType } from '@/types'
@@ -324,6 +325,9 @@ export async function issueCreditNote(input: IssueCreditNoteInput): Promise<Issu
           entityType,
           creditNote.customer?.name ?? undefined,
           originalVoucherRef,
+          // The posting port's event, while POSTING_EVENTS is on: the person
+          // (or the approved operation) credited the invoice.
+          () => ({ linkBasis: linkBasisColumns('user_created') }),
         )
         journalEntryId = journalEntry?.id ?? null
       }
