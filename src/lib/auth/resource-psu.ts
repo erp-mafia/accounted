@@ -26,7 +26,11 @@ import { normalizeSignerPersonalNumber } from '@/lib/auth/bankid-signer'
 import { createLogger } from '@/lib/logger'
 import { createServiceClient } from '@/lib/supabase/server'
 
-/** Where a connection's number came from when its consent was created. */
+/**
+ * Where a connection's number came from when its consent was created. on_file:
+ * the person's BankID login or remembered number, or the owner's personnummer
+ * that is an enskild firma's organisationsnummer (lib/bank-feed/party.ts).
+ */
 export type ConnectionPsuSource = 'typed' | 'on_file' | 'signatory_link'
 
 export interface StoredConnectionPsu {

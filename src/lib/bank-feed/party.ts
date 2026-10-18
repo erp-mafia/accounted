@@ -17,7 +17,9 @@
  *     created with (bank_connection_psus, lib/auth/resource-psu.ts): several
  *     banks require that same PSU-ID on every later call to it. Otherwise,
  *     and when none is stored or it cannot be read, the number the person
- *     typed, else the one on file for the user the call acts for (their
+ *     typed, else for an enskild firma's private account its owner's
+ *     personnummer (the organisationsnummer), else the one on file for the
+ *     user the call acts for (their
  *     BankID login or the remembered number, lib/auth/bankid-signer.ts); the
  *     connection's owner on an unattended read. A co-signer's own
  *     authorisation on a partly signed consent carries the co-signer's
@@ -35,6 +37,7 @@
 import type { AisParty } from '@accounted/connect-contract'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { normalizeSignerPersonalNumber, signerPersonalNumberOnFile } from '@/lib/auth/bankid-signer'
+import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import { companyOrgNumber } from '@/lib/company/org-number'
 import { storedConnectionPsu, type ConnectionPsuSource } from '@/lib/auth/resource-psu'
 import type { OperationOutcome } from '@/lib/operations/types'
@@ -99,6 +102,22 @@ export type PartyResult =
     }
   | { ok: false; outcome: Extract<OperationOutcome<never>, { ok: false }> }
 
+/**
+ * The holder of a private-account consent when the company's
+ * organisationsnummer is its owner's personnummer (an enskild firma): that
+ * personnummer, 12 digits. The bank waits for the holder's BankID, and the
+ * person starting the connection may be someone else (a consultant at a
+ * byrå), whose own number would name the wrong BankID (crm#1298). Null for a
+ * corporate agreement and every other form.
+ */
+async function privateAccountHolder(supabase: SupabaseClient, companyId: string, orgNumber: string, accountContext: AisParty['accountContext']): Promise<string | null> {
+  if (accountContext !== 'private') return null
+  const { data } = await supabase.from('companies').select('entity_type').eq('id', companyId).maybeSingle()
+  const entityType = (data as { entity_type?: unknown } | null)?.entity_type
+  if (!isEntityType(entityType) || !usesPersonnummerAsOrgNumber(entityType)) return null
+  return normalizeSignerPersonalNumber(orgNumber)
+}
+
 export async function buildBankFeedParty(supabase: SupabaseClient, input: PartyInput): Promise<PartyResult> {
   const orgNumber = await companyOrgNumber(supabase, input.companyId)
   if (!orgNumber) return { ok: false, outcome: { ok: false, code: 'BANK_CONSENT_ORG_NUMBER_MISSING', details: { field: 'org_number', reason: 'missing' } } }
@@ -106,15 +125,17 @@ export async function buildBankFeedParty(supabase: SupabaseClient, input: PartyI
   if (input.signer.personalNumber && !typed) {
     return { ok: false, outcome: { ok: false, code: 'BANK_CONSENT_PERSONAL_NUMBER_REQUIRED', details: { reason: 'invalid' } } }
   }
+  const accountContext = accountContextOf(input.psuType)
   const stored = input.connectionId && !input.coSigner ? await storedConnectionPsu(input.connectionId) : null
-  const onFile = !stored && !typed && input.userId && input.signer.lookupOnFile !== false ? await signerPersonalNumberOnFile(input.userId) : null
-  const personalNumber = stored?.personalNumber ?? typed ?? onFile
+  const holder = !stored && !typed && !input.coSigner ? await privateAccountHolder(supabase, input.companyId, orgNumber, accountContext) : null
+  const onFile = !stored && !typed && !holder && input.userId && input.signer.lookupOnFile !== false ? await signerPersonalNumberOnFile(input.userId) : null
+  const personalNumber = stored?.personalNumber ?? typed ?? holder ?? onFile
   if (input.requireSigner && !personalNumber) return { ok: false, outcome: { ok: false, code: 'BANK_CONSENT_PERSONAL_NUMBER_REQUIRED' } }
   const source: ConnectionPsuSource | null = stored
     ? stored.source
     : typed
       ? input.signer.lookupOnFile === false ? 'signatory_link' : 'typed'
-      : onFile ? 'on_file' : null
+      : holder || onFile ? 'on_file' : null
   const authoriser = psuAuthoriserIdFor(input.bic, input.signer.psuAuthoriserId)
   if (!authoriser.ok) return { ok: false, outcome: { ok: false, code: 'VALIDATION_ERROR', details: { field: 'psu_authoriser_id', reason: 'invalid' } } }
   return {
@@ -122,7 +143,7 @@ export async function buildBankFeedParty(supabase: SupabaseClient, input: PartyI
     source,
     party: {
       orgNumber,
-      accountContext: accountContextOf(input.psuType),
+      accountContext,
       bic: input.bic,
       personalNumber,
       psuIpAddress: input.signer.ipAddress,
