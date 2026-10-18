@@ -336,6 +336,35 @@ function rpcRecord(seed: Seed, calls: Posted['rpc']): unknown[] {
   })
 }
 
+/**
+ * A bulk booking's request lines, order-free: bulk-book.ts builds a line
+ * pair per bank row in the order its unordered read (.in('id', ...)) returns
+ * the rows, which no run fixes on a busy database. Compared as a set
+ * (sorted, sort_order left out) on both sides of every comparison, so the
+ * committed fixture stays as recorded.
+ */
+function bulkLinesAsSet<T>(value: T): T {
+  const copy = JSON.parse(JSON.stringify(value)) as T
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      node.forEach(visit)
+      return
+    }
+    if (!node || typeof node !== 'object') return
+    const record = node as { fn?: unknown; body?: { p_new_entry?: { lines?: unknown } } }
+    const entry = record.fn === 'bulk_book_transactions' ? record.body?.p_new_entry : undefined
+    if (entry && Array.isArray(entry.lines)) {
+      entry.lines = (entry.lines as Array<Record<string, unknown>>)
+        .map((line) => ({ ...line, sort_order: null }))
+        .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
+      return
+    }
+    Object.values(node).forEach(visit)
+  }
+  visit(copy)
+  return copy
+}
+
 // ---------------------------------------------------------------------------
 // Setup rows (not part of a flow's dump)
 // ---------------------------------------------------------------------------
@@ -932,7 +961,7 @@ describe('posting port parity, the SQL posting functions (pg)', () => {
     if (process.env.UPDATE_POSTING_PARITY_FIXTURE === '1') {
       fs.writeFileSync(FIXTURE, `${JSON.stringify(recorded, null, 2)}\n`)
     }
-    expect(recorded).toEqual(JSON.parse(fs.readFileSync(FIXTURE, 'utf8')))
+    expect(bulkLinesAsSet(recorded)).toEqual(bulkLinesAsSet(JSON.parse(fs.readFileSync(FIXTURE, 'utf8'))))
   })
 
   it('off writes no business event', { timeout: FLOW_TIMEOUT }, async () => {
@@ -958,7 +987,9 @@ describe('posting port parity, the SQL posting functions (pg)', () => {
 
       // Requests: the same, plus only the two event parameters.
       for (const [i, flow] of FLOWS.entries()) {
-        expect(rpcRecord(shadow.seed, withoutEventParams(shadow.posted[i]!.rpc)), flow.name).toEqual(off.dumps[i]!.rpc)
+        expect(bulkLinesAsSet(rpcRecord(shadow.seed, withoutEventParams(shadow.posted[i]!.rpc))), flow.name).toEqual(
+          bulkLinesAsSet(off.dumps[i]!.rpc),
+        )
       }
 
       const { seed } = shadow
