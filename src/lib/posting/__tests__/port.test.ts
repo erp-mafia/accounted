@@ -452,6 +452,78 @@ describe('posting port: an event linked to no verifikat (recordEvent, an import 
   })
 })
 
+describe('posting port: the events a SQL posting function links itself (recordEventsForSql)', () => {
+  const ids = ['66666666-6666-4666-8666-000000000001', '66666666-6666-4666-8666-000000000002', '66666666-6666-4666-8666-000000000003']
+  function sqlPort(mode: PostingEventsMode) {
+    let n = 0
+    return createPostingPort({ adapter: fakeAdapter(), mode: () => mode, newId: () => ids[n++]! })
+  }
+  const events = () => [EVENT, { ...EVENT, subject: { type: 'transaction' as const, id: OP } }, EVENT]
+
+  it('off: builds nothing, writes nothing and answers undefined, so the function is called as before', async () => {
+    const { supabase, from } = fakeSupabase(() => ({ error: null }))
+    const build = vi.fn(events)
+    expect(await sqlPort('off').recordEventsForSql({ supabase, companyId: COMPANY, events: build })).toBeUndefined()
+    expect(build).not.toHaveBeenCalled()
+    expect(from).not.toHaveBeenCalled()
+  })
+
+  it('shadow: writes every event, answers their ids in the given order and the mode', async () => {
+    const { supabase, inserted } = fakeSupabase(() => ({ error: null }))
+    const link = await sqlPort('shadow').recordEventsForSql({ supabase, companyId: COMPANY, events: events })
+    expect(link).toEqual({ ids, mode: 'shadow' })
+    expect(inserted).toHaveLength(3)
+    expect((inserted as Array<{ id: string; kind: string }>).map((row) => row.id)).toEqual(ids)
+  })
+
+  it('strict answers its mode, so the function fails a refused link before any number', async () => {
+    const { supabase } = fakeSupabase(() => ({ error: null }))
+    expect(await sqlPort('strict').recordEventsForSql({ supabase, companyId: COMPANY, events: async () => [EVENT] })).toEqual({
+      ids: [ids[0]],
+      mode: 'strict',
+    })
+  })
+
+  it('shadow: a refused write leaves its slot null; nothing recorded at all answers undefined', async () => {
+    let n = 0
+    const partly = fakeSupabase(() => (n++ === 1 ? { error: { message: 'refused', code: '42501' } } : { error: null }))
+    expect(await sqlPort('shadow').recordEventsForSql({ supabase: partly.supabase, companyId: COMPANY, events })).toEqual({
+      ids: [ids[0], null, ids[2]],
+      mode: 'shadow',
+    })
+    const none = fakeSupabase(() => ({ error: { message: 'refused', code: '42501' } }))
+    expect(await sqlPort('shadow').recordEventsForSql({ supabase: none.supabase, companyId: COMPANY, events })).toBeUndefined()
+    const missing = fakeSupabase(() => ({ error: { message: 'no table', code: '42P01' } }))
+    expect(await sqlPort('strict').recordEventsForSql({ supabase: missing.supabase, companyId: COMPANY, events })).toBeUndefined()
+  })
+
+  it('strict: a refused write throws before the function runs', async () => {
+    const { supabase } = fakeSupabase(() => ({ error: { message: 'refused', code: '42501' } }))
+    await expect(sqlPort('strict').recordEventsForSql({ supabase, companyId: COMPANY, events })).rejects.toBeInstanceOf(BookkeepingDatabaseError)
+  })
+
+  it('a builder that throws (a read that failed) is logged under shadow and thrown under strict; no events answers undefined', async () => {
+    const { supabase, from } = fakeSupabase(() => ({ error: null }))
+    const failing = async (): Promise<BusinessEventDraft[]> => {
+      throw new Error('read failed')
+    }
+    expect(await sqlPort('shadow').recordEventsForSql({ supabase, companyId: COMPANY, events: failing })).toBeUndefined()
+    await expect(sqlPort('strict').recordEventsForSql({ supabase, companyId: COMPANY, events: failing })).rejects.toThrow('read failed')
+    expect(await sqlPort('strict').recordEventsForSql({ supabase, companyId: COMPANY, events: () => [] })).toBeUndefined()
+    expect(from).not.toHaveBeenCalled()
+  })
+
+  it('writes a long list in waves and keeps the order', async () => {
+    let n = 0
+    const many = Array.from({ length: 23 }, (_, i) => `77777777-7777-4777-8777-${String(i).padStart(12, '0')}`)
+    const wavePort = createPostingPort({ adapter: fakeAdapter(), mode: () => 'shadow', newId: () => many[n++]! })
+    const { supabase, inserted } = fakeSupabase(() => ({ error: null }))
+    const link = await wavePort.recordEventsForSql({ supabase, companyId: COMPANY, events: () => many.map(() => EVENT) })
+    expect(link?.ids).toEqual(many)
+    expect(inserted).toHaveLength(23)
+  })
+})
+
 describe('posting port: a correction, two verifikat and two events (correctJournalEntry)', () => {
   const ORIGINAL = '66666666-6666-4666-8666-666666666666'
   const STORNO_EVENT: BusinessEventDraft = {

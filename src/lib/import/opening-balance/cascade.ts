@@ -5,6 +5,10 @@ import { roundOre } from '@/lib/money'
 import { replaceOpeningBalanceEntry } from '@/lib/bookkeeping/engine'
 import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { postingPort } from '@/lib/posting/port'
+import { openingBalanceBusinessEvent, openingBalanceStornoBusinessEvent } from '../import-business-events'
 import {
   validateOpeningBalanceLines,
   type OpeningBalanceLine,
@@ -377,15 +381,36 @@ export async function cascadeOpeningBalanceCorrection(
     // fiscal_periods.opening_balance_entry_id, CAS-guarded on oldEntryId. Any
     // failure (including a period locked between our pre-check and the write)
     // rolls the whole period back: no compensation pass, no half states.
+    // The posting port (its SQL step) records the year's two events first,
+    // as the base correction records its own: the corrected IB's
+    // ledger.opening_balance and the storno's ledger.storno, by position;
+    // the RPC links them to its two drafts before either number is drawn.
+    // Under strict an event that could not be recorded skips the year here,
+    // before any number. Off: nothing is built and the RPC is called as
+    // before.
     try {
-      const replacement = await replaceOpeningBalanceEntry(supabase, companyId, userId, oldEntryId, {
+      const businessEvents = await postingPort.recordEventsForSql({
+        supabase,
+        companyId,
+        events: () => {
+          const linkBasis = linkBasisColumns('user_created')
+          return [
+            openingBalanceBusinessEvent(period.id, period.period_start, linkBasis),
+            openingBalanceStornoBusinessEvent(period.id, todayIsoStockholm(), linkBasis),
+          ]
+        },
+      })
+      const replacementInput = {
         fiscal_period_id: period.id,
         entry_date: period.period_start,
         description,
-        source_type: 'opening_balance',
+        source_type: 'opening_balance' as const,
         voucher_series: 'A',
         lines,
-      })
+      }
+      const replacement = businessEvents
+        ? await replaceOpeningBalanceEntry(supabase, companyId, userId, oldEntryId, replacementInput, { businessEvents })
+        : await replaceOpeningBalanceEntry(supabase, companyId, userId, oldEntryId, replacementInput)
 
       result.corrected.push({
         fiscal_period_id: period.id,

@@ -55,6 +55,10 @@ import {
 } from '@/lib/bookkeeping/template-library'
 import { resolveSkattekontoAccount } from '@/lib/skatteverket/skattekonto-account'
 import { commitBulkBooking } from '@/lib/bookkeeping/engine'
+import type { SqlBusinessEventLink } from '@/lib/bookkeeping/business-event-link'
+import { bulkBookedBankLineBusinessEvent } from '@/lib/bookkeeping/sql-posting-business-events'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { postingPort } from '@/lib/posting/port'
 import {
   mergeDimensionBags,
   validateEntryDimensions,
@@ -392,6 +396,31 @@ export async function bulkBookTransactions(
   // What was on offer for each row, taken before the booking.
   const suggestionSnapshot = await snapshotSuggestions(supabase, companyId, body.tx_ids)
 
+  // The posting port (its SQL step): a new samlingsverifikat books every row
+  // as its own business act, so one bank.categorized event per row, in the
+  // order of tx_ids, which the RPC links to its draft before the number is
+  // drawn. A link to a posted verifikat posts nothing and records nothing.
+  // Off: nothing is built and the RPC is called as before.
+  let businessEvents: SqlBusinessEventLink | undefined
+  if (newEntryPayload) {
+    const byId = new Map(txTyped.map((t) => [t.id, t]))
+    const templateId = body.manual_lines ? null : (body.template_id ?? null)
+    try {
+      businessEvents = await postingPort.recordEventsForSql({
+        supabase,
+        companyId,
+        events: () => {
+          const linkBasis = linkBasisColumns('user_created')
+          return body.tx_ids.map((id) => bulkBookedBankLineBusinessEvent(byId.get(id)!, { linkBasis, templateId }))
+        },
+      })
+    } catch (err) {
+      // strict: an event that could not be recorded stops the booking before any number.
+      opLog.error('bulk_book business events not recorded (strict)', err)
+      return { ok: false, code: 'BULK_BOOK_RPC_FAILED', details: { message: getUserErrorMessage(err) } }
+    }
+  }
+
   // The engine door: it also emits journal_entry.committed for a new
   // samlingsverifikat, which the RPC alone never announces.
   const { data, error } = await commitBulkBooking(supabase, companyId, userId, {
@@ -399,6 +428,7 @@ export async function bulkBookTransactions(
     existingJournalEntryId: body.existing_journal_entry_id ?? null,
     newEntry: newEntryPayload,
     commitMethod: 'bulk_accept',
+    ...(businessEvents ? { businessEvents } : {}),
   })
   if (error) {
     opLog.error('bulk_book_transactions RPC error', error)

@@ -185,9 +185,9 @@ describe('bulk_book_transactions service actor', () => {
       service_role_can: boolean
       overloads: string
     }>(
-      `SELECT has_function_privilege('anon', 'public.bulk_book_transactions(uuid[],uuid,jsonb,uuid,uuid,text,text,text)', 'EXECUTE') AS anon_can,
-              has_function_privilege('authenticated', 'public.bulk_book_transactions(uuid[],uuid,jsonb,uuid,uuid,text,text,text)', 'EXECUTE') AS authenticated_can,
-              has_function_privilege('service_role', 'public.bulk_book_transactions(uuid[],uuid,jsonb,uuid,uuid,text,text,text)', 'EXECUTE') AS service_role_can,
+      `SELECT has_function_privilege('anon', 'public.bulk_book_transactions(uuid[],uuid,jsonb,uuid,uuid,text,text,text,uuid[],text)', 'EXECUTE') AS anon_can,
+              has_function_privilege('authenticated', 'public.bulk_book_transactions(uuid[],uuid,jsonb,uuid,uuid,text,text,text,uuid[],text)', 'EXECUTE') AS authenticated_can,
+              has_function_privilege('service_role', 'public.bulk_book_transactions(uuid[],uuid,jsonb,uuid,uuid,text,text,text,uuid[],text)', 'EXECUTE') AS service_role_can,
               (SELECT count(*) FROM pg_proc p
                  JOIN pg_namespace n ON n.oid = p.pronamespace
                 WHERE n.nspname = 'public' AND p.proname = 'bulk_book_transactions')::text AS overloads`,

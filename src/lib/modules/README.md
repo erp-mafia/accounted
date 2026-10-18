@@ -557,3 +557,41 @@ on SQL: the inline rättelse (`correct_entry_metadata`,
 `commit_opening_balance_replacement` and the SIE import and undo writers.
 Their proof is `tests/pg/posting-parity-ledger.pg.test.ts` and the doors'
 `*.engine-input.test.ts`.
+
+The SQL step links the events of the six SQL posting functions, which draft
+and commit their verifikat in one transaction, so the engine cannot link
+between the two. Each takes `p_event_ids uuid[]` and `p_event_mode text`,
+last and defaulted (migrations 20261018210100 to 20261018210600; the old
+signature is dropped, so PostgREST sees one function), and links the ids to
+every draft it writes before `commit_journal_entry` draws the number, through
+`link_business_events_to_draft` (20261018210000): no ids, nothing; `strict`,
+a refused link raises and nothing is booked; otherwise it is logged as a
+WARNING and the booking goes ahead. The caller passes the mode, SQL reads no
+environment. The callers record the events first with the port's
+`recordEventsForSql`, which builds them (reads included) only while the port
+is on and answers their ids and the mode; off, the functions are called with
+exactly the arguments they had. A samlingsverifikat books several business
+acts, so it gets one event per act, all linked to it: `bulk_book_transactions`
+(`bulkBookTransactions`) one `bank.categorized` per bank line, as the book
+route, a link to a posted verifikat none; `match_batch_allocate`
+(`matchTransactionBatch`) one `sale.payment_received` or `purchase.paid` per
+allocation, the invoice as subject, the debt settled and the kronor of the
+bank line; `link_invoice_to_voucher` and `link_supplier_invoice_to_voucher`
+(the voucher links) one payment event for a foreign-currency invoice, linked
+to the kursdifferens verifikat when one is posted (an invoice in the ledger
+currency records none); `create_expense_payout_batch` (`createPayoutBatch`)
+one `expense.paid_out` per claim; `commit_opening_balance_replacement` (the
+IB cascade) the year's `ledger.opening_balance` and `ledger.storno`, by
+position. A deploy that reaches a database without the migrations gets
+PGRST202 and retries without the two parameters
+(`lib/bookkeeping/business-event-rpc.ts`). Unchanged by design: the asset
+doors draft through the port already and `commit_asset_depreciation` and
+`commit_asset_disposal` only commit; the inline rättelse
+(`correct_entry_metadata`, `correct_entry_lines_inline`) changes a verifikat
+in place and drafts none; the SIE import writers keep one event per job
+(step 2h), and so does a provider migration's
+`commit_provider_migration_followup`, whose positional call of
+`link_supplier_invoice_to_voucher` passes no ids. Their proof is
+`tests/pg/posting-parity-sql-producers.pg.test.ts` (fixture taken before the
+move, the requests to the six functions included) and
+`tests/pg/sql-posting-business-events.pg.test.ts`.

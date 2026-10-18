@@ -47,7 +47,8 @@ import { selectReversalHooks, type ReversalHookContext } from '@/lib/bookkeeping
 import { REVERSAL_HOOKS } from '@/lib/composition/reversal-hooks'
 import { defaultCommitMethod, getActor } from '@/lib/bookkeeping/actor-context'
 import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
-import { linkBusinessEventToDraft, type BusinessEventLink } from '@/lib/bookkeeping/business-event-link'
+import { linkBusinessEventToDraft, type BusinessEventLink, type SqlBusinessEventLink } from '@/lib/bookkeeping/business-event-link'
+import { callWithBusinessEvents } from '@/lib/bookkeeping/business-event-rpc'
 import {
   findKontantmetodCarry,
   kontantmetodCarryHasSettlements,
@@ -1391,6 +1392,11 @@ export interface OpeningBalanceReplacementResult {
  * voucher and a storno of the old voucher. The database function owns the
  * period row lock, authorization, compare-and-swap check, voucher commits,
  * status transition, and pointer swap in one transaction.
+ *
+ * `options.businessEvents`: the posting port's two events by position (the
+ * new IB's ledger.opening_balance, the storno's ledger.storno), which the
+ * function links to its two drafts before either number is drawn
+ * (business-event-rpc.ts). Without it the function is called as before.
  */
 export async function replaceOpeningBalanceEntry(
   supabase: SupabaseClient,
@@ -1398,6 +1404,7 @@ export async function replaceOpeningBalanceEntry(
   userId: string,
   expectedOldEntryId: string,
   input: CreateJournalEntryInput,
+  options: { businessEvents?: SqlBusinessEventLink } = {},
 ): Promise<OpeningBalanceReplacementResult> {
   if (input.source_type !== 'opening_balance') {
     throw new BookkeepingDatabaseError(
@@ -1444,18 +1451,21 @@ export async function replaceOpeningBalanceEntry(
   const preparedLines = buildLineValues(input.lines, accountIdMap)
   const actor = getActor()
 
-  const { data, error } = await supabase.rpc('commit_opening_balance_replacement', {
-    p_company_id: companyId,
-    p_period_id: input.fiscal_period_id,
-    p_expected_old_entry_id: expectedOldEntryId,
-    p_user_id: userId,
-    p_entry_date: input.entry_date,
-    p_description: input.description,
-    p_voucher_series: voucherSeries,
-    p_lines: preparedLines,
-    p_actor_type: actor?.type ?? null,
-    p_actor_label: actor?.label ?? null,
-  })
+  const { data, error } = await callWithBusinessEvents('commit_opening_balance_replacement', options.businessEvents, (events) =>
+    supabase.rpc('commit_opening_balance_replacement', {
+      p_company_id: companyId,
+      p_period_id: input.fiscal_period_id,
+      p_expected_old_entry_id: expectedOldEntryId,
+      p_user_id: userId,
+      p_entry_date: input.entry_date,
+      p_description: input.description,
+      p_voucher_series: voucherSeries,
+      p_lines: preparedLines,
+      p_actor_type: actor?.type ?? null,
+      p_actor_label: actor?.label ?? null,
+      ...events,
+    }),
+  )
 
   if (error) {
     log.error('commit_opening_balance_replacement RPC failed', error, {
@@ -1560,6 +1570,12 @@ export interface BulkBookingInput {
   newEntry: Record<string, unknown> | null
   /** commit_method for a new verifikat; omitted, the actor's default. */
   commitMethod?: 'bulk_accept'
+  /**
+   * The posting port's bank.categorized events, one per row of txIds, linked
+   * to a new samlingsverifikat before its number is drawn. Omitted: the RPC
+   * is called as before.
+   */
+  businessEvents?: SqlBusinessEventLink
 }
 
 /**
@@ -1574,7 +1590,8 @@ export interface BulkBookingInput {
  *
  * Attribution: the RPC hands commit method and actor on to
  * commit_journal_entry (migration 20261011140000), resolved here exactly as
- * commitEntry resolves them.
+ * commitEntry resolves them. The posting port's events, when given, are
+ * linked by the RPC to its draft (business-event-rpc.ts).
  *
  * Returns the RPC's answer unchanged. Its structured refusals
  * ({ ok: false, code }) and transport errors stay the callers' to translate.
@@ -1586,19 +1603,22 @@ export async function commitBulkBooking(
   input: BulkBookingInput,
 ): Promise<PostingRpcAnswer> {
   const actor = getActor()
-  const { data, error } = await supabase.rpc('bulk_book_transactions', {
-    p_tx_ids: input.txIds,
-    p_existing_journal_entry_id: input.existingJournalEntryId,
-    p_new_entry: input.newEntry,
-    p_company_id: companyId,
-    // Honoured only for a service_role caller (the v1 and pending-operation
-    // doors); a session caller resolves from its own auth.uid()
-    // (migration 20260824170000).
-    p_user_id: userId,
-    p_commit_method: input.commitMethod ?? defaultCommitMethod(actor),
-    p_actor_type: actor?.type ?? null,
-    p_actor_label: actor?.label ?? null,
-  })
+  const { data, error } = await callWithBusinessEvents('bulk_book_transactions', input.businessEvents, (events) =>
+    supabase.rpc('bulk_book_transactions', {
+      p_tx_ids: input.txIds,
+      p_existing_journal_entry_id: input.existingJournalEntryId,
+      p_new_entry: input.newEntry,
+      p_company_id: companyId,
+      // Honoured only for a service_role caller (the v1 and pending-operation
+      // doors); a session caller resolves from its own auth.uid()
+      // (migration 20260824170000).
+      p_user_id: userId,
+      p_commit_method: input.commitMethod ?? defaultCommitMethod(actor),
+      p_actor_type: actor?.type ?? null,
+      p_actor_label: actor?.label ?? null,
+      ...events,
+    }),
+  )
   if (error) return { data, error }
 
   const result = data as { ok?: boolean; mode?: string; journal_entry_id?: string } | null
@@ -1651,6 +1671,12 @@ export interface MatchBatchAllocationInput {
   transactionId: string
   /** The allocations exactly as match_batch_allocate takes them. */
   allocations: unknown[]
+  /**
+   * The posting port's events, one per allocation (sale.payment_received or
+   * purchase.paid), linked to the samlingsverifikat before its number is
+   * drawn. Omitted: the RPC is called as before.
+   */
+  businessEvents?: SqlBusinessEventLink
 }
 
 /**
@@ -1674,15 +1700,18 @@ export async function commitMatchBatchAllocation(
   userId: string,
   input: MatchBatchAllocationInput,
 ): Promise<PostingRpcAnswer> {
-  const { data, error } = await rpcWithActor(supabase, 'match_batch_allocate', {
-    p_tx_id: input.transactionId,
-    p_allocations: input.allocations,
-    p_company_id: companyId,
-    // Honoured only for a service_role caller (the v1 and pending-operation
-    // doors); a session caller resolves from its own auth.uid()
-    // (migration 20260824120000).
-    p_user_id: userId,
-  })
+  const { data, error } = await callWithBusinessEvents('match_batch_allocate', input.businessEvents, (events) =>
+    rpcWithActor(supabase, 'match_batch_allocate', {
+      p_tx_id: input.transactionId,
+      p_allocations: input.allocations,
+      p_company_id: companyId,
+      // Honoured only for a service_role caller (the v1 and pending-operation
+      // doors); a session caller resolves from its own auth.uid()
+      // (migration 20260824120000).
+      p_user_id: userId,
+      ...events,
+    }),
+  )
   if (error) return { data, error }
 
   const result = data as { ok?: boolean; journal_entry_id?: string } | null
@@ -1699,6 +1728,12 @@ export interface ExpensePayoutBatchInput {
   notes: string | null
   /** The bank outflow the payout is matched to, linked in the same RPC. */
   transactionId: string | null
+  /**
+   * The posting port's expense.paid_out events, one per claim, linked to the
+   * verifikat before its number is drawn. Omitted: the RPC is called as
+   * before.
+   */
+  businessEvents?: SqlBusinessEventLink
 }
 
 /**
@@ -1718,18 +1753,21 @@ export async function commitExpensePayoutBatch(
   userId: string,
   input: ExpensePayoutBatchInput,
 ): Promise<PostingRpcAnswer> {
-  const { data, error } = await rpcWithActor(supabase, 'create_expense_payout_batch', {
-    p_company_id: companyId,
-    p_claim_ids: input.claimIds,
-    p_payout_date: input.payoutDate,
-    p_cash_account: input.cashAccount,
-    p_notes: input.notes,
-    // Honoured only for a service_role caller (API-key and MCP paths run on
-    // the cookieless service client where auth.uid() is NULL); a session
-    // caller is pinned to its own auth.uid() by the RPC.
-    p_user_id: userId,
-    p_transaction_id: input.transactionId,
-  })
+  const { data, error } = await callWithBusinessEvents('create_expense_payout_batch', input.businessEvents, (events) =>
+    rpcWithActor(supabase, 'create_expense_payout_batch', {
+      p_company_id: companyId,
+      p_claim_ids: input.claimIds,
+      p_payout_date: input.payoutDate,
+      p_cash_account: input.cashAccount,
+      p_notes: input.notes,
+      // Honoured only for a service_role caller (API-key and MCP paths run on
+      // the cookieless service client where auth.uid() is NULL); a session
+      // caller is pinned to its own auth.uid() by the RPC.
+      p_user_id: userId,
+      p_transaction_id: input.transactionId,
+      ...events,
+    }),
+  )
   if (error) return { data, error }
 
   const result = data as { ok?: boolean; journal_entry_id?: string } | null
@@ -1743,6 +1781,12 @@ export interface VoucherLinkInput {
   /** The already-posted verifikat that paid the invoice. */
   journalEntryId: string
   notes: string | null
+  /**
+   * The posting port's payment event (sale.payment_received or
+   * purchase.paid), linked to the kursdifferens verifikat before its number
+   * is drawn when the RPC posts one. Omitted: the RPC is called as before.
+   */
+  businessEvents?: SqlBusinessEventLink
 }
 
 /**
@@ -1763,13 +1807,16 @@ export async function commitInvoiceVoucherLink(
   userId: string,
   input: VoucherLinkInput & { invoiceId: string },
 ): Promise<PostingRpcAnswer> {
-  const { data, error } = await rpcWithActor(supabase, 'link_invoice_to_voucher', {
-    p_invoice_id: input.invoiceId,
-    p_journal_entry_id: input.journalEntryId,
-    p_user_id: userId,
-    p_company_id: companyId,
-    p_notes: input.notes,
-  })
+  const { data, error } = await callWithBusinessEvents('link_invoice_to_voucher', input.businessEvents, (events) =>
+    rpcWithActor(supabase, 'link_invoice_to_voucher', {
+      p_invoice_id: input.invoiceId,
+      p_journal_entry_id: input.journalEntryId,
+      p_user_id: userId,
+      p_company_id: companyId,
+      p_notes: input.notes,
+      ...events,
+    }),
+  )
   if (error) return { data, error }
 
   const result = data as { ok?: boolean; fx_journal_entry_id?: string | null } | null
@@ -1802,23 +1849,26 @@ export async function commitSupplierInvoiceVoucherLink(
   userId: string,
   input: VoucherLinkInput & { supplierInvoiceId: string; amount?: number | null },
 ): Promise<PostingRpcAnswer> {
-  const { data, error } =
+  const { data, error } = await callWithBusinessEvents('link_supplier_invoice_to_voucher', input.businessEvents, (events) =>
     input.amount == null
-      ? await rpcWithActor(supabase, 'link_supplier_invoice_to_voucher', {
+      ? rpcWithActor(supabase, 'link_supplier_invoice_to_voucher', {
           p_supplier_invoice_id: input.supplierInvoiceId,
           p_journal_entry_id: input.journalEntryId,
           p_user_id: userId,
           p_company_id: companyId,
           p_notes: input.notes,
+          ...events,
         })
-      : await rpcWithActor(supabase, 'link_supplier_invoice_to_voucher', {
+      : rpcWithActor(supabase, 'link_supplier_invoice_to_voucher', {
           p_supplier_invoice_id: input.supplierInvoiceId,
           p_journal_entry_id: input.journalEntryId,
           p_user_id: userId,
           p_company_id: companyId,
           p_notes: input.notes,
           p_amount: input.amount,
-        })
+          ...events,
+        }),
+  )
   if (error) return { data, error }
 
   const result = data as { ok?: boolean; fx_journal_entry_id?: string | null } | null

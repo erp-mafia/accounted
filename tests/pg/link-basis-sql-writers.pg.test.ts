@@ -376,7 +376,7 @@ describe('bulk_book_transactions records the link basis', () => {
 
   it('keeps its signature, SECURITY DEFINER, search_path, grants and comment', async () => {
     await expectFunctionUnchanged('bulk_book_transactions', {
-      sig: 'bulk_book_transactions(uuid[],uuid,jsonb,uuid,uuid,text,text,text)',
+      sig: 'bulk_book_transactions(uuid[],uuid,jsonb,uuid,uuid,text,text,text,uuid[],text)',
       definer: true,
       config: ['search_path=public'],
       grantees: ['authenticated', 'postgres', 'service_role'],
@@ -619,7 +619,7 @@ describe('match_batch_allocate records the link basis', () => {
 
   it('keeps its signature, SECURITY DEFINER, search_path, grants and comment', async () => {
     await expectFunctionUnchanged('match_batch_allocate', {
-      sig: 'match_batch_allocate(uuid,jsonb,uuid,uuid,text,text)',
+      sig: 'match_batch_allocate(uuid,jsonb,uuid,uuid,text,text,uuid[],text)',
       definer: true,
       config: ['search_path=public'],
       grantees: ['authenticated', 'postgres', 'service_role'],
@@ -707,7 +707,7 @@ describe('link_invoice_to_voucher records the link basis', () => {
 
   it('keeps its signature, SECURITY DEFINER, search_path, grants and comment', async () => {
     await expectFunctionUnchanged('link_invoice_to_voucher', {
-      sig: 'link_invoice_to_voucher(uuid,uuid,uuid,uuid,text,text,text)',
+      sig: 'link_invoice_to_voucher(uuid,uuid,uuid,uuid,text,text,text,uuid[],text)',
       definer: true,
       config: ['search_path=public'],
       grantees: ['authenticated', 'postgres', 'service_role'],
@@ -801,7 +801,7 @@ describe('create_expense_payout_batch records the link basis of the bank row', (
 
   it('keeps its signature, SECURITY DEFINER, search_path, grants and comment', async () => {
     await expectFunctionUnchanged('create_expense_payout_batch', {
-      sig: 'create_expense_payout_batch(uuid,uuid[],date,text,text,uuid,uuid,text,text)',
+      sig: 'create_expense_payout_batch(uuid,uuid[],date,text,text,uuid,uuid,text,text,uuid[],text)',
       definer: true,
       config: ['search_path=public'],
       grantees: ['authenticated', 'postgres', 'service_role'],

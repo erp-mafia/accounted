@@ -31,6 +31,12 @@ import { clearSettledInvoiceSuggestions } from './clear-settled-invoice-suggesti
 import { anchorCustomerInvoiceDocument } from '@/lib/core/documents/customer-invoice-underlag'
 import { documentCurrency, ledgerLineSideAmountIn } from '@/lib/bookkeeping/ledger-line-amount'
 import { commitInvoiceVoucherLink } from '@/lib/bookkeeping/engine'
+import type { SqlBusinessEventLink } from '@/lib/bookkeeping/business-event-link'
+import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
+import { voucherLinkKursdifferensBusinessEvent } from '@/lib/bookkeeping/sql-posting-business-events'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { postingPort } from '@/lib/posting/port'
+import type { BusinessEventDraft } from '@/lib/posting/types'
 import type { Invoice, Customer } from '@/types'
 import {
   AMOUNT_TOLERANCE,
@@ -453,12 +459,31 @@ export async function linkInvoiceToVoucher(
   // pre-link snapshot: under concurrent linking it could clobber a sibling's
   // successful write while leaving its payment row in place (audit C2; mirrors
   // the supplier-side link_supplier_invoice_to_voucher fix from PR #602).
+  // The posting port (its SQL step): a foreign-currency invoice can get a
+  // kursdifferens verifikat from the RPC, so its payment event is recorded
+  // first and the RPC links it to that draft before the number is drawn
+  // (when the link posts none, the event stays unlinked). Off: nothing is
+  // read or built and the RPC is called as before.
+  let businessEvents: SqlBusinessEventLink | undefined
+  try {
+    businessEvents = await postingPort.recordEventsForSql({
+      supabase,
+      companyId,
+      events: () => customerVoucherLinkEvents(supabase, companyId, params),
+    })
+  } catch (err) {
+    // strict: an event that could not be recorded stops the link before any number.
+    log.error('link_invoice_to_voucher business event not recorded (strict)', err, { companyId, invoiceId: params.invoiceId })
+    return { ok: false, code: 'LINK_VOUCHER_DB_ERROR', details: { reason: err instanceof Error ? err.message : String(err) } }
+  }
+
   // Through the engine door, which announces the kursdifferens verifikat the
   // RPC posts for a foreign-currency invoice with journal_entry.committed.
   const { data: rpcData, error: rpcError } = await commitInvoiceVoucherLink(supabase, companyId, userId, {
     invoiceId: params.invoiceId,
     journalEntryId: params.journalEntryId,
     notes: params.notes ?? null,
+    ...(businessEvents ? { businessEvents } : {}),
   })
 
   if (rpcError) {
@@ -560,6 +585,51 @@ export async function linkInvoiceToVoucher(
 }
 
 // ── Helpers ─────────────────────────────────────────────────
+
+/**
+ * The payment event of a voucher link, for the kursdifferens verifikat the
+ * RPC posts when a foreign-currency invoice is settled by a plain-kronor
+ * verifikat at another rate. None for an invoice in the ledger currency
+ * (the RPC posts nothing of its own) or when the invoice or verifikat is not
+ * there (the RPC refuses as before). A read error throws: the port logs it
+ * under shadow and stops the link under strict.
+ */
+async function customerVoucherLinkEvents(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: LinkInvoiceToVoucherParams,
+): Promise<BusinessEventDraft[]> {
+  const { data: invoiceRow, error: invoiceError } = await supabase
+    .from('invoices')
+    .select('id, customer_id, currency, total, paid_amount, remaining_amount')
+    .eq('id', params.invoiceId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (invoiceError) throw invoiceError
+  const invoice = invoiceRow as Pick<Invoice, 'id' | 'customer_id' | 'currency' | 'total' | 'paid_amount' | 'remaining_amount'> | null
+  if (!invoice || isLedgerCurrency(invoice.currency)) return []
+  const { data: voucher, error: voucherError } = await supabase
+    .from('journal_entries')
+    .select('entry_date')
+    .eq('id', params.journalEntryId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (voucherError) throw voucherError
+  if (!voucher) return []
+  return [
+    voucherLinkKursdifferensBusinessEvent(
+      {
+        side: 'customer',
+        invoiceId: invoice.id,
+        partyId: invoice.customer_id,
+        currency: invoice.currency,
+        remaining: computeRemaining(invoice as Invoice),
+        voucherDate: (voucher as { entry_date: string }).entry_date,
+      },
+      linkBasisColumns('user_confirmed'),
+    ),
+  ]
+}
 
 function computeRemaining(invoice: Invoice): number {
   if (typeof invoice.remaining_amount === 'number' && invoice.remaining_amount > 0) {
