@@ -4,11 +4,12 @@
  * (service.engine-input.json) that was taken before the producer went
  * through the port. setOpeningBalances posts the IB of a year with
  * createJournalEntry; correctOpeningBalances posts the corrected IB with
- * createJournalEntry, stornoes the old one with reverseEntry and relinks the
- * year, and when the storno or the relink fails it stornoes the corrected IB
- * again (the compensation). These are the producers behind every IB door: the
- * dashboard's execute and correct routes, the SIE file review route and the
- * v1 and MCP operations opening-balances.set-manual and .correct. Every
+ * createJournalEntry, relinks the year to it and then stornoes the old one
+ * with reverseEntry, and when the relink or the storno fails it stornoes the
+ * corrected IB again (the compensation). These are the producers behind every
+ * IB door: the dashboard's execute and correct routes, the SIE file review
+ * route and the v1 and MCP operations opening-balances.set-manual and
+ * .correct. Every
  * argument of every engine call is recorded, in the order the calls were
  * made, an absent one as '<undefined>', so an extra argument or a changed
  * input fails here; trailing undefined arguments are dropped before the
@@ -18,6 +19,9 @@
  *
  * Regenerate only on purpose, from the code before the move:
  *   UPDATE_ENGINE_INPUT_FIXTURE=1 npx vitest run src/lib/import/opening-balance/__tests__/service.engine-input.test.ts
+ * Changed on purpose once since (2026-10-18): the relink now comes before the
+ * storno of the old IB, so a refused relink no longer stornoes the old IB
+ * (that left the year with no live IB); only the corrected IB is stornoed.
  *
  * Since the service posts through the posting port, the scenarios also run
  * with POSTING_EVENTS=shadow and strict: the engine must get the same
@@ -115,6 +119,8 @@ function supabaseFor(scenario: Scenario, opts: RunOptions) {
     business_events: opts.refuseEvent ? { error: { message: 'business_events refused', code: '42501' } } : { data: null },
     // The period, findExistingOpeningBalance's pointer read, and the link update.
     fiscal_periods: (calls) => (calls.some((c) => c.method === 'update') ? { data: null } : { data: period }),
+    // The caller is an owner: the correction's owner/admin gate passes.
+    company_members: { data: { role: 'owner' } },
     // No posted IB without a pointer, and no bokslut on the year.
     journal_entries: { data: [], count: 0 },
     company_settings: { data: null },
@@ -253,7 +259,8 @@ describe('opening balance service engine input (posting port parity)', () => {
     const ib = { ...shape, kind: 'ledger.opening_balance', occurred_on: '2026-01-01', evidence: { link_basis: 'user_created' } }
     const storno = { ...shape, kind: 'ledger.storno', occurred_on: today, evidence: { link_basis: 'user_created' } }
     const compensation = { ...storno, evidence: { link_basis: 'system_derived' } }
-    const expected = [[ib], [ib], [ib, storno], [ib, storno, compensation], [ib, storno, compensation]]
+    // A refused relink comes before the storno of the old IB: only the compensation follows.
+    const expected = [[ib], [ib], [ib, storno], [ib, compensation], [ib, storno, compensation]]
     for (const [i, run] of runs.entries()) {
       expect(run.events, run.name).toEqual(expected[i]!.map((event) => expect.objectContaining(event)))
     }

@@ -6,8 +6,9 @@
  *
  * The rules under test are the service's (lib/import/opening-balance/service.ts):
  * the year's state, an existing IB, the company lock date, balance sheet
- * accounts only, balance, the storno-then-relink correction (never an edit of
- * the posted IB), and a dry run that writes nothing and spends no voucher.
+ * accounts only, balance, the relink-then-storno correction (never an edit of
+ * the posted IB, owner or admin only), and a dry run that writes nothing and
+ * spends no voucher.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -466,7 +467,30 @@ describe('POST .../opening-balances/correct', () => {
     expect(wrote(client)).toBe(false)
   })
 
-  it('201 books the corrected IB, stornoes the old one and relinks the year: the posted IB is never updated', async () => {
+  it('403 FORBIDDEN for a member key, dry run included, before anything is booked', async () => {
+    const MEMBER = { data: { company_id: COMPANY_ID, role: 'member' }, error: null }
+    for (const query of ['', '?dry_run=true']) {
+      const client = makeClient({
+        company_members: MEMBER,
+        fiscal_periods: { data: YEAR_WITH_IB, error: null },
+        company_settings: NO_LOCK,
+        journal_entries: { data: null, error: null, count: 0 },
+        chart_of_accounts: CHART,
+        rpc: { data: null, error: null },
+      })
+      mockServiceClient.mockReturnValue(client)
+      const res = await post({ lines: CORRECTED }, query)
+      expect(res.status, query).toBe(403)
+      const body = await res.json()
+      expect(body.error.code, query).toBe('FORBIDDEN')
+      expect(body.error.details, query).toMatchObject({ required_roles: ['owner', 'admin'] })
+      expect(wrote(client), query).toBe(false)
+    }
+    expect(createJournalEntryMock).not.toHaveBeenCalled()
+    expect(reverseEntryMock).not.toHaveBeenCalled()
+  })
+
+  it('201 books the corrected IB, relinks the year to it, then stornoes the old one: the posted IB is never updated', async () => {
     const client = makeClient({
       company_members: OWNER,
       fiscal_periods: { data: YEAR_WITH_IB, error: null },
@@ -487,7 +511,8 @@ describe('POST .../opening-balances/correct', () => {
     })
     expect(body.data.cascade).toBeUndefined()
 
-    // Book first, then storno the old IB, then relink.
+    // Book first, then relink (naming the key's user: the service-role
+    // client has no auth.uid()), then storno the old IB.
     expect(createJournalEntryMock.mock.invocationCallOrder[0]).toBeLessThan(reverseEntryMock.mock.invocationCallOrder[0])
     expect(reverseEntryMock).toHaveBeenCalledTimes(1)
     expect(reverseEntryMock).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, 'user-1', OLD_ENTRY_ID)
@@ -495,12 +520,15 @@ describe('POST .../opening-balances/correct', () => {
       p_company_id: COMPANY_ID,
       p_period_id: PERIOD_ID,
       p_new_entry_id: NEW_ENTRY_ID,
+      p_user_id: 'user-1',
     })
+    const relink = client.rpc.mock.calls.findIndex((c) => c[0] === 'replace_period_opening_balance_link')
+    expect(client.rpc.mock.invocationCallOrder[relink]).toBeLessThan(reverseEntryMock.mock.invocationCallOrder[0])
     // Hard rule 1: no write to journal_entries / journal_entry_lines.
     expect(client.calls.some((c) => c.table.startsWith('journal_entr') && WRITES.has(c.method))).toBe(false)
   })
 
-  it('a failed relink stornoes the new IB again and answers OB_CORRECT_FAILED with both ids', async () => {
+  it('a failed relink stornoes only the new IB and answers OB_CORRECT_FAILED with both ids: the old IB stays live', async () => {
     const client = makeClient({
       company_members: OWNER,
       fiscal_periods: { data: YEAR_WITH_IB, error: null },
@@ -515,7 +543,8 @@ describe('POST .../opening-balances/correct', () => {
     const body = await res.json()
     expect(body.error.code).toBe('OB_CORRECT_FAILED')
     expect(body.error.details).toMatchObject({ newEntryId: NEW_ENTRY_ID, oldEntryId: OLD_ENTRY_ID })
-    expect(reverseEntryMock).toHaveBeenNthCalledWith(2, expect.anything(), COMPANY_ID, 'user-1', NEW_ENTRY_ID)
+    expect(reverseEntryMock).toHaveBeenCalledTimes(1)
+    expect(reverseEntryMock).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, 'user-1', NEW_ENTRY_ID)
   })
 
   it('cascade carries the per-account delta into later years and reports the result', async () => {

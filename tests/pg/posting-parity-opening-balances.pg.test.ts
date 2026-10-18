@@ -7,16 +7,24 @@
  * with five fiscal years: setOpeningBalances (the IB typed for a year, from
  * the dashboard door as the owner, and from the v1 and MCP operation door
  * inside a staged approval on the service role) and correctOpeningBalances
- * (a corrected IB booked, the old one stornoed and the year relinked; one
- * with cascade, which carries the delta into the next year's IB through the
- * SQL replacement commit_opening_balance_replacement; and one on the service
- * role, whose relink is refused, so the corrected IB is stornoed again: the
- * compensation path). Every verifikat a flow writes is dumped normalised
- * (series, number, date, description, source type, status and every line)
- * together with the years' IB pointers and each door's outcome, and the dump
- * is compared with the committed fixture
+ * (a corrected IB booked, the year relinked to it and the old one stornoed;
+ * one with cascade, which carries the delta into the next year's IB through
+ * the SQL replacement commit_opening_balance_replacement; and one from the v1
+ * and MCP door on the service role). Every verifikat a flow writes is dumped
+ * normalised (series, number, date, description, source type, status and
+ * every line) together with the years' IB pointers and each door's outcome,
+ * and the dump is compared with the committed fixture
  * (posting-parity-opening-balances.fixture.json), which was taken before
  * these producers went through the port.
+ *
+ * The fixture's last flow changed on purpose on 2026-10-18, because the bug
+ * it recorded is fixed: the relink of the service-role door used to be
+ * refused (replace_period_opening_balance_link read auth.uid(), NULL there),
+ * after the old IB was already stornoed, and the compensation stornoed the
+ * corrected IB too, leaving 2029 with no IB. The RPC now takes the door's
+ * user from the service role (migration 20261018200000) and the service
+ * relinks before it stornoes the old IB, so that flow books the corrected IB,
+ * links the year to it and stornoes the old one, like the dashboard flow.
  *
  * With the producers on the port, the test also asserts that
  *
@@ -25,15 +33,16 @@
  *   2. the dump with POSTING_EVENTS=shadow equals the dump with it off, every
  *      IB verifikat the service posts has exactly one ledger.opening_balance
  *      event and every storno it makes one ledger.storno event (subject the
- *      year; the compensation storno system_derived), and the cascade's
- *      verifikat, written in SQL by commit_opening_balance_replacement, have
- *      none: that function waits for an event id parameter;
+ *      year), and the cascade's verifikat, written in SQL by
+ *      commit_opening_balance_replacement, have none: that function waits
+ *      for an event id parameter;
  *   3. a failed event or link write under shadow still posts; under strict a
  *      refused event stops a set and a correction before any voucher number,
  *      and a link refused on the storno of the old IB stops that storno
- *      before its number, after which the corrected IB is stornoed again
- *      (the compensation, as before the port) and the year keeps its old IB;
- *      and detect_voucher_gaps finds no gap.
+ *      before its number, after which the year is pointed back at its old IB
+ *      and the corrected IB is stornoed again (the compensation, system
+ *      derived) and the year keeps its old IB; and detect_voucher_gaps finds
+ *      no gap.
  *
  * Regenerate the fixture only on purpose, from the code before the move:
  *   UPDATE_POSTING_PARITY_FIXTURE=1 npx vitest run --project pg-real tests/pg/posting-parity-opening-balances.pg.test.ts
@@ -305,7 +314,7 @@ const FLOWS: Flow[] = [
     events: [{ ...SET, occurred_on: '2029-01-01', year: '2029', link_basis: STAGED, entries: [0] }],
   },
   {
-    name: 'correct from the v1 and MCP door: the relink is refused, so the corrected IB is stornoed again',
+    name: 'correct from the v1 and MCP door (service role): the corrected IB booked and linked, the old one stornoed',
     run: (seed) =>
       written(seed, async () => [
         outcomeOf(await asKey(() => correct(serviceCtx(seed), seed.periods['2029'], IB_CORRECTED, false, { balanceSheetOnly: true }))),
@@ -313,7 +322,6 @@ const FLOWS: Flow[] = [
     events: [
       { ...SET, occurred_on: '2029-01-01', year: '2029', link_basis: 'client_asserted', entries: [0] },
       { ...STORNO, year: '2029', link_basis: 'client_asserted', entries: [1] },
-      { ...STORNO, year: '2029', link_basis: 'system_derived', entries: [2] },
     ],
   },
 ]
@@ -669,9 +677,10 @@ describe('posting port parity, opening balances (pg)', () => {
       }
 
       // Strict, with only the link to the old IB's storno refused: the
-      // corrected IB posts, the storno stops before its number, the corrected
-      // IB is stornoed again (the compensation, as before the port), and the
-      // year keeps its old IB, linked; two numbers drawn, no gap.
+      // corrected IB posts and the year is relinked to it, the storno stops
+      // before its number, the year is pointed back at its old IB and the
+      // corrected IB is stornoed again (the compensation), so the year keeps
+      // its old IB, linked; two numbers drawn, no gap.
       {
         vi.stubEnv('POSTING_EVENTS', 'strict')
         const year = periods['2029']

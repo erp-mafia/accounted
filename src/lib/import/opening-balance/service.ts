@@ -25,21 +25,26 @@
  * with it off the engine gets exactly the calls it always got.
  *
  * A correction never edits the posted IB (BFL 5 kap 5 §, hard rule 1): the
- * corrected IB is booked first, the old one is stornoed with reverseEntry,
- * and the year is relinked with the replace_period_opening_balance_link RPC.
- * If the storno or the relink fails, the new IB is stornoed again so the year
- * keeps exactly one live IB. With cascade the per-account delta is carried
- * into every later year's IB (lib/import/opening-balance/cascade.ts).
+ * corrected IB is booked first, the year is relinked to it with the
+ * replace_period_opening_balance_link RPC, and only then is the old one
+ * stornoed with reverseEntry. If the relink or the storno fails, the year is
+ * pointed back at the old IB and the new IB is stornoed again, so the year
+ * keeps its old IB, linked and live. Owner or admin only, as the relink RPC
+ * requires: refused up front at every door. With cascade the per-account
+ * delta is carried into every later year's IB
+ * (lib/import/opening-balance/cascade.ts).
  *
  * A dry run reads, checks and previews the verifikat and writes nothing
  * (it is also the MCP staging preview): no account activation, no entry, no
  * voucher number.
  */
 import { toEntryPreview } from '@/lib/bookkeeping/entry-preview'
+import { isMissingRpcSignature } from '@/lib/bookkeeping/actor-rpc'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { linkBasisColumns } from '@/lib/links/stamp'
+import { requireCompanyAdmin } from '@/lib/operations/access'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { postingPort } from '@/lib/posting/port'
 import type { CreateJournalEntryInput } from '@/types'
@@ -158,6 +163,8 @@ async function readLockDate(ctx: OperationContext): Promise<string | null> {
 }
 
 const NOT_FOUND: Failure = { ok: false, code: 'OB_PERIOD_NOT_FOUND' }
+
+const CORRECT_ADMIN_MESSAGE = 'Endast ägare eller administratörer kan rätta ingående balanser.'
 
 // ---------------------------------------------------------------------------
 // Set (first IB of a year)
@@ -317,6 +324,13 @@ export async function correctOpeningBalances(
     if (periodError || !period) return NOT_FOUND
     const row = period as unknown as PeriodRow
 
+    // Owner or admin only: the relink RPC refuses anyone else, and by then the
+    // corrected IB is already booked. Asked here, before any write and on a
+    // dry run too, so a member's v1 key, MCP stage or dashboard session is
+    // refused with nothing booked, and an MCP approval checks the approver.
+    const denied = await requireCompanyAdmin(ctx, CORRECT_ADMIN_MESSAGE)
+    if (denied) return denied
+
     if (row.is_closed) return { ok: false, code: 'OB_PERIOD_CLOSED' }
     if (row.locked_at) return { ok: false, code: 'OB_PERIOD_LOCKED' }
 
@@ -401,8 +415,8 @@ export async function correctOpeningBalances(
       ? await fetchEntryOpeningBalanceLines(supabase, companyId, oldEntryId)
       : null
 
-    // Book the corrected IB BEFORE the storno, so a failure midway never
-    // leaves the year without an IB.
+    // Book the corrected IB first, so a failure midway never leaves the year
+    // without an IB.
     const newEntry = await postingPort.postJournalEntry({
       supabase,
       companyId,
@@ -426,10 +440,30 @@ export async function correctOpeningBalances(
       })
     }
 
-    // The storno and the relink are not atomic with the new IB: on any
-    // failure, compensate by stornoing the NEW entry so the year keeps its
-    // original IB and no second live one.
+    // The year's pointer, moved by the RPC (a plain UPDATE is refused by
+    // enforce_opening_balance_immutability). p_user_id is the user this door
+    // authenticated: the RPC honors it only from the service role (the v1 and
+    // MCP doors, where auth.uid() is NULL) and checks that user is an owner or
+    // admin. Until the migration that adds it is applied, the old signature
+    // answers PGRST202: retried once without it (lib/bookkeeping/actor-rpc.ts
+    // handles the same deploy window).
+    const relinkYear = async (entryId: string) => {
+      const args = { p_company_id: companyId, p_period_id: fiscal_period_id, p_new_entry_id: entryId }
+      let answer = await supabase.rpc('replace_period_opening_balance_link', { ...args, p_user_id: userId })
+      if (isMissingRpcSignature(answer.error)) answer = await supabase.rpc('replace_period_opening_balance_link', args)
+      if (answer.error) throw new Error(`replace_period_opening_balance_link failed: ${answer.error.message}`)
+    }
+
+    // The relink and the storno are not atomic with the new IB, so the order
+    // keeps the year with one live, linked IB at every failure point: relink
+    // first, while the old IB is still posted, then storno the old IB (the
+    // year no longer names it, so reverseEntry leaves the pointer alone). On
+    // a failure the year is pointed back at the old IB and the NEW entry is
+    // stornoed, so the year keeps its original IB and no second live one.
+    let relinked = false
     try {
+      await relinkYear(newEntry.id)
+      relinked = true
       // The storno of the old IB is the person's correction (user_created).
       await postingPort.reverseJournalEntry({
         supabase,
@@ -439,20 +473,24 @@ export async function correctOpeningBalances(
         event: () => openingBalanceStornoBusinessEvent(fiscal_period_id, todayIsoStockholm(), linkBasisColumns('user_created')),
         role: 'reversal',
       })
-      const { error: relinkError } = await supabase.rpc('replace_period_opening_balance_link', {
-        p_company_id: companyId,
-        p_period_id: fiscal_period_id,
-        p_new_entry_id: newEntry.id,
-      })
-      if (relinkError) {
-        throw new Error(`replace_period_opening_balance_link failed: ${relinkError.message}`)
-      }
     } catch (seqErr) {
       const reason = seqErr instanceof Error ? seqErr.message : 'unknown'
-      // Residual edge: if the storno succeeded but the relink failed, the old
-      // entry is reversed yet still linked; the audit ids let an operator
-      // finish the recovery.
-      auditCorrectionFailure({ phase: 'sequence_failed', reason })
+      auditCorrectionFailure({ phase: 'sequence_failed', reason, relinked })
+      if (relinked) {
+        // Back to the old IB before the new one is stornoed: a storno of the
+        // IB the year names clears the year's pointer (reverseEntry). If this
+        // fails the storno below still runs, so the books keep one live IB
+        // (the old one, unlinked); the audit ids let an operator relink it.
+        try {
+          await relinkYear(oldEntryId)
+        } catch (relinkBackErr) {
+          auditCorrectionFailure({
+            phase: 'relink_back_failed',
+            reason,
+            relinkBackError: relinkBackErr instanceof Error ? relinkBackErr.message : 'unknown',
+          })
+        }
+      }
       try {
         // The compensation: no one chose this storno (system_derived).
         await postingPort.reverseJournalEntry({

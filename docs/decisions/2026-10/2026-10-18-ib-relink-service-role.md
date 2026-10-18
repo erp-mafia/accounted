@@ -1,0 +1,1 @@
+[2026-10-18] IB relink from v1/MCP: replace_period_opening_balance_link takes p_user_id, honored only from service_role, owner/admin unchanged, plus requireCompanyAdmin up front: the undo_bank_file_import/undo_sie_import shape; bypassing the role for service_role would let any member key do it.

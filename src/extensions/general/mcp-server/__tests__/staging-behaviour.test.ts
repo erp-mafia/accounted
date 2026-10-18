@@ -977,10 +977,13 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
     empty: ['journal_entries'],
   },
   // The same year with its IB (A1) and no bokslut: the storno preview reads
-  // the original lines for the per-account change, writes nothing.
+  // the original lines for the per-account change, writes nothing. IB
+  // correction is owner/admin only on every door: the preview reads the
+  // caller's role.
   gnubok_correct_opening_balances: {
     args: { lines: [{ account_number: '1930', amount: 1200 }, { account_number: '2099', amount: -1200 }] },
     rows: {
+      company_members: { role: 'owner' },
       fiscal_periods: {
         ...FISCAL_YEAR_2026,
         locked_at: null,

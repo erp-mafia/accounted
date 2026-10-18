@@ -17,6 +17,8 @@ vi.mock('@/lib/init', () => ({
 
 vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
+  // The service's owner/admin gate (requireCompanyAdmin): the caller is an owner.
+  getCompanyRole: vi.fn().mockResolvedValue({ ok: true, role: 'owner', companyId: 'company-1' }),
 }))
 
 vi.mock('@/lib/company/context', () => ({
@@ -135,12 +137,13 @@ describe('POST /api/import/opening-balance/correct: atomicity, audit, BFL refere
   })
 
   // FIX 1 (ASVS V2.3): compensation when the storno of the OLD entry throws
-  // after the new entry was already created.
-  it('compensates by stornoing the new entry when reverseEntry throws, returning OB_CORRECT_FAILED', async () => {
+  // after the new entry was already created and the year relinked to it.
+  it('points the year back at the old IB and stornoes the new entry when reverseEntry throws, returning OB_CORRECT_FAILED', async () => {
     enqueue({ data: openPeriodWithOB() }) // period
     enqueue({ data: { bookkeeping_locked_through: null } }) // company lock-date pre-flight
     enqueue({ count: 0 }) // year-end check
-    // No RPC enqueue: step B throws before the relink is reached.
+    enqueue({ error: null }) // relink to the new IB
+    enqueue({ error: null }) // relink back to the old IB (compensation)
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'entry-new', voucher_series: 'A', voucher_number: 9 })
     mockReverseEntry
@@ -154,10 +157,14 @@ describe('POST /api/import/opening-balance/correct: atomicity, audit, BFL refere
     expect((body.error as unknown as { code: string }).code).toBe('OB_CORRECT_FAILED')
 
     // First the failed storno of the old entry, then the compensating storno of
-    // the new entry.
+    // the new entry, after the year is pointed back at the old IB (a storno of
+    // the IB the year names would clear the pointer).
     expect(mockReverseEntry).toHaveBeenCalledTimes(2)
     expect(mockReverseEntry).toHaveBeenNthCalledWith(1, expect.anything(), 'company-1', 'user-1', 'entry-old')
     expect(mockReverseEntry).toHaveBeenNthCalledWith(2, expect.anything(), 'company-1', 'user-1', 'entry-new')
+    const relinks = mockSupabase.rpc.mock.calls.filter((c: unknown[]) => c[0] === 'replace_period_opening_balance_link')
+    expect(relinks.map((c: unknown[]) => (c[1] as { p_new_entry_id: string }).p_new_entry_id)).toEqual(['entry-new', 'entry-old'])
+    expect(mockSupabase.rpc.mock.invocationCallOrder[1]).toBeLessThan(mockReverseEntry.mock.invocationCallOrder[1])
 
     // Durable audit carries both ids for manual recovery.
     const audit = auditLines(errorSpy)
@@ -173,7 +180,7 @@ describe('POST /api/import/opening-balance/correct: atomicity, audit, BFL refere
     enqueue({ error: { message: 'relink boom' } }) // RPC failure
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'entry-new', voucher_series: 'A', voucher_number: 9 })
-    mockReverseEntry.mockResolvedValue({ id: 'entry-storno' }) // step B + compensation both succeed
+    mockReverseEntry.mockResolvedValue({ id: 'entry-storno' }) // the compensation succeeds
 
     const res = await POST(makeRequest({ fiscal_period_id: PERIOD_ID, lines: BALANCED_LINES }))
     const { status, body } = await parseJsonResponse(res)
@@ -184,16 +191,74 @@ describe('POST /api/import/opening-balance/correct: atomicity, audit, BFL refere
     expect(err.details?.newEntryId).toBe('entry-new')
     expect(err.details?.oldEntryId).toBe('entry-old')
 
-    // Compensation: old entry stornoed (step B) then the new entry stornoed.
-    expect(mockReverseEntry).toHaveBeenCalledTimes(2)
-    expect(mockReverseEntry).toHaveBeenNthCalledWith(1, expect.anything(), 'company-1', 'user-1', 'entry-old')
-    expect(mockReverseEntry).toHaveBeenNthCalledWith(2, expect.anything(), 'company-1', 'user-1', 'entry-new')
+    // Compensation: only the new entry is stornoed. The relink comes before
+    // the storno of the old IB, so the old IB stays posted and linked.
+    expect(mockReverseEntry).toHaveBeenCalledTimes(1)
+    expect(mockReverseEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'entry-new')
 
     // Durable audit event payload contains newEntryId + oldEntryId.
     const audit = auditLines(errorSpy)
     expect(audit).toContain('opening_balance.correction_failed')
     expect(audit).toContain('entry-new')
     expect(audit).toContain('entry-old')
+  })
+
+  // The relink back to the old IB may fail too: the new entry is still
+  // stornoed, so the books keep one live IB (the old one), and the audit names
+  // the phase for the operator who relinks it.
+  it('still stornoes the new entry and audits relink_back_failed when the relink back fails', async () => {
+    enqueue({ data: openPeriodWithOB() }) // period
+    enqueue({ data: { bookkeeping_locked_through: null } }) // company lock-date pre-flight
+    enqueue({ count: 0 }) // year-end check
+    enqueue({ error: null }) // relink to the new IB
+    enqueue({ error: { message: 'relink back boom' } }) // relink back to the old IB fails
+
+    mockCreateJournalEntry.mockResolvedValue({ id: 'entry-new', voucher_series: 'A', voucher_number: 9 })
+    mockReverseEntry
+      .mockRejectedValueOnce(new Error('storno of old failed'))
+      .mockResolvedValueOnce({ id: 'entry-storno-new' })
+
+    const res = await POST(makeRequest({ fiscal_period_id: PERIOD_ID, lines: BALANCED_LINES }), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('OB_CORRECT_FAILED')
+    expect(mockReverseEntry).toHaveBeenNthCalledWith(2, expect.anything(), 'company-1', 'user-1', 'entry-new')
+    const audit = auditLines(errorSpy)
+    expect(audit).toContain('relink_back_failed')
+    expect(audit).toContain('compensated')
+  })
+
+  // Deploy window: the app can be live before the migration that adds
+  // p_user_id; PostgREST then answers PGRST202 and the relink is retried
+  // with the three original arguments.
+  it('retries the relink without p_user_id when the database still has the old signature', async () => {
+    enqueue({ data: openPeriodWithOB() }) // period
+    enqueue({ data: { bookkeeping_locked_through: null } }) // company lock-date pre-flight
+    enqueue({ count: 0 }) // year-end check
+    enqueue({ error: { code: 'PGRST202', message: 'Could not find the function' } }) // new signature missing
+    enqueue({ error: null }) // the 3-argument call
+
+    mockCreateJournalEntry.mockResolvedValue({ id: 'entry-new', voucher_series: 'A', voucher_number: 9 })
+    mockReverseEntry.mockResolvedValue({ id: 'entry-storno' })
+
+    const res = await POST(makeRequest({ fiscal_period_id: PERIOD_ID, lines: BALANCED_LINES }), { params: Promise.resolve({}) })
+    const { status } = await parseJsonResponse(res)
+
+    expect(status).toBe(200)
+    expect(mockSupabase.rpc).toHaveBeenNthCalledWith(1, 'replace_period_opening_balance_link', {
+      p_company_id: 'company-1',
+      p_period_id: PERIOD_ID,
+      p_new_entry_id: 'entry-new',
+      p_user_id: 'user-1',
+    })
+    expect(mockSupabase.rpc).toHaveBeenNthCalledWith(2, 'replace_period_opening_balance_link', {
+      p_company_id: 'company-1',
+      p_period_id: PERIOD_ID,
+      p_new_entry_id: 'entry-new',
+    })
+    expect(mockReverseEntry).toHaveBeenCalledTimes(1)
+    expect(mockReverseEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'entry-old')
   })
 
   // FIX 2: the compensating storno may itself fail; the handler must still
@@ -205,9 +270,7 @@ describe('POST /api/import/opening-balance/correct: atomicity, audit, BFL refere
     enqueue({ error: { message: 'relink boom' } }) // RPC failure
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'entry-new', voucher_series: 'A', voucher_number: 9 })
-    mockReverseEntry
-      .mockResolvedValueOnce({ id: 'entry-storno' }) // step B ok
-      .mockRejectedValueOnce(new Error('compensation storno failed')) // compensation throws
+    mockReverseEntry.mockRejectedValueOnce(new Error('compensation storno failed')) // compensation throws
 
     const res = await POST(makeRequest({ fiscal_period_id: PERIOD_ID, lines: BALANCED_LINES }))
     const { status, body } = await parseJsonResponse(res)
