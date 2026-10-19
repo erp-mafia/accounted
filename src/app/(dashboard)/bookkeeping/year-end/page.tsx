@@ -5,12 +5,20 @@ import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Card, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { HelpPopover } from '@/components/ui/help-popover'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { Skeleton } from '@/components/ui/skeleton'
-import { CalendarPlus, Lock } from 'lucide-react'
+import { CalendarPlus, Lock, MoreHorizontal } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { FiscalPeriod, YearEndPreview, YearEndResult } from '@/types'
@@ -23,6 +31,12 @@ import { ExecuteStep } from '@/components/bookkeeping/year-end/ExecuteStep'
 import { ResultStep } from '@/components/bookkeeping/year-end/ResultStep'
 import { StepRail } from '@/components/bokslut/StepRail'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import {
+  filesIncomeReturn,
+  isEntityType,
+  simplifiedYearEndRegelverk,
+  supportsCorporateTaxDispositions,
+} from '@/lib/company/entity-type'
 
 type Step = 'preflight' | 'accruals' | 'dispositions' | 'preview' | 'execute' | 'result'
 
@@ -219,8 +233,17 @@ export default function YearEndPage() {
   // Imported historical years (SIE) land here as "pending bokslut" even though
   // the bokslut was done in the old software. The confirm dialog POSTs
   // close-external, which closes + locks the period without a closing entry.
+  // The ochre question is asked only for a year that holds imported history
+  // (readiness report); every eligible year keeps the action in the ⋯ menu.
   const [confirmExternalOpen, setConfirmExternalOpen] = useState(false)
   const selectedOption = periods?.find((p) => p.id === selectedPeriodId) ?? null
+  const canMarkClosedExternally =
+    showWizard && step === 'preflight' && Boolean(selectedOption?.eligible) && !navigationBlocked
+  const askMarkClosedExternally =
+    canMarkClosedExternally &&
+    report !== null &&
+    report.period.id === selectedPeriodId &&
+    report.holdsImportedHistory
 
   const markClosedExternally = useCallback(async () => {
     if (!selectedPeriodId) return
@@ -261,8 +284,27 @@ export default function YearEndPage() {
   return (
     <div className="space-y-8">
       <div className="page-header flex items-center justify-between gap-3 flex-wrap">
-        <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">Årsbokslut</h1>
         <div className="flex items-center gap-2">
+          <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">Årsbokslut</h1>
+          <HelpPopover>
+            <StepHelp step={step} entityType={report?.entityType ?? null} />
+          </HelpPopover>
+        </div>
+        <div className="flex items-center gap-2">
+          {canMarkClosedExternally && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon-sm" aria-label="Fler åtgärder">
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => setConfirmExternalOpen(true)}>
+                  Klarmarkera perioden…
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           {showWizard && periods && periods.length > 0 && step !== 'result' && (
             <ContextPicker
               items={periods.map((p) => ({
@@ -288,7 +330,7 @@ export default function YearEndPage() {
         </div>
       </div>
 
-      {showWizard && step === 'preflight' && selectedOption?.eligible && !navigationBlocked && (
+      {askMarkClosedExternally && selectedOption && (
         <AttnLine
           action={{ label: 'Klarmarkera perioden', onClick: () => setConfirmExternalOpen(true) }}
         >
@@ -413,6 +455,72 @@ export default function YearEndPage() {
 
       {step === 'result' && result && (
         <div className="mx-auto w-full max-w-3xl"><ResultStep result={result} /></div>
+      )}
+    </div>
+  )
+}
+
+type ReportEntityType = BokslutReadinessReport['entityType']
+
+/**
+ * The wizard's "?" (UI-migration convention 7): what the current step does
+ * and the rules that apply to it. The guidance that used to sit in
+ * instruction-only step cards and in the Kontroll step's always-on reminders
+ * lives here, so the flow carries only the year's own figures and findings.
+ */
+function StepHelp({ step, entityType }: { step: Step; entityType: ReportEntityType | null }) {
+  const form = entityType && isEntityType(entityType) ? entityType : null
+  const filesNe = form !== null && filesIncomeReturn(form) === 'NE'
+  const corporate = form !== null && supportsCorporateTaxDispositions(form)
+  // The 5 000 kr relief belongs to förenklat årsbokslut (K1), by capability.
+  const k1 = form !== null && simplifiedYearEndRegelverk(form) === 'K1'
+
+  return (
+    <div className="space-y-2">
+      <p>
+        Bokslutet görs per räkenskapsår efter att periodens slutdatum har passerat.
+        Periodiseringar och dispositioner bokförs när du går vidare från sina steg;
+        bokslutsverifikatet bokförs först när du verkställer, och då stängs och låses perioden.
+      </p>
+      {step === 'preflight' && (
+        <p>
+          Är bokslutet för året redan gjort i ett tidigare bokföringsprogram klarmarkerar du
+          perioden från menyn (⋯) bredvid periodväljaren i stället.
+        </p>
+      )}
+      {step === 'accruals' && (
+        <>
+          <p>
+            Periodiseringar (förutbetalda kostnader 17xx, upplupna kostnader 29xx) bokas
+            manuellt. Posteringarna ska vändas på första dagen av nästa räkenskapsår: datumet
+            visas per verifikation. Automatisk omvändning är planerad till en kommande version.
+          </p>
+          {k1 && (
+            <p>
+              Med förenklat årsbokslut (K1) behöver poster under 5 000 kr normalt inte
+              periodiseras.
+            </p>
+          )}
+        </>
+      )}
+      {step === 'dispositions' && (
+        <>
+          {corporate && (
+            <>
+              <p>Justera beloppen och bocka av de dispositioner du vill boka.</p>
+              <p>
+                Skattemässiga justeringar (återläggningar) påverkar skatten och INK2, men skapar
+                ingen egen verifikation och ändrar inte en redan bokförd periodiseringsfond.
+              </p>
+            </>
+          )}
+          {filesNe && (
+            <p>
+              Egenavgifter, räntefördelning, periodiseringsfond och expansionsfond beräknas i
+              NE-bilagan, inte bokförs. Skatten betalas privat av ägaren.
+            </p>
+          )}
+        </>
       )}
     </div>
   )

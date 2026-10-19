@@ -1,28 +1,18 @@
 'use client'
 
-import Link from 'next/link'
 import { useEffect, useState, useCallback } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { PageHeader } from '@/components/ui/page-header'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { FyPicker } from '@/components/common/FyPicker'
+import { ReportPrintHeader } from '@/components/reports/ReportPrintHeader'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/info-tooltip'
-import {
-  ArrowLeft,
-  Download,
-  FileSpreadsheet,
-  AlertTriangle,
-  CheckCircle2,
-} from 'lucide-react'
-import { formatAmount, formatDate } from '@/lib/utils'
+import { Download, AlertTriangle, CheckCircle2 } from 'lucide-react'
+import { formatAmount } from '@/lib/utils'
 import { downloadFile } from '@/lib/browser/download-file'
 import { failureDescription } from '@/lib/browser/action-failure'
 import type { KassaflodesanalysReport } from '@/lib/reports/kassaflodesanalys'
@@ -77,17 +67,17 @@ export function KassaflodesanalysClient() {
       const res = await fetch(`/api/reports/kassaflodesanalys?period_id=${periodId}`)
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
-        throw new Error(body.error || 'Kunde inte hämta kassaflödesanalys')
+        throw new Error(body.error || t('cash_flow_load_failed'))
       }
       const { data } = await res.json()
       setReport(data)
     } catch (err) {
-      setError(err instanceof Error ? getUserErrorMessage(err) : 'Okänt fel')
+      setError(err instanceof Error ? getUserErrorMessage(err, { locale }) : t('cash_flow_load_failed'))
       setReport(null)
     } finally {
       setIsLoadingReport(false)
     }
-  }, [])
+  }, [t, locale])
 
   useEffect(() => {
     if (selectedPeriod) {
@@ -152,53 +142,41 @@ export function KassaflodesanalysClient() {
     }
   }, [selectedPeriod, report, isDownloadingPdf, locale, toast, t])
 
+  // The shell every report page shares: title, "?" and the top bar's
+  // actions (download, then the year picker far right, convention 8). No
+  // back link over the title (the nav names Rapporter), no period line (the
+  // picker names the year; ReportPrintHeader states it on paper) and no
+  // permanently disabled Excel button.
   return (
     <div className="space-y-8">
-      <Link
-        href="/reports"
-        className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
-      >
-        <ArrowLeft className="h-4 w-4" />
-        Rapporter
-      </Link>
-      <PageHeader title="Kassaflödesanalys" />
-
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <FyPicker
-          value={selectedPeriod}
-          onChange={(id) => setSelectedPeriod(id)}
-          includeAllOption={false}
-          hideFuturePeriods
-          onReady={() => setIsLoadingPeriods(false)}
-        />
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            onClick={handleDownloadPdf}
-            disabled={!report || isLoadingReport}
-            loading={isDownloadingPdf}
-          >
-            {!isDownloadingPdf && <Download className="mr-2 h-4 w-4" />}
-            Ladda ner PDF
-          </Button>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span>
-                  <Button variant="outline" disabled>
-                    <FileSpreadsheet className="mr-2 h-4 w-4" />
-                    Ladda ner Excel
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent>Snart tillgänglig</TooltipContent>
-            </Tooltip>
-        </div>
-      </div>
-
-      <p className="text-sm text-muted-foreground">
-        Indirekt metod enligt BFNAR 2012:1 kap 7. Totalsumman ska överensstämma
-        med förändringen i likvida medel (kontoklass 19) under perioden.
-      </p>
+      <PageHeader
+        title={t('name_kassaflodesanalys')}
+        help={<HelpPopover>{t('cash_flow_help')}</HelpPopover>}
+        action={
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleDownloadPdf}
+              disabled={!report || isLoadingReport}
+              loading={isDownloadingPdf}
+            >
+              {!isDownloadingPdf && <Download className="mr-2 h-4 w-4" />}
+              {t('download_pdf')}
+            </Button>
+            <FyPicker
+              value={selectedPeriod}
+              onChange={(id) => setSelectedPeriod(id)}
+              includeAllOption={false}
+              hideFuturePeriods
+              onReady={() => setIsLoadingPeriods(false)}
+            />
+          </div>
+        }
+      />
+      <ReportPrintHeader
+        period={report ? { start: report.period_start, end: report.period_end } : null}
+      />
 
       {isLoadingPeriods ? (
         <div className="space-y-4">
@@ -208,8 +186,8 @@ export function KassaflodesanalysClient() {
         </div>
       ) : !selectedPeriod ? (
         <EmptyState
-          title="Välj räkenskapsår"
-          description="Välj ett räkenskapsår ovan för att generera kassaflödesanalys."
+          title={t('cash_flow_choose_year_title')}
+          description={t('cash_flow_choose_year_description')}
         />
       ) : isLoadingReport ? (
         <div className="space-y-4">
@@ -223,43 +201,35 @@ export function KassaflodesanalysClient() {
         </Card>
       ) : report ? (
         <div className="space-y-6">
-          <p className="text-sm text-muted-foreground">
-            Period: {formatDate(report.period_start)} till {formatDate(report.period_end)}
-          </p>
-
-          {/* Section 1: Löpande verksamhet */}
+          {/* Section 1: Löpande verksamhet. One heading per section, the
+              statutory one the PDF uses. */}
           <Card>
             <CardHeader>
-              <h2 className="text-sm uppercase tracking-wider text-muted-foreground">
-                Den löpande verksamheten
-              </h2>
-              <CardTitle className="text-base">
-                Kassaflöde från löpande verksamhet
-              </CardTitle>
+              <CardTitle className="text-base">{t('cash_flow_section_operating')}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-1">
               <CashRow
-                label="Resultat efter finansiella poster"
+                label={t('cash_flow_result_after_financial')}
                 amount={report.lopande.resultat_efter_finansiella_poster}
               />
-              <CashRow label="Avskrivningar" amount={report.lopande.avskrivningar} />
+              <CashRow label={t('cash_flow_depreciation')} amount={report.lopande.avskrivningar} />
               <CashRow
-                label="Övriga ej-kassaflödespåverkande poster"
+                label={t('cash_flow_other_non_cash')}
                 amount={report.lopande.ovriga_ej_kassaflodesposter}
               />
               <CashRow
-                label="Förändring av kortfristiga fordringar"
+                label={t('cash_flow_delta_receivables')}
                 amount={report.lopande.delta_kortfristiga_fordringar}
               />
               <CashRow
-                label="Förändring av varulager"
+                label={t('cash_flow_delta_inventory')}
                 amount={report.lopande.delta_varulager}
               />
               <CashRow
-                label="Förändring av kortfristiga skulder"
+                label={t('cash_flow_delta_payables')}
                 amount={report.lopande.delta_kortfristiga_skulder}
               />
-              <CashRow label="Betald inkomstskatt" amount={report.lopande.skatt_betald} />
+              <CashRow label={t('cash_flow_tax_paid')} amount={report.lopande.skatt_betald} />
               {report.lopande.koncernbidrag !== 0 && (
                 <CashRow
                   label={t('cash_flow_group_contributions')}
@@ -275,7 +245,7 @@ export function KassaflodesanalysClient() {
                 />
               )}
               <SubtotalRow
-                label="Summa kassaflöde löpande verksamhet"
+                label={t('cash_flow_total_operating')}
                 amount={report.lopande.total}
               />
             </CardContent>
@@ -284,20 +254,15 @@ export function KassaflodesanalysClient() {
           {/* Section 2: Investeringsverksamhet */}
           <Card>
             <CardHeader>
-              <h2 className="text-sm uppercase tracking-wider text-muted-foreground">
-                Investeringsverksamheten
-              </h2>
-              <CardTitle className="text-base">
-                Kassaflöde från investeringsverksamhet
-              </CardTitle>
+              <CardTitle className="text-base">{t('cash_flow_section_investing')}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-1">
               <CashRow
-                label="Förvärv av anläggningstillgångar"
+                label={t('cash_flow_acquisitions')}
                 amount={report.investerings.forvarv_anlaggningar}
               />
               <CashRow
-                label="Avyttring av anläggningstillgångar"
+                label={t('cash_flow_disposals')}
                 amount={report.investerings.avyttring_anlaggningar}
               />
               {report.investerings.kortfristiga_placeringar !== 0 && (
@@ -307,7 +272,7 @@ export function KassaflodesanalysClient() {
                 />
               )}
               <SubtotalRow
-                label="Summa kassaflöde investeringsverksamhet"
+                label={t('cash_flow_total_investing')}
                 amount={report.investerings.total}
               />
             </CardContent>
@@ -316,26 +281,21 @@ export function KassaflodesanalysClient() {
           {/* Section 3: Finansieringsverksamhet */}
           <Card>
             <CardHeader>
-              <h2 className="text-sm uppercase tracking-wider text-muted-foreground">
-                Finansieringsverksamheten
-              </h2>
-              <CardTitle className="text-base">
-                Kassaflöde från finansieringsverksamhet
-              </CardTitle>
+              <CardTitle className="text-base">{t('cash_flow_section_financing')}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-1">
               <CashRow
-                label="Förändring av lån"
+                label={t('cash_flow_delta_loans')}
                 amount={report.finansierings.delta_lan}
               />
-              <CashRow label="Utdelningar" amount={report.finansierings.utdelningar} />
-              <CashRow label="Nyemission" amount={report.finansierings.nyemission} />
+              <CashRow label={t('cash_flow_dividends')} amount={report.finansierings.utdelningar} />
+              <CashRow label={t('cash_flow_new_issue')} amount={report.finansierings.nyemission} />
               <CashRow
-                label="Erhållna aktieägartillskott"
+                label={t('cash_flow_shareholder_contributions')}
                 amount={report.finansierings.erhallna_aktieagartillskott}
               />
               <SubtotalRow
-                label="Summa kassaflöde finansieringsverksamhet"
+                label={t('cash_flow_total_financing')}
                 amount={report.finansierings.total}
               />
             </CardContent>
@@ -345,7 +305,7 @@ export function KassaflodesanalysClient() {
           <Card>
             <CardContent className="p-6">
               <div className="flex items-center justify-between">
-                <span className="font-display text-lg">Årets kassaflöde</span>
+                <span className="font-display text-lg">{t('cash_flow_year_total')}</span>
                 <span className="font-display text-lg tabular-nums">
                   {formatAmount(report.total_cash_flow)}
                 </span>
@@ -370,30 +330,30 @@ export function KassaflodesanalysClient() {
                 )}
                 <span className="font-medium">
                   {report.reconciliation.is_reconciled
-                    ? 'Avstämning OK: kassaflödet stämmer med 19xx'
-                    : 'Avstämning misslyckades: kontrollera bokföringen'}
+                    ? t('cash_flow_reconciled')
+                    : t('cash_flow_not_reconciled')}
                 </span>
               </div>
               <div className="space-y-1 text-sm">
                 <CashRow
-                  label="Ingående saldo (19xx)"
+                  label={t('cash_flow_opening_cash')}
                   amount={report.reconciliation.opening_cash_1xxx}
                 />
                 <CashRow
-                  label="Utgående saldo (19xx)"
+                  label={t('cash_flow_closing_cash')}
                   amount={report.reconciliation.closing_cash_1xxx}
                 />
                 <CashRow
-                  label="Faktisk förändring i likvida medel"
+                  label={t('cash_flow_delta_actual')}
                   amount={report.reconciliation.delta_actual}
                 />
                 <CashRow
-                  label="Beräknad förändring (summa kassaflöden)"
+                  label={t('cash_flow_delta_calculated')}
                   amount={report.reconciliation.delta_calculated}
                 />
                 {!report.reconciliation.is_reconciled && (
                   <div className="flex items-center justify-between border-t border-destructive pt-2 mt-2 text-sm font-medium text-destructive">
-                    <span>Avvikelse</span>
+                    <span>{t('cash_flow_mismatch')}</span>
                     <span className="tabular-nums text-right">
                       {formatAmount(report.reconciliation.mismatch_amount)}
                     </span>

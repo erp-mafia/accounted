@@ -74,6 +74,9 @@ interface AnnualReportStudioProps {
    */
   contentSection: ReactNode
   boardSection: ReactNode
+  /** The "?" beside the step 3 and step 4 headings: each step's intro and § references. */
+  contentHelp?: ReactNode
+  boardHelp?: ReactNode
   /** The next action on the page: only its button gets the primary style. */
   primaryAction: AnnualReportNextAction | null
   onVersionsChanged?: (versions: AnnualReportVersionSummary[]) => void
@@ -141,6 +144,8 @@ export function AnnualReportStudio({
   refreshKey = 0,
   contentSection,
   boardSection,
+  contentHelp,
+  boardHelp,
   primaryAction,
   onVersionsChanged,
   onComplianceChanged,
@@ -543,7 +548,7 @@ export function AnnualReportStudio({
       </section>
 
       <section id={annualReportStepAnchor('content')} className="scroll-mt-24">
-        <StepSectionHeader step="content" title={tSteps('section_content')} />
+        <StepSectionHeader step="content" title={tSteps('section_content')} help={contentHelp} />
         {contentSection}
         {ready && (
           <div className="space-y-4 px-1 pt-6">
@@ -563,7 +568,7 @@ export function AnnualReportStudio({
       </section>
 
       <section id={annualReportStepAnchor('board')} className="scroll-mt-24">
-        <StepSectionHeader step="board" title={tSteps('section_board')} />
+        <StepSectionHeader step="board" title={tSteps('section_board')} help={boardHelp} />
         {boardSection}
         {ready && (
           <div className="space-y-4 px-1 pt-6">

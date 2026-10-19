@@ -136,23 +136,8 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
 
   return (
     <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Periodiseringar</CardTitle>
-          <p className="text-sm text-muted-foreground">
-            Förutbetalda kostnader (17xx) och upplupna kostnader (29xx). Posteringarna
-            ska vändas på första dagen av nästa räkenskapsår: datumet visas per
-            verifikation. Automatisk omvändning är planerad till en kommande version.
-          </p>
-          {isEF && (
-            <p className="text-xs text-muted-foreground">
-              Enskild firma med förenklat årsbokslut (K1) behöver normalt inte
-              periodisera poster under 5 000 kr.
-            </p>
-          )}
-        </CardHeader>
-      </Card>
-
+      {/* The step's instructions (17xx/29xx, reversal on day one of the next
+          räkenskapsår, the K1 5 000 kr relief) live behind the wizard's "?". */}
       {!vacation && proposal.notices?.length > 0 && (
         <Card>
           <CardHeader>

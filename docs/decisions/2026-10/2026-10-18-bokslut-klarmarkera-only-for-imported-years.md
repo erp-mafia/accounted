@@ -1,0 +1,1 @@
+[2026-10-18] Bokslut asks "redan gjort i ett tidigare program?" only for years with imported verifikat or a completed SIE import (new holdsImportedHistory on the readiness report, two capped id reads); Klarmarkera stays in a quiet ⋯ menu for every eligible year.
