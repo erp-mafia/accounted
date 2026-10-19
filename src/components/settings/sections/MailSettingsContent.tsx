@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { MailConnectionsPanel } from '@/components/extensions/general/MailConnectionsPanel'
+import { MailAccessFacts, MailConnectionsPanel } from '@/components/extensions/general/MailConnectionsPanel'
 import {
   MAIL_SETTINGS_HREF,
   parseMailCallback,
@@ -46,7 +46,12 @@ export function MailSettingsContent() {
       <SettingsBackLink href="/settings/connections" label={tNav('connections')} />
       <SettingsSectionHeader
         title={tNav('mail')}
-        intro={tIntro('mail', { appName })}
+        intro={
+          <>
+            <p>{tIntro('mail', { appName })}</p>
+            <MailAccessFacts className="mt-3" />
+          </>
+        }
         mark={<GoogleMark className="h-5 w-5" />}
       />
       <MailConnectionsPanel notice={callback && callback !== 'connected' ? callback : null} />

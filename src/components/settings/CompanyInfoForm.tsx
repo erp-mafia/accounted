@@ -51,7 +51,34 @@ export function CompanyInfoForm({ settings, companyOrgNumber, onWrongCompany }: 
       <SettingsRow
         label={t('org_number_label')}
         htmlFor="org_number"
-        help={orgLocked ? t('org_number_locked') : undefined}
+        help={
+          !orgLocked
+            ? undefined
+            : onWrongCompany
+              ? // A locked field alone is a dead end: an owner who set up the
+                // wrong company comes here to change the number. The way out
+                // sits in the same "?" that says it cannot change, and taking
+                // it closes the popover before the delete dialog opens.
+                (close) => (
+                  <>
+                    <p>{t('org_number_locked')}</p>
+                    <p className="mt-2">
+                      {t('org_number_wrong_company')}{' '}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          close()
+                          onWrongCompany()
+                        }}
+                        className="underline underline-offset-2 transition-colors duration-150 hover:text-foreground"
+                      >
+                        {t('org_number_wrong_company_action')}
+                      </button>
+                    </p>
+                  </>
+                )
+              : t('org_number_locked')
+        }
         align="baseline"
       >
         <SettingsInput
@@ -69,22 +96,6 @@ export function CompanyInfoForm({ settings, companyOrgNumber, onWrongCompany }: 
         {!orgLocked && (
           <SettingsRowNote className="basis-full">
             {t(isPersonnummerForm ? 'org_number_fill_note_ef' : 'org_number_fill_note')}
-          </SettingsRowNote>
-        )}
-        {/* A locked field alone is a dead end: an owner who set up the wrong
-            company comes here to change the number, and the reason behind the
-            "?" says only that it cannot be done. One muted sentence with the
-            way out, on its own line under the field. */}
-        {orgLocked && onWrongCompany && (
-          <SettingsRowNote className="basis-full">
-            {t('org_number_wrong_company')}{' '}
-            <button
-              type="button"
-              onClick={onWrongCompany}
-              className="underline underline-offset-2 transition-colors duration-150 hover:text-foreground"
-            >
-              {t('org_number_wrong_company_action')}
-            </button>
           </SettingsRowNote>
         )}
       </SettingsRow>

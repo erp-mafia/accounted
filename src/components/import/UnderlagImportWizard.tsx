@@ -3,7 +3,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
-import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -17,6 +16,7 @@ import {
 } from '@/components/ui/destructive-confirm-dialog'
 import { FyPicker } from '@/components/common/FyPicker'
 import { CloseImportedYearsOffer } from '@/components/import/CloseImportedYearsOffer'
+import { ImportWizardRail } from '@/components/import/ImportWizardRail'
 import { mapWithConcurrency } from '@/lib/concurrency'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatDate } from '@/lib/utils'
@@ -121,7 +121,7 @@ function badgeVariant(status: UnderlagPlanStatus): 'secondary' | 'warning' | 'de
   return 'secondary'
 }
 
-export default function UnderlagImportWizard() {
+export default function UnderlagImportWizard({ onBack }: { onBack?: () => void }) {
   const t = useTranslations('import')
   const { toast } = useToast()
   const { dialogProps, confirm } = useDestructiveConfirm()
@@ -153,8 +153,6 @@ export default function UnderlagImportWizard() {
     review: t('underlag_step_review'),
     result: t('underlag_step_result'),
   }
-  const currentStepIndex = steps.indexOf(step)
-  const progress = ((currentStepIndex + 1) / steps.length) * 100
 
   const anyRenumbered = useMemo(
     () => rows.some((row) => row.candidates.some((c) => differingSourceLabel(c) !== null)),
@@ -409,33 +407,7 @@ export default function UnderlagImportWizard() {
 
   return (
     <div className="space-y-6">
-      <Card>
-        <CardContent className="pt-6">
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm">
-              <span className="sm:hidden text-primary font-medium">
-                {t('underlag_step_counter', {
-                  current: currentStepIndex + 1,
-                  total: steps.length,
-                  label: stepLabels[step],
-                })}
-              </span>
-              {steps.map((s, i) => (
-                <span
-                  key={s}
-                  className={cn(
-                    'hidden sm:inline',
-                    i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground',
-                  )}
-                >
-                  {stepLabels[s]}
-                </span>
-              ))}
-            </div>
-            <Progress value={progress} className="h-2" />
-          </div>
-        </CardContent>
-      </Card>
+      <ImportWizardRail steps={steps} current={step} label={(s) => stepLabels[s]} onBack={onBack} />
 
       {error && <AttnLine>{error}</AttnLine>}
 

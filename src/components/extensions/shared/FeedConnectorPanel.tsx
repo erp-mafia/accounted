@@ -21,6 +21,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { Switch } from '@/components/ui/switch'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
@@ -376,10 +377,15 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">{t('title')}</CardTitle>
+        <CardTitle className="flex items-center gap-2 text-base">
+          {t('title')}
+          {/* Connected, the description only restates the import row that
+              opened this panel: it moves behind the "?". */}
+          {hasActive && <HelpPopover className="shrink-0">{t('description')}</HelpPopover>}
+        </CardTitle>
       </CardHeader>
       <CardContent className="space-y-6 pt-0">
-        <p className="text-sm text-muted-foreground">{t('description')}</p>
+        {!hasActive && <p className="text-sm text-muted-foreground">{t('description')}</p>}
 
         {connections.map((connection) => {
           const isActive = connection.status === 'active'
@@ -388,6 +394,12 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
           const syncing = busyId === connection.id && !backfilling
           const { name, detail } = props.identity(connection)
           const lastSynced = props.lastSyncedAt(connection)
+          // The switch row's one note: when the feed last ran.
+          const syncedNote = lastSynced
+            ? tf('transaction_sync_last_synced', { date: formatDateLong(lastSynced) })
+            : connection.transaction_sync_enabled
+              ? tf('transaction_sync_never_synced')
+              : null
           return (
             <div key={connection.id} className="space-y-4 rounded-lg border border-border p-4">
               <div className="flex flex-wrap items-center justify-between gap-4">
@@ -464,18 +476,19 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
                   ))}
               </div>
 
+              {/* Flat rows: the switch with its "?" and when it last ran, then
+                  the backfill date and button with theirs. */}
               {isActive && (
-                <div className="flex flex-wrap items-start justify-between gap-4 border-t border-border pt-4">
-                  <div className="min-w-0 max-w-prose space-y-1">
-                    <p className="text-sm font-medium">{t('transaction_sync_title')}</p>
-                    <p className="text-sm text-muted-foreground">{t('transaction_sync_description')}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {!connection.transaction_sync_enabled
-                        ? t('transaction_sync_backfill_note')
-                        : lastSynced
-                          ? tf('transaction_sync_last_synced', { date: formatDateLong(lastSynced) })
-                          : tf('transaction_sync_never_synced')}
+                <div className="flex items-center justify-between gap-4 border-t border-border pt-4">
+                  <div className="min-w-0">
+                    <p className="flex items-center gap-2 text-sm font-medium">
+                      {t('transaction_sync_title')}
+                      <HelpPopover className="shrink-0">
+                        <p>{t('transaction_sync_description')}</p>
+                        <p className="mt-2">{t('transaction_sync_backfill_note')}</p>
+                      </HelpPopover>
                     </p>
+                    {syncedNote && <p className="mt-0.5 text-xs text-muted-foreground">{syncedNote}</p>}
                   </div>
                   <Switch
                     checked={connection.transaction_sync_enabled}
@@ -487,11 +500,11 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
               )}
 
               {isActive && (
-                <div className="space-y-4 border-t border-border pt-4">
-                  <div className="min-w-0 max-w-prose space-y-1">
-                    <p className="text-sm font-medium">{t('backfill_title')}</p>
-                    <p className="text-sm text-muted-foreground">{t('backfill_description')}</p>
-                  </div>
+                <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-border pt-4">
+                  <p className="flex items-center gap-2 text-sm font-medium">
+                    {t('backfill_title')}
+                    <HelpPopover className="shrink-0">{t('backfill_description')}</HelpPopover>
+                  </p>
                   <div className="flex flex-wrap items-center gap-3">
                     <Input
                       type="date"

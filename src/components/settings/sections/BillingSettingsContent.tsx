@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { Check } from 'lucide-react'
+import { Check, ChevronDown } from 'lucide-react'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -11,7 +11,13 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { Skeleton } from '@/components/ui/skeleton'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { SettingsSectionHeader, SettingsSeg } from '@/components/settings/SettingsRows'
+import {
+  SettingsRow,
+  SettingsRowEnd,
+  SettingsRowNote,
+  SettingsSectionHeader,
+  SettingsSeg,
+} from '@/components/settings/SettingsRows'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { useFormat } from '@/lib/hooks/use-format'
 import { BillingActions } from '@/components/settings/BillingActions'
@@ -178,6 +184,9 @@ function BillingCoreContent() {
   // The receipts panel mounts on first open and then stays mounted, so
   // switching back and forth does not refetch.
   const [receiptsOpened, setReceiptsOpened] = useState(false)
+  // A paying company sees its plan as one row; the two sales cards open
+  // behind "Jämför planer".
+  const [comparing, setComparing] = useState(false)
   // Whether collections is switched on for this company (kill switch and
   // pilot list): only then does the paid list name it. A failed read keeps it
   // off, which is the merge-time state anyway.
@@ -333,24 +342,18 @@ function BillingCoreContent() {
       ? t('price_note_yearly', { inc: formatCurrency(price.incVat), perMonth: formatCurrency(price.perMonthEquivalent) })
       : t('price_note_monthly', { inc: formatCurrency(price.incVat) })
 
+  // An active paid plan: one row with the plan, its price, the next charge
+  // when one is known, and the manage action. The cards are a comparison.
+  const planRow = view.isPaying && !view.isDemo
+
   let paidFooter: React.ReactNode = null
   if (view.isDemo) {
     // Demo accounts cannot check out: both cards, no CTA.
     paidFooter = null
   } else if (view.isPaying) {
-    paidFooter = (
-      <div className="flex flex-col items-center gap-3">
-        <BillingActions isPaying configured={view.configured} />
-        <div className="space-y-1 text-center text-xs text-muted-foreground">
-          {/* Subscribed during the trial: the card is committed but not yet
-              charged, so say when, in the words the sell view used. */}
-          {view.firstChargeAt && (
-            <p>{t('first_charge_on', { date: formatDateLong(view.firstChargeAt) })}</p>
-          )}
-          <p>{t('manage_line')}</p>
-        </div>
-      </div>
-    )
+    // The plan row above the comparison carries the manage action, the
+    // first charge and the manage line.
+    paidFooter = null
   } else if (view.paidJustNow) {
     // Just returned from checkout but the webhook hasn't flipped isPaying
     // yet: confirm instead of re-showing the sell pitch to someone who paid.
@@ -398,7 +401,7 @@ function BillingCoreContent() {
     )
   }
 
-  const planTab = (
+  const comparison = (
     <div>
       <div className="grid gap-4 sm:grid-cols-2">
         <PlanCard
@@ -462,6 +465,42 @@ function BillingCoreContent() {
         <HelpPopover className="ml-1 align-middle">{t('unlock_help')}</HelpPopover>
       </p>
     </div>
+  )
+
+  const planTab = planRow ? (
+    <div>
+      <SettingsRow label={t('paid_title')} help={t('manage_line')}>
+        <span className="tabular-nums">
+          {formatCurrency(price.exVat)} / {t(`period_${plan}`)}
+        </span>
+        <SettingsRowEnd>
+          <BillingActions isPaying configured={view.configured} />
+        </SettingsRowEnd>
+        <SettingsRowNote className="basis-full tabular-nums">{priceNote}</SettingsRowNote>
+        {/* Subscribed during the trial: the card is committed but not yet
+            charged, so say when, in the words the sell view used. */}
+        {view.firstChargeAt && (
+          <SettingsRowNote className="basis-full">
+            {t('first_charge_on', { date: formatDateLong(view.firstChargeAt) })}
+          </SettingsRowNote>
+        )}
+      </SettingsRow>
+      <button
+        type="button"
+        onClick={() => setComparing((v) => !v)}
+        aria-expanded={comparing}
+        className="mt-4 inline-flex items-center gap-1 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:text-foreground pointer-coarse:min-h-10"
+      >
+        {t('compare_plans')}
+        <ChevronDown
+          className={cn('h-3.5 w-3.5 transition-transform duration-150', comparing && 'rotate-180')}
+          aria-hidden="true"
+        />
+      </button>
+      {comparing && <div className="mt-6 animate-fade-in">{comparison}</div>}
+    </div>
+  ) : (
+    comparison
   )
 
   function selectTab(next: BillingTab) {

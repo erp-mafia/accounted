@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react'
 import SIEJobProgress from '@/components/import/SIEJobProgress'
+import { ImportWizardRail } from '@/components/import/ImportWizardRail'
 import { uploadSIEFile } from '@/lib/import/sie-job-client'
 import { describeImportResponseFailure, formatImportFailure } from '@/lib/import/import-failure'
 import { legacyNotices, type ImportNotice } from '@/lib/import/notices'
@@ -10,8 +11,6 @@ import { fetchAccounts } from '@/lib/reference-data/fetchers'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { Card, CardContent } from '@/components/ui/card'
-import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -138,7 +137,7 @@ const BANK_STEP_LABELS: Record<BankFileStep, string> = {
   result: 'Resultat',
 }
 
-function BankFileImportWizard() {
+function BankFileImportWizard({ onBack }: { onBack: () => void }) {
   const { toast } = useToast()
   const tTx = useTranslations('transactions')
   const { company } = useCompany()
@@ -231,8 +230,6 @@ function BankFileImportWizard() {
   }, [company?.id])
 
   const steps = parseResult?.format === 'generic_csv' ? BANK_STEPS_WITH_MAPPING : BANK_STEPS
-  const currentStepIndex = steps.indexOf(bankStep)
-  const progress = ((currentStepIndex + 1) / steps.length) * 100
 
   const handleFileSelect = useCallback(async (file: File, formatOverride?: BankFileFormatId) => {
     setBankError(null)
@@ -418,6 +415,14 @@ function BankFileImportWizard() {
 
   return (
     <div className="space-y-6">
+      {/* A deposit specification attaches to existing rows: no steps to show. */}
+      <ImportWizardRail
+        steps={depositSpecFile ? [] : steps}
+        current={bankStep}
+        label={(s) => BANK_STEP_LABELS[s]}
+        onBack={onBack}
+      />
+
       {/* Status chip for at-a-glance "auto-sync is healthy / stale / needs attention" */}
       <BankSyncStatusChip />
 
@@ -429,33 +434,6 @@ function BankFileImportWizard() {
       )}
 
       {depositSpecFile && <BankDepositSpecStep file={depositSpecFile} onNewImport={handleNewImport} />}
-
-      {/* Progress */}
-      {!depositSpecFile && (
-        <Card>
-          <CardContent className="pt-6">
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="sm:hidden text-primary font-medium">
-                  Steg {currentStepIndex + 1}/{steps.length}: {BANK_STEP_LABELS[bankStep]}
-                </span>
-                {steps.map((s, i) => (
-                  <span
-                    key={s}
-                    className={cn(
-                      'hidden sm:inline',
-                      i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground'
-                    )}
-                  >
-                    {BANK_STEP_LABELS[s]}
-                  </span>
-                ))}
-              </div>
-              <Progress value={progress} className="h-2" />
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
       {/* Step content */}
       {bankStep === 'upload' && !depositSpecFile && (
@@ -535,7 +513,7 @@ const SKATTEKONTO_STEP_LABELS: Record<SkattekontoFileStep, string> = {
   result: 'Resultat',
 }
 
-function SkattekontoImportWizard() {
+function SkattekontoImportWizard({ onBack }: { onBack: () => void }) {
   const { toast } = useToast()
   const t = useTranslations('import')
 
@@ -551,9 +529,6 @@ function SkattekontoImportWizard() {
   const [promotionIndexes, setPromotionIndexes] = useState<number[]>([])
   const [orgNumberMismatch, setOrgNumberMismatch] = useState(false)
   const [importResult, setImportResult] = useState<SkattekontoFileImportResult | null>(null)
-
-  const currentStepIndex = SKATTEKONTO_STEPS.indexOf(step)
-  const progress = ((currentStepIndex + 1) / SKATTEKONTO_STEPS.length) * 100
 
   const handleFileSelect = useCallback(
     async (file: File) => {
@@ -650,30 +625,12 @@ function SkattekontoImportWizard() {
 
   return (
     <div className="space-y-6">
-      <Card>
-        <CardContent className="pt-6">
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm">
-              <span className="sm:hidden text-primary font-medium">
-                Steg {currentStepIndex + 1}/{SKATTEKONTO_STEPS.length}:{' '}
-                {SKATTEKONTO_STEP_LABELS[step]}
-              </span>
-              {SKATTEKONTO_STEPS.map((s, i) => (
-                <span
-                  key={s}
-                  className={cn(
-                    'hidden sm:inline',
-                    i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground'
-                  )}
-                >
-                  {SKATTEKONTO_STEP_LABELS[s]}
-                </span>
-              ))}
-            </div>
-            <Progress value={progress} className="h-2" />
-          </div>
-        </CardContent>
-      </Card>
+      <ImportWizardRail
+        steps={SKATTEKONTO_STEPS}
+        current={step}
+        label={(s) => SKATTEKONTO_STEP_LABELS[s]}
+        onBack={onBack}
+      />
 
       {step === 'upload' && (
         <SkattekontoFileUploadStep
@@ -720,8 +677,11 @@ const SIE_STEP_LABELS: Record<ImportWizardStep, string> = {
 }
 
 function SIEImportWizard({
+  onBack,
   onOpenManualOpeningBalances,
 }: {
+  /** Back to the import choices: the rail's first crumb. */
+  onBack: () => void
   /** Switch to the manual "Ingående balanser" wizard (SIE preview, issue #2082). */
   onOpenManualOpeningBalances?: () => void
 }) {
@@ -771,8 +731,6 @@ function SIEImportWizard({
     ? ['upload', 'preview', 'mapping', 'review', 'result']
     : ['upload', 'preview', 'review', 'result']
 
-  const currentStepIndex = sieSteps.indexOf(step)
-  const progress = ((currentStepIndex + 1) / sieSteps.length) * 100
 
   const handleFileSelect = useCallback(async (selectedFile: File) => {
     setFile(selectedFile)
@@ -1157,30 +1115,17 @@ function SIEImportWizard({
     setImportResult(result);setStep('result');setJobId(null)
     void invalidateReferenceData(['ref:accounts','ref:fiscal-periods'])
   },[])
-  if (jobId) return <SIEJobProgress key={jobId} importId={jobId} onCompleted={handleJobCompleted} onUndone={handleNewImport}/>
+  // A running job has no steps to show; the back crumb stays.
+  if (jobId) return (
+    <div className="space-y-6">
+      <ImportWizardRail steps={[]} current={null} label={(s: ImportWizardStep) => SIE_STEP_LABELS[s]} onBack={onBack} />
+      <SIEJobProgress key={jobId} importId={jobId} onCompleted={handleJobCompleted} onUndone={handleNewImport}/>
+    </div>
+  )
 
   return (
     <div className="space-y-6">
-      <Card>
-        <CardContent className="pt-6">
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm">
-              <span className="sm:hidden text-primary font-medium">
-                Steg {currentStepIndex + 1}/{sieSteps.length}: {SIE_STEP_LABELS[step]}
-              </span>
-              {sieSteps.map((s, i) => (
-                <span key={s} className={cn(
-                  'hidden sm:inline',
-                  i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground'
-                )}>
-                  {SIE_STEP_LABELS[s]}
-                </span>
-              ))}
-            </div>
-            <Progress value={progress} className="h-2" />
-          </div>
-        </CardContent>
-      </Card>
+      <ImportWizardRail steps={sieSteps} current={step} label={(s) => SIE_STEP_LABELS[s]} onBack={onBack} />
 
       {step === 'upload' && <SIEUploadStep onFileSelect={handleFileSelect} isLoading={isLoading} error={error} errorType={errorType} validationErrors={validationErrors} validationWarnings={validationWarnings} duplicateImportId={duplicateImportId} onReplace={handleReplace} isReplacing={isReplacing} />}
       {step === 'preview' && preview && (
@@ -1227,7 +1172,7 @@ const OB_STEP_LABELS: Record<OpeningBalanceStep, string> = {
   result: 'Resultat',
 }
 
-function OpeningBalanceFlow() {
+function OpeningBalanceFlow({ onBack, entityPicker }: { onBack: () => void; entityPicker: React.ReactNode }) {
   const { toast } = useToast()
   const { dialogProps, confirm } = useDestructiveConfirm()
   const router = useRouter()
@@ -1249,8 +1194,6 @@ function OpeningBalanceFlow() {
   const steps: OpeningBalanceStep[] = needsMapping
     ? ['upload', 'column_mapping', 'edit', 'period', 'result']
     : ['upload', 'edit', 'period', 'result']
-  const currentStepIndex = steps.indexOf(obStep)
-  const progress = ((currentStepIndex + 1) / steps.length) * 100
 
   const handleFileSelect = useCallback(async (file: File) => {
     setObError(null)
@@ -1413,30 +1356,8 @@ function OpeningBalanceFlow() {
 
   return (
     <div className="space-y-6">
-      {/* Progress */}
-      <Card>
-        <CardContent className="pt-6">
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm">
-              <span className="sm:hidden text-primary font-medium">
-                Steg {currentStepIndex + 1}/{steps.length}: {OB_STEP_LABELS[obStep]}
-              </span>
-              {steps.map((s, i) => (
-                <span
-                  key={s}
-                  className={cn(
-                    'hidden sm:inline',
-                    i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground',
-                  )}
-                >
-                  {OB_STEP_LABELS[s]}
-                </span>
-              ))}
-            </div>
-            <Progress value={progress} className="h-2" />
-          </div>
-        </CardContent>
-      </Card>
+      <ImportWizardRail steps={steps} current={obStep} label={(s) => OB_STEP_LABELS[s]} onBack={onBack} />
+      {entityPicker}
 
       {/* Step content */}
       {obStep === 'upload' && (
@@ -1510,13 +1431,20 @@ const ENTITY_OPTIONS: { value: CsvDataEntity; label: string }[] = [
   { value: 'articles', label: 'Artiklar' },
 ]
 
-function CSVDataImportWizard({ initialEntity }: { initialEntity: CsvDataEntity | null }) {
+function CSVDataImportWizard({
+  initialEntity,
+  onBack,
+}: {
+  initialEntity: CsvDataEntity | null
+  onBack: () => void
+}) {
   // Opens on "Ingående balanser" unless a register page deep-linked a tab
   // (/import?mode=csv_data&entity=customers, see register-import-link.ts).
-  const [entity, setEntity] = useState<CsvDataEntity | null>(initialEntity ?? 'opening_balance')
+  const [entity, setEntity] = useState<CsvDataEntity>(initialEntity ?? 'opening_balance')
 
-  return (
-    <div className="space-y-6">
+  // The register picker sits under the flow's rail, so the back crumb stays
+  // the first thing on the row like in every other wizard.
+  const entityPicker = (
       <div className="flex flex-wrap gap-3">
         {ENTITY_OPTIONS.map((opt) => {
           const selected = entity === opt.value
@@ -1559,10 +1487,12 @@ function CSVDataImportWizard({ initialEntity }: { initialEntity: CsvDataEntity |
           )
         })}
       </div>
+  )
 
-      {entity === 'opening_balance' && <OpeningBalanceFlow key="ob-flow" />}
-      {entity !== null && entity !== 'opening_balance' && <RegisterImportFlow key={entity} entity={entity} />}
-    </div>
+  return entity === 'opening_balance' ? (
+    <OpeningBalanceFlow key="ob-flow" onBack={onBack} entityPicker={entityPicker} />
+  ) : (
+    <RegisterImportFlow key={entity} entity={entity} onBack={onBack} entityPicker={entityPicker} />
   )
 }
 
@@ -1601,6 +1531,12 @@ type ImportMode = null | 'psd2' | 'stripe' | 'woocommerce' | 'shopify' | 'zettle
 // preselects). "Tillbaka till val" removes them.
 const DEEP_LINK_MODE_PARAMS = ['mode', 'migration', 'provider', 'entity']
 
+type ImportHistoryKind = 'sie' | 'bank' | 'register'
+
+// Modes whose wizard renders "Tillbaka till val" as the first crumb of its
+// step rail; every other mode gets the plain back button.
+const WIZARD_MODES: ReadonlySet<ImportMode> = new Set<ImportMode>(['bank', 'skattekonto', 'sie', 'underlag', 'csv_data'])
+
 export default function ImportPage() {
   const { isSandbox, role } = useCompany()
   const [mode, setMode] = useState<ImportMode>(null)
@@ -1610,9 +1546,9 @@ export default function ImportPage() {
   const [sieDialogOpen, setSieDialogOpen] = useState(false)
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false)
   const [cloudOpen, setCloudOpen] = useState(false)
-  const [sieHistoryOpen, setSieHistoryOpen] = useState(false)
-  const [bankFileHistoryOpen, setBankFileHistoryOpen] = useState(false)
-  const [registerHistoryOpen, setRegisterHistoryOpen] = useState(false)
+  // One "Importhistorik" row; the history type is picked inside it.
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [historyKind, setHistoryKind] = useState<ImportHistoryKind>('sie')
   const [userId, setUserId] = useState('')
   const [exportPeriodId, setExportPeriodId] = useState<string | null>(null)
   const [exportExcludeClosing, setExportExcludeClosing] = useState(true)
@@ -1669,7 +1605,8 @@ export default function ImportPage() {
     // SIE import history so "Ångra import" is one click away.
     if (searchParams.get('history') === 'sie') {
       setView('import')
-      setSieHistoryOpen(true)
+      setHistoryOpen(true)
+      setHistoryKind('sie')
       // The history table renders below ~8 import rows: scroll it into view
       // (same pattern as the #cloud-backup hash deep link below).
       setTimeout(() => {
@@ -1700,6 +1637,24 @@ export default function ImportPage() {
       }, 80)
     }
   }, [])
+
+  const backToChoices = () => {
+    setMode(null)
+    // Mode is client state (not URL-synced), so the deep-linked
+    // preselect must be cleared here too or a re-entered migration
+    // mode would auto-jump again.
+    setInitialProvider(null)
+    setInitialCsvEntity(null)
+    // A deep link also left the mode in the URL. Drop it, or the next
+    // URL change (the Exportera tab's router.replace keeps every
+    // param) re-runs the sync effect above and reopens the mode.
+    const params = new URLSearchParams(searchParams.toString())
+    if (DEEP_LINK_MODE_PARAMS.some((key) => params.has(key))) {
+      DEEP_LINK_MODE_PARAMS.forEach((key) => params.delete(key))
+      const qs = params.toString()
+      router.replace(qs ? `/import?${qs}` : '/import', { scroll: false })
+    }
+  }
 
   const handleViewChange = (next: 'import' | 'export') => {
     setView(next)
@@ -1856,37 +1811,27 @@ export default function ImportPage() {
                   onClick={() => setMode('underlag')}
                 />
                 <ImportRow
-                  title={t('sie_history_title')}
-                  sub={t('sie_history_description')}
-                  expanded={sieHistoryOpen}
-                  onClick={() => setSieHistoryOpen((v) => !v)}
-                />
-                <ImportRow
-                  title={t('bankfile_history_title')}
-                  sub={t('bankfile_history_description')}
-                  expanded={bankFileHistoryOpen}
-                  onClick={() => setBankFileHistoryOpen((v) => !v)}
-                />
-                <ImportRow
-                  title={t('register_history_title')}
-                  sub={t('register_history_description')}
-                  expanded={registerHistoryOpen}
-                  onClick={() => setRegisterHistoryOpen((v) => !v)}
+                  title={t('history_title')}
+                  sub={t('history_description')}
+                  expanded={historyOpen}
+                  onClick={() => setHistoryOpen((v) => !v)}
                 />
               </div>
-              {sieHistoryOpen && (
-                <div className="mt-6" id="sie-import-history">
-                  <SIEImportHistory />
-                </div>
-              )}
-              {bankFileHistoryOpen && (
-                <div className="mt-6">
-                  <BankFileImportHistory />
-                </div>
-              )}
-              {registerHistoryOpen && (
-                <div className="mt-6">
-                  <RegisterImportHistory />
+              {historyOpen && (
+                <div className="mt-6 space-y-4 scroll-mt-24" id="sie-import-history">
+                  <SegmentedControl<ImportHistoryKind>
+                    value={historyKind}
+                    onChange={setHistoryKind}
+                    aria-label={t('history_title')}
+                    options={[
+                      { value: 'sie', label: t('history_kind_sie') },
+                      { value: 'bank', label: t('history_kind_bank') },
+                      { value: 'register', label: t('history_kind_register') },
+                    ]}
+                  />
+                  {historyKind === 'sie' && <SIEImportHistory />}
+                  {historyKind === 'bank' && <BankFileImportHistory />}
+                  {historyKind === 'register' && <RegisterImportHistory />}
                 </div>
               )}
             </div>
@@ -1990,28 +1935,9 @@ export default function ImportPage() {
         </>
       )}
 
-      {mode !== null && (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => {
-            setMode(null)
-            // Mode is client state (not URL-synced), so the deep-linked
-            // preselect must be cleared here too or a re-entered migration
-            // mode would auto-jump again.
-            setInitialProvider(null)
-            setInitialCsvEntity(null)
-            // A deep link also left the mode in the URL. Drop it, or the next
-            // URL change (the Exportera tab's router.replace keeps every
-            // param) re-runs the sync effect above and reopens the mode.
-            const params = new URLSearchParams(searchParams.toString())
-            if (DEEP_LINK_MODE_PARAMS.some((key) => params.has(key))) {
-              DEEP_LINK_MODE_PARAMS.forEach((key) => params.delete(key))
-              const qs = params.toString()
-              router.replace(qs ? `/import?${qs}` : '/import', { scroll: false })
-            }
-          }}
-        >
+      {/* The file wizards carry this as their rail's first crumb. */}
+      {mode !== null && !WIZARD_MODES.has(mode) && (
+        <Button variant="ghost" size="sm" onClick={backToChoices}>
           <ArrowLeft className="mr-2 h-4 w-4" />
           {t('back_to_choices')}
         </Button>
@@ -2076,13 +2002,13 @@ export default function ImportPage() {
           />
         )
       )}
-      {mode === 'bank' && <BankFileImportWizard />}
-      {mode === 'skattekonto' && <SkattekontoImportWizard />}
+      {mode === 'bank' && <BankFileImportWizard onBack={backToChoices} />}
+      {mode === 'skattekonto' && <SkattekontoImportWizard onBack={backToChoices} />}
       {/* The CSV/Excel wizard opens on "Ingående balanser" by default, which is
           exactly the manual path the SIE preview offers on an IB imbalance. */}
-      {mode === 'sie' && <SIEImportWizard key={searchParams.get('job') ?? 'new'} onOpenManualOpeningBalances={() => setMode('csv_data')} />}
-      {mode === 'underlag' && <UnderlagImportWizard />}
-      {mode === 'csv_data' && <CSVDataImportWizard initialEntity={initialCsvEntity} />}
+      {mode === 'sie' && <SIEImportWizard key={searchParams.get('job') ?? 'new'} onBack={backToChoices} onOpenManualOpeningBalances={() => setMode('csv_data')} />}
+      {mode === 'underlag' && <UnderlagImportWizard onBack={backToChoices} />}
+      {mode === 'csv_data' && <CSVDataImportWizard initialEntity={initialCsvEntity} onBack={backToChoices} />}
       {mode === 'migration' && (
         <MigrationWizard userId={userId} initialProvider={initialProvider ?? undefined} />
       )}

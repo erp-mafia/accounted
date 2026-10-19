@@ -109,16 +109,12 @@ export function CompanyDangerZone({ deleteDoor, onDeleteDoorChange }: CompanyDan
     <>
       <CompanyMigrationArchiveRow companyId={company.id} />
 
-      <SettingsDangerZone label={t('danger_heading')}>
+      {/* Both destructive actions ask for a typed confirmation first. Said
+          once, behind the zone's "?": a reader who does not dare press the
+          link can find that out without pressing it (issue #2214). */}
+      <SettingsDangerZone label={t('danger_heading')} help={t('danger_confirm_hint')}>
         <SettingsRow label={t('reset_row_label')}>
-          {/* Both destructive rows say up front that a typed confirmation
-              follows. A reader who does not dare press the link cannot find
-              that out any other way, and on a phone the link sits where a
-              stray tap while scrolling lands (issue #2214). */}
-          <div className="flex min-w-0 flex-col gap-0.5">
-            <SettingsRowNote>{t('reset_row_note')}</SettingsRowNote>
-            <SettingsRowNote>{t('danger_confirm_hint')}</SettingsRowNote>
-          </div>
+          <SettingsRowNote className="min-w-0">{t('reset_row_note')}</SettingsRowNote>
           <SettingsRowEnd>
             <button
               type="button"
@@ -130,23 +126,21 @@ export function CompanyDangerZone({ deleteDoor, onDeleteDoorChange }: CompanyDan
           </SettingsRowEnd>
         </SettingsRow>
         <SettingsRow
-          label={t('danger_button')}
+          // The label says what deleting does; the action says "Radera".
+          label={t('danger_delete_row_label')}
           borderless
           // The full BFL retention copy (incl. the backup link) lives behind
           // the "?": the visible row stays one quiet line.
           help={<RetentionNotice variant="company" className="border-0 bg-transparent p-0" />}
         >
-          <div className="flex min-w-0 flex-col gap-0.5">
-            <SettingsRowNote>{tRetention('company_title')}</SettingsRowNote>
-            <SettingsRowNote>{t('danger_confirm_hint')}</SettingsRowNote>
-          </div>
+          <SettingsRowNote className="min-w-0">{tRetention('company_title')}</SettingsRowNote>
           <SettingsRowEnd>
             <button
               type="button"
               onClick={() => onDeleteDoorChange('danger_zone')}
               className="text-sm font-medium text-destructive underline underline-offset-2 transition-colors duration-150 hover:text-destructive/80"
             >
-              {t('danger_button')}
+              {t('danger_delete_row_action')}
             </button>
           </SettingsRowEnd>
         </SettingsRow>

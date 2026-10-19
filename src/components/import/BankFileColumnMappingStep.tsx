@@ -20,7 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { ArrowLeft, ArrowRight, Columns3 } from 'lucide-react'
+import { ArrowLeft, ArrowRight } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 import { getCSVPreview, normalizeMinusSign, suggestColumnMapping } from '@/lib/import/bank-file/formats/generic-csv'
 import type { GenericCSVColumnMapping } from '@/lib/import/bank-file/types'
@@ -178,10 +178,6 @@ export default function BankFileColumnMappingStep({
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Columns3 className="h-5 w-5" />
-            Kolumnmappning
-          </CardTitle>
           <CardDescription>
             Vi kunde inte identifiera bankformatet automatiskt. Mappa kolumnerna manuellt.
           </CardDescription>

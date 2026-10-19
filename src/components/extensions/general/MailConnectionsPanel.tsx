@@ -279,24 +279,35 @@ export function MailConnectionsPanel({
         </SettingsGroup>
       ) : null}
 
-      {/* What the grant allows, stated before and after connecting: the
-          consent screen itself only says "read your email". */}
-      <SettingsGroup label={t('access_group')}>
-        <SettingsRow label={t('access_read_label')}>
-          <SettingsRowNote>{t('access_read')}</SettingsRowNote>
-        </SettingsRow>
-        <SettingsRow label={t('access_scope_label')}>
-          <SettingsRowNote>{t('access_scope')}</SettingsRowNote>
-        </SettingsRow>
-        <SettingsRow label={t('access_kept_label')}>
-          <SettingsRowNote>{t('access_kept')}</SettingsRowNote>
-        </SettingsRow>
-        <SettingsRow label={t('access_revoke_label')} borderless>
-          <SettingsRowNote>{t('access_revoke')}</SettingsRowNote>
-        </SettingsRow>
-      </SettingsGroup>
-
       <DestructiveConfirmDialog {...dialogProps} />
     </>
+  )
+}
+
+/**
+ * What the grant allows, stated before and after connecting: the consent
+ * screen itself only says "read your email". Prose with no control, so it
+ * lives behind the section's "?" (MailSettingsContent), not as rows.
+ */
+export function MailAccessFacts({ className }: { className?: string }) {
+  const t = useTranslations('mail')
+  const facts = [
+    ['access_read_label', 'access_read'],
+    ['access_scope_label', 'access_scope'],
+    ['access_kept_label', 'access_kept'],
+    ['access_revoke_label', 'access_revoke'],
+  ] as const
+  return (
+    <div className={className}>
+      <p className="font-medium">{t('access_group')}</p>
+      <dl className="mt-2 space-y-2">
+        {facts.map(([label, text]) => (
+          <div key={label}>
+            <dt className="font-medium">{t(label)}</dt>
+            <dd className="m-0 text-muted-foreground">{t(text)}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
   )
 }

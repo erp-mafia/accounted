@@ -84,45 +84,84 @@ export function SettingsFormWrapper({ children, onSave, className }: SettingsFor
     >
       {children}
 
-      {/* Sticky save bar: invisible until the form is dirty. The gradient
-          lets rows scroll away underneath without a hard edge. */}
-      <div
-        className={cn(
-          'sticky bottom-0 flex items-center gap-4 bg-gradient-to-t from-background via-background/95 to-transparent px-1 transition-opacity duration-150',
-          barVisible
-            ? 'mt-2 pb-3 pt-6 opacity-100'
-            : 'pointer-events-none h-0 overflow-hidden py-0 opacity-0',
-        )}
-        aria-hidden={!barVisible}
-      >
-        <Button
-          type="submit"
-          disabled={!canWrite}
-          loading={isSaving}
-          size="sm"
-          tabIndex={barVisible ? 0 : -1}
-          title={!canWrite ? t('wrapper_readonly_tooltip') : undefined}
-        >
-          {isSaving ? (
-            t('wrapper_saving')
-          ) : !canWrite ? (
-            <>
-              <Lock className="mr-2 h-3.5 w-3.5" />
-              {t('wrapper_save_changes')}
-            </>
-          ) : (
-            t('wrapper_save_changes')
-          )}
-        </Button>
-        {saved ? (
-          <span className="flex items-center gap-2 text-sm text-muted-foreground animate-in fade-in duration-150">
-            <Check className="h-3.5 w-3.5" />
-            {t('wrapper_saved')}
-          </span>
-        ) : (
-          <span className="text-xs text-muted-foreground">{t('wrapper_unsaved')}</span>
-        )}
-      </div>
+      <SettingsSaveBar visible={barVisible} saving={isSaving} saved={saved} canWrite={canWrite} />
     </form>
+  )
+}
+
+interface SettingsSaveBarProps {
+  visible: boolean
+  saving: boolean
+  saved: boolean
+  /** False for a read-only member: the button locks with a tooltip. */
+  canWrite?: boolean
+  /** Extra reasons the save cannot run yet (an invalid field). */
+  disabled?: boolean
+  /**
+   * Outside a <form>: what the button runs. Without it the button submits
+   * the form it sits in (SettingsFormWrapper).
+   */
+  onSave?: () => void
+  /** A quiet secondary action beside the save button (e.g. "Återställ"). */
+  secondary?: React.ReactNode
+}
+
+/**
+ * The Fönster save bar: sticky at the bottom of its container and invisible
+ * until something changed. SettingsFormWrapper renders it for the forms
+ * that save to /api/settings; a section that saves elsewhere (the first
+ * fiscal year) renders it directly with `onSave`.
+ */
+export function SettingsSaveBar({
+  visible,
+  saving,
+  saved,
+  canWrite = true,
+  disabled = false,
+  onSave,
+  secondary,
+}: SettingsSaveBarProps) {
+  const t = useTranslations('settings_company')
+  return (
+    // The gradient lets rows scroll away underneath without a hard edge.
+    <div
+      className={cn(
+        'sticky bottom-0 flex items-center gap-4 bg-gradient-to-t from-background via-background/95 to-transparent px-1 transition-opacity duration-150',
+        visible
+          ? 'mt-2 pb-3 pt-6 opacity-100'
+          : 'pointer-events-none h-0 overflow-hidden py-0 opacity-0',
+      )}
+      aria-hidden={!visible}
+    >
+      <Button
+        type={onSave ? 'button' : 'submit'}
+        onClick={onSave}
+        disabled={!canWrite || disabled}
+        loading={saving}
+        size="sm"
+        tabIndex={visible ? 0 : -1}
+        title={!canWrite ? t('wrapper_readonly_tooltip') : undefined}
+      >
+        {saving ? (
+          t('wrapper_saving')
+        ) : !canWrite ? (
+          <>
+            <Lock className="mr-2 h-3.5 w-3.5" />
+            {t('wrapper_save_changes')}
+          </>
+        ) : (
+          t('wrapper_save_changes')
+        )}
+      </Button>
+      {secondary}
+      {saved ? (
+        <span className="flex items-center gap-2 text-sm text-muted-foreground animate-in fade-in duration-150">
+          <Check className="h-3.5 w-3.5" />
+          {t('wrapper_saved')}
+        </span>
+      ) : (
+        <span className="text-xs text-muted-foreground">{t('wrapper_unsaved')}</span>
+      )}
+    </div>
   )
 }

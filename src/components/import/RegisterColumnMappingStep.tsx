@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Label } from '@/components/ui/label'
@@ -44,7 +44,6 @@ export default function RegisterColumnMappingStep<K extends string>({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Kolumnmappning</CardTitle>
         <CardDescription>
           Vi kunde inte automatiskt identifiera alla kolumner. Ange vilka kolumner i din fil
           som motsvarar respektive fält. Lämna tomt för fält som inte finns.
