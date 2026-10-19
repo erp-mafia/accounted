@@ -5,11 +5,12 @@ import { useLocale } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Download, AlertCircle, AlertTriangle, Info } from 'lucide-react'
+import { Download, AlertCircle, AlertTriangle } from 'lucide-react'
 import {
   DeclarationRutaRow,
   formatWholeKronor,
 } from '@/components/reports/DeclarationRutaRow'
+import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import type { INK2Declaration } from '@/lib/reports/ink2/types'
 import {
   INK2R_RUTA_LABELS,
@@ -114,50 +115,23 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
     <div
       className={`space-y-8 transition-opacity duration-150 ${loading ? 'opacity-60' : ''}`}
     >
-      {/* Header: company, year, filing artifact, and how to file it */}
-      <div className="px-1">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h3 className="font-sans text-sm font-medium">Inkomstdeklaration 2 (INK2)</h3>
-              <p className="text-sm text-muted-foreground mt-1">
-                {data.companyInfo.companyName} · {data.fiscalYear.name}
-                {data.companyInfo.orgNumber && ` · Org.nr: ${data.companyInfo.orgNumber}`}
-              </p>
-            </div>
-            <Button variant="outline" onClick={downloadSRU} disabled={downloading}>
-              <Download className="h-4 w-4 mr-2" />
-              {downloading ? 'Laddar ner...' : 'Ladda ner SRU-filer'}
-            </Button>
-          </div>
-          {downloadError && (
-            <div role="alert" className="flex items-start gap-2 text-sm text-destructive">
-              <AlertCircle className="h-4 w-4 mt-1 shrink-0" />
-              {downloadError}
-            </div>
-          )}
-          <div className="mt-4 flex items-start gap-2">
-            <Info className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-            <div className="text-[13px] leading-6 text-muted-foreground space-y-2">
-              <p>
-                INK2 visar det bokföringsmässiga resultatet baserat på din bokföring.
-              </p>
-              <ol className="list-decimal pl-6 space-y-1">
-                <li>Ladda ner SRU-filerna (en ZIP med INFO.SRU och BLANKETTER.SRU).</li>
-                <li>
-                  Ladda upp båda filerna till{' '}
-                  <a
-                    href="https://www1.skatteverket.se/fv/fv_web/start.do"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="underline underline-offset-2 text-foreground"
-                  >
-                    Skatteverkets filöverföringstjänst
-                  </a>.
-                </li>
-              </ol>
-            </div>
-          </div>
-      </div>
+      {/* The filing artifact sits in the report shell's toolbar slot beside
+          the other reports' exports. The page title, year picker and the
+          "?" with the filing steps (Ink2FilingHelp) live in the top bar, so
+          no second title block here; company and org.nr print on paper via
+          ReportPrintHeader. */}
+      <ReportExportMenu>
+        <Button size="sm" variant="outline" onClick={downloadSRU} loading={downloading}>
+          {!downloading && <Download className="h-4 w-4 mr-2" />}
+          Ladda ner SRU-filer
+        </Button>
+      </ReportExportMenu>
+      {downloadError && (
+        <div role="alert" className="flex items-start gap-2 px-1 text-sm text-destructive">
+          <AlertCircle className="h-4 w-4 mt-1 shrink-0" />
+          {downloadError}
+        </div>
+      )}
 
       {/* Warnings */}
       {data.warnings.length > 0 && (

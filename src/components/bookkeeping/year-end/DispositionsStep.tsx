@@ -12,6 +12,7 @@ import { Label } from '@/components/ui/label'
 import { ArrowRight, AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
+import { AttnLine } from '@/components/ui/attn-line'
 import { DepreciationPanel } from './DepreciationPanel'
 import { EfDeclarationSection } from './EfDeclarationSection'
 import type {
@@ -317,18 +318,14 @@ export function DispositionsStep({
         onPosted={() => void loadProposals()}
         onTaxDirtyChange={setTaxDepreciationDirty}
       />
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Bokslutsdispositioner</CardTitle>
-          <p className="text-sm text-muted-foreground">
-            Resultat före dispositioner:{' '}
-            <span className="tabular-nums font-medium">
-              {formatCurrency(proposal.netResultBefore)}
-            </span>
-            . Justera beloppen och bocka av de dispositioner du vill boka.
-          </p>
-        </CardHeader>
-      </Card>
+      {/* The figure the dispositions start from, as one meta line; the
+          instructions live behind the wizard's "?". */}
+      <p className="px-1 text-[12.5px] text-muted-foreground">
+        Resultat före dispositioner:{' '}
+        <span className="tabular-nums text-foreground">
+          {formatCurrency(proposal.netResultBefore)}
+        </span>
+      </p>
 
       {proposal.taxAdjustments && (
         <TaxAdjustmentsCard
@@ -342,14 +339,15 @@ export function DispositionsStep({
         />
       )}
 
-      {proposal.warnings?.map((warning) => (
-        <Card key={warning}>
-          <CardContent className="p-4 text-sm text-attn flex items-start gap-2">
-            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-            <span>{warning}</span>
-          </CardContent>
-        </Card>
-      ))}
+      {/* Attention is ochre sentences, not cards (conventions 6 and 12):
+          every disposition warning in one block. */}
+      {proposal.warnings && proposal.warnings.length > 0 && (
+        <div role="status" className="space-y-1 px-1">
+          {proposal.warnings.map((warning) => (
+            <AttnLine key={warning}>{warning}</AttnLine>
+          ))}
+        </div>
+      )}
 
       {(proposal.completedDispositions ?? []).map((completed) => (
         <Card key={`completed-${completed.kind}`}>
@@ -482,11 +480,9 @@ function TaxAdjustmentsCard({
   return (
     <Card>
       <CardHeader>
+        {/* What återläggningar do (and do not) touch lives behind the
+            wizard's "?" on this step. */}
         <CardTitle className="text-base">Skattemässiga justeringar</CardTitle>
-        <p className="text-sm text-muted-foreground">
-          Återläggningar påverkar skatten och INK2, men skapar ingen egen verifikation och ändrar
-          inte en redan bokförd periodiseringsfond.
-        </p>
       </CardHeader>
       <CardContent className="space-y-5">
         {detected.length > 0 && (

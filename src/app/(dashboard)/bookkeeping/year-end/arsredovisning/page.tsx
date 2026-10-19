@@ -20,7 +20,8 @@ import {
 } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { PageHeader } from '@/components/ui/page-header'
-import { ArrowLeft, FileDown, Plus, ExternalLink, Save, CheckCircle2, Trash2 } from 'lucide-react'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { FileDown, Plus, ExternalLink, Save, CheckCircle2, Trash2 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
 import { FyPicker } from '@/components/common/FyPicker'
@@ -44,6 +45,7 @@ import type { AnnualReportVersionSummary } from '@/lib/bokslut/arsredovisning/co
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { parseAmountInput } from '@/lib/money'
+import { useBranding } from '@/lib/branding/brand-context'
 
 const SIGNATURE_EVIDENCE_REFERENCE_PATTERN =
   /^(archive|document|receipt):[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/
@@ -74,6 +76,8 @@ export default function ArsredovisningPage() {
   const tStudio = useTranslations('annualReportStudio')
   const tNotes = useTranslations('annualReportNotes')
   const tSteps = useTranslations('annualReportSteps')
+  const tHelp = useTranslations('annualReportHelp')
+  const { appName } = useBranding()
   const { periods: fiscalPeriods, isLoading: periodsLoading } = useFiscalPeriods()
 
   const [data, setData] = useState<ArsredovisningData | null>(null)
@@ -788,29 +792,23 @@ export default function ArsredovisningPage() {
               : data.company.name}
           </span>
         }
+        // The year switch has to live on the loaded view too: the no-period
+        // branch above auto-jumps to the remembered scope (or the newest
+        // year) before anyone sees its picker, so without this the only way
+        // to another year's årsredovisning was to change the scope on some
+        // other page and come back. The way back to the bokslut is the
+        // rail's first step (Bokslut), not a second button up here.
         action={
-          <div className="flex flex-wrap items-center gap-2">
-            {/* The year switch has to live on the loaded view too: the
-                no-period branch above auto-jumps to the remembered scope (or
-                the newest year) before anyone sees its picker, so without
-                this the only way to another year's årsredovisning was to
-                change the scope on some other page and come back. */}
-            <FyPicker
-              value={periodId}
-              onChange={(id) => {
-                if (id && id !== periodId) {
-                  router.replace(`/bookkeeping/year-end/arsredovisning?period=${id}`)
-                }
-              }}
-              includeAllOption={false}
-              hideFuturePeriods
-            />
-            <Button size="sm" variant="outline" asChild>
-              <Link href={`/bookkeeping/year-end?period=${periodId}`}>
-                <ArrowLeft className="mr-2 h-4 w-4" /> Tillbaka till bokslut
-              </Link>
-            </Button>
-          </div>
+          <FyPicker
+            value={periodId}
+            onChange={(id) => {
+              if (id && id !== periodId) {
+                router.replace(`/bookkeeping/year-end/arsredovisning?period=${id}`)
+              }
+            }}
+            includeAllOption={false}
+            hideFuturePeriods
+          />
         }
       />
 
@@ -860,29 +858,6 @@ export default function ArsredovisningPage() {
         </div>
       )}
 
-      {data.accounting_framework === 'k3' && (
-        <div className="px-1 text-sm">
-          <p className="font-medium">Årsredovisning enligt K3 (BFNAR 2012:1)</p>
-          {/* Enumerate only what buildK3Noter and buildArsredovisningData
-              actually emit. The uppskjuten skatt-noten needs a 2240/8940
-              balance (which the engine no longer creates: K3 29.37 gross in
-              juridisk person), the anläggningsnoter need assets in the
-              register, and the kassaflödesanalys is dropped with a warning
-              when it cannot be generated. Promising any of them
-              unconditionally is false in the normal case. */}
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            {data.kassaflodesanalys
-              ? 'Dokumentet följer K3-mallen: kassaflödesanalys, förändring av eget kapital som egen räkning och noter enligt K3.'
-              : data.kassaflodesanalys_omission?.omitted
-                ? tNotes('cashflow_omitted_notice')
-                : 'Dokumentet följer K3-mallen: förändring av eget kapital som egen räkning och noter enligt K3. Kassaflödesanalysen kunde inte beräknas för perioden: se varningarna längre ner.'}{' '}
-            Vilka noter som kommer med styrs av bokföringen: noten Uppskjutna skatter tas
-            med först när konto 2240 eller 8940 har ett saldo, och anläggningsnoterna när
-            det finns tillgångar i anläggningsregistret.
-          </p>
-        </div>
-      )}
-
       {/* Steps 2 to 5 render inside the studio, which owns the compliance
           check; steps 3 and 4 are this page's inputs, passed in so each
           step's fields, open points and confirm button sit together. */}
@@ -897,13 +872,37 @@ export default function ArsredovisningPage() {
         primaryAction={primaryAction}
         onVersionsChanged={handleVersionsChanged}
         onComplianceChanged={setComplianceSummary}
+        contentHelp={
+          <HelpPopover>
+            <div className="space-y-2">
+              <p>{tHelp('content_pdf')}</p>
+              {data.accounting_framework === 'k3' && (
+                <>
+                  <p className="font-medium">{tHelp('k3_title')}</p>
+                  {/* Enumerate only what buildK3Noter and buildArsredovisningData
+                      actually emit. The uppskjuten skatt-noten needs a 2240/8940
+                      balance (which the engine no longer creates: K3 29.37 gross in
+                      juridisk person), the anläggningsnoter need assets in the
+                      register, and the kassaflödesanalys is dropped with a warning
+                      when it cannot be generated. Promising any of them
+                      unconditionally is false in the normal case. */}
+                  <p>
+                    {data.kassaflodesanalys
+                      ? tHelp('k3_template')
+                      : data.kassaflodesanalys_omission?.omitted
+                        ? tNotes('cashflow_omitted_notice')
+                        : tHelp('k3_template_cashflow_failed')}{' '}
+                    {tHelp('k3_notes_scope')}
+                  </p>
+                </>
+              )}
+            </div>
+          </HelpPopover>
+        }
+        boardHelp={<HelpPopover>{tSteps('board_intro')}</HelpPopover>}
         contentSection={
           <>
-            <p className="px-1 text-xs leading-5 text-muted-foreground">
-              Texten nedan visas i PDF:en. Klicka på <strong>Spara texten</strong> nedan
-              för att behålla ändringarna mellan sessioner.
-            </p>
-            <div className="space-y-4 px-1 pt-4">
+            <div className="space-y-4 px-1 pt-2">
               <div className="space-y-2">
                 <Label htmlFor="ar-description">Verksamhetsbeskrivning</Label>
                 <Textarea
@@ -946,24 +945,34 @@ export default function ArsredovisningPage() {
                 </p>
               </div>
               <div className="pt-4 border-t border-border space-y-4">
-                <div>
+                <div className="flex items-center gap-2">
                   <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
                     Lagstadgade upplysningar
                   </h3>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Noter som krävs enligt ÅRL men inte kan härledas automatiskt. Tomma
-                    fält visas som &quot;Inga.&quot; i PDF:en.
-                  </p>
+                  <HelpPopover>
+                    <div className="space-y-2">
+                      <p>{tHelp('disclosures_intro')}</p>
+                      <ul className="list-disc space-y-1 pl-4">
+                        <li>{tHelp('ref_medelantal')}</li>
+                        <li>{tHelp('ref_long_term_debt')}</li>
+                        <li>{tHelp('ref_securities')}</li>
+                        <li>{tHelp('ref_contingent')}</li>
+                        <li>{tHelp('ref_parent')}</li>
+                      </ul>
+                      <p>{tHelp('parent_org_nr_format')}</p>
+                    </div>
+                  </HelpPopover>
                 </div>
                 {data?.company.entity_type === 'ekonomisk_forening' && (
                   <div className="space-y-4 pb-4 border-b border-border">
-                    <div>
-                      <h4 className="text-sm font-medium">Medlemmar och insatser (ÅRL 6 kap. 3 §)</h4>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Förvaltningsberättelsen i en ekonomisk förening ska ange väsentliga
-                        förändringar i medlemsantalet, insatser som ska återbetalas och
-                        förlagsinsatsernas villkor. Tomma belopp visas som &quot;inga&quot;.
-                      </p>
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-sm font-medium">{tHelp('members_title')}</h4>
+                      <HelpPopover>
+                        <div className="space-y-2">
+                          <p>{tHelp('members_intro')}</p>
+                          <p>{tHelp('members_refs')}</p>
+                        </div>
+                      </HelpPopover>
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="ar-member-count">Väsentliga förändringar i medlemsantalet</Label>
@@ -988,7 +997,6 @@ export default function ArsredovisningPage() {
                         placeholder="0"
                         className="max-w-[220px] tabular-nums"
                       />
-                      <p className="text-xs text-muted-foreground">EFL 10 kap. 11 och 16 §§.</p>
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="ar-forlags-right">Rätt till utdelning som förlagsinsatser medför</Label>
@@ -1013,7 +1021,6 @@ export default function ArsredovisningPage() {
                         placeholder="0"
                         className="max-w-[220px] tabular-nums"
                       />
-                      <p className="text-xs text-muted-foreground">EFL 11 kap. 7 §.</p>
                     </div>
                   </div>
                 )}
@@ -1028,11 +1035,7 @@ export default function ArsredovisningPage() {
                     placeholder="Beräknas från Löner"
                     className="max-w-[220px] tabular-nums"
                   />
-                  <p className="text-xs text-muted-foreground">
-                    ÅRL 5:20 §. Lämna tomt för att använda antalet anställda från Löner.
-                    Ägare som tar ut lön räknas som anställd; fyll i om lönen bokförts utan
-                    anställd i Löner.
-                  </p>
+                  <p className="text-xs text-muted-foreground">{tHelp('medelantal_hint')}</p>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="ar-ltd">
@@ -1047,9 +1050,7 @@ export default function ArsredovisningPage() {
                     placeholder="0"
                     className="max-w-[220px] tabular-nums"
                   />
-                  <p className="text-xs text-muted-foreground">
-                    ÅRL 5:13 §. Lämna tomt om inga skulder förfaller senare än fem år.
-                  </p>
+                  <p className="text-xs text-muted-foreground">{tHelp('long_term_debt_hint')}</p>
                   <label className="flex cursor-pointer items-center gap-3 text-sm">
                     <Checkbox
                       id="ar-ltd-confirmed"
@@ -1068,7 +1069,6 @@ export default function ArsredovisningPage() {
                     rows={2}
                     placeholder="t.ex. Företagsinteckning 500 000 kr som säkerhet för bankkredit."
                   />
-                  <p className="text-xs text-muted-foreground">ÅRL 5:14 §.</p>
                   <label className="flex cursor-pointer items-center gap-3 text-sm">
                     <Checkbox
                       id="ar-securities-confirmed"
@@ -1087,7 +1087,6 @@ export default function ArsredovisningPage() {
                     rows={2}
                     placeholder="t.ex. Borgensåtagande för dotterbolags krediter 200 000 kr."
                   />
-                  <p className="text-xs text-muted-foreground">ÅRL 5:15 §.</p>
                   <label className="flex cursor-pointer items-center gap-3 text-sm">
                     <Checkbox
                       id="ar-contingent-confirmed"
@@ -1107,10 +1106,7 @@ export default function ArsredovisningPage() {
                     onChange={(e) => setParentName(e.target.value)}
                     placeholder="t.ex. AB Koncernholding"
                   />
-                  <p className="text-xs text-muted-foreground">
-                    BFNAR 2016:10 kap. 19 / BFNAR 2012:1 kap. 8. Lämna tomt om bolaget
-                    inte ingår i en koncern: noten utelämnas då.
-                  </p>
+                  <p className="text-xs text-muted-foreground">{tHelp('parent_name_hint')}</p>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="space-y-2">
@@ -1121,10 +1117,6 @@ export default function ArsredovisningPage() {
                       onChange={(e) => setParentOrgNr(e.target.value)}
                       placeholder="556677-8899 eller CHE-123.456.789"
                     />
-                    <p className="text-xs text-muted-foreground">
-                      Svenskt org.nr NNNNNN-NNNN. Utländskt moderföretag: registreringsnumret som
-                      det står i hemlandets register.
-                    </p>
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="ar-parent-city">Moderföretagets säte</Label>
@@ -1148,11 +1140,11 @@ export default function ArsredovisningPage() {
 
               {data.accounting_framework === 'k3' && (
                 <div className="pt-4 border-t border-border space-y-4">
-                  <div>
+                  <div className="flex items-center gap-2">
                     <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
                       {tNotes('notes_title')}
                     </h3>
-                    <p className="text-xs text-muted-foreground mt-1">{tNotes('notes_description')}</p>
+                    <HelpPopover>{tNotes('notes_description')}</HelpPopover>
                   </div>
                   {data.noter
                     .filter((note) => note.key)
@@ -1209,11 +1201,11 @@ export default function ArsredovisningPage() {
 
               {data.accounting_framework === 'k3' && data.kassaflodesanalys_omission && (
                 <div className="pt-4 border-t border-border space-y-3">
-                  <div>
+                  <div className="flex items-center gap-2">
                     <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
                       {tNotes('cashflow_title')}
                     </h3>
-                    <p className="text-xs text-muted-foreground mt-1">{tNotes('cashflow_rule')}</p>
+                    <HelpPopover>{tNotes('cashflow_rule')}</HelpPopover>
                   </div>
                   {data.kassaflodesanalys_omission.rule === 'forbidden' ? (
                     <>
@@ -1329,7 +1321,6 @@ export default function ArsredovisningPage() {
         }
         boardSection={
           <div className="space-y-4 px-1 pt-2">
-            <p className="text-xs leading-5 text-muted-foreground">{tSteps('board_intro')}</p>
             {signatures.length === 0 ? (
               <p className="text-sm text-muted-foreground italic">{tSteps('board_empty')}</p>
             ) : (
@@ -1399,9 +1390,19 @@ export default function ArsredovisningPage() {
       />
 
       <section id={annualReportStepAnchor('signatures')} className="scroll-mt-24">
-        <StepSectionHeader step="signatures" title={tSteps('section_signatures')} />
-        <p className="px-1 text-xs leading-5 text-muted-foreground">{tSteps('signatures_intro')}</p>
-        <div className="space-y-4 px-1 pt-4">
+        <StepSectionHeader
+          step="signatures"
+          title={tSteps('section_signatures')}
+          help={
+            <HelpPopover>
+              <div className="space-y-2">
+                <p>{tSteps('signatures_intro')}</p>
+                <p>{tHelp('signatures_evidence', { appName })}</p>
+              </div>
+            </HelpPopover>
+          }
+        />
+        <div className="space-y-4 px-1 pt-2">
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="signature-version">Låst version</Label>
@@ -1474,10 +1475,6 @@ export default function ArsredovisningPage() {
                 autoComplete="off"
               />
             </div>
-            <p className="text-xs text-muted-foreground md:col-span-2">
-              Accounted registrerar beviset men skapar inte själva underskriften. Spara
-              originalet eller signeringskvittot enligt bolagets dokumenthantering.
-            </p>
           </div>
           {pendingSignatureCount > 0 && signReadinessHint && (
             <p className="text-xs leading-5 text-muted-foreground">{signReadinessHint}</p>
@@ -1521,9 +1518,12 @@ export default function ArsredovisningPage() {
       </section>
 
       <section id={annualReportStepAnchor('agm')} className="scroll-mt-24">
-        <StepSectionHeader step="agm" title={tSteps('section_agm')} />
-        <p className="px-1 text-xs leading-5 text-muted-foreground">{tSteps('agm_intro')}</p>
-        <div className="space-y-4 px-1 pt-4">
+        <StepSectionHeader
+          step="agm"
+          title={tSteps('section_agm')}
+          help={<HelpPopover>{tSteps('agm_intro')}</HelpPopover>}
+        />
+        <div className="space-y-4 px-1 pt-2">
           <div className="space-y-2">
             <Label htmlFor="ar-agm-date">Datum för årsstämma</Label>
             <Input

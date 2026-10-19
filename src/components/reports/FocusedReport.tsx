@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { PageHeader } from '@/components/ui/page-header'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ReportBodyLoading, ReportPageLoading } from '@/components/reports/ReportLoading'
 import { REPORT_TOOLBAR_SLOT_ID } from '@/components/reports/ReportExportMenu'
@@ -13,6 +14,7 @@ import { FyPicker } from '@/components/common/FyPicker'
 import { ReportDateRange, type DateRangeValue } from '@/components/common/ReportDateRange'
 import { DimensionFilter, type DimensionFilterValue } from '@/components/reports/DimensionFilter'
 import { ReportPrintHeader } from '@/components/reports/ReportPrintHeader'
+import { Ink2FilingHelp } from '@/components/reports/Ink2FilingHelp'
 import { DATE_RANGE_SLUGS, DIMENSION_FILTER_SLUGS, getReport } from '@/lib/reports/catalog'
 import { huvudbokDrilldownHref, parseDrilldownParams } from '@/lib/reports/report-drilldown'
 import type { FiscalPeriod } from '@/types'
@@ -154,7 +156,11 @@ function FocusedReportInner({
           // Page help behind a "?" (UI-migration convention 7): the report
           // bodies carry no instructional copy in the page flow.
           help={
-            undefined
+            slug === 'ink2-declaration' && filesInk2 ? (
+              <HelpPopover>
+                <Ink2FilingHelp />
+              </HelpPopover>
+            ) : undefined
           }
           action={
             <FyPicker

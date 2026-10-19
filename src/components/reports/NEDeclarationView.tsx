@@ -10,6 +10,7 @@ import {
   DeclarationRutaRow,
   formatWholeKronor,
 } from '@/components/reports/DeclarationRutaRow'
+import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import type { NEDeclaration } from '@/lib/reports/ne-bilaga/types'
 import { downloadFile, RENDERED_DOWNLOAD_TIMEOUT_MS } from '@/lib/browser/download-file'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
@@ -125,34 +126,30 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
     <div
       className={`space-y-8 transition-opacity duration-150 ${loading ? 'opacity-60' : ''}`}
     >
-      {/* Header: company, year, and the filing artifact */}
-      <div className="px-1">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h3 className="font-sans text-sm font-medium">NE-bilaga (Enskild firma)</h3>
-              <p className="text-sm text-muted-foreground mt-1">
-                {data.companyInfo.companyName} · {data.fiscalYear.name}
-                {data.companyInfo.orgNumber && ` · Org.nr: ${data.companyInfo.orgNumber}`}
-              </p>
-            </div>
-            {/* A blocked declaration (R11 not the booked result) has no file: the
-                reason is the first warning below. */}
-            <Button
-              variant="outline"
-              onClick={downloadSRU}
-              disabled={downloading || data.sruBlockers.length > 0}
-            >
-              <Download className="h-4 w-4 mr-2" />
-              {downloading ? 'Laddar ner...' : 'Ladda ner SRU-fil'}
-            </Button>
-          </div>
-          {downloadError && (
-            <div role="alert" className="flex items-start gap-2 text-sm text-destructive">
-              <AlertCircle className="h-4 w-4 mt-1 shrink-0" />
-              {downloadError}
-            </div>
-          )}
-      </div>
+      {/* The filing artifact sits in the report shell's toolbar slot beside
+          the other reports' exports; the page title and year picker live in
+          the top bar, so no second title block here (company and org.nr
+          print on paper via ReportPrintHeader). A blocked declaration (R11
+          not the booked result) has no file: the reason is the first
+          warning below. */}
+      <ReportExportMenu>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={downloadSRU}
+          loading={downloading}
+          disabled={data.sruBlockers.length > 0}
+        >
+          {!downloading && <Download className="h-4 w-4 mr-2" />}
+          Ladda ner SRU-fil
+        </Button>
+      </ReportExportMenu>
+      {downloadError && (
+        <div role="alert" className="flex items-start gap-2 px-1 text-sm text-destructive">
+          <AlertCircle className="h-4 w-4 mt-1 shrink-0" />
+          {downloadError}
+        </div>
+      )}
 
       {/* Warnings */}
       {data.warnings.length > 0 && (

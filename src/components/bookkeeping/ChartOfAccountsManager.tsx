@@ -566,7 +566,9 @@ export default function ChartOfAccountsManager() {
         </HelpPopover>
       </div>
       <div className="flex items-center gap-4">
-        <Badge variant="outline" className="font-normal">{t('bas_version_chip')}</Badge>
+        {/* Which BAS edition the chart follows: a fact, not a choice, so
+            muted text rather than a chip that reads as a picker (conv 8). */}
+        <span className="text-[12.5px] text-muted-foreground">{t('bas_version_chip')}</span>
         <button type="button" className={QUIET_LINK_CLASS} onClick={() => setPruneDialogOpen(true)}>
           {t('prune_button')}
         </button>

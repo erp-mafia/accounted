@@ -62,15 +62,10 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
 
   return (
     <div className="space-y-8">
-      {/* Period line: muted text for the normal state, chip only when the
-          period deviates (design.md: chips mark exceptions). */}
-      <div className="flex flex-wrap items-baseline justify-between gap-3 px-1">
-        <div className="flex items-baseline gap-3">
-          <h2 className="font-sans text-sm font-medium">{report.period.name}</h2>
-          <span className="text-xs tabular-nums text-muted-foreground">
-            {report.period.period_start} till {report.period.period_end}
-          </span>
-        </div>
+      {/* Readiness: muted text for the normal state, chip only when the
+          period deviates (design.md: chips mark exceptions). The period
+          itself is named by the picker in the top bar, so no second title. */}
+      <div className="px-1">
         {report.ready ? (
           <span className="text-xs text-muted-foreground">Redo för bokslut</span>
         ) : (

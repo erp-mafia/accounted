@@ -63,6 +63,10 @@ export interface BokslutReadinessReport {
   }
   /** Entity type drives which dispositions apply (e.g. bolagsskatt only for AB). */
   entityType: 'aktiebolag' | 'enskild_firma' | 'ideell_forening' | 'handelsbolag' | 'kommanditbolag' | 'ekonomisk_forening'
+  /** The period holds history imported from a previous bookkeeping system
+   *  (an imported verifikat or a completed SIE import for the year). The
+   *  wizard asks "bokslutet redan gjort i ett tidigare program?" only then. */
+  holdsImportedHistory: boolean
   /** The full raw validation, for callers that want every field. */
   rawValidation: YearEndValidation
 }
@@ -100,6 +104,49 @@ async function fiscalYearGapWarnings(supabase: SupabaseClient, companyId: string
   }
 }
 
+/**
+ * Whether the period holds history imported from a previous bookkeeping
+ * system: a verifikat with source_type 'import' (SIE file and provider
+ * migrations alike) or a completed SIE import for the year (a balances-only
+ * file brings no verifikat). Two id-only reads capped at one row.
+ *
+ * Only such a year can have had its bokslut done elsewhere, so the wizard
+ * prompts for Klarmarkera only then; the action itself stays reachable for
+ * every eligible year. Advisory: a failed read answers false and costs only
+ * the prompt.
+ */
+async function periodHoldsImportedHistory(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+): Promise<boolean> {
+  try {
+    const [entries, imports] = await Promise.all([
+      supabase
+        .from('journal_entries')
+        .select('id')
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', fiscalPeriodId)
+        .eq('source_type', 'import')
+        .limit(1),
+      supabase
+        .from('sie_imports')
+        .select('id')
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', fiscalPeriodId)
+        .eq('status', 'completed')
+        .limit(1),
+    ])
+    for (const failed of [entries.error, imports.error]) {
+      if (failed) log.warn('imported history read failed', { companyId, fiscalPeriodId, error: failed.message })
+    }
+    return (entries.data?.length ?? 0) > 0 || (imports.data?.length ?? 0) > 0
+  } catch (err) {
+    log.warn('imported history check failed', { companyId, fiscalPeriodId, error: err instanceof Error ? err.message : String(err) })
+    return false
+  }
+}
+
 export async function buildBokslutReadinessReport(
   supabase: SupabaseClient,
   companyId: string,
@@ -107,7 +154,7 @@ export async function buildBokslutReadinessReport(
   fiscalPeriodId: string,
 ): Promise<BokslutReadinessReport> {
   // Fetch period + entity type in parallel with the heavy validation.
-  const [periodResult, settingsResult, validation] = await Promise.all([
+  const [periodResult, settingsResult, validation, holdsImportedHistory] = await Promise.all([
     supabase
       .from('fiscal_periods')
       .select('id, name, period_start, period_end, is_closed, locked_at, closing_entry_id')
@@ -120,6 +167,7 @@ export async function buildBokslutReadinessReport(
       .eq('company_id', companyId)
       .maybeSingle(),
     validateYearEndReadiness(supabase, companyId, userId, fiscalPeriodId),
+    periodHoldsImportedHistory(supabase, companyId, fiscalPeriodId),
   ])
 
   if (periodResult.error || !periodResult.data) {
@@ -230,16 +278,11 @@ export async function buildBokslutReadinessReport(
     }
   }
 
-  // Periodiseringar (accruals) are still manual: no wizard step ships in
-  // Phases 1-3. Depreciation, bolagsskatt and periodiseringsfond now have
-  // dedicated calculators (DepreciationPanel + DispositionsStep) so they're
-  // no longer surfaced as manual reminders.
-  reminders.push({
-    code: 'accruals_manual',
-    severity: 'info',
-    message:
-      'Periodiseringar (förutbetalda kostnader 17xx, upplupna kostnader 29xx) bokas manuellt. Tänk på att vända dem 1 januari nästa år.',
-  })
+  // Reminders are this year's findings only. The static guidance that used to
+  // ride along on every report (accruals are manual and reversed on day one
+  // of the next year; EF egenavgifter & co. are computed in the NE-bilaga,
+  // not booked) lives behind the wizard's "?" on the step it belongs to, so
+  // the Kontroll step does not announce the very next step on every year.
 
   // Bokslutsbilagor: every balance account signed off per balansdagen is what
   // Reko 760/765 asks for. Advisory: a failed read costs only this reminder.
@@ -267,22 +310,16 @@ export async function buildBokslutReadinessReport(
     log.warn('bilagor reminder failed', { companyId, fiscalPeriodId, error: err instanceof Error ? err.message : String(err) })
   }
 
-  // Only a form that files NE-bilagan gets the EF declaration reminders and
+  // Only a form that files NE-bilagan gets the EF declaration reminder and
   // preview; the preview itself refuses every other form, so the capability
   // is read here rather than the form compared to a string.
   if (filesIncomeReturn(entityType) === 'NE') {
     // Pre-compute the EF declaration so the wizard's overview reflects what
     // the user will see when they reach the dispositions step. Egenavgifter,
     // räntefördelning, periodiseringsfond-EF and expansionsfond are NOT
-    // booked: they go into the NE-bilaga / INK1. This reminder explains
-    // the BFL distinction.
-    reminders.push({
-      code: 'ef_skatt_via_ne',
-      severity: 'info',
-      message:
-        'Egenavgifter, räntefördelning, periodiseringsfond och expansionsfond beräknas i NE-bilagan, inte bokförs. Skatten betalas privat av ägaren.',
-    })
-
+    // booked: they go into the NE-bilaga / INK1 (explained behind the
+    // Dispositioner step's "?").
+    //
     // Surface a soft warning when kapitalunderlag is missing AND the booked
     // surplus is large enough to make positive räntefördelning meaningful
     // (> 50 000 kr: the spärrbelopp). This is non-blocking but actionable:
@@ -315,6 +352,7 @@ export async function buildBokslutReadinessReport(
     reconciliation,
     period,
     entityType,
+    holdsImportedHistory,
     rawValidation: validation,
   }
 }
