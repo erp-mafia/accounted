@@ -310,7 +310,9 @@ describe('the surface is classified and points at code that exists', () => {
     }
   })
 
-  it('the real tree still has the SIE writers the permanent allowlist names', () => {
+  // Scans every file under src/ and scripts/: well past vitest's 5 s default
+  // on a loaded CI runner.
+  it('the real tree still has the SIE writers the permanent allowlist names', { timeout: 60_000 }, () => {
     const { allowlisted } = findPostingPortBypasses(REPO)
     expect(allowlisted).toEqual(
       Object.fromEntries(Object.entries(ALLOWLIST).map(([file, { names }]) => [file, [...names].sort()])),
