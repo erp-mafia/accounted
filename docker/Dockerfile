@@ -55,12 +55,13 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # default. V8 caps its default old-space at about 4 GB on 64-bit whatever the
 # machine has, so a self-hosted build fails with "Ineffective mark-compacts
 # near heap limit" on a 32 GB host exactly as it would on a 4 GB one: more RAM
-# does not raise the ceiling, only this does. Measured on the current tree:
-# the check completes at 5120 MiB and dies at the default.
+# does not raise the ceiling, only this does. Measured on the current tree
+# (2026-10-19): the check no longer fits in 6144 MiB (two production builds
+# died there), so the builder gets 8192, as CI's checks job does.
 #
 # Only the builder stage sets this. The runner is a separate FROM and its
 # runtime heap stays whatever the deployment chooses.
-ENV NODE_OPTIONS=--max-old-space-size=6144
+ENV NODE_OPTIONS=--max-old-space-size=8192
 
 RUN npm run build
 
