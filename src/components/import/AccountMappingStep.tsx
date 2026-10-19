@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useRef } from 'react'
 import { useTranslations } from 'next-intl'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -281,7 +281,6 @@ export default function AccountMappingStep({
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Kontomappning</CardTitle>
           <CardDescription>
             Varje konto i SIE-filen kopplas till ett konto i din kontoplan.
             De flesta matchas automatiskt: granska de osäkra nedan.{' '}

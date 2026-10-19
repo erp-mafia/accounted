@@ -1,0 +1,1 @@
+[2026-10-18] SettingsSaveBar is extracted from SettingsFormWrapper so settings that save elsewhere than /api/settings (Räkenskapsår via fiscal-periods PATCH) get the same dirty-only sticky bar; the confirm dialog before a fiscal-year change stays.

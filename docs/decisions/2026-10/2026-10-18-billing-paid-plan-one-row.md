@@ -1,0 +1,1 @@
+[2026-10-18] Abonnemang shows a paying company its plan as one row (price, VAT note, first charge if known, Hantera abonnemang) with the sales cards behind Jämför planer; no renewal date until billing status returns one.

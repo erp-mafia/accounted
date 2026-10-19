@@ -4,11 +4,8 @@ import { useCallback, useState } from 'react'
 import dynamic from 'next/dynamic'
 import { useTranslations } from 'next-intl'
 import { Loader2 } from 'lucide-react'
-import { Card, CardContent } from '@/components/ui/card'
-import { Progress } from '@/components/ui/progress'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { cn } from '@/lib/utils'
 import { legacyNotices, type ImportNotice } from '@/lib/import/notices'
 import type { RegisterImportEntity } from '@/lib/import/register-import-link'
 import {
@@ -21,6 +18,7 @@ import {
   type RegisterStep,
 } from '@/lib/import/register-import-flow'
 import RegisterColumnMappingStep from '@/components/import/RegisterColumnMappingStep'
+import { ImportWizardRail } from '@/components/import/ImportWizardRail'
 import type { RegisterResult } from '@/components/import/RegisterResultStep'
 import { useRegisterImportConfig, type ReviewRow } from '@/components/import/register-import-config'
 
@@ -52,7 +50,17 @@ interface RegisterParseResult {
  * Artiklar): upload, column mapping when detection is unsure, review, result.
  * The steps are the same for every register; what differs is its config.
  */
-export default function RegisterImportFlow({ entity }: { entity: RegisterImportEntity }) {
+export default function RegisterImportFlow({
+  entity,
+  onBack,
+  entityPicker,
+}: {
+  entity: RegisterImportEntity
+  /** Back to the import choices: the rail's first crumb. */
+  onBack?: () => void
+  /** The register picker, rendered under the rail. */
+  entityPicker?: React.ReactNode
+}) {
   const { toast } = useToast()
   const t = useTranslations('import.register_flow')
   const config = useRegisterImportConfig(entity)
@@ -67,8 +75,6 @@ export default function RegisterImportFlow({ entity }: { entity: RegisterImportE
 
   const needsMapping = parseResult !== null && needsColumnMapping(parseResult.detected_columns)
   const steps = registerSteps(needsMapping)
-  const currentStepIndex = steps.indexOf(step)
-  const progress = ((currentStepIndex + 1) / steps.length) * 100
 
   const parse = useCallback(
     async (selectedFile: File, overrides?: Record<string, number | null>): Promise<{ ok: true; result: RegisterParseResult } | { ok: false; message: string }> => {
@@ -195,29 +201,8 @@ export default function RegisterImportFlow({ entity }: { entity: RegisterImportE
 
   return (
     <div className="space-y-6">
-      <Card>
-        <CardContent className="pt-6">
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm">
-              <span className="sm:hidden text-primary font-medium">
-                {t('step_of', { current: currentStepIndex + 1, total: steps.length, label: stepLabel(step) })}
-              </span>
-              {steps.map((s, i) => (
-                <span
-                  key={s}
-                  className={cn(
-                    'hidden sm:inline',
-                    i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground',
-                  )}
-                >
-                  {stepLabel(s)}
-                </span>
-              ))}
-            </div>
-            <Progress value={progress} className="h-2" />
-          </div>
-        </CardContent>
-      </Card>
+      <ImportWizardRail steps={steps} current={step} label={stepLabel} onBack={onBack} />
+      {entityPicker}
 
       {step === 'upload' && (
         <RegisterUploadStep

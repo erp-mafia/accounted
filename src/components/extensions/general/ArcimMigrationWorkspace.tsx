@@ -3032,22 +3032,24 @@ export function ResultStep({
         <section className="space-y-3">
           <SectionKicker>Övriga data</SectionKicker>
           <div className="stagger-enter grid gap-x-10 sm:grid-cols-2" data-no-stagger>
+            {/* Label and value only: the detail (skip reasons, why a
+                credit note has no link, when missing rows arrive) explains
+                rather than asks for action, so it sits behind the row's "?".
+                A failed row keeps its destructive value. */}
             {entityLines.map((line) => (
-              <div key={line.label} className="border-b border-border py-2">
-                <div className="flex items-baseline justify-between gap-4">
-                  <span className="text-sm">{line.label}</span>
-                  <span
-                    className={cn(
-                      'text-right text-sm tabular-nums',
-                      line.failed ? 'font-medium text-destructive' : 'text-muted-foreground'
-                    )}
-                  >
-                    {line.value}
-                  </span>
-                </div>
-                {line.detail && (
-                  <p className="mt-0.5 text-xs text-muted-foreground">{line.detail}</p>
-                )}
+              <div key={line.label} className="flex items-center justify-between gap-4 border-b border-border py-2">
+                <span className="flex min-w-0 items-center gap-2 text-sm">
+                  {line.label}
+                  {line.detail && <HelpPopover className="shrink-0">{line.detail}</HelpPopover>}
+                </span>
+                <span
+                  className={cn(
+                    'text-right text-sm tabular-nums',
+                    line.failed ? 'font-medium text-destructive' : 'text-muted-foreground'
+                  )}
+                >
+                  {line.value}
+                </span>
               </div>
             ))}
           </div>

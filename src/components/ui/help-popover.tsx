@@ -6,9 +6,15 @@ import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 
+/**
+ * Popover body: the page's help text (i18n `help_*` keys per namespace). A
+ * function receives `close`, for help that carries an action which opens
+ * something else (a dialog) and should take the popover down with it.
+ */
+export type HelpPopoverContent = React.ReactNode | ((close: () => void) => React.ReactNode)
+
 interface HelpPopoverProps {
-  /** Popover body: the page's help text (i18n `help_*` keys per namespace). */
-  children: React.ReactNode
+  children: HelpPopoverContent
   className?: string
 }
 
@@ -111,7 +117,7 @@ export function HelpPopover({ children, className }: HelpPopoverProps) {
             className={cn('pointer-events-auto fixed z-[60] w-[300px] p-4 outline-none text-[13px] leading-relaxed', POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS)}
             style={{ top: pos.top, left: pos.left }}
           >
-            {children}
+            {typeof children === 'function' ? children(() => setOpen(false)) : children}
           </div>,
           document.body,
         )}

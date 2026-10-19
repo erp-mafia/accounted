@@ -1,0 +1,1 @@
+[2026-10-18] Every import wizard opens with one ImportWizardRail row (back crumb plus the bokslut StepRail) instead of a back row, a progress card and a repeated step title; SIE acknowledgement gates and blockContinue are unchanged.

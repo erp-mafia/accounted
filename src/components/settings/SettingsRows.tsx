@@ -4,7 +4,7 @@ import { Children, cloneElement, isValidElement, useRef, useState } from 'react'
 import Link from 'next/link'
 import { ChevronLeft } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { HelpPopover } from '@/components/ui/help-popover'
+import { HelpPopover, type HelpPopoverContent } from '@/components/ui/help-popover'
 import { Switch } from '@/components/ui/switch'
 import {
   Select,
@@ -106,7 +106,7 @@ interface SettingsRowProps {
   /** Ties the label to a control; renders a <label> instead of a <span>. */
   htmlFor?: string
   /** Row help content: goes behind a "?" next to the label, never inline. */
-  help?: React.ReactNode
+  help?: HelpPopoverContent
   /** 'center' for toggles/selects/chips, 'baseline' for text inputs. */
   align?: 'center' | 'baseline'
   /** Drop the hairline (last row before a fold/reveal). */
@@ -426,11 +426,21 @@ export function SettingsSeg<T extends string>({
 }
 
 /** Terracotta-tinted trailing block for destructive actions. */
-export function SettingsDangerZone({ label, children }: { label: string; children: React.ReactNode }) {
+export function SettingsDangerZone({
+  label,
+  help,
+  children,
+}: {
+  label: string
+  /** Zone-level help ("?" after the label) for what holds for every row. */
+  help?: React.ReactNode
+  children: React.ReactNode
+}) {
   return (
     <section className="mt-10 border-t border-destructive/30 pt-3">
-      <p data-ph-unmask="" className="px-1 text-[11px] font-medium uppercase tracking-wider text-destructive/80">
-        {label}
+      <p className="flex items-center gap-2 px-1 text-[11px] font-medium uppercase tracking-wider text-destructive/80">
+        <span data-ph-unmask="">{label}</span>
+        {help ? <HelpPopover className="shrink-0">{help}</HelpPopover> : null}
       </p>
       <div>{children}</div>
     </section>

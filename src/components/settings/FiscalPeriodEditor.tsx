@@ -20,6 +20,7 @@ import {
   SettingsRow,
   SettingsRowNote,
 } from '@/components/settings/SettingsRows'
+import { SettingsSaveBar } from '@/components/settings/SettingsFormWrapper'
 import type { FiscalPeriod } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -194,9 +195,25 @@ export function FiscalPeriodEditor() {
     setEndDate(period.period_end)
   }
 
-  return (
+  // What used to sit in the flow (the care warning, the posted-voucher
+  // count) lives behind the group's "?". The enskild-firma calendar-year rule
+  // shows as a validation message when the dates break it.
+  const help = (
     <>
-      <SettingsGroup label={t('fp_heading')} help={t('fp_intro')}>
+      <p>{t('fp_intro')}</p>
+      <p className="mt-2">
+        {t('fp_warning_title')} {t('fp_warning_body')}
+        {isEF ? t('fp_warning_ef_suffix') : null}
+      </p>
+      {(postedCount ?? 0) > 0 && (
+        <p className="mt-2">{t('fp_posted_note', { count: postedCount ?? 0 })}</p>
+      )}
+    </>
+  )
+
+  return (
+    <div>
+      <SettingsGroup label={t('fp_heading')} help={help}>
         {isLoading ? (
           <div className="flex items-center gap-2 px-1 py-3 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -210,17 +227,6 @@ export function FiscalPeriodEditor() {
           <BlockedRow period={period} />
         ) : (
           <>
-            {/* Consequential warning: stays visible as one quiet ochre sentence. */}
-            <p className="px-1 py-3 text-[12.5px] text-attn">
-              {t('fp_warning_title')} {t('fp_warning_body')}
-              {isEF ? t('fp_warning_ef_suffix') : null}
-            </p>
-            {(postedCount ?? 0) > 0 && (
-              <p className="px-1 pb-3 text-xs text-muted-foreground">
-                {t('fp_posted_note', { count: postedCount ?? 0 })}
-              </p>
-            )}
-
             <SettingsRow
               label={t('fp_start_date_label')}
               htmlFor="fiscal-period-start"
@@ -251,7 +257,9 @@ export function FiscalPeriodEditor() {
               />
             </SettingsRow>
 
-            {validation.canSummarise && (
+            {/* The proposed year restates the two fields, so it only shows
+                once they differ from the saved dates. */}
+            {isDirty && validation.canSummarise && (
               <p className="px-1 pt-3 text-xs text-muted-foreground">
                 {t('fp_summary_title')}:{' '}
                 <span className="tabular-nums">
@@ -263,38 +271,34 @@ export function FiscalPeriodEditor() {
             {validation.error && (
               <p className="px-1 pt-1 text-xs text-destructive">{validation.error}</p>
             )}
-
-            <div className="flex justify-end gap-2 px-1 pt-3">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={handleReset}
-                disabled={!isDirty || isSaving}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                {t('fp_reset')}
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                onClick={handleSave}
-                disabled={
-                  !isDirty ||
-                  !startDate ||
-                  !endDate ||
-                  validation.error !== null
-                }
-                loading={isSaving}
-              >
-                {isSaving ? t('fp_saving') : t('fp_save')}
-              </Button>
-            </div>
           </>
         )}
       </SettingsGroup>
+      {/* The shared dirty-only save bar; saving still opens the confirm
+          dialog first (handleSave). */}
+      {period && !isBlocked && (
+        <SettingsSaveBar
+          visible={isDirty || isSaving}
+          saving={isSaving}
+          saved={false}
+          disabled={!startDate || !endDate || validation.error !== null}
+          onSave={() => void handleSave()}
+          secondary={
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={handleReset}
+              disabled={isSaving}
+              tabIndex={isDirty ? 0 : -1}
+            >
+              {t('fp_reset')}
+            </Button>
+          }
+        />
+      )}
       <DestructiveConfirmDialog {...dialogProps} />
-    </>
+    </div>
   )
 }
 
