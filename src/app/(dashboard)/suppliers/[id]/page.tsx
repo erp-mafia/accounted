@@ -23,6 +23,8 @@ import { usePartyDossier } from '@/components/parties/use-party-dossier'
 import { fromRegistry, addressRowsFromRegistry, listSv } from '@/lib/parties/registry-summary'
 import { formatOrgNumber } from '@/lib/utils'
 import { supplierInvoiceStatusDisplay } from '@/lib/supplier-invoices/status-display'
+import { companyAttestsSupplierInvoices } from '@/lib/supplier-invoices/lifecycle'
+import { useCompanySettings } from '@/components/settings/useSettings'
 import {
   openPaymentMarker,
   OPEN_PAYMENT_MARKER_LABEL_KEYS,
@@ -54,6 +56,9 @@ export default function SupplierDetailPage() {
   const t = useTranslations('supplier_detail')
   const tParties = useTranslations('parties')
   const tInvoices = useTranslations('supplier_invoices')
+  // Kontantmetoden never attests, so 'registered' reads "Att betala" there.
+  const { settings: companySettings } = useCompanySettings()
+  const attests = companyAttestsSupplierInvoices(companySettings?.accounting_method)
   const [supplier, setSupplier] = useState<Supplier & { stats?: SupplierStats } | null>(null)
   const partyId = (supplier as { party_id?: string | null } | null)?.party_id ?? null
   const party = usePartyDossier(partyId)
@@ -370,7 +375,7 @@ export default function SupplierDetailPage() {
               {invoices.map((inv) => {
                 // The same status as the supplier-invoice list and detail
                 // (lib/supplier-invoices/status-display.ts).
-                const statusDisplay = supplierInvoiceStatusDisplay(inv.status)
+                const statusDisplay = supplierInvoiceStatusDisplay(inv.status, { attests })
                 const exceptionVariant = statusDisplay?.chip ?? undefined
                 const label = statusDisplay ? tInvoices(statusDisplay.labelKey) : inv.status
                 const openPayment = openPaymentMarker(inv)

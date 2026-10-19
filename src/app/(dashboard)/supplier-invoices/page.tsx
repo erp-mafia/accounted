@@ -158,6 +158,9 @@ export default function SupplierInvoicesPage() {
   // the status picker (founder call 2026-09-07: a bar of stages over two
   // invoices was chrome, not information).
   const { settings: companySettings } = useCompanySettings()
+  // Kontantmetoden never attests: there 'registered' is the normal open
+  // state, so the row reads "Att betala" instead of the attest chip.
+  const attests = companyAttestsSupplierInvoices(companySettings?.accounting_method)
   const [searchTerm, setSearchTerm] = useState('')
   // null = the API's default order (förfallodatum stigande).
   const [sort, setSort] = useState<SupplierInvoiceListSort | null>(null)
@@ -720,7 +723,7 @@ export default function SupplierInvoicesPage() {
               {orderedInvoices.map((inv, rowIndex) => {
                 // One chip per row, the same as the detail header and the
                 // supplier page (lib/supplier-invoices/status-display.ts).
-                const statusDisplay = supplierInvoiceStatusDisplay(inv.status)
+                const statusDisplay = supplierInvoiceStatusDisplay(inv.status, { attests })
                 const chipVariant = statusDisplay?.chip ?? undefined
                 const chipLabel =
                   inv.status === 'paid' && inv.paid_at
@@ -861,7 +864,7 @@ export default function SupplierInvoicesPage() {
                       className={cn(TD_CLASS, 'whitespace-nowrap text-right')}
                       onClick={(e) => e.stopPropagation()}
                     >
-                      {canApprove && companyAttestsSupplierInvoices(companySettings?.accounting_method) && (
+                      {canApprove && attests && (
                         <button
                           type="button"
                           className={cn(

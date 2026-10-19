@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import dynamic from 'next/dynamic'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -12,8 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { TH_CLASS, TD_CLASS, SHOW_MORE_STEP, ShowMoreFooter } from '@/components/ui/dry-table'
-import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
-import { RegisterImportButton } from '@/components/import/RegisterImportButton'
+import { RegisterActionsMenu } from '@/components/import/RegisterActionsMenu'
 import { useToast } from '@/components/ui/use-toast'
 import { Plus, Lock, Truck } from 'lucide-react'
 import Link from 'next/link'
@@ -21,6 +20,7 @@ import { cn } from '@/lib/utils'
 import { formatOrgNumberDisplay, stripOrgNumberFormatting } from '@/lib/invariants/org-number'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { Supplier, SupplierType, CreateSupplierInput } from '@/types'
+import { dominantPartyType, partyTypeSuffix } from '@/lib/parties/list-type-suffix'
 
 const SupplierForm = dynamic(
   () => import('@/components/suppliers/SupplierForm'),
@@ -40,6 +40,9 @@ const SUPPLIER_TYPE_KEYS: Record<SupplierType, string> = {
   eu_business: 'type_eu_business',
   non_eu_business: 'type_non_eu_business',
 }
+
+/** Tie order for the list's normal type: Swedish first. */
+const SUPPLIER_TYPE_ORDER: readonly SupplierType[] = ['swedish_business', 'eu_business', 'non_eu_business']
 
 // "Betalsätt" cell (concept scene 26): the supplier's primary payment route,
 // e.g. "BG 5050-1055". First match wins, mirroring the detail page's order.
@@ -114,21 +117,21 @@ export default function SuppliersPage() {
       : false)
   )
   const visibleSuppliers = filteredSuppliers.slice(0, visibleCount)
+  // The Typ column said "Svenskt företag eller organisation" on nearly every
+  // row: the whole register's most common type goes unsaid, and a row of
+  // another type carries it after the name.
+  const dominantType = useMemo(
+    () => dominantPartyType(suppliers.map((s) => s.supplier_type), SUPPLIER_TYPE_ORDER),
+    [suppliers],
+  )
 
   return (
     <div className="space-y-8">
-      {/* Page header (concept scene 26): title + import + export + Ny leverantör */}
+      {/* Page header (concept scene 26): title + import/export menu + Ny leverantör */}
       <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
         <div className="flex flex-wrap items-center justify-end gap-2">
-          <RegisterImportButton entity="suppliers" />
-          <ReportExportMenu
-            size="sm"
-            items={[
-              { format: 'xlsx', href: '/api/export/suppliers' },
-              { format: 'csv', href: '/api/export/suppliers?format=csv' },
-            ]}
-          />
+          <RegisterActionsMenu entity="suppliers" />
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
               <Button
@@ -198,7 +201,6 @@ export default function SuppliersPage() {
               <thead>
                 <tr>
                   <th className={cn(TH_CLASS, 'w-full')}>{t('th_name')}</th>
-                  <th className={TH_CLASS}>{t('th_type')}</th>
                   <th className={cn(TH_CLASS, 'hidden sm:table-cell')}>{t('th_payment')}</th>
                   <th className={cn(TH_CLASS, 'hidden md:table-cell')}>{t('th_email')}</th>
                   <th className={cn(TH_CLASS, 'hidden lg:table-cell')}>{t('th_org_number')}</th>
@@ -207,6 +209,7 @@ export default function SuppliersPage() {
               <tbody className="stagger-enter">
                 {visibleSuppliers.map((supplier) => {
                   const payment = getPaymentInfo(supplier, t)
+                  const typeSuffix = partyTypeSuffix(supplier.supplier_type, dominantType)
                   return (
                     <tr
                       key={supplier.id}
@@ -214,16 +217,20 @@ export default function SuppliersPage() {
                       onClick={() => router.push(`/suppliers/${supplier.id}`)}
                     >
                       <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
-                        <Link
-                          href={`/suppliers/${supplier.id}`}
-                          className="block truncate hover:underline"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          {supplier.name}
-                        </Link>
-                      </td>
-                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
-                        {t(SUPPLIER_TYPE_KEYS[supplier.supplier_type])}
+                        <span className="flex min-w-0 items-baseline gap-2">
+                          <Link
+                            href={`/suppliers/${supplier.id}`}
+                            className="min-w-0 truncate hover:underline"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {supplier.name}
+                          </Link>
+                          {typeSuffix && SUPPLIER_TYPE_KEYS[typeSuffix] && (
+                            <span className="shrink-0 text-[12.5px] text-muted-foreground">
+                              {t(SUPPLIER_TYPE_KEYS[typeSuffix])}
+                            </span>
+                          )}
+                        </span>
                       </td>
                       <td className={cn(TD_CLASS, 'hidden whitespace-nowrap tabular-nums text-muted-foreground sm:table-cell')}>
                         {payment ? `${payment.label} ${payment.value}` : ''}

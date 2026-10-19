@@ -39,9 +39,12 @@ import { DocumentViewButton } from '@/components/bookkeeping/DocumentViewButton'
 import { useCompanySettings } from '@/components/settings/useSettings'
 import useSWR from 'swr'
 import { StageSteps } from '@/components/supplier-invoices/StageSteps'
+import { SplitButton, type SplitButtonOption } from '@/components/ui/split-button'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { useUiState } from '@/lib/hooks/use-ui-state'
+import { resolveInitialMode } from '@/lib/ui-state/client'
 import {
   openPaymentMarker,
-  OPEN_PAYMENT_MARKER_LABEL_KEYS,
   stagesFor,
   type InvoiceLifecycle,
   type SupplierInvoiceLadderStage,
@@ -185,6 +188,8 @@ export default function SupplierInvoiceDetailPage() {
   // Betala via banken is offered where bank payments are switched on for the
   // company (GET /api/payments/availability), beside the payment file.
   const [bankPaymentsAvailable, setBankPaymentsAvailable] = useState(false)
+  // Seeds the Betala split button with the last-used pay mode.
+  const { uiState, loaded: uiStateLoaded } = useUiState()
   useEffect(() => {
     let cancelled = false
     fetchPaymentsAvailability()
@@ -495,7 +500,9 @@ export default function SupplierInvoiceDetailPage() {
   // One status element, the same as the list row and the supplier page
   // (lib/supplier-invoices/status-display.ts): approved and paid render as
   // muted text, everything that deviates gets a chip.
-  const statusDisplay = supplierInvoiceStatusDisplay(invoice.status)
+  const statusDisplay = supplierInvoiceStatusDisplay(invoice.status, {
+    attests: companyAttestsSupplierInvoices(companySettings?.accounting_method),
+  })
   const status: { label: string; exception: boolean; variant?: StatusChip } =
     invoice.status === 'paid' && invoice.paid_at
       ? { label: tList('status_paid_date', { date: formatDate(invoice.paid_at) }), exception: false }
@@ -533,28 +540,25 @@ export default function SupplierInvoiceDetailPage() {
     !invoice.is_credit_note &&
     companyAttestsSupplierInvoices(companySettings?.accounting_method) &&
     (!attestState?.required || attestState.viewer.may_approve)
-  const stripText = (s: SupplierInvoiceLadderStage, state: 'done' | 'now' | 'todo'): string => {
-    if (state === 'todo') return t(`strip_pending_${s}`)
+  // The strip's dates: when each done or current step happened.
+  const stageDate = (s: SupplierInvoiceLadderStage): string | null => {
     switch (s) {
       case 'incoming':
-        return t('strip_incoming', { date: formatDate(invoice.created_at) })
       case 'registered':
-        return invoice.registration_journal_entry_id
-          ? t('strip_registered', { date: formatDate(invoice.created_at) })
-          : t('strip_registered_unbooked', { date: formatDate(invoice.created_at) })
+        return formatDate(invoice.created_at)
       case 'approved':
-        return invoice.approved_at ? t('strip_approved', { date: formatDate(invoice.approved_at) }) : t('strip_skipped')
-      case 'in_file':
+        return invoice.approved_at ? formatDate(invoice.approved_at) : null
+      case 'in_file': {
         // Same step, two kinds of evidence: a payment file or a bank payment.
-        return lifecycle?.payment_order
-          ? t('strip_in_bank_payment', { date: formatDate(lifecycle.payment_order.created_at) })
-          : t('strip_in_file', { date: lifecycle?.batch ? formatDate(lifecycle.batch.created_at) : '' })
-      case 'paid':
-        return t('strip_paid', {
-          date: invoice.paid_at ? formatDate(invoice.paid_at) : lifecycle?.paid ? formatDate(lifecycle.paid.date) : '',
-        })
+        const opened = lifecycle?.payment_order?.created_at ?? lifecycle?.batch?.created_at
+        return opened ? formatDate(opened) : null
+      }
+      case 'paid': {
+        const paid = invoice.paid_at ?? lifecycle?.paid?.date
+        return paid ? formatDate(paid) : null
+      }
       case 'reconciled':
-        return t('strip_reconciled', { date: lifecycle?.reconciled_through ? formatDate(lifecycle.reconciled_through) : '' })
+        return lifecycle?.reconciled_through ? formatDate(lifecycle.reconciled_through) : null
     }
   }
   const canMarkPaid = ['approved', 'overdue', 'partially_paid'].includes(invoice.status)
@@ -569,8 +573,8 @@ export default function SupplierInvoiceDetailPage() {
     (!!invoice.approved_at || !companyAttestsSupplierInvoices(companySettings?.accounting_method)) &&
     !lifecycle?.batch &&
     !lifecycle?.payment_order
-  // With bank payments on, Betala via banken is the primary and the betalfil
-  // steps back to a secondary (same order as the list's bulk bar).
+  // With bank payments on, Betala via banken comes first and the betalfil
+  // second (same order as the list's bulk bar).
   const canPayViaBank = canAddToFile && bankPaymentsAvailable
   // "Inlagd i banken" (#2220) sits on the same rows as Markera som betald:
   // it is the step right before it. Viewers see the bock only when it is set.
@@ -590,6 +594,26 @@ export default function SupplierInvoiceDetailPage() {
   // Secondary actions collapse into one overflow menu (convention 9: one
   // obvious next step in the header, the alternatives behind a caret).
   const hasMenu = canCredit || canDelete
+  // The ways to pay collapse into one split button (convention 9) whose face
+  // is the last-used mode; each mode keeps its own gate above. Attest gates
+  // payment, so while attest is pending the button steps back to outline and
+  // the header keeps one next step (an aged-but-unattested invoice can be
+  // marked paid). With a bank payment open, paying is never the next step
+  // (crm#1243).
+  const payDisabledTitle = !canWrite ? t('viewer_disabled_tooltip') : undefined
+  const payOptions: SplitButtonOption[] = [
+    ...(canPayViaBank
+      ? [{ key: 'bank', label: tList('bulk_pay_via_bank'), icon: canWrite ? Landmark : Lock, onSelect: () => setIsBankDialogOpen(true) }]
+      : []),
+    ...(canAddToFile
+      ? [{ key: 'file', label: t('add_to_payment_file'), icon: canWrite ? FileText : Lock, onSelect: () => setIsFileDialogOpen(true) }]
+      : []),
+    ...(canMarkPaid
+      ? [{ key: 'mark_paid', label: t('mark_paid'), icon: canWrite ? CreditCard : Lock, onSelect: () => setIsPayDialogOpen(true) }]
+      : []),
+  ].map((option) => ({ ...option, disabled: isProcessing || !canWrite, disabledTitle: payDisabledTitle }))
+  const payVariant = canApprove || openPayment === 'bank_payment' ? 'outline' : 'default'
+  const singlePayOption = payOptions.length === 1 ? payOptions[0] : null
   // #967: registered-without-booking (deferred booking). Ekonomi books the
   // registration verifikat from here.
   const canBookAfterwards =
@@ -620,15 +644,13 @@ export default function SupplierInvoiceDetailPage() {
           <div className="flex flex-wrap items-center gap-3">
             {/* data-ph-mask: the title carries the supplier's invoice number */}
             <h1 data-ph-mask="" className="page-header-title font-display text-2xl leading-8 tracking-tight">{title}</h1>
+            <HelpPopover>
+              {companyAttestsSupplierInvoices(companySettings?.accounting_method) ? t('help_body') : t('help_body_cash')}
+            </HelpPopover>
             {status.exception ? (
               <Badge variant={status.variant}>{status.label}</Badge>
             ) : (
               <span className="text-sm text-muted-foreground">{status.label}</span>
-            )}
-            {openPayment && (
-              <Link href={openPayment === 'bank_payment' ? '/payments' : '/supplier-invoices/payment-files'}>
-                <Badge variant="outline">{tList(OPEN_PAYMENT_MARKER_LABEL_KEYS[openPayment])}</Badge>
-              </Link>
             )}
             {items.some(itemHasAccrual) && (
               <Badge variant="outline" className="gap-1">
@@ -649,11 +671,7 @@ export default function SupplierInvoiceDetailPage() {
           />
           {/* The supplier's own document, reviewed in the browser (#1190). */}
           {invoice.document_id && (
-            <DocumentViewButton
-              documentId={invoice.document_id}
-              label={t('view_document')}
-              className="text-[13px]"
-            />
+            <DocumentViewButton documentId={invoice.document_id} label={t('view_document')} iconOnly />
           )}
           {canApprove && (
             <Button size="sm"
@@ -670,33 +688,31 @@ export default function SupplierInvoiceDetailPage() {
               {t('approve')}
             </Button>
           )}
-          {canPayViaBank && (
-            <Button size="sm" onClick={() => setIsBankDialogOpen(true)} disabled={isProcessing || !canWrite} title={!canWrite ? t('viewer_disabled_tooltip') : undefined}>
-              {canWrite ? <Landmark className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-              {tList('bulk_pay_via_bank')}
-            </Button>
-          )}
-          {canAddToFile && (
-            <Button size="sm" variant={canPayViaBank ? 'outline' : 'default'} onClick={() => setIsFileDialogOpen(true)} disabled={isProcessing || !canWrite} title={!canWrite ? t('viewer_disabled_tooltip') : undefined}>
-              {canWrite ? <FileText className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-              {t('add_to_payment_file')}
-            </Button>
-          )}
-          {/* Attest gates payment: while attest is still pending, Markera
-              betald steps back to a secondary so the header keeps one next
-              step (an aged-but-unattested invoice can have both). With a
-              bank payment open it is never the next step (crm#1243). */}
-          {canMarkPaid && (
-            <Button size="sm"
-              variant={canApprove || canAddToFile || openPayment === 'bank_payment' ? 'outline' : 'default'}
-              onClick={() => setIsPayDialogOpen(true)}
-              disabled={isProcessing || !canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+          {payOptions.length > 1 ? (
+            <SplitButton
+              key={`${uiStateLoaded ? 'loaded' : 'initial'}-${payOptions.map((o) => o.key).join('-')}`}
+              persistKey="supplier_invoice_pay"
+              initialModeKey={resolveInitialMode(
+                uiState,
+                'supplier_invoice_pay',
+                payOptions.map((o) => o.key),
+                payOptions[0].key,
+              )}
+              options={payOptions}
+              variant={payVariant}
+            />
+          ) : singlePayOption ? (
+            <Button
+              size="sm"
+              variant={payVariant}
+              onClick={singlePayOption.onSelect}
+              disabled={singlePayOption.disabled}
+              title={singlePayOption.disabledTitle}
             >
-              {canWrite ? <CreditCard className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-              {t('mark_paid')}
+              {singlePayOption.icon && <singlePayOption.icon className="mr-2 h-4 w-4" />}
+              {singlePayOption.label}
             </Button>
-          )}
+          ) : null}
           {canUncredit && (
             <Button size="sm"
               variant="outline"
@@ -758,7 +774,7 @@ export default function SupplierInvoiceDetailPage() {
         <StageSteps
           stages={stagesFor(companySettings?.accounting_method)}
           current={lifecycle.stage}
-          detail={stripText}
+          dateOf={stageDate}
         />
       )}
 
@@ -919,6 +935,15 @@ export default function SupplierInvoiceDetailPage() {
           <DefRow label={t('payment_file_label')}>
             <Link href="/supplier-invoices/payment-files" className="hover:underline underline-offset-4">
               {t('payment_file_created', { date: formatDate(lifecycle.batch.created_at) })}
+            </Link>
+          </DefRow>
+        )}
+        {/* An open bank payment, linked to where it is followed (the header
+            chip that used to carry the link repeated the strip). */}
+        {lifecycle?.payment_order && (
+          <DefRow label={t('bank_payment_label')}>
+            <Link href="/payments" className="hover:underline underline-offset-4">
+              {t('bank_payment_created', { date: formatDate(lifecycle.payment_order.created_at) })}
             </Link>
           </DefRow>
         )}

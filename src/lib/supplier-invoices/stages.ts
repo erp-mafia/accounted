@@ -26,9 +26,6 @@ export type SupplierInvoiceLadderStage = (typeof SUPPLIER_INVOICE_STAGES)[number
 /** Credited and reversed invoices leave the ladder. */
 export type SupplierInvoiceStage = SupplierInvoiceLadderStage | 'credited'
 
-/** Steps the system takes without the user. */
-export const AUTO_STAGES: ReadonlySet<SupplierInvoiceLadderStage> = new Set(['incoming', 'paid', 'reconciled'])
-
 export interface StageInput {
   status: string
   approved_at: string | null

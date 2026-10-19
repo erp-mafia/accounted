@@ -23,8 +23,7 @@ import {
 } from '@/lib/hooks/use-submit-with-account-activation'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ContextPicker } from '@/components/common/ContextPicker'
-import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
-import { RegisterImportButton } from '@/components/import/RegisterImportButton'
+import { RegisterActionsMenu } from '@/components/import/RegisterActionsMenu'
 import { cn, formatCurrency } from '@/lib/utils'
 import { compareArticles } from '@/lib/articles/sort'
 import {
@@ -214,18 +213,11 @@ function ArticlesPageInner() {
 
   return (
     <div className="space-y-8">
-      {/* Page header (concept scene 27): title + import + export + Ny artikel */}
+      {/* Page header (concept scene 27): title + import/export menu + Ny artikel */}
       <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
         <div className="flex flex-wrap items-center justify-end gap-2">
-          <RegisterImportButton entity="articles" />
-          <ReportExportMenu
-            size="sm"
-            items={[
-              { format: 'xlsx', href: '/api/export/articles' },
-              { format: 'csv', href: '/api/export/articles?format=csv' },
-            ]}
-          />
+          <RegisterActionsMenu entity="articles" />
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
               <Button

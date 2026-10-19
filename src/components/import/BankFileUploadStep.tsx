@@ -18,7 +18,6 @@ import {
   FileText,
   AlertCircle,
   CheckCircle,
-  HelpCircle,
   Landmark,
   Loader2,
 } from 'lucide-react'
@@ -38,6 +37,22 @@ const FORMAT_NAMES: Record<string, string> = {
   wise: 'Wise',
   generic_csv: 'CSV (manuell mappning)',
   camt053: 'ISO 20022 camt.053',
+}
+
+/**
+ * Where each bank keeps its export, in the `import` namespace: shown under
+ * the Bank/format select for the chosen bank only.
+ */
+const EXPORT_PATH_KEYS: Partial<Record<BankFileFormatId, string>> = {
+  nordea: 'bank_export_nordea',
+  seb: 'bank_export_seb',
+  swedbank: 'bank_export_swedbank',
+  handelsbanken: 'bank_export_handelsbanken',
+  lansforsakringar: 'bank_export_lansforsakringar',
+  ica_banken: 'bank_export_ica_banken',
+  skandia: 'bank_export_skandia',
+  lunar: 'bank_export_lunar',
+  northmill: 'bank_export_northmill',
 }
 
 interface BankFileUploadStepProps {
@@ -80,6 +95,8 @@ export default function BankFileUploadStep({
     onFileSelect(file, formatOverride)
   }, [onFileSelect, formatOverride])
 
+  const exportPathKey = formatOverride ? EXPORT_PATH_KEYS[formatOverride] : undefined
+
   const handleFormatChange = (value: string) => {
     const format = value === 'auto' ? undefined : value as BankFileFormatId
     setFormatOverride(format)
@@ -94,42 +111,42 @@ export default function BankFileUploadStep({
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Upload className="h-5 w-5" />
-            Ladda upp kontoutdrag
+            {t('bank_upload_title')}
           </CardTitle>
-          <CardDescription>
-            {t('bank_upload_description')}{' '}
-            {t('bgmax_upload_hint')}
-          </CardDescription>
+          <CardDescription>{t('bgmax_upload_hint')}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Format override */}
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
-            <label className="text-sm font-medium whitespace-nowrap">Bank/format:</label>
-            <Select
-              value={formatOverride || 'auto'}
-              onValueChange={handleFormatChange}
-            >
-              <SelectTrigger className="w-full sm:w-64">
-                <SelectValue placeholder="Automatisk identifiering" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="auto">Automatisk identifiering</SelectItem>
-                <SelectItem value="nordea">Nordea</SelectItem>
-                <SelectItem value="nordea_business">Nordea Företag</SelectItem>
-                <SelectItem value="seb">SEB</SelectItem>
-                <SelectItem value="swedbank">Swedbank</SelectItem>
-                <SelectItem value="handelsbanken">Handelsbanken</SelectItem>
-                <SelectItem value="lansforsakringar">Länsförsäkringar</SelectItem>
-                <SelectItem value="ica_banken">ICA Banken</SelectItem>
-                <SelectItem value="skandia">Skandia</SelectItem>
-                <SelectItem value="lunar">Lunar</SelectItem>
-                <SelectItem value="northmill">Northmill</SelectItem>
-                <SelectItem value="wise">Wise</SelectItem>
-                <SelectItem value="wise_statement">{t('bank_format_wise_statement')}</SelectItem>
-                <SelectItem value="camt053">ISO 20022 camt.053 (XML)</SelectItem>
-                <SelectItem value="generic_csv">Annan CSV (manuell mappning)</SelectItem>
-              </SelectContent>
-            </Select>
+          {/* Format override, with the chosen bank's export path under it */}
+          <div className="space-y-2">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+              <label className="text-sm font-medium whitespace-nowrap">{t('bank_format_label')}</label>
+              <Select
+                value={formatOverride || 'auto'}
+                onValueChange={handleFormatChange}
+              >
+                <SelectTrigger className="w-full sm:w-64">
+                  <SelectValue placeholder={t('bank_format_auto')} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto">{t('bank_format_auto')}</SelectItem>
+                  <SelectItem value="nordea">Nordea</SelectItem>
+                  <SelectItem value="nordea_business">Nordea Företag</SelectItem>
+                  <SelectItem value="seb">SEB</SelectItem>
+                  <SelectItem value="swedbank">Swedbank</SelectItem>
+                  <SelectItem value="handelsbanken">Handelsbanken</SelectItem>
+                  <SelectItem value="lansforsakringar">Länsförsäkringar</SelectItem>
+                  <SelectItem value="ica_banken">ICA Banken</SelectItem>
+                  <SelectItem value="skandia">Skandia</SelectItem>
+                  <SelectItem value="lunar">Lunar</SelectItem>
+                  <SelectItem value="northmill">Northmill</SelectItem>
+                  <SelectItem value="wise">Wise</SelectItem>
+                  <SelectItem value="wise_statement">{t('bank_format_wise_statement')}</SelectItem>
+                  <SelectItem value="camt053">ISO 20022 camt.053 (XML)</SelectItem>
+                  <SelectItem value="generic_csv">{t('bank_format_generic_csv')}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {exportPathKey && <p className="text-[12.5px] text-muted-foreground">{t(exportPathKey)}</p>}
           </div>
 
           {/* Drop zone */}
@@ -206,72 +223,6 @@ export default function BankFileUploadStep({
               </div>
             </div>
           )}
-        </CardContent>
-      </Card>
-
-      {/* Bank export instructions */}
-      <Card className="bg-muted/50">
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <HelpCircle className="h-4 w-4" />
-            Så exporterar du från din bank
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="text-sm space-y-3">
-          <div>
-            <p className="font-medium">Nordea</p>
-            <p className="text-muted-foreground">
-              Logga in → Konton → Välj konto → Transaktioner → Exportera (CSV)
-            </p>
-          </div>
-          <div>
-            <p className="font-medium">SEB</p>
-            <p className="text-muted-foreground">
-              Logga in → Konton → Transaktioner → Exportera (CSV), eller Kontoutdrag → Hämta som fil (CSV)
-            </p>
-          </div>
-          <div>
-            <p className="font-medium">Swedbank</p>
-            <p className="text-muted-foreground">
-              Logga in → Konton → Transaktioner → Exportera kontoutdrag (CSV)
-            </p>
-          </div>
-          <div>
-            <p className="font-medium">Handelsbanken</p>
-            <p className="text-muted-foreground">
-              Logga in → Konton → Transaktioner → Ladda ner (CSV)
-            </p>
-          </div>
-          <div>
-            <p className="font-medium">Länsförsäkringar</p>
-            <p className="text-muted-foreground">
-              {t('bank_export_lansforsakringar')}
-            </p>
-          </div>
-          <div>
-            <p className="font-medium">ICA Banken</p>
-            <p className="text-muted-foreground">
-              Logga in → Konton → Transaktioner → Exportera till fil (CSV)
-            </p>
-          </div>
-          <div>
-            <p className="font-medium">Skandia</p>
-            <p className="text-muted-foreground">
-              Logga in → Konton → Transaktioner → Exportera (CSV)
-            </p>
-          </div>
-          <div>
-            <p className="font-medium">Lunar</p>
-            <p className="text-muted-foreground">
-              Logga in → Konto → Transaktioner → Exportera (CSV)
-            </p>
-          </div>
-          <div>
-            <p className="font-medium">Northmill</p>
-            <p className="text-muted-foreground">
-              Logga in → Konto → Kontoutdrag → Ladda ner (CSV)
-            </p>
-          </div>
         </CardContent>
       </Card>
     </div>

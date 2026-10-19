@@ -16,14 +16,14 @@ import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { Plus, Users, Lock } from 'lucide-react'
 import { EmptyCustomers, EmptyState } from '@/components/ui/empty-state'
-import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
-import { RegisterImportButton } from '@/components/import/RegisterImportButton'
+import { RegisterActionsMenu } from '@/components/import/RegisterActionsMenu'
 import { cn } from '@/lib/utils'
 import Link from 'next/link'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { Customer, CustomerType, CreateCustomerInput } from '@/types'
 import { customerListIdentifier } from '@/lib/customers/mask-personal-number'
 import { compareCustomerNumbers } from '@/lib/customers/sort'
+import { dominantPartyType, partyTypeSuffix } from '@/lib/parties/list-type-suffix'
 
 const CustomerForm = dynamic(
   () => import('@/components/customers/CustomerForm'),
@@ -45,10 +45,12 @@ const CUSTOMER_TYPE_LABEL_KEYS: Record<CustomerType, string> = {
   non_eu_business: 'type_non_eu_business',
 }
 
+/** Tie order for the list's normal type: business first. */
+const CUSTOMER_TYPE_ORDER: readonly CustomerType[] = ['swedish_business', 'individual', 'eu_business', 'non_eu_business']
+
 type SortColumn =
   | 'customer_number'
   | 'name'
-  | 'customer_type'
   | 'identifier'
   | 'email'
   | 'city'
@@ -57,7 +59,6 @@ type SortColumn =
 const SORTABLE_COLUMNS: ReadonlyArray<SortColumn> = [
   'customer_number',
   'name',
-  'customer_type',
   'identifier',
   'email',
   'city',
@@ -196,10 +197,6 @@ function CustomersPageInner() {
           av = a.name || ''
           bv = b.name || ''
           break
-        case 'customer_type':
-          av = a.customer_type || ''
-          bv = b.customer_type || ''
-          break
         case 'identifier':
           av = getIdentifier(a)
           bv = getIdentifier(b)
@@ -223,21 +220,21 @@ function CustomersPageInner() {
     return arr
   }, [filteredCustomers, sortColumn, sortDir])
   const visibleCustomers = sortedCustomers.slice(0, visibleCount)
+  // The Typ column said "Svenskt företag eller organisation" on nearly every
+  // row: the whole register's most common type goes unsaid, and a row of
+  // another type carries it after the name.
+  const dominantType = useMemo(
+    () => dominantPartyType(customers.map((c) => c.customer_type), CUSTOMER_TYPE_ORDER),
+    [customers],
+  )
 
   return (
     <div className="space-y-8">
-      {/* Page header (concept scene 25): title + import + export + Ny kund */}
+      {/* Page header (concept scene 25): title + import/export menu + Ny kund */}
       <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
         <div className="flex flex-wrap items-center justify-end gap-2">
-          <RegisterImportButton entity="customers" />
-          <ReportExportMenu
-            size="sm"
-            items={[
-              { format: 'xlsx', href: '/api/export/customers' },
-              { format: 'csv', href: '/api/export/customers?format=csv' },
-            ]}
-          />
+          <RegisterActionsMenu entity="customers" />
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
               <Button
@@ -314,7 +311,6 @@ function CustomersPageInner() {
                     />
                   )}
                   <SortableTh direction={sortColumn === 'name' ? sortDir : null} onSort={() => updateSort('name')} label={t('col_name')} className="w-full" />
-                  <SortableTh direction={sortColumn === 'customer_type' ? sortDir : null} onSort={() => updateSort('customer_type')} label={t('col_type')} />
                   <SortableTh
                     direction={sortColumn === 'identifier' ? sortDir : null}
                     onSort={() => updateSort('identifier')}
@@ -338,6 +334,7 @@ function CustomersPageInner() {
               <tbody className="stagger-enter">
                 {visibleCustomers.map((customer) => {
                   const identifier = getIdentifier(customer)
+                  const typeSuffix = partyTypeSuffix(customer.customer_type, dominantType)
                   return (
                     <tr
                       key={customer.id}
@@ -353,16 +350,20 @@ function CustomersPageInner() {
                           page: a success chip on most rows marks the normal
                           state, not an exception (convention 5). */}
                       <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
-                        <Link
-                          href={`/customers/${customer.id}`}
-                          className="block truncate hover:underline"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          {customer.name}
-                        </Link>
-                      </td>
-                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
-                        {t(CUSTOMER_TYPE_LABEL_KEYS[customer.customer_type])}
+                        <span className="flex min-w-0 items-baseline gap-2">
+                          <Link
+                            href={`/customers/${customer.id}`}
+                            className="min-w-0 truncate hover:underline"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {customer.name}
+                          </Link>
+                          {typeSuffix && CUSTOMER_TYPE_LABEL_KEYS[typeSuffix] && (
+                            <span className="shrink-0 text-[12.5px] text-muted-foreground">
+                              {t(CUSTOMER_TYPE_LABEL_KEYS[typeSuffix])}
+                            </span>
+                          )}
+                        </span>
                       </td>
                       <td className={cn(TD_CLASS, 'hidden whitespace-nowrap tabular-nums text-muted-foreground lg:table-cell')}>
                         {identifier || ''}

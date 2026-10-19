@@ -1,7 +1,7 @@
 'use client'
 
 import { UUID_RE } from '@/lib/invariants/uuid'
-import { ExternalLink } from 'lucide-react'
+import { ExternalLink, Paperclip } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { useBranding } from '@/lib/branding/brand-context'
@@ -10,6 +10,11 @@ interface DocumentViewButtonProps {
   documentId: string
   label?: string
   className?: string
+  /**
+   * An icon-sm button with the label as its aria-label and tooltip, for a
+   * top bar where the document is one action among several.
+   */
+  iconOnly?: boolean
 }
 
 
@@ -25,7 +30,7 @@ interface DocumentViewButtonProps {
  * catch (the previous signed-URL fetch needed openDeferredTab for exactly that
  * reason). The browser's own viewer still offers saving the file.
  */
-export function DocumentViewButton({ documentId, label = 'Visa dokument', className }: DocumentViewButtonProps) {
+export function DocumentViewButton({ documentId, label = 'Visa dokument', className, iconOnly = false }: DocumentViewButtonProps) {
   const { toast } = useToast()
   const { appName } = useBranding()
 
@@ -56,6 +61,24 @@ export function DocumentViewButton({ documentId, label = 'Visa dokument', classN
         variant: 'destructive',
       })
     }
+  }
+
+  if (iconOnly) {
+    return (
+      <Button
+        type="button"
+        variant="outline"
+        size="icon-sm"
+        onClick={handleClick}
+        className={className}
+        aria-label={label}
+        title={label}
+      >
+        {/* Icon-only, the glyph names the thing (the attached underlag);
+            the tooltip says it opens. */}
+        <Paperclip className="h-4 w-4" aria-hidden />
+      </Button>
+    )
   }
 
   return (
