@@ -44,6 +44,10 @@
  *      invoice, so a whole-krona overshoot absorbed on 3740 made the row
  *      exceed the receivable (#2250). recordInvoicePaymentRow() is the one
  *      writer. Tracked as a file-set, no baseline: the count is 0 today.
+ *   3d. consent-token-access: a read of a token column or any write of
+ *      `provider_consent_tokens` outside lib/providers/consent-tokens.ts, the
+ *      module that seals provider tokens at rest (accounted#58).
+ *      Implementation in consent-token-access.mjs. No baseline: 0 today.
  *   4. pinned-dep    : a dependency pinned to an exact version (PINNED_DEPS)
  *      whose package.json spec or locked version drifted from the pin. Guards
  *      against a repeat of the @anthropic-ai/bedrock-sdk 0.32.0 prod outage
@@ -247,6 +251,7 @@ import { findUtcTodaySites, UTC_TODAY_ALLOWED } from './utc-today.mjs'
 import { findLiteralLegalForms } from './literal-legal-form.mjs'
 import { findClientNodeBuiltins } from './client-node-builtin.mjs'
 import { findClientServerOnlyReachers } from './client-server-only.mjs'
+import { findConsentTokenAccess, CONSENT_TOKEN_HINT } from './consent-token-access.mjs'
 import { findAmbiguousEmbeds } from './ambiguous-embed.mjs'
 import { findUiUniformityFindings, UI_UNIFORMITY_HINTS } from './ui-uniformity.mjs'
 import { findTablesWithoutGrant, grandfatheredFiles, grantHint } from './table-without-grant.mjs'
@@ -1279,6 +1284,7 @@ const current = {
   rawReferenceFetch: findRawReferenceFetches(SOURCE_ROOT),
   clientNodeBuiltins: findClientNodeBuiltins(SOURCE_ROOT),
   clientServerOnly: findClientServerOnlyReachers(SOURCE_ROOT),
+  consentTokenAccess: findConsentTokenAccess(SOURCE_ROOT),
   ambiguousEmbeds: findAmbiguousEmbeds(ROOT, SOURCE_ROOT),
   literalLegalForm: findLiteralLegalForms(SOURCE_ROOT),
   uiUniformity: findUiUniformityFindings(SOURCE_ROOT),
@@ -1499,6 +1505,19 @@ if (current.clientNodeBuiltins.length) {
       '    lib/auth/api-key-scopes.ts) and import that from the client. scripts/perf/client-import-closure.mjs\n' +
       '    prints the full chain for any module.',
   )
+}
+
+// 1b3a. consent-token-access: provider_consent_tokens read or written outside
+// lib/providers/consent-tokens.ts, the one module that seals the tokens
+// (accounted#58). No baseline: 0 today, any finding is a hard failure.
+if (current.consentTokenAccess.length) {
+  failed = true
+  console.error(
+    `\n✗ consent-token-access: ${current.consentTokenAccess.length} provider_consent_tokens token read(s) or ` +
+      `write(s) outside the sealed accessor:`,
+  )
+  current.consentTokenAccess.forEach((f) => console.error(`    ${f.file}:${f.line} (${f.kind})`))
+  console.error(CONSENT_TOKEN_HINT)
 }
 
 // 1b3b. client-server-only: a 'use client' module whose static import closure
@@ -2262,5 +2281,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, hand-written-sie-extensions: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, static-init-import: 0, lazy-init-reach: ${current.lazyInitEntries.length}/${lazyInitBaseline?.count ?? 'no baseline'}, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, client-server-only: ${current.clientServerOnly.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), unsigned-provider-names: ${current.unsignedProviderNames.skipped ? 'skipped' : current.unsignedProviderNames.findings.length}, table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), functiondef-patch: ${functiondefPatchFiles.length}/${functiondefPatchBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s), utc-today: ${current.utcToday.length} in ${UTC_TODAY_ALLOWED.size} allowlisted file(s), bas-account-literal: ${current.jurisdictionWelds.basAccountLiteral.length} in ${Object.keys(basLiteralCounts).length} file(s), sek-literal: ${current.jurisdictionWelds.sekLiteral.length} in ${Object.keys(sekLiteralCounts).length} file(s), kernel-import: ${kernelImportEdgeCount} edge(s), posting-port-bypass: ${postingBypassEdgeCount}/${countEdges(postingBypassBaseline)} baselined edge(s) + ${countEdges(current.postingPort.allowlisted)} permanent, decision-log: 0, script-init-condition: 0).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, hand-written-sie-extensions: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, static-init-import: 0, lazy-init-reach: ${current.lazyInitEntries.length}/${lazyInitBaseline?.count ?? 'no baseline'}, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, client-server-only: ${current.clientServerOnly.length}, consent-token-access: 0, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), unsigned-provider-names: ${current.unsignedProviderNames.skipped ? 'skipped' : current.unsignedProviderNames.findings.length}, table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), functiondef-patch: ${functiondefPatchFiles.length}/${functiondefPatchBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s), utc-today: ${current.utcToday.length} in ${UTC_TODAY_ALLOWED.size} allowlisted file(s), bas-account-literal: ${current.jurisdictionWelds.basAccountLiteral.length} in ${Object.keys(basLiteralCounts).length} file(s), sek-literal: ${current.jurisdictionWelds.sekLiteral.length} in ${Object.keys(sekLiteralCounts).length} file(s), kernel-import: ${kernelImportEdgeCount} edge(s), posting-port-bypass: ${postingBypassEdgeCount}/${countEdges(postingBypassBaseline)} baselined edge(s) + ${countEdges(current.postingPort.allowlisted)} permanent, decision-log: 0, script-init-condition: 0).`,
 )

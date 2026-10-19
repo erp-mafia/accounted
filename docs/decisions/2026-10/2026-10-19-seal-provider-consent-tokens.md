@@ -1,0 +1,1 @@
+[2026-10-19] Provider consent tokens are sealed at rest under PERSONNUMMER_ENCRYPTION_KEY (own scrypt salt, pct1: prefix) and only lib/providers/consent-tokens.ts reads or writes them: the table was documented as encrypted but held every token in plaintext (accounted#58).

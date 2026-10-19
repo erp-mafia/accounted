@@ -11,6 +11,7 @@ import { refreshWintToken } from './wint/oauth';
 import { ProviderCallError, classifyProviderError, isMissingLicenseError } from './with-provider-call';
 import { FortnoxOAuthError } from './fortnox/oauth-error';
 import { createLogger } from '@/lib/logger';
+import { readConsentTokens, resealConsentTokens, updateConsentTokens } from './consent-tokens';
 
 const log = createLogger('providers/resolve-consent');
 
@@ -46,21 +47,17 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
     throw { status: 400, message: 'Consent has no provider set: complete onboarding first' };
   }
 
-  // Load tokens
-  const { data: tokenRows } = await queryInExecutionBudget(supabase
-    .from('provider_consent_tokens')
-    .select('*')
-    .eq('consent_id', consentId)
-    .limit(1));
+  // Load tokens. A legacy plaintext row is sealed in place on the paths that
+  // serve the stored token; a refresh seals by writing the rotated pair.
+  const { tokens, plaintext } = await readConsentTokens(supabase, consentId);
 
-  if (!tokenRows || tokenRows.length === 0) {
+  if (!tokens) {
     throw { status: 401, message: 'No tokens found for this consent: complete OAuth first' };
   }
 
-  const tokens = tokenRows[0]!;
-
   // Bokio: private API tokens that don't expire
   if (consent.provider === 'bokio') {
+    if (plaintext) await resealConsentTokens(supabase, consentId, tokens);
     return {
       consent,
       accessToken: tokens.access_token as string,
@@ -74,13 +71,10 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
       const refreshed = await refreshWithinBudget(() => refreshBjornLundenToken());
       const newExpiresAt = new Date(Date.now() + refreshed.expires_in * 1000).toISOString();
 
-      await queryInExecutionBudget(supabase
-        .from('provider_consent_tokens')
-        .update({
-          access_token: refreshed.access_token,
-          token_expires_at: newExpiresAt,
-        })
-        .eq('consent_id', consentId));
+      await queryInExecutionBudget(updateConsentTokens(supabase, consentId, {
+        access_token: refreshed.access_token,
+        token_expires_at: newExpiresAt,
+      }));
 
       return {
         consent,
@@ -89,6 +83,7 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
       };
     }
 
+    if (plaintext) await resealConsentTokens(supabase, consentId, tokens);
     return {
       consent,
       accessToken: tokens.access_token as string,
@@ -131,9 +126,7 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
         // A competing refresh/reconnect may have made this request obsolete.
         // The completion block RPC also checks this atomically when recording.
         if (code === 'PROVIDER_AUTH_EXPIRED') {
-          const { data: freshRows, error: readError } = await queryInExecutionBudget(supabase
-            .from('provider_consent_tokens').select('*').eq('consent_id', consentId).limit(1));
-          const fresh = readError ? undefined : freshRows?.[0];
+          const { tokens: fresh } = await readConsentTokens(supabase, consentId);
           if (fresh?.access_token && fresh.credential_revision !== tokens.credential_revision) {
             return { consent, accessToken: fresh.access_token as string,
               providerCompanyId: fresh.provider_company_id as string | undefined,
@@ -179,14 +172,11 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
     // the pair the first request just stored with a possibly-dead one. Fortnox
     // uses a credential revision; other providers retain token_expires_at. If
     // another request rotated, zero rows match and we adopt the stored pair.
-    const refreshUpdate = supabase
-      .from('provider_consent_tokens')
-      .update({
-        access_token: refreshed.access_token,
-        refresh_token: refreshed.refresh_token,
-        token_expires_at: newExpiresAt,
-      })
-      .eq('consent_id', consentId);
+    const refreshUpdate = updateConsentTokens(supabase, consentId, {
+      access_token: refreshed.access_token,
+      refresh_token: refreshed.refresh_token,
+      token_expires_at: newExpiresAt,
+    });
     // During rollout the token row may still have the legacy schema. Keep its
     // expiry guard and projection until the revision column is available, so
     // deploying before the migration cannot lose a provider-rotated token pair.
@@ -225,13 +215,7 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
       // Lost the refresh race: a concurrent request already rotated and
       // persisted a fresh pair. Use those tokens as-is: calling the provider
       // refresh endpoint again here would invalidate the winner's pair.
-      const { data: freshRows } = await queryInExecutionBudget(supabase
-        .from('provider_consent_tokens')
-        .select('*')
-        .eq('consent_id', consentId)
-        .limit(1));
-
-      const fresh = freshRows?.[0];
+      const { tokens: fresh } = await readConsentTokens(supabase, consentId);
       if (fresh?.access_token) {
         return {
           consent,
@@ -259,7 +243,10 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
     consent,
     accessToken: tokens.access_token as string,
     providerCompanyId: tokens.provider_company_id as string | undefined,
-    credentialRevision: tokens.credential_revision as string | undefined,
+    // A reseal moves the revision; hand out the one the row has now.
+    credentialRevision: plaintext
+      ? await resealConsentTokens(supabase, consentId, tokens)
+      : tokens.credential_revision as string | undefined,
   };
 }
 

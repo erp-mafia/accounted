@@ -36,6 +36,7 @@ import { loginWint, WintLoginRejectedError } from '@/lib/providers/wint/oauth'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import { fetchCompanyInfoDirect } from '@/lib/providers/provider-data-fetcher'
 import { resolveConsent as resolveConsentForIdentity } from '@/lib/providers/resolve-consent'
+import { saveConsentTokens } from '@/lib/providers/consent-tokens'
 import type { CompanyInformationDto } from '@/lib/providers/dto'
 import { createLogger } from '@/lib/logger'
 import type { ConsentRecord, OtcResponse } from '../types'
@@ -502,15 +503,13 @@ export async function exchangeAuthToken(
   )
 
   // Store tokens
-  const { error: tokenError } = await supabase
-    .from('provider_consent_tokens')
-    .upsert({
-      consent_id: consentId,
-      provider,
-      access_token: tokenResponse.access_token,
-      refresh_token: tokenResponse.refresh_token,
-      token_expires_at: expiresAt,
-    })
+  const { error: tokenError } = await saveConsentTokens(supabase, {
+    consent_id: consentId,
+    provider,
+    access_token: tokenResponse.access_token,
+    refresh_token: tokenResponse.refresh_token,
+    token_expires_at: expiresAt,
+  })
   if (tokenError) throw new Error('Provider credentials could not be saved')
 
   // Mark consent as accepted and record which provider company it opens. The
@@ -984,16 +983,14 @@ export async function submitProviderToken(
   }
 
   // Store tokens: consent stays at status 0 until migration/SIE import completes
-  await supabase
-    .from('provider_consent_tokens')
-    .upsert({
-      consent_id: consentId,
-      provider,
-      access_token: accessToken,
-      refresh_token: refreshToken,
-      token_expires_at: tokenExpiresAt,
-      provider_company_id: storedProviderCompanyId,
-    })
+  await saveConsentTokens(supabase, {
+    consent_id: consentId,
+    provider,
+    access_token: accessToken,
+    refresh_token: refreshToken,
+    token_expires_at: tokenExpiresAt,
+    provider_company_id: storedProviderCompanyId,
+  })
 
   return { success: true, consentId }
 }
