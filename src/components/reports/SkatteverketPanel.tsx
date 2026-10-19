@@ -22,7 +22,6 @@ import {
   AlertTriangle,
   CheckCircle2,
   ExternalLink,
-  FileCheck,
   Info,
   Link2,
   Loader2,
@@ -35,7 +34,6 @@ import { formatRedovisare, formatRedovisningsperiod } from '@/lib/skatteverket/f
 import { useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
-import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { formatAmount } from '@/lib/utils'
 
 interface SkatteverketStatus {
@@ -96,6 +94,21 @@ interface SkatteverketPanelProps {
    * Never re-derive it here from a narrower source.
    */
   localBlocked: boolean
+  /**
+   * The rest of "Lämna in" (Ladda ner, Markera som inlämnad or the filed
+   * line), rendered after the panel's own primary action so the step is one
+   * action row. Rendered on its own when the extension is not enabled.
+   */
+  actions?: React.ReactNode
+  /** The step's single "?" (convention 7), last in the row. */
+  help?: React.ReactNode
+  /**
+   * Called when Skatteverket confirms the period as filed (a kvittens or a
+   * beslut was found): the server records the filing, and the owner
+   * refetches its filing records so the row stops offering "Markera som
+   * inlämnad".
+   */
+  onFilingConfirmed?: () => void
 }
 
 /**
@@ -136,8 +149,26 @@ const ACTION_IN_FLIGHT_LABELS: Record<string, string> = {
 
 const SKV_ENABLED = ENABLED_EXTENSION_IDS.has('skatteverket')
 
+/** Whether direct filing exists in this build (the skatteverket extension). */
+export const SKATTEVERKET_DIRECT_FILING = SKV_ENABLED
+
+/** "Lämna in" as one row: the primary action, then the step's own actions. */
+function ActionRow({ children }: { children: React.ReactNode }) {
+  return <div className="flex flex-wrap items-center gap-2">{children}</div>
+}
+
 export function SkatteverketPanel(props: SkatteverketPanelProps) {
-  if (!SKV_ENABLED) return null
+  if (!SKV_ENABLED) {
+    // Core build: no direct filing, but the step's own actions still form
+    // the row.
+    if (!props.actions && !props.help) return null
+    return (
+      <ActionRow>
+        {props.actions}
+        {props.help}
+      </ActionRow>
+    )
+  }
   return <SkatteverketPanelInner {...props} />
 }
 
@@ -149,6 +180,9 @@ function SkatteverketPanelInner({
   fiscalYearEnd,
   hasData,
   localBlocked,
+  actions,
+  help,
+  onFilingConfirmed,
 }: SkatteverketPanelProps) {
   // In yearly mode the year picker is replaced by the räkenskapsår selector,
   // so the `year` prop is stale (stuck at the current year). Every SKV call
@@ -538,6 +572,7 @@ function SkatteverketPanelInner({
       } else if (result.data) {
         setSubmitted(result.data)
         setNotice({ kind: 'success', text: 'Deklarationen har lämnats in' })
+        onFilingConfirmed?.()
       } else if (!silent) {
         setNotice({ kind: 'info', text: 'Ingen inlämnad deklaration hittades för denna period' })
       }
@@ -550,7 +585,7 @@ function SkatteverketPanelInner({
     } finally {
       setActionLoading(null)
     }
-  }, [applyApiError, getRedovisare, getRedovisningsperiod, periodType, effectiveYear, period])
+  }, [applyApiError, getRedovisare, getRedovisningsperiod, periodType, effectiveYear, period, onFilingConfirmed])
 
   // While a signing link is outstanding, re-check submission status when the
   // user returns to this tab: signing happens on Skatteverket's site, so the
@@ -646,6 +681,7 @@ function SkatteverketPanelInner({
         const tid = result.data?.beslutadTidpunkt
         const tidLabel = tid ? ` (beslutad ${new Date(tid).toLocaleDateString('sv-SE')})` : ''
         setNotice({ kind: 'success', text: `Beslut hittades${tidLabel}` })
+        onFilingConfirmed?.()
       }
     } catch (err) {
       setNotice(
@@ -681,82 +717,66 @@ function SkatteverketPanelInner({
   }
 
   if (loading) {
-    // The same silhouette as the report above it: a heading and rows, not a
-    // block, so the page does not change shape twice while it loads.
+    // The primary action's silhouette in the row, so the row does not change
+    // shape once the connection status lands.
     return (
       <section aria-busy>
-        <div className="space-y-3">
-          <Skeleton className="h-3 w-48" />
-          {[0, 1].map((i) => (
-            <div key={i} className="flex items-center justify-between border-b border-border py-2">
-              <Skeleton className="h-3.5 w-56" />
-              <Skeleton className="h-3.5 w-20" />
-            </div>
-          ))}
-        </div>
+        <ActionRow>
+          <Skeleton className="h-8 w-44 rounded-full" />
+          {actions}
+          {help}
+        </ActionRow>
       </section>
     )
   }
 
   // Paywall: direct API submission is the paid convenience; manual filing at
-  // skatteverket.se stays free and is owned by the "Lämna in" card above.
-  // Rendered BEFORE the connected check so a company that connected during
-  // trial sees the upsell instead of action buttons that would 403.
+  // skatteverket.se stays free (Ladda ner in the same row). Rendered BEFORE
+  // the connected check so a company that connected during trial sees the
+  // upsell instead of action buttons that would 403. The action stays on
+  // screen, disabled, with the note saying why (UpgradeNote's contract).
   if (!hasSkvCapability) {
     return (
-      <section>
-        <div className="mb-3">
-          <h3 className="flex items-center gap-2 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            <FileCheck className="h-4 w-4" />
-            Skicka direkt till Skatteverket (valfritt)
-          </h3>
-        </div>
-        <div className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            Med ett abonnemang kan du ansluta med BankID och skicka deklarationen
-            direkt härifrån, samt validera, spara utkast och signera.
-          </p>
-          <UpgradeNote>
-            Direktinlämning till Skatteverket kräver ett abonnemang.
-          </UpgradeNote>
-        </div>
+      <section className="space-y-3">
+        <ActionRow>
+          <Button size="sm" disabled className="gap-2">
+            <Send className="h-4 w-4" />
+            Skicka till Skatteverket
+          </Button>
+          {actions}
+          {help}
+        </ActionRow>
+        <UpgradeNote>
+          Direktinlämning till Skatteverket kräver ett abonnemang.
+        </UpgradeNote>
       </section>
     )
   }
 
-  // Not connected. The momsdeklaration is already complete and can be filed
-  // manually at skatteverket.se with no connection (the "Lämna in" card above
-  // owns that path). Connecting is an optional convenience for submitting
-  // directly from Accounted, so frame it that way.
+  // Not connected. The momsdeklaration can be filed manually with no
+  // connection (Ladda ner in the same row); connecting is an optional
+  // convenience for submitting directly from Accounted. Why and how lives
+  // behind the step's "?".
   if (!status?.connected) {
     return (
-      <section>
-        <div className="mb-3">
-          <h3 className="flex items-center gap-2 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            <FileCheck className="h-4 w-4" />
-            Skicka direkt till Skatteverket (valfritt)
-          </h3>
-        </div>
-        <div className="space-y-4">
-          {notice?.kind === 'error' && (
-            <div
-              role="alert"
-              className="flex items-start gap-2 text-sm text-destructive bg-destructive/5 rounded-lg p-3"
-            >
-              <AlertCircle className="h-4 w-4 mt-1 shrink-0" />
-              <span>{notice.text}</span>
-            </div>
-          )}
-          <p className="text-sm text-muted-foreground">
-            Vill du slippa skriva in siffrorna själv kan du ansluta med BankID och
-            skicka deklarationen direkt härifrån, samt validera, spara utkast och
-            signera.
-          </p>
-          <Button onClick={handleConnect} className="gap-2">
+      <section className="space-y-3">
+        <ActionRow>
+          <Button size="sm" onClick={handleConnect} className="gap-2">
             <Link2 className="h-4 w-4" />
             Anslut med BankID
           </Button>
-        </div>
+          {actions}
+          {help}
+        </ActionRow>
+        {notice?.kind === 'error' && (
+          <div
+            role="alert"
+            className="flex items-start gap-2 text-sm text-destructive bg-destructive/5 rounded-lg p-3"
+          >
+            <AlertCircle className="h-4 w-4 mt-1 shrink-0" />
+            <span>{notice.text}</span>
+          </div>
+        )}
       </section>
     )
   }
@@ -765,145 +785,145 @@ function SkatteverketPanelInner({
   const hasErrors = kontroller.some(k => k.status === 'ERROR')
 
   return (
-    <section>
-      <div className="mb-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h3 className="flex items-center gap-2 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            <FileCheck className="h-4 w-4" />
-            Skicka direkt till Skatteverket
-          </h3>
-          <div className="flex flex-wrap items-center gap-2">
-            {/* Connected is the normal state here (the not-connected branch is
-                a different section): muted text, never a chip. The expired
-                session is the one exception and gets the attn sentence below
-                instead of a badge-and-button cluster. */}
-            {!status.expired && (
-              <span className="text-xs text-muted-foreground">Ansluten</span>
-            )}
-            {/* Read-only lookups and recovery actions live in the overflow
-                menu: the visible surface stays the forward path (validera,
-                spara utkast, lås och signera). */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" aria-label="Fler åtgärder">
-                  <MoreHorizontal className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-72">
-                {/* The demoted step-by-step actions: the visible surface is
-                    the one-click "Skicka till Skatteverket" button; these
-                    remain for partial retries (e.g. lock-only after a lock
-                    failure) and for users who want to inspect each step. */}
-                <DropdownMenuLabel>Steg för steg</DropdownMenuLabel>
-                <DropdownMenuItem
-                  disabled={!hasData || localBlocked || actionLoading !== null}
-                  onSelect={() => handleValidate()}
-                >
-                  <div>
-                    <p>Validera</p>
-                    <p className="text-xs text-muted-foreground">
-                      Kontrollera deklarationen hos Skatteverket utan att spara
-                    </p>
-                  </div>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  disabled={!hasData || localBlocked || actionLoading !== null}
-                  onSelect={() => handleSaveDraft()}
-                >
-                  <div>
-                    <p>Spara utkast</p>
-                    <p className="text-xs text-muted-foreground">
-                      Spara deklarationen som utkast i Eget utrymme
-                    </p>
-                  </div>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  disabled={!hasData || actionLoading !== null}
-                  onSelect={() => handleLock()}
-                >
-                  <div>
-                    <p>Lås och signera</p>
-                    <p className="text-xs text-muted-foreground">
-                      Lås det sparade utkastet och hämta signeringslänken
-                    </p>
-                  </div>
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuLabel>Status hos Skatteverket</DropdownMenuLabel>
-                <DropdownMenuItem
-                  disabled={actionLoading !== null}
-                  onSelect={() => handleFetchDraft()}
-                >
-                  <div>
-                    <p>Hämta utkast</p>
-                    <p className="text-xs text-muted-foreground">
-                      Hämta sparat utkast från Eget utrymme
-                    </p>
-                  </div>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  disabled={actionLoading !== null}
-                  onSelect={() => handleCheckSubmitted()}
-                >
-                  <div>
-                    <p>Kontrollera inlämning</p>
-                    <p className="text-xs text-muted-foreground">
-                      Kontrollera om en signerad deklaration har lämnats in
-                    </p>
-                  </div>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  disabled={actionLoading !== null}
-                  onSelect={() => handleFetchDecided()}
-                >
-                  <div>
-                    <p>Hämta beslut</p>
-                    <p className="text-xs text-muted-foreground">
-                      Hämta Skatteverkets beslut för perioden
-                    </p>
-                  </div>
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuLabel>Återställning</DropdownMenuLabel>
-                <DropdownMenuItem
-                  disabled={actionLoading !== null}
-                  onSelect={() => handleUnlock()}
-                >
-                  <div>
-                    <p>Lås upp</p>
-                    <p className="text-xs text-muted-foreground">
-                      Lås upp en låst period så att utkastet kan ändras
-                    </p>
-                  </div>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  disabled={actionLoading !== null}
-                  onSelect={() => handleDeleteDraftConfirmed()}
-                >
-                  <div>
-                    <p>Radera utkast...</p>
-                    <p className="text-xs text-muted-foreground">
-                      Radera sparat utkast från Eget utrymme
-                    </p>
-                  </div>
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  disabled={actionLoading !== null}
-                  onSelect={() => handleDisconnectConfirmed()}
-                  className="text-destructive focus:text-destructive"
-                >
-                  <div>
-                    <p>Koppla bort Skatteverket...</p>
-                    <p className="text-xs text-muted-foreground">
-                      Kräver ny BankID-anslutning för direktinlämning
-                    </p>
-                  </div>
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        </div>
+    <section className="space-y-4">
+      <div>
+        {/* Forward lifecycle: one primary action, then the step's own
+            actions. The individual steps, read-only lookups and recovery
+            live in the overflow menu; what Skicka does is behind the step's
+            "?". Connected is the normal state, so it is not announced; the
+            expired session is the exception and gets the attn sentence. */}
+        <ActionRow>
+          <Button
+            size="sm"
+            onClick={handleSubmit}
+            disabled={!hasData || localBlocked || actionLoading !== null}
+            loading={actionLoading === 'submit'}
+          >
+            {actionLoading !== 'submit' && <Send className="mr-2 h-4 w-4" />}
+            Skicka till Skatteverket
+          </Button>
+          {actions}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon-sm" aria-label="Fler åtgärder">
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-72">
+              {/* The demoted step-by-step actions: the visible surface is
+                  the one-click "Skicka till Skatteverket" button; these
+                  remain for partial retries (e.g. lock-only after a lock
+                  failure) and for users who want to inspect each step. */}
+              <DropdownMenuLabel>Steg för steg</DropdownMenuLabel>
+              <DropdownMenuItem
+                disabled={!hasData || localBlocked || actionLoading !== null}
+                onSelect={() => handleValidate()}
+              >
+                <div>
+                  <p>Validera</p>
+                  <p className="text-xs text-muted-foreground">
+                    Kontrollera deklarationen hos Skatteverket utan att spara
+                  </p>
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={!hasData || localBlocked || actionLoading !== null}
+                onSelect={() => handleSaveDraft()}
+              >
+                <div>
+                  <p>Spara utkast</p>
+                  <p className="text-xs text-muted-foreground">
+                    Spara deklarationen som utkast i Eget utrymme
+                  </p>
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={!hasData || actionLoading !== null}
+                onSelect={() => handleLock()}
+              >
+                <div>
+                  <p>Lås och signera</p>
+                  <p className="text-xs text-muted-foreground">
+                    Lås det sparade utkastet och hämta signeringslänken
+                  </p>
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>Status hos Skatteverket</DropdownMenuLabel>
+              <DropdownMenuItem
+                disabled={actionLoading !== null}
+                onSelect={() => handleFetchDraft()}
+              >
+                <div>
+                  <p>Hämta utkast</p>
+                  <p className="text-xs text-muted-foreground">
+                    Hämta sparat utkast från Eget utrymme
+                  </p>
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={actionLoading !== null}
+                onSelect={() => handleCheckSubmitted()}
+              >
+                <div>
+                  <p>Kontrollera inlämning</p>
+                  <p className="text-xs text-muted-foreground">
+                    Kontrollera om en signerad deklaration har lämnats in
+                  </p>
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={actionLoading !== null}
+                onSelect={() => handleFetchDecided()}
+              >
+                <div>
+                  <p>Hämta beslut</p>
+                  <p className="text-xs text-muted-foreground">
+                    Hämta Skatteverkets beslut för perioden
+                  </p>
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>Återställning</DropdownMenuLabel>
+              <DropdownMenuItem
+                disabled={actionLoading !== null}
+                onSelect={() => handleUnlock()}
+              >
+                <div>
+                  <p>Lås upp</p>
+                  <p className="text-xs text-muted-foreground">
+                    Lås upp en låst period så att utkastet kan ändras
+                  </p>
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={actionLoading !== null}
+                onSelect={() => handleDeleteDraftConfirmed()}
+              >
+                <div>
+                  <p>Radera utkast...</p>
+                  <p className="text-xs text-muted-foreground">
+                    Radera sparat utkast från Eget utrymme
+                  </p>
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                disabled={actionLoading !== null}
+                onSelect={() => handleDisconnectConfirmed()}
+                className="text-destructive focus:text-destructive"
+              >
+                <div>
+                  <p>Koppla bort Skatteverket...</p>
+                  <p className="text-xs text-muted-foreground">
+                    Kräver ny BankID-anslutning för direktinlämning
+                  </p>
+                </div>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          {help}
+        </ActionRow>
         {status.expired && (
           <p className="mt-2 text-[12.5px] leading-5 text-attn">
             Sessionen mot Skatteverket har gått ut.{' '}
@@ -987,24 +1007,19 @@ function SkatteverketPanelInner({
           </div>
         )}
 
-        {/* Submitted confirmation */}
+        {/* Submitted confirmation: a normal state, so muted text (convention
+            12), never a green box. */}
         {submitted && (
-          <div className="rounded-lg border border-border p-3 space-y-1">
-            <p className="text-sm font-medium flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 text-success" />
-              Inlämnad
-            </p>
+          <p role="status" className="text-[13px] leading-5 text-muted-foreground tabular-nums">
+            Inlämnad
+            {submitted.tidpunkt && ` ${new Date(submitted.tidpunkt).toLocaleString('sv-SE')}`}
             {submitted.kvittensnummer && (
-              <p className="text-xs text-muted-foreground">
-                Kvittensnummer: <span className="font-mono">{submitted.kvittensnummer}</span>
-              </p>
+              <>
+                {' · kvittens '}
+                <span className="font-mono">{submitted.kvittensnummer}</span>
+              </>
             )}
-            {submitted.tidpunkt && (
-              <p className="text-xs text-muted-foreground">
-                Tidpunkt: {new Date(submitted.tidpunkt).toLocaleString('sv-SE')}
-              </p>
-            )}
-          </div>
+          </p>
         )}
 
         {/* Signing link */}
@@ -1035,37 +1050,11 @@ function SkatteverketPanelInner({
           </div>
         )}
 
-        {/* Forward lifecycle: one primary action. The individual steps live
-            in the overflow menu under "Steg för steg". */}
-        <div className="flex flex-wrap items-center gap-2 pt-1">
-          <Button
-            onClick={handleSubmit}
-            disabled={!hasData || localBlocked || actionLoading !== null}
-            loading={actionLoading === 'submit'}
-          >
-            {actionLoading !== 'submit' && <Send className="mr-2 h-4 w-4" />}
-            Skicka till Skatteverket
-          </Button>
-        </div>
-
-        <p className="text-xs text-muted-foreground">
-          Deklarationen kontrolleras, sparas som utkast i{' '}
-          <InfoTooltip
-            variant="help"
-            content="Ditt företags privata yta hos Skatteverket. Utkast som sparas där räknas inte som inlämnade förrän de har signerats med BankID."
-          >
-            <span>Eget utrymme</span>
-          </InfoTooltip>{' '}
-          och låses för signering med BankID hos Skatteverket. Inget lämnas in
-          förrän du har signerat.
-        </p>
-
         {/* Visible disabled-state explanations: title attributes never show
             on disabled buttons. */}
         {localBlocked && (
           <p className="text-sm text-destructive">
-            Åtgärda felen under Kontroll av underlaget högst upp på sidan innan du
-            skickar in.
+            Åtgärda felen under steg 1, Kontrollera, innan du skickar in.
           </p>
         )}
         {hasErrors && !localBlocked && (

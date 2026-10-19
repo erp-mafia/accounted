@@ -750,6 +750,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // "+ Märkning" and "+ Leveransdatum": the field shows once asked for.
   const [markingOpen, setMarkingOpen] = useState(false)
   const [deliveryOpen, setDeliveryOpen] = useState(false)
+  // "+ Omvänd betalningsskyldighet": the checkbox shows once asked for, and
+  // stays open after any toggle so it never vanishes under the pointer.
+  const [reverseChargeOpen, setReverseChargeOpen] = useState(false)
   const [defaultDimsOpen, setDefaultDimsOpen] = useState(false)
   // Periodisering strips opened from the row menu or the row's badge.
   const [accrualRows, setAccrualRows] = useState<Set<number>>(new Set())
@@ -3737,23 +3740,43 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
 
             {/* Omvänd betalningsskyldighet for construction services
                 (crm#1007): the seller states it per invoice, so it sits with
-                the buyer it depends on, only for a Swedish business. The
-                buyer's Swedish VAT number must print on the invoice: when the
-                card lacks it, one click saves the one the org number gives. */}
-            {domesticReverseChargeAvailable && (
+                the buyer it depends on, only for a Swedish business. Most
+                invoices to a Swedish business are not construction services,
+                so it waits behind an add-link like Märkning; it shows open
+                when asked for, ticked, or stored on the invoice. The buyer's
+                Swedish VAT number must print on the invoice: when the card
+                lacks it, one click saves the one the org number gives. */}
+            {domesticReverseChargeAvailable && !reverseChargeOpen && !domesticReverseCharge && (
+              <button
+                type="button"
+                className={cn(ADD_ROW_LINK_CLASS, 'mt-3')}
+                onClick={() => {
+                  setReverseChargeOpen(true)
+                  window.setTimeout(() => document.getElementById('domestic-reverse-charge')?.focus(), 0)
+                }}
+              >
+                + {tForm('domestic_reverse_charge_add')}
+              </button>
+            )}
+            {domesticReverseChargeAvailable && (reverseChargeOpen || domesticReverseCharge) && (
               <div className="mt-3 space-y-1">
                 <div className="flex items-start gap-2">
                   <Checkbox
                     id="domestic-reverse-charge"
                     checked={domesticReverseCharge}
-                    onCheckedChange={(checked) => handleDomesticReverseChargeChange(checked === true)}
+                    onCheckedChange={(checked) => {
+                      setReverseChargeOpen(true)
+                      handleDomesticReverseChargeChange(checked === true)
+                    }}
                     className="mt-0.5"
                   />
                   <Label htmlFor="domestic-reverse-charge" className="text-[13px] font-normal leading-5">
                     {tForm('domestic_reverse_charge_label')}
                   </Label>
+                  <HelpPopover className="mt-0.5 shrink-0">
+                    {tForm('domestic_reverse_charge_hint')}
+                  </HelpPopover>
                 </div>
-                <p className={cn(FIELD_HINT_CLASS, 'pl-6')}>{tForm('domestic_reverse_charge_hint')}</p>
                 {buyerVatNumberMissing && selectedCustomer && (
                   <AttnLine
                     className="pl-6 text-muted-foreground"

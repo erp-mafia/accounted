@@ -172,7 +172,7 @@ export default function JournalEntryList({
   /**
    * Deep-link arrival from the bokslut preflight ("Förklara luckan"): scope
    * this visit to the räkenskapsår whose unexplained voucher gap blocked the
-   * bokslut, so the gap rows above the table are the ones it named. In memory
+   * bokslut, so the gap line above the table counts the ones it named. In memory
    * only; the saved fiscal-year preference is not overwritten.
    */
   initialGapPeriodId?: string | null
@@ -227,6 +227,10 @@ export default function JournalEntryList({
   const [rattelseFlags, setRattelseFlags] = useState<Set<string>>(new Set())
   const [noDocRequired, setNoDocRequired] = useState<Map<string, string | null>>(new Map())
   const [showMissingOnly, setShowMissingOnly] = useState(initialShowMissingOnly)
+  // Unexplained voucher gaps the VoucherGapNotice attn line is showing. The
+  // page has one attn slot (convention 6) and a missing BFNAR 2013:2
+  // explanation outranks the SIE import pointer, so that line yields.
+  const [unexplainedGapCount, setUnexplainedGapCount] = useState(0)
   // Radix' onCheckedChange carries no mouse event: the click that precedes it
   // records whether shift was held, for range selection.
   const shiftHeld = useRef(false)
@@ -821,6 +825,19 @@ export default function JournalEntryList({
     [attachmentCounts, invoiceReferenced, noDocRequired],
   )
 
+  // Imported verifikat missing underlag: the rows that used to carry the
+  // per-row "Underlag saknas" chip, counted once in the line above the table
+  // instead (founder 2026-10-18: a migrated year was a wall of chips). Same
+  // population as the chip: posted, import, no attachment, not
+  // invoice-referenced, not marked "Inget underlag krävs". Counted over the
+  // loaded rows, so the line says "på den här sidan" unless the whole scope
+  // is on screen. NEEDS_DOC_SOURCE_TYPES and the worklist counts are
+  // untouched; only the list rows change.
+  const importedMissingCount = attachmentCountsLoaded
+    ? entries.filter((e) => e.source_type === 'import' && isEligibleForExempt(e)).length
+    : 0
+  const wholeScopeLoaded = entries.length >= count
+
   const handleBatchExempt = async () => {
     const ids = Array.from(selectedIds)
     if (ids.length === 0) return
@@ -1326,10 +1343,11 @@ export default function JournalEntryList({
         )}
       </div>
 
-      {/* Holes in this year's voucher numbering with their documented
-          explanations, or the Förklara action: the surface that satisfies the
-          BFNAR 2013:2 documentation requirement the bokslut preflight checks.
-          Scoped to the selected räkenskapsår, or the current one under "Alla
+      {/* Holes in this year's voucher numbering: one attn line with the
+          Förklara action for unexplained gaps, explained ones behind a quiet
+          disclosure. The surface that satisfies the BFNAR 2013:2
+          documentation requirement the bokslut preflight checks. Scoped to
+          the selected räkenskapsår, or the current one under "Alla
           räkenskapsår"; hidden on the drafts view and when the series is
           unbroken. */}
       {listMode === 'committed' && periodHydrated && (
@@ -1340,6 +1358,7 @@ export default function JournalEntryList({
           }
           series={seriesFilter !== 'all' ? seriesFilter : null}
           refreshToken={refreshToken}
+          onUnexplainedCountChange={setUnexplainedGapCount}
         />
       )}
 
@@ -1444,19 +1463,43 @@ export default function JournalEntryList({
           </button>
         </BulkSelectionBar>
 
-        {/* Discoverability for "Ångra import" (issue #1883): when the page
-            shows import-sourced vouchers, point at the SIE import history
-            where a bad import can be undone in one step. One page-domain
-            attn line (design convention 6). Only source_type 'import' is an
-            SIE marker: 'opening_balance' is also written by year-end closing
-            and the manual IB flows, which have nothing to undo here. */}
-        {entries.some((e) => e.source_type === 'import') && (
+        {/* The page's one page-domain attn slot (convention 6), in priority
+            order: unexplained voucher gaps (VoucherGapNotice above) win,
+            then imported verifikat missing underlag, then the "Ångra import"
+            pointer (issue #1883). The missing-underlag line opens the
+            existing "Underlag till importerade verifikat" import, which
+            attaches a folder of receipts by voucher number; the import
+            history stays one quiet link away in the same line. Only
+            source_type 'import' is an SIE marker: 'opening_balance' is also
+            written by year-end closing and the manual IB flows, which have
+            nothing to undo here. */}
+        {unexplainedGapCount === 0 && importedMissingCount > 0 ? (
           <AttnLine
             className="px-1 pb-2"
-            action={{ label: t('import_attn_action'), href: '/import?history=sie' }}
+            action={{ label: t('import_missing_attn_action'), href: '/import?mode=underlag' }}
+            trailing={
+              <>
+                <span className="text-muted-foreground print:hidden"> · </span>
+                <Link href="/import?history=sie" className={cn(QUIET_LINK_CLASS, 'print:hidden')}>
+                  {t('import_attn_action')}
+                </Link>
+              </>
+            }
           >
-            {t('import_attn')}
+            {wholeScopeLoaded
+              ? t('import_missing_attn', { count: importedMissingCount })
+              : t('import_missing_attn_page', { count: importedMissingCount })}
           </AttnLine>
+        ) : (
+          unexplainedGapCount === 0 &&
+          entries.some((e) => e.source_type === 'import') && (
+            <AttnLine
+              className="px-1 pb-2"
+              action={{ label: t('import_attn_action'), href: '/import?history=sie' }}
+            >
+              {t('import_attn')}
+            </AttnLine>
+          )
         )}
 
         <div className="overflow-x-auto">
@@ -1641,9 +1684,13 @@ export default function JournalEntryList({
                                   <CircleSlash className="h-3.5 w-3.5 text-muted-foreground" />
                                 </span>
                               ) : (
-                                <Badge variant="warning" title={t('missing_attachment_tooltip')}>
-                                  {t('missing_attachment_chip')}
-                                </Badge>
+                                // Imported rows are counted once in the line
+                                // above the table, not chipped row by row.
+                                entry.source_type !== 'import' && (
+                                  <Badge variant="warning" title={t('missing_attachment_tooltip')}>
+                                    {t('missing_attachment_chip')}
+                                  </Badge>
+                                )
                               )
                             )
                           )}

@@ -5,8 +5,8 @@
  * cron route and its email templates were removed on 2026-10-12 (Plan 2
  * step 18): reminders belong to the collections integration now
  * (lib/collections). The schedule settings (send_invoice_reminders,
- * reminder_days_level_1/2/3) stay editable, and the invoice settings form
- * reads this constant to tell users that automatic sending is off.
+ * reminder_days_level_1/2/3) stay stored, and Försäljning → Utskick reads
+ * this constant to hide the schedule while automatic sending is off.
  *
  * Turning reminders back on is a founder product decision and means building
  * a sender again, not flipping this flag. Whatever sender comes next must be
@@ -30,8 +30,9 @@ export const REMINDERS_SENDING_ENABLED = false as boolean
  * Every surface that tells a user "reminders are sent after N days" must read
  * this, never the company setting alone: that setting defaults to on, so read
  * by itself it promises a schedule nothing runs (crm#95). The
- * settings form keeps reading REMINDERS_SENDING_ENABLED directly because its
- * notice is about the product-wide state, whatever the toggle says.
+ * settings page keeps reading REMINDERS_SENDING_ENABLED directly because
+ * whether the schedule shows at all is about the product-wide state, whatever
+ * the toggle says.
  *
  * `sendingEnabled` is a parameter only so tests can pin the truth table for
  * both switch states; callers never pass it.

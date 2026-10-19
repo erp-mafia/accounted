@@ -2,8 +2,16 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Badge } from '@/components/ui/badge'
+import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import {
   Dialog,
@@ -49,21 +57,26 @@ function scopeKeyOf(periodId: string | null, series: string | null): string {
 }
 
 /**
- * Holes in the voucher numbering of one räkenskapsår, listed above the
- * verifikat table: each with its documented explanation, or the Förklara
- * action when none exists yet. Every gap needs a documented reason (BFNAR
- * 2013:2) and the bokslut preflight refuses to run while one is missing, so
- * this is where the customer satisfies that requirement. Renders nothing when
- * the series is unbroken, so most companies never see it.
+ * Holes in the voucher numbering of one räkenskapsår, above the verifikat
+ * table. Every gap needs a documented reason (BFNAR 2013:2) and the bokslut
+ * preflight refuses to run while one is missing, so this is where the
+ * customer satisfies that requirement. Renders nothing when the series is
+ * unbroken, so most companies never see it.
  *
- * Rows sit above the table rather than at the gap's position inside it: the
- * table is paginated and sorted two ways, so a synthetic row has no stable
- * place. Write-once by design: editing waits for a history trail.
+ * Unexplained gaps collapse into one attn line (convention 6) whose Förklara
+ * action opens the explain dialog; with several open gaps the dialog picks
+ * between them and moves on to the next after each save. Explained gaps are
+ * done work, so they leave the default view but stay one click away behind a
+ * quiet "Förklarade luckor (N)" disclosure: the documentation must remain
+ * findable, not just exist.
+ *
+ * Write-once by design: editing waits for a history trail.
  */
 export default function VoucherGapNotice({
   periodId,
   series,
   refreshToken,
+  onUnexplainedCountChange,
 }: {
   /** Räkenskapsår to inspect; null renders nothing. */
   periodId: string | null
@@ -71,6 +84,12 @@ export default function VoucherGapNotice({
   series: string | null
   /** Bumped by the parent after a write so a new gap shows up. */
   refreshToken?: number
+  /**
+   * Reports how many unexplained gaps the attn line is showing, so the list
+   * can give this line the page's single attn slot (convention 6). Reports 0
+   * on unmount.
+   */
+  onUnexplainedCountChange?: (count: number) => void
 }) {
   const t = useTranslations('journal_list')
   const { toast } = useToast()
@@ -86,7 +105,10 @@ export default function VoucherGapNotice({
   const scopeKey = scopeKeyOf(periodId, series)
   const [loaded, setLoaded] = useState<{ scopeKey: string; gaps: VoucherGap[] } | null>(null)
   const gaps = loaded && loaded.scopeKey === scopeKey ? loaded.gaps : []
+  const unexplained = gaps.filter((gap) => !gap.explanation)
+  const explained = gaps.filter((gap) => gap.explanation)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [showExplained, setShowExplained] = useState(false)
   // The gap being explained, pinned to the räkenskapsår it was opened for: a
   // save must never attach an explanation to a year the list switched to
   // while the dialog was open.
@@ -121,6 +143,17 @@ export default function VoucherGapNotice({
     void load()
   }, [load, refreshToken])
 
+  // The parent hides its own attn line while this one shows; the callback is
+  // read through a ref so a parent passing an inline function does not
+  // re-run the effect on every render.
+  const onCountRef = useRef(onUnexplainedCountChange)
+  onCountRef.current = onUnexplainedCountChange
+  const unexplainedCount = periodId ? unexplained.length : 0
+  useEffect(() => {
+    onCountRef.current?.(unexplainedCount)
+  }, [unexplainedCount])
+  useEffect(() => () => onCountRef.current?.(0), [])
+
   // A period or series switch invalidates the gap list the dialog was opened
   // from, so the dialog closes rather than saving against the new scope.
   useEffect(() => {
@@ -137,11 +170,21 @@ export default function VoucherGapNotice({
     })
   }
 
-  /** Opens the explain dialog for one gap of the currently shown year. */
-  const openDialog = (gap: VoucherGap) => {
-    if (!periodId) return
-    setTarget({ gap, periodId })
+  /** Opens the explain dialog on the first unexplained gap of the shown year. */
+  const openDialog = () => {
+    if (!periodId || unexplained.length === 0) return
+    setTarget({ gap: unexplained[0], periodId })
     setDraft('')
+  }
+
+  /**
+   * Switches the dialog to another unexplained gap of the same year. The
+   * draft is kept: one reason often covers several gaps, and nothing is saved
+   * until the user confirms it for the gap now shown.
+   */
+  const pickTarget = (key: string) => {
+    const gap = unexplained.find((g) => gapKey(g) === key)
+    if (gap && target) setTarget({ gap, periodId: target.periodId })
   }
 
   /** Saves the draft through the existing voucher-gaps route, then reloads. */
@@ -171,7 +214,16 @@ export default function VoucherGapNotice({
         return
       }
       toast({ title: t('gap_saved') })
-      setTarget(null)
+      // Several open gaps: move straight on to the next one with an empty
+      // draft, so each gap gets its own deliberate explanation.
+      const savedKey = gapKey(target.gap)
+      const next = unexplained.find((g) => gapKey(g) !== savedKey)
+      if (next) {
+        setTarget({ gap: next, periodId: target.periodId })
+        setDraft('')
+      } else {
+        setTarget(null)
+      }
       await load()
     } catch {
       toast({ title: t('gap_save_failed'), variant: 'destructive' })
@@ -185,55 +237,78 @@ export default function VoucherGapNotice({
   const joiner = t('gap_range_joiner')
   const targetRange = target ? formatVoucherGapRange(target.gap, joiner) : ''
 
+  const explainedToggle =
+    explained.length > 0 ? (
+      <button
+        type="button"
+        className={cn(QUIET_LINK_CLASS, 'print:hidden')}
+        aria-expanded={showExplained}
+        onClick={() => setShowExplained((v) => !v)}
+      >
+        {showExplained
+          ? t('gap_explained_hide')
+          : t('gap_explained_toggle', { count: explained.length })}
+      </button>
+    ) : null
+
   return (
     <>
-      <div className="divide-y divide-border border-b border-border text-[13px] leading-5">
-        {gaps.map((gap) => {
-          const key = gapKey(gap)
-          const range = formatVoucherGapRange(gap, joiner)
-          const text = gap.explanation?.explanation ?? ''
-          const clampable = text.length > CLAMP_THRESHOLD
-          const isExpanded = expanded.has(key)
-          return (
-            <div
-              key={key}
-              className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 px-1 py-3"
-            >
-              <div className="min-w-0 flex-1">
-                <p className="font-medium">{t('gap_title', { series: gap.series, range })}</p>
-                {gap.explanation && (
+      <div className="px-1 pb-2">
+        {unexplained.length > 0 ? (
+          <AttnLine
+            action={
+              canExplain ? { label: t('gap_explain_action'), onClick: openDialog } : undefined
+            }
+            trailing={
+              explainedToggle ? (
+                <>
+                  <span className="text-muted-foreground print:hidden"> · </span>
+                  {explainedToggle}
+                </>
+              ) : undefined
+            }
+          >
+            {t('gap_attn', { count: unexplained.length })}
+          </AttnLine>
+        ) : (
+          <p className="text-[12.5px] leading-5">{explainedToggle}</p>
+        )}
+      </div>
+
+      {showExplained && explained.length > 0 && (
+        <div className="divide-y divide-border border-b border-border text-[13px] leading-5">
+          {explained.map((gap) => {
+            const key = gapKey(gap)
+            const range = formatVoucherGapRange(gap, joiner)
+            const text = gap.explanation?.explanation ?? ''
+            const clampable = text.length > CLAMP_THRESHOLD
+            const isExpanded = expanded.has(key)
+            return (
+              <div
+                key={key}
+                className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 px-1 py-3"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium">{t('gap_title', { series: gap.series, range })}</p>
                   <p className={cn('text-muted-foreground', clampable && !isExpanded && 'line-clamp-2')}>
                     {text}
                   </p>
-                )}
-                {clampable && (
-                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => toggleExpanded(key)}>
-                    {isExpanded ? t('gap_show_less') : t('gap_show_more')}
-                  </button>
-                )}
-              </div>
-              <div className="flex shrink-0 items-baseline gap-3">
-                {gap.explanation ? (
-                  <span className="text-xs tabular-nums text-muted-foreground">
+                  {clampable && (
+                    <button type="button" className={QUIET_LINK_CLASS} onClick={() => toggleExpanded(key)}>
+                      {isExpanded ? t('gap_show_less') : t('gap_show_more')}
+                    </button>
+                  )}
+                </div>
+                {gap.explanation && (
+                  <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
                     {t('gap_explained_on', { date: formatDate(gap.explanation.created_at) })}
                   </span>
-                ) : (
-                  <>
-                    <Badge variant="warning" className="font-normal">
-                      {t('gap_missing')}
-                    </Badge>
-                    {canExplain && (
-                      <button type="button" className={QUIET_LINK_CLASS} onClick={() => openDialog(gap)}>
-                        {t('gap_explain_action')}
-                      </button>
-                    )}
-                  </>
                 )}
               </div>
-            </div>
-          )
-        })}
-      </div>
+            )
+          })}
+        </div>
+      )}
 
       <Dialog
         open={target !== null}
@@ -246,6 +321,23 @@ export default function VoucherGapNotice({
             <DialogTitle>{t('gap_dialog_title', { range: targetRange })}</DialogTitle>
             <DialogDescription>{t('gap_dialog_hint')}</DialogDescription>
           </DialogHeader>
+          {target && unexplained.length > 1 && (
+            <div className="space-y-2">
+              <Label htmlFor="voucher-gap-pick">{t('gap_dialog_pick_label')}</Label>
+              <Select value={gapKey(target.gap)} onValueChange={pickTarget} disabled={saving}>
+                <SelectTrigger id="voucher-gap-pick">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {unexplained.map((gap) => (
+                    <SelectItem key={gapKey(gap)} value={gapKey(gap)}>
+                      {t('gap_title', { series: gap.series, range: formatVoucherGapRange(gap, joiner) })}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           <Textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value.slice(0, EXPLANATION_MAX))}

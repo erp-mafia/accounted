@@ -1436,7 +1436,7 @@ export default function JournalEntryForm({
       )}
       {selectedPeriodLocked && <AttnLine>{t('review_period_locked')}</AttnLine>}
       {uploadedFiles.filter((f) => f.status === 'uploaded').length === 0 && (
-        <AttnLine>{t('no_doc_body')}</AttnLine>
+        <AttnLine>{t('no_doc_attn')}</AttnLine>
       )}
 
       <JournalEntryReviewContent

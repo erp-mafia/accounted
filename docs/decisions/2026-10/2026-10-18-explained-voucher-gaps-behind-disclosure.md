@@ -1,0 +1,1 @@
+[2026-10-18] Verifikat shows unexplained voucher gaps as one attn line and explained gaps behind a Förklarade luckor (N) disclosure: BFNAR 2013:2 needs the explanations findable, not always on screen.
