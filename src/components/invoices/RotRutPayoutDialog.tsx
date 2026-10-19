@@ -34,7 +34,7 @@ import {
   type ErrorLocale,
 } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate, formatOrgNumber } from '@/lib/utils'
-import { DEDUCTION_TYPE_LABEL_KEYS, type DeductionType } from '@/lib/invoices/rot-rut-rules'
+import { DEDUCTION_TYPE_LABEL_KEYS, type DeductionType } from '@/lib/bookkeeping/rot-rut-rules'
 
 type RequestStatus =
   | 'generated'

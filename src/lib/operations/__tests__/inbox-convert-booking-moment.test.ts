@@ -31,7 +31,7 @@ vi.mock('@/lib/supabase/server', () => ({
 
 import { createClient } from '@/lib/supabase/server'
 import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
-import { registerSupplierInvoiceHandler } from '@/lib/bookkeeping/handlers/supplier-invoice-handler'
+import { registerSupplierInvoiceHandler } from '@/lib/invoices/supplier-invoice-handler'
 import { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
 import { convertInboxItemToSupplierInvoice } from '../inbox-convert'
 import type { SupabaseClient } from '@supabase/supabase-js'

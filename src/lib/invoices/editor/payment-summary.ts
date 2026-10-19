@@ -6,7 +6,7 @@ import {
   normalizeInvoicePaymentAccount,
   resolveInvoicePaymentAccount,
   summarizeInvoicePaymentAccount,
-} from '@/lib/invoices/payment-accounts'
+} from '@/lib/cash-accounts/invoice-payment-accounts'
 import { cashAccountPayee, foreignInvoicePayeeCandidates } from '@/lib/cash-accounts/invoice-payee-rules'
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import {

@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CreateJournalEntryInput, DeductionType, JournalEntry } from '@/types'
 import { ORE_ROUNDING_ACCOUNT, ORE_ROUNDING_SETTLEMENT_MAX, roundOre } from '@/lib/money'
-import { DEDUCTION_TYPE_LABELS } from '@/lib/invoices/rot-rut-rules'
+import { DEDUCTION_TYPE_LABELS } from '@/lib/bookkeeping/rot-rut-rules'
 import { postingPort } from '@/lib/posting/port'
 import { findFiscalPeriod } from './engine'
 import {

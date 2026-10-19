@@ -26,7 +26,7 @@ import {
 import {
   MATCHABLE_INVOICE_STATUSES,
   MATCHABLE_SUPPLIER_INVOICE_STATUSES,
-} from '@/lib/invoices/matchable-statuses'
+} from '@/lib/bookkeeping/matchable-statuses'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { filterOverdueInvoices, invoiceDaysOverdue } from '@/lib/invoices/overdue'
 import { COLLECTIONS_BATCH_TYPE } from '@/lib/collections/batch'

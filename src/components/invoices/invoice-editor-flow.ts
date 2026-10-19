@@ -1,6 +1,6 @@
 import { addDays, differenceInCalendarDays, format, isValid, parseISO } from 'date-fns'
 import { foldText } from '@/lib/bookkeeping/account-search'
-import { gronTeknikWorkType } from '@/lib/invoices/rot-rut-rules'
+import { gronTeknikWorkType } from '@/lib/bookkeeping/rot-rut-rules'
 
 /**
  * Pure derivations behind the invoice editor's snabbflöde shell:

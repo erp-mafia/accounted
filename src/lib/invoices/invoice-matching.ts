@@ -35,7 +35,7 @@ import { normalizeCurrencyCode, invoiceAmountSek } from './duplicate-guard-curre
 import { normalizeOcrReference } from './duplicate-payment-guard'
 import { invoicesNamedByReference, invoicesNamedInTiers, distinctiveReferenceKeys } from './ocr-keys'
 import type { Invoice, Transaction, Customer } from '@/types'
-import { MATCHABLE_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
+import { MATCHABLE_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 
 export interface InvoiceMatch {
   invoice: Invoice & { customer?: Customer }

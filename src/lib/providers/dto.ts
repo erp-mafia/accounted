@@ -244,7 +244,7 @@ export interface HouseholdDeductionDto {
 
 /**
  * The deduction data of one work row. `workType` is Skatteverket's
- * arbetstypskod (lib/invoices/rot-rut-rules.ts), or null when the provider's
+ * arbetstypskod (lib/bookkeeping/rot-rut-rules.ts), or null when the provider's
  * type has no element in the begäran schema; `providerWorkType` keeps the
  * provider's own code for the review list.
  */

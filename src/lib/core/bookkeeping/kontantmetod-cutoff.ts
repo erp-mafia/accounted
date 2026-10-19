@@ -94,7 +94,7 @@ import type { ChartVatTreatments } from '@/lib/bookkeeping/vat-entries'
 import { correctionBusinessEvents } from '@/lib/bookkeeping/ledger-business-events'
 import { anchorCustomerInvoiceDocument } from '@/lib/core/documents/customer-invoice-underlag'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
-import { invoiceCustomerOutstanding, invoiceCustomerShare } from '@/lib/invoices/customer-share'
+import { invoiceCustomerOutstanding, invoiceCustomerShare } from '@/lib/bookkeeping/customer-share'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { createLogger } from '@/lib/logger'
 import { ORE_TOLERANCE, roundOre } from '@/lib/money'
@@ -1635,7 +1635,7 @@ function customerOutstandingAsOf(
   // Measuring the outstanding against the gross total left exactly
   // deduction_total "open" on a fully paid invoice and booked it as a phantom
   // 1510 fordran with phantom moms (#2248). The share has ONE definition
-  // (lib/invoices/customer-share.ts, twin of the DB guard), the as-of
+  // (lib/bookkeeping/customer-share.ts, twin of the DB guard), the as-of
   // reconstruction is the reskontra's; only the floor below belongs to the
   // cut-off.
   const shareInput = { total: totalOwn, deduction_total: Number(row.deduction_total ?? 0) }

@@ -22,7 +22,7 @@ import { linkBasisColumnsFor, type LinkBasisInput } from '@/lib/links/stamp'
 import { roundOre } from '@/lib/money'
 import { postingPort } from '@/lib/posting/port'
 import type { CreateJournalEntryInput, Customer, EntityType, Invoice } from '@/types'
-import { MATCHABLE_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
+import { MATCHABLE_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 
 /**
  * The core "apply a payment to an invoice" operation, extracted from the

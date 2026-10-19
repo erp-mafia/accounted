@@ -12,7 +12,7 @@ import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import {
   hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
-} from '@/lib/invoices/payment-accounts'
+} from '@/lib/cash-accounts/invoice-payment-accounts'
 
 /**
  * `?disposition=inline` serves the PDF for in-browser review instead of forcing

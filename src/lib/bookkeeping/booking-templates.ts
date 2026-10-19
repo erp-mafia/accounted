@@ -15,7 +15,7 @@ import {
 } from './vat-entries'
 import { resolveSekAmount } from './currency-utils'
 import { getOutputVatAccount } from './invoice-accounts'
-import { grossVat } from '@/lib/vat/gross-split'
+import { grossVat } from '@/lib/bookkeeping/gross-split'
 import { templateAccountForForm } from '@/lib/company/entity-type'
 import { templateSkattekontoAccount, type SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 import { vatTreatmentForRegistration, type VatRegistration } from './vat-registration'

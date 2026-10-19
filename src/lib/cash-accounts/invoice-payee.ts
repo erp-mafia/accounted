@@ -8,7 +8,7 @@ import type {
 } from '@/types'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { syncMappedAccounts } from '@/lib/import/account-sync'
-import { isInvoicePaymentAccountCurrency } from '@/lib/invoices/payment-accounts'
+import { isInvoicePaymentAccountCurrency } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { findFreeLedgerAccount } from '@/lib/cash-accounts/service'
 import { isBankCashAccount } from '@/lib/cash-accounts/invoice-payee-rules'
 

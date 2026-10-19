@@ -5,7 +5,7 @@ import { textColumn, integerColumn } from '@/lib/reports/xlsx-export'
 import { buildRegisterExport, parseExportFormat, todayIso } from '@/lib/export/register-export'
 import { maskStoredCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
 import { maskCustomerPersonalNumber } from '@/lib/customers/mask-personal-number'
-import { orgNumberIsPersonalIdentifier } from '@/lib/customers/personal-number-shape'
+import { orgNumberIsPersonalIdentifier } from '@/lib/invariants/personal-number-shape'
 import type { Customer } from '@/types'
 import { fileResponse } from '@/lib/api/file-response'
 

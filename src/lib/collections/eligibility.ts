@@ -1,7 +1,7 @@
 import type { CollectionsFeatures } from '@accounted/connect-contract'
 import { roundOre } from '@/lib/money'
 import { luhnValidate } from '@/lib/bankgiro/luhn'
-import { getAmountToPay } from '@/lib/invoices/rounding'
+import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
 import { ADULT_AGE, type DebtorPersonalNumber } from './personal-number'
 

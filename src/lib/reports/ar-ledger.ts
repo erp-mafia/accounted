@@ -7,12 +7,12 @@ import {
   fetchInvoiceRegisterCoverage,
   NO_INVOICE_REGISTER_COVERAGE,
   type InvoiceRegisterCoverage,
-} from '@/lib/invoices/invoice-register-coverage'
+} from '@/lib/reports/invoice-register-coverage'
 import {
   fetchSkatteverketSettled,
   liveReceivableOutstanding,
   outstandingLessPayouts,
-} from '@/lib/invoices/skatteverket-share'
+} from '@/lib/bookkeeping/skatteverket-share'
 import { fetchCreditNoteCreditUsed, outstandingWithCreditUsed } from './credit-note-settlement'
 
 export interface ARInvoiceDetail {

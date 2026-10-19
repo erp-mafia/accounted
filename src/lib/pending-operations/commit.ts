@@ -30,7 +30,7 @@ import {
   exceedsSupplierInvoiceTotalsTolerance,
   supplierInvoiceLinesInclVat,
   supplierInvoiceTotalsGap,
-} from '@/lib/supplier-invoices/line-totals'
+} from '@/lib/bookkeeping/supplier-invoice-line-totals'
 import { resolveSupplierInvoiceReverseCharge } from '@/lib/supplier-invoices/create'
 import { matchPairs, setItemIgnored, unmatchLink } from '@/lib/reconciliation/actions'
 import { signOffAccount } from '@/lib/reconciliation/signoff'
@@ -203,7 +203,7 @@ import {
   describeMissingInvoicePaymentAccount,
   hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
-} from '@/lib/invoices/payment-accounts'
+} from '@/lib/cash-accounts/invoice-payment-accounts'
 import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
 import {
   exceedsInvoiceEmailRecipientLimit,
@@ -309,7 +309,7 @@ import type {
   FiscalPeriod,
 } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
-import { MATCHABLE_INVOICE_STATUSES, isMatchableInvoiceStatus } from '@/lib/invoices/matchable-statuses'
+import { MATCHABLE_INVOICE_STATUSES, isMatchableInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { linkBasisColumns } from '@/lib/links/stamp'
 
 const log = createLogger('pending-operations/commit')

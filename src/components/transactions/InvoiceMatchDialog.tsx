@@ -12,7 +12,7 @@ import { isInvoiceBookingRateMissing, previewedFxGainSek } from './invoice-match
 import {
   getInvoiceMatchTargetState,
   getSupplierInvoiceMatchTargetState,
-} from '@/lib/invoices/matchable-statuses'
+} from '@/lib/bookkeeping/matchable-statuses'
 import { CheckCircle2, AlertTriangle } from 'lucide-react'
 import type { LineDimensions } from '@/components/bookkeeping/payment-line-dimensions'
 import type { PaymentLinePayload, PaymentPreviewLine } from '@/components/bookkeeping/payment-preview-lines'

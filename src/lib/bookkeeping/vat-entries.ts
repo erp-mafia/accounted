@@ -7,7 +7,7 @@ import {
 import { rcBasisAccountRate } from '@/lib/reports/vat-filing-gate'
 import { roundOre } from '@/lib/money'
 import { reverseChargeBasisAccounts, vatBasisAccount } from '@/lib/vat/moms-box-mapping'
-import { grossVat } from '@/lib/vat/gross-split'
+import { grossVat } from '@/lib/bookkeeping/gross-split'
 
 /**
  * Generate VAT journal entry lines based on VAT treatment

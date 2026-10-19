@@ -10,7 +10,7 @@ import { createQueuedMockSupabase, makeCompanySettings, makeInvoiceInboxItem, ma
 vi.mock('@/lib/bookkeeping/supplier-invoice-entries', () => ({ createSupplierInvoiceRegistrationEntry: vi.fn() }))
 
 import { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
-import { convertInboxItemToSupplierInvoice } from '@/lib/documents/inbox-convert'
+import { convertInboxItemToSupplierInvoice } from '@/lib/operations/inbox-convert'
 import { rejectSupersededInboxConversions } from '../supersede'
 
 const SUPPLIER = '00000000-0000-4000-8000-000000000001'

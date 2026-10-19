@@ -14,10 +14,10 @@ import {
 import type { ReactNode } from 'react'
 import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
 import type { InvoicePdfPaymentQr } from '@/lib/invoices/payment-qr'
-import { getAmountToPay } from '@/lib/invoices/rounding'
+import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
 import { isTextLikeLine } from '@/lib/invoices/display'
 import { maskedDeductionPersonnummer } from '@/lib/invoices/deduction-personnummer'
-import { GRON_TEKNIK_WORK_TYPES, workTypeLabel } from '@/lib/invoices/rot-rut-rules'
+import { GRON_TEKNIK_WORK_TYPES, workTypeLabel } from '@/lib/bookkeeping/rot-rut-rules'
 import { getCountryName } from '@/lib/vat/country-codes'
 import { unitLabel } from '@/lib/invoices/unit-labels'
 import {

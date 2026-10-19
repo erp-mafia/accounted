@@ -31,7 +31,7 @@ import { prepareInvoiceFont } from '@/lib/invoices/pdf-fonts'
 import {
   assertInvoicePaymentAccountForRender,
   companyWithInvoicePaymentAccount,
-} from '@/lib/invoices/payment-accounts'
+} from '@/lib/cash-accounts/invoice-payment-accounts'
 
 const logoLog = createLogger('invoice.logo')
 

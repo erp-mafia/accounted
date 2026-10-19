@@ -3,7 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase, makeCustomer } from '@/tests/helpers'
 import { buildInvoiceWriteData, type InvoiceWriteInput } from '@/lib/invoices/build-invoice-write'
 import { encryptPersonnummer, decryptPersonnummer } from '@/lib/salary/personnummer'
-import { getAmountToPay } from '@/lib/invoices/rounding'
+import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
 import type { Customer, InvoiceDocumentType } from '@/types'
 
 // Uses the REAL getVatRules / rot-rut-rules / personnummer helpers (only the

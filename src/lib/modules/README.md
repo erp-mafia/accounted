@@ -638,3 +638,35 @@ its own mirrors beside it, by hand (for `year_end` the kontantmetod carry's
 storno guard and the asset register's release; for any storno the release
 of its bank lines and of a period's IB link), and `correctEntry` runs no
 hook. Moving those is not part of this step.
+
+Phase 2's exit check: the posting port design closes Phase 2 when "the
+reversal hooks become a registry and the ledger to invoicing imports in the
+boundary ratchet go to zero." The registry is step 3's other half (above).
+Every posting goes through the port, so the ledger no longer reaches into a
+block for its rules: both kernel pairs, `ledger -> invoicing` (20 edges) and
+`ledger -> supplier-invoices` (6), are at zero and gone from
+`boundary-baseline.json`, with no behaviour change (each file moved as it was,
+with its tests, every import rewritten). The pure rules the ledger's own line
+builders and reports read moved into the kernel: in `lib/bookkeeping` the
+gross split (from `lib/vat`), an invoice line's VAT treatment
+(`invoice-line-vat-treatment.ts`, out of `lib/invoices/vat-rules.ts`), the
+ROT/RUT rules and the invoice line amounts they compute on, the customer's and
+Skatteverket's share of an invoice, öresavrundning (`invoice-rounding.ts`), the
+supplier invoice display figures, line totals and rounding item, the matchable
+statuses and `registered-from-books.ts`; the invoice payment accounts in
+`lib/cash-accounts`, the personnummer shape in `lib/invariants`, the invoice
+number series in `lib/company` (the settings save checks it) and the invoice
+register coverage in `lib/reports` (the kundreskontra reads it). The LIKE
+escape (`lib/supabase/like-pattern.ts`) and `toSingleLine` (`lib/utils.ts`)
+went to infrastructure. Two files left the ledger: the supplier invoice
+retro-match, invoicing's own event handler, sits beside its scorer
+(`lib/invoices/supplier-invoice-handler.ts`, which the event consumer list
+imports), and the conversion of an inbox item to a supplier invoice, which
+wires inbox, supplier invoices, payments and VAT, sits in the operations layer
+it serves (`lib/operations/inbox-convert.ts`). The payment sync stays in the
+ledger (in invoicing it would import collections, which depends on invoicing)
+and reads the customer share from the kernel.
+`__tests__/phase2-exit-check.test.ts` asserts the sentence: both
+pairs at zero in the scan and in the baseline, engine.ts importing the static
+hook list, which covers every source type whose storno needs a mirror, and the
+posting-port-bypass guard finding no edge, with an empty baseline.

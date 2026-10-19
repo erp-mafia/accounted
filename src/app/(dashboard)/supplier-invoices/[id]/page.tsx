@@ -47,7 +47,7 @@ import {
   type SupplierInvoiceLadderStage,
 } from '@/lib/supplier-invoices/stages'
 import { formatCurrency } from '@/lib/utils'
-import { supplierInvoiceDisplayFigures } from '@/lib/supplier-invoices/display-figures'
+import { supplierInvoiceDisplayFigures } from '@/lib/bookkeeping/supplier-invoice-display-figures'
 import {
   canApproveSupplierInvoice,
   canMarkSupplierInvoiceBankEntered,

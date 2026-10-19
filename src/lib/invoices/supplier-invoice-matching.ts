@@ -27,7 +27,7 @@
  */
 
 import type { Transaction, SupplierInvoice } from '@/types'
-import { isMatchableSupplierInvoiceStatus } from '@/lib/invoices/matchable-statuses'
+import { isMatchableSupplierInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { counterpartyGiroDigits, giroKey } from '@/lib/transactions/giro-counterparty'
 
 export interface SupplierInvoiceMatch {

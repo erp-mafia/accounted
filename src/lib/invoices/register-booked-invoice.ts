@@ -58,7 +58,7 @@ import { ORE_TOLERANCE, roundOre } from '@/lib/money'
 import { ACCOUNT_RUTA } from '@/lib/reports/vat-declaration'
 import type { VatTreatment } from '@/types'
 import { recordInvoicePaymentRow } from './invoice-payment-row'
-import { seriesNumberOf } from './invoice-number-series'
+import { seriesNumberOf } from '@/lib/company/invoice-number-series'
 import { REGISTER_BOOKED_INVOICE_MODE } from './register-booked-invoice-mode'
 import {
   refineRegistrationDatesAndAmounts,

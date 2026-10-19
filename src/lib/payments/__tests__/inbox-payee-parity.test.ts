@@ -33,7 +33,7 @@ vi.mock('@/lib/expenses/expense-claims-service', () => ({
 }))
 
 import { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
-import { convertInboxItemToSupplierInvoice } from '@/lib/documents/inbox-convert'
+import { convertInboxItemToSupplierInvoice } from '@/lib/operations/inbox-convert'
 import { createSupplierInvoice, type CreateSupplierInvoiceInput } from '@/lib/supplier-invoices/create'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
 

@@ -7,7 +7,7 @@
  * half lives in lib/customers/protect-personal-number.ts, which is server-only.
  */
 
-import { orgNumberIsPersonalIdentifier } from '@/lib/customers/personal-number-shape'
+import { orgNumberIsPersonalIdentifier } from '@/lib/invariants/personal-number-shape'
 
 /**
  * Placeholder used when a stored personal_number cannot be decrypted
@@ -86,7 +86,7 @@ export function maskCustomerPersonalNumber(value: string | null | undefined): st
  * like one. Individual rows show the masked personal_number; a legacy
  * individual row that still carries its personnummer in org_number (written
  * before the write paths started moving it) is masked the same way. Both cases
- * are orgNumberIsPersonalIdentifier in lib/customers/personal-number-shape.ts.
+ * are orgNumberIsPersonalIdentifier in lib/invariants/personal-number-shape.ts.
  *
  * Callers pass rows whose personal_number is already the API's masked form or
  * a plaintext value; ciphertext must be masked server-side first

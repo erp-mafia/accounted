@@ -27,7 +27,7 @@ vi.mock('@/lib/invoices/pdf-template', () => ({
 // The real payee resolution, without the logo fetch and font registration.
 vi.mock('@/lib/invoices/pdf-render-helpers', async () => {
   const { companyWithInvoicePaymentAccount, assertInvoicePaymentAccountForRender } = await import(
-    '@/lib/invoices/payment-accounts'
+    '@/lib/cash-accounts/invoice-payment-accounts'
   )
   return {
     prepareInvoicePdfRender: (

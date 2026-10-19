@@ -9,7 +9,7 @@ import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
 import { resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
 import { roundOre } from '@/lib/money'
 import { todayIsoStockholm } from '@/lib/dates/iso'
-import { isMatchableInvoiceStatus } from '@/lib/invoices/matchable-statuses'
+import { isMatchableInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import type { EntityType, Invoice } from '@/types'
 
 /**

@@ -32,7 +32,7 @@ import {
   normalizeInvoicePaymentAccount,
   printedLegacySekAccount,
   summarizeInvoicePaymentAccount,
-} from '@/lib/invoices/payment-accounts'
+} from '@/lib/cash-accounts/invoice-payment-accounts'
 import { blankPrimaryPayeeAccount, cashAccountPayee, isUsableInvoicePayee } from '@/lib/cash-accounts/invoice-payee-rules'
 import { isValidSwish, normaliseSwish } from '@/lib/payments/swish'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'

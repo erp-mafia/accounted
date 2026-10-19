@@ -9,7 +9,7 @@ import {
   hasUsableInvoicePaymentAccount,
   normalizeInvoicePaymentAccount,
   summarizeInvoicePaymentAccount,
-} from '@/lib/invoices/payment-accounts'
+} from '@/lib/cash-accounts/invoice-payment-accounts'
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 
 /** A cash account's payee columns: the InvoicePaymentAccount keys, with the printed IBAN in payee_iban. */

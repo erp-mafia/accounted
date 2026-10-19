@@ -6,7 +6,7 @@ import { fetchCreditNoteCreditUsed, outstandingWithCreditUsed } from '@/lib/repo
 import {
   fetchSkatteverketSettled,
   liveReceivableOutstanding,
-} from '@/lib/invoices/skatteverket-share'
+} from '@/lib/bookkeeping/skatteverket-share'
 import type { ReportSourceLine } from '@/lib/reports/source-lines'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { roundOre } from '@/lib/money'

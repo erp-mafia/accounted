@@ -30,7 +30,7 @@ import {
   RUT_WORK_TYPES,
   gronTeknikWorkType,
   normalizeHouseworkType,
-} from '@/lib/invoices/rot-rut-rules'
+} from '@/lib/bookkeeping/rot-rut-rules'
 import { UNIT_MAX_LENGTH } from '@/lib/invoices/units'
 import UnitPicker from '@/components/invoices/UnitPicker'
 import { roundOre } from '@/lib/money'

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getAmountToPay, getDisplayTotal } from '@/lib/invoices/rounding'
+import { getAmountToPay, getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
 
 const inv = (total: number, currency: 'SEK' | 'EUR' = 'SEK') => ({ total, currency })
 const co = (ore_rounding: boolean) => ({ ore_rounding })

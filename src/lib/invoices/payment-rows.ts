@@ -29,7 +29,7 @@ import {
   invoicePrintsPlusgiro,
   invoiceShowsOcrReference,
 } from '@/lib/invoices/ocr-reference'
-import { bankCodeLabelKey } from '@/lib/invoices/payment-accounts'
+import { bankCodeLabelKey } from '@/lib/cash-accounts/invoice-payment-accounts'
 
 // Swish on invoices (the number row + the payment QR). When true, the Swish
 // row and QR can print and the settings "Visa Swish" toggle is live.

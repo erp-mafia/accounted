@@ -8,7 +8,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { encryptCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
-import { looksLikeSwedishPersonalNumber } from '@/lib/customers/personal-number-shape'
+import { looksLikeSwedishPersonalNumber } from '@/lib/invariants/personal-number-shape'
 import { normalizeVatRateToFraction } from '@/lib/vat/vat-rate-unit'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
 import { orgNumberKey } from '@/lib/invariants/org-number'

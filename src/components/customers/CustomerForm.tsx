@@ -28,7 +28,7 @@ import {
 import {
   isOrgNumberRefusedOnIndividual,
   isPersonalNumberOrgNumberDisallowed,
-} from '@/lib/customers/personal-number-shape'
+} from '@/lib/invariants/personal-number-shape'
 import { registryFormFill, type RegistryFormField } from '@/lib/parties/registry-form-fill'
 import { useRegistryAutofill } from '@/components/parties/use-registry-autofill'
 import { RegistryAutofillNote } from '@/components/parties/RegistryAutofillNote'

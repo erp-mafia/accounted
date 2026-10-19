@@ -1,4 +1,4 @@
-import { getDisplayTotal, type DisplayTotal } from '@/lib/invoices/rounding'
+import { getDisplayTotal, type DisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
 
 /**
  * Supplier invoices never had a company-wide öresavrundning setting: only an

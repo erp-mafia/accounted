@@ -20,7 +20,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { toHandle } from '@/lib/handles'
-import { INVOICE_ENGINE_SOURCE_TYPES } from '@/lib/invoices/invoice-register-coverage'
+import { INVOICE_ENGINE_SOURCE_TYPES } from '@/lib/reports/invoice-register-coverage'
 import { tiesOut } from '@/lib/measures/explain'
 import { fiscalPeriodContaining } from '@/lib/measures/params'
 import type { MeasureFiscalPeriod } from '@/lib/measures/types'
@@ -63,7 +63,7 @@ const ID_CHUNK = 200
  * The source types the supplier invoice flows write (registration, payment,
  * credit): their lines on the payables account are the register's own
  * bookkeeping. The customer side has the same list in
- * lib/invoices/invoice-register-coverage.ts.
+ * lib/reports/invoice-register-coverage.ts.
  */
 const SUPPLIER_INVOICE_ENGINE_SOURCE_TYPES = [
   'supplier_invoice_registered',

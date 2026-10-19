@@ -22,8 +22,8 @@ import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { getVatTreatmentLabel } from '@/lib/invoices/vat-rules'
 import { invoiceDisplayNumber, isTextLikeLine } from '@/lib/invoices/display'
-import { getDisplayTotal, getAmountToPay } from '@/lib/invoices/rounding'
-import { workTypeLabel } from '@/lib/invoices/rot-rut-rules'
+import { getDisplayTotal, getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
+import { workTypeLabel } from '@/lib/bookkeeping/rot-rut-rules'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import {
   continueInvoiceSeries,
@@ -33,7 +33,7 @@ import {
 import { creditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { getCreditNoteSendMode } from '@/lib/invoices/credit-note-send-mode'
 import { canCopyInvoice } from '@/lib/invoices/copy-invoice'
-import { isRegisteredFromBooks } from '@/lib/invoices/registered-from-books'
+import { isRegisteredFromBooks } from '@/lib/bookkeeping/registered-from-books'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import {
   classifyPaymentHistoryGap,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { supplierInvoiceRoundingItem } from '../rounding-item'
+import { supplierInvoiceRoundingItem } from '../supplier-invoice-rounding-item'
 
 // One rule for the zero-VAT 3740 adjustment the editor saves and the inbox
 // tool stages (crm#110, feedback seq 753539).

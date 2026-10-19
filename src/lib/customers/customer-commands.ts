@@ -29,7 +29,7 @@ import {
   normalizeReroutedPersonalNumber,
   orgNumberHoldsPersonalNumber,
   personalNumberDigits,
-} from './personal-number-shape'
+} from '@/lib/invariants/personal-number-shape'
 import {
   encryptCustomerPersonalNumber,
   maskCustomerRow,

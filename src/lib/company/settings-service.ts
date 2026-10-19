@@ -50,7 +50,7 @@ import { propagateLegacyPayeeWrite } from '@/lib/cash-accounts/invoice-payee'
 import { importExistingDimensionCodes } from '@/lib/dimensions/import-existing'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
 import { requireCompanyAdmin } from '@/lib/operations/access'
-import { invoiceSeriesBehindMessages, readInvoiceSeries } from '@/lib/invoices/invoice-number-series'
+import { invoiceSeriesBehindMessages, readInvoiceSeries } from '@/lib/company/invoice-number-series'
 import { resolveOrgNumberChange } from '@/lib/company/org-number'
 
 /** The dashboard's settings body after validation: column names, all optional. */

@@ -35,7 +35,7 @@ import {
   DEDUCTION_TYPE_LABEL_KEYS,
   isDeductionType,
   type DeductionType,
-} from '@/lib/invoices/rot-rut-rules'
+} from '@/lib/bookkeeping/rot-rut-rules'
 import { readyTileOf } from '@/lib/invoices/rot-rut-overview'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 

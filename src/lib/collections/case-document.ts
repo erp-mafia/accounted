@@ -3,7 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { COLLECTIONS_MAX_DOCUMENT_CHARS } from '@accounted/connect-contract'
 import { downloadDocumentObject, uploadDocument } from '@/lib/core/documents/document-service'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
-import { invoiceRequiresPaymentAccount } from '@/lib/invoices/payment-accounts'
+import { invoiceRequiresPaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
 import type { CompanySettings, Customer, Invoice, InvoiceItem } from '@/types'
 

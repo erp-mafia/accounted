@@ -1,5 +1,5 @@
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
-import { hasLineDiscount } from '@/lib/invoices/line-amounts'
+import { hasLineDiscount } from '@/lib/bookkeeping/invoice-line-amounts'
 
 /**
  * The invoice editor's row table: which optional columns it carries and

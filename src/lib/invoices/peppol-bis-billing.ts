@@ -8,10 +8,10 @@ import { isSaneDateString, normalizeOrgNumber } from '@/lib/invariants'
 import { normalizeIban } from '@/lib/cash-accounts/service'
 import { isEntityType, legalFormProfile, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import { isValidBic, isValidIban } from '@/lib/supplier-invoices/payment-details-backfill'
-import { resolveInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
-import { computeLineAmounts, hasLineDiscount } from '@/lib/invoices/line-amounts'
-import { getDisplayTotal } from '@/lib/invoices/rounding'
-import { toSingleLine } from '@/lib/invoices/display'
+import { resolveInvoicePaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
+import { computeLineAmounts, hasLineDiscount } from '@/lib/bookkeeping/invoice-line-amounts'
+import { getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
+import { toSingleLine } from '@/lib/utils'
 import { equalOre, ORE_TOLERANCE, roundOre } from '@/lib/money'
 import type { CompanySettings, Customer, Invoice, InvoiceItem } from '@/types'
 
@@ -449,7 +449,7 @@ function prepareInvoice(input: PeppolInvoiceInput):
     }
     // Net of any line discount: line_total must equal (qty × price) − rabatt,
     // the same exact öre arithmetic the write path stores
-    // (lib/invoices/line-amounts.ts) and the BG-27 allowance below renders.
+    // (lib/bookkeeping/invoice-line-amounts.ts) and the BG-27 allowance below renders.
     const expectedAmounts = computeLineAmounts(item.quantity, item.unit_price, item.discount_percent)
     if (!equalMoney(item.line_total, roundMoney(expectedAmounts.net))) {
       issues.push(validationIssue(

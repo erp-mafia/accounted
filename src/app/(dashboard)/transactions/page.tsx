@@ -102,7 +102,7 @@ import { skvStatusNeedsReconnect, type SkvStatusLike } from '@/lib/notices/predi
 import {
   MATCHABLE_INVOICE_STATUSES,
   MATCHABLE_SUPPLIER_INVOICE_STATUSES,
-} from '@/lib/invoices/matchable-statuses'
+} from '@/lib/bookkeeping/matchable-statuses'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'

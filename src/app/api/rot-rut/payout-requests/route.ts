@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
-import { isDeductionType } from '@/lib/invoices/rot-rut-rules'
+import { isDeductionType } from '@/lib/bookkeeping/rot-rut-rules'
 
 /**
  * GET /api/rot-rut/payout-requests

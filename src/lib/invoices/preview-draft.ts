@@ -17,10 +17,10 @@ import {
   companyWithInvoicePaymentAccount,
   hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
-} from '@/lib/invoices/payment-accounts'
+} from '@/lib/cash-accounts/invoice-payment-accounts'
 import { buildInvoicePaymentRows, printsPayableRow } from '@/lib/invoices/payment-rows'
-import { computeLineDeductions } from '@/lib/invoices/rot-rut-rules'
-import { computeLineNet } from '@/lib/invoices/line-amounts'
+import { computeLineDeductions } from '@/lib/bookkeeping/rot-rut-rules'
+import { computeLineNet } from '@/lib/bookkeeping/invoice-line-amounts'
 import { buildCreditNoteItem } from '@/lib/invoices/build-credit-note-item'
 import {
   buildCreditNoteFields,

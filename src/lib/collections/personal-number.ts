@@ -1,5 +1,5 @@
 import { calculateAge, expandPersonnummerTo12, validatePersonnummer } from '@/lib/salary/personnummer-format'
-import { looksLikeSwedishPersonalNumber } from '@/lib/customers/personal-number-shape'
+import { looksLikeSwedishPersonalNumber } from '@/lib/invariants/personal-number-shape'
 
 /**
  * A debtor's personal identity number on its way to the collections

@@ -4,11 +4,11 @@ import {
   getAvailableVatRates,
   getArticleVatRateAdoptionSet,
   getPermittedVatRates,
-  getVatTreatmentForRate,
   getVatRules,
   getVatTreatmentLabel,
   requiresSwedishVatAcknowledgement,
 } from '../vat-rules'
+import { getVatTreatmentForRate } from '@/lib/bookkeeping/invoice-line-vat-treatment'
 
 // ============================================================
 // getAvailableVatRates

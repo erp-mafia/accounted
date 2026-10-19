@@ -22,7 +22,7 @@ import {
 } from '@/lib/invoices/rot-rut-payout-matching'
 import { CheckCircle2, AlertTriangle } from 'lucide-react'
 import type { DeductionType } from '@/types'
-import { DEDUCTION_TYPE_LABEL_KEYS } from '@/lib/invoices/rot-rut-rules'
+import { DEDUCTION_TYPE_LABEL_KEYS } from '@/lib/bookkeeping/rot-rut-rules'
 import type { TransactionWithInvoice } from './transaction-types'
 
 interface RotRutPayoutMatchDialogProps {

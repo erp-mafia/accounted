@@ -35,7 +35,7 @@ import {
   type SupplierVoucherCandidate,
 } from './supplier-voucher-matching'
 import type { SupplierInvoice, Supplier } from '@/types'
-import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
+import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 
 const log = createLogger('bulk-reconcile-supplier-vouchers')
 

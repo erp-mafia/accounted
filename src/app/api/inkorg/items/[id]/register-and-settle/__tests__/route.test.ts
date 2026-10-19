@@ -14,7 +14,7 @@ const requireWriteMock = vi.fn()
 vi.mock('@/lib/auth/require-write', () => ({ requireWritePermission: (...args: unknown[]) => requireWriteMock(...args) }))
 
 const convertMock = vi.fn()
-vi.mock('@/lib/documents/inbox-convert', () => ({
+vi.mock('@/lib/operations/inbox-convert', () => ({
   convertInboxItemToSupplierInvoice: (...args: unknown[]) => convertMock(...args),
 }))
 const settleMock = vi.fn()

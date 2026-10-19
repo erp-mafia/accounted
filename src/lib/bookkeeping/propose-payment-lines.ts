@@ -9,7 +9,7 @@ import { roundOre, ORE_TOLERANCE } from '@/lib/money'
 import { InvoiceFxRateMissingError } from './invoice-accounts'
 import { buildInvoiceCashLines } from './invoice-lines'
 import { fxDifferenceLine, oreRoundingLine, oreSettlementResidual } from './ore-rounding'
-import { getDisplayTotal } from '@/lib/invoices/rounding'
+import { getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import type { CreateJournalEntryLineInput, EntityType, InvoiceItem, VatTreatment } from '@/types'
 

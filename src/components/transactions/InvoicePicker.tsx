@@ -11,7 +11,7 @@ import { roundOre } from '@/lib/money'
 import { Search, FileText, Loader2, Landmark } from 'lucide-react'
 import { useCompany } from '@/contexts/CompanyContext'
 import type { Invoice, Customer, SupplierInvoice, Supplier } from '@/types'
-import { DEDUCTION_TYPE_LABEL_KEYS } from '@/lib/invoices/rot-rut-rules'
+import { DEDUCTION_TYPE_LABEL_KEYS } from '@/lib/bookkeeping/rot-rut-rules'
 import type { PotentialRotRutPayoutRequest, TransactionWithInvoice } from './transaction-types'
 import {
   DOMESTIC_CURRENCY,

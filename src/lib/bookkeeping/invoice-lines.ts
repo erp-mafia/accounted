@@ -21,8 +21,8 @@ import {
   type LineDimensions,
 } from './dimension-resolver'
 import { generateSalesVatLines } from './vat-entries'
-import { isZeroRatedInvoiceTreatment, resolveLineVatTreatment } from '@/lib/invoices/vat-rules'
-import { computeLineDeductions, DEDUCTION_TYPE_LABELS } from '@/lib/invoices/rot-rut-rules'
+import { isZeroRatedInvoiceTreatment, resolveLineVatTreatment } from './invoice-line-vat-treatment'
+import { computeLineDeductions, DEDUCTION_TYPE_LABELS } from '@/lib/bookkeeping/rot-rut-rules'
 import { creditNatural } from './line-side'
 import { InvoiceFxRateMissingError, getOutputVatAccount, getRevenueAccount } from './invoice-accounts'
 import { oreRoundingLine, oreSettlementResidual } from './ore-rounding'

@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Invoice, InvoiceDocumentType } from '@/types'
 import { userFacing } from '@/lib/errors/user-facing'
-import { invoiceSeriesBehindMessages, type InvoiceSeriesBehind } from '@/lib/invoices/invoice-number-series'
+import { invoiceSeriesBehindMessages, type InvoiceSeriesBehind } from '@/lib/company/invoice-number-series'
 
 type InvoiceShape = Pick<Invoice, 'id' | 'invoice_number'> & {
   invoice_number: string | null

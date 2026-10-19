@@ -9,7 +9,7 @@
  *   POST   /api/v1/companies/:companyId/inbox-items/:id/convert
  *
  * The rules are the services' (lib/documents/inbox-item-actions.ts,
- * lib/documents/inbox-convert.ts), shared with the extension's dashboard
+ * lib/operations/inbox-convert.ts), shared with the extension's dashboard
  * routes: converted items are frozen, booked ones cannot be discarded, the
  * list carries no e-mail body or full reading, and a dry run writes nothing
  * (for convert: no ankomstnummer either).

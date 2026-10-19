@@ -58,8 +58,8 @@ import {
 import { sortArticles } from '@/lib/articles/sort'
 import { articleLineName, documentLanguageOf, planArticleNameSwap, type DocumentLanguage } from '@/lib/articles/line-name'
 import ArticleCombobox from '@/components/invoices/ArticleCombobox'
-import { getAmountToPay } from '@/lib/invoices/rounding'
-import { computeLineNet, hasLineDiscount } from '@/lib/invoices/line-amounts'
+import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
+import { computeLineNet, hasLineDiscount } from '@/lib/bookkeeping/invoice-line-amounts'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { ChevronDown, Loader2, X, Landmark, MoreVertical, CalendarClock, Tags, Package, Percent, Plus, Trash2 } from 'lucide-react'
 import {
@@ -99,7 +99,7 @@ import {
   SCHABLON_WORK_TYPES,
   type DeductionType,
   type PriorYearDeductions,
-} from '@/lib/invoices/rot-rut-rules'
+} from '@/lib/bookkeeping/rot-rut-rules'
 import { UNDECRYPTABLE_PERSONAL_NUMBER_MASK } from '@/lib/customers/mask-personal-number'
 import { roundOre } from '@/lib/money'
 import { isFiscalYear } from '@/lib/invariants'
@@ -185,7 +185,7 @@ import {
   paymentTermsTexts,
   type EditorPaymentSummaryInput,
 } from '@/lib/invoices/editor/payment-summary'
-import { companyWithInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
+import { companyWithInvoicePaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { formatSwishForDisplay } from '@/lib/invoices/payment-rows'
 import { EditorSection } from '@/components/invoices/editor/EditorSection'
 import { useClaimNavRow } from '@/components/dashboard/nav-row-claim'

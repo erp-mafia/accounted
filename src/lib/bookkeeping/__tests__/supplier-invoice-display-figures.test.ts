@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { supplierInvoiceDisplayFigures } from '../display-figures'
+import { supplierInvoiceDisplayFigures } from '../supplier-invoice-display-figures'
 
 describe('supplierInvoiceDisplayFigures', () => {
   it('rounds a SEK total to whole kronor when the per-invoice flag is on', () => {

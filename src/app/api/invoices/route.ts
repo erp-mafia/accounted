@@ -19,7 +19,7 @@ import { maskEmbeddedCustomer } from '@/lib/customers/protect-personal-number'
 import {
   fetchInvoiceRegisterCoverage,
   NO_INVOICE_REGISTER_COVERAGE,
-} from '@/lib/invoices/invoice-register-coverage'
+} from '@/lib/reports/invoice-register-coverage'
 
 export const GET = withRouteContext(
   'invoice.list',

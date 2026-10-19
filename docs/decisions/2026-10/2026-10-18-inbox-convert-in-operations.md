@@ -1,0 +1,1 @@
+[2026-10-18] The inbox-to-supplier-invoice conversion moved from lib/documents to lib/operations, not to supplier-invoices: it also wires payments, which depends on supplier-invoices, and VAT, so a block home would make a cycle or grow an undeclared pair.

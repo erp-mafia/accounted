@@ -3,15 +3,15 @@ import type { Currency, Customer, DeductionType, InvoiceDocumentType, InvoiceQrM
 import {
   deriveInvoiceVatHeader,
   explainVatTreatment,
-  isZeroRatedInvoiceTreatment,
   resolveInvoiceVatRules,
   type InvoiceVatOverride,
   type InvoiceVatTreatmentOverride,
   type InvoiceVatWarning,
 } from '@/lib/invoices/vat-rules'
+import { isZeroRatedInvoiceTreatment } from '@/lib/bookkeeping/invoice-line-vat-treatment'
 import { isBalanceSheetAccount } from '@/lib/invoices/posting-account'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
-import { computeLineNet } from '@/lib/invoices/line-amounts'
+import { computeLineNet } from '@/lib/bookkeeping/invoice-line-amounts'
 import { roundOre } from '@/lib/money'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { DEFAULT_DEFERRED_REVENUE_ACCOUNT } from '@/lib/bookkeeping/accruals/account-suggestions'
@@ -20,7 +20,7 @@ import {
   computeInvoiceDeductionTotal,
   computeLineDeductions,
   validateInvoice as validateRotRut,
-} from '@/lib/invoices/rot-rut-rules'
+} from '@/lib/bookkeeping/rot-rut-rules'
 import {
   encryptPersonnummer,
   expandPersonnummerTo12,
@@ -96,7 +96,7 @@ export interface InvoiceWriteItemInput {
   unit: string
   unit_price: number
   /** Percentage discount on the line (0-100). Omitted/null = 0; line_total
-   *  and vat_amount are computed NET of it (lib/invoices/line-amounts.ts). */
+   *  and vat_amount are computed NET of it (lib/bookkeeping/invoice-line-amounts.ts). */
   discount_percent?: number | null
   vat_rate?: number
   article_id?: string | null
