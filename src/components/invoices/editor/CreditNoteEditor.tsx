@@ -33,13 +33,15 @@ import { resolveSendLabel } from '@/lib/invoices/editor/primary-action'
 import { resolveEditorStatusLine } from '@/lib/invoices/editor/status-line'
 import { proposeCreditNoteSendLines } from '@/lib/invoices/editor/voucher-preview'
 import { persistAndSend } from '@/lib/invoices/editor/send-sequence'
-import { creditNoteNumber, creditNoteOriginalReference } from '@/lib/invoices/build-credit-note'
+import { creditedAmount, creditNoteNumber, creditNoteOriginalReference } from '@/lib/invoices/build-credit-note'
+import { buildCreditNoteItem } from '@/lib/invoices/build-credit-note-item'
 import { creditBooksOriginalFirst, creditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { isEntityType } from '@/lib/company/entity-type'
 import { EMAIL_PATTERN, parseInvoiceRecipientText } from '@/lib/invoices/email-recipients'
 import { hasLineDiscount } from '@/lib/bookkeeping/invoice-line-amounts'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 import type { Invoice, InvoiceItem } from '@/types'
 import type { InvoiceWithRelations } from '@/components/invoices/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -312,26 +314,28 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
   if (!invoice) return <InvoiceEditorShellSkeleton />
 
   const items = invoice.items ?? []
+  // The credit note's own rows, as the create route writes them: a rabatt
+  // row of the original comes back positive (accounted#58).
+  const creditRows = items.map((item) => ({ id: item.id, ...buildCreditNoteItem(invoice.id, item) }))
   const productCount = items.filter((item) => item.line_type !== 'text').length
   const today = todayIsoStockholm()
   const vatByRate = new Map<number, { base: number; vat: number }>()
-  for (const item of items) {
-    if (item.line_type === 'text') continue
-    const rate = item.vat_rate ?? 0
+  for (const row of creditRows) {
+    if (row.line_type === 'text') continue
+    const rate = row.vat_rate ?? 0
     const group = vatByRate.get(rate) ?? { base: 0, vat: 0 }
     vatByRate.set(rate, {
-      base: Math.round((group.base + Math.abs(item.line_total ?? 0)) * 100) / 100,
-      vat: Math.round((group.vat + Math.abs(item.vat_amount ?? 0)) * 100) / 100,
+      base: roundOre(group.base + row.line_total),
+      vat: roundOre(group.vat + row.vat_amount),
     })
   }
-  // The same VAT lines as the invoice editor's Summering: a 0 % rate says
-  // why (the original's treatment), shown negated as the amount credited.
+  // The same VAT lines as the invoice editor's Summering, from the credit
+  // rows: a 0 % rate says why (the original's treatment).
   const summaryVatLines = buildSummaryVatLines({
     vatRegistered: companySettings?.vat_registered !== false,
     groups: Array.from(vatByRate.entries()).map(([rate, group]) => ({ rate, ...group })),
     treatment: invoice.vat_treatment,
   })
-  const credited = (amount: number) => (amount === 0 ? 0 : -Math.abs(amount))
   const statusLabel =
     invoice.status === 'paid' ? t('status_paid') : isInvoiceOverdue(invoice) ? t('status_overdue') : t('status_unpaid')
   const customerLine = customer
@@ -387,7 +391,7 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
     confirmRows.push({ label: tShell('confirm_row_channel'), value: tShell('confirm_channel_manual') })
   }
   confirmRows.push({ label: tShell('confirm_row_number'), value: creditNumber ?? '' })
-  confirmRows.push({ label: t('to_credit'), value: formatCurrency(-Math.abs(invoice.total), currency) })
+  confirmRows.push({ label: t('to_credit'), value: formatCurrency(creditedAmount(invoice.total), currency) })
   if (confirmChannel && booksOriginalFirst) {
     confirmRows.push({
       label: t('confirm_row_original'),
@@ -530,7 +534,7 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {items.map((item) =>
+                  {creditRows.map((item) =>
                     item.line_type === 'text' ? (
                       <tr key={item.id} className="border-b border-border">
                         <td colSpan={4} className="px-2 py-2 italic text-muted-foreground">
@@ -548,13 +552,13 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
                           )}
                         </td>
                         <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">
-                          -{Math.abs(item.quantity)} {item.unit}
+                          {item.quantity} {item.unit}
                         </td>
                         <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">
                           {formatCurrency(item.unit_price, currency)}
                         </td>
                         <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">
-                          {formatCurrency(-Math.abs(item.line_total), currency)}
+                          {formatCurrency(item.line_total, currency)}
                         </td>
                       </tr>
                     ),
@@ -564,7 +568,7 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
 
               <dl className="ml-auto mt-6 grid w-full max-w-xs grid-cols-[minmax(0,1fr)_auto] gap-x-6 gap-y-1 text-[13px] tabular-nums">
                 <dt className="text-muted-foreground">{t('subtotal')}</dt>
-                <dd className="text-right">{formatCurrency(-Math.abs(invoice.subtotal), currency)}</dd>
+                <dd className="text-right">{formatCurrency(creditedAmount(invoice.subtotal), currency)}</dd>
                 {/* A rate with no VAT to reverse says nothing; a 0 % rate says why. */}
                 {summaryVatLines
                   .filter((line) => line.kind === 'vat' && line.rate !== null)
@@ -574,19 +578,19 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
                         {t('vat_at_rate', { rate: line.rate ?? 0 })}
                         {line.kind === 'vat' && line.reason && ` · ${tShell(`vat_zero_reason_${line.reason}`)}`}
                       </dt>
-                      <dd className="text-right">{formatCurrency(credited(line.amount), currency)}</dd>
+                      <dd className="text-right">{formatCurrency(line.amount, currency)}</dd>
                     </div>
                   ))}
                 {currency !== 'SEK' && invoice.total_sek ? (
                   <>
                     <dt className="text-muted-foreground">{t('in_sek', { rate: invoice.exchange_rate ?? 1 })}</dt>
-                    <dd className="text-right">{formatCurrency(-Math.abs(invoice.total_sek))}</dd>
+                    <dd className="text-right">{formatCurrency(creditedAmount(invoice.total_sek))}</dd>
                   </>
                 ) : null}
                 {/* One row spanning both columns: an unbroken rule above the total. */}
                 <div className="col-span-2 mt-2 flex items-baseline justify-between gap-6 border-t border-border pt-2 font-display text-xl">
                   <dt>{t('to_credit')}</dt>
-                  <dd className="text-right">{formatCurrency(-Math.abs(invoice.total), currency)}</dd>
+                  <dd className="text-right">{formatCurrency(creditedAmount(invoice.total), currency)}</dd>
                 </div>
               </dl>
             </EditorSection>

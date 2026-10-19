@@ -276,6 +276,47 @@ describe('creditInvoice', () => {
     expect(entry.lines.some((l) => l.account_number.startsWith('30'))).toBe(false)
   })
 
+  it('turns a rabatt row around: it comes back positive and the verifikat reverses what the original booked (accounted#58)', async () => {
+    // 1 000 kr and a -100 kr rabatt at 25 %: the original booked 900 revenue
+    // and 225 moms on a 1 125 kr receivable.
+    const withRabatt = {
+      ...ORIGINAL,
+      subtotal: 900,
+      subtotal_sek: 900,
+      vat_amount: 225,
+      vat_amount_sek: 225,
+      total: 1125,
+      total_sek: 1125,
+      deduction_total: 0,
+      items: [
+        { ...ROT_ITEM, quantity: 1, unit_price: 1000, line_total: 1000, vat_amount: 250, revenue_account: null, deduction_type: null, deduction_amount: 0 },
+        { ...ROT_ITEM, id: 'item-2', sort_order: 1, description: 'Rabatt', quantity: 1, unit_price: -100, line_total: -100, vat_amount: -25, revenue_account: null, deduction_type: null, deduction_amount: 0 },
+      ],
+    }
+    const { supabase, calls } = setup(withRabatt)
+
+    const result = await creditInvoice(ctx(supabase), ORIGINAL_ID, {})
+
+    expect(result.ok).toBe(true)
+    // The kreditfaktura's rows add up to its own header (-900 / -225).
+    const insertedHeader = calls.find((c) => c.table === 'invoices' && c.method === 'insert')?.args[0] as Record<string, number>
+    expect(insertedHeader).toMatchObject({ subtotal: -900, vat_amount: -225, total: -1125 })
+    const insertedRows = calls.find((c) => c.table === 'invoice_items' && c.method === 'insert')?.args[0] as InvoiceItem[]
+    expect(insertedRows.map((row) => [row.quantity, row.unit_price, row.line_total, row.vat_amount])).toEqual([
+      [-1, 1000, -1000, -250],
+      [-1, -100, 100, 25],
+    ])
+    // Dr 3001 900, Dr 2611 225, Cr 1510 1 125: not 1 100 / 275 / 1 375.
+    const entry = mocks.createJournalEntry.mock.calls[0][3] as {
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }
+    expect(entry.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['3001', 900, 0],
+      ['2611', 225, 0],
+      ['1510', 0, 1125],
+    ])
+  })
+
   it('numbers a self-billed original KR-<its external number>', async () => {
     const selfBilled = { ...ORIGINAL, invoice_number: null, external_invoice_number: 'SB-77' }
     const { supabase, calls } = setup(selfBilled)

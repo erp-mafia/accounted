@@ -518,6 +518,15 @@ export function buildInvoiceRegistrationLines(
  *   Credit 1510 Kundfordringar      [total, minus ROT/RUT]
  *   Credit 1513 Skatteverket        [ROT/RUT per item]
  *
+ * The credit note's rows are the original's negated by their sign
+ * (buildCreditNoteItem), so the same per-rate builder the registration uses
+ * lands every line on the other side of the original's on its own:
+ * a bucket that nets to a reduction on the original (a rabatt or
+ * öresavrundning row on its own account) is credited here, and one rate's
+ * moms is debited by the original's net moms. The original and its full
+ * credit note then net to zero on every account and dimension cell, 1510
+ * included (accounted#58).
+ *
  * originalVoucherRef (e.g. "A-42") is embedded in the line texts: BFL 5 kap.
  * 5 § requires a correction to point back to the corrected verifikation.
  *
@@ -537,12 +546,12 @@ export function buildCreditNoteLines(
   // time) so the reversal nets against the same dimension cells in reports.
   const defaultDimensions = coerceDimensionsBag(creditNote.default_dimensions)
 
-  // Generate reversed revenue + VAT lines per rate group (debit side for credit notes)
-  const debitLines: CreateJournalEntryLineInput[] = []
+  // Revenue + VAT lines per rate group, each on its natural side for the
+  // credit note's signed amounts: the other side of the original's.
+  const reversalLines: CreateJournalEntryLineInput[] = []
 
   if (creditNote.items && creditNote.items.length > 0) {
-    // Use absolute items for generatePerRateLines, then swap debit/credit
-    const creditLines = generatePerRateLines(
+    const perRateLines = generatePerRateLines(
       creditNote.items, creditNote.vat_treatment, entityType, tag,
       creditNote.currency, creditNote.exchange_rate,
       // Credit-note items carry the original's accrual fields so the reversal
@@ -551,50 +560,44 @@ export function buildCreditNoteLines(
       // from the original too, so goods revenue reverses on 3105 / 3108.
       { deferAccruals: options.deferAccruals ?? true, defaultDimensions, goodsDeliveryCountry: creditNote.delivery_country }
     )
-    // Every caller hands us items negated with -Math.abs (build-credit-note-
-    // item.ts), so generatePerRateLines lands every line on the debit side
-    // via creditNatural. Taking |net| as the debit reproduces the pre-existing
-    // output exactly (the old column swap would now flip them back). Known
-    // gap, unchanged by this commit: an original with a NEGATIVE row (rabatt,
-    // avrundning) is credited on the same side as the original instead of
-    // the opposite one, because -Math.abs erases the row's sign upstream.
-    for (const line of creditLines) {
-      debitLines.push({
+    // No side is forced here: the rows already carry the credit's sign
+    // (buildCreditNoteItem), and generatePerRateLines books each bucket by
+    // creditNatural. Forcing every line to the debit side (the old
+    // |net| rule) credited a rabatt row on the original's own side.
+    for (const line of perRateLines) {
+      reversalLines.push({
         ...line,
-        debit_amount: Math.round(Math.abs(line.credit_amount - line.debit_amount) * 100) / 100,
-        credit_amount: 0,
         line_description: `Kreditfaktura ${tag}${lineSuffix}`,
       })
     }
   } else {
-    // Fallback: invoice-level amounts. Same strict conversion as the
+    // Fallback: invoice-level amounts, signed as the credit note's header
+    // carries them (buildCreditNoteFields). Same strict conversion as the
     // registration fallback above: a rate-less foreign credit note must
     // refuse, not reverse the receivable with a mislabelled number.
     const revenueAccount = getRevenueAccount(creditNote.vat_treatment, entityType, creditNote.delivery_country)
-    const absSubtotal = Math.abs(headerToSekOrThrow(creditNote.subtotal, creditNote.subtotal_sek, creditNote.currency, creditNote.exchange_rate))
-    const absVat = Math.abs(headerToSekOrThrow(creditNote.vat_amount, creditNote.vat_amount_sek, creditNote.currency, creditNote.exchange_rate))
+    const subtotalSek = headerToSekOrThrow(creditNote.subtotal, creditNote.subtotal_sek, creditNote.currency, creditNote.exchange_rate)
+    const vatSek = headerToSekOrThrow(creditNote.vat_amount, creditNote.vat_amount_sek, creditNote.currency, creditNote.exchange_rate)
 
-    debitLines.push({
+    reversalLines.push({
       account_number: revenueAccount,
-      debit_amount: absSubtotal,
-      credit_amount: 0,
+      ...creditNatural(subtotalSek),
       line_description: `Kreditfaktura ${tag}`,
       dimensions: defaultDimensions,
     })
 
-    if (absVat > 0) {
+    if (roundOre(vatSek) !== 0) {
       const vatAccount = getOutputVatAccount(creditNote.vat_treatment)
-      debitLines.push({
+      reversalLines.push({
         account_number: vatAccount,
-        debit_amount: absVat,
-        credit_amount: 0,
+        ...creditNatural(vatSek),
         line_description: `Moms kreditfaktura ${tag}${lineSuffix}`,
         dimensions: defaultDimensions,
       })
     }
   }
 
-  lines.push(...debitLines)
+  lines.push(...reversalLines)
 
   // ROT/RUT reverses the exact receivable split used by the original invoice:
   // 1510 for the customer portion and 1513 for the Skatteverket portion.
@@ -609,13 +612,14 @@ export function buildCreditNoteLines(
       )
     : { lines: [], totalSek: 0 }
 
-  // Credit: Kundfordringar, balance guarantee: 1510 + 1513 equals debits.
-  const totalDebits = debitLines.reduce((sum, l) => sum + l.debit_amount, 0)
-  const customerReceivable = roundOre(totalDebits - rotRut.totalSek)
+  // Credit: Kundfordringar, balance guarantee: 1510 + 1513 equal the NET of
+  // the revenue/VAT lines (a credited rabatt row subtracts), on 1510's
+  // natural side for what the credit takes off the receivable.
+  const netDebits = reversalLines.reduce((sum, l) => sum + l.debit_amount - l.credit_amount, 0)
+  const customerReceivable = roundOre(netDebits - rotRut.totalSek)
   lines.push({
     account_number: '1510',
-    debit_amount: 0,
-    credit_amount: customerReceivable,
+    ...creditNatural(customerReceivable),
     line_description: `Kreditfaktura ${tag}`,
     dimensions: defaultDimensions,
   })
