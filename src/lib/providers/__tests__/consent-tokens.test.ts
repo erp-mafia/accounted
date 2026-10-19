@@ -6,6 +6,7 @@ import {
   resealConsentTokens,
   saveConsentTokens,
   sealConsentToken,
+  sealLegacyConsentTokens,
   updateConsentTokens,
 } from '../consent-tokens'
 
@@ -137,6 +138,101 @@ describe('consent token sealing', () => {
   it('does not reseal a row without a revision to guard on', async () => {
     const mock = createQueuedMockSupabase()
     await expect(resealConsentTokens(mock.supabase as never, 'c1', { access_token: JWT })).resolves.toBeUndefined()
+    expect(mock.findCall('provider_consent_tokens', 'update')).toBeUndefined()
+  })
+})
+
+// The rows written before the seal that no read or refresh touches again: the
+// provider OAuth cleanup cron seals them a batch at a time.
+describe('sealLegacyConsentTokens', () => {
+  beforeEach(() => {
+    vi.stubEnv('PERSONNUMMER_ENCRYPTION_KEY', 'test-personnummer-key')
+  })
+  afterEach(() => vi.unstubAllEnvs())
+
+  const legacy = (id: string, extra: Record<string, unknown> = {}) => ({
+    consent_id: id, access_token: JWT, refresh_token: UUID, credential_revision: `${id}-r1`, ...extra,
+  })
+
+  it('seals every legacy row either read finds, once, guarded on its revision', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({ data: [legacy('c1'), legacy('c2', { refresh_token: null })] }) // plaintext access tokens
+    mock.enqueue({ data: [legacy('c1'), legacy('c3', { access_token: sealConsentToken(BOKIO) })] }) // plaintext refresh tokens
+    mock.enqueue({ data: [{ consent_id: 'c1', credential_revision: 'c1-r2' }] })
+    mock.enqueue({ data: [{ consent_id: 'c2', credential_revision: 'c2-r2' }] })
+    mock.enqueue({ data: [{ consent_id: 'c3', credential_revision: 'c3-r2' }] })
+
+    await expect(sealLegacyConsentTokens(mock.supabase as never)).resolves.toEqual({ found: 3, sealed: 3 })
+
+    expect(mock.findCalls('provider_consent_tokens', 'not')).toEqual([
+      ['access_token', 'like', 'pct1:%'],
+      ['refresh_token', 'like', 'pct1:%'],
+    ])
+    const updates = mock.findCalls('provider_consent_tokens', 'update').map(([patch]) => patch as Record<string, string>)
+    expect(updates).toHaveLength(3)
+    for (const patch of updates) {
+      expect(JSON.stringify(patch)).not.toContain(JWT)
+      expect(JSON.stringify(patch)).not.toContain(UUID)
+    }
+    expect(updates.map(p => openConsentToken(p.access_token!))).toEqual([JWT, JWT, BOKIO])
+    expect(updates.map(p => p.refresh_token && openConsentToken(p.refresh_token))).toEqual([UUID, undefined, UUID])
+    expect(mock.findCalls('provider_consent_tokens', 'eq').filter(([column]) => column === 'credential_revision'))
+      .toEqual([['credential_revision', 'c1-r1'], ['credential_revision', 'c2-r1'], ['credential_revision', 'c3-r1']])
+  })
+
+  it('reads twice and writes nothing once every row is sealed', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({ data: [] })
+    mock.enqueue({ data: [] })
+    await expect(sealLegacyConsentTokens(mock.supabase as never)).resolves.toEqual({ found: 0, sealed: 0 })
+    expect(mock.findCall('provider_consent_tokens', 'update')).toBeUndefined()
+  })
+
+  it('leaves a row a concurrent refresh rotated for the next run', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({ data: [legacy('c1'), legacy('c2')] })
+    mock.enqueue({ data: [] })
+    mock.enqueue({ data: [] }) // c1: the revision moved, no row matched
+    mock.enqueue({ data: [{ consent_id: 'c2', credential_revision: 'c2-r2' }] })
+    await expect(sealLegacyConsentTokens(mock.supabase as never)).resolves.toEqual({ found: 2, sealed: 1 })
+  })
+
+  it('takes at most one batch per run', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({ data: [legacy('c1'), legacy('c2')] })
+    mock.enqueue({ data: [legacy('c3')] })
+    mock.enqueue({ data: [{ consent_id: 'c1', credential_revision: 'c1-r2' }] })
+    mock.enqueue({ data: [{ consent_id: 'c2', credential_revision: 'c2-r2' }] })
+    await expect(sealLegacyConsentTokens(mock.supabase as never, 2)).resolves.toEqual({ found: 2, sealed: 2 })
+    expect(mock.findCalls('provider_consent_tokens', 'limit')).toEqual([[2], [2]])
+    expect(mock.findCalls('provider_consent_tokens', 'update')).toHaveLength(2)
+  })
+
+  it('writes nothing without the key and says how many rows wait', async () => {
+    vi.stubEnv('PERSONNUMMER_ENCRYPTION_KEY', '')
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({ data: [legacy('c1')] })
+    mock.enqueue({ data: [] })
+    await expect(sealLegacyConsentTokens(mock.supabase as never)).resolves.toEqual({ found: 1, sealed: 0 })
+    expect(mock.findCall('provider_consent_tokens', 'update')).toBeUndefined()
+  })
+
+  it('skips a row it cannot open and seals the rest', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({ data: [legacy('c1', { access_token: 'pct1:not-a-sealed-value' }), legacy('c2')] })
+    mock.enqueue({ data: [] })
+    mock.enqueue({ data: [{ consent_id: 'c2', credential_revision: 'c2-r2' }] })
+    await expect(sealLegacyConsentTokens(mock.supabase as never)).resolves.toEqual({ found: 2, sealed: 1 })
+  })
+
+  it('fails the run on a read error without naming a token', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({ error: { message: 'connection reset' } })
+    mock.enqueue({ data: [legacy('c1')] })
+    const err: unknown = await sealLegacyConsentTokens(mock.supabase as never).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect((err as Error).message).toContain('connection reset')
+    expect((err as Error).message).not.toContain(JWT)
     expect(mock.findCall('provider_consent_tokens', 'update')).toBeUndefined()
   })
 })
