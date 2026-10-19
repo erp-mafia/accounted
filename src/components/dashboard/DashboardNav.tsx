@@ -231,6 +231,11 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
     if (href === '/salary') {
       return pathname === '/salary' || pathname.startsWith('/salary/runs')
     }
+    // One account's reconciliation (/reconciliation?account=) is opened from
+    // the Konton list and has no row of its own.
+    if (href === '/accounts') {
+      return pathname.startsWith('/accounts') || pathname.startsWith('/reconciliation')
+    }
     // Routes with their own rows under Skatt & bokslut (Bokslut, Moms,
     // Periodiseringar, Årsredovisning, Inkomstdeklaration) are carved out
     // of their parent routes so exactly one row lights up.

@@ -7,16 +7,18 @@ import AddAccountMenu from '@/components/accounts/AddAccountMenu'
 export const dynamic = 'force-dynamic'
 
 /**
- * Konton (UI v2 PR 8): bank accounts and the skattekonto on one page, with
- * last read, sign-off date and rows to review. Reachable from the v2 sidebar
- * (Konton › Översikt); the reconciliation workspace does the work.
+ * Konton: every account with an outside truth on one list, and the way into
+ * each account's reconciliation (founder decision 2026-10-18: the Avstämning
+ * list merged into this one; /reconciliation without an account redirects
+ * here, next.config.ts). ?autorun=1 is the old bankavstämning deep link from
+ * the transactions inbox, carried on to the bank account a row opens.
  */
-export default async function AccountsPage() {
-  const t = await getTranslations('accounts_v2')
+export default async function AccountsPage({ searchParams }: { searchParams: Promise<{ autorun?: string }> }) {
+  const [t, query] = await Promise.all([getTranslations('accounts_v2'), searchParams])
   return (
     <>
       <PageHeader title={t('title')} help={<HelpPopover>{t('help')}</HelpPopover>} action={<AddAccountMenu />} />
-      <AccountsOverview />
+      <AccountsOverview autorun={query.autorun === '1'} />
     </>
   )
 }

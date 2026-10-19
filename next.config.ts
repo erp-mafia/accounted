@@ -214,6 +214,15 @@ const nextConfig: NextConfig = {
         destination: '/supplier-invoices',
         permanent: false,
       },
+      // The Avstämning account list merged into Konton (2026-10-18): the bare
+      // address lands on that list; ?account= still opens one account's
+      // reconciliation here. The query string is forwarded (?autorun=1).
+      {
+        source: '/reconciliation',
+        missing: [{ type: 'query', key: 'account' }],
+        destination: '/accounts',
+        permanent: false,
+      },
       // Docs canonicalised to docs.accounted.se. Every `docs_url` field on the
       // v1 error envelope still points at this host; the 308 forwards both
       // humans and agents to the docs subdomain without us needing to
