@@ -106,7 +106,7 @@ export const invoicesBook = defineOperation({
     useWhen:
       'A customer invoice is sent or overdue, has no journal_entry_id, and the company books invoices in a separate step (defer_invoice_booking), typically after someone has checked the kontering.',
     doNotUseFor:
-      'Drafts (issue them with :send or :mark-sent first), paid invoices (their payment already booked the sale in full), credit notes, quotes, proformas or delivery notes, or any invoice under kontantmetoden (booked at payment).',
+      'Drafts (issue them with :send or :mark-sent first), paid or partially paid invoices (a payment books the sale first through this step; a kontantmetoden payment books the whole sale), credit notes, quotes, proformas or delivery notes, or any invoice under kontantmetoden (booked at payment).',
     pitfalls: [
       'An invoice that already has a journal_entry_id answers 400 INVOICE_BOOK_ALREADY_BOOKED.',
       'Status other than sent or overdue answers 400 INVOICE_BOOK_INVALID_STATUS with details.currentStatus.',
@@ -114,6 +114,7 @@ export const invoicesBook = defineOperation({
       PERIOD_LOCKED_PITFALL,
       'No open fiscal year covering the invoice date answers 400 INVOICE_BOOK_NO_FISCAL_PERIOD: create the räkenskapsår first.',
       'A posted verifikat is permanent: undo a wrong booking with storno (POST /journal-entries/{id}/reverse), never by editing.',
+      'Settling an unbooked invoice (mark-paid, a bank match, a samlingsbetalning, a link to an existing verifikat) runs this step first and refuses the payment with its code when it refuses: there is no need to call it before recording a payment, and no way to pay around it.',
     ],
     example: {
       response: {

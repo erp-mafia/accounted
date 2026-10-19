@@ -38,6 +38,13 @@ import { eventBus } from '@/lib/events/bus'
 import type { CreateJournalEntryInput, CreateJournalEntryLineInput, Currency, Invoice, Transaction } from '@/types'
 import { MATCHABLE_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import { linkBasisColumns } from '@/lib/links/stamp'
+import {
+  bookSaleBeforeSettlement,
+  clearsReceivable,
+  planSaleBeforeSettlement,
+  SALE_FIRST_NOT_REQUIRED,
+} from '@/lib/invoices/sale-first'
+import { sessionFailureResponse } from '@/lib/operations/session'
 
 /**
  * POST /api/transactions/[id]/match-invoice
@@ -50,6 +57,11 @@ import { linkBasisColumns } from '@/lib/links/stamp'
  * 5. Creates journal entry for payment receipt
  *    - Debit <resolved bank account> Företagskonto (Bank)
  *    - Credit 1510 Kundfordringar (Accounts Receivable)
+ *
+ * A company that books invoices in a separate step (defer_invoice_booking)
+ * gets an unbooked invoice's sale booked first, by the Bokför step on its
+ * invoice date, before step 1 (lib/invoices/sale-first.ts); a refusal there
+ * refuses the match with nothing written.
  *
  * The bank leg is resolved from THIS transaction's own cash_account_id via
  * resolveSettlementAccount (cash_account_id -> cash_accounts.ledger_account),
@@ -584,6 +596,19 @@ export const POST = withRouteContext(
       return errorResponse(new AccountsNotInChartError(unresolvable), txLog, { requestId })
     }
 
+    // Faktureringsmetoden with defer_invoice_booking: an invoice sent without
+    // its verifikat gets its sale booked first, by the Bokför step on its
+    // invoice date, and the payment then clears the 1510 it debits
+    // (lib/invoices/sale-first.ts). The plan is the Bokför step's dry run and
+    // the payment date's lock, so a refusal comes before anything is written.
+    // Edited rows that book the revenue themselves carry the sale already.
+    const saleCtx = { supabase, companyId: companyId!, userId: user.id, log: txLog }
+    const salePlan =
+      customLines && !clearsReceivable(customLines)
+        ? SALE_FIRST_NOT_REQUIRED
+        : await planSaleBeforeSettlement(saleCtx, invoice, { settlementDate: transaction.date })
+    if (!salePlan.ok) return sessionFailureResponse(salePlan, txLog, requestId)
+
     // A RECONCILIATION link (reconciliation_method set) is not a conflicting
     // booking: the entry it points at is an independent verifikat (SIE import,
     // salary run, manual booking) that may evidence OTHER affärshändelser, and
@@ -601,8 +626,15 @@ export const POST = withRouteContext(
           }
         : null
 
-    // From here on the request writes. Storno the conflicting
-    // auto-categorization JE first; if it fails, nothing has been written.
+    // From here on the request writes. The sale first: a correct booking of
+    // the sent invoice whatever happens to the match after it, so every later
+    // failure names it in posted_ids.
+    const sale = await bookSaleBeforeSettlement(saleCtx, salePlan)
+    if (!sale.ok) return sessionFailureResponse(sale, txLog, requestId)
+    if (sale.bookedHere && sale.journalEntryId) postedIds.sale_journal_entry_id = sale.journalEntryId
+
+    // Storno the conflicting auto-categorization JE; if it fails, nothing
+    // but the sale above has been written.
     if (transaction.journal_entry_id && !priorReconciliationLink) {
       try {
         // Through the posting port: while POSTING_EVENTS is on, the storno
@@ -633,7 +665,7 @@ export const POST = withRouteContext(
         })
       } catch (err) {
         txLog.error('failed to storno conflicting journal entry', err as Error)
-        return errorResponse(err, txLog, { requestId })
+        return errorResponse(err, txLog, { requestId, details: withPostedIds() })
       }
     }
 
@@ -710,12 +742,14 @@ export const POST = withRouteContext(
     // row pointing at the same storage_path. Same WORM file, second JE
     // pointer: no copy, no schema change. Non-blocking (BFL 7 kap audit
     // gap, but the bank line + invoice still exist as evidence).
-    if (journalEntryId && invoice.journal_entry_id) {
+    // The invoice's own verifikat: linked at issue, or booked first above.
+    const invoiceJournalEntryId = invoice.journal_entry_id ?? sale.journalEntryId
+    if (journalEntryId && invoiceJournalEntryId) {
       try {
         const { data: invoiceDoc } = await supabase
           .from('document_attachments')
           .select('storage_path, file_name, file_size_bytes, mime_type, sha256_hash')
-          .eq('journal_entry_id', invoice.journal_entry_id)
+          .eq('journal_entry_id', invoiceJournalEntryId)
           .eq('company_id', companyId)
           .eq('is_current_version', true)
           .limit(1)
@@ -744,7 +778,7 @@ export const POST = withRouteContext(
             txLog.warn('failed to attach invoice PDF to payment journal entry', {
               attachError: attachErr.message,
               paymentJournalEntryId: journalEntryId,
-              invoiceJournalEntryId: invoice.journal_entry_id,
+              invoiceJournalEntryId,
             })
           }
         }
@@ -959,6 +993,11 @@ export const POST = withRouteContext(
       // field survives for response-shape compatibility with existing callers.
       journal_entry_error: null,
       category: 'income_services',
+      // The sale verifikat this match booked first (defer_invoice_booking).
+      ...(postedIds.sale_journal_entry_id ? { sale_journal_entry_id: postedIds.sale_journal_entry_id } : {}),
+      ...(sale.warnings.length > 0
+        ? { warnings: sale.warnings.map((w) => ({ code: w.code, message: w.message_sv })) }
+        : {}),
     })
   },
   { requireWrite: true },

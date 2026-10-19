@@ -1,0 +1,1 @@
+[2026-10-19] A kontantfaktura paid at issue (settleInvoicePayment with recognizeSaleAtPayment) books no sale first, even for a deferring company: its one cash verifikat is the sale and the payment, and a Bokför step on top would double revenue and utgående moms.

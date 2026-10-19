@@ -256,6 +256,8 @@ const LinkOut = z.object({
   invoice_status: z.enum(['paid', 'partially_paid']).nullable(),
   paid_amount: z.number().nullable(),
   remaining_amount: z.number().nullable(),
+  /** The sale verifikat the link booked first (defer_invoice_booking). */
+  sale_journal_entry_id: z.string().uuid().optional(),
 })
 
 export const transactionsLinkJournalEntry = defineOperation({
@@ -277,6 +279,7 @@ export const transactionsLinkJournalEntry = defineOperation({
       'The verifikat must be posted: LINK_TX_JE_NOT_POSTED otherwise.',
       'invoice_id: the invoice must be open (sent, overdue, partially_paid), not a credit note, and in the transaction currency (LINK_TX_INVOICE_CURRENCY_MISMATCH); cross-currency payments go through match-invoice.',
       'invoice_id: the verifikat must settle the invoice on its own side (LINK_TX_INVOICE_SETTLEMENT_SIDE): a 151x credit for a booked invoice, including a kontantmetod invoice carried over the year end, a 19xx debit for a kontantmetod invoice never booked.',
+      'Faktureringsmetoden with defer_invoice_booking (Registrera men bokför inte): when the invoice was sent without its verifikat and the linked verifikat clears 151x, the invoices :book step books the sale first (dated on the invoice date); sale_journal_entry_id names it and the dry run returns it as sale_entry. A verifikat that books the revenue itself (no 151x credit) is refused with LINK_TX_INVOICE_SETTLEMENT_SIDE before any sale is planned. When the book step refuses (PERIOD_LOCKED on the invoice date, INVOICE_BOOK_NO_FISCAL_PERIOD, INVOICE_BOOK_INVALID_STATUS for a partially paid invoice), the link is refused with that code, details.sale_first is true, and nothing is written.',
     ],
     example: {
       request: { journal_entry_id: '4d2a…' },
@@ -309,6 +312,10 @@ export const transactionsLinkJournalEntry = defineOperation({
     'LINK_TX_INVOICE_RACE',
     'MATCH_INVOICE_RECORD_PAYMENT_FAILED',
     'BANK_BOOKING_CURRENCY_MISMATCH',
+    'PERIOD_LOCKED',
+    'INVOICE_BOOK_NO_FISCAL_PERIOD',
+    'INVOICE_BOOK_INVALID_STATUS',
+    'INVOICE_BOOK_FAILED',
   ],
   http: {
     method: 'POST',
@@ -351,6 +358,8 @@ export const transactionsLinkJournalEntry = defineOperation({
         invoice_number: p.invoice_number,
         invoice_remaining_after: p.remaining_amount,
         will_be_fully_paid: p.invoice_status == null ? null : p.invoice_status === 'paid',
+        // The sale verifikat approval books first (defer_invoice_booking).
+        ...(p.sale_entry ? { books_sale_first: true, sale_entry: p.sale_entry } : {}),
       }),
       extras: (input, p) => {
         const txDate = String(p.transaction_date ?? '')
@@ -358,8 +367,9 @@ export const transactionsLinkJournalEntry = defineOperation({
         return {
           next: input.invoice_id
             ? {
-                description:
-                  'After approval the tx attaches to the existing verifikat and the invoice flips to paid/partially_paid. No new bokföring. Verify with gnubok_get_ar_ledger.',
+                description: p.sale_entry
+                  ? 'After approval the invoice\'s sale verifikat is booked first (preview.sale_entry, the Bokför step), then the tx attaches to the existing verifikat and the invoice flips to paid/partially_paid. Verify with gnubok_get_ar_ledger.'
+                  : 'After approval the tx attaches to the existing verifikat and the invoice flips to paid/partially_paid. No new bokföring. Verify with gnubok_get_ar_ledger.',
                 tool: 'gnubok_get_ar_ledger',
               }
             : {
@@ -396,6 +406,7 @@ export const transactionsLinkJournalEntry = defineOperation({
       invoice_status: r.invoiceStatus,
       paid_amount: r.paidAmount,
       remaining_amount: r.remainingAmount,
+      ...(r.saleJournalEntryId ? { sale_journal_entry_id: r.saleJournalEntryId } : {}),
     }
     if (outcome.dryRun) {
       const subject = outcome.subject
@@ -410,6 +421,8 @@ export const transactionsLinkJournalEntry = defineOperation({
           transaction_date: subject.transactionDate,
           voucher_date: subject.voucherDate,
           invoice_number: subject.invoiceNumber,
+          // The sale verifikat the link books first (defer_invoice_booking).
+          ...(subject.saleEntry ? { books_sale_first: true, sale_entry: subject.saleEntry } : {}),
         },
       }
     }
@@ -450,6 +463,7 @@ export const transactionsMatchBatch = defineOperation({
       'A row that posted vouchers already explain (each invoice marked paid by hand) returns 409 BATCH_TX_POSSIBLE_DUPLICATE with the vouchers: link the row to them instead. force=true needs expected_journal_entry_ids naming exactly that set.',
       'Under kontantmetoden an invoice with no booking yet returns 400 BATCH_CASH_METHOD_UNBOOKED_INVOICE.',
       'Faktureringsmetoden with defer_invoice_booking (Registrera men bokför inte): each supplier invoice registered without its verifikat is booked first by the supplier-invoices :book step (dated on its invoice date), then the samlingsverifikation clears its 2440; registration_journal_entry_ids names them and the dry run shows them as registration_entries. A refusal of the book step (PERIOD_LOCKED on an invoice date, SI_BOOK_NO_FISCAL_PERIOD, SI_ACCRUED_COST_PERIOD_LOCKED, SI_BOOK_INVALID_STATUS for a partially paid invoice) refuses the batch with that code and details.registration_first, before anything is booked.',
+      'Faktureringsmetoden with defer_invoice_booking (Registrera men bokför inte): each customer invoice sent without its verifikat gets its sale booked first by the invoices :book step (dated on its invoice date), then the samlingsverifikation clears its 1510; sale_journal_entry_ids names them and the dry run shows them as sale_entries. A refusal of the book step (PERIOD_LOCKED on an invoice date, INVOICE_BOOK_NO_FISCAL_PERIOD, INVOICE_BOOK_INVALID_STATUS for a partially paid invoice) refuses the batch with that code and details.sale_first, before anything is booked.',
       'Proformas and quotes return 400 MATCH_INVOICE_NOT_INVOICE_TYPE.',
     ],
     example: {
@@ -482,6 +496,8 @@ export const transactionsMatchBatch = defineOperation({
     leftover: z.number(),
     /** Supplier invoice id to the registration verifikat booked first (defer_invoice_booking). */
     registration_journal_entry_ids: z.record(z.string(), z.string().uuid()).optional(),
+    /** Customer invoice id to the sale verifikat booked first (defer_invoice_booking). */
+    sale_journal_entry_ids: z.record(z.string(), z.string().uuid()).optional(),
   }),
   errorCodes: [
     'MATCH_INVOICE_NOT_INVOICE_TYPE',
@@ -500,10 +516,14 @@ export const transactionsMatchBatch = defineOperation({
     'BATCH_AMOUNT_BELOW_TX',
     'BATCH_PERIOD_LOCKED',
     'BATCH_RPC_FAILED',
+    'BATCH_NO_FISCAL_PERIOD',
     'PERIOD_LOCKED',
     'SI_BOOK_NO_FISCAL_PERIOD',
     'SI_BOOK_INVALID_STATUS',
     'SI_BOOK_FAILED',
+    'INVOICE_BOOK_NO_FISCAL_PERIOD',
+    'INVOICE_BOOK_INVALID_STATUS',
+    'INVOICE_BOOK_FAILED',
   ],
   http: {
     method: 'POST',
@@ -542,6 +562,9 @@ export const transactionsMatchBatch = defineOperation({
         expected_lines: p.expected_lines,
         expected_lines_balanced: p.expected_lines_balanced,
         expected_fx: p.expected_fx,
+        // The sale verifikat approval books first per customer invoice
+        // (defer_invoice_booking), before the samlingsverifikation.
+        ...(p.sale_entries ? { books_sale_first: true, sale_entries: p.sale_entries } : {}),
       }),
       extras: (_input, p) => ({
         next: {

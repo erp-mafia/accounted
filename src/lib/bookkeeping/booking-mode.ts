@@ -10,10 +10,10 @@
  *
  * The payment flows route on whether a live journal-entry link exists, but
  * only kontantmetoden books the whole invoice at payment. Under
- * faktureringsmetoden a payment is a clearing (2440 or 1510), so a supplier
- * invoice still unbooked when it is settled is booked first through the
- * Bokför step (lib/supplier-invoices/registration-first.ts). The customer
- * payment doors have no such step yet.
+ * faktureringsmetoden a payment is a clearing (2440 or 1510), so an invoice
+ * still unbooked when it is settled is booked first through the Bokför step:
+ * a supplier invoice's registration (lib/supplier-invoices/registration-
+ * first.ts), a customer invoice's sale (lib/invoices/sale-first.ts).
  */
 export function booksInvoicesOnIssue(
   settings:
@@ -135,8 +135,11 @@ export function creditNoteNeedsJournalEntry(
 /**
  * Whether the customer invoice's sale is in the ledger: its own verifikat is
  * linked (at issue, by the explicit Bokför step, or a migrated
- * registration), or it was paid, and the payment booked the full cash-style
- * entry because no entry existed yet.
+ * registration), or it was paid with no verifikat of its own. Under
+ * kontantmetoden that payment booked the full cash-style entry. A deferring
+ * company's payment books the sale first (lib/invoices/sale-first.ts), so
+ * its paid invoices carry the link; one paid before that rule (2026-10-17)
+ * got only the 1510 clearing, which needs a rättelse, not a second sale here.
  */
 function customerOriginalReachedLedger(original: CustomerCreditNoteOriginal | null | undefined): boolean {
   if (!original) return false

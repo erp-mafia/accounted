@@ -16,6 +16,13 @@ vi.mock('@/lib/bookkeeping/cancel-orphaned-entry', () => ({
 vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({
   clearSettledInvoiceSuggestions: vi.fn(),
 }))
+// The sale-first rule (defer_invoice_booking) has its own suites
+// (lib/invoices/__tests__/settle-invoice-payment-sale-first.test.ts pins
+// that a kontantfaktura books no sale first); here no invoice needs one.
+vi.mock('@/lib/invoices/sale-first', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/invoices/sale-first')>()),
+  planSaleBeforeSettlement: vi.fn(async () => ({ ok: true, required: false })),
+}))
 
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'

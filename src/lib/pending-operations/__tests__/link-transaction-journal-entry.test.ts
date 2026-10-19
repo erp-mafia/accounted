@@ -10,6 +10,16 @@
  * and v1. These tests focus on the approval wiring.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The sale-first rule (defer_invoice_booking) has its own suites
+// (lib/invoices/__tests__/sale-first.test.ts and the deferred-door tests);
+// here no invoice needs its sale booked first.
+vi.mock('@/lib/invoices/sale-first', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/invoices/sale-first')>()),
+  planSaleBeforeSettlement: vi.fn(async () => ({ ok: true, required: false })),
+  planSaleBeforeSettlementById: vi.fn(async () => ({ ok: true, required: false })),
+  planSalesBeforeBatchSettlement: vi.fn(async () => ({ ok: true, plans: [] })),
+}))
 import { eventBus } from '@/lib/events/bus'
 import { createQueuedMockSupabase, enqueueBankLinkLeg, makeTransaction, makeInvoice } from '@/tests/helpers'
 import type { PendingOperation } from '@/types'

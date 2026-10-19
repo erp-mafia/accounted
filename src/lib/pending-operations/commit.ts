@@ -155,6 +155,11 @@ import {
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
+import {
+  bookSaleBeforeSettlement,
+  planSaleBeforeSettlement,
+  type SaleFirstRefusal,
+} from '@/lib/invoices/sale-first'
 import { creditInvoice } from '@/lib/invoices/credit-invoice'
 import { recordInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
@@ -435,6 +440,23 @@ type ExecutorResult = {
   // the approval can be given again once the other call is done instead of
   // the op being consumed as 'rejected'.
   returnToPending?: boolean
+}
+
+/**
+ * A refusal of the sale a settlement books first (lib/invoices/sale-first.ts)
+ * as the executor's result: the Bokför step's own code with details.sale_first.
+ * A typed bookkeeping error propagates to the dispatcher, as the engine's own
+ * refusals do.
+ */
+function saleFirstRefusalResult(refusal: SaleFirstRefusal): ExecutorResult {
+  if (refusal.error) throw refusal.error
+  const entry = getErrorEntry(refusal.code)
+  return {
+    error: entry?.message_sv ?? refusal.code,
+    errorCode: refusal.code,
+    status: entry?.httpStatus ?? 400,
+    ...(refusal.details ? { data: refusal.details } : {}),
+  }
 }
 
 /**
@@ -2618,9 +2640,10 @@ async function commitMarkInvoicePaid(
   const { accountingMethod, entityType } = await loadBookingContext(supabase, companyId)
 
   // Settle the full outstanding balance through settleInvoicePayment, the
-  // write path the dashboard, v1 and the Stripe sync share: journal entry
-  // routed on the invoice's own booking state (cash entry only for a
-  // never-booked kontantmetod invoice, else clearing 1510), the
+  // write path the dashboard, v1 and the Stripe sync share: the sale first
+  // when a deferring company's invoice has no verifikat yet (sale-first.ts),
+  // journal entry routed on the invoice's own booking state (cash entry only
+  // for a never-booked kontantmetod invoice, else clearing 1510), the
   // invoice_payments row, the CAS-guarded status update that makulerar the
   // voucher on a lost race, and invoice.paid. Prefer remaining_amount; for
   // legacy rows where it was never written, derive it from total - paid_amount
@@ -2642,6 +2665,9 @@ async function commitMarkInvoicePaid(
 
   if (!settled.ok) {
     switch (settled.code) {
+      case 'SALE_FIRST_REFUSED':
+        // The sale this payment books first was refused: nothing was written.
+        return saleFirstRefusalResult(settled.refusal)
       case 'BOOKKEEPING_ERROR':
         // As before the shared path: an engine refusal (locked period, an
         // account outside the chart) propagates to the dispatcher.
@@ -2689,8 +2715,16 @@ async function commitMarkInvoicePaid(
     }
   }
 
-  const { newStatus, newRemaining, journalEntryId } = settled
-  return { data: { status: newStatus, remaining_amount: newRemaining, journal_entry_id: journalEntryId } }
+  const { newStatus, newRemaining, journalEntryId, saleJournalEntryId } = settled
+  return {
+    data: {
+      status: newStatus,
+      remaining_amount: newRemaining,
+      journal_entry_id: journalEntryId,
+      // The sale verifikat this payment booked first (defer_invoice_booking).
+      ...(saleJournalEntryId ? { sale_journal_entry_id: saleJournalEntryId } : {}),
+    },
+  }
 }
 
 async function commitSendInvoice(
@@ -3354,23 +3388,51 @@ async function commitMatchTransactionInvoice(
     }
   }
 
+  // Faktureringsmetoden with defer_invoice_booking: an invoice sent without
+  // its verifikat gets its sale booked first, by the Bokför step on its
+  // invoice date, and the payment then clears the 1510 it debits
+  // (lib/invoices/sale-first.ts). Planned here, before the storno, so a
+  // refusal leaves everything untouched.
+  const saleCtx = { supabase, companyId, userId, log }
+  const salePlan = await planSaleBeforeSettlement(saleCtx, invoice, { settlementDate: transaction.date })
+  if (!salePlan.ok) return saleFirstRefusalResult(salePlan)
+
   // From here on the executor posts irreversible vouchers. Track their ids so
   // a later failure can land the op in 'failed_partial' carrying them
   // (issue #842) instead of a clean-looking 'rejected'.
   const postedIds: Record<string, string> = {}
 
+  // The sale first: a correct booking of the sent invoice whatever happens
+  // to the match after it.
+  const sale = await bookSaleBeforeSettlement(saleCtx, salePlan)
+  if (!sale.ok) return saleFirstRefusalResult(sale)
+  if (sale.bookedHere && sale.journalEntryId) postedIds.sale_journal_entry_id = sale.journalEntryId
+
   if (transaction.journal_entry_id) {
     // Through the posting port: while POSTING_EVENTS is on, the storno
     // records ledger.storno of the bank line (system_derived, with this
     // approval as evidence: the match replaces the booking).
-    const reversal = await postingPort.reverseJournalEntry({
-      supabase,
-      companyId,
-      userId,
-      entryId: transaction.journal_entry_id,
-      event: () => matchedBankLineStornoBusinessEvent(transactionId, todayIsoStockholm(), linkBasisColumns('system_derived')),
-      role: 'reversal',
-    })
+    let reversal
+    try {
+      reversal = await postingPort.reverseJournalEntry({
+        supabase,
+        companyId,
+        userId,
+        entryId: transaction.journal_entry_id,
+        event: () => matchedBankLineStornoBusinessEvent(transactionId, todayIsoStockholm(), linkBasisColumns('system_derived')),
+        role: 'reversal',
+      })
+    } catch (err) {
+      // The sale posted above makes a failed storno a partial commit.
+      if (Object.keys(postedIds).length > 0) {
+        throw new PartialCommitError(
+          `match_transaction_invoice failed after booking the invoice's sale: ${err instanceof Error ? err.message : 'storno failed'}`,
+          postedIds,
+          err,
+        )
+      }
+      throw err
+    }
     postedIds.reversal_journal_entry_id = reversal.id
     await supabase.from('transactions').update({ journal_entry_id: null }).eq('id', transactionId)
   }
@@ -3615,6 +3677,8 @@ async function commitMatchTransactionInvoice(
       paid_amount: newPaidAmount,
       journal_entry_id: journalEntryId,
       ...(matchPlan.overpayment ? { overpayment: matchPlan.overpayment } : {}),
+      // The sale verifikat this match booked first (defer_invoice_booking).
+      ...(postedIds.sale_journal_entry_id ? { sale_journal_entry_id: postedIds.sale_journal_entry_id } : {}),
     },
   }
 }
@@ -3647,6 +3711,11 @@ function voucherLinkOutcomeToResult(outcome: VoucherLinkOutcome): ExecutorResult
       payment_id: outcome.result.paymentId,
       journal_entry_id: outcome.result.journalEntryId,
       reconciled_transaction_id: outcome.result.reconciledTransactionId,
+      // Customer side: the sale verifikat the link booked first
+      // (defer_invoice_booking), when it did.
+      ...('saleJournalEntryId' in outcome.result && outcome.result.saleJournalEntryId
+        ? { sale_journal_entry_id: outcome.result.saleJournalEntryId }
+        : {}),
       // Supplier side: the registration verifikat the link booked first
       // (defer_invoice_booking), when it did.
       ...('registrationJournalEntryId' in outcome.result && outcome.result.registrationJournalEntryId

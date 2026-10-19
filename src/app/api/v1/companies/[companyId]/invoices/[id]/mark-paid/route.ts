@@ -9,6 +9,9 @@
  *     was already booked as revenue at :mark-sent; this just settles the AR.
  *   - Kontantmetoden (cash): Debit 1930 / Credit 30xx + Credit 26xx. Revenue
  *     recognition happens here (no entry at :mark-sent under cash basis).
+ *   - Faktureringsmetoden with defer_invoice_booking: an invoice sent without
+ *     its verifikat gets its sale booked first by the :book step (dated on
+ *     the invoice date), then the clearing above (lib/invoices/sale-first.ts).
  *
  * Optional request body (all fields optional: empty POST = book full payment
  * on today's date with default lines):
@@ -43,6 +46,13 @@ import {
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { isMatchableInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
+import {
+  clearsReceivable,
+  planSaleBeforeSettlement,
+  SALE_FIRST_NOT_REQUIRED,
+  saleFirstPreview,
+} from '@/lib/invoices/sale-first'
+import { v1OutcomeResponse } from '@/lib/operations/v1'
 import { INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import { roundOre } from '@/lib/money'
 import type { EntityType, Invoice } from '@/types'
@@ -63,6 +73,11 @@ const InvoiceMarkPaidResponse = z.object({
   remaining_amount: z.number(),
   paid_at: z.string().nullable(),
   journal_entry_id: z.string().uuid().nullable(),
+  sale_journal_entry_id: z
+    .string()
+    .uuid()
+    .optional()
+    .describe('The sale verifikat this payment booked first (defer_invoice_booking); absent when none was booked.'),
 })
 
 registerEndpoint({
@@ -82,6 +97,7 @@ registerEndpoint({
     'For foreign-currency invoices, supply `exchange_rate_difference` (SEK delta vs the invoice\'s booked rate) to book the FX adjustment correctly. Omitting it on a non-SEK invoice will mis-book the FX gain/loss.',
     'Custom `lines` are journal lines and therefore SEK, while `total` / `paid_amount` / `remaining_amount` are stored in the invoice currency. The route converts the line total via `invoice.exchange_rate`; a non-SEK invoice with no exchange_rate on file returns 400 MATCH_INVOICE_BOOKING_RATE_MISSING rather than silently treating the SEK amount as invoice currency.',
     'Cash basis (kontantmetoden) recognizes revenue HERE, not at :mark-sent. The dashboard tracks this via company_settings.accounting_method.',
+    'Faktureringsmetoden with defer_invoice_booking (Registrera men bokför inte): an invoice sent without its verifikat is booked first by the :book step (Debit 1510 / Credit revenue + output VAT, dated on the invoice date), then the payment clears that 1510. sale_journal_entry_id in the response names it, and the dry run returns it as sale_entry. When the book step refuses (invoice date in a locked period PERIOD_LOCKED, no fiscal year INVOICE_BOOK_NO_FISCAL_PERIOD, a partially paid invoice INVOICE_BOOK_INVALID_STATUS), or the payment date is locked (PERIOD_LOCKED with details.payment_date), the payment is refused with that code, details.sale_first is true, and nothing is booked.',
     'Duplicate-payment guard: if an unlinked inbound bank transaction looks like this payment, returns 409 INVOICE_PAID_LIKELY_DUPLICATE with candidate transactions. Retry with `force: true` to bypass, but the retry MUST use a fresh Idempotency-Key (the original is body-hash bound; reusing it returns 400 IDEMPOTENCY_KEY_REUSE). The guard is also evaluated under dry-run, so a successful dry-run does not guarantee a successful commit.',
   ],
   example: {
@@ -429,6 +445,19 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     if (ctx.dryRun) {
+      // The commit books a deferring company's unbooked invoice first, through
+      // the :book step (lib/invoices/sale-first.ts): its dry run is every check
+      // that booking runs, so a preview shows both verifikat and cannot mask a
+      // refusal. Custom lines that book the revenue themselves need none.
+      const salePlan =
+        customLines && !clearsReceivable(customLines)
+          ? SALE_FIRST_NOT_REQUIRED
+          : await planSaleBeforeSettlement(
+              { supabase: ctx.supabase, companyId: ctx.companyId!, userId: ctx.userId, log: ctx.log },
+              typed,
+              { settlementDate: paymentDate },
+            )
+      if (!salePlan.ok) return v1OutcomeResponse(salePlan, ctx)
       return dryRunPreview(
         {
           ...typed,
@@ -439,6 +468,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           would_create_journal_entry: !typed.document_type || typed.document_type === 'invoice',
           accounting_method: accountingMethod,
           would_use_custom_lines: customLines !== undefined,
+          ...saleFirstPreview(salePlan),
         },
         { requestId: ctx.requestId, log: ctx.log },
       )
@@ -465,6 +495,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     if (!result.ok) {
       switch (result.code) {
+        case 'SALE_FIRST_REFUSED':
+          // The :book step's own code, details.sale_first: nothing was written.
+          return v1OutcomeResponse(result.refusal, ctx)
         case 'BOOKKEEPING_ERROR':
           return v1ErrorResponse(result.error, ctx.log, { requestId: ctx.requestId })
         case 'UPDATE_FAILED':
@@ -544,8 +577,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       {
         ...(updated as object),
         journal_entry_id: journalEntryId,
+        ...(result.saleJournalEntryId ? { sale_journal_entry_id: result.saleJournalEntryId } : {}),
       },
-      { requestId: ctx.requestId },
+      {
+        requestId: ctx.requestId,
+        ...(result.warnings.length > 0 ? { warnings: result.warnings } : {}),
+      },
     )
   },
   { requireIdempotencyKey: true },

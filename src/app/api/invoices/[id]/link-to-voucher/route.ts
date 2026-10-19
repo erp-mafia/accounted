@@ -14,6 +14,9 @@ import { linkInvoiceToVoucher } from '@/lib/invoices/voucher-matching'
  *
  * Rejects with LINK_VOUCHER_NO_AR_CREDIT for vouchers that book income
  * directly (e.g. 1930→3001): those require gnubok_correct_entry first.
+ *
+ * A deferring company's unbooked invoice (defer_invoice_booking) gets its
+ * sale booked first by the Bokför step (lib/invoices/sale-first.ts).
  */
 export const POST = withRouteContext(
   'invoice.link_to_voucher',
@@ -72,6 +75,8 @@ export const POST = withRouteContext(
         payment_id: outcome.result.paymentId,
         journal_entry_id: outcome.result.journalEntryId,
         reconciled_transaction_id: outcome.result.reconciledTransactionId,
+        // The sale verifikat this link booked first (defer_invoice_booking).
+        ...(outcome.result.saleJournalEntryId ? { sale_journal_entry_id: outcome.result.saleJournalEntryId } : {}),
       },
     })
   },

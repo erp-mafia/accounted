@@ -1,0 +1,1 @@
+[2026-10-17] Settling an unbooked customer invoice of a defer_invoice_booking company books its sale through the Bokför step first, at every door, then the 1510 clearing: faktureringsmetoden books the sale at fakturadatum, and a clearing alone leaves revenue and utgående moms out of the ledger.

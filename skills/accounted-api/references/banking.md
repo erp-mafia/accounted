@@ -3862,6 +3862,7 @@ Anchors the row to an existing POSTED journal entry: the row counts as booked an
 - The verifikat must be posted: LINK_TX_JE_NOT_POSTED otherwise.
 - invoice_id: the invoice must be open (sent, overdue, partially_paid), not a credit note, and in the transaction currency (LINK_TX_INVOICE_CURRENCY_MISMATCH); cross-currency payments go through match-invoice.
 - invoice_id: the verifikat must settle the invoice on its own side (LINK_TX_INVOICE_SETTLEMENT_SIDE): a 151x credit for a booked invoice, including a kontantmetod invoice carried over the year end, a 19xx debit for a kontantmetod invoice never booked.
+- Faktureringsmetoden with defer_invoice_booking (Registrera men bokför inte): when the invoice was sent without its verifikat and the linked verifikat clears 151x, the invoices :book step books the sale first (dated on the invoice date); sale_journal_entry_id names it and the dry run returns it as sale_entry. A verifikat that books the revenue itself (no 151x credit) is refused with LINK_TX_INVOICE_SETTLEMENT_SIDE before any sale is planned. When the book step refuses (PERIOD_LOCKED on the invoice date, INVOICE_BOOK_NO_FISCAL_PERIOD, INVOICE_BOOK_INVALID_STATUS for a partially paid invoice), the link is refused with that code, details.sale_first is true, and nothing is written.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -3892,7 +3893,8 @@ Response `200`:
     invoice_id: string | null,
     invoice_status: "paid" | "partially_paid" | null,
     paid_amount: number | null,
-    remaining_amount: number | null
+    remaining_amount: number | null,
+    sale_journal_entry_id?: string
   },
   meta: {
     request_id: string,
@@ -3942,6 +3944,7 @@ Allocates the transaction across N invoices of one kind: one samlingsverifikatio
 - A row that posted vouchers already explain (each invoice marked paid by hand) returns 409 BATCH_TX_POSSIBLE_DUPLICATE with the vouchers: link the row to them instead. force=true needs expected_journal_entry_ids naming exactly that set.
 - Under kontantmetoden an invoice with no booking yet returns 400 BATCH_CASH_METHOD_UNBOOKED_INVOICE.
 - Faktureringsmetoden with defer_invoice_booking (Registrera men bokför inte): each supplier invoice registered without its verifikat is booked first by the supplier-invoices :book step (dated on its invoice date), then the samlingsverifikation clears its 2440; registration_journal_entry_ids names them and the dry run shows them as registration_entries. A refusal of the book step (PERIOD_LOCKED on an invoice date, SI_BOOK_NO_FISCAL_PERIOD, SI_ACCRUED_COST_PERIOD_LOCKED, SI_BOOK_INVALID_STATUS for a partially paid invoice) refuses the batch with that code and details.registration_first, before anything is booked.
+- Faktureringsmetoden with defer_invoice_booking (Registrera men bokför inte): each customer invoice sent without its verifikat gets its sale booked first by the invoices :book step (dated on its invoice date), then the samlingsverifikation clears its 1510; sale_journal_entry_ids names them and the dry run shows them as sale_entries. A refusal of the book step (PERIOD_LOCKED on an invoice date, INVOICE_BOOK_NO_FISCAL_PERIOD, INVOICE_BOOK_INVALID_STATUS for a partially paid invoice) refuses the batch with that code and details.sale_first, before anything is booked.
 - Proformas and quotes return 400 MATCH_INVOICE_NOT_INVOICE_TYPE.
 
 | Parameter | In | Type | Required | Notes |
@@ -3988,7 +3991,8 @@ Response `200`:
     allocations: { kind: "customer_invoice" | "supplier_invoice", invoice_id?: string, supplier_invoice_id?: string, payment_id: string, status: "paid" | "partially_paid", paid_amount: number, remaining_amount: number, amount: number }[],
     total_allocated: number,
     leftover: number,
-    registration_journal_entry_ids?: Record<string, string>
+    registration_journal_entry_ids?: Record<string, string>,
+    sale_journal_entry_ids?: Record<string, string>
   },
   meta: {
     request_id: string,
@@ -4117,6 +4121,7 @@ Confirms an invoice match for a transaction. Storno any conflicting auto-categor
 - Transaction must be positive (amount > 0): negative transactions return MATCH_INVOICE_NOT_INCOME.
 - Invoice must be in sent / overdue / partially_paid status: paid or draft invoices return MATCH_INVOICE_NOT_OPEN.
 - Kontantmetoden: an invoice never booked at issue is matched only by one payment of its whole amount. A partial payment, or the final payment of an invoice already part-paid, returns INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED (details.reason partial_payment | previously_partially_paid); book that payment as a manual journal entry.
+- Faktureringsmetoden with defer_invoice_booking (Registrera men bokför inte): an invoice sent without its verifikat is booked first by the invoices :book step (dated on the invoice date), then the payment clears that 1510; sale_journal_entry_id names it. When the book step refuses (PERIOD_LOCKED on the invoice date, INVOICE_BOOK_NO_FISCAL_PERIOD, INVOICE_BOOK_INVALID_STATUS for a partially paid invoice) or the transaction date is locked (PERIOD_LOCKED with details.payment_date), the match is refused with that code, details.sale_first is true, and nothing is booked.
 - Idempotency-Key is mandatory.
 
 | Parameter | In | Type | Required | Notes |
@@ -4152,6 +4157,7 @@ Response `200`:
     paid_amount: number,
     remaining_amount: number,
     journal_entry_id: string | null,
+    sale_journal_entry_id?: string,
     category: string | null
   },
   meta: {

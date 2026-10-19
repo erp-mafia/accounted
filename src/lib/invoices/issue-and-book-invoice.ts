@@ -446,6 +446,14 @@ async function settleAtIssue(
       case 'INVOICE_PAID_LINES_UNBALANCED':
         log.error('kontantfaktura: settlement at issue failed', settled.code === 'UPDATE_FAILED' ? settled.error as Error : undefined)
         return { ok: false, errorCode: 'INVOICE_MARK_SENT_BOOK_FAILED' }
+      case 'SALE_FIRST_REFUSED':
+        // Not reached: the cash entry books the kontantfaktura's sale itself,
+        // so settleInvoicePayment plans no sale first for it. Fail closed if
+        // it ever does: nothing was written.
+        log.error('kontantfaktura: settlement at issue planned a sale first', undefined, {
+          refusalCode: settled.refusal.code,
+        })
+        return { ok: false, errorCode: 'INVOICE_MARK_SENT_BOOK_FAILED' }
       default:
         return { ok: false, errorCode: settled.code }
     }

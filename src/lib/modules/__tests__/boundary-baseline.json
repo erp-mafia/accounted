@@ -59,7 +59,7 @@
     "transactions -> collections": 1,
     "transactions -> deadlines": 1,
     "transactions -> inbox": 1,
-    "transactions -> invoicing": 24,
+    "transactions -> invoicing": 26,
     "transactions -> skatteverket": 9,
     "transactions -> supplier-invoices": 1,
     "vat -> parties": 1,

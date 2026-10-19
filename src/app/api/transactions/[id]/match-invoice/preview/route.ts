@@ -19,6 +19,12 @@
  * The UI uses this to show the user the exact lines before they confirm:
  * the lack of any preview was part of the reported bug.
  *
+ * A company that books invoices in a separate step (defer_invoice_booking)
+ * gets an unbooked invoice's sale booked first by the POST, through the Bokför
+ * step (lib/invoices/sale-first.ts): `sale_entry` is that verifikat as the
+ * step's dry run builds it, and `lines` the payment that clears it. A refusal
+ * there is the POST's refusal too.
+ *
  * `overpayment_account` (optional): where a SEK customer's excess of a krona
  * or more goes, as the POST takes it. Without it such a match previews no
  * rows and `overpayment` names the excess and the accounts that may take it,
@@ -43,6 +49,8 @@ import { planMatchPayment } from '@/lib/invoices/match-payment-plan'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
+import { planSaleBeforeSettlement } from '@/lib/invoices/sale-first'
+import { sessionFailureResponse } from '@/lib/operations/session'
 import type { CreateJournalEntryLineInput, Currency, EntityType, Invoice } from '@/types'
 import { z } from 'zod'
 
@@ -64,7 +72,7 @@ export const GET = withRouteContext(
   'transaction.match_invoice_preview',
   async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id: transactionId } = await params
-    const { supabase, companyId, log, requestId } = ctx
+    const { supabase, companyId, user, log, requestId } = ctx
 
     const url = new URL(request.url)
     const parsed = QuerySchema.safeParse({
@@ -291,6 +299,16 @@ export const GET = withRouteContext(
       }
     }
 
+    // The POST books a deferring company's unbooked invoice first, through
+    // the Bokför step: its dry run is every check that booking runs, and the
+    // verifikat the dialog shows above the payment.
+    const salePlan = await planSaleBeforeSettlement(
+      { supabase, companyId: companyId!, userId: user.id, log },
+      invoice,
+      { settlementDate: transaction.date },
+    )
+    if (!salePlan.ok) return sessionFailureResponse(salePlan, log, requestId)
+
     // The rows come from the builders the POST books with, fed the POST's
     // arguments, so what the dialog shows (and what an edited row starts
     // from) is what gets booked: texts, amounts and the invoice's dimensions.
@@ -356,6 +374,9 @@ export const GET = withRouteContext(
       fx_conversion: fxConversion,
       // The settled invoice's bag, for a row the user adds while editing.
       document_dimensions: coerceDimensionsBag(inv.default_dimensions),
+      // The sale verifikat the POST books first (defer_invoice_booking).
+      books_sale_first: salePlan.required,
+      sale_entry: salePlan.required ? salePlan.entry : null,
       // A SEK excess of a krona or more: the accounts that may take it and
       // the one the user named (null until then, with no rows above).
       overpayment: overpayment && {

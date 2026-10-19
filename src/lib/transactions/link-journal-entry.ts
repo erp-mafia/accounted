@@ -14,7 +14,15 @@
  * bank link core in lib/transactions/bank-link.ts, shared with the
  * reconciliation page's manualLink.
  *
- * NEVER creates a new journal entry. The match log records
+ * Creates no payment entry: the existing verifikat is the payment. The one
+ * exception is the sale of an invoice the company books in a separate step
+ * (faktureringsmetoden with defer_invoice_booking) and has not booked yet:
+ * when the linked verifikat clears the receivable (credits 151x), the Bokför
+ * step books the sale first, on its invoice date (lib/invoices/sale-first.ts),
+ * so 1510 never carries a credit no sale debited. A verifikat that books the
+ * revenue itself (no 151x credit) never gets that far: the settlement side
+ * (invoice_settlement_side, #3440) refuses it for every invoice outside
+ * kontantmetoden, before the sale is planned. The match log records
  * 'linked_to_existing_voucher' for audit on success.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -37,6 +45,16 @@ import { createLogger } from '@/lib/logger'
 import { conflictCode } from '@/lib/errors/structured-errors'
 import type { Invoice, Transaction } from '@/types'
 import { isMatchableInvoiceStatus, MATCHABLE_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
+import type { EntryPreview } from '@/lib/bookkeeping/entry-preview'
+import {
+  bookSaleBeforeSettlement,
+  clearsReceivable,
+  planSaleBeforeSettlementById,
+  SALE_FIRST_NOT_REQUIRED,
+  saleFirstRefusalCode,
+  type SaleFirstPlan,
+  type SaleFirstRefusal,
+} from '@/lib/invoices/sale-first'
 
 const log = createLogger('transactions/link-journal-entry')
 
@@ -78,6 +96,8 @@ export interface LinkTransactionJournalEntryResult {
   invoiceStatus: 'paid' | 'partially_paid' | null
   paidAmount: number | null
   remainingAmount: number | null
+  /** The sale verifikat this link booked first (defer_invoice_booking), else null. */
+  saleJournalEntryId: string | null
 }
 
 /**
@@ -92,13 +112,17 @@ export interface LinkTransactionJournalEntrySubject {
   transactionDate: string
   voucherDate: string
   invoiceNumber: string | null
+  /** The sale verifikat the link books first (defer_invoice_booking), as the Bokför dry run builds it. */
+  saleEntry: EntryPreview | null
 }
 
 export type LinkTransactionJournalEntryOutcome =
   // dryRun: the result the link WOULD produce; nothing was written.
   | { ok: true; result: LinkTransactionJournalEntryResult; dryRun?: false }
   | { ok: true; result: LinkTransactionJournalEntryResult; dryRun: true; subject: LinkTransactionJournalEntrySubject }
-  | { ok: false; code: LinkTransactionJournalEntryErrorCode; details?: Record<string, unknown> }
+  // A link refusal, or the Bokför step's code when the sale the link books
+  // first was refused (details.sale_first).
+  | { ok: false; code: LinkTransactionJournalEntryErrorCode | SaleFirstRefusal['code']; details?: Record<string, unknown> }
 
 /**
  * Canonical verifikat-label format: `${series}-${number}` (e.g. "A-12").
@@ -307,6 +331,22 @@ export async function linkTransactionToJournalEntry(
     newStatus = isFullyPaid ? 'paid' : 'partially_paid'
   }
 
+  // Faktureringsmetoden with defer_invoice_booking: an invoice sent without
+  // its verifikat gets its sale booked first, by the Bokför step on its
+  // invoice date, when the verifikat clears the receivable. Planned here, so
+  // a refusal comes before anything is written.
+  const saleCtx = { supabase, companyId, userId, log }
+  let salePlan: SaleFirstPlan = SALE_FIRST_NOT_REQUIRED
+  if (invoice && invoiceId) {
+    const plan = await planSaleBeforeSettlementById(saleCtx, invoiceId)
+    if (!plan.ok) return { ok: false, code: saleFirstRefusalCode(plan), details: plan.details }
+    if (plan.required) {
+      const clears = await verifikatClearsReceivable(supabase, journalEntryId)
+      if (clears === null) return { ok: false, code: 'LINK_TX_DB_ERROR', details: { reason: 'journal entry lines unreadable' } }
+      if (clears) salePlan = plan
+    }
+  }
+
   // Dry run (the v1 ?dry_run=true door): every check above ran on the same
   // reads the commit uses; answer the projected result and write nothing.
   if (options.dryRun) {
@@ -324,6 +364,7 @@ export async function linkTransactionToJournalEntry(
         invoiceStatus: invoice ? newStatus : null,
         paidAmount: invoice ? newPaidAmount : null,
         remainingAmount: invoice ? newRemaining : null,
+        saleJournalEntryId: null,
       },
       subject: {
         transactionDescription:
@@ -333,6 +374,7 @@ export async function linkTransactionToJournalEntry(
         transactionDate: transaction.date as string,
         voucherDate: journalEntry.entry_date as string,
         invoiceNumber: (invoice?.invoice_number as string | null | undefined) ?? null,
+        saleEntry: salePlan.required ? salePlan.entry : null,
       },
     }
   }
@@ -351,6 +393,12 @@ export async function linkTransactionToJournalEntry(
     potential_rot_rut_payout_request_id: transaction.potential_rot_rut_payout_request_id ?? null,
     is_business: transaction.is_business,
   }
+
+  // The sale first: a correct booking of the sent invoice whatever happens
+  // to the link after it.
+  const sale = await bookSaleBeforeSettlement(saleCtx, salePlan)
+  if (!sale.ok) return { ok: false, code: saleFirstRefusalCode(sale), details: sale.details }
+  const saleJournalEntryId = sale.bookedHere ? sale.journalEntryId : null
 
   const written = await writeBankLink(supabase, companyId, {
     transactionId,
@@ -586,6 +634,23 @@ export async function linkTransactionToJournalEntry(
       invoiceStatus: invoice ? newStatus : null,
       paidAmount: invoice ? newPaidAmount : null,
       remainingAmount: invoice ? newRemaining : null,
+      saleJournalEntryId,
     },
   }
+}
+
+/**
+ * Whether the verifikat's lines clear the receivable (credit 151x): the
+ * payment the sale must be booked before. null when the lines cannot be read.
+ */
+async function verifikatClearsReceivable(supabase: SupabaseClient, journalEntryId: string): Promise<boolean | null> {
+  const { data, error } = await supabase
+    .from('journal_entry_lines')
+    .select('account_number, credit_amount')
+    .eq('journal_entry_id', journalEntryId)
+  if (error) {
+    log.warn('failed to read the linked verifikat lines for the sale-first check', { journalEntryId, error: error.message })
+    return null
+  }
+  return clearsReceivable((data ?? []) as Array<{ account_number: string; credit_amount: number | null }>)
 }
