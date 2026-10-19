@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { PayeeAccountError } from '@/lib/salary/payment/bank-account'
+import { PayeeAccountError } from '@/lib/payments/bank-account'
 import {
   isSwedbankBic,
   isSwedbankCompany,

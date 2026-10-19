@@ -124,6 +124,15 @@ describe('preparePaymentOrders', () => {
     expect(result.data.warnings).toContainEqual({ supplier_invoice_id: 'c', code: 'unattested' })
   })
 
+  it('stops when the attest policy cannot be read: it never reads as no policy', async () => {
+    const failed = { message: 'policy read failed' }
+    db.setTable('company_attest_policies', { data: null, error: failed })
+    db.setTable('supplier_invoices', { data: [invoice('a', { status: 'registered', approved_at: null, user_id: 'user-1', total: 737.5 })] })
+
+    await expect(preparePaymentOrders(ctx, { supplierInvoiceIds: ['a'], cashAccountId: 'acct-1', today: '2026-09-30' })).rejects.toBe(failed)
+    expect(db.findCall('rpc:create_payment_orders', 'rpc')).toBeUndefined()
+  })
+
   it('with the policy off, an unattested invoice is paid with the warning, as before', async () => {
     db.setTable('supplier_invoices', { data: [invoice('a', { status: 'registered', approved_at: null, user_id: 'user-1', total: 737.5 })] })
     db.setTable('rpc:create_payment_orders', { data: { ok: true, orders: [{ id: 'order-a', supplier_invoice_id: 'a' }] } })

@@ -30,7 +30,7 @@ import {
   normalizeBankNumber,
   lookupBankByClearing,
   checkEmployeeAccountChecksum,
-} from '@/lib/salary/payment/bank-account'
+} from '@/lib/payments/bank-account'
 import type { EmployeeMasked } from '@/types'
 import { EmployeeBenefitsPanel } from '@/components/salary/EmployeeBenefitsPanel'
 import { EmployeeRecurringLinesPanel } from '@/components/salary/EmployeeRecurringLinesPanel'

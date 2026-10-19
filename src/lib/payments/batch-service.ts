@@ -30,7 +30,7 @@ import {
   lookupBicByClearing,
   lookupBicByBankName,
   normalizeBankNumber,
-} from '@/lib/salary/payment/bank-account'
+} from '@/lib/payments/bank-account'
 import {
   evaluateInvoiceForBatch,
   type BatchExclusionReason,
@@ -43,7 +43,7 @@ import type { StatedPayeeSource } from './payee-change'
 import { isOpenPaymentOrder, OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES } from './orders/status'
 import { generateSupplierPain001, type SupplierPain001Payment } from './pain001-supplier'
 import { resolveSwedbankFileIds, swedbankIso2PaysPayee } from './swedbank'
-import { loadAttestBlockedInvoiceIds } from '@/lib/supplier-invoices/attest-policy-read'
+import { PAYMENT_ATTEST_GATE } from '@/lib/composition/payment-attest-gate'
 import type { SupplierPaymentBatch, SupplierPaymentBatchItem } from '@/types'
 
 const log = createLogger('payments/batch-service')
@@ -277,7 +277,7 @@ export async function previewSupplierPaymentBatch(
     loadActiveBatchMap(supabase, companyId),
     resolveBatchDebtor(supabase, companyId),
     loadInvoicesInBankPayment(supabase, companyId, input.ids),
-    loadAttestBlockedInvoiceIds(supabase, companyId, input.ids),
+    PAYMENT_ATTEST_GATE.blockedInvoiceIds(supabase, companyId, input.ids),
   ])
 
   const rows = (invoices ?? []) as unknown as InvoiceRow[]
@@ -445,7 +445,7 @@ export async function planSupplierPaymentBatch(
       .in('id', ids),
     loadActiveBatchMap(supabase, companyId),
     loadInvoicesInBankPayment(supabase, companyId, ids),
-    loadAttestBlockedInvoiceIds(supabase, companyId, ids),
+    PAYMENT_ATTEST_GATE.blockedInvoiceIds(supabase, companyId, ids),
   ])
   const rows = (invoices ?? []) as unknown as InvoiceRow[]
   const byId = new Map(rows.map((row) => [row.id, row]))

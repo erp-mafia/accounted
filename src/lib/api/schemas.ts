@@ -38,7 +38,7 @@ import {
 import { ORE_ROUNDING_ACCOUNT } from '@/lib/money'
 import { isPaidAtIssueAccount } from '@/lib/invoices/paid-at-issue'
 import { DIMENSION_RULE_TYPES, ruleValueProblem } from '@/lib/dimensions/rule-value'
-import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
+import { validateEmployeeBankAccount } from '@/lib/payments/bank-account'
 import { validateJamkning } from '@/lib/salary/jamkning-rules'
 import {
   EXTRA_TAX_AMOUNT_MAX,

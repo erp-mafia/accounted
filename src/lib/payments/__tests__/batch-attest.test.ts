@@ -74,6 +74,20 @@ describe('payment file under the attest policy', () => {
     expect(mock.supabase.rpc).not.toHaveBeenCalled()
   })
 
+  it('a failed policy read stops the preview and the create: it never reads as no policy', async () => {
+    const failed = { message: 'policy read failed' }
+    const mock = db(null)
+    mock.setTable('company_attest_policies', { data: null, error: failed })
+    await expect(previewSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, { ids: ['unattested'] })).rejects.toBe(failed)
+    await expect(
+      createSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, 'user-1', {
+        format: 'pain001',
+        items: [{ supplier_invoice_id: 'unattested' }],
+      }),
+    ).rejects.toBe(failed)
+    expect(mock.supabase.rpc).not.toHaveBeenCalled()
+  })
+
   it('policy off: the unattested invoice is in the file with the warning, as before', async () => {
     const mock = db(null)
     const preview = await previewSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, { ids: ['unattested'] })

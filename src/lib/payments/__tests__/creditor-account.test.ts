@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest'
 import { creditorAccountForm, domesticCreditorAccount } from '../creditor-account'
 import { swedbankCreditorAccount } from '../swedbank'
-import { PayeeAccountError } from '@/lib/salary/payment/bank-account'
+import { PayeeAccountError } from '@/lib/payments/bank-account'
 
 const NAME = 'Sara Svensson'
 const SWEDBANK_IDS = { signerId: '123456789ORI0001', corporatePayId: '123456789CPO0001' }

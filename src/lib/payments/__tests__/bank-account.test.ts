@@ -13,7 +13,7 @@ import {
   employeeBankDetailsRemark,
   PayeeAccountError,
   maskPayeeAccount,
-} from '@/lib/salary/payment/bank-account'
+} from '@/lib/payments/bank-account'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 // Every number in this file is invented.

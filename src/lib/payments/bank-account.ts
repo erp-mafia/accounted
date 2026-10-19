@@ -7,9 +7,9 @@
  *   - the employee forms and the server Zod schema / API routes
  *     (`validateEmployeeBankAccount`),
  *   - the supplier payee resolver (`lib/payments/supplier-payee.ts`),
- *   - all three payment-file generators (`bg-lb-generator.ts`,
- *     `pain001-generator.ts`, `lib/payments/pain001-supplier.ts`).
- * The contract is pinned by `__tests__/payable-account-contract.test.ts`,
+ *   - all three payment-file generators (`lib/salary/payment/bg-lb-generator.ts`,
+ *     `lib/salary/payment/pain001-generator.ts`, `lib/payments/pain001-supplier.ts`).
+ * The contract is pinned by `lib/salary/payment/__tests__/payable-account-contract.test.ts`,
  * which runs every accepted shape through every generator.
  *
  * What resolves (deliberately structural, per the product decision):

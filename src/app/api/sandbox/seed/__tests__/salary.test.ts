@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { roundOre } from '@/lib/money'
 import { lineItemAccount } from '@/lib/salary/account-mapping'
-import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
+import { validateEmployeeBankAccount } from '@/lib/payments/bank-account'
 import type { PayrollConfig } from '@/lib/salary/payroll-config'
 import {
   encryptPersonnummer,

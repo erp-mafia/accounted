@@ -21,7 +21,7 @@ import {
   lookupBicByClearing,
   normalizeBankNumber,
   payeeAccountParts,
-} from '@/lib/salary/payment/bank-account'
+} from '@/lib/payments/bank-account'
 
 /** The only DbtrAgt BIC MIG 2.0 allows besides NOTPROVIDED. */
 export const SWEDBANK_BIC = 'SWEDSESS'

@@ -14,7 +14,7 @@
  */
 
 import { validateBankgiroNumber, validatePlusgiroNumber, validateOcrReference } from '@/lib/bankgiro/luhn'
-import { resolveDomesticBankAccount } from '@/lib/salary/payment/bank-account'
+import { resolveDomesticBankAccount } from '@/lib/payments/bank-account'
 
 export type SupplierPayee =
   | { type: 'bankgiro'; bankgiro: string }
