@@ -4,6 +4,7 @@ import path from 'node:path'
 import {
   roundOre,
   parseAmountInput,
+  parseAmountTerm,
   parseDecimalInput,
   formatAmountInput,
   truncateToWholeKronor,
@@ -349,6 +350,23 @@ describe('parseDecimalInput', () => {
 
   it('never returns negative zero', () => {
     expect(Object.is(parseDecimalInput('-0'), 0)).toBe(true)
+  })
+})
+
+describe('parseAmountTerm', () => {
+  it('parses plain, spaced, and decimal amounts', () => {
+    expect(parseAmountTerm('14000')).toBe(14000)
+    expect(parseAmountTerm('14 000')).toBe(14000)
+    expect(parseAmountTerm('17 500')).toBe(17500) // NBSP thousand separator
+    expect(parseAmountTerm('17 500,50')).toBe(17500.5)
+    expect(parseAmountTerm('17500.50')).toBe(17500.5)
+  })
+
+  it('rejects non-amounts', () => {
+    expect(parseAmountTerm('Testbrand')).toBeNull()
+    expect(parseAmountTerm('26-27')).toBeNull()
+    expect(parseAmountTerm('14000,123')).toBeNull()
+    expect(parseAmountTerm('')).toBeNull()
   })
 })
 

@@ -1,4 +1,4 @@
-import { underlagKeyFor } from '@/lib/agent/categorize/read-shape'
+import { underlagKeyFor } from './underlag-key'
 import type { BookingProposal } from '@/lib/bookkeeping/proposal'
 import type { Transaction } from '@/types'
 

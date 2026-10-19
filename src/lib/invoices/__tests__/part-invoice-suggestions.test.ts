@@ -6,9 +6,9 @@ import {
   BANKGIRO_SPLIT_CONFIDENCE,
   BANKGIRO_SPLIT_METHOD,
   splitIsComplete,
-  suggestPartInvoices,
   type PartSuggestionInput,
-} from '../part-suggestions'
+} from '@/lib/transactions/part-suggestions'
+import { suggestPartInvoices } from '../part-invoice-suggestions'
 
 /** One part of a Bankgirot split as the bank feed delivers it. */
 function part(overrides: Partial<BankTransactionPartInput> = {}): BankTransactionPartInput {

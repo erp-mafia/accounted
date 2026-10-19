@@ -1,5 +1,6 @@
 import type { AccountCandidate } from './select-account'
 import type { ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
+import { underlagKeyFor } from '@/lib/transactions/underlag-key'
 import type { Transaction, TransactionCategory, VatTreatment } from '@/types'
 
 /**
@@ -31,10 +32,6 @@ export interface AssistantRead {
   /** Which prompt produced the read (select-account's promptSha256); null on reads stored before it was kept. */
   prompt_sha256?: string | null
   updated_at?: string
-}
-
-export function underlagKeyFor(tx: Pick<Transaction, 'document_id'>): string | null {
-  return tx.document_id ?? null
 }
 
 /** A read is fresh while the transaction still has the document it was read with. */

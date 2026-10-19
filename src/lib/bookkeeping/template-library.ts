@@ -1,3 +1,4 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine, VatTreatment } from '@/types'
 import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
@@ -10,6 +11,7 @@ import { rcBasisAccountRate } from '@/lib/reports/vat-filing-gate'
 import { roundOre } from '@/lib/money'
 import { grossVat, treatmentForRate } from '@/lib/bookkeeping/gross-split'
 import {
+  resolveSkattekontoAccount,
   templateSkattekontoAccount,
   templateTouchesSkattekonto,
   type SkattekontoLedgerAccount,
@@ -40,6 +42,21 @@ export function libraryLinesForSkattekonto(
 ): BookingTemplateLibraryLine[] {
   if (!skattekontoAccount || !libraryLinesTouchSkattekonto(lines)) return lines
   return lines.map((l) => ({ ...l, account: templateSkattekontoAccount(l.account, skattekontoAccount) }))
+}
+
+/**
+ * libraryLinesForSkattekonto with this company's skattekonto account, read
+ * (resolveSkattekontoAccount, which throws when it cannot be read) only when
+ * the lines name the skattekonto; any other lines come back as they are.
+ */
+export async function libraryLinesForCompanySkattekonto(
+  supabase: SupabaseClient,
+  companyId: string,
+  lines: BookingTemplateLibraryLine[],
+): Promise<BookingTemplateLibraryLine[]> {
+  return libraryLinesTouchSkattekonto(lines)
+    ? libraryLinesForSkattekonto(lines, await resolveSkattekontoAccount(supabase, companyId))
+    : lines
 }
 
 /**

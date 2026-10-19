@@ -7,11 +7,12 @@ import {
 } from '@/lib/bookkeeping/counterparty-templates'
 import { loadCounterLegTopology, type CounterLegTopology } from '@/lib/cash-accounts/service'
 import { isCashLedger } from '@/lib/bookkeeping/bank-leg'
-import { loadReads, readIsFresh, assistantSuggestionFromRead, mergeAssistantSuggestion, type AssistantRead } from '@/lib/agent/categorize/read'
+import type { AssistantRead } from '@/lib/agent/categorize/read'
+import { ASSISTANT_READS } from '@/lib/composition/assistant-reads'
 import { proposalFromTemplate, reverseChargeBoxesOf, slateAccount, type BookingProposal } from '@/lib/bookkeeping/proposal'
 import { getTemplateById } from '@/lib/bookkeeping/booking-templates'
 import { isSkatteverketPayment } from '@/lib/bookkeeping/skatteverket-payment'
-import { COUNTERPART_SEEN_FOR_DIRECT } from './direct-booking'
+import { ASSISTANT_LIKELY, COUNTERPART_SEEN_FOR_DIRECT } from './direct-booking'
 import type { Transaction, EntityType, CategorizationTemplate, MappingRule } from '@/types'
 
 /**
@@ -176,12 +177,12 @@ export async function proposeForTransactions(
   // read itself goes along so the review opens with it. Best effort: the
   // list never waits on this table.
   if (opts.withReads !== false) {
-    const reads = await loadReads(supabase, companyId, transactions.map((t) => t.id)).catch(() => new Map<string, AssistantRead>())
+    const reads = await ASSISTANT_READS.load(supabase, companyId, transactions.map((t) => t.id)).catch(() => new Map<string, AssistantRead>())
     for (const tx of transactions) {
       const read = reads.get(tx.id)
-      if (!read || !readIsFresh(read, tx)) continue
+      if (!read || !ASSISTANT_READS.isFresh(read, tx)) continue
       assistant_reads[tx.id] = read
-      const s = assistantSuggestionFromRead(read, tx, entityType)
+      const s = ASSISTANT_READS.proposal(read, tx, entityType)
       if (s) proposals[tx.id] = mergeAssistantSuggestion(proposals[tx.id] ?? [], s)
       const cpMatch = counterpartyMatches.get(tx.id)
       if (cpMatch) proposals[tx.id] = contestCounterpart(proposals[tx.id] ?? [], cpMatch, read)
@@ -194,6 +195,19 @@ export async function proposeForTransactions(
   }
 
   return { proposals, assistant_reads }
+}
+
+/**
+ * Where the assistant's suggestion sits among the row's others: a rule and
+ * a counterpart come first, then the assistant when it is at least likely,
+ * then the catalog's keyword matches, then an unsure assistant last.
+ */
+export function mergeAssistantSuggestion(list: BookingProposal[], s: BookingProposal): BookingProposal[] {
+  const rest = list.filter((x) => x.source !== 'assistant')
+  if (s.confidence < ASSISTANT_LIKELY) return [...rest, s]
+  const firstCatalog = rest.findIndex((x) => x.source !== 'rule' && x.source !== 'counterparty')
+  if (firstCatalog === -1) return [...rest, s]
+  return [...rest.slice(0, firstCatalog), s, ...rest.slice(firstCatalog)]
 }
 
 /** The catalog template that books a bank line on the skattekonto (Insättning skattekonto, 1630). */
