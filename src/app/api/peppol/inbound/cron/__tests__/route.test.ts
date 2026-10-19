@@ -25,6 +25,10 @@ vi.mock('@/lib/invoices/peppol-inbound', () => ({
 vi.mock('@/lib/invoices/peppol-inbox-delivery', () => ({
   deliverPeppolDocumentToInbox: (...args: unknown[]) => deliverMock(...args),
 }))
+const withdrawMock = vi.fn()
+vi.mock('@/lib/invoices/peppol-registration', () => ({
+  withdrawRevokedPeppolRegistrations: (...args: unknown[]) => withdrawMock(...args),
+}))
 const proposeMock = vi.fn()
 vi.mock('@/lib/operations/inbox-bank-match', () => ({
   proposeBankMatchForInboxItem: (...args: unknown[]) => proposeMock(...args),
@@ -65,6 +69,7 @@ describe('GET /api/peppol/inbound/cron', () => {
     process.env.PEPPOL_TRANSPORT_PROVIDER = 'qvalia'
     syncMock.mockResolvedValue(cleanSync)
     reprocessMock.mockResolvedValue(cleanReprocess)
+    withdrawMock.mockResolvedValue({ withdrawn: [], failed: [] })
   })
 
   afterEach(() => {
@@ -203,5 +208,35 @@ describe('GET /api/peppol/inbound/cron', () => {
     expect(logMock.warn).not.toHaveBeenCalledWith('peppol inbound reprocess left failures to retry', expect.anything())
     expect(logMock.error).not.toHaveBeenCalled()
     expect(pages()).toHaveLength(0)
+  })
+
+  it('withdraws revoked registrations before the sync and reports them', async () => {
+    const transport = makeTransport()
+    unregister = registerPeppolTransport(transport)
+    withdrawMock.mockResolvedValue({ withdrawn: ['c-box'], failed: [] })
+    const body = await (await GET(request('cron-secret'))).json()
+    expect(withdrawMock).toHaveBeenCalledWith(expect.objectContaining({ transport }))
+    expect(withdrawMock.mock.invocationCallOrder[0]).toBeLessThan(syncMock.mock.invocationCallOrder[0])
+    expect(body.data.withdrawal).toEqual({ withdrawn: ['c-box'], failed: [] })
+    expect(logMock.info).toHaveBeenCalledWith('peppol receiving withdrawn for revoked access', { companyIds: ['c-box'] })
+    expect(pages()).toHaveLength(0)
+  })
+
+  it('pages on a failed withdrawal and still runs the sync', async () => {
+    unregister = registerPeppolTransport(makeTransport())
+    withdrawMock.mockResolvedValue({ withdrawn: [], failed: [{ companyId: 'c-box', reason: 'CONNECTOR_UPSTREAM_ERROR' }] })
+    await GET(request('cron-secret'))
+    expect(pages()).toHaveLength(1)
+    expect(pages()[0][1]).toMatchObject({ alert: true, failed: [{ companyId: 'c-box', reason: 'CONNECTOR_UPSTREAM_ERROR' }] })
+    expect(syncMock).toHaveBeenCalledTimes(1)
+
+    vi.clearAllMocks()
+    syncMock.mockResolvedValue(cleanSync)
+    reprocessMock.mockResolvedValue(cleanReprocess)
+    withdrawMock.mockRejectedValue(new Error('db down'))
+    const body = await (await GET(request('cron-secret'))).json()
+    expect(body.data.withdrawal).toEqual({ failed: true })
+    expect(logMock.error).toHaveBeenCalledWith('peppol receiving withdrawal failed', expect.any(Error), { alert: true })
+    expect(syncMock).toHaveBeenCalledTimes(1)
   })
 })

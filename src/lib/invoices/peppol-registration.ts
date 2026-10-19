@@ -20,6 +20,7 @@ import {
   type PeppolParticipant,
   type PeppolTransport,
 } from '@/lib/invoices/peppol-transport'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { CompanySettings } from '@/types'
 
 export const PEPPOL_BIS_BILLING_CREDIT_NOTE_DOCUMENT_TYPE_ID =
@@ -508,4 +509,64 @@ export async function deregisterCompanyFromPeppolReceiving(args: {
 
   const registration = await finalizeDeregistered(service, existing.id, { last_error: null, last_error_code: null })
   return { ok: true, registration }
+}
+
+/** Max ids per PostgREST .in() filter: 150 UUIDs stay well under proxy URL limits. */
+const IN_CLAUSE_CHUNK = 150
+
+export interface WithdrawRevokedPeppolSummary {
+  withdrawn: string[]
+  failed: Array<{ companyId: string; reason: string }>
+}
+
+/**
+ * Withdraw the identifier of every company whose Peppol access no longer
+ * allows receiving: access disabled, or receiving switched off. Revoking
+ * access only changes peppol_access, so without this pass the identifier
+ * stayed published in the SMP: the company kept receiving and held a
+ * contracted tenant slot. A registration without an access row predates the
+ * access gate and is left alone. Run by the inbound cron; a failure leaves
+ * the registration live for the next run.
+ */
+export async function withdrawRevokedPeppolRegistrations(args: {
+  service: SupabaseClient
+  transport: PeppolTransport
+}): Promise<WithdrawRevokedPeppolSummary> {
+  const { service, transport } = args
+  const summary: WithdrawRevokedPeppolSummary = { withdrawn: [], failed: [] }
+  if (!transport.unregisterRecipient) return summary
+
+  const live = await fetchAllRows<{ company_id: string }>(({ from, to }) =>
+    service
+      .from('peppol_registrations')
+      .select('company_id')
+      .eq('provider', transport.provider)
+      .in('status', LIVE_STATUSES)
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
+  const companyIds = [...new Set(live.map((row) => row.company_id))]
+
+  const revoked: string[] = []
+  for (let i = 0; i < companyIds.length; i += IN_CLAUSE_CHUNK) {
+    const { data, error } = await service
+      .from('peppol_access')
+      .select('company_id, status, receive_enabled')
+      .in('company_id', companyIds.slice(i, i + IN_CLAUSE_CHUNK))
+    if (error) throw new Error(`Failed to read Peppol access: ${error.message}`)
+    for (const row of (data ?? []) as Array<{ company_id: string; status: string; receive_enabled: boolean }>) {
+      if (row.status !== 'enabled' || !row.receive_enabled) revoked.push(row.company_id)
+    }
+  }
+
+  for (const companyId of revoked) {
+    try {
+      const result = await deregisterCompanyFromPeppolReceiving({ service, companyId, transport })
+      if (result.ok) summary.withdrawn.push(companyId)
+      else summary.failed.push({ companyId, reason: 'reason' in result && result.reason ? result.reason : result.code })
+    } catch (err) {
+      summary.failed.push({ companyId, reason: err instanceof Error ? err.message : String(err) })
+    }
+  }
+  return summary
 }

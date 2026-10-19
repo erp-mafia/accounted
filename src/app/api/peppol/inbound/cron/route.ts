@@ -6,6 +6,7 @@ import {
   syncInboundPeppolDocuments,
 } from '@/lib/invoices/peppol-inbound'
 import { deliverPeppolDocumentToInbox } from '@/lib/invoices/peppol-inbox-delivery'
+import { withdrawRevokedPeppolRegistrations } from '@/lib/invoices/peppol-registration'
 import { proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
 import {
   getPeppolTransport,
@@ -31,6 +32,10 @@ export const maxDuration = 300
  * failures. Transport hiccups, XML misses under budget and held documents
  * are logged at warn and retried after the backoff.
  *
+ * First, the identifier of every company whose access no longer allows
+ * receiving is withdrawn from the SMP (revoking access only changes our row).
+ * In its own try/catch: a failed withdrawal must never stop the inbound sync.
+ *
  * Truthful no-op when no access point is switched on in this environment.
  */
 export const GET = withCronContext('cron.peppol_inbound', async (_request, ctx) => {
@@ -44,6 +49,23 @@ export const GET = withCronContext('cron.peppol_inbound', async (_request, ctx) 
   }
 
   const service = createServiceClientNoCookies()
+  let withdrawal: Awaited<ReturnType<typeof withdrawRevokedPeppolRegistrations>> | { failed: true }
+  try {
+    withdrawal = await withdrawRevokedPeppolRegistrations({ service, transport })
+    if (withdrawal.withdrawn.length > 0) {
+      ctx.log.info('peppol receiving withdrawn for revoked access', { companyIds: withdrawal.withdrawn })
+    }
+    if (withdrawal.failed.length > 0) {
+      ctx.log.error('peppol receiving withdrawal failed, the identifiers stay published', {
+        alert: true,
+        failed: withdrawal.failed,
+      })
+    }
+  } catch (err) {
+    ctx.log.error('peppol receiving withdrawal failed', err as Error, { alert: true })
+    withdrawal = { failed: true }
+  }
+
   // Each delivered e-invoice is checked against the bank at once (match on
   // arrival): a payment already in the bank becomes a proposal on the item.
   const deliver = async (delivery: Parameters<typeof deliverPeppolDocumentToInbox>[1]) => {
@@ -86,7 +108,7 @@ export const GET = withCronContext('cron.peppol_inbound', async (_request, ctx) 
       terminalReasons: terminalDocuments.map((d) => `${d.providerDocumentId}: ${d.reason}`),
     })
   }
-  return NextResponse.json({ data: { ...summary, reprocess } })
+  return NextResponse.json({ data: { ...summary, reprocess, withdrawal } })
 })
 
 export const POST = GET
