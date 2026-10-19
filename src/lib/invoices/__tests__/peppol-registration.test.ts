@@ -11,6 +11,7 @@ import {
   isStalePeppolPending,
   preparePeppolParticipant,
   registerCompanyForPeppolReceiving,
+  withdrawRevokedPeppolRegistrations,
 } from '@/lib/invoices/peppol-registration'
 import { PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID } from '@/lib/invoices/peppol-bis-billing'
 import { PeppolTransportError, type PeppolTransport } from '@/lib/invoices/peppol-transport'
@@ -493,5 +494,82 @@ describe('deregisterCompanyFromPeppolReceiving', () => {
       ok: false, code: 'PEPPOL_REGISTRATION_REJECTED', detail: 'hosted detail', reason: 'CONNECTOR_PEPPOL_PARTICIPANT_NOT_ALLOWED',
     })
     expect(updates()[0]).toMatchObject({ last_error_code: 'CONNECTOR_PEPPOL_PARTICIPANT_NOT_ALLOWED' })
+  })
+})
+
+describe('withdrawRevokedPeppolRegistrations', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+  })
+
+  const withdraw = (transport: PeppolTransport) => withdrawRevokedPeppolRegistrations({ service, transport })
+  const live = (companyId: string, identifier: string) => ({
+    ...registeredRow, id: `reg-${companyId}`, company_id: companyId, participant_identifier: identifier,
+  })
+
+  it('withdraws companies whose access is disabled or has receiving off, and nobody else', async () => {
+    const transport = makeTransport()
+    enqueue({ data: [{ company_id: 'c-disabled' }, { company_id: 'c-receive-off' }, { company_id: 'c-receiving' }, { company_id: 'c-no-access' }], error: null })
+    enqueue({
+      data: [
+        { company_id: 'c-disabled', status: 'disabled', receive_enabled: true },
+        { company_id: 'c-receive-off', status: 'enabled', receive_enabled: false },
+        { company_id: 'c-receiving', status: 'enabled', receive_enabled: true },
+      ],
+      error: null,
+    })
+    enqueue({ data: [live('c-disabled', '5565810776')], error: null })
+    enqueue({ data: { ...live('c-disabled', '5565810776'), status: 'deregistered' }, error: null })
+    enqueue({ data: [live('c-receive-off', '5595386219')], error: null })
+    enqueue({ data: { ...live('c-receive-off', '5595386219'), status: 'deregistered' }, error: null })
+
+    expect(await withdraw(transport)).toEqual({ withdrawn: ['c-disabled', 'c-receive-off'], failed: [] })
+    expect(transport.unregisterRecipient).toHaveBeenCalledTimes(2)
+    expect(transport.unregisterRecipient).toHaveBeenCalledWith({ scheme: '0007', identifier: '5565810776' })
+    expect(transport.unregisterRecipient).toHaveBeenCalledWith({ scheme: '0007', identifier: '5595386219' })
+    expect(calls.find((c) => c.table === 'peppol_registrations' && c.method === 'in')?.args).toEqual(['status', ['pending', 'registered']])
+    expect(updates()).toHaveLength(2)
+  })
+
+  it('records a failed withdrawal and goes on with the next company', async () => {
+    const transport = makeTransport({
+      unregisterRecipient: vi.fn()
+        .mockRejectedValueOnce(transportFailure('CONNECTOR_UPSTREAM_ERROR', true, 'smp down'))
+        .mockResolvedValueOnce(undefined),
+    })
+    enqueue({ data: [{ company_id: 'c-a' }, { company_id: 'c-b' }], error: null })
+    enqueue({
+      data: [
+        { company_id: 'c-a', status: 'disabled', receive_enabled: false },
+        { company_id: 'c-b', status: 'disabled', receive_enabled: false },
+      ],
+      error: null,
+    })
+    enqueue({ data: [live('c-a', '5560000001')], error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: [live('c-b', '5560000002')], error: null })
+    enqueue({ data: { ...live('c-b', '5560000002'), status: 'deregistered' }, error: null })
+
+    expect(await withdraw(transport)).toEqual({
+      withdrawn: ['c-b'],
+      failed: [{ companyId: 'c-a', reason: 'CONNECTOR_UPSTREAM_ERROR' }],
+    })
+  })
+
+  it('does nothing without live registrations or on a send-only transport', async () => {
+    enqueue({ data: [], error: null })
+    expect(await withdraw(makeTransport())).toEqual({ withdrawn: [], failed: [] })
+    expect(calls.some((c) => c.table === 'peppol_access')).toBe(false)
+
+    reset()
+    expect(await withdraw(makeTransport({ unregisterRecipient: undefined }))).toEqual({ withdrawn: [], failed: [] })
+    expect(calls).toHaveLength(0)
+  })
+
+  it('throws when the access rows cannot be read', async () => {
+    enqueue({ data: [{ company_id: 'c-a' }], error: null })
+    enqueue({ data: null, error: { message: 'boom' } })
+    await expect(withdraw(makeTransport())).rejects.toThrow('Failed to read Peppol access: boom')
   })
 })
