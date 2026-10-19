@@ -62,9 +62,9 @@ interface RunHeaderProps {
   // one has nothing worth previewing.
   isCalculated: boolean
   // The single "forward" step for the current status (Beräkna, Till
-  // granskning, Godkänn, Markera utbetald, Bokför): the one default button
-  // in the header. Everything else lives behind the ⋯ menu, except the
-  // payslip send, which is a rail step of its own and stays visible.
+  // granskning, Godkänn, Markera utbetald, Bokför, Lämna in AGI): the one
+  // default button in the header. Everything else lives behind the ⋯ menu,
+  // the payslip send included.
   primaryAction?: { key: string; label: string; onClick: () => void } | null
   onPreview: () => void
   onRevert: () => void
@@ -124,6 +124,7 @@ export function RunHeader({
   const showDelete = canWrite && run.status === 'draft'
   const showCorrect = canWrite && run.status === 'booked'
   const hasMenu =
+    showPayslipSend ||
     showPreview ||
     showRevert ||
     showUnapprove ||
@@ -132,6 +133,7 @@ export function RunHeader({
     showDelete ||
     showCorrect
   const menuBusy =
+    actionLoading === 'payslips-send' ||
     actionLoading === 'delete' ||
     actionLoading === 'correct' ||
     actionLoading === 'preview' ||
@@ -264,24 +266,6 @@ export function RunHeader({
         </div>
 
         <div className="page-header-action flex shrink-0 flex-wrap items-center gap-2">
-          {showPayslipSend && (
-            // The span carries the tooltip: browsers suppress `title` on
-            // disabled elements, and hover events don't fire on them.
-            <span title={!hasEmailSend ? t('payslips_send_requires_subscription') : undefined}>
-              <Button size="sm"
-                variant="outline"
-                onClick={onSendPayslips}
-                disabled={busy || !hasEmailSend}
-                loading={actionLoading === 'payslips-send'}
-              >
-                {actionLoading !== 'payslips-send' && <Send className="mr-2 h-4 w-4" />}
-                {deliveries && deliveries.sent > 0
-                  ? t('action_send_payslips_again')
-                  : t('action_send_payslips')}
-              </Button>
-            </span>
-          )}
-
           {primaryAction && (
             <Button size="sm" onClick={primaryAction.onClick} disabled={busy} loading={actionLoading === primaryAction.key}>
               {primaryAction.label}
@@ -303,6 +287,24 @@ export function RunHeader({
                   >
                     <Eye className="h-4 w-4" />
                     {t('action_preview')}
+                  </DropdownMenuItem>
+                )}
+                {showPayslipSend && (
+                  // Email send is a paid capability: without it the item stays
+                  // visible but disabled, and says why on the item itself (a
+                  // disabled menu item takes no hover, so no tooltip).
+                  <DropdownMenuItem onSelect={onSendPayslips} disabled={busy || !hasEmailSend}>
+                    <Send className="h-4 w-4" />
+                    <span className="min-w-0 flex-1">
+                      {deliveries && deliveries.sent > 0
+                        ? t('action_send_payslips_again')
+                        : t('action_send_payslips')}
+                    </span>
+                    {!hasEmailSend && (
+                      <span className="text-[11px] text-muted-foreground">
+                        {t('payslips_send_requires_subscription')}
+                      </span>
+                    )}
                   </DropdownMenuItem>
                 )}
                 {showDownloadPayslips && (

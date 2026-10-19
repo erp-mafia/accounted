@@ -28,6 +28,9 @@ import {
 import type { SalaryRun } from '@/types'
 import { salaryRunStatusDisplay } from '@/lib/salary/run-status-display'
 
+/** Runs the landing lists before the "Visa alla" line: a year of months. */
+const RUNS_SHOWN = 12
+
 /**
  * Löner landing (concept scene 22): header + the lönekörningar dry-table,
  * nothing else. The open run's row is the way into the flow (chip + payout
@@ -37,6 +40,8 @@ import { salaryRunStatusDisplay } from '@/lib/salary/run-status-display'
 export default function SalaryPage() {
   const [runs, setRuns] = useState<SalaryRun[]>([])
   const [runsLoading, setRunsLoading] = useState(true)
+  // The list loads every run; past RUNS_SHOWN the rest wait behind one line.
+  const [showAllRuns, setShowAllRuns] = useState(false)
   // The active roster from the session cache: the start card counts it.
   const { employees, isLoading: employeesLoading } = useEmployees()
   const loading = runsLoading || employeesLoading
@@ -231,7 +236,7 @@ export default function SalaryPage() {
                   </tr>
                 </thead>
                 <tbody className="stagger-enter">
-                  {runs.slice(0, 12).map(run => {
+                  {(showAllRuns ? runs : runs.slice(0, RUNS_SHOWN)).map(run => {
                     // PostgREST count embed: employee_count is [{ count: n }].
                     const employeeCount = (
                       run as SalaryRun & { employee_count?: { count: number }[] }
@@ -289,6 +294,15 @@ export default function SalaryPage() {
                   })}
                 </tbody>
               </table>
+              {!showAllRuns && runs.length > RUNS_SHOWN && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllRuns(true)}
+                  className="px-4 py-2 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:text-foreground"
+                >
+                  {t('show_all_runs', { count: runs.length })}
+                </button>
+              )}
             </div>
           )}
         </div>

@@ -102,8 +102,9 @@ export function deadlineDateLabel(dateStr: string): string {
 
 /**
  * One deadline as a concept thread row (scene 17): icon circle, "12 aug ·
- * Title" line, muted status sentence below, quiet hover actions. Rows are
- * borderless; the section headers carry the structure.
+ * Title" line with the relative date, time and customer as a muted suffix on
+ * the same line (convention 4), quiet hover actions. Rows are borderless; the
+ * section headers carry the structure.
  */
 export function DeadlineRow({ deadline, onEdit, onRequestToggle }: DeadlineRowProps) {
   const t = useTranslations('deadlines')
@@ -147,6 +148,17 @@ export function DeadlineRow({ deadline, onEdit, onRequestToggle }: DeadlineRowPr
           </span>
           <span className="text-muted-foreground/50"> · </span>
           <span>{deadline.title}</span>
+          {subParts.length > 0 && (
+            <span
+              className={cn(
+                'text-[12.5px]',
+                overdue && !completed ? 'text-destructive' : 'text-muted-foreground',
+              )}
+            >
+              <span className="text-muted-foreground/50"> · </span>
+              {subParts.join(' · ')}
+            </span>
+          )}
         </p>
         {deadline.source_document_id && deadline.source_document?.file_name && (
           <a
@@ -158,16 +170,6 @@ export function DeadlineRow({ deadline, onEdit, onRequestToggle }: DeadlineRowPr
           >
             {t('source_document', { name: deadline.source_document.file_name })}
           </a>
-        )}
-        {subParts.length > 0 && (
-          <p
-            className={cn(
-              'text-xs leading-5',
-              overdue && !completed ? 'text-destructive' : 'text-muted-foreground',
-            )}
-          >
-            {subParts.join(' · ')}
-          </p>
         )}
       </div>
 

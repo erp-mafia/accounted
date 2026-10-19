@@ -408,7 +408,7 @@ describe('run page and AGI panel derivations', () => {
     }
   }
 
-  /** Mirrors RunProgressBar: the kvittens renders only on the signed step. */
+  /** The run's AGI step: a kvittens is attributed only to a signed declaration. */
   function railAgiStep(run: AgiFilingRun, submission: AgiSubmissionState | null) {
     const state = deriveAgiFilingState(run, submission)
     return {

@@ -1,0 +1,1 @@
+[2026-10-18] Nytt utlägg shows the missing-receipt line on step 2 only, when no receipt is attached, instead of on open: a receipt is not required to register, so the nudge must not block or pre-empt the flow; the BFL text sits behind a ?.

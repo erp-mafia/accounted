@@ -7,11 +7,10 @@ import { useArticles } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
-import { TH_CLASS, TD_CLASS, SHOW_MORE_STEP, ShowMoreFooter, SortableTh } from '@/components/ui/dry-table'
+import { TD_CLASS, SHOW_MORE_STEP, ShowMoreFooter, SortableTh } from '@/components/ui/dry-table'
 import { useUrlSort } from '@/lib/hooks/use-url-sort'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
@@ -334,7 +333,6 @@ function ArticlesPageInner() {
                   <SortableTh direction={sortColumn === 'unit' ? sortDir : null} onSort={() => updateSort('unit')} label={t('col_unit')} className="hidden text-right sm:table-cell" />
                   <SortableTh direction={sortColumn === 'price_excl_vat' ? sortDir : null} onSort={() => updateSort('price_excl_vat')} label={t('col_price')} className="text-right" />
                   <SortableTh direction={sortColumn === 'vat_rate' ? sortDir : null} onSort={() => updateSort('vat_rate')} label={t('col_vat')} className="hidden text-right sm:table-cell" />
-                  <th className={cn(TH_CLASS, 'text-right')}>{t('col_status')}</th>
                 </tr>
               </thead>
               <tbody className="stagger-enter">
@@ -347,14 +345,23 @@ function ArticlesPageInner() {
                     <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>
                       {article.article_number || '-'}
                     </td>
+                    {/* Active is the normal state and says nothing; an inactive
+                        article carries a muted suffix after its name. */}
                     <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
-                      <Link
-                        href={`/articles/${article.id}`}
-                        className="block truncate hover:underline"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        {article.name}
-                      </Link>
+                      <span className="flex min-w-0 items-baseline gap-2">
+                        <Link
+                          href={`/articles/${article.id}`}
+                          className="truncate hover:underline"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {article.name}
+                        </Link>
+                        {!article.active && (
+                          <span className="shrink-0 text-xs text-muted-foreground">
+                            {t('status_inactive')}
+                          </span>
+                        )}
+                      </span>
                     </td>
                     <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-muted-foreground md:table-cell')}>
                       {t(ARTICLE_TYPE_LABEL_KEYS[article.type])}
@@ -367,15 +374,6 @@ function ArticlesPageInner() {
                     </td>
                     <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground sm:table-cell')}>
                       {article.vat_rate} %
-                    </td>
-                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-right')}>
-                      {article.active ? (
-                        <span className="text-muted-foreground">{t('status_active')}</span>
-                      ) : (
-                        <Badge variant="outline" className="font-normal">
-                          {t('status_inactive')}
-                        </Badge>
-                      )}
                     </td>
                   </tr>
                 ))}

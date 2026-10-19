@@ -26,6 +26,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { PageHeader } from '@/components/ui/page-header'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { AttnLine } from '@/components/ui/attn-line'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -618,6 +620,9 @@ export default function ExpenseClaimsPage() {
     }
     return null
   }, [upload, inboxChoice, inboxOptions])
+  /** No receipt from either path: the claim registers, but lacks its underlag. */
+  const receiptMissing =
+    (upload.phase === 'idle' || upload.phase === 'error') && inboxChoice === NO_RECEIPT_VALUE
 
   const claimantDisplay =
     claimant === OWNER_VALUE
@@ -1104,29 +1109,17 @@ export default function ExpenseClaimsPage() {
                   ) : (
                     c.description
                   )}
-                  <span className="ml-2 text-muted-foreground">{c.expense_account}</span>
                 </td>
                 <td className={`${TD_CLASS} hidden md:table-cell`}>{c.claimant_name}</td>
+                {/* A receipt is the normal state and says nothing; only a
+                    missing one is marked. */}
                 <td className={`${TD_CLASS} hidden lg:table-cell`}>
-                  {c.document ? (
-                    <span className="text-muted-foreground">
-                      {c.document.file_name ?? t('receipt_attached')}
-                    </span>
-                  ) : (
-                    <span className="text-attn">{t('receipt_missing')}</span>
-                  )}
+                  {!c.document && <span className="text-attn">{t('receipt_missing')}</span>}
                 </td>
                 <td className={TD_CLASS}>
-                  {/* Chips mark exceptions (convention 5): a paid claim is
-                      done and reads as muted text; an outstanding one waits
-                      for its payout. */}
-                  {c.status === 'registered' ? (
-                    <Badge variant="outline" className="font-normal">
-                      {t(`status_${c.status}`)}
-                    </Badge>
-                  ) : (
-                    <span className="text-xs text-muted-foreground">{t(`status_${c.status}`)}</span>
-                  )}
+                  {/* Chips mark exceptions (convention 5): registered and
+                      paid are both normal states, so both read as muted text. */}
+                  <span className="text-xs text-muted-foreground">{t(`status_${c.status}`)}</span>
                   {c.batch && (
                     <span className="ml-2 text-xs text-muted-foreground tabular-nums">
                       {formatDate(c.batch.payout_date)}
@@ -1214,15 +1207,21 @@ export default function ExpenseClaimsPage() {
           }
         >
           <DialogHeader className="shrink-0">
-            <DialogTitle>
-              {t('new_claim')}
-              <span className="ml-3 text-sm font-normal text-muted-foreground">
-                {step === 1 ? t('step_details') : t('step_booking')}
-              </span>
-            </DialogTitle>
-            <DialogDescription>
-              {step === 1 ? t('new_claim_help') : t('step_booking_help')}
-            </DialogDescription>
+            {/* Convention 7: how the claim is booked lives behind the "?". */}
+            <div className="flex items-center gap-2">
+              <DialogTitle>
+                {t('new_claim')}
+                <span className="ml-3 text-sm font-normal text-muted-foreground">
+                  {step === 1 ? t('step_details') : t('step_booking')}
+                </span>
+              </DialogTitle>
+              <HelpPopover className="shrink-0">{t('new_claim_help')}</HelpPopover>
+            </div>
+            {step === 1 ? (
+              <DialogDescription className="sr-only">{t('new_claim_help')}</DialogDescription>
+            ) : (
+              <DialogDescription>{t('step_booking_help')}</DialogDescription>
+            )}
           </DialogHeader>
 
           {receiptDoc && (
@@ -1256,11 +1255,31 @@ export default function ExpenseClaimsPage() {
               {/* Receipt drop zone with AI extraction */}
               <div className="space-y-2">
                 <Label>{t('form_receipt_upload')}</Label>
-                {upload.phase === 'idle' || upload.phase === 'error' ? (
-                  <>
+                {upload.phase === 'idle' && inboxChoice !== NO_RECEIPT_VALUE ? (
+                  // A receipt picked from the inbox: one line, like an upload.
+                  <div className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm">
+                    <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 flex-1 truncate">
+                      {inboxOptions.find((i) => i.id === inboxChoice)?.label ?? inboxChoice}
+                    </span>
+                    <span className="text-xs text-muted-foreground">{t('form_receipt')}</span>
                     <button
                       type="button"
-                      onClick={() => fileInputRef.current?.click()}
+                      aria-label={t('form_receipt_none')}
+                      onClick={() => setInboxChoice(NO_RECEIPT_VALUE)}
+                      className="text-muted-foreground hover:text-foreground"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                ) : upload.phase === 'idle' || upload.phase === 'error' ? (
+                  <>
+                    {/* The zone opens the file chooser on a click anywhere
+                        but the inbox link, which is its own button inside. */}
+                    <div
+                      onClick={(e) => {
+                        if (e.target === e.currentTarget) fileInputRef.current?.click()
+                      }}
                       onDragOver={(e) => {
                         e.preventDefault()
                         setDragOver(true)
@@ -1271,17 +1290,32 @@ export default function ExpenseClaimsPage() {
                         setDragOver(false)
                         onFileChosen(e.dataTransfer.files)
                       }}
-                      className={`flex w-full items-center justify-center gap-2 rounded-lg border border-dashed px-4 py-6 text-sm text-muted-foreground transition-colors duration-150 hover:border-foreground/40 hover:text-foreground ${
+                      className={`flex w-full cursor-pointer flex-wrap items-center justify-center gap-x-2 gap-y-1 rounded-lg border border-dashed px-4 py-6 text-sm text-muted-foreground transition-colors duration-150 hover:border-foreground/40 ${
                         dragOver ? 'border-foreground/60 text-foreground' : 'border-border'
                       }`}
                     >
-                      <Upload className="h-4 w-4" />
-                      {t('dropzone_hint')}
-                      <span className="inline-flex items-center gap-1 text-xs">
-                        <Sparkles className="h-3 w-3" />
-                        {t('dropzone_ai_hint')}
-                      </span>
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="inline-flex items-center gap-2 transition-colors duration-150 hover:text-foreground"
+                      >
+                        <Upload className="h-4 w-4" />
+                        {t('dropzone_hint')}
+                        <span className="inline-flex items-center gap-1 text-xs">
+                          <Sparkles className="h-3 w-3" />
+                          {t('dropzone_ai_hint')}
+                        </span>
+                      </button>
+                      {inboxOptions.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setShowInboxPicker(true)}
+                          className="underline underline-offset-2 transition-colors duration-150 hover:text-foreground"
+                        >
+                          {t('dropzone_pick_from_inbox')}
+                        </button>
+                      )}
+                    </div>
                     <input
                       ref={fileInputRef}
                       type="file"
@@ -1321,40 +1355,6 @@ export default function ExpenseClaimsPage() {
                   </div>
                 )}
               </div>
-
-              {upload.phase === 'idle' && inboxOptions.length > 0 && (
-                <div className="space-y-2">
-                  <Label>{t('form_receipt')}</Label>
-                  <div className="flex items-center gap-2">
-                    {inboxChoice !== NO_RECEIPT_VALUE ? (
-                      <Badge variant="secondary" className="gap-1.5 py-1 pl-2 pr-1 font-normal">
-                        <span className="max-w-[260px] truncate">
-                          {inboxOptions.find((i) => i.id === inboxChoice)?.label ?? inboxChoice}
-                        </span>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={t('form_receipt_none')}
-                          onClick={() => setInboxChoice(NO_RECEIPT_VALUE)}
-                        >
-                          <X className="h-3 w-3" />
-                        </Button>
-                      </Badge>
-                    ) : (
-                      <span className="text-sm text-muted-foreground">{t('form_receipt_none')}</span>
-                    )}
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setShowInboxPicker(true)}
-                    >
-                      {t('form_pick_from_inbox')}
-                    </Button>
-                  </div>
-                </div>
-              )}
 
               <div className="space-y-2">
                 <Label htmlFor="ec_description">{t('form_description')}</Label>
@@ -1448,12 +1448,21 @@ export default function ExpenseClaimsPage() {
               {currency !== 'SEK' && (
                 <p className="text-xs text-muted-foreground">{t('form_fx_hint')}</p>
               )}
-              {upload.phase === 'idle' && inboxChoice === NO_RECEIPT_VALUE && (
-                <p className="text-xs text-attn">{t('form_receipt_warning')}</p>
-              )}
             </div>
           ) : (
             <div className="space-y-4">
+              {/* Reached by Nästa without a receipt: say it once, here. The
+                  claim may still be registered; the BFL reason is behind
+                  the "?". */}
+              {receiptMissing && (
+                <AttnLine
+                  trailing={
+                    <HelpPopover className="ml-2 align-[-3px]">{t('form_receipt_warning')}</HelpPopover>
+                  }
+                >
+                  {t('form_receipt_missing')}
+                </AttnLine>
+              )}
               {/* Step 2: VAT mode + templates + an editable verifikat grid.
                   The liability row is locked: the payout flow reimburses
                   exactly the claim gross from that account. */}
@@ -1774,11 +1783,9 @@ export default function ExpenseClaimsPage() {
                       {formatAmount(totalCredit)}
                     </td>
                     <td className={TD_CLASS}>
-                      {bookingBalanced && bookingRowsValid ? (
-                        <Badge variant="outline" className="font-normal text-positive">
-                          {t('balanced')}
-                        </Badge>
-                      ) : (
+                      {/* A balanced verifikat is the normal state: only the
+                          exception gets a chip (convention 5). */}
+                      {!(bookingBalanced && bookingRowsValid) && (
                         <Badge variant="outline" className="font-normal text-attn">
                           {t('unbalanced')}
                         </Badge>

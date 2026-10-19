@@ -18,9 +18,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Plus, X } from 'lucide-react'
+import { ChevronRight, Plus, X } from 'lucide-react'
 import { useTranslations } from 'next-intl'
 import { useToast } from '@/components/ui/use-toast'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { formatCurrency } from '@/lib/utils'
 import type { AssetCategory, K3Component } from '@/types'
@@ -97,6 +98,11 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
   // depreciated from a previous system. Registered only, never posted.
   const [openingAmount, setOpeningAmount] = useState('')
   const [openingDate, setOpeningDate] = useState('')
+  // The opening block concerns a move from another register only, so it
+  // waits behind a disclosure; a value in either field keeps it open, so
+  // nothing entered is ever hidden.
+  const [openingExpanded, setOpeningExpanded] = useState(false)
+  const openingOpen = openingExpanded || openingAmount !== '' || openingDate !== ''
   // K3 component depreciation. `useComponents` toggles the advanced section;
   // null when disabled, an array (possibly empty during editing) when enabled.
   const [useComponents, setUseComponents] = useState(false)
@@ -253,6 +259,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
       setAcquisitionCost('')
       setOpeningAmount('')
       setOpeningDate('')
+      setOpeningExpanded(false)
       setUseComponents(false)
       setComponentRows([])
       onCreated()
@@ -319,7 +326,10 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="asset-cost">Anskaffningsvärde (kr)</Label>
+              <div className="flex items-center gap-2">
+                <Label htmlFor="asset-cost">Anskaffningsvärde (kr)</Label>
+                <HelpPopover>{t('register_help')}</HelpPopover>
+              </div>
               <Input
                 id="asset-cost"
                 type="number"
@@ -333,7 +343,10 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="asset-life">Avskrivningstid (år)</Label>
+            <div className="flex items-center gap-2">
+              <Label htmlFor="asset-life">Avskrivningstid (år)</Label>
+              <HelpPopover>{t('life_help')}</HelpPopover>
+            </div>
             <Input
               id="asset-life"
               type="number"
@@ -344,45 +357,55 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
               onChange={(e) => setUsefulLifeYears(e.target.value)}
               className="tabular-nums"
             />
-            <p className="text-xs text-muted-foreground">
-              K2-schablon för redovisning: datorer 3 år, inventarier 5 år, byggnader 25 år.
-              För skattemässig avskrivning kan annan livslängd gälla (IL 18-20 kap).
-            </p>
           </div>
-          <div className="space-y-3 rounded-lg border border-border p-4">
-            <p className="text-sm font-medium">{t('opening.title')}</p>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label htmlFor="asset-opening-amount">{t('opening.amount_label')}</Label>
-                <Input
-                  id="asset-opening-amount"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={openingAmount}
-                  onChange={(e) => setOpeningAmount(e.target.value)}
-                  placeholder="0"
-                  className="tabular-nums"
-                />
+          {!openingOpen ? (
+            <button
+              type="button"
+              onClick={() => setOpeningExpanded(true)}
+              aria-expanded={false}
+              className="inline-flex items-center gap-2 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:text-foreground"
+            >
+              <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+              {t('opening.disclosure')}
+            </button>
+          ) : (
+            <div className="space-y-3 rounded-lg border border-border p-4">
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-medium">{t('opening.title')}</p>
+                <HelpPopover>{t('opening.hint')}</HelpPopover>
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="asset-opening-date">{t('opening.date_label')}</Label>
-                <Input
-                  id="asset-opening-date"
-                  type="date"
-                  value={openingDate}
-                  onChange={(e) => setOpeningDate(e.target.value)}
-                  className="tabular-nums"
-                />
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label htmlFor="asset-opening-amount">{t('opening.amount_label')}</Label>
+                  <Input
+                    id="asset-opening-amount"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={openingAmount}
+                    onChange={(e) => setOpeningAmount(e.target.value)}
+                    placeholder="0"
+                    className="tabular-nums"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="asset-opening-date">{t('opening.date_label')}</Label>
+                  <Input
+                    id="asset-opening-date"
+                    type="date"
+                    value={openingDate}
+                    onChange={(e) => setOpeningDate(e.target.value)}
+                    className="tabular-nums"
+                  />
+                </div>
               </div>
+              {remainingAfterOpening !== null && (
+                <p className="text-xs tabular-nums text-foreground">
+                  {t('opening.remaining', { amount: formatCurrency(remainingAfterOpening) })}
+                </p>
+              )}
             </div>
-            {remainingAfterOpening !== null && (
-              <p className="text-xs tabular-nums text-foreground">
-                {t('opening.remaining', { amount: formatCurrency(remainingAfterOpening) })}
-              </p>
-            )}
-            <p className="text-xs text-muted-foreground">{t('opening.hint')}</p>
-          </div>
+          )}
           {isK3 && (
             <div className="space-y-3 rounded-lg border border-border bg-muted/20 p-4">
               <div className="flex items-start justify-between gap-4">
@@ -535,12 +558,6 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
               )}
             </div>
           )}
-          <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-            <strong className="text-foreground">Tips:</strong> Anskaffningen måste redan vara
-            bokförd (debet på 1xxx-kontot mot t.ex. 1930/2440): registret bokför inte
-            själva köpet. Det här registret styr enbart de planenliga avskrivningarna under
-            bokslutet.
-          </div>
           {error && (
             <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
               {error}

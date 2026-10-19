@@ -1,0 +1,1 @@
+[2026-10-18] The salary run rail shows step labels plus three exceptions only (failed payslips, AGI awaiting BankID signature, AGI underlag awaiting Skatteverket); a booked run gets the header primary Lämna in AGI, which scrolls to the existing AGI section.
