@@ -100,12 +100,10 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     module: 'ledger',
     labelKey: 'v2_accounts',
     icon: Landmark,
-    // Each account opens from the overview's rows; sub-items per account
-    // kind pointed at a settings dialog and at the skattekonto page.
-    sub: [
-      { href: '/accounts', module: 'ledger', labelKey: 'v2_accounts_overview' },
-      { href: '/reconciliation', module: 'transactions', labelKey: 'reconciliation' },
-    ],
+    // One list, no sub-items (founder decision 2026-10-18): Avstämning was a
+    // second list of the same accounts, so it merged into Konton. Each row
+    // opens the account's reconciliation at /reconciliation?account=, which
+    // keeps this row lit (DashboardNav isActive).
   },
   {
     href: '/transactions',

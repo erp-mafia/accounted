@@ -68,7 +68,7 @@ export type NavLabelKey =
   | 'suppliers'
   | 'review'
   | 'transactions'
-  | 'reconciliation'
+  | 'v2_accounts'
   | 'bookkeeping'
   | 'chart_of_accounts'
   | 'dimensions'
@@ -178,7 +178,9 @@ export const navItems: NavItem[] = [
   { href: '/bookkeeping', module: 'ledger', labelKey: 'bookkeeping', icon: BookOpen, group: 'arbeta' },
   { href: '/e/general/invoice-inbox', module: 'inbox', labelKey: 'invoice_inbox', icon: Inbox, group: 'arbeta', requiredCapability: EXTENSION_REQUIRED_CAPABILITY['general/invoice-inbox'], hiddenWithInkorgV2: true },
   { href: '/transactions', module: 'transactions', labelKey: 'transactions', icon: ArrowLeftRight, group: 'arbeta' },
-  { href: '/reconciliation', module: 'transactions', labelKey: 'reconciliation', icon: Scale, group: 'arbeta' },
+  // Konton: the one list of accounts, each row opening its reconciliation
+  // (the Avstämning list merged into it, 2026-10-18).
+  { href: '/accounts', module: 'ledger', labelKey: 'v2_accounts', icon: Scale, group: 'arbeta' },
   { href: '/pending', module: 'platform', labelKey: 'review', icon: ClipboardCheck, group: 'arbeta' },
   // Kundorder: opt-in via the bookkeeping settings toggle (UI gate only).
   { href: '/sales-orders', module: 'invoicing', labelKey: 'sales_orders', icon: ClipboardList, group: 'arbeta', requiresSalesOrders: true },

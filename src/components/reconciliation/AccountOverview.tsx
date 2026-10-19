@@ -1,6 +1,7 @@
 'use client'
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
@@ -9,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Skeleton } from '@/components/ui/skeleton'
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
-import { QUIET_LINK_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -20,6 +21,7 @@ import type {
   ReconciliationStatus,
 } from '@/lib/reconciliation/schemas'
 import { dropProposedLedgerDuplicates } from '@/lib/reconciliation/overview-rows'
+import { accountTransactionsHref } from '@/lib/reconciliation/account-links'
 import type { SkattekontoBatchRowResult, SkattekontoTransactionWithSuggestion } from '@/types/skatteverket'
 import { SignoffDialog, type SignoffPreviewResult, type SignoffSubmitInput } from './SignoffDialog'
 import { ReconciliationUnderlag } from './ReconciliationUnderlag'
@@ -99,9 +101,14 @@ interface AccountOverviewProps {
   onChanged: () => void
   /** Opens the manual match view. */
   onMatchManually?: () => void
+  /**
+   * The workspace's slot in the top bar, beside "Senast avstämt": the
+   * sign-off details and Öppna igen render there, so the date is said once.
+   */
+  headerSlot?: HTMLElement | null
 }
 
-export function AccountOverview({ account, otherBankAccounts = [], window, onChanged, onMatchManually }: AccountOverviewProps) {
+export function AccountOverview({ account, otherBankAccounts = [], window, onChanged, onMatchManually, headerSlot = null }: AccountOverviewProps) {
   const t = useTranslations('reconciliation')
   const locale = useLocale()
   const { toast } = useToast()
@@ -136,7 +143,8 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
   // bridge (IB, movement, UB against a specification or the signer's
   // underlag) and the sign-off.
   const isManual = account.kind === 'manual'
-  const base = `/api/reconciliation/accounts/${encodeURIComponent(account.account_key)}`
+  const transactionsHref = accountTransactionsHref(account)
+  const base =`/api/reconciliation/accounts/${encodeURIComponent(account.account_key)}`
 
   const load = useCallback(async () => {
     try {
@@ -655,8 +663,6 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
           })
       : null
 
-  const unexplained = status.unexplained_difference
-
   const bucketLabel = (bucket: ReconciliationItemBucket): string => {
     switch (bucket) {
       case 'proposed':
@@ -681,10 +687,10 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
     (byBucket.get('unmatched_external')?.length ?? 0) +
     (byBucket.get('unmatched_ledger')?.length ?? 0)
 
-  // The verdict in one sentence. The difference once, then what
-  // explains it as the bridge's own counted lines ("9 omatchade
-  // banktransaktioner"), then what is left unexplained only when it differs
-  // from the difference itself. The full bridge stays behind a disclosure.
+  // The verdict in one sentence: what the difference holds, as the bridge's
+  // own counted lines ("9 omatchade banktransaktioner"). The Differens and
+  // Oförklarat tiles above carry the amounts, so the sentence never repeats
+  // them; the full bridge stays behind a disclosure.
   const explained = status.bridge
     .filter((l) => !['bank_transactions', 'external_balance', 'specification', 'ledger_balance', 'opening_balance', 'movement'].includes(l.key))
     .filter((l) => l.count != null && l.count > 0)
@@ -701,12 +707,8 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
           ? t('v2_verdict_ok_manual')
           : t('v2_verdict_ok_bank')
       : explained.length > 0
-        ? t('v2_verdict_diff', { amount: formatCurrency(diffAbs, currency), explanations: explained.join(', ') })
-        : t('v2_verdict_diff_plain', { amount: formatCurrency(diffAbs, currency) })
-  const verdictUnexplained =
-    unexplained != null && Math.abs(unexplained) >= 0.005 && Math.abs(Math.abs(unexplained) - diffAbs) >= 0.005
-      ? t('v2_verdict_unexplained', { amount: formatCurrency(unexplained, currency) })
-      : null
+        ? t('v2_verdict_diff', { explanations: explained.join(', ') })
+        : null
 
 
   // Default sign-off date: the window end, never past today nor past the
@@ -747,8 +749,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
         </div>
         <p className={cn('text-[13px]', status.is_reconciled ? 'text-success' : 'text-muted-foreground')} data-ph-mask>
           {verdict}
-          {verdictUnexplained && <span className="ml-1 text-warning">{verdictUnexplained}</span>}
-          <button type="button" onClick={() => setBridgeOpen((v) => !v)} className={cn(QUIET_LINK_CLASS, 'ml-3 text-[12.5px]')}>
+          <button type="button" onClick={() => setBridgeOpen((v) => !v)} className={cn(QUIET_LINK_CLASS, verdict && 'ml-3', 'text-[12.5px]')}>
             {bridgeOpen ? t('v2_hide_bridge') : t('v2_show_bridge')}
           </button>
         </p>
@@ -760,27 +761,27 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
                 {bankReportedLine}
               </p>
             )}
-          </div>
-        )}
-        {beforeCount > 0 && historyStart && (
-          <p className="text-[12.5px] text-muted-foreground" data-ph-mask>
-            {t('before_history_line', {
-              count: beforeCount,
-              account: status.account_number,
-              date: formatDate(historyStart),
-              amount: formatCurrency(bankHistory?.before_history_total ?? 0, currency),
-            })}
+            {/* Where the books stood when the bank's history begins: part of
+                the bridge's story, so it waits behind the bridge. */}
             {openingDifference != null && (
-              <>
-                {' '}
+              <p className="text-[12.5px] text-muted-foreground" data-ph-mask>
                 {Math.abs(openingDifference) < 0.005
                   ? t('before_history_opening_ok', { account: status.account_number })
                   : t('before_history_opening_diff', {
                       account: status.account_number,
                       amount: formatCurrency(Math.abs(openingDifference), currency),
                     })}
-              </>
+              </p>
             )}
+          </div>
+        )}
+        {beforeCount > 0 && historyStart && (
+          <p className="text-[12.5px] text-muted-foreground" data-ph-mask>
+            {t('before_history_line', {
+              count: beforeCount,
+              date: formatDate(historyStart),
+              amount: formatCurrency(bankHistory?.before_history_total ?? 0, currency),
+            })}
             <button type="button" onClick={() => setBeforeOpen((v) => !v)} className={cn(QUIET_LINK_CLASS, 'ml-3')}>
               {beforeOpen ? t('hide') : t('before_history_show')}
             </button>
@@ -797,7 +798,8 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
       </div>
 
       {/* One notice at a time: stale data first, else the rows a summarised
-          verifikat already covers, with the way to link them. */}
+          verifikat already covers, with the way to link them. One line: the
+          why behind the "?". */}
       {status.stale ? (
         <AttnLine>{t('stale_line', { source: sourceLabel })}</AttnLine>
       ) : isSkv && status.skattekonto?.covered ? (
@@ -809,40 +811,53 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
                 ? { label: t('mode_match'), onClick: onMatchManually }
                 : undefined
           }
+          trailing={
+            <InfoTooltip
+              variant="help"
+              content={t('covered_help', { skattekonto: skattekontoAccount })}
+              className="ml-1 align-middle"
+              iconClassName="h-3 w-3"
+            />
+          }
         >
           {t('covered_line', {
             count: status.skattekonto.covered.event_count,
             date: formatDate(status.skattekonto.covered.through_date),
-            skattekonto: skattekontoAccount,
           })}
         </AttnLine>
       ) : null}
 
-      {status.signoff && (
-        <p className="group flex items-center gap-2 text-[13px] text-muted-foreground">
-          <span>
-            {t('signed_off_line', { date: formatDate(status.signoff.through_date), when: formatDate(status.signoff.signed_at) })}
-            {status.signoff.note && <span className="ml-1">· {t('signed_off_forced')}</span>}
-          </span>
-          <button
-            type="button"
-            onClick={() => void reopen(status.signoff!.id)}
-            disabled={busy !== null}
-            className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS)}
-          >
-            {t('reopen')}
-          </button>
-        </p>
-      )}
+      {/* The sign-off rides in the top bar beside "Senast avstämt" (the
+          workspace's slot), so the date is said once: whether it was signed
+          with a note, when it was signed, and the way to reopen it. */}
+      {headerSlot &&
+        status.signoff &&
+        createPortal(
+          <span title={t('signed_off_line', { date: formatDate(status.signoff.through_date), when: formatDate(status.signoff.signed_at) })}>
+            {status.signoff.note && <> · {t('signed_off_forced')}</>}
+            {' · '}
+            <button
+              type="button"
+              onClick={() => void reopen(status.signoff!.id)}
+              disabled={busy !== null}
+              className={cn(QUIET_LINK_CLASS, 'text-xs')}
+            >
+              {t('reopen')}
+            </button>
+          </span>,
+          headerSlot,
+        )}
 
       {/* Actions row: the work, then the way to the richer surfaces. */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         {proposedCount > 0 && (
           // Skattekonto: the proposals open as one previewed set (count, sum,
           // verifikat) with Ångra afterwards, PH 171; a bank account links
-          // its proposals directly, as before.
+          // its proposals directly, as before. Outline: the one filled
+          // button on the page is the sign-off.
           <Button
             size="sm"
+            variant="outline"
             onClick={() => (isSkv ? setLinkAllOpen(true) : void matchProposals())}
             disabled={busy !== null}
           >
@@ -873,6 +888,16 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
           <span className="ml-auto">
             <Link href="/skattekonto" className={QUIET_LINK_CLASS}>
               {t('action_open_skattekonto')}
+            </Link>
+          </span>
+        )}
+        {/* The account's own rows: the Konton row used to open them, and now
+            opens this view, so the way there lives here (as Skattekonto and
+            Huvudbok do for the other kinds). */}
+        {transactionsHref && (
+          <span className="ml-auto">
+            <Link href={transactionsHref} className={QUIET_LINK_CLASS}>
+              {t('action_open_transactions')}
             </Link>
           </span>
         )}

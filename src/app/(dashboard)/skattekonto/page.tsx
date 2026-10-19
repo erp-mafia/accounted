@@ -192,6 +192,8 @@ export default function SkattekontoPage() {
   // Ignored rows are always fetched (include_ignored=1) but rendered only on
   // demand: the count line below the table toggles the "Ignorerade" band.
   const [showIgnored, setShowIgnored] = useState(false)
+  // Skatteverket's informationstext: folded until asked for.
+  const [showSkvMessages, setShowSkvMessages] = useState(false)
   const { dialogProps: ignoreConfirmProps, confirm: confirmIgnore } =
     useDestructiveConfirm()
   // Bulk ignore (hover-checkbox pattern from /transactions and /orders): a
@@ -352,15 +354,15 @@ export default function SkattekontoPage() {
         // …) fire while Inställningar truthfully shows the stored token as
         // "Ansluten". Showing the full "inte anslutet"-tomvy for those
         // contradicts the settings panel; show the server's actual reason
-        // with a reconnect CTA instead. The split lives in the shared
+        // with a reconnect CTA instead (the header's Anslut igen, the reason
+        // in a toast and its tooltip). The split lives in the shared
         // skvAuthErrorNeedsReconnect predicate (lib/notices), never inline.
         if (res.status === 401) {
           if (skvAuthErrorNeedsReconnect(res.status, json.code)) {
-            setReconnectMessage(
-              typeof json.error === 'string' && json.error
-                ? json.error
-                : t('attn_reconnect_body'),
-            )
+            const reason =
+              typeof json.error === 'string' && json.error ? json.error : t('attn_reconnect_body')
+            setReconnectMessage(reason)
+            toast({ title: t('sync_failed'), description: reason, variant: 'destructive' })
           } else {
             setNotConnected(true)
           }
@@ -370,7 +372,7 @@ export default function SkattekontoPage() {
         // the Error constructor stringifies a non-string body field, and the
         // mapper would discard the route's own Swedish reason.
         toast({
-          title: 'Synk misslyckades',
+          title: t('sync_failed'),
           description: getUserErrorMessage(json, { statusCode: res.status }),
           variant: 'destructive',
         })
@@ -385,7 +387,7 @@ export default function SkattekontoPage() {
       await reload()
     } catch (err) {
       toast({
-        title: 'Synk misslyckades',
+        title: t('sync_failed'),
         description: err instanceof Error ? getUserErrorMessage(err) : undefined,
         variant: 'destructive',
       })
@@ -689,10 +691,14 @@ export default function SkattekontoPage() {
     tx !== null &&
     tx.booked.length + tx.overdue.length + tx.upcoming.length + tx.ignored_count > 0
 
-  // Drives ONE ochre line and nothing else: nothing on this page is hidden or
-  // removed while it is true. needs_reconsent is the resting state for the
+  // Drives the header action and nothing else: nothing on this page is hidden
+  // or removed while it is true. needs_reconsent is the resting state for the
   // personal-token cohort (93% of connected companies on 2026-08-26), so
-  // anything that HIDES on this flag hides from nearly everyone.
+  // anything that HIDES on this flag hides from nearly everyone. The one
+  // swap is Synkronisera nu for Anslut igen: a sync cannot succeed on a
+  // session that needs reconsent (resolveReadAuth answers SESSION_EXPIRED),
+  // and a near-permanent ochre line would hold the page's one attention slot
+  // that the shortfall line needs.
   const showReconnect = needsReconnect || reconnectMessage !== null
   const reconnectBody = reconnectMessage ?? t('attn_reconnect_body')
 
@@ -748,6 +754,14 @@ export default function SkattekontoPage() {
             >
               <Link href="/import?mode=skattekonto">{t('import_statement_action')}</Link>
             </Button>
+          ) : showReconnect ? (
+            // The same connect flow the reconnect line used to link; the
+            // reason (the server's own, when a sync just failed) in the tooltip.
+            <Button size="sm" variant="outline" asChild>
+              <Link href="/settings/skatteverket" title={reconnectBody}>
+                {t('attn_reconnect_action')}
+              </Link>
+            </Button>
           ) : (
             // The span carries the tooltip: `title` is suppressed on disabled elements.
             <span title={!hasSkvCapability ? 'Synk mot Skatteverket kräver ett abonnemang' : undefined}>
@@ -765,16 +779,10 @@ export default function SkattekontoPage() {
         }
       />
 
-      {/* Page level, not nested in the saldo section: the line used to live
-          inside the `data` branch below, so a company with no snapshot got no
-          feedback at all when the sync it just clicked died. Coexists with the
-          shortfall line under convention 6's 2026-08-19 addendum (one
-          lib/notices notice plus one page-domain attn line). */}
-      {showReconnect ? (
-        <AttnLine action={{ label: t('attn_reconnect_action'), href: '/settings/skatteverket' }}>
-          {reconnectBody}
-        </AttnLine>
-      ) : (ledgerProposals ?? 0) > 0 ? (
+      {/* Page level, not nested in the saldo section. An expired Skatteverket
+          session is not a line here: the header action turns into Anslut
+          igen instead (see showReconnect). */}
+      {(ledgerProposals ?? 0) > 0 ? (
         // Rows the imported books already hold win over the connect hint:
         // without the link they read as unbooked and invite a second booking.
         <AttnLine action={{ label: t('ledger_attn_cta'), onClick: () => setLinkAllOpen(true) }}>
@@ -803,8 +811,10 @@ export default function SkattekontoPage() {
             <Skeleton className="h-28 w-full rounded-lg" />
           </div>
         ) : !data ? (
+          // With a reconnect pending the header holds Anslut igen, not the
+          // sync button this sentence names: say why there is no saldo instead.
           <p className="py-4 text-sm text-muted-foreground">
-            Inget saldo hämtat ännu: klicka på ”Synkronisera nu”.
+            {showReconnect ? reconnectBody : 'Inget saldo hämtat ännu: klicka på ”Synkronisera nu”.'}
           </p>
         ) : (
           <>
@@ -870,11 +880,10 @@ export default function SkattekontoPage() {
               </div>
             </div>
 
-            {/* The reconnect line moved to page level; this slot keeps the
-                shortfall notice, which needs `data`. Deliberately still shown
-                while a reconnect is pending: it is the warning that prevents
-                kostnadsränta, and its action is this page's only route to the
-                bankgiro and OCR. */}
+            {/* The shortfall notice, which needs `data`. Deliberately still
+                shown while a reconnect is pending: it is the warning that
+                prevents kostnadsränta, and its action is this page's only
+                route to the bankgiro and OCR. */}
             {shortfall !== null && nextCharge ? (
               <AttnLine
                 action={{ label: t('attn_show_payment'), onClick: () => setShowPayment(true) }}
@@ -890,17 +899,25 @@ export default function SkattekontoPage() {
             {/* Optional chain on purpose: `data` is Skatteverket's raw saldo
                 JSON cast to our interface, and informationstext is not a
                 required field in SKV's own v2.1.0 schema. A response without
-                it blanked the whole Skattekonto page. */}
+                it blanked the whole Skattekonto page. Folded behind a quiet
+                disclosure: Skatteverket's general texts are read on demand,
+                not set in the page flow (convention 7). */}
             {(data.informationstext?.length ?? 0) > 0 && (
               <div className="space-y-1">
-                <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                  Information från Skatteverket
-                </p>
-                {(data.informationstext ?? []).map((info, i) => (
-                  <p key={i} className="text-xs leading-5 text-muted-foreground">
-                    {info}
-                  </p>
-                ))}
+                <button
+                  type="button"
+                  onClick={() => setShowSkvMessages((v) => !v)}
+                  aria-expanded={showSkvMessages}
+                  className={QUIET_LINK_CLASS}
+                >
+                  {t('skv_messages', { count: data.informationstext?.length ?? 0 })}
+                </button>
+                {showSkvMessages &&
+                  (data.informationstext ?? []).map((info, i) => (
+                    <p key={i} className="text-xs leading-5 text-muted-foreground">
+                      {info}
+                    </p>
+                  ))}
               </div>
             )}
           </>

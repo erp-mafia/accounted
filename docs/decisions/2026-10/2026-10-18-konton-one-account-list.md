@@ -1,0 +1,1 @@
+[2026-10-18] Konton is the one account list (founder): Avstämning stops being a second table, bare /reconciliation redirects to /accounts (307, query kept) so ~12 in-app links and bookmarks still land, and ?account= keeps opening the per-account view.
