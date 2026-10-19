@@ -20,7 +20,7 @@ import { resolveTransactionAmountSek } from '@/lib/transactions/booking-duplicat
 import { findExactCoveringSet } from '@/lib/reconciliation/covering-set'
 import { roundOre } from '@/lib/money'
 import { createLogger } from '@/lib/logger'
-import { MATCHABLE_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
+import { MATCHABLE_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 
 const log = createLogger('invoices/duplicate-payment-candidates')
 

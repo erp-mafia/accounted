@@ -9,7 +9,7 @@ import {
   normalizeCountryCode,
 } from '@/lib/vat/country-codes'
 import { readBestSheet } from '../shared/workbook-reader'
-import { isOrgNumberRefusedOnIndividual } from '@/lib/customers/personal-number-shape'
+import { isOrgNumberRefusedOnIndividual } from '@/lib/invariants/personal-number-shape'
 import type {
   DetectedCustomerColumns,
   ParsedCustomerRow,

@@ -35,7 +35,7 @@ import type { DeductionType } from '@/types'
 import type { HouseholdDeductionDto, SalesInvoiceDto } from '@/lib/providers/dto'
 import { roundOre } from '@/lib/money'
 import { expandPersonnummerTo12, validatePersonnummer } from '@/lib/salary/personnummer-format'
-import { deductionLineIssues, type DeductionLineIssueCode } from './rot-rut-rules'
+import { deductionLineIssues, type DeductionLineIssueCode } from '@/lib/bookkeeping/rot-rut-rules'
 import { isPastRequestDeadline } from './rot-rut-file'
 
 export interface PlanItem {

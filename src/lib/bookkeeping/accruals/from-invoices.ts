@@ -24,8 +24,8 @@ import {
   suggestBalanceAccount,
 } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { getRevenueAccount } from '@/lib/bookkeeping/invoice-entries'
-import { isZeroRatedInvoiceTreatment, resolveLineVatTreatment } from '@/lib/invoices/vat-rules'
-import { toSingleLine } from '@/lib/invoices/display'
+import { isZeroRatedInvoiceTreatment, resolveLineVatTreatment } from '@/lib/bookkeeping/invoice-line-vat-treatment'
+import { toSingleLine } from '@/lib/utils'
 import type { EntityType } from '@/types'
 import { createLogger } from '@/lib/logger'
 

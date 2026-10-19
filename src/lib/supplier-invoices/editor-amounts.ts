@@ -1,6 +1,6 @@
 import { roundOre } from '@/lib/money'
-import { supplierInvoiceDisplayFigures } from './display-figures'
-import { isSupplierInvoiceRoundingItem, supplierInvoiceRoundingItem } from './rounding-item'
+import { supplierInvoiceDisplayFigures } from '@/lib/bookkeeping/supplier-invoice-display-figures'
+import { isSupplierInvoiceRoundingItem, supplierInvoiceRoundingItem } from '@/lib/bookkeeping/supplier-invoice-rounding-item'
 
 interface AmountItem {
   amount: number

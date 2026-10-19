@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
-import { isRegisteredFromBooks } from './registered-from-books'
+import { isRegisteredFromBooks } from '@/lib/bookkeeping/registered-from-books'
 
 /**
  * Coverage of the invoice register (the `invoices` table) relative to the

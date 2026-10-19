@@ -2,11 +2,11 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
-import { hasPreRegisterArInPeriod } from '@/lib/invoices/invoice-register-coverage'
+import { hasPreRegisterArInPeriod } from '@/lib/reports/invoice-register-coverage'
 import {
   fetchSkatteverketSettled,
   liveReceivableOutstanding,
-} from '@/lib/invoices/skatteverket-share'
+} from '@/lib/bookkeeping/skatteverket-share'
 import { fetchCreditNoteCreditUsed, outstandingWithCreditUsed } from './credit-note-settlement'
 import { closingBalanceOf } from './trial-balance'
 

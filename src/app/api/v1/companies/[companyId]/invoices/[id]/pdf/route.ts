@@ -26,7 +26,7 @@ import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import {
   hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
-} from '@/lib/invoices/payment-accounts'
+} from '@/lib/cash-accounts/invoice-payment-accounts'
 import { INVOICE_PDF_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import type { CompanySettings, Customer, Invoice, InvoiceItem } from '@/types'

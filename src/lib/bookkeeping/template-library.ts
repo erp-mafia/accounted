@@ -8,7 +8,7 @@ import {
 } from '@/lib/bookkeeping/vat-entries'
 import { rcBasisAccountRate } from '@/lib/reports/vat-filing-gate'
 import { roundOre } from '@/lib/money'
-import { grossVat, treatmentForRate } from '@/lib/vat/gross-split'
+import { grossVat, treatmentForRate } from '@/lib/bookkeeping/gross-split'
 import {
   templateSkattekontoAccount,
   templateTouchesSkattekonto,

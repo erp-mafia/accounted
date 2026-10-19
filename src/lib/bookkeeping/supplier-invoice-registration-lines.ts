@@ -34,7 +34,7 @@ import {
 } from './dimension-resolver'
 import { roundOre } from '@/lib/money'
 import { creditNatural, debitNatural } from './line-side'
-import { isSupplierInvoiceRoundingItem } from '@/lib/supplier-invoices/rounding-item'
+import { isSupplierInvoiceRoundingItem } from '@/lib/bookkeeping/supplier-invoice-rounding-item'
 import type { CreateJournalEntryLineInput, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
 /**

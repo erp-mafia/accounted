@@ -1,5 +1,5 @@
 import { normalizeOrgNumber, orgNumberKey } from '@/lib/invariants/org-number'
-import { looksLikeSwedishPersonalNumber } from '@/lib/customers/personal-number-shape'
+import { looksLikeSwedishPersonalNumber } from '@/lib/invariants/personal-number-shape'
 import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 
 /**
@@ -20,7 +20,7 @@ import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-
  * copy counts: company_settings.org_number or companies.org_number.
  *
  * A new number must be valid in that sense and fit the legal form
- * (SFS 1974:174 2 §, see lib/customers/personal-number-shape.ts): an enskild
+ * (SFS 1974:174 2 §, see lib/invariants/personal-number-shape.ts): an enskild
  * firma's org number is the owner's personnummer, a legal person's has 20 or
  * more in the "month" position.
  *

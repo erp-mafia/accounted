@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase, makeCustomer } from '@/tests/helpers'
-import { computeLineAmounts, computeLineNet, hasLineDiscount } from '@/lib/invoices/line-amounts'
-import { computeDeduction } from '@/lib/invoices/rot-rut-rules'
+import { computeLineAmounts, computeLineNet, hasLineDiscount } from '@/lib/bookkeeping/invoice-line-amounts'
+import { computeDeduction } from '@/lib/bookkeeping/rot-rut-rules'
 import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
 
 describe('computeLineAmounts', () => {

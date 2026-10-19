@@ -1,6 +1,6 @@
 import { proposeSendLines } from '@/lib/bookkeeping/propose-send-lines'
 import { buildInvoiceCashLines } from '@/lib/bookkeeping/invoice-lines'
-import { computeLineNet } from '@/lib/invoices/line-amounts'
+import { computeLineNet } from '@/lib/bookkeeping/invoice-line-amounts'
 import { roundOre } from '@/lib/money'
 import {
   buildCreditNoteFields,

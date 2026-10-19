@@ -1,6 +1,6 @@
 import type { Customer, SalesOrderItemInput } from '@/types'
 import { getVatRules, getPermittedVatRates } from '@/lib/invoices/vat-rules'
-import { computeLineNet } from '@/lib/invoices/line-amounts'
+import { computeLineNet } from '@/lib/bookkeeping/invoice-line-amounts'
 import { roundOre } from '@/lib/money'
 
 /**

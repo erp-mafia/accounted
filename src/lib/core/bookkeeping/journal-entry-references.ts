@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { chunk } from '@/lib/utils'
-import { NON_ISSUED_INVOICE_STATUSES_FILTER } from '@/lib/invoices/matchable-statuses'
+import { NON_ISSUED_INVOICE_STATUSES_FILTER } from '@/lib/bookkeeping/matchable-statuses'
 import { MAX_CHAIN_WALK } from './correction-chain'
 
 /**

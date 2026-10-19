@@ -15,7 +15,7 @@ import { encryptCustomerPersonalNumber, maskCustomerRow } from '@/lib/customers/
 import {
   normalizeReroutedPersonalNumber,
   orgNumberHoldsPersonalNumber,
-} from '@/lib/customers/personal-number-shape'
+} from '@/lib/invariants/personal-number-shape'
 
 interface ExistingCustomer {
   id: string

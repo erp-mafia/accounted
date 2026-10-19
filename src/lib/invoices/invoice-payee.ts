@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CashAccount, Currency, Invoice, InvoicePaymentAccount } from '@/types'
 import { cashAccountPayee, isBankCashAccount, isUsableInvoicePayee } from '@/lib/cash-accounts/invoice-payee-rules'
-import { invoiceRequiresPaymentAccount } from '@/lib/invoices/payment-accounts'
+import { invoiceRequiresPaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { createLogger } from '@/lib/logger'
 

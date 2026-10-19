@@ -101,7 +101,7 @@ import {
   UpdateInboxItemFieldsSchema,
   type UpdateInboxItemFieldsInput,
 } from '@/lib/documents/inbox-item-actions'
-import { convertInboxItemToSupplierInvoice } from '@/lib/documents/inbox-convert'
+import { convertInboxItemToSupplierInvoice } from '@/lib/operations/inbox-convert'
 import { setInboxItemPurchaseCategory, SetInboxPurchaseCategorySchema } from '@/lib/documents/inbox-purchase-category'
 import { resolveInboxPurchaseCategories } from '@/lib/categories/inbox-purchase-category'
 import { carriedPersonFields, keepPersonChoices } from '@/lib/documents/person-corrections'
@@ -2021,7 +2021,7 @@ export const invoiceInboxExtension: Extension = {
     },
 
     // ── Convert inbox item to supplier invoice ─────────────
-    // Rules in lib/documents/inbox-convert.ts, shared with the v1 operation
+    // Rules in lib/operations/inbox-convert.ts, shared with the v1 operation
     // inbox-items.convert-to-supplier-invoice.
     {
       method: 'POST',

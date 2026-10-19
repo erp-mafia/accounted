@@ -2,7 +2,7 @@
  * Invoice-inbox (Underlag) operations: list and read inbox items, correct a
  * reading's fields, release a transaction match, discard an item, and turn
  * one into a registered supplier invoice. Rules live in
- * lib/documents/inbox-item-actions.ts and lib/documents/inbox-convert.ts,
+ * lib/documents/inbox-item-actions.ts and lib/operations/inbox-convert.ts,
  * shared with the invoice-inbox extension's dashboard routes.
  *
  * Stamping an item against a verifikat stays the hand-written v1 route
@@ -24,7 +24,7 @@ import {
   updateInboxItemFields,
   UpdateInboxItemFieldsSchema,
 } from '@/lib/documents/inbox-item-actions'
-import { convertInboxItemToSupplierInvoice } from '@/lib/documents/inbox-convert'
+import { convertInboxItemToSupplierInvoice } from '@/lib/operations/inbox-convert'
 import { INTAKE_SOURCE_IDS } from '@/lib/intake/sources'
 import { InboxPurchaseCategorySchema } from '@/lib/categories/inbox-purchase-category'
 import { DocumentReadingSchema } from '@/lib/documents/reading/schema'

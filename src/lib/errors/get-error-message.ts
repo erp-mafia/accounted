@@ -24,7 +24,7 @@ import { formatDimensionValidationIssues } from '@/lib/bookkeeping/dimension-err
 import {
   describeMissingInvoicePaymentAccount,
   isInvoicePaymentAccountCurrency,
-} from '@/lib/invoices/payment-accounts'
+} from '@/lib/cash-accounts/invoice-payment-accounts'
 import { conflictCode, getErrorEntry, hasErrorEntry } from './structured-errors'
 import { FOREIGN_KEY_REFUSAL_CODES, foreignKeyRefusal } from './foreign-key-refusal'
 import { ACCOUNT_NUMBER_MESSAGE } from '@/lib/invariants/account-number'

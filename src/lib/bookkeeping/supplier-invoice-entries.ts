@@ -22,7 +22,7 @@ import {
   type SupplierPaymentPostingContext,
 } from './supplier-invoice-business-events'
 import { creditNatural, debitNatural } from './line-side'
-import { supplierInvoiceTotalsTolerance } from '@/lib/supplier-invoices/line-totals'
+import { supplierInvoiceTotalsTolerance } from '@/lib/bookkeeping/supplier-invoice-line-totals'
 import {
   addSupplierBankFeeLine,
   buildSupplierPaymentClearingLines,

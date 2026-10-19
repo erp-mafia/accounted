@@ -1,9 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { escapeLikePattern } from '@/lib/invoices/duplicate-payment-guard'
+import { escapeLikePattern } from '@/lib/supabase/like-pattern'
 import {
   MATCHABLE_INVOICE_STATUSES,
   MATCHABLE_SUPPLIER_INVOICE_STATUSES,
-} from '@/lib/invoices/matchable-statuses'
+} from '@/lib/bookkeeping/matchable-statuses'
 
 /**
  * Open customer and supplier invoices for the surfaces that match a bank
@@ -19,7 +19,7 @@ import {
  * invoice; without a term the newest PICKER_LIMIT still make the default view.
  *
  * The statuses are the ones the match routes and the batch RPC accept
- * (lib/invoices/matchable-statuses): offering anything else gives a confirm
+ * (lib/bookkeeping/matchable-statuses): offering anything else gives a confirm
  * that can only fail, and hiding one of them hides a match the server takes.
  */
 

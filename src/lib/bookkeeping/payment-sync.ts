@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
-import { invoiceCustomerOutstanding } from '@/lib/invoices/customer-share'
+import { invoiceCustomerOutstanding } from '@/lib/bookkeeping/customer-share'
 import type { JournalEntry } from '@/types'
 import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
 
@@ -263,7 +263,7 @@ export async function syncInvoiceStatusFromPaymentEntry(
       // once mark-paid started comparing the net customer settlement against
       // remaining (a net payment can never reach a gross remaining, and the
       // cash-partial block rejects the "partial"). The share comes from the
-      // one shared definition (lib/invoices/customer-share.ts); the
+      // one shared definition (lib/bookkeeping/customer-share.ts); the
       // Math.max(0, ...) mirrors the guard's GREATEST(0, ...) because this
       // value is persisted into the column.
       // A refused deduction that a rot_rut_reclaim voucher moved back onto

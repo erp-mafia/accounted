@@ -55,7 +55,7 @@ import {
 } from '@/lib/invoices/issue-and-book-invoice'
 import {
   hasRequiredInvoicePaymentAccount,
-} from '@/lib/invoices/payment-accounts'
+} from '@/lib/cash-accounts/invoice-payment-accounts'
 import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import { paidAtIssueBlockReason } from '@/lib/invoices/paid-at-issue'
 import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'

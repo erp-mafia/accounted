@@ -1795,7 +1795,7 @@ export interface InvoiceDelivery {
  * Skatteverket handles in "Rot och rut: företag"; gron_teknik is the separate
  * skattereduktion för grön teknik (e-tjänst "Grön teknik: företag"). The
  * rot_rut_* table, route and column names are kept for wire stability.
- * Runtime list, labels and rates: lib/invoices/rot-rut-rules.ts.
+ * Runtime list, labels and rates: lib/bookkeeping/rot-rut-rules.ts.
  */
 export type DeductionType = 'rot' | 'rut' | 'gron_teknik'
 
@@ -1824,7 +1824,7 @@ export interface InvoiceItem {
   unit_price: number
 
   // Percentage discount on the line (0-100). line_total and vat_amount are
-  // stored NET of this discount (lib/invoices/line-amounts.ts). Optional in
+  // stored NET of this discount (lib/bookkeeping/invoice-line-amounts.ts). Optional in
   // TS for pre-migration fixtures; treat undefined the same as 0.
   discount_percent?: number
 
@@ -1864,7 +1864,7 @@ export interface InvoiceItem {
 
   // Skattereduktion (ROT/RUT-avdrag, or grön teknik). When `deduction_type`
   // is set, the system computes `deduction_amount` from the rules in
-  // lib/invoices/rot-rut-rules.ts and posts the receivable to BAS 1513
+  // lib/bookkeeping/rot-rut-rules.ts and posts the receivable to BAS 1513
   // (Skatteverket). The whole flagged line is the base: ROT/RUT flag labour
   // lines only, grön teknik flags labour and material lines.
   //

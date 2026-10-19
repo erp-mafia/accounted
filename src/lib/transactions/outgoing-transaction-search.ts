@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { escapeLikePattern } from '@/lib/invoices/duplicate-payment-guard'
+import { escapeLikePattern } from '@/lib/supabase/like-pattern'
 
 /** Rows one picker request returns, with or without a search term. */
 export const OUTGOING_PICKER_LIMIT = 200

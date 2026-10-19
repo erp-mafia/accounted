@@ -13,7 +13,7 @@
 import {
   looksLikeSwedishPersonalNumber,
   personalNumberDigits,
-} from '@/lib/customers/personal-number-shape'
+} from '@/lib/invariants/personal-number-shape'
 
 export interface OrgNumberRepairRow {
   customer_type: string | null

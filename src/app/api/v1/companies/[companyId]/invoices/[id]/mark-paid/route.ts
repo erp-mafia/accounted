@@ -41,7 +41,7 @@ import {
   planInvoicePaymentForLines,
 } from '@/lib/invoices/apply-invoice-payment'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
-import { isMatchableInvoiceStatus } from '@/lib/invoices/matchable-statuses'
+import { isMatchableInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
 import { INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import { roundOre } from '@/lib/money'

@@ -12,7 +12,7 @@
  * Pure and isomorphic (no fs, no crypto): the invoice editor can import it.
  */
 import { roundOre } from '@/lib/money'
-import { getAmountToPay } from '@/lib/invoices/rounding'
+import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
 import type { CompanySettings, Invoice } from '@/types'
 
 /** The invoice header fields that decide whether it is a payment request. */

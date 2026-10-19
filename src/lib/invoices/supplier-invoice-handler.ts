@@ -123,7 +123,7 @@ export async function handleSupplierInvoiceRetroMatch(
  *
  * No subscriber books on supplier_invoice.confirmed: the flow that creates
  * the invoice posts its registration entry inline when booksInvoicesOnIssue()
- * says so (lib/documents/inbox-convert.ts), and a deferred invoice is booked
+ * says so (lib/operations/inbox-convert.ts), and a deferred invoice is booked
  * by the explicit Bokför step (lib/supplier-invoices/book-service.ts). A
  * second booking path here decided on accounting_method alone and posted the
  * entry for companies with defer_invoice_booking.

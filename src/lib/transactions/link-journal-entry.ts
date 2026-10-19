@@ -36,7 +36,7 @@ import {
 import { createLogger } from '@/lib/logger'
 import { conflictCode } from '@/lib/errors/structured-errors'
 import type { Invoice, Transaction } from '@/types'
-import { isMatchableInvoiceStatus, MATCHABLE_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
+import { isMatchableInvoiceStatus, MATCHABLE_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 
 const log = createLogger('transactions/link-journal-entry')
 

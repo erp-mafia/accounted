@@ -45,7 +45,7 @@ import { eventBus } from '@/lib/events'
 import {
   fetchInvoiceRegisterCoverage,
   NO_INVOICE_REGISTER_COVERAGE,
-} from '@/lib/invoices/invoice-register-coverage'
+} from '@/lib/reports/invoice-register-coverage'
 import type { Invoice, InvoiceDocumentType } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 

@@ -6,7 +6,7 @@ import { postingPort } from '@/lib/posting/port'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateDashboardJournalEntrySchema } from '@/lib/api/schemas'
-import { escapeLikePattern } from '@/lib/invoices/duplicate-payment-guard'
+import { escapeLikePattern } from '@/lib/supabase/like-pattern'
 import { parseVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {

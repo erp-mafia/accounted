@@ -29,7 +29,7 @@ import {
   buildRecurringPlaceholderValues,
 } from '@/lib/invoices/recurring-placeholders'
 import { isTextLine } from '@/lib/invoices/recurring-schedule-items'
-import { computeLineNet } from '@/lib/invoices/line-amounts'
+import { computeLineNet } from '@/lib/bookkeeping/invoice-line-amounts'
 import { roundOre } from '@/lib/money'
 import { yourReferenceForNewInvoice } from '@/lib/customers/invoice-reference'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
@@ -63,7 +63,7 @@ import {
 } from '@/lib/invoices/email-recipients'
 import {
   hasRequiredInvoicePaymentAccount,
-} from '@/lib/invoices/payment-accounts'
+} from '@/lib/cash-accounts/invoice-payment-accounts'
 import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
 import { createLogger } from '@/lib/logger'

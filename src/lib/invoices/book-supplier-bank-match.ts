@@ -47,7 +47,7 @@ import { emitSupplierInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { eventBus } from '@/lib/events/bus'
 import type { CreateJournalEntryInput, CreateJournalEntryLineInput, SupplierInvoice, Transaction } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
+import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import { linkBasisColumns, linkBasisColumnsFor, type LinkBasisInput } from '@/lib/links/stamp'
 
 /**

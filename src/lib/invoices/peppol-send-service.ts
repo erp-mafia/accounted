@@ -48,7 +48,7 @@ import {
   type MarkSentAndBookResult,
 } from '@/lib/invoices/issue-and-book-invoice'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
-import { hasRequiredInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
+import { hasRequiredInvoicePaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import {
   PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID,

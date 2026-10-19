@@ -6,7 +6,7 @@
  * reader can prefill the batch allocation without a second lookup.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { isMatchableInvoiceStatus, isMatchableSupplierInvoiceStatus } from '@/lib/invoices/matchable-statuses'
+import { isMatchableInvoiceStatus, isMatchableSupplierInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import type { BankTransactionPart } from '@/types'
 
 export interface TransactionPartSuggestedInvoice {

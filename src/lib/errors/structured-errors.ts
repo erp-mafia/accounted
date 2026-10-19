@@ -2309,7 +2309,7 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     // Currency-neutral by necessity (the registry has no details). Surfaces
     // that know the invoice currency say exactly what is missing through
-    // describeMissingInvoicePaymentAccount() (lib/invoices/payment-accounts.ts).
+    // describeMissingInvoicePaymentAccount() (lib/cash-accounts/invoice-payment-accounts.ts).
     message_sv: 'Fakturan saknar betalningsuppgifter för sin valuta: bankgiro, plusgiro, Swish eller bankkonto för SEK, IBAN för andra valutor. Lägg till dem under Inställningar → Fakturering innan du skapar PDF-filen eller skickar fakturan.',
     message_en: 'The invoice has no payment details for its currency: bankgiro, plusgiro, Swish or a bank account for SEK, an IBAN for other currencies. Add them under Inställningar → Fakturering (Settings → Invoicing) before generating the PDF or sending the invoice.',
     remediation: {

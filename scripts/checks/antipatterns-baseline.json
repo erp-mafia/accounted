@@ -551,16 +551,20 @@
       "lib/bookkeeping/category-mapping.ts": 1,
       "lib/bookkeeping/invoice-lines.ts": 4,
       "lib/bookkeeping/invoice-payment-lines.ts": 2,
+      "lib/bookkeeping/invoice-rounding.ts": 1,
       "lib/bookkeeping/ledger-line-amount.ts": 2,
       "lib/bookkeeping/mapping-engine.ts": 1,
       "lib/bookkeeping/propose-payment-lines.ts": 1,
+      "lib/bookkeeping/rot-rut-rules.ts": 3,
       "lib/bookkeeping/supplier-invoice-entries.ts": 2,
       "lib/bookkeeping/supplier-invoice-registration-lines.ts": 2,
+      "lib/bookkeeping/supplier-invoice-rounding-item.ts": 1,
       "lib/bookkeeping/supplier-payment-amounts.ts": 1,
       "lib/bookkeeping/supplier-payment-lines.ts": 1,
       "lib/bookkeeping/transaction-entries.ts": 1,
       "lib/calendar/utils.ts": 1,
       "lib/cash-accounts/invoice-payee.ts": 1,
+      "lib/cash-accounts/invoice-payment-accounts.ts": 3,
       "lib/cash-accounts/primary.ts": 1,
       "lib/core/bookkeeping/journal-entry-corrections.ts": 1,
       "lib/core/bookkeeping/kontantmetod-cutoff.ts": 1,
@@ -583,7 +587,6 @@
       "lib/invoices/link-migrated-registration-vouchers.ts": 3,
       "lib/invoices/match-payment-plan.ts": 3,
       "lib/invoices/migrated-deduction-plan.ts": 1,
-      "lib/invoices/payment-accounts.ts": 3,
       "lib/invoices/payment-qr.ts": 2,
       "lib/invoices/pdf-template.tsx": 1,
       "lib/invoices/peppol-bis-billing.ts": 1,
@@ -595,8 +598,6 @@
       "lib/invoices/rot-rut-payout-matching.ts": 1,
       "lib/invoices/rot-rut-payout-set-matching.ts": 1,
       "lib/invoices/rot-rut-reclaim.ts": 1,
-      "lib/invoices/rot-rut-rules.ts": 3,
-      "lib/invoices/rounding.ts": 1,
       "lib/invoices/self-billed-sale.ts": 1,
       "lib/invoices/supplier-invoice-matching.ts": 1,
       "lib/invoices/voucher-matching-shared.ts": 3,
@@ -620,7 +621,6 @@
       "lib/supplier-invoices/attest-policy.ts": 1,
       "lib/supplier-invoices/credit.ts": 1,
       "lib/supplier-invoices/register-booked.ts": 2,
-      "lib/supplier-invoices/rounding-item.ts": 1,
       "lib/transactions/booking-duplicate-detection.ts": 3,
       "lib/transactions/bulk-book.ts": 1,
       "lib/transactions/ingest.ts": 4,
@@ -633,7 +633,7 @@
     }
   },
   "kernelImports": {
-    "count": 30,
+    "count": 28,
     "files": {
       "lib/bookkeeping/engine.ts": [
         "lib/composition/reversal-hooks",
@@ -657,11 +657,7 @@
         "lib/api/v1/check-period-lock",
         "lib/operations/types"
       ],
-      "lib/core/bookkeeping/journal-entry-references.ts": [
-        "lib/invoices/matchable-statuses"
-      ],
       "lib/core/bookkeeping/kontantmetod-cutoff.ts": [
-        "lib/invoices/customer-share",
         "lib/reports/reskontra-payments"
       ],
       "lib/core/bookkeeping/opening-balance-split.ts": [

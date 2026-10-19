@@ -22,7 +22,7 @@ import {
   type ResolvedInvoicePaymentQr,
 } from '@/lib/invoices/payment-qr'
 import { BANK_PAYMENT_QR_QUIET_ZONE, bankPaymentQrSymbol } from '@/lib/invoices/bank-payment-qr'
-import { invoiceRequiresPaymentAccount } from '@/lib/invoices/payment-accounts'
+import { invoiceRequiresPaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { createLogger } from '@/lib/logger'
 import type { CompanySettings, Customer, InvoiceItem, InvoicePaymentAccount } from '@/types'
 

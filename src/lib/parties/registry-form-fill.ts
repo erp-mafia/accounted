@@ -8,7 +8,7 @@
  * fills. Pure: form values in, patch out. The hook in
  * components/parties/use-registry-autofill.ts decides when to call.
  */
-import { looksLikeSwedishPersonalNumber } from '@/lib/customers/personal-number-shape'
+import { looksLikeSwedishPersonalNumber } from '@/lib/invariants/personal-number-shape'
 import { normalizeOrgNumber } from '@/lib/invariants/org-number'
 import { isLegalPersonOrgNumber } from './scb/org-number'
 import { contactFill, fromRegistry, type RegistrySummary } from './registry-summary'

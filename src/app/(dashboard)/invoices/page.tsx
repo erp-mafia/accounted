@@ -31,7 +31,7 @@ import { legacyListEditorHref, newEditorHref } from '@/lib/invoices/editor/new-e
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import { invoiceDisplayNumber } from '@/lib/invoices/display'
-import { getDisplayTotal } from '@/lib/invoices/rounding'
+import { getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
 import { matchesInvoiceSearch } from '@/lib/invoices/invoice-search'
 import {
   INVOICE_LIST_TABS,
@@ -54,7 +54,7 @@ import {
   fetchInvoiceRegisterCoverage,
   NO_INVOICE_REGISTER_COVERAGE,
   type InvoiceRegisterCoverage,
-} from '@/lib/invoices/invoice-register-coverage'
+} from '@/lib/reports/invoice-register-coverage'
 import {
   sortInvoiceList,
   type InvoiceListSort,
@@ -336,7 +336,7 @@ export default function InvoicesPage() {
   // empty ROT one.
   const rotRutPayoutType = useMemo(() => payoutDialogTypeFor(invoices), [invoices])
 
-  // Invoice-register coverage (see lib/invoices/invoice-register-coverage.ts):
+  // Invoice-register coverage (see lib/reports/invoice-register-coverage.ts):
   // a migrated or backfilled company has invoices that live only as verifikat,
   // so this list looks complete for periods it doesn't cover. One quiet attn
   // line discloses the boundary; without it the user's next step is "those

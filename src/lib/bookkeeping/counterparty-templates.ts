@@ -28,7 +28,7 @@ import {
 } from './dimension-resolver'
 import { DimensionValidationError, type DimensionValidationIssue } from './dimension-errors'
 import { resolveSekAmount } from './currency-utils'
-import { grossVat, treatmentForRate } from '@/lib/vat/gross-split'
+import { grossVat, treatmentForRate } from '@/lib/bookkeeping/gross-split'
 import { stripBankNoise as stripBankMethodPhrases } from './booking-templates'
 import { bankSideOf, isCashLedger, settleBankLeg, type BankSide } from './bank-leg'
 import { isSkatteverketPayment } from './skatteverket-payment'

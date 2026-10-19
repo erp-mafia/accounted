@@ -1,5 +1,5 @@
 import { roundOre } from '@/lib/money'
-import { grossVat } from '@/lib/vat/gross-split'
+import { grossVat } from '@/lib/bookkeeping/gross-split'
 
 /**
  * How far a supplier invoice's document total may sit from its lines incl.

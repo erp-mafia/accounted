@@ -58,7 +58,7 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
   //     second revert of a part payment wipes the payment that should stand.
   //   - customer invoice payments: the TS sync below. Their remaining_amount
   //     is the ROT/RUT customer share defined once in
-  //     lib/invoices/customer-share.ts, which is not duplicated into SQL.
+  //     lib/bookkeeping/customer-share.ts, which is not duplicated into SQL.
   const { data: entryBefore } = await supabase
     .from('journal_entries')
     .select('id, source_type, source_id')

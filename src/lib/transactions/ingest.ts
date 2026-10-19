@@ -24,7 +24,7 @@ import {
 } from '@/lib/transactions/ingest-package-gate'
 import { physicalAccountKey, reenableIfUnused, resolveDefaultCashAccount, sameCashAccount } from '@/lib/cash-accounts/service'
 import type { Transaction, RawTransaction, IngestResult, IngestOptions, IngestSkipReason, IngestSkippedRow, SupplierInvoice, Currency, ExchangeRate } from '@/types'
-import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
+import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import { roundOre } from '@/lib/money'
 import { linkBasisColumns } from '@/lib/links/stamp'
 

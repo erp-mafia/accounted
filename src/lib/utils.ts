@@ -261,3 +261,14 @@ export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
     )
   })
 }
+
+/**
+ * Collapse a possibly multi-line description to one line.
+ *
+ * Line descriptions may carry line breaks (the editor allows them so the PDF
+ * breaks where the user wants). Every consumer that is a single-line field by
+ * format (Peppol cbc:Name, journal entry and SIE texts) goes through this.
+ */
+export function toSingleLine(text: string | null | undefined): string {
+  return (text ?? '').replace(/\s+/g, ' ').trim()
+}

@@ -3,7 +3,7 @@ import type {
   ROT_WORK_TYPES,
   RUT_WORK_TYPES,
   GRON_TEKNIK_WORK_TYPES,
-} from '@/lib/invoices/rot-rut-rules';
+} from '@/lib/bookkeeping/rot-rut-rules';
 import { readNumber } from '../amounts';
 import { roundOre } from '@/lib/money';
 

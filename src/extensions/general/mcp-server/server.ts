@@ -75,7 +75,7 @@ import {
 import { isEagerAuthRequested } from './auth-mode'
 import { createLogger } from '@/lib/logger'
 import { ORE_ROUNDING_SETTLEMENT_MAX, roundOre, sumOre } from '@/lib/money'
-import { grossVat } from '@/lib/vat/gross-split'
+import { grossVat } from '@/lib/bookkeeping/gross-split'
 import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { currentAppVersion } from '@/lib/reports/app-version'
 import {
@@ -103,14 +103,14 @@ import { hasSIEFileExtension, SIE_FILE_EXTENSIONS_EN } from '@/lib/import/sie-fi
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { invoiceMonthOnlyAccrualRows } from '@/lib/bookkeeping/accruals/compute'
 import { foldSellerVatIntoCost, sellerVatAsCostNote, sellerVatIsCost } from '@/lib/bookkeeping/vat-registration'
-import { supplierInvoiceRoundingItem } from '@/lib/supplier-invoices/rounding-item'
+import { supplierInvoiceRoundingItem } from '@/lib/bookkeeping/supplier-invoice-rounding-item'
 import {
   exceedsSupplierInvoiceTotalsTolerance,
   readSupplierInvoiceLinesAsGross,
   supplierInvoiceLinesInclVat,
   supplierInvoiceTotalsGap,
   type PrintedLineAmount,
-} from '@/lib/supplier-invoices/line-totals'
+} from '@/lib/bookkeeping/supplier-invoice-line-totals'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
 import { dbError, errorCauseTag } from '@/lib/errors/db-error'
@@ -162,8 +162,8 @@ import {
   getArticleVatRateAdoptionSet,
   type InvoiceVatWarning,
 } from '@/lib/invoices/vat-rules'
-import { DEDUCTION_TYPES, isDeductionType, validateDeductionLines, type DeductionType } from '@/lib/invoices/rot-rut-rules'
-import { computeLineNet } from '@/lib/invoices/line-amounts'
+import { DEDUCTION_TYPES, isDeductionType, validateDeductionLines, type DeductionType } from '@/lib/bookkeeping/rot-rut-rules'
+import { computeLineNet } from '@/lib/bookkeeping/invoice-line-amounts'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { MAX_INVOICE_ATTACHMENTS, linkInvoiceAttachments } from '@/lib/invoices/invoice-attachments'
 import { creditNoteNumber, creditNoteOriginalReference } from '@/lib/invoices/build-credit-note'
@@ -198,7 +198,7 @@ import {
   normalizeReroutedPersonalNumber,
   orgNumberHoldsPersonalNumber,
   orgNumberIsPersonalIdentifier,
-} from '@/lib/customers/personal-number-shape'
+} from '@/lib/invariants/personal-number-shape'
 import { isMaskedPersonalNumber, maskCustomerPersonalNumber } from '@/lib/customers/mask-personal-number'
 import {
   encryptCustomerPersonalNumber,
@@ -212,7 +212,7 @@ import { generateARLedger } from '@/lib/reports/ar-ledger'
 import {
   fetchInvoiceRegisterCoverage,
   NO_INVOICE_REGISTER_COVERAGE,
-} from '@/lib/invoices/invoice-register-coverage'
+} from '@/lib/reports/invoice-register-coverage'
 import { generateMonthlyBreakdown } from '@/lib/reports/monthly-breakdown'
 import { uiWidgets, findUiWidget, WIDGET_MIME_TYPE } from './widgets'
 import { dataResources, findResource, parseResourceQuery } from './resources'
@@ -297,7 +297,7 @@ import { computeInitialRunDate, getStockholmDateHour } from '@/lib/invoices/recu
 import { runDateMatchesDayOfMonth } from '@/lib/invoices/recurring-run-date'
 import { UpdateInvoiceParamsSchema } from '@/lib/pending-operations/schemas/update-invoice'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
-import { isRegisteredFromBooks } from '@/lib/invoices/registered-from-books'
+import { isRegisteredFromBooks } from '@/lib/bookkeeping/registered-from-books'
 import { registrationVoucherLabel } from '@/lib/invoices/register-booked-rules'
 import { effectiveQuoteStatus, quoteAwaitsSending } from '@/lib/invoices/quote-status'
 import { effectiveInvoiceStatus, filterInvoicesByReportedStatus, type OverdueInvoiceInput } from '@/lib/invoices/overdue'
@@ -660,7 +660,7 @@ import { getUserCompanies } from '@/lib/company/context'
 import { CURRENCIES, INVOICE_QR_MODES } from '@/types'
 import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, InvoiceQrMode, Currency, CompanySettings, Customer, InvoiceItem, PendingOperation, YearEndBlockerCode, SalesOrder, SalesOrderItem, SalesOrderStatus } from '@/types'
 import type { InvoiceExtractionResult } from '@/types'
-import { isMatchableInvoiceStatus, isMatchableSupplierInvoiceStatus } from '@/lib/invoices/matchable-statuses'
+import { isMatchableInvoiceStatus, isMatchableSupplierInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { creditNoteRefusal } from '@/lib/invoices/credit-invoice'
 
 // ── Actor context ────────────────────────────────────────────

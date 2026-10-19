@@ -1,4 +1,4 @@
-import { getDisplayTotal } from '@/lib/invoices/rounding'
+import { getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
 import type { Invoice, InvoiceStatus } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { effectiveInvoiceStatus } from './overdue'

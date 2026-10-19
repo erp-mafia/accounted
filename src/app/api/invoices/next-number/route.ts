@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { formatQuoteNumber } from '@/lib/invoices/quote-status'
-import { formatSeriesNumber, readInvoiceSeries } from '@/lib/invoices/invoice-number-series'
+import { formatSeriesNumber, readInvoiceSeries } from '@/lib/company/invoice-number-series'
 
 export const GET = withRouteContext(
   'invoice.peek_next_number',

@@ -6,7 +6,7 @@ import {
   supplierInvoiceLinesInclVat,
   supplierInvoiceTotalsGap,
   supplierInvoiceTotalsTolerance,
-} from '../line-totals'
+} from '../supplier-invoice-line-totals'
 
 // Feedback seq 983757: a bill that printed its line amounts incl. VAT was
 // staged as if they were net, and 25 % was added on top again. Synthetic

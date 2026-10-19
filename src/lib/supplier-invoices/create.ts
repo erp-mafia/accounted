@@ -165,7 +165,7 @@ function invalid(reason: string): CreateSupplierInvoiceFailure {
 
 // ── The reverse-charge rules of a supplier invoice ──────────────────────
 // Shared by every door that registers one: this module, the inbox convert
-// (lib/documents/inbox-convert.ts), and the MCP inbox staging with its commit
+// (lib/operations/inbox-convert.ts), and the MCP inbox staging with its commit
 // executor (lib/pending-operations/commit.ts). The convert used to carry a
 // copy without the reverse-charge leg, so a reverse-charge invoice converted
 // from the inbox registered net + 25 % as the payable while the registration

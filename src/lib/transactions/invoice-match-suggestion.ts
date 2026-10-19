@@ -19,9 +19,9 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   DUPLICATE_AMOUNT_TOLERANCE_PCT,
   DUPLICATE_DATE_WINDOW_DAYS,
-  escapeLikePattern,
   normalizeOcrReference,
 } from '@/lib/invoices/duplicate-payment-guard'
+import { escapeLikePattern } from '@/lib/supabase/like-pattern'
 import { invoicesNamedByReference } from '@/lib/invoices/ocr-keys'
 import {
   invoiceAmountSek,
@@ -33,7 +33,7 @@ import {
 import { resolveTransactionAmountSek } from '@/lib/transactions/booking-duplicate-detection'
 import type { Logger } from '@/lib/logger'
 import { invoiceMatchSide } from '@/lib/transactions/invoice-match-side'
-import { MATCHABLE_INVOICE_STATUSES, MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
+import { MATCHABLE_INVOICE_STATUSES, MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 
 /** The `transactions` columns the intercept reads. */
 export interface InvoiceMatchTransaction {

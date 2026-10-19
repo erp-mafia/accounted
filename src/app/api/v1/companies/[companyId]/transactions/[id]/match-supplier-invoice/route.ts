@@ -38,7 +38,7 @@ import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { eventBus } from '@/lib/events/bus'
 import { emitSupplierInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import type { CreateJournalEntryInput, SupplierInvoice, Transaction } from '@/types'
-import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
+import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import { linkBasisColumns } from '@/lib/links/stamp'
 
 const MatchSIResponse = z.object({

@@ -6,7 +6,7 @@ import {
   type EditorPaymentSummaryInput,
 } from '@/lib/invoices/editor/payment-summary'
 import { cashAccountPayee, invoicePayeeAccountLabel } from '@/lib/cash-accounts/invoice-payee-rules'
-import { hasRequiredInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
+import { hasRequiredInvoicePaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { makeCompanySettings } from '@/tests/helpers'
 import sv from '@/messages/sv.json'
 import en from '@/messages/en.json'

@@ -98,7 +98,7 @@ import {
 import {
   hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
-} from '@/lib/invoices/payment-accounts'
+} from '@/lib/cash-accounts/invoice-payment-accounts'
 import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
 import { eventBus } from '@/lib/events'
 import { guardSandbox } from '@/lib/sandbox/guard'

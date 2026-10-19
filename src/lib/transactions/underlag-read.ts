@@ -1,6 +1,6 @@
 import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import { vatTreatmentForRegistration } from '@/lib/bookkeeping/vat-registration'
-import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
+import { getVatTreatmentForRate } from '@/lib/bookkeeping/invoice-line-vat-treatment'
 import { roundOre } from '@/lib/money'
 import type { InvoiceExtractionResult, VatTreatment } from '@/types'
 

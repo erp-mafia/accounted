@@ -29,7 +29,7 @@ import { validateQuery } from '@/lib/api/validate'
 import { DimensionTaggingLinesQuerySchema } from '@/lib/api/schemas'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { fetchLinesByEntryIds } from '@/lib/bookkeeping/entry-lines'
-import { escapeLikePattern } from '@/lib/invoices/duplicate-payment-guard'
+import { escapeLikePattern } from '@/lib/supabase/like-pattern'
 
 interface RawEntry {
   id: string

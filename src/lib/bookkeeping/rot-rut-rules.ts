@@ -1,5 +1,5 @@
 import { roundOre, truncateToWholeKronor } from '@/lib/money'
-import { computeLineNet } from '@/lib/invoices/line-amounts'
+import { computeLineNet } from '@/lib/bookkeeping/invoice-line-amounts'
 import type { ArticleType, DeductionType } from '@/types'
 
 export type { DeductionType } from '@/types'

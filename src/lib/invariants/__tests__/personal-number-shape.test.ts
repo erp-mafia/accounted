@@ -7,7 +7,7 @@ import {
   orgNumberHoldsPersonalNumber,
   orgNumberIsPersonalIdentifier,
   personalNumberDigits,
-} from '@/lib/customers/personal-number-shape'
+} from '@/lib/invariants/personal-number-shape'
 
 // Every personal-shaped fixture is synthetic, never a real person's number.
 describe('looksLikeSwedishPersonalNumber', () => {

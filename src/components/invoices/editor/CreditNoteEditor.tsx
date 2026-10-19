@@ -38,7 +38,7 @@ import { creditNoteNumber, creditNoteOriginalReference } from '@/lib/invoices/bu
 import { creditBooksOriginalFirst, creditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { isEntityType } from '@/lib/company/entity-type'
 import { EMAIL_PATTERN, parseInvoiceRecipientText } from '@/lib/invoices/email-recipients'
-import { hasLineDiscount } from '@/lib/invoices/line-amounts'
+import { hasLineDiscount } from '@/lib/bookkeeping/invoice-line-amounts'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import type { Invoice, InvoiceItem } from '@/types'

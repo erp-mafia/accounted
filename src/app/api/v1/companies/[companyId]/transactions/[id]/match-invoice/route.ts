@@ -61,7 +61,7 @@ import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { roundOre } from '@/lib/money'
 import { eventBus } from '@/lib/events/bus'
 import type { CreateJournalEntryInput, Currency, EntityType, Invoice, Transaction } from '@/types'
-import { MATCHABLE_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
+import { MATCHABLE_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import { linkBasisColumns } from '@/lib/links/stamp'
 
 const MatchInvoiceResponse = z.object({

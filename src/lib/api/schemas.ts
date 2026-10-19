@@ -58,7 +58,7 @@ import { EXPENSE_CLAIM_REVERSE_CHARGE_KINDS } from '@/lib/expenses/expense-claim
 import { VOUCHER_LINE_VAT_KINDS, VOUCHER_LINE_VAT_RATES } from '@/lib/bookkeeping/voucher-line-vat-code'
 import { MAX_INVOICE_EMAIL_COPY_RECIPIENTS } from '@/lib/invoices/email-recipients'
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
-import { computeLineNet } from '@/lib/invoices/line-amounts'
+import { computeLineNet } from '@/lib/bookkeeping/invoice-line-amounts'
 import { INVOICE_VAT_TREATMENT_OVERRIDES } from '@/lib/invoices/invoice-vat-override'
 import { MAX_BANK_ROW_SPLIT } from '@/lib/reconciliation/limits'
 import {
@@ -69,8 +69,8 @@ import {
   deductionLineIssues,
   normalizeHouseworkType,
   type DeductionType,
-} from '@/lib/invoices/rot-rut-rules'
-import { NON_IBAN_CURRENCIES } from '@/lib/invoices/payment-accounts'
+} from '@/lib/bookkeeping/rot-rut-rules'
+import { NON_IBAN_CURRENCIES } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { PERSONAL_NUMBER_INPUT_RE } from '@/lib/customers/mask-personal-number'
 import {
   COUNTRY_CONSISTENCY_MESSAGES,
@@ -85,7 +85,7 @@ import {
   normalizeReroutedPersonalNumber,
   orgNumberHoldsPersonalNumber,
   personalNumberDigits,
-} from '@/lib/customers/personal-number-shape'
+} from '@/lib/invariants/personal-number-shape'
 import {
   CURRENCIES,
   INVOICE_QR_MODES,
@@ -567,7 +567,7 @@ export const CreateInvoiceItemSchema = z
     unit_price: z.number(),
     // Percentage discount on the line (rabatt i procent per artikelrad).
     // line_total and vat_amount are computed NET of this server-side
-    // (lib/invoices/line-amounts.ts); the client never sends a total.
+    // (lib/bookkeeping/invoice-line-amounts.ts); the client never sends a total.
     discount_percent: z.number().min(0).max(100).nullable().optional(),
     vat_rate: z.number().min(0).max(100).optional(),
     // Article linkage. `article_id` ties the line to a catalog article (text

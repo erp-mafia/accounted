@@ -49,7 +49,7 @@ import {
   encryptCustomerPersonalNumber,
   revealStoredCustomerPersonalNumber,
 } from '@/lib/customers/protect-personal-number'
-import { normalizeReroutedPersonalNumber } from '@/lib/customers/personal-number-shape'
+import { normalizeReroutedPersonalNumber } from '@/lib/invariants/personal-number-shape'
 import {
   countOrgNumberRepairActions,
   isWritingAction,

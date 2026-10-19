@@ -4,7 +4,7 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { findMatchingVouchersForSupplierInvoice } from '@/lib/invoices/supplier-voucher-matching'
 import { resolveSupplierSettlementSide } from '@/lib/invoices/supplier-settlement-side'
 import type { Supplier, SupplierInvoice } from '@/types'
-import { isMatchableSupplierInvoiceStatus } from '@/lib/invoices/matchable-statuses'
+import { isMatchableSupplierInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 
 /**
  * GET /api/supplier-invoices/[id]/voucher-candidates

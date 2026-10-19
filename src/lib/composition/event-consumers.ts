@@ -16,7 +16,7 @@
  * in the consumer index the event bus reads (lib/events/consumer-index.ts,
  * kept fresh by consumer-index.test.ts).
  */
-import { handleSupplierInvoiceRetroMatch } from '@/lib/bookkeeping/handlers/supplier-invoice-handler'
+import { handleSupplierInvoiceRetroMatch } from '@/lib/invoices/supplier-invoice-handler'
 import { unlearnOnReversal } from '@/lib/bookkeeping/handlers/unlearn-on-reversal'
 import { WEBHOOKS_EVENT_CONSUMER } from '@/lib/composition/async-event-consumers'
 import { eventConsumer, type EventConsumer } from '@/lib/events/consumers'

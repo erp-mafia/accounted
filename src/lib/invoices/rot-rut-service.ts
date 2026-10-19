@@ -12,7 +12,7 @@ import {
   type RotRutBlockerCode,
 } from './rot-rut-file'
 import { evaluateGronTeknikClaim, type GronTeknikInstallation } from './gron-teknik-claim'
-import { DEDUCTION_TYPE_LABELS, deductionKindsOf, type HusDeductionType } from './rot-rut-rules'
+import { DEDUCTION_TYPE_LABELS, deductionKindsOf, type HusDeductionType } from '@/lib/bookkeeping/rot-rut-rules'
 
 /**
  * Shared service behind the rot/rut payout-file API routes and the MCP tool

@@ -5,7 +5,7 @@ import { cellOrNull } from '../shared/column-utils'
 import { parseAmount } from '../opening-balance/parser'
 import { readBestSheet } from '../shared/workbook-reader'
 import type { DetectedArticleColumns, ParsedArticleRow } from './types'
-import { deductionTypeForWorkType, normalizeHouseworkType } from '@/lib/invoices/rot-rut-rules'
+import { deductionTypeForWorkType, normalizeHouseworkType } from '@/lib/bookkeeping/rot-rut-rules'
 
 const VALID_VAT_RATES = [0, 6, 12, 25] as const
 

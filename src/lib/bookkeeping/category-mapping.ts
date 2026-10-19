@@ -7,7 +7,7 @@ import {
 } from './vat-entries'
 import { resolveSekAmount } from './currency-utils'
 import { roundOre } from '@/lib/money'
-import { grossVat } from '@/lib/vat/gross-split'
+import { grossVat } from '@/lib/bookkeeping/gross-split'
 import { byEntityType, ownerSettlementAccount } from '@/lib/company/entity-type'
 import {
   isNotVatRegistered,

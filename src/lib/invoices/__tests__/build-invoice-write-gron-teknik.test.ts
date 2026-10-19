@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase, makeCustomer } from '@/tests/helpers'
 import { buildInvoiceWriteData, type InvoiceWriteInput } from '@/lib/invoices/build-invoice-write'
-import { DEDUCTION_LINE_ERRORS, GRON_TEKNIK_INVOICE_ERRORS } from '@/lib/invoices/rot-rut-rules'
+import { DEDUCTION_LINE_ERRORS, GRON_TEKNIK_INVOICE_ERRORS } from '@/lib/bookkeeping/rot-rut-rules'
 
 /**
  * The shared invoice write path (dashboard POST/PATCH, v1, MCP commits) with

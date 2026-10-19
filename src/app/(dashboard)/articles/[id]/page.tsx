@@ -20,7 +20,7 @@ import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui
 import { Lock } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency } from '@/lib/utils'
-import { DEDUCTION_TYPE_LABEL_KEYS, articleDeductionPrefill, workTypeLabel } from '@/lib/invoices/rot-rut-rules'
+import { DEDUCTION_TYPE_LABEL_KEYS, articleDeductionPrefill, workTypeLabel } from '@/lib/bookkeeping/rot-rut-rules'
 import type { Article, ArticleType, CreateArticleInput } from '@/types'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'

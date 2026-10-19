@@ -16,12 +16,11 @@ import {
   deriveInvoiceVatHeader,
   getPermittedVatRates,
   getVatRules,
-  isZeroRatedInvoiceTreatment,
   resolveInvoiceVatRules,
-  resolveLineVatTreatment,
   type InvoiceVatTreatmentOverride,
   type VatTreatmentCustomer,
 } from '../vat-rules'
+import { isZeroRatedInvoiceTreatment, resolveLineVatTreatment } from '@/lib/bookkeeping/invoice-line-vat-treatment'
 import { getRevenueAccount } from '@/lib/bookkeeping/invoice-accounts'
 import { ACCOUNT_RUTA } from '@/lib/reports/vat-declaration'
 

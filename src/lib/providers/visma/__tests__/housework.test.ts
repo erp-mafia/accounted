@@ -5,7 +5,7 @@ import {
   vismaWorkType,
   vismaGreenTechnologyType,
 } from '../housework'
-import { ROT_WORK_TYPES, RUT_WORK_TYPES, GRON_TEKNIK_WORK_TYPES } from '@/lib/invoices/rot-rut-rules'
+import { ROT_WORK_TYPES, RUT_WORK_TYPES, GRON_TEKNIK_WORK_TYPES } from '@/lib/bookkeeping/rot-rut-rules'
 
 /**
  * Visma's WorkCostType and GreenTechnologyType enums as CustomerInvoiceRowApi
