@@ -18,7 +18,7 @@ import { useBankSwitchCampaign } from '@/components/bank-feed/use-bank-switch-ca
 import { SWITCH_DEEP_LINK_PARAM } from '@/lib/bank-feed/switch-link'
 import { bankCoveredByOpenPayments } from '@/lib/bank-feed/bank-coverage'
 import { useFormat } from '@/lib/hooks/use-format'
-import { bankLogoUrl } from '@/lib/reconciliation/bank-logos'
+import { bankLogoUrl } from '@/lib/cash-accounts/bank-logos'
 import { collectionsEntryShown, useCollectionsAvailability } from '@/components/collections/collections-client'
 import { GoogleMark } from '@/components/ui/provider-marks'
 import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'

@@ -48,7 +48,7 @@ const LABELS: ReadonlySet<string> = new Set([
   'skatteverket',
   // Free-mail
   'gmail', 'googlemail', 'hotmail', 'outlook', 'live', 'yahoo', 'ymail',
-  // Banks and the payment brands lib/reconciliation/bank-logos.ts draws
+  // Banks and the payment brands lib/cash-accounts/bank-logos.ts draws
   'nordea', 'handelsbanken', 'swedbank', 'danskebank', 'danske', 'lansforsakringar', 'avanza', 'nordnet', 'skandia',
   'skandiabanken', 'resursbank', 'resurs', 'marginalen', 'marginalenbank', 'ikanobank', 'northmill', 'santander',
   'landshypotek', 'alandsbanken', 'collector', 'lunar', 'revolut', 'wise', 'transferwise', 'klarna', 'paypal',

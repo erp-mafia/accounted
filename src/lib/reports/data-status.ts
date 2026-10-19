@@ -1,8 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
-import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
-import { getLatestSignoffs } from '@/lib/reconciliation/signoff-store'
-import { bankAccountKey } from '@/lib/reconciliation/schemas'
+import { UNBOOKED_BANK_LINES } from '@/lib/composition/unbooked-bank-lines'
+import { RECONCILIATION_SIGNOFFS } from '@/lib/composition/reconciliation-signoffs'
 
 const log = createLogger('report-data-status')
 
@@ -145,7 +144,7 @@ async function build(
   const to = options.toDate ?? period.period_end
 
   const [unbooked, draftsRes, feedRes, recon] = await Promise.all([
-    countUnbookedBankTransactions(supabase, companyId, { fromDate: from, toDate: to }),
+    UNBOOKED_BANK_LINES.count(supabase, companyId, { fromDate: from, toDate: to }),
     supabase
       .from('journal_entries')
       .select('id', { count: 'exact', head: true })
@@ -309,7 +308,7 @@ async function bankReconciliation(
       .select('id, iban, currency, updated_at')
       .eq('company_id', companyId)
       .eq('enabled', true),
-    getLatestSignoffs(supabase, companyId),
+    RECONCILIATION_SIGNOFFS.latest(supabase, companyId),
   ])
   if (accountsRes.error) throw new Error(`cash account read failed: ${accountsRes.error.message}`)
   const accounts = (accountsRes.data ?? []) as Array<{ id: string; iban: string | null; currency: string | null; updated_at: string | null }>
@@ -331,7 +330,7 @@ async function bankReconciliation(
 
   let earliest: string | null = null
   for (const id of live) {
-    const through = signoffs.get(bankAccountKey(id))?.through_date ?? null
+    const through = signoffs.get(RECONCILIATION_SIGNOFFS.bankAccountKey(id))?.through_date ?? null
     if (!through) return { reconciledThrough: null, hasBankAccounts: true, adopted }
     if (earliest === null || through < earliest) earliest = through
   }

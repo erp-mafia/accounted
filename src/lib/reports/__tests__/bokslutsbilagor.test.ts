@@ -134,6 +134,21 @@ describe('generateBokslutsbilagor', () => {
     expect(listAccountsMock).toHaveBeenCalledWith(supabase, COMPANY, { today: '2026-12-31', windowFrom: '2026-01-01', windowTo: '2026-12-31' })
   })
 
+  it('reads the reconciliation for the year: each read once, with the balansdag and the provider accounts', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: PERIOD })
+    enqueue({ data: { name: 'X', org_number: null } })
+    enqueue({ data: [] })
+    await generateBokslutsbilagor(supabase as never, COMPANY, 'fy-2026', { userId: 'u1' })
+
+    expect(listAccountsMock).toHaveBeenCalledExactlyOnceWith(supabase, COMPANY, { today: '2026-12-31', windowFrom: '2026-01-01', windowTo: '2026-12-31' })
+    expect(snapshotMock).toHaveBeenCalledExactlyOnceWith(supabase, COMPANY, '2026-12-31')
+    expect(latestSignoffsMock).toHaveBeenCalledExactlyOnceWith(supabase, COMPANY)
+    expect(attachmentsMock).toHaveBeenCalledExactlyOnceWith(supabase, COMPANY, '2026-01-01', '2026-12-31', { includeRemoved: true })
+    // Only the manual accounts with a system specification: 1510, not the bank's 1930 or the loan.
+    expect(specMock).toHaveBeenCalledExactlyOnceWith(supabase, COMPANY, await snapshotMock.mock.results[0].value, new Set(['1510']))
+  })
+
   it('skips the readiness-derived checklist items without a user, and returns null for a foreign period', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: PERIOD })

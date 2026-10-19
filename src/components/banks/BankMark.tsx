@@ -1,5 +1,5 @@
 import { cn } from '@/lib/utils'
-import { bankLogoUrl } from '@/lib/reconciliation/bank-logos'
+import { bankLogoUrl } from '@/lib/cash-accounts/bank-logos'
 
 /**
  * The bank's mark wherever an account or a connection is named: the account

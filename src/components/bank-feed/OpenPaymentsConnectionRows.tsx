@@ -10,7 +10,7 @@ import { SettingsRow, SettingsRowEnd, SettingsRowNote } from '@/components/setti
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useFormat } from '@/lib/hooks/use-format'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { bankLogoUrl } from '@/lib/reconciliation/bank-logos'
+import { bankLogoUrl } from '@/lib/cash-accounts/bank-logos'
 import { notifyBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
 import { cn } from '@/lib/utils'
 import { consentState } from './connection-kind'

@@ -14,7 +14,7 @@ import {
   type ReconciliationStatus,
 } from './schemas'
 import { getLatestSignoff, getLatestSignoffs } from './signoff-store'
-import { bankLogoUrl } from './bank-logos'
+import { bankLogoUrl } from '@/lib/cash-accounts/bank-logos'
 import { getManualReconciliationStatus, listManualAccounts } from './manual-reconciliation'
 
 const log = createLogger('reconciliation/service')

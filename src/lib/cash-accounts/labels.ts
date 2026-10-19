@@ -17,7 +17,7 @@
  */
 
 import type { CashAccount } from '@/types'
-import { bankLogoUrl } from '@/lib/reconciliation/bank-logos'
+import { bankLogoUrl } from '@/lib/cash-accounts/bank-logos'
 
 /**
  * A cash_accounts row with its connection's bank name and status embedded:

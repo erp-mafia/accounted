@@ -153,6 +153,24 @@ describe('snapshotSuggestions', () => {
     expect(snapshot).toEqual({ companyId: 'company-1', byTransaction: new Map() })
   })
 
+  it('asks the bank proposals for exactly the rows it read, once', async () => {
+    mockPropose.mockResolvedValue({ proposals: {}, assistant_reads: {} })
+    const { client } = fakeClient({ transactions: [tx] })
+
+    await snapshotSuggestions(client as never, 'company-1', ['tx-1'])
+
+    expect(mockPropose).toHaveBeenCalledExactlyOnceWith(client, 'company-1', [tx])
+  })
+
+  it('never fails the booking: a failed proposal read gives a snapshot without suggestions or rules', async () => {
+    mockPropose.mockRejectedValue(new Error('rules read failed'))
+    const { client } = fakeClient({ transactions: [tx] })
+
+    const snapshot = await snapshotSuggestions(client as never, 'company-1', ['tx-1'])
+
+    expect(snapshot).toEqual({ companyId: 'company-1', byTransaction: new Map() })
+  })
+
   it('asks nothing for an empty batch', async () => {
     const { client } = fakeClient()
     await snapshotSuggestions(client as never, 'company-1', [])
