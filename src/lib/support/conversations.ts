@@ -149,6 +149,22 @@ export function pickTicketToOpen(
   return unread ? { ticket: unread, mode: 'read' } : null
 }
 
+/**
+ * The customer's tickets besides the one on screen. Open ones are always
+ * listed, so it is visible what is still in progress and one click switches
+ * to it; resolved ones are history and wait behind a toggle.
+ */
+export function otherTickets(
+  tickets: TicketSummary[],
+  viewingId: string | null
+): { open: TicketSummary[]; resolved: TicketSummary[] } {
+  const others = tickets.filter((t) => t.id !== viewingId)
+  return {
+    open: others.filter((t) => !isResolved(t.status)),
+    resolved: others.filter((t) => isResolved(t.status)),
+  }
+}
+
 export function conversationsAvailable(): boolean {
   if (!isAnalyticsEnabled()) return false
   try {

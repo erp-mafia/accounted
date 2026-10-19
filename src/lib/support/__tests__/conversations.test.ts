@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { displayStatus, listTickets, loadThread, pickActiveTicket, pickTicketToOpen, replyInThread, startThread, toSummary, toThreadMessage, totalUnread } from '@/lib/support/conversations'
+import { displayStatus, listTickets, loadThread, otherTickets, pickActiveTicket, pickTicketToOpen, replyInThread, startThread, toSummary, toThreadMessage, totalUnread } from '@/lib/support/conversations'
 
 const getTicketsMock = vi.fn()
 const getMessagesMock = vi.fn()
@@ -60,6 +60,17 @@ describe('pickTicketToOpen', () => {
   it('is null when nothing is open and every answer has been read', () => {
     expect(pickTicketToOpen([t('done', 'resolved', '2026-09-14')], 'done')).toBeNull()
     expect(pickTicketToOpen([])).toBeNull()
+  })
+})
+
+describe('otherTickets', () => {
+  it('lists every other open ticket and keeps resolved ones apart (crm#1138)', () => {
+    const tickets = [t('b', 'new', '2026-10-10'), t('a', 'pending', '2026-10-08'), t('old', 'resolved', '2026-09-01')]
+    expect(otherTickets(tickets, 'b')).toEqual({ open: [tickets[1]], resolved: [tickets[2]] })
+  })
+  it('lists all of them while composing with no thread on screen', () => {
+    const tickets = [t('b', 'open', '2026-10-10'), t('a', 'on_hold', '2026-10-08')]
+    expect(otherTickets(tickets, null).open.map((x) => x.id)).toEqual(['b', 'a'])
   })
 })
 
