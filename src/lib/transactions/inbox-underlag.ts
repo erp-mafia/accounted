@@ -556,3 +556,60 @@ export async function completeInboxItemsForBookedTransaction(
   await propagateUnderlagForBookedTransaction(supabase, companyId, txId, journalEntryId)
   return journalEntryId
 }
+
+/** Where completing one item on a verifikat ended. */
+export type ItemOnEntryOutcome =
+  /** Its document references the verifikat (or it has none) and the item is stamped. */
+  | 'completed'
+  /** The document could not be linked (a closed or locked period, a document on another verifikat): nothing stamped. */
+  | 'not_linked'
+  /** Another verifikat or a supplier invoice holds the item. */
+  | 'taken'
+  /** The stamp write failed. */
+  | 'failed'
+
+/**
+ * Complete one inbox item on a verifikat that already books its purchase:
+ * the receipt that came in one mail with the invoice booked on it, with no
+ * bank row between them (an utlägg, the owner's own money, a verifikat
+ * booked from the document). The same two steps as a matched item on its
+ * transaction's verifikat (propagateUnderlagForBookedTransaction): the
+ * document is anchored with the guards every booking path shares (never
+ * moved off another verifikat, refused by the period lock in a closed
+ * period), and only then is the item stamped, by the shared compare-and-set.
+ * Nothing in the verifikat itself changes. Best effort: never throws.
+ */
+export async function completeInboxItemOnEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  item: { id: string; document_id: string | null },
+  journalEntryId: string,
+  linkBasis: LinkBasisInput,
+): Promise<ItemOnEntryOutcome> {
+  try {
+    if (item.document_id) {
+      const anchored = await anchorDocumentToJournalEntry(
+        supabase,
+        companyId,
+        item.document_id,
+        journalEntryId,
+        { inbox_item_id: item.id, source: 'inbox_companion' },
+        linkBasis,
+      )
+      if (!anchored) return 'not_linked'
+    }
+    const stamp = await claimInboxItemForEntry(supabase, companyId, item.id, journalEntryId)
+    if (stamp.status === 'failed') {
+      log.error('Failed to stamp companion inbox item created_journal_entry_id', {
+        inbox_item_id: item.id,
+        journal_entry_id: journalEntryId,
+        error: stamp.error.message,
+      })
+      return 'failed'
+    }
+    return stamp.status === 'claimed' ? 'completed' : 'taken'
+  } catch (err) {
+    log.error('Failed to complete companion inbox item', err)
+    return 'failed'
+  }
+}

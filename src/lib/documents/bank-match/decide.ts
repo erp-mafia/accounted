@@ -24,6 +24,14 @@
  *          pass; or within the receipt matcher's converted tolerance when the
  *          row is in another currency), inside the window, and the row names
  *          the counterparty or its alias.
+ * The card the document (or the receipt it came with) says paid it weighs in
+ * on the two lower levels, never on its own (./card-token.ts):
+ *   - the row names that card, and trolig holds to the öre in one currency:
+ *     stark (the amount, the name, the window and the card all agree);
+ *   - the row names another card: another payment, never proposed below
+ *     exakt.
+ * A card never makes a proposal the rules above would not: it identifies
+ * the payer's card, not the payee, so the name still has to agree.
  * Among rows at the best level the one nearest the issue-to-due span wins; a
  * tie the date cannot break proposes nothing, since a proposal is a claim
  * about one row. Two rows the OCR names (a payment made twice) give the
@@ -40,6 +48,7 @@ import { daysBetweenIso } from '@/lib/dates/iso'
 import type { SupplierInvoiceMatch } from '@/lib/invoices/supplier-invoice-matching'
 import type { GiroRow } from '@/lib/transactions/giro-counterparty'
 import type { SupplierInvoice, Transaction } from '@/types'
+import { cardEvidence } from './card-token'
 import { paymentWindow, windowDueDate, type BankMatchFacts } from './facts'
 
 /** The rules this block reuses from the blocks that own them; the caller passes them in. */
@@ -114,9 +123,14 @@ function giroContradicts(facts: BankMatchFacts, row: ProposableBankRow, rules: B
   return !documentGiros.some((giro) => rowGiros.includes(giro))
 }
 
+/** What the bank row says about itself in words: the merchant and the bank's texts. */
+function rowTexts(row: ProposableBankRow): string[] {
+  return [row.merchant_name, row.description, row.original_description].filter((t): t is string => !!t && t.trim() !== '')
+}
+
 /** The row names the counterparty, or its alias on the supplier card. */
 function nameAgrees(facts: BankMatchFacts, row: ProposableBankRow): boolean {
-  const texts = [row.merchant_name, row.description, row.original_description].filter((t): t is string => !!t && t.trim() !== '')
+  const texts = rowTexts(row)
   return facts.names.some((name) => texts.some((t) => calculateMerchantSimilarity(name, t) >= NAME_AGREEMENT))
 }
 
@@ -140,10 +154,17 @@ function scoreRow(facts: BankMatchFacts, row: ProposableBankRow, rules: BankMatc
   }
 
   if (!inWindow) return null
+  // Another card paid this row: another payment, whatever else agrees.
+  const card = cardEvidence(facts.cardLast4, rowTexts(row))
+  if (card === 'contradicts') return null
   const plain = rules.matchSupplierInvoice(transaction, [asRegisteredInvoice(facts, amountSek, false)])
   if (plain?.matchMethod === 'amount_bankgiro') return { row, level: 'stark', basis: 'rule_counterparty', distance }
   if (!nameAgrees(facts, row)) return null
-  if (plain?.matchMethod === 'amount_date') return { row, level: 'trolig', basis: 'rule_amount_date', distance }
+  if (plain?.matchMethod === 'amount_date') {
+    // The card the document says paid it is the row's: amount, name, window and card agree.
+    const level = card === 'agrees' && sameAmount(facts, row) ? 'stark' : 'trolig'
+    return { row, level, basis: 'rule_amount_date', distance }
+  }
 
   // Another currency: the receipt matcher's comparison through kronor, with
   // its tolerance for a card issuer's rate beside Riksbanken's.

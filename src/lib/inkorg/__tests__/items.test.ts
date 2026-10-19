@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_VIEW,
+  companionOf,
   doorOf,
   doorsInUse,
   itemHeadline,
+  isCompanionReceipt,
   itemStage,
   needCount,
   needsYou,
@@ -166,5 +168,27 @@ describe('itemHeadline', () => {
   it('carries the currency, SEK when unread', () => {
     expect(itemHeadline(makeItem({ extracted_data: reading({ invoice: { currency: 'EUR' } }) })).currency).toBe('EUR')
     expect(itemHeadline(makeItem()).currency).toBe('SEK')
+  })
+})
+
+describe('an invoice and its receipt as one row', () => {
+  const invoice = makeItem({ id: 'invoice', pairing: { role: 'invoice', receipt_item_id: 'receipt', basis: 'invoice_number' } })
+  const receipt = makeItem({ id: 'receipt', pairing: { role: 'receipt', invoice_item_id: 'invoice', basis: 'invoice_number' } })
+  const other = makeItem({ id: 'other' })
+
+  it('lists the invoice and hides the receipt as its companion, in every view', () => {
+    const items = [invoice, receipt, other]
+    expect(queueFor(items, { kind: 'need' }).map((i) => i.id).sort()).toEqual(['invoice', 'other'])
+    expect(queueFor(items, { kind: 'door', door: 'upload' }).map((i) => i.id).sort()).toEqual(['invoice', 'other'])
+    expect(needCount(items)).toBe(2)
+    expect(doorsInUse(items)).toEqual([{ door: 'upload', waiting: 2 }])
+    expect(isCompanionReceipt(receipt)).toBe(true)
+    expect(isCompanionReceipt(invoice)).toBe(false)
+  })
+
+  it('finds the receipt an invoice carries', () => {
+    expect(companionOf(invoice, [invoice, receipt])?.id).toBe('receipt')
+    expect(companionOf(invoice, [invoice])).toBeNull()
+    expect(companionOf(receipt, [invoice, receipt])).toBeNull()
   })
 })

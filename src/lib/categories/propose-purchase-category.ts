@@ -33,6 +33,9 @@
  *
  * The taxonomy is country-neutral; the accounts are read through a country
  * pack (Sweden's BAS map by default).
+ *
+ * purchaseCategoryAlternatives reads the same evidence for a person choosing
+ * by hand: what else it points to besides the proposal, never a guess.
  */
 import { SE_PURCHASE_CATEGORY_PACK } from '@/lib/bookkeeping/bas-data/purchase-category-accounts'
 import {
@@ -181,29 +184,37 @@ export function categoryOfLine(description: string | null | undefined): Purchase
 export function dominantLineCategory(
   lines: readonly PurchaseCategoryLineInput[] | null | undefined,
 ): PurchaseCategoryCode | null {
-  if (!lines || lines.length === 0) return null
+  const top = lineCategoryShares(lines)[0]
+  return top && top.share >= LINE_DOMINANT_SHARE ? top.code : null
+}
+
+/**
+ * Each category the lines name, with its share of all lines (by amount, by
+ * count when the document has no amounts; the undecided lines count in the
+ * whole), largest first. On a tie the category of the earlier line comes
+ * first.
+ */
+export function lineCategoryShares(
+  lines: readonly PurchaseCategoryLineInput[] | null | undefined,
+): Array<{ code: PurchaseCategoryCode; share: number }> {
+  if (!lines || lines.length === 0) return []
   const amounts = lines.map((l) =>
     typeof l.lineTotal === 'number' && Number.isFinite(l.lineTotal) ? Math.abs(l.lineTotal) : 0,
   )
   const byCount = amounts.every((a) => a === 0)
   const weights = byCount ? lines.map(() => 1) : amounts
   const total = weights.reduce((sum, w) => sum + w, 0)
-  if (total <= 0) return null
+  if (total <= 0) return []
 
   const score = new Map<PurchaseCategoryCode, number>()
   lines.forEach((line, i) => {
     const code = categoryOfLine(line.description)
     if (code) score.set(code, (score.get(code) ?? 0) + weights[i])
   })
-  let top: PurchaseCategoryCode | null = null
-  let topScore = 0
-  for (const [code, value] of score) {
-    if (value > topScore) {
-      top = code
-      topScore = value
-    }
-  }
-  return top && topScore / total >= LINE_DOMINANT_SHARE ? top : null
+  // A stable sort keeps the line order on a tie.
+  return [...score]
+    .map(([code, value]) => ({ code, share: value / total }))
+    .sort((a, b) => b.share - a.share)
 }
 
 /** The merchant kind a supplier name gives away by a generic word in it, if any. */
@@ -214,6 +225,19 @@ export function merchantKindOfSupplierName(name: string | null | undefined): str
     .filter(([, words]) => words.some((w) => matchKeyword(padded, compileKeyword(w))))
     .map(([kind]) => kind)
   return kinds.length === 1 ? kinds[0] : null
+}
+
+/**
+ * The categories the merchant kind can mean: extraction's merchantCategory,
+ * else a generic word in the supplier's name. Several when the kind cannot
+ * decide alone (a restaurant).
+ */
+function merchantKindCategories(extraction: PurchaseCategoryInput['extraction']): readonly PurchaseCategoryCode[] {
+  const kind =
+    extraction?.merchantCategory && extraction.merchantCategory !== 'other'
+      ? extraction.merchantCategory
+      : merchantKindOfSupplierName(extraction?.supplierName)
+  return kind ? MERCHANT_KIND_CATEGORIES[kind] ?? [] : []
 }
 
 // ── The proposal ──────────────────────────────────────────────
@@ -242,11 +266,7 @@ export function proposePurchaseCategory(
     return propose(fromHistory[0], 'counterparty', strong ? 'Stark' : 'Trolig')
   }
 
-  const kind =
-    extraction?.merchantCategory && extraction.merchantCategory !== 'other'
-      ? extraction.merchantCategory
-      : merchantKindOfSupplierName(extraction?.supplierName)
-  const fromKind = kind ? MERCHANT_KIND_CATEGORIES[kind] ?? [] : []
+  const fromKind = merchantKindCategories(extraction)
 
   // A shared account and the document agreeing on one of its categories.
   if (counterparty && fromHistory.length > 1 && counterparty.cleanHits >= STRONG_MIN_CLEAN_HITS) {
@@ -271,4 +291,113 @@ export function proposePurchaseCategory(
     if (narrowed.length === 1) return propose(narrowed[0], 'merchant_category', 'Trolig')
   }
   return null
+}
+
+// ── Alternatives ──────────────────────────────────────────────
+
+/** Share of the document's line value a category needs before the lines offer it as an alternative. */
+export const LINE_ALTERNATIVE_SHARE = 0.25
+
+/** Alternatives the picker offers beside the proposal, at most. */
+export const MAX_PURCHASE_CATEGORY_ALTERNATIVES = 3
+
+/** A category the evidence points to besides the proposal, and the evidence it rests on. */
+export interface PurchaseCategoryAlternative {
+  code: PurchaseCategoryCode
+  source: PurchaseCategorySource
+}
+
+/**
+ * Every category the learned evidence names, best first: those two sources
+ * agree on before those one source names; then those a source names alone
+ * (a line, an account or a merchant kind that means one category) before
+ * those it names among several (a shared account like 5410 says computers,
+ * furniture or tools, and says them equally); then in the order of the
+ * ladder (booked history, the lines, the suggested account, the merchant
+ * kind).
+ */
+function evidenceCandidates(input: PurchaseCategoryInput, pack: PurchaseCategoryAccountPack): PurchaseCategoryAlternative[] {
+  const extraction = input.extraction ?? null
+  // specific: the source names this category alone. Each line names one category, however many lines there are.
+  const sources: Array<{ source: PurchaseCategorySource; codes: readonly PurchaseCategoryCode[]; specific: boolean }> = []
+  const named = (source: PurchaseCategorySource, codes: readonly PurchaseCategoryCode[]) =>
+    sources.push({ source, codes, specific: codes.length === 1 })
+  named('counterparty', input.counterparty ? pack.categoriesFor(input.counterparty.account) : [])
+  sources.push({
+    source: 'lines',
+    codes: lineCategoryShares(extraction?.lineItems)
+      .filter((s) => s.share >= LINE_ALTERNATIVE_SHARE)
+      .map((s) => s.code),
+    specific: true,
+  })
+  named('account', input.suggestedAccount ? pack.categoriesFor(input.suggestedAccount) : [])
+  named('merchant_category', merchantKindCategories(extraction))
+
+  const tally = new Map<
+    PurchaseCategoryCode,
+    { source: PurchaseCategorySource; sources: number; specific: boolean; position: number }
+  >()
+  let position = 0
+  for (const { source, codes, specific } of sources) {
+    for (const code of codes) {
+      const seen = tally.get(code)
+      if (seen) {
+        seen.sources += 1
+        seen.specific ||= specific
+      } else {
+        tally.set(code, { source, sources: 1, specific, position })
+      }
+      position += 1
+    }
+  }
+  return [...tally]
+    .sort(
+      ([, a], [, b]) =>
+        b.sources - a.sources || Number(b.specific) - Number(a.specific) || a.position - b.position,
+    )
+    .map(([code, { source }]) => ({ code, source }))
+}
+
+/**
+ * What else the evidence points to, for a person choosing by hand: never the
+ * proposal itself, at most `limit`, and nothing the system does not hold. In
+ * order:
+ *
+ *   1. The supplier's instruction, when a choice on this underlag outranks it.
+ *   2. What the evidence alone proposes, when a person's word is the proposal:
+ *      the answer the system would give without it.
+ *   3. Every other category the history, the lines (each carrying at least
+ *      LINE_ALTERNATIVE_SHARE), the suggested account or the merchant kind
+ *      names: the ones two sources agree on first, then the ones a source
+ *      names alone (evidenceCandidates). A shared account (5410:
+ *      computers, furniture, tools) and a restaurant receipt (a client meal,
+ *      a staff meal or a meal on a trip) are where these help: the proposal
+ *      stays null there, and the candidates are the choice.
+ *
+ * A document that is not a purchase offers only a person's instruction.
+ * Pure and deterministic, like the proposal.
+ */
+export function purchaseCategoryAlternatives(
+  input: PurchaseCategoryInput,
+  pack: PurchaseCategoryAccountPack = SE_PURCHASE_CATEGORY_PACK,
+  limit: number = MAX_PURCHASE_CATEGORY_ALTERNATIVES,
+): PurchaseCategoryAlternative[] {
+  const proposal = proposePurchaseCategory(input, pack)
+  const seen = new Set<PurchaseCategoryCode>(proposal ? [proposal.code] : [])
+  const out: PurchaseCategoryAlternative[] = []
+  const add = (code: PurchaseCategoryCode, source: PurchaseCategorySource) => {
+    if (seen.has(code)) return
+    seen.add(code)
+    out.push({ code, source })
+  }
+
+  if (isPurchaseCategoryCode(input.supplierInstruction)) add(input.supplierInstruction, 'instruction')
+  const own = proposePurchaseCategory({ ...input, override: null, supplierInstruction: null }, pack)
+  if (own) add(own.code, own.source)
+
+  const documentKind = input.extraction?.documentKind
+  if (!(documentKind && NOT_PURCHASES.has(documentKind))) {
+    for (const candidate of evidenceCandidates(input, pack)) add(candidate.code, candidate.source)
+  }
+  return out.slice(0, Math.max(0, limit))
 }

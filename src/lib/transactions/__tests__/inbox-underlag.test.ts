@@ -7,6 +7,7 @@ vi.mock('@/lib/core/documents/document-service', () => ({
 }))
 
 import {
+  completeInboxItemOnEntry,
   completeInboxItemsForBookedTransaction,
   propagateUnderlagForBookedTransaction,
   resolveBookedJournalEntryIds,
@@ -557,5 +558,49 @@ describe('stampNewInboxItemIfDocumentLinked', () => {
       await stampNewInboxItemIfDocumentLinked(failed.supabase as unknown as SupabaseClient, COMPANY, 'doc-new'),
     ).toBeNull()
     expect(failed.findCalls('invoice_inbox_items', 'update')).toEqual([])
+  })
+})
+
+describe('completeInboxItemOnEntry: a receipt onto the verifikat its invoice was booked on', () => {
+  const BASIS = { basis: 'user_confirmed' as const, evidence: { rule_id: 'inbox_receipt_pair:invoice_number' } }
+  const RECEIPT = { id: 'receipt', document_id: 'doc-r' }
+  beforeEach(() => vi.clearAllMocks())
+
+  it('links the document, then stamps the item, nothing else', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { journal_entry_id: null } }) // the document is on no verifikat yet
+    enqueue({ data: [{ id: 'receipt' }] }) // the stamp lands
+    expect(await completeInboxItemOnEntry(supabase as unknown as SupabaseClient, COMPANY, RECEIPT, JE1, BASIS)).toBe('completed')
+    expect(linkToJournalEntry).toHaveBeenCalledWith(supabase, COMPANY, 'doc-r', JE1, {
+      link_basis: 'user_confirmed',
+      link_evidence: { rule_id: 'inbox_receipt_pair:invoice_number' },
+    })
+    expect(findCalls('invoice_inbox_items', 'update')).toEqual([[{ created_journal_entry_id: JE1, matched_transaction_id: undefined }]])
+    expect(findCalls('invoice_inbox_items', 'is')).toEqual(expect.arrayContaining([['created_journal_entry_id', null], ['created_supplier_invoice_id', null]]))
+    expect(findCalls('journal_entries', 'update')).toEqual([])
+  })
+
+  it('never moves a document off another verifikat, and then stamps nothing', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { journal_entry_id: JE2 } })
+    expect(await completeInboxItemOnEntry(supabase as unknown as SupabaseClient, COMPANY, RECEIPT, JE1, BASIS)).toBe('not_linked')
+    expect(linkToJournalEntry).not.toHaveBeenCalled()
+    expect(findCalls('invoice_inbox_items', 'update')).toEqual([])
+  })
+
+  it('a link the period lock refuses stamps nothing', async () => {
+    vi.mocked(linkToJournalEntry).mockRejectedValueOnce(new Error('period is locked'))
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { journal_entry_id: null } })
+    expect(await completeInboxItemOnEntry(supabase as unknown as SupabaseClient, COMPANY, RECEIPT, JE1, BASIS)).toBe('not_linked')
+    expect(findCalls('invoice_inbox_items', 'update')).toEqual([])
+  })
+
+  it('an item another verifikat already holds is taken', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { journal_entry_id: JE1 } }) // already on this verifikat: no link write
+    enqueue({ data: [] }) // the stamp matched nothing
+    expect(await completeInboxItemOnEntry(supabase as unknown as SupabaseClient, COMPANY, RECEIPT, JE1, BASIS)).toBe('taken')
+    expect(linkToJournalEntry).not.toHaveBeenCalled()
   })
 })

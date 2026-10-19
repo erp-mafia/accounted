@@ -32,6 +32,9 @@ import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { roundOre } from '@/lib/money'
 import type { InvoiceExtractionResult } from '@/types'
+import { pairInboxItems } from '@/lib/inkorg/pairs'
+import { readDeliverySiblings, type PairableRow } from '@/lib/inkorg/pairs-read'
+import { normaliseCardLast4 } from './card-token'
 import { decideBankMatch, NAME_AGREEMENT, type BankMatchDecision, type BankMatchRules } from './decide'
 import { bankMatchFacts, searchRange, type SupplierCardForMatch } from './facts'
 
@@ -59,6 +62,7 @@ interface ItemRow extends BankMatchItemRow, ReadingItemRow {
   status: string | null
   created_at: string
   bank_match_checked_at: string | null
+  resend_email_id?: string | null
 }
 
 function fail(what: string, error: { message: string }): never {
@@ -75,6 +79,32 @@ async function supplierCard(supabase: SupabaseClient, companyId: string, supplie
     .maybeSingle()
   if (error) fail('supplier read', error)
   return (data as SupplierCardForMatch | null) ?? null
+}
+
+/** The card a reading says paid it (extracted_data.payment.cardLast4), or null. */
+function cardOf(extracted: unknown): string | null {
+  const payment = (extracted as InvoiceExtractionResult | null)?.payment
+  return normaliseCardLast4(payment?.cardLast4 ?? null)
+}
+
+/**
+ * The card the purchase was paid with: the item's own reading says so (a
+ * receipt), or the receipt it came with as one purchase does (an invoice
+ * whose mail carried its receipt, lib/inkorg/pairs.ts). Best effort: a
+ * pairing that cannot be read is no card.
+ */
+async function paymentCard(supabase: SupabaseClient, companyId: string, item: ItemRow, kind: string): Promise<string | null> {
+  const own = cardOf(item.extracted_data)
+  if (own || kind !== 'supplier_invoice') return own
+  try {
+    const { items, arrivalIds } = await readDeliverySiblings(supabase, companyId, item as unknown as PairableRow)
+    if (items.length < 2) return null
+    const pairing = pairInboxItems(items, { arrivalIds }).get(item.id)
+    if (pairing?.role !== 'invoice') return null
+    return cardOf(items.find((other) => other.id === pairing.receipt_item_id)?.extracted_data)
+  } catch {
+    return null
+  }
 }
 
 function defaultRateFor(supabase: SupabaseClient) {
@@ -98,7 +128,7 @@ export async function refreshInboxItemBankMatch(
 ): Promise<BankMatchRefreshOutcome> {
   const { data, error } = await supabase
     .from('invoice_inbox_items')
-    .select('id, status, source, document_id, extracted_data, extraction_skipped, kind_hint, channel_context, email_from, email_received_at, matched_supplier_id, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id, routed_to_arkiv_at, created_at, bank_match_transaction_id, bank_match_basis, bank_match_evidence_level, bank_match_checked_at, bank_match_source_key')
+    .select('id, status, source, document_id, extracted_data, extraction_skipped, kind_hint, channel_context, email_from, email_received_at, resend_email_id, matched_supplier_id, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id, routed_to_arkiv_at, created_at, bank_match_transaction_id, bank_match_basis, bank_match_evidence_level, bank_match_checked_at, bank_match_source_key')
     .eq('id', inboxItemId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -114,7 +144,8 @@ export async function refreshInboxItemBankMatch(
     supplierCard(supabase, companyId, item.matched_supplier_id),
   ])
   const arrivedOn = item.created_at ? todayIsoStockholm(new Date(item.created_at)) : today
-  const facts = bankMatchFacts(reading, supplier, arrivedOn)
+  const read = bankMatchFacts(reading, supplier, arrivedOn)
+  const facts = read ? { ...read, cardLast4: await paymentCard(supabase, companyId, item, read.kind) } : null
 
   let decision: BankMatchDecision | null = null
   if (facts) {

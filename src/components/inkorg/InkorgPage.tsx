@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { ExternalLink } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { PageHeader } from '@/components/ui/page-header'
@@ -15,7 +15,7 @@ import { cn } from '@/lib/utils'
 import { LEGACY_INBOX_HREF } from '@/lib/inkorg/flag'
 import { ALL_STARTABLE, type InkorgStartable } from '@/lib/inkorg/decision'
 import { focusAfterChange, focusKeyAction, neighbour } from '@/lib/inkorg/focus'
-import { doorOf, doorsInUse, needCount, parseViewKey, queueFor, viewKey, type InkorgView } from '@/lib/inkorg/items'
+import { companionOf, doorOf, doorsInUse, needCount, parseViewKey, queueFor, viewKey, type InkorgItem, type InkorgView } from '@/lib/inkorg/items'
 import { dragCarriesFiles, missingDecision, orderMissing, splitMissing } from '@/lib/inkorg/missing'
 import { portalRows, purchasesAtPortal } from '@/lib/inkorg/portals'
 import { AddMailboxDialog } from './AddMailboxDialog'
@@ -27,6 +27,7 @@ import { MissingFocusStage } from './MissingFocusStage'
 import { MissingUnderlagList } from './MissingUnderlagList'
 import { FocusStage, type FinePrintOpen } from './FocusStage'
 import { FetchWithAiButton } from './FetchWithAiButton'
+import { followCompanion } from './follow-companion'
 import { CONTENT_COLUMN_CLASS, RAIL_COLUMN_CLASS, WORK_AREA_CLASS } from './frame'
 import { UploadButton } from './UploadButton'
 import { useAttachUnderlag } from './use-attach-underlag'
@@ -95,6 +96,7 @@ export function InkorgPage({
 
 function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartable; ownerAccount: string | null }) {
   const t = useTranslations('inkorg')
+  const locale = useLocale()
   const searchParams = useSearchParams()
   const { toast } = useToast()
   const companyId = useCompanyOptional()?.company?.id ?? null
@@ -121,7 +123,10 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
     })
   }, [])
 
-  const queue = useMemo(() => queueFor(items, view), [items, view])
+  // Receipts on their way onto their invoice's booking: out of every queue meanwhile, so a
+  // read that lands before they arrive never opens one as the next item.
+  const [following, setFollowing] = useState<ReadonlySet<string>>(() => new Set())
+  const queue = useMemo(() => queueFor(items, view).filter((item) => !following.has(item.id)), [items, view, following])
   // Saknar underlag works through bank purchases, not items: its own queue, newest first,
   // what needs a person before what is on its way (the order the view lists them in).
   const purchaseIds = useMemo(() => purchases.map((p) => p.id), [purchases])
@@ -213,16 +218,36 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
   }, [])
 
   const onDone = useCallback(
-    async (id: string, outcome: { leaves: boolean; payInBank?: PayInBankTarget }) => {
+    async (item: InkorgItem, outcome: { leaves: boolean; payInBank?: PayInBankTarget; dropped?: boolean }) => {
+      const id = item.id
       if (outcome.payInBank) setPayInBank(outcome.payInBank)
       // "Klart" first, so the stage carries it as it leaves.
       if (outcome.leaves) setFinishingId(id)
+      // The receipt it came with follows it onto its booking (lib/operations/inbox-companion.ts),
+      // before the list is read again: the purchase is booked once, and the receipt never asks again.
+      const receiptId = outcome.leaves && !outcome.dropped && item.pairing?.role === 'invoice' ? item.pairing.receipt_item_id : null
+      if (receiptId) {
+        setFollowing((current) => new Set(current).add(receiptId))
+        const answer = await followCompanion(id, receiptId, locale === 'en' ? 'en' : 'sv')
+        if (answer.status === 'waiting') {
+          toast({ title: t('companion_waiting_title'), description: t(`companion_waiting_${answer.reason}`) })
+        } else if (answer.status === 'failed') {
+          toast({ title: t('companion_failed_title'), description: answer.message || undefined, variant: 'destructive' })
+        }
+      }
       await refresh()
+      if (receiptId) {
+        setFollowing((current) => {
+          const next = new Set(current)
+          next.delete(receiptId)
+          return next
+        })
+      }
       // An item that stays is read again (its new state); one that left needs nothing more.
       if (!outcome.leaves) setRevision((r) => r + 1)
       else window.setTimeout(() => setFinishingId((f) => (f === id ? null : f)), DONE_MARK_MS)
     },
-    [refresh],
+    [refresh, locale, toast, t],
   )
 
   // A purchase got its underlag: "Klart" while it leaves, then the list is read
@@ -376,12 +401,13 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
                 return item ? (
                   <FocusStage
                     item={item}
+                    companion={companionOf(item, items)}
                     revision={revision}
                     finishing={finishingId === item.id}
                     finePrint={finePrint}
                     onFinePrint={setFinePrint}
                     onBankMatch={onBankMatch}
-                    onDone={(outcome) => onDone(item.id, outcome)}
+                    onDone={(outcome) => onDone(item, outcome)}
                     startable={startable}
                     ownerAccount={ownerAccount}
                     onBack={back}

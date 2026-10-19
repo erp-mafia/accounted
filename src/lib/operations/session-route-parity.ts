@@ -758,6 +758,10 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
     [`POST ${V}/inbox-items/:id/convert`, `POST ${V}/transactions/:id/match-supplier-invoice`],
     'the Inkorg runs the two in one request; a machine calls them in turn',
   ),
+  'POST /api/inkorg/items/:id/companion': covered(
+    [`POST ${V}/inbox-items/:id/match-transaction`, 'gnubok_link_document_to_voucher'],
+    'the receipt that came with an invoice lands on the invoice\'s booking: matched to its booked bank row, or its document linked to the verifikat',
+  ),
   'POST /api/extensions/ext/invoice-inbox/items/:id/book-direct': covered(['gnubok_bulk_book_inbox_items'], 'batch of one; items without a matched bank row have no API'),
   'POST /api/extensions/ext/invoice-inbox/items/:id/suggest-booking': covered(['gnubok_suggest_categories']),
   'POST /api/extensions/ext/invoice-inbox/items/bulk-book': covered(['gnubok_bulk_book_inbox_items']),

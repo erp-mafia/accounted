@@ -85,6 +85,7 @@ import TransactionMatchPicker from '@/components/inbox/TransactionMatchPicker'
 import { InboxCreditNotePanel } from './InboxCreditNotePanel'
 import { PurchaseCategoryChip } from '@/components/inbox/PurchaseCategoryChip'
 import type { InboxPurchaseCategory } from '@/lib/categories/inbox-purchase-category'
+import type { PurchaseCategoryAlternative } from '@/lib/categories/propose-purchase-category'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import {
   getErrorMessage as getUserErrorMessage,
@@ -220,6 +221,8 @@ interface InboxItem {
   // What the underlag bought, computed by GET /items/:id (null when
   // ambiguous). Absent on list rows and client-side placeholders.
   purchase_category?: InboxPurchaseCategory | null
+  // What else the evidence points to, offered in the category dialog; same read.
+  purchase_category_alternatives?: PurchaseCategoryAlternative[]
   // True when AI extraction was skipped: either because the upload caller
   // passed skip_extraction=true (MCP/agent path) or because the server's
   // page-count gate skipped a PDF above the auto-extract limit (issue #553).
@@ -3275,6 +3278,7 @@ function FieldsRail({
           <PurchaseCategoryChip
             itemId={item.id}
             value={item.purchase_category}
+            alternatives={item.purchase_category_alternatives}
             locked={isProcessed}
             supplierName={item.matched_supplier_id ? pickSupplierName(item) : null}
           />

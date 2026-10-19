@@ -3047,6 +3047,11 @@ export const RegisterAndSettleInboxItemSchema = z.object({
   path: ['invoice', 'paid_with_private_funds'],
 })
 
+/** POST /api/inkorg/items/:id/companion: the receipt that came with the invoice :id as one purchase. */
+export const FollowInboxCompanionSchema = z.object({
+  receipt_item_id: uuid,
+})
+
 
 // ============================================================
 // Settings schemas

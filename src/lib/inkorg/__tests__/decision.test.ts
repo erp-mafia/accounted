@@ -308,3 +308,76 @@ describe('bookedOnAccount', () => {
     expect(bookedOnAccount([{ account_number: '1930', debit_amount: 0 }])).toBeNull()
   })
 })
+
+describe('focusDecision: an invoice its receipt says is paid', () => {
+  // The X subscription (prod, company Arcim): invoice and receipt in one mail.
+  const invoice = makeItem({
+    id: 'invoice',
+    extracted_data: reading({
+      documentKind: 'supplier_invoice',
+      supplier: { name: 'X Corp.' },
+      invoice: { invoiceNumber: 'J0LVRPBD-0003', invoiceDate: '2026-10-03', dueDate: '2026-10-03' },
+      totals: { total: 83 },
+    }),
+    pairing: { role: 'invoice', receipt_item_id: 'receipt', basis: 'invoice_number' },
+  })
+  const receipt = makeItem({
+    id: 'receipt',
+    extracted_data: reading({ documentKind: 'receipt', totals: { total: 83 }, payment: { method: 'card', cardLast4: '3667' } }),
+    pairing: { role: 'receipt', invoice_item_id: 'invoice', basis: 'invoice_number' },
+  })
+  const MATCH = {
+    transaction_id: 'tx-x',
+    date: '2026-10-05',
+    amount: -83,
+    currency: 'SEK',
+    counterparty: 'X CORP. PAID FEATURES K3667',
+    basis: 'rule_amount_date' as const,
+    evidence_level: 'stark' as const,
+  }
+
+  it('asks who paid, with the receipt\'s card as the evidence, instead of how it will be paid', () => {
+    const d = focusDecision(invoice, { companion: receipt })
+    expect(d.question).toBe('who_paid')
+    expect(d.evidence).toEqual({ kind: 'paid_with', method: 'card', cardLast4: '3667' })
+    expect(d.actions).toEqual(['match_purchase', 'expense', 'not_underlag'])
+    // Never "register it unpaid" or "pay it in the bank": the receipt says it is paid.
+    expect(d.actions).not.toContain('register_invoice')
+    expect(d.actions).not.toContain('pay_in_bank')
+    expect(d.editorEscape).toBe(true)
+  })
+
+  it('without the receipt\'s row in the list, the invoice\'s amount is the evidence', () => {
+    expect(focusDecision(invoice).evidence).toEqual({ kind: 'amount', amount: 83, currency: 'SEK', date: '2026-10-03' })
+  })
+
+  it('with a bank row found: settle against it; the third answer is who else paid, never "not paid"', () => {
+    const d = focusDecision(invoice, { companion: receipt, bankMatch: MATCH })
+    expect(d.question).toBe('already_paid')
+    expect(d.actions).toEqual(['register_and_settle', 'match_purchase', 'expense'])
+    const off = focusDecision(invoice, { companion: receipt, bankMatch: MATCH, startable: { ...ALL_STARTABLE, supplierInvoices: false, cashMethod: true } })
+    expect(off.actions).toEqual(['accept_bank_match', 'match_purchase', 'expense'])
+    expect(off.actions).not.toContain('wait_for_payment')
+  })
+
+  it('follows what the company can start for the private answer', () => {
+    const sole = { ...ALL_STARTABLE, expenses: false, soleTrader: true }
+    expect(focusDecision(invoice, { companion: receipt, startable: sole }).actions).toEqual(['match_purchase', 'owner_paid', 'not_underlag'])
+    const ab = { ...ALL_STARTABLE, expenses: false }
+    expect(focusDecision(invoice, { companion: receipt, startable: ab }).actions).toEqual(['match_purchase', 'turn_on_expenses', 'not_underlag'])
+  })
+
+  it('a pair matched to a bank row books like any matched purchase', () => {
+    expect(focusDecision({ ...invoice, matched_transaction_id: 'tx-x' }, { companion: receipt }).question).toBe('book_purchase')
+  })
+
+  it('an invoice without a pairing still asks how it will be paid', () => {
+    expect(focusDecision({ ...invoice, pairing: null }).question).toBe('invoice_paid')
+  })
+
+  it('the row says paid by its receipt, not "to pay"', () => {
+    expect(rowStatus(invoice, null)).toEqual({ kind: 'paid_by_receipt' })
+    expect(rowStatus(invoice, MATCH)).toEqual({ kind: 'looks_paid' })
+    expect(rowStatus({ ...invoice, pairing: null }, null)).toEqual({ kind: 'to_pay', dueDate: '2026-10-03' })
+  })
+})

@@ -41,10 +41,16 @@
  * Without a `startable` context every package counts as on, which is every
  * company without a stored profile or a package switch.
  *
+ * An invoice that came with its receipt as one purchase (./pairs.ts) is
+ * paid: the receipt says so. It never asks how the invoice will be paid; it
+ * asks who paid, as a receipt does, with the receipt's payment as the
+ * evidence ("Betald med kort •• 3667"), and with a bank row found it is
+ * settled against that row. "Inte betald än" is no answer for it.
+ *
  * Pure: codes out, the component turns them into words.
  */
 import type { ExtractedPaymentMethod } from '@/types'
-import type { InboxDocumentKind } from '@/lib/documents/inbox-kind'
+import { resolveInboxKind, type InboxDocumentKind } from '@/lib/documents/inbox-kind'
 import type { BankMatch } from '@/lib/documents/inbox-bank-match'
 import { isUnderlagDivergent, itemHeadline, itemStage, type InkorgItem, type UnderlagStatus } from './items'
 
@@ -159,9 +165,27 @@ function firstDecisionEvidence(item: InkorgItem, kind: InboxDocumentKind | null)
   return null
 }
 
+/** The evidence a paid invoice's receipt gives: how it was paid, else the invoice's own amount. */
+function receiptEvidence(item: InkorgItem, companion: InkorgItem | null): DecisionEvidence | null {
+  const payment = companion?.extracted_data?.payment
+  if (payment?.method) return { kind: 'paid_with', method: payment.method, cardLast4: payment.cardLast4 ?? null }
+  const headline = itemHeadline(item)
+  return headline.amount != null ? { kind: 'amount', amount: headline.amount, currency: headline.currency, date: headline.documentDate } : null
+}
+
+/** An invoice its receipt from the same arrival says is paid (./pairs.ts). */
+export function paidByReceipt(item: Pick<InkorgItem, 'pairing' | 'kind_hint' | 'extracted_data'>): boolean {
+  return item.pairing?.role === 'invoice' && resolveInboxKind({ kind_hint: item.kind_hint ?? null, extracted_data: item.extracted_data }) === 'supplier_invoice'
+}
+
 export function focusDecision(
   item: InkorgItem,
-  context: { bankMatch?: BankMatch | null; startable?: InkorgStartable } = {},
+  context: {
+    bankMatch?: BankMatch | null
+    startable?: InkorgStartable
+    /** The receipt the invoice came with as one purchase (its pairing), when the list has it. */
+    companion?: InkorgItem | null
+  } = {},
 ): FocusDecision {
   const stage = itemStage(item)
   const startable = context.startable ?? ALL_STARTABLE
@@ -204,6 +228,7 @@ export function focusDecision(
   // Waiting for the first decision.
   const kind = itemHeadline(item).kind
   const match = context.bankMatch
+  const paid = paidByReceipt(item)
   if (match && kind !== 'credit_note') {
     // The bank was checked when it arrived: it looks paid already, by this row.
     // Yes: an invoice is registered and settled against it (the supplier
@@ -213,11 +238,17 @@ export function focusDecision(
     // Without Leverantörsfakturor a paid invoice is linked to its row and
     // booked with it, like a receipt; "No" then means it waits for its
     // payment (kontantmetoden) or needs the package (faktureringsmetoden).
+    // An invoice its receipt says is paid has no "not paid": the third
+    // answer is the receipt's, someone paid it privately.
     const actions: DecisionAction[] =
       kind === 'supplier_invoice'
         ? startable.supplierInvoices
-          ? ['register_and_settle', 'match_purchase', 'register_invoice']
-          : ['accept_bank_match', 'match_purchase', startable.cashMethod ? 'wait_for_payment' : 'turn_on_supplier_invoices']
+          ? ['register_and_settle', 'match_purchase', paid ? privatelyPaid(startable) : 'register_invoice']
+          : [
+              'accept_bank_match',
+              'match_purchase',
+              paid ? privatelyPaid(startable) : startable.cashMethod ? 'wait_for_payment' : 'turn_on_supplier_invoices',
+            ]
         : ['accept_bank_match', 'match_purchase', privatelyPaid(startable)]
     return {
       question: 'already_paid',
@@ -233,6 +264,18 @@ export function focusDecision(
       },
       actions,
       quietActions: ['not_underlag'],
+      editorEscape: true,
+    }
+  }
+  if (paid) {
+    // Paid, by the receipt it came with, and no bank row found for it: who
+    // paid decides the booking, as for the receipt itself. The company's
+    // account means picking the bank row; never "pay it" or "not paid yet".
+    return {
+      question: 'who_paid',
+      evidence: receiptEvidence(item, context.companion ?? null),
+      actions: ['match_purchase', privatelyPaid(startable), 'not_underlag'],
+      quietActions: [],
       editorEscape: true,
     }
   }
@@ -302,6 +345,8 @@ export function canUndo(action: DecisionAction): boolean {
  *   - looks_paid: a bank row it looks paid by (match on arrival), from the
  *     first sight: the list read carries the stored proposal, checked against
  *     its bank row for the whole page at once;
+ *   - paid_by_receipt: an invoice the receipt it came with says is paid,
+ *     no bank row found for it yet;
  *   - to_pay: an invoice with a due date that nothing says is paid;
  *   - unreadable, reading, linked: its stage;
  *   - waiting: everything else waiting for a decision;
@@ -312,6 +357,7 @@ export function canUndo(action: DecisionAction): boolean {
  */
 export type RowStatus =
   | { kind: 'looks_paid' }
+  | { kind: 'paid_by_receipt' }
   | { kind: 'to_pay'; dueDate: string }
   | { kind: 'unreadable' }
   | { kind: 'reading' }
@@ -327,6 +373,7 @@ export function rowStatus(item: InkorgItem, bankMatch: BankMatch | null | undefi
   if (stage === 'linked') return { kind: 'linked' }
   const kind = itemHeadline(item).kind
   if (bankMatch && kind !== 'credit_note') return { kind: 'looks_paid' }
+  if (paidByReceipt(item)) return { kind: 'paid_by_receipt' }
   const due = item.extracted_data?.invoice?.dueDate
   if (kind === 'supplier_invoice' && due) return { kind: 'to_pay', dueDate: due }
   return { kind: 'waiting' }

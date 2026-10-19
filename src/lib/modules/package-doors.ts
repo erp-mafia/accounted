@@ -413,6 +413,8 @@ const RECEIPTS_AND_DOCUMENTS: PackageDoors = {
     'POST /api/extensions/ext/invoice-inbox/upload',
     'POST /api/extensions/ext/invoice-inbox/upload/complete',
     'POST /api/extensions/ext/invoice-inbox/upload/create',
+    // The receipt that came with an invoice lands on the invoice's booking: it starts nothing new.
+    'POST /api/inkorg/items/:id/companion',
     'DELETE /api/extensions/ext/mail/connections',
     'POST /api/extensions/ext/whatsapp-inbox/link/default-company',
     'POST /api/extensions/ext/whatsapp-inbox/link/revoke',

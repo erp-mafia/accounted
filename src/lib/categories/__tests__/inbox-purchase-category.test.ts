@@ -5,6 +5,7 @@ import {
   InboxPurchaseCategorySchema,
   readPurchaseCategoryOverride,
   resolveInboxPurchaseCategories,
+  resolveInboxPurchaseCategoryChoices,
   templatePurchaseAccount,
 } from '../inbox-purchase-category'
 
@@ -266,5 +267,67 @@ describe('resolveInboxPurchaseCategories', () => {
     expect(out.get('b')?.code).toBe('expense.telecom.mobile')
     expect(out.get('c')).toMatchObject({ code: 'expense.equipment.furniture', source: 'lines' })
     expect(mock.calls.filter((c) => c.method === 'select')).toHaveLength(2)
+  })
+})
+
+describe('resolveInboxPurchaseCategoryChoices', () => {
+  it('reads the evidence under a person\'s choice and offers what the history alone says', async () => {
+    mock.enqueue({ data: [template()] })
+    mock.enqueue({ data: [] })
+    const out = await resolveInboxPurchaseCategoryChoices(supabase, COMPANY, {
+      id: 'a',
+      extracted_data: reading({ purchaseCategory: { code: 'expense.equipment.furniture', source: 'person', set_at: 'x' } }),
+    })
+    expect(out.proposal).toEqual({ code: 'expense.equipment.furniture', source: 'person', level: 'Ditt val', version: 'pc-2026-10' })
+    expect(out.alternatives).toEqual([{ code: 'expense.telecom.mobile', source: 'counterparty' }])
+    expect(mock.findCalls('categorization_templates', 'in')[0]).toEqual(['counterparty_name', ['telia company']])
+  })
+
+  it('offers the supplier\'s instruction under a choice on the item', async () => {
+    mock.enqueue({ data: [template()] })
+    mock.enqueue({ data: [] })
+    mock.enqueue({ data: [{ id: 'sup-1', default_expense_account: null, default_purchase_category: 'expense.telecom.internet' }] })
+    const out = await resolveInboxPurchaseCategoryChoices(supabase, COMPANY, {
+      id: 'a',
+      extracted_data: reading({ purchaseCategory: { code: 'expense.equipment.furniture', source: 'person', set_at: 'x' } }),
+      matched_supplier_id: 'sup-1',
+    })
+    expect(out.proposal).toMatchObject({ code: 'expense.equipment.furniture', source: 'person' })
+    expect(out.alternatives).toEqual([
+      { code: 'expense.telecom.internet', source: 'instruction' },
+      { code: 'expense.telecom.mobile', source: 'counterparty' },
+    ])
+  })
+
+  it('offers the categories of a shared booked account where the proposal stays null', async () => {
+    mock.enqueue({ data: [template({ counterparty_name: 'clas ohlson', debit_account: '5410' })] })
+    mock.enqueue({ data: [] })
+    const out = await resolveInboxPurchaseCategoryChoices(supabase, COMPANY, {
+      id: 'a',
+      extracted_data: reading({ supplier: { name: 'Clas Ohlson' } }),
+    })
+    expect(out.proposal).toBeNull()
+    expect(out.alternatives.map((a) => a.code)).toEqual([
+      'expense.equipment.hardware',
+      'expense.equipment.furniture',
+      'expense.equipment.tools',
+    ])
+  })
+
+  it('falls back to the reading alone when the history cannot be read', async () => {
+    mock.enqueue({ data: null, error: { message: 'statement timeout' } })
+    mock.enqueue({ data: [] })
+    const out = await resolveInboxPurchaseCategoryChoices(supabase, COMPANY, {
+      id: 'a',
+      extracted_data: reading({ documentKind: 'receipt', merchantCategory: 'restaurant', supplier: { name: 'Bistro Norr' } }),
+    })
+    expect(out.proposal).toBeNull()
+    expect(out.alternatives.map((a) => a.source)).toEqual(['merchant_category', 'merchant_category', 'merchant_category'])
+  })
+
+  it('answers nothing for an item with nothing to go on, reading nothing', async () => {
+    const out = await resolveInboxPurchaseCategoryChoices(supabase, COMPANY, { id: 'a', extracted_data: null })
+    expect(out).toEqual({ proposal: null, alternatives: [] })
+    expect(mock.calls).toHaveLength(0)
   })
 })
