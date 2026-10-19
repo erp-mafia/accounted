@@ -32,6 +32,8 @@ export interface SupplierCreditNoteSource {
   exchange_rate: number | null
   vat_treatment: string
   reverse_charge: boolean
+  /** Goods or services under an EU supplier's reverse charge; the credit books the same box. */
+  reverse_charge_kind?: string | null
   subtotal: number
   subtotal_sek: number | null
   vat_amount: number
@@ -97,6 +99,7 @@ export function buildSupplierCreditNoteRow(
     exchange_rate: original.exchange_rate,
     vat_treatment: original.vat_treatment,
     reverse_charge: original.reverse_charge,
+    reverse_charge_kind: original.reverse_charge_kind ?? null,
     subtotal: original.subtotal,
     subtotal_sek: original.subtotal_sek,
     vat_amount: original.vat_amount,

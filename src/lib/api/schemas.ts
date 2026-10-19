@@ -89,6 +89,7 @@ import {
 import {
   CURRENCIES,
   INVOICE_QR_MODES,
+  SUPPLIER_INVOICE_REVERSE_CHARGE_KINDS,
   type AuditAction,
   type Currency,
   type InvoiceDocumentType,
@@ -1877,6 +1878,11 @@ export const CreateSupplierInvoiceSchema = z.object({
   exchange_rate: exchangeRate.optional(),
   vat_treatment: VatTreatmentSchema.optional(),
   reverse_charge: z.boolean().optional(),
+  // Under reverse charge from a supplier in another EU country: goods
+  // (eu_goods, basis 4515-4517, ruta 20) or services (eu_services, 4535-4537,
+  // ruta 21). Omitted books services. Refused for any other supplier type or
+  // without reverse charge (resolveSupplierInvoiceReverseChargeKind).
+  reverse_charge_kind: z.enum(SUPPLIER_INVOICE_REVERSE_CHARGE_KINDS).optional(),
   payment_reference: z.string().optional(),
   notes: z.string().optional(),
   // Per-invoice öresavrundning toggle (display-only). Omitted → stored as null (off).

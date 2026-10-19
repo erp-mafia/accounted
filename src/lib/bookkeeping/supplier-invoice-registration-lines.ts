@@ -20,8 +20,8 @@ import { resolveBookingAccount } from './accruals/account-suggestions'
 import {
   generateReverseChargePurchaseLines,
   resolveReverseChargeRate,
-  reverseChargeKindForSupplierType,
   reverseChargeOnAccount,
+  supplierInvoiceReverseChargeKind,
   type ChartVatTreatments,
 } from './vat-entries'
 import { generateSlpLines, isSlpPensionAccount } from './slp-lines'
@@ -117,7 +117,7 @@ export type SupplierInvoiceBookingItem = Pick<
 /** The header fields the registration verifikat reads. */
 export type SupplierInvoiceRegistrationHeader = Pick<
   SupplierInvoice,
-  'currency' | 'exchange_rate' | 'reverse_charge' | 'vat_treatment' | 'default_dimensions' | 'total'
+  'currency' | 'exchange_rate' | 'reverse_charge' | 'reverse_charge_kind' | 'vat_treatment' | 'default_dimensions' | 'total'
 >
 
 /**
@@ -426,7 +426,7 @@ export function supplierInvoiceRowLines(
         const rcLines = generateReverseChargePurchaseLines({
           base,
           rate,
-          kind: reverseChargeKindForSupplierType(rcSupplierType),
+          kind: supplierInvoiceReverseChargeKind(rcSupplierType, header.reverse_charge_kind),
           basisBase,
         })
         lines.push(...rcLines.map((l) => ({ ...l, dimensions: defaultDimensions })))

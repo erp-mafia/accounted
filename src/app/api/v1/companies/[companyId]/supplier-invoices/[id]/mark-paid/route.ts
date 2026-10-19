@@ -206,7 +206,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       .from('supplier_invoices')
       .select(`
         id, supplier_id, status, currency, exchange_rate, total, paid_amount, remaining_amount,
-        supplier_invoice_number, arrival_number, invoice_date, vat_treatment, reverse_charge, payment_reference,
+        supplier_invoice_number, arrival_number, invoice_date, vat_treatment, reverse_charge, reverse_charge_kind, payment_reference,
         subtotal, subtotal_sek, vat_amount, vat_amount_sek, total_sek, due_date, received_date,
         is_credit_note, credited_invoice_id, payment_journal_entry_id, registration_journal_entry_id, default_dimensions,
         supplier:suppliers(id, name, supplier_type),

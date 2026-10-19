@@ -18,7 +18,7 @@ import { inferVatTreatment } from '@/lib/supplier-invoices/form-payload'
 import { roundOre } from '@/lib/money'
 import { itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
 import type { InvoiceBookingMoment } from '@/lib/bookkeeping/booking-mode'
-import type { Supplier } from '@/types'
+import type { Supplier, SupplierInvoiceReverseChargeKind } from '@/types'
 
 interface ReviewLineItem {
   description: string
@@ -56,6 +56,8 @@ interface SupplierInvoiceReviewContentProps {
   currency: string
   exchangeRate?: string
   reverseCharge: boolean
+  /** Goods or services under an EU supplier's reverse charge, as the payload sends it. */
+  reverseChargeKind?: SupplierInvoiceReverseChargeKind
   paymentReference?: string
   items: ReviewLineItem[]
   /** Include the invoice rounding in both the payable and journal preview. */
@@ -130,6 +132,7 @@ export function SupplierInvoiceReviewContent({
   currency,
   exchangeRate,
   reverseCharge,
+  reverseChargeKind,
   paymentReference,
   items,
   oreRounding,
@@ -167,6 +170,7 @@ export function SupplierInvoiceReviewContent({
       currency,
       exchange_rate: currency === 'SEK' ? null : fxRate,
       reverse_charge: reverseCharge,
+      reverse_charge_kind: reverseChargeKind ?? null,
       vat_treatment: inferVatTreatment(items, reverseCharge),
       default_dimensions: defaultDimensions,
       total,

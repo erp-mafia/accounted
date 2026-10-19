@@ -737,6 +737,28 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
     expect(insertedRow!.reverse_charge).toBe(true)
   })
 
+  it('refuses reverse_charge_kind for a supplier that is not in another EU country (crm#1323)', async () => {
+    mockServiceClient.mockReturnValue(
+      supabaseFor({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        suppliers: { data: SAMPLE_SUPPLIER, error: null },
+        company_settings: { data: { bookkeeping_locked_through: null }, error: null },
+        fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
+        idempotency_keys: { data: null, error: null },
+      }).supabase,
+    )
+    const res = await createSI(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices`, {
+        method: 'POST',
+        body: JSON.stringify({ ...validBody, reverse_charge_kind: 'eu_goods' }),
+      }),
+      companyParams(COMPANY_ID),
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('SI_CREATE_INVALID_INPUT')
+  })
+
   it('rejects reverse_charge=true with non-zero item vat_rate (cross-field)', async () => {
     mockServiceClient.mockReturnValue(
       supabaseFor({

@@ -399,7 +399,7 @@ import { resolveInboxCreditTarget } from '@/lib/supplier-invoices/credit-target'
 import { resolveInboxPurchaseCategories } from '@/lib/categories/inbox-purchase-category'
 import { keepPersonChoices } from '@/lib/documents/person-corrections'
 import { CreditSupplierInvoiceInputSchema, creditSupplierInvoice } from '@/lib/supplier-invoices/credit'
-import { resolveSupplierInvoiceReverseCharge } from '@/lib/supplier-invoices/create'
+import { resolveSupplierInvoiceReverseCharge, resolveSupplierInvoiceReverseChargeKind } from '@/lib/supplier-invoices/create'
 import { OperationError, throwOutcomeFailure } from '@/lib/operations/errors'
 import { requireCompanyAdmin } from '@/lib/operations/access'
 import { createSupplier } from '@/lib/suppliers/create-supplier'
@@ -664,9 +664,9 @@ import { commitPendingOperation } from '@/lib/pending-operations/commit'
 import { buildStagedInvoice, describeInvoiceBuildRefusal } from '@/lib/pending-operations/build-staged-invoice'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { getUserCompanies } from '@/lib/company/context'
-import { CURRENCIES, INVOICE_QR_MODES } from '@/types'
+import { CURRENCIES, INVOICE_QR_MODES, SUPPLIER_INVOICE_REVERSE_CHARGE_KINDS } from '@/types'
 import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, InvoiceQrMode, Currency, CompanySettings, Customer, InvoiceItem, PendingOperation, YearEndBlockerCode, SalesOrder, SalesOrderItem, SalesOrderStatus } from '@/types'
-import type { InvoiceExtractionResult } from '@/types'
+import type { InvoiceExtractionResult, SupplierInvoiceReverseChargeKind } from '@/types'
 import { isMatchableInvoiceStatus, isMatchableSupplierInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { creditNoteRefusal } from '@/lib/invoices/credit-invoice'
 
@@ -15874,6 +15874,7 @@ export const tools: McpTool[] = [
         inbox_item_id: { type: 'string' },
         supplier_id_override: { type: 'string', description: 'Force this supplier UUID instead of the matched/extracted one' },
         vat_treatment_override: { type: 'string', enum: ['standard_25', 'reduced_12', 'reduced_6', 'reverse_charge', 'export', 'exempt'], description: 'Default follows supplier type' },
+        reverse_charge_kind: { type: 'string', enum: [...SUPPLIER_INVOICE_REVERSE_CHARGE_KINDS], description: 'EU supplier, reverse charge: goods ruta 20 (4515); omitted = services, ruta 21' },
         invoice_date_override: { type: 'string', description: 'Override extracted invoice date (YYYY-MM-DD). Use when OCR misses the date.' },
         due_date_override: { type: 'string', description: 'Override extracted due date (YYYY-MM-DD)' },
         exchange_rate_override: { type: 'number', description: 'SEK per 1 unit of invoice currency; skips the Riksbanken lookup.' },
@@ -16214,6 +16215,12 @@ export const tools: McpTool[] = [
       // charges Swedish moms). The approver is told (compliance note below).
       const reverseChargeOverridden =
         !reverseCharge && resolveSupplierInvoiceReverseCharge(supplierType, {}).reverseCharge
+      // Goods or services under an EU supplier's reverse charge (crm#1323),
+      // by the rule every door shares. Staged only when given, so an op
+      // without it keeps the exact params a company grant knows.
+      const reverseChargeKindArg = args.reverse_charge_kind as SupplierInvoiceReverseChargeKind | undefined
+      const reverseChargeKind = resolveSupplierInvoiceReverseChargeKind(supplierType, reverseCharge, reverseChargeKindArg)
+      if (!reverseChargeKind.ok) throw new Error(String(reverseChargeKind.details?.reason ?? 'reverse_charge_kind is not valid here'))
       // Omvänd skattskyldighet: the buyer self-assesses the VAT (2614/2645
       // in the registration entry) and the seller must not charge any. When
       // the underlag still carries VAT (feedback seq 366701: a foreign SaaS
@@ -16641,6 +16648,7 @@ export const tools: McpTool[] = [
         currency,
         exchange_rate: exchangeRate,
         vat_treatment: vatTreatment,
+        ...(reverseChargeKind.kind ? { reverse_charge_kind: reverseChargeKind.kind } : {}),
         payment_reference: paymentReference,
         // The net of the lines the invoice is staged with, a rounding item
         // included (an ordinary zero-VAT line, as the create route sums it),
@@ -16681,6 +16689,7 @@ export const tools: McpTool[] = [
             }
           : {}),
         vat_treatment: vatTreatment,
+        ...(reverseChargeKind.kind ? { reverse_charge_kind: reverseChargeKind.kind } : {}),
         payment_reference: paymentReference,
         subtotal: params.subtotal,
         vat_amount: params.vat_amount,

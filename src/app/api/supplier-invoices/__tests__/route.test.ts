@@ -1253,6 +1253,73 @@ describe('POST /api/supplier-invoices: unified registration guards', () => {
     expect(itemRows[0].vat_rate).toBe(0)
   })
 
+  it('stores an EU supplier\'s goods purchase as eu_goods (crm#1323)', async () => {
+    stubRegistration({
+      supplier: makeSupplier({ id: VALID_UUID, supplier_type: 'eu_business' }),
+      settings: { accounting_method: 'cash' },
+    })
+
+    const response = await POST(createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: body({ reverse_charge_kind: 'eu_goods', items: [{ description: 'Varor', amount: 10000, account_number: '4010' }] }),
+    }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    const invoiceRow = findCall('supplier_invoices', 'insert')?.[0] as Record<string, unknown>
+    expect(invoiceRow.reverse_charge).toBe(true)
+    expect(invoiceRow.reverse_charge_kind).toBe('eu_goods')
+  })
+
+  it('stores no kind when the caller says nothing: services, as before', async () => {
+    stubRegistration({
+      supplier: makeSupplier({ id: VALID_UUID, supplier_type: 'eu_business' }),
+      settings: { accounting_method: 'cash' },
+    })
+
+    const response = await POST(createMockRequest('/api/supplier-invoices', { method: 'POST', body: body() }))
+
+    expect(response.status).toBe(200)
+    const invoiceRow = findCall('supplier_invoices', 'insert')?.[0] as Record<string, unknown>
+    expect(invoiceRow.reverse_charge_kind).toBeNull()
+  })
+
+  it.each([
+    ['a Swedish supplier', 'swedish_business', {}],
+    ['a non-EU supplier', 'non_eu_business', {}],
+    ['an EU supplier without reverse charge', 'eu_business', { reverse_charge: false, vat_treatment: 'exempt' }],
+  ] as const)('refuses reverse_charge_kind for %s before anything is written', async (_label, supplierType, extra) => {
+    stubRegistration({ supplier: makeSupplier({ id: VALID_UUID, supplier_type: supplierType }) })
+
+    const response = await POST(createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: body({ reverse_charge_kind: 'eu_goods', ...extra }),
+    }))
+    const { status, body: responseBody } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(responseBody.error.code).toBe('SI_CREATE_INVALID_INPUT')
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+    expect(findCall('supplier_invoices', 'insert')).toBeUndefined()
+  })
+
+  it('refuses a kind outside eu_goods and eu_services as a validation error', async () => {
+    stubRegistration({ supplier: makeSupplier({ id: VALID_UUID, supplier_type: 'eu_business' }) })
+
+    const response = await POST(createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: body({ reverse_charge_kind: 'non_eu_services' }),
+    }))
+    const { status, body: responseBody } = await parseJsonResponse<{
+      type: string
+      errors: Array<{ field: string }>
+    }>(response)
+
+    expect(status).toBe(400)
+    expect(responseBody.type).toBe('validation_error')
+    expect(responseBody.errors.some((e) => e.field === 'reverse_charge_kind')).toBe(true)
+  })
+
   it('a reverse-charge line carrying a vat_rate is a VALIDATION_ERROR', async () => {
     stubRegistration({ supplier: makeSupplier({ id: VALID_UUID, supplier_type: 'eu_business' }) })
 

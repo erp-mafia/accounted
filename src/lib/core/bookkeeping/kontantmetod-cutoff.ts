@@ -86,11 +86,11 @@ import { buildSupplierDescription } from '@/lib/bookkeeping/supplier-invoice-des
 import {
   generateReverseChargePurchaseLines,
   resolveReverseChargeRate,
-  reverseChargeKindForSupplierType,
   reverseChargeOnAccount,
+  supplierInvoiceReverseChargeKind,
 } from '@/lib/bookkeeping/vat-entries'
 import { chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
-import type { ChartVatTreatments } from '@/lib/bookkeeping/vat-entries'
+import type { ChartVatTreatments, ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
 import { correctionBusinessEvents } from '@/lib/bookkeeping/ledger-business-events'
 import { anchorCustomerInvoiceDocument } from '@/lib/core/documents/customer-invoice-underlag'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
@@ -221,7 +221,8 @@ export interface CutoffPayable {
     rate: number
     base: number
     nonBasisBase: number
-    supplierType: 'eu_business' | 'non_eu_business' | 'swedish_business'
+    /** The basis box the invoice books (supplierInvoiceReverseChargeKind). */
+    kind: ReverseChargeKind
   }>
   /**
    * Net expense split across BAS accounts, as weights. Only the ratios matter:
@@ -432,7 +433,7 @@ export function buildCutoffLines(
     rate: number
     baseOre: number
     nonBasisBaseOre: number
-    supplierType: 'eu_business' | 'non_eu_business' | 'swedish_business'
+    kind: ReverseChargeKind
   }>()
   let payableOre = 0
   let inputVatOre = 0
@@ -462,12 +463,12 @@ export function buildCutoffLines(
       expenseByAccount.set(bucket.account, (expenseByAccount.get(bucket.account) ?? 0) + share)
     })
     for (const group of row.reverseChargeGroups ?? []) {
-      const key = `${group.supplierType}:${group.rate}`
+      const key = `${group.kind}:${group.rate}`
       const current = reverseChargeByGroup.get(key) ?? {
         rate: group.rate,
         baseOre: 0,
         nonBasisBaseOre: 0,
-        supplierType: group.supplierType,
+        kind: group.kind,
       }
       current.baseOre += toOre(group.base)
       current.nonBasisBaseOre += toOre(group.nonBasisBase)
@@ -519,7 +520,7 @@ export function buildCutoffLines(
         generateReverseChargePurchaseLines({
           base,
           rate: group.rate,
-          kind: reverseChargeKindForSupplierType(group.supplierType),
+          kind: group.kind,
           basisBase: nonBasisBase,
         }),
         sign,
@@ -1852,7 +1853,7 @@ export async function collectKontantmetodCutoff(
           // judged against what it booked then, so its figures stay.
           let query = supabase
             .from('supplier_invoices')
-            .select('id, supplier_invoice_number, arrival_number, invoice_date, status, total, total_sek, vat_amount, vat_amount_sek, reverse_charge, is_credit_note, credited_invoice_id, currency, exchange_rate, remaining_amount, paid_at, registration_journal_entry_id, supplier:suppliers(supplier_type), items:supplier_invoice_items(account_number, line_total, vat_rate, reverse_charge_rate)')
+            .select('id, supplier_invoice_number, arrival_number, invoice_date, status, total, total_sek, vat_amount, vat_amount_sek, reverse_charge, reverse_charge_kind, is_credit_note, credited_invoice_id, currency, exchange_rate, remaining_amount, paid_at, registration_journal_entry_id, supplier:suppliers(supplier_type), items:supplier_invoice_items(account_number, line_total, vat_rate, reverse_charge_rate)')
             .eq('company_id', companyId)
             .lte('invoice_date', periodEnd)
             .in('status', perInvoice ? [...KONTANTMETOD_CARRY_SUPPLIER_STATUSES] : LEGACY_CUTOFF_SUPPLIER_STATUSES)
@@ -2063,7 +2064,10 @@ export async function collectKontantmetodCutoff(
         rate,
         base: group.base * sign,
         nonBasisBase: group.nonBasisBase * sign,
-        supplierType: supplierType as 'eu_business' | 'non_eu_business' | 'swedish_business',
+        kind: supplierInvoiceReverseChargeKind(
+          supplierType as 'eu_business' | 'non_eu_business' | 'swedish_business',
+          row.reverse_charge_kind as string | null | undefined,
+        ),
       }))
     }
     payables.push({

@@ -28,7 +28,7 @@ vi.mock('@/components/ui/account-number', () => ({ AccountNumber: ({ number }: {
 const header = {
   supplier_id: 'supplier-1', supplier_invoice_number: 'M-1190', invoice_date: '2026-10-01',
   due_date: '2026-10-31', delivery_date: '', currency: 'SEK', exchange_rate: '',
-  reverse_charge: false, payment_reference: '', notes: '', payer: 'unpaid',
+  reverse_charge: false, reverse_charge_kind: 'eu_services', payment_reference: '', notes: '', payer: 'unpaid',
   claimant_name: '', employee_id: '',
 } satisfies Omit<SupplierInvoiceFormData, 'items'>
 
@@ -66,7 +66,7 @@ function previewRows(items: SupplierInvoiceLineItem[], oreRounding: boolean): Ro
 async function bookedLines(items: SupplierInvoiceLineItem[], oreRounding: boolean) {
   const data: SupplierInvoiceFormData = { ...header, items }
   const payload = buildSupplierInvoicePayload(data, {
-    oreRounding, inboxItemId: null, uploadedDocumentId: undefined, defaultDims: {}, canUseAccrual: true,
+    oreRounding, inboxItemId: null, uploadedDocumentId: undefined, defaultDims: {}, canUseAccrual: true, euSupplier: false,
   })
   const stored: SupplierInvoiceItem[] = payload.items.map((item, i) => ({
     ...item, id: `item-${i}`, supplier_invoice_id: 'invoice-1', sort_order: i,

@@ -290,6 +290,7 @@ export default function NewSupplierInvoiceForm({
       currency: 'SEK',
       exchange_rate: '',
       reverse_charge: false,
+      reverse_charge_kind: 'eu_services',
       payment_reference: '',
       notes: '',
       payer: settleWith && inboxItemId ? 'company' : 'unpaid',
@@ -372,6 +373,11 @@ export default function NewSupplierInvoiceForm({
       reverseCharge: watchedReverseCharge,
     })
   }
+  const watchedReverseChargeKind = watch('reverse_charge_kind')
+  // An EU supplier's reverse charge books goods (ruta 20) or services
+  // (ruta 21): the form asks which, and sends it only then (crm#1323).
+  const euSupplier = suppliers.find((s) => s.id === watchedSupplierId)?.supplier_type === 'eu_business'
+  const asksReverseChargeKind = watchedReverseCharge && euSupplier
   // Watched values used to decide whether the AI-filled indicator should
   // still be visible. Once the user edits a field, its value no longer
   // matches what the extractor wrote, and the dot fades out.
@@ -599,6 +605,9 @@ export default function NewSupplierInvoiceForm({
     if (supplier.supplier_type === 'eu_business') {
       setValue('reverse_charge', true)
     }
+    // Goods or services is a word about this purchase, never carried over
+    // from the previous supplier: back to services, the default.
+    setValue('reverse_charge_kind', 'eu_services')
 
     // No supplier default: fall back to the company's own booking history for
     // this counterparty (the same tiered matcher the booking flows use). Fills
@@ -1408,6 +1417,7 @@ export default function NewSupplierInvoiceForm({
       oreRounding,
       defaultDims,
       canUseAccrual,
+      euSupplier,
     })
   }
 
@@ -1532,7 +1542,13 @@ export default function NewSupplierInvoiceForm({
         ? t('forval_books_at_payment')
         : t('forval_books_on_book_step'),
   ]
-  if (watchedReverseCharge) forvalChips.push(t('reverse_charge_label'))
+  if (watchedReverseCharge) {
+    forvalChips.push(
+      asksReverseChargeKind
+        ? t(watchedReverseChargeKind === 'eu_goods' ? 'reverse_charge_chip_goods' : 'reverse_charge_chip_services')
+        : t('reverse_charge_label'),
+    )
+  }
   if ((watchedCurrency || 'SEK') !== 'SEK') {
     forvalChips.push(
       watchedExchangeRate
@@ -2277,6 +2293,31 @@ export default function NewSupplierInvoiceForm({
                     )}
                   />
                 </div>
+                {asksReverseChargeKind && (
+                  <div className="flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]">
+                    <span>
+                      {t('reverse_charge_kind_label')}
+                      <span className="block text-xs text-muted-foreground">
+                        {t('reverse_charge_kind_help')}
+                      </span>
+                    </span>
+                    <Controller
+                      name="reverse_charge_kind"
+                      control={control}
+                      render={({ field }) => (
+                        <Select value={field.value} onValueChange={field.onChange}>
+                          <SelectTrigger className="h-8 w-28" aria-label={t('reverse_charge_kind_label')}>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="eu_services">{t('reverse_charge_kind_services')}</SelectItem>
+                            <SelectItem value="eu_goods">{t('reverse_charge_kind_goods')}</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      )}
+                    />
+                  </div>
+                )}
                 <div className="flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]">
                   <span>{t('currency_label')}</span>
                   <Controller
@@ -2495,6 +2536,7 @@ export default function NewSupplierInvoiceForm({
               currency={pendingData.currency}
               exchangeRate={pendingData.exchange_rate || undefined}
               reverseCharge={pendingData.reverse_charge}
+              reverseChargeKind={pendingData.reverse_charge && euSupplier ? pendingData.reverse_charge_kind : undefined}
               paymentReference={pendingData.payment_reference || undefined}
               items={pendingData.items}
               oreRounding={oreRounding}

@@ -239,6 +239,21 @@ export function reverseChargeKindForSupplierType(supplierType: ReverseChargeSupp
   return 'eu_services'
 }
 
+/**
+ * The kind a supplier invoice's reverse charge books. An EU supplier's
+ * invoice says goods (ruta 20) in reverse_charge_kind (crm#1323); NULL, and
+ * every other supplier type, books what the type books. Every builder of a
+ * supplier invoice's reverse-charge lines reads it here, so the registration,
+ * the cash and cut-off entries and the credit note can never disagree.
+ */
+export function supplierInvoiceReverseChargeKind(
+  supplierType: ReverseChargeSupplierType,
+  invoiceKind: string | null | undefined,
+): ReverseChargeKind {
+  if (supplierType === 'eu_business' && invoiceKind === 'eu_goods') return 'eu_goods'
+  return reverseChargeKindForSupplierType(supplierType)
+}
+
 /** The momsdeklaration box the basis pair of a kind lands in. */
 export function reverseChargeKindRuta(kind: ReverseChargeKind): 'ruta20' | 'ruta21' | 'ruta22' | 'ruta24' {
   if (kind === 'eu_goods') return 'ruta20'

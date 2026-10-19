@@ -820,6 +820,9 @@ describe('tools/list payload size guard', () => {
     // paid_at_issue_account (crm#1281). Each fitted alone; together they measured
     // 61 317 on main. The prose was trimmed first (to 61 301); what remains is the
     // new argument and the two payment rules an agent needs.
+    // 2026-10-19 (crm#1323): gnubok_create_supplier_invoice_from_inbox gains
+    // reverse_charge_kind (EU goods, ruta 20) with a one-line description.
+    // Measured 61 369 (full catalog 65 838). Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 
