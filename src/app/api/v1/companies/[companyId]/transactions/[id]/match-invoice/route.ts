@@ -16,6 +16,11 @@
  *   4. Update invoice status (paid / partially_paid) with optimistic lock.
  *   5. Insert invoice_payments row; link transaction to invoice.
  *
+ * A company that books invoices in a separate step (defer_invoice_booking)
+ * gets an unbooked invoice's sale booked first, by the :book step on its
+ * invoice date, before step 1 (lib/invoices/sale-first.ts); a refusal there
+ * refuses the match with nothing written.
+ *
  * Mirrors the internal route's failure ordering exactly. Idempotent on
  * (transaction, key). NOT dry-runnable: the multi-row interlock makes a
  * meaningful preview infeasible without staging the JE for real, and dry-
@@ -63,6 +68,13 @@ import { eventBus } from '@/lib/events/bus'
 import type { CreateJournalEntryInput, Currency, EntityType, Invoice, Transaction } from '@/types'
 import { MATCHABLE_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import { linkBasisColumns } from '@/lib/links/stamp'
+import {
+  bookSaleBeforeSettlement,
+  clearsReceivable,
+  planSaleBeforeSettlement,
+  SALE_FIRST_NOT_REQUIRED,
+} from '@/lib/invoices/sale-first'
+import { v1OutcomeResponse } from '@/lib/operations/v1'
 
 const MatchInvoiceResponse = z.object({
   success: z.boolean(),
@@ -71,6 +83,11 @@ const MatchInvoiceResponse = z.object({
   paid_amount: z.number(),
   remaining_amount: z.number(),
   journal_entry_id: z.string().uuid().nullable(),
+  sale_journal_entry_id: z
+    .string()
+    .uuid()
+    .optional()
+    .describe('The sale verifikat this match booked first (defer_invoice_booking); absent when none was booked.'),
   // Preserved from the prior :categorize call (or whatever the existing
   // value was). Returns null when the transaction had never been
   // categorized: the v1 surface no longer guesses 'income_services'
@@ -95,6 +112,7 @@ registerEndpoint({
     'Transaction must be positive (amount > 0): negative transactions return MATCH_INVOICE_NOT_INCOME.',
     'Invoice must be in sent / overdue / partially_paid status: paid or draft invoices return MATCH_INVOICE_NOT_OPEN.',
     'Kontantmetoden: an invoice never booked at issue is matched only by one payment of its whole amount. A partial payment, or the final payment of an invoice already part-paid, returns INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED (details.reason partial_payment | previously_partially_paid); book that payment as a manual journal entry.',
+    'Faktureringsmetoden with defer_invoice_booking (Registrera men bokför inte): an invoice sent without its verifikat is booked first by the invoices :book step (dated on the invoice date), then the payment clears that 1510; sale_journal_entry_id names it. When the book step refuses (PERIOD_LOCKED on the invoice date, INVOICE_BOOK_NO_FISCAL_PERIOD, INVOICE_BOOK_INVALID_STATUS for a partially paid invoice) or the transaction date is locked (PERIOD_LOCKED with details.payment_date), the match is refused with that code, details.sale_first is true, and nothing is booked.',
     'Idempotency-Key is mandatory.',
   ],
   example: {
@@ -515,6 +533,19 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       }
     }
 
+    // Faktureringsmetoden with defer_invoice_booking: an invoice sent without
+    // its verifikat gets its sale booked first, by the :book step on its
+    // invoice date, and the payment then clears the 1510 it debits
+    // (lib/invoices/sale-first.ts). The plan is the :book step's dry run and
+    // the payment date's lock, so a refusal comes before anything is written.
+    // Custom lines that book the revenue themselves carry the sale already.
+    const saleCtx = { supabase: ctx.supabase, companyId: ctx.companyId!, userId: ctx.userId, log: txLog }
+    const salePlan =
+      customLines && !clearsReceivable(customLines)
+        ? SALE_FIRST_NOT_REQUIRED
+        : await planSaleBeforeSettlement(saleCtx, invoice, { settlementDate: transaction.date })
+    if (!salePlan.ok) return v1OutcomeResponse(salePlan, ctx)
+
     // A RECONCILIATION link (reconciliation_method set) is not a conflicting
     // booking: the entry is an independent verifikat that may evidence OTHER
     // affärshändelser; reversing it wholesale would be an over-broad rättelse
@@ -528,6 +559,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             method: transaction.reconciliation_method as string,
           }
         : null
+
+    // The sale first: a correct booking of the sent invoice whatever happens
+    // to the match after it.
+    const sale = await bookSaleBeforeSettlement(saleCtx, salePlan)
+    if (!sale.ok) return v1OutcomeResponse(sale, ctx)
+    const saleJournalEntryId = sale.bookedHere ? sale.journalEntryId : null
 
     if (transaction.journal_entry_id && !priorReconciliationLink) {
       try {
@@ -680,7 +717,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       txLog.error('match-invoice: payment JE creation failed: aborting before state mutation', err as Error)
       return v1ErrorResponseFromCode('INVOICE_PAID_BOOK_FAILED', txLog, {
         requestId: ctx.requestId,
-        details: { reason: getErrorMessage(err, { context: 'invoice' }) },
+        details: {
+          reason: getErrorMessage(err, { context: 'invoice' }),
+          // The sale booked first stands: a retry settles against it.
+          ...(saleJournalEntryId ? { sale_journal_entry_id: saleJournalEntryId } : {}),
+        },
       })
     }
     // Fail closed, as the dashboard route does: a builder that booked nothing
@@ -688,17 +729,22 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     if (!journalEntryId) {
       return v1ErrorResponseFromCode('INVOICE_PAID_BOOK_FAILED', txLog, {
         requestId: ctx.requestId,
-        details: { reason: 'no_journal_entry_created' },
+        details: {
+          reason: 'no_journal_entry_created',
+          ...(saleJournalEntryId ? { sale_journal_entry_id: saleJournalEntryId } : {}),
+        },
       })
     }
 
-    // Re-attach invoice PDF to the payment JE (BFL 7 kap underlag).
-    if (journalEntryId && invoice.journal_entry_id) {
+    // Re-attach invoice PDF to the payment JE (BFL 7 kap underlag), from the
+    // invoice's own verifikat: linked at issue, or booked first above.
+    const invoiceJournalEntryId = invoice.journal_entry_id ?? sale.journalEntryId
+    if (journalEntryId && invoiceJournalEntryId) {
       try {
         const { data: invoiceDoc } = await ctx.supabase
           .from('document_attachments')
           .select('storage_path, file_name, file_size_bytes, mime_type, sha256_hash')
-          .eq('journal_entry_id', invoice.journal_entry_id)
+          .eq('journal_entry_id', invoiceJournalEntryId)
           .eq('company_id', ctx.companyId!)
           .eq('is_current_version', true)
           .limit(1)
@@ -918,9 +964,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         paid_amount: newPaidAmount,
         remaining_amount: newRemaining,
         journal_entry_id: journalEntryId,
+        ...(saleJournalEntryId ? { sale_journal_entry_id: saleJournalEntryId } : {}),
         category: existingTxCategory,
       },
-      { requestId: ctx.requestId },
+      {
+        requestId: ctx.requestId,
+        ...(sale.warnings.length > 0 ? { warnings: sale.warnings } : {}),
+      },
     )
   },
   { requireIdempotencyKey: true },

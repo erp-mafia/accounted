@@ -74,6 +74,12 @@ import {
 } from './public-tools'
 import { isEagerAuthRequested } from './auth-mode'
 import { createLogger } from '@/lib/logger'
+import {
+  planSaleBeforeSettlement,
+  planSaleBeforeSettlementById,
+  saleFirstPreview,
+  type SaleFirstInvoice,
+} from '@/lib/invoices/sale-first'
 import { planRegistrationBeforeSettlement } from '@/lib/supplier-invoices/registration-first'
 import { ORE_ROUNDING_SETTLEMENT_MAX, roundOre, sumOre } from '@/lib/money'
 import { grossVat } from '@/lib/bookkeeping/gross-split'
@@ -10494,10 +10500,23 @@ export const tools: McpTool[] = [
         }
       }
 
+      // A deferring company's unbooked invoice (defer_invoice_booking) gets
+      // its sale booked first on approval, by the Bokför step: its dry run
+      // refuses here what approval would refuse, and the approver sees the
+      // sale verifikat (lib/invoices/sale-first.ts).
+      const salePlan = await planSaleBeforeSettlement(
+        { supabase, companyId, userId, log },
+        invoice as SaleFirstInvoice,
+        { settlementDate: paymentDate },
+      )
+      if (!salePlan.ok) throwOutcomeFailure(salePlan)
+
       // The entry the executor will post, from the same inputs it routes on
       // (kontantmetoden on a never-booked invoice: bank / revenue / VAT;
       // otherwise bank / 1510), so the approver sees the lines, not prose.
-      const paymentPreview = await buildMarkPaidPreview(supabase, companyId, invoice)
+      const paymentPreview = await buildMarkPaidPreview(supabase, companyId, invoice, {
+        booksSaleFirst: salePlan.required,
+      })
 
       return stage({
         supabase,
@@ -10515,6 +10534,8 @@ export const tools: McpTool[] = [
           accounting_method: paymentPreview.accounting_method,
           source_type: paymentPreview.source_type,
           journal_entry_preview: paymentPreview.journal_entry_preview,
+          // The sale verifikat approval books first (defer_invoice_booking).
+          ...saleFirstPreview(salePlan),
         },
         actor,
         next: {
@@ -13274,6 +13295,17 @@ export const tools: McpTool[] = [
       // overpayment_account the excess is booked in the same verifikat.
       const overpayment = await refuseUnpayableMatch(supabase, transaction, invoice, overpaymentAccount)
 
+      // A deferring company's unbooked invoice (defer_invoice_booking) gets
+      // its sale booked first on approval, by the Bokför step: its dry run
+      // refuses here what approval would refuse, and the approver sees the
+      // sale verifikat (lib/invoices/sale-first.ts).
+      const salePlan = await planSaleBeforeSettlement(
+        { supabase, companyId, userId, log },
+        invoice as SaleFirstInvoice,
+        { settlementDate: transaction.date },
+      )
+      if (!salePlan.ok) throwOutcomeFailure(salePlan)
+
       const txDesc = transaction.merchant_name || transaction.description || transactionId
       const duplicateNote =
         duplicate.status === 'overridden'
@@ -13319,10 +13351,14 @@ export const tools: McpTool[] = [
           ...(overpayment
             ? { overpayment_amount: overpayment.amount, overpayment_account: overpayment.account }
             : {}),
+          // The sale verifikat approval books first (defer_invoice_booking).
+          ...saleFirstPreview(salePlan),
         },
         actor,
         next: {
-          description: 'After approval the transaction is linked and the invoice is marked paid. Use gnubok_get_ar_ledger to verify the customer balance.',
+          description: salePlan.required
+            ? 'After approval the invoice\'s sale verifikat is booked first (preview.sale_entry, the Bokför step, dated on the invoice date), then the transaction is linked and the invoice is marked paid. Use gnubok_get_ar_ledger to verify the customer balance.'
+            : 'After approval the transaction is linked and the invoice is marked paid. Use gnubok_get_ar_ledger to verify the customer balance.',
           tool: 'gnubok_get_ar_ledger',
         },
         dateForPeriodCheck: transaction.date,
@@ -13581,7 +13617,7 @@ export const tools: McpTool[] = [
       const { data: invoice, error: invErr } = await supabase
         .from('invoices')
         .select(
-          'id, invoice_number, status, document_type, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, journal_entry_id, customer_id, customer:customers(id, name)'
+          'id, invoice_number, status, document_type, credited_invoice_id, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, journal_entry_id, customer_id, customer:customers(id, name)'
         )
         .eq('id', invoiceId)
         .eq('company_id', companyId)
@@ -13603,6 +13639,13 @@ export const tools: McpTool[] = [
         journalEntryId,
       )
       if (!validation.ok) throw voucherLinkRefusal(validation)
+
+      // A deferring company's unbooked invoice (defer_invoice_booking) gets
+      // its sale booked first on approval, by the Bokför step: its dry run
+      // refuses here what approval would refuse, and the approver sees the
+      // sale verifikat (lib/invoices/sale-first.ts).
+      const salePlan = await planSaleBeforeSettlement({ supabase, companyId, userId, log }, invoice as SaleFirstInvoice)
+      if (!salePlan.ok) throwOutcomeFailure(salePlan)
 
       const voucherLabel = validation.voucher.voucher_series && validation.voucher.voucher_number != null
         ? `${validation.voucher.voucher_series}-${validation.voucher.voucher_number}`
@@ -13627,10 +13670,14 @@ export const tools: McpTool[] = [
           will_be_fully_paid: validation.isFullyPaid,
           remaining_after: validation.remainingAfter,
           customer_name: (invoice.customer as unknown as { name?: string } | null)?.name ?? null,
+          // The sale verifikat approval books first (defer_invoice_booking).
+          ...saleFirstPreview(salePlan),
         },
         actor,
         next: {
-          description: 'After approval the invoice transitions to paid (or partially_paid). No new verifikat is created: the existing voucher is the payment posting.',
+          description: salePlan.required
+            ? 'After approval the invoice\'s sale verifikat is booked first (preview.sale_entry, the Bokför step, dated on the invoice date), then the invoice transitions to paid (or partially_paid) against the existing voucher, which is the payment posting.'
+            : 'After approval the invoice transitions to paid (or partially_paid). No new verifikat is created: the existing voucher is the payment posting.',
           tool: 'gnubok_get_ar_ledger',
         },
       })
@@ -14180,6 +14227,15 @@ export const tools: McpTool[] = [
           // the amounts and the routes that book it, instead of being staged.
           const source = proposalSources.get(p.transaction_id)
           if (source) await refuseUnpayableMatch(supabase, source.tx, source.invoice)
+          // The single-match tool's sale-first plan (defer_invoice_booking):
+          // a proposal whose sale the Bokför step would refuse lands in
+          // stage_failures with that code instead of being staged.
+          const salePlan = await planSaleBeforeSettlementById(
+            { supabase, companyId, userId, log },
+            p.invoice_id,
+            { settlementDate: p.transaction_date },
+          )
+          if (!salePlan.ok) throwOutcomeFailure(salePlan)
           await stage({
             supabase,
             companyId,
@@ -14196,6 +14252,8 @@ export const tools: McpTool[] = [
               customer_name: p.customer_name,
               auto_match_confidence: p.confidence,
               auto_match_reason: p.match_reason,
+              // The sale verifikat approval books first (defer_invoice_booking).
+              ...saleFirstPreview(salePlan),
             },
             actor,
           })

@@ -15,9 +15,13 @@
  *     class 19: 1910/1920/1930/1940…) IS the payment the user already booked;
  *     linking just marks the invoice paid without a duplicate entry.
  *
- * No new journal entry is created in either case. Only an invoice_payments row
+ * No payment entry is created in either case. Only an invoice_payments row
  * is inserted pointing at the existing journal_entry_id, plus the invoice's
- * paid_amount/remaining_amount/status are advanced.
+ * paid_amount/remaining_amount/status are advanced. The one exception is the
+ * sale of an invoice a deferring company (defer_invoice_booking) has not
+ * booked yet: the Bokför step books it first, on its invoice date, so the
+ * linked voucher's 151x credit clears a receivable the ledger carries
+ * (./sale-first.ts).
  *
  * Both the web API route and the MCP commit handler call into the same
  * `linkInvoiceToVoucher()` function (→ link_invoice_to_voucher RPC) so
@@ -54,6 +58,12 @@ import {
 } from './voucher-matching-shared'
 import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
 import { resolveInvoiceSettlementSide } from './invoice-settlement-side'
+import {
+  bookSaleBeforeSettlement,
+  planSaleBeforeSettlementById,
+  saleFirstRefusalCode,
+  type SaleFirstRefusal,
+} from './sale-first'
 
 const log = createLogger('voucher-matching')
 
@@ -408,6 +418,8 @@ export interface LinkInvoiceToVoucherResult {
    *  unbooked line matched it; null when nothing was safely linkable. Lets the
    *  inbox row leave the Transactions list: the gap this whole flow fixes. */
   reconciledTransactionId: string | null
+  /** The sale verifikat this link booked first (defer_invoice_booking), else null. */
+  saleJournalEntryId: string | null
 }
 
 /** jsonb payload returned by the link_invoice_to_voucher RPC on success. */
@@ -447,8 +459,18 @@ export async function linkInvoiceToVoucher(
   params: LinkInvoiceToVoucherParams
 ): Promise<
   | { ok: true; result: LinkInvoiceToVoucherResult }
-  | { ok: false; code: VoucherLinkErrorCode; details?: Record<string, unknown> }
+  // A link refusal, or the Bokför step's code when the sale the link books
+  // first was refused (details.sale_first).
+  | { ok: false; code: VoucherLinkErrorCode | SaleFirstRefusal['code']; details?: Record<string, unknown> }
 > {
+  // Faktureringsmetoden with defer_invoice_booking: an invoice sent without
+  // its verifikat gets its sale booked first by the Bokför step, so the linked
+  // voucher's 151x credit clears a receivable the ledger carries
+  // (./sale-first.ts). The link is validated first, so neither refusal leaves
+  // the sale booked.
+  const sale = await bookSaleBeforeVoucherLink(supabase, userId, companyId, params)
+  if (!sale.ok) return sale
+
   // All validation + writes happen inside link_invoice_to_voucher (PL/pgSQL).
   // The function locks the invoice row FOR UPDATE, re-validates the voucher,
   // and applies the invoices UPDATE + invoice_payments INSERT in a single PG
@@ -588,8 +610,47 @@ export async function linkInvoiceToVoucher(
       paymentAmount: rpc.payment_amount,
       journalEntryId: params.journalEntryId,
       reconciledTransactionId,
+      saleJournalEntryId: sale.journalEntryId,
     },
   }
+}
+
+/**
+ * The sale-first step of a voucher link. Plans by invoice id (the company
+ * setting first, so a company that books at issue pays one read); when the
+ * invoice must be booked first, validates the link (the RPC re-checks it) and
+ * runs the Bokför step. A no-op otherwise.
+ */
+async function bookSaleBeforeVoucherLink(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: LinkInvoiceToVoucherParams,
+): Promise<{ ok: true; journalEntryId: string | null } | { ok: false; code: string; details?: Record<string, unknown> }> {
+  const opCtx = { supabase, companyId, userId, log }
+  const plan = await planSaleBeforeSettlementById(opCtx, params.invoiceId)
+  if (!plan.ok) return { ok: false, code: saleFirstRefusalCode(plan), details: plan.details }
+  if (!plan.required) return { ok: true, journalEntryId: null }
+
+  const { data: row, error } = await supabase
+    .from('invoices')
+    .select(
+      'id, invoice_number, status, document_type, credited_invoice_id, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, journal_entry_id, customer_id, customer:customers(id, name)',
+    )
+    .eq('id', params.invoiceId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error) return { ok: false, code: 'LINK_VOUCHER_DB_ERROR', details: { reason: error.message } }
+  // A missing invoice is the RPC's own refusal (LINK_VOUCHER_INVOICE_NOT_FOUND).
+  if (!row) return { ok: true, journalEntryId: null }
+
+  const invoice = row as unknown as Invoice & { customer?: Customer }
+  const validation = await validateVoucherForInvoiceLink(supabase, companyId, invoice, params.journalEntryId)
+  if (!validation.ok) return { ok: false, code: validation.code, details: validation.details }
+
+  const booked = await bookSaleBeforeSettlement(opCtx, plan)
+  if (!booked.ok) return { ok: false, code: saleFirstRefusalCode(booked), details: booked.details }
+  return { ok: true, journalEntryId: booked.bookedHere ? booked.journalEntryId : null }
 }
 
 // ── Helpers ─────────────────────────────────────────────────

@@ -10,6 +10,7 @@ import { resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
 import { roundOre } from '@/lib/money'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { isMatchableInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
+import { sessionFailureResponse } from '@/lib/operations/session'
 import type { EntityType, Invoice } from '@/types'
 
 /**
@@ -19,6 +20,11 @@ import type { EntityType, Invoice } from '@/types'
  *
  * Faktureringsmetoden (accrual): Debit 1930, Credit 1510 (clearing entry)
  * Kontantmetoden (cash):         Debit 1930, Credit 30xx, Credit 26xx
+ *
+ * A company that books invoices in a separate step (defer_invoice_booking)
+ * gets an unbooked invoice's sale booked first, by the Bokför step on its
+ * invoice date, then the clearing (lib/invoices/sale-first.ts); a refusal
+ * there refuses the payment with nothing written.
  *
  * The booking + status transition live in settleInvoicePayment (shared with
  * the Stripe payment sync); this route owns request parsing, the payable
@@ -257,6 +263,9 @@ export const POST = withRouteContext(
 
     if (!result.ok) {
       switch (result.code) {
+        case 'SALE_FIRST_REFUSED':
+          // The Bokför step's own code, details.sale_first: nothing was written.
+          return sessionFailureResponse(result.refusal, opLog, requestId)
         case 'BOOKKEEPING_ERROR':
           return errorResponse(result.error, opLog, { requestId })
         case 'UPDATE_FAILED':
@@ -287,6 +296,11 @@ export const POST = withRouteContext(
       paid_amount: result.newPaidAmount,
       remaining_amount: result.newRemaining,
       journal_entry_id: result.journalEntryId,
+      // The sale verifikat this payment booked first (defer_invoice_booking).
+      ...(result.saleJournalEntryId ? { sale_journal_entry_id: result.saleJournalEntryId } : {}),
+      ...(result.warnings.length > 0
+        ? { warnings: result.warnings.map((w) => ({ code: w.code, message: w.message_sv })) }
+        : {}),
     })
   },
   { requireWrite: true },

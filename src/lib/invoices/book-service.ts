@@ -2,7 +2,9 @@
  * The deferred "Bokför" step for customer invoices (#967), one implementation
  * behind every door: the dashboard routes (POST /api/invoices/[id]/book,
  * POST /api/invoices/bulk-book), the v1 operations invoices.book and
- * invoices.bulk-book, and their MCP tools (lib/operations/invoice-booking.ts).
+ * invoices.bulk-book, their MCP tools (lib/operations/invoice-booking.ts),
+ * and every settlement of a still unbooked invoice, which books it here first
+ * (sale-first.ts).
  *
  * Companies with company_settings.defer_invoice_booking=true send invoices
  * without a verifikat; ekonomi books the revenue entry here once the kontering
@@ -12,7 +14,14 @@
  * Rules, in order, for one invoice:
  *   - it exists in the company, is a real invoice (not a quote, proforma,
  *     delivery note or credit note) and is not booked yet;
- *   - status sent or overdue (paid invoices were booked by their payment);
+ *   - status sent or overdue. A settlement never reaches an unbooked invoice
+ *     of a deferring company first: every door that settles one books its
+ *     sale through this function beforehand (sale-first.ts). So a paid or
+ *     partially paid invoice without a verifikat is either a kontantmetoden
+ *     payment that booked the whole sale (a later switch to
+ *     faktureringsmetoden would double-post it here) or a payment made before
+ *     that rule (2026-10-17) that booked only the 1510 clearing, which needs
+ *     a rättelse, not this step;
  *   - faktureringsmetoden: under kontantmetoden the sale books at payment;
  *   - the invoice date is not in a locked or closed period, nor on or before
  *     the company lock date: PERIOD_LOCKED, checked before anything is

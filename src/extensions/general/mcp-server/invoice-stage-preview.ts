@@ -6,7 +6,9 @@
  * from the same inputs it uses (lib/pending-operations/commit.ts):
  *
  *   - mark paid: kontantmetoden books an invoice that has no verifikat yet as
- *     one cash entry; every other case clears the receivable. The lines come
+ *     one cash entry; every other case clears the receivable, after the sale
+ *     of a deferring company's unbooked invoice is booked first by the Bokför
+ *     step (lib/invoices/sale-first.ts, planned by the tool). The lines come
  *     from the builders the executor books with (buildInvoiceCashLines,
  *     buildInvoicePaymentLines), and the description is read off those lines,
  *     so it cannot claim an account the entry does not touch.
@@ -119,6 +121,8 @@ export async function buildMarkPaidPreview(
   supabase: SupabaseClient,
   companyId: string,
   invoice: StagedInvoiceRow,
+  /** The approval books the invoice's sale first (defer_invoice_booking): the payment clears that receivable. */
+  options: { booksSaleFirst?: boolean } = {},
 ): Promise<MarkPaidPreview> {
   // Same read and defaults as loadBookingContext in the commit executor.
   const { data: settings } = await supabase
@@ -170,7 +174,9 @@ export async function buildMarkPaidPreview(
 
   const how = useCash
     ? 'under kontantmetoden: the invoice has no verifikat of its own, so revenue is recognised at payment'
-    : 'against the receivable booked when the invoice was issued'
+    : options.booksSaleFirst
+      ? 'against the receivable its sale verifikat books first (preview.sale_entry: the Bokför step, dated on the invoice date)'
+      : 'against the receivable booked when the invoice was issued'
   const next_description = journalEntryPreview
     ? `Once approved, the payment is booked ${how}: ${describeAccounts(journalEntryPreview.lines)}. ` +
       'preview.journal_entry_preview lists the amounts. Use gnubok_get_ar_ledger to confirm the invoice is settled.'

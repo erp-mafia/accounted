@@ -76,6 +76,8 @@ export const POST = withRouteContext(
       invoice_status: outcome.result.invoiceStatus,
       paid_amount: outcome.result.paidAmount,
       remaining_amount: outcome.result.remainingAmount,
+      // The sale verifikat this link booked first (defer_invoice_booking).
+      ...(outcome.result.saleJournalEntryId ? { sale_journal_entry_id: outcome.result.saleJournalEntryId } : {}),
     })
   },
   { requireWrite: true },

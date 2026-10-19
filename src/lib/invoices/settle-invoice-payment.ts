@@ -23,6 +23,16 @@ import { roundOre } from '@/lib/money'
 import { postingPort } from '@/lib/posting/port'
 import type { CreateJournalEntryInput, Customer, EntityType, Invoice } from '@/types'
 import { MATCHABLE_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
+import {
+  bookSaleBeforeSettlement,
+  clearsReceivable,
+  planSaleBeforeSettlement,
+  type SaleFirstRefusal,
+} from '@/lib/invoices/sale-first'
+import { createLogger } from '@/lib/logger'
+import type { OperationWarning } from '@/lib/operations/types'
+
+const log = createLogger('settle-invoice-payment')
 
 /**
  * The core "apply a payment to an invoice" operation, extracted from the
@@ -31,15 +41,21 @@ import { MATCHABLE_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses
  * and event emission as the manual flow:
  *
  *   1. planInvoicePayment: ledger math + overpayment guard
- *   2. journal entry: custom lines | cash entry (kontantmetoden, unbooked) |
+ *   2. the sale first, when the company books invoices in a separate step
+ *      (faktureringsmetoden with defer_invoice_booking) and this one has no
+ *      verifikat yet: the Bokför step books it on its invoice date, and a
+ *      refusal there refuses the payment with nothing written
+ *      (lib/invoices/sale-first.ts)
+ *   3. journal entry: custom lines | cash entry (kontantmetoden, unbooked) |
  *      payment entry (clears 1510), fail-closed for real invoices
- *   3. invoice_payments row (the AR sub-ledger): the only source of the
+ *   4. invoice_payments row (the AR sub-ledger): the only source of the
  *      payment DATE, which the kontantmetod bokslut cut-off, the voucher ->
  *      invoice reference map and the "Betalningar" view all read (#2019)
- *   4. CAS-guarded invoice status update; a lost race or failed update cancels
- *      the just-posted voucher and removes the payment row so GL and
- *      sub-ledger never diverge
- *   5. invoice.paid event when the invoice is now fully paid (best-effort)
+ *   5. CAS-guarded invoice status update; a lost race or failed update cancels
+ *      the just-posted payment voucher and removes the payment row so GL and
+ *      sub-ledger never diverge (a sale booked in step 2 stands: it is the
+ *      correct booking of a sent invoice either way)
+ *   6. invoice.paid event when the invoice is now fully paid (best-effort)
  *
  * `settlementAccountNumber` routes the debit side: default 1930 (bank), 1686
  * for PSP-balance settlements (Stripe) where the money reaches the bank only
@@ -110,6 +126,10 @@ export type SettleInvoicePaymentResult =
       newRemaining: number
       journalEntryId: string | null
       paidAt: string | null
+      /** The sale verifikat this payment booked first (defer_invoice_booking), else null. */
+      saleJournalEntryId: string | null
+      /** The Bokför step's non-blocking warnings when it booked the sale here. */
+      warnings: OperationWarning[]
     }
   | { ok: false; code: 'MATCH_AMOUNT_EXCEEDS_REMAINING'; details: Record<string, unknown> }
   | { ok: false; code: 'INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED'; details: Record<string, unknown> }
@@ -120,6 +140,12 @@ export type SettleInvoicePaymentResult =
   | { ok: false; code: 'INVOICE_PAID_RACE' }
   | { ok: false; code: 'BOOKKEEPING_ERROR'; error: unknown }
   | { ok: false; code: 'UPDATE_FAILED'; error: unknown }
+  /**
+   * The sale this payment must book first was refused by the Bokför step (or
+   * the payment date takes no verifikat): `refusal` carries that code, with
+   * details.sale_first. Nothing was written.
+   */
+  | { ok: false; code: 'SALE_FIRST_REFUSED'; refusal: SaleFirstRefusal }
 
 /**
  * Why a settled payment is linked to its invoice. "Markera som betald"
@@ -233,6 +259,11 @@ export async function settleInvoicePayment(
   }
 
   let journalEntryId: string | null = null
+  let saleJournalEntryId: string | null = null
+  let saleWarnings: OperationWarning[] = []
+  // A failure after the sale was booked names it: that verifikat stands.
+  const withSale = (details: Record<string, unknown>): Record<string, unknown> =>
+    saleJournalEntryId ? { ...details, sale_journal_entry_id: saleJournalEntryId } : details
 
   // Posting port (step 2f-2): what this door saw, read only while
   // POSTING_EVENTS is on. The link basis is the payment row's (a person's
@@ -244,26 +275,58 @@ export async function settleInvoicePayment(
   })
 
   if (isRealInvoice) {
-    try {
-      if (customLines) {
-        const totalDebit = customLines.reduce((s, l) => s + l.debit_amount, 0)
-        const totalCredit = customLines.reduce((s, l) => s + l.credit_amount, 0)
-        if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
-          return {
-            ok: false,
-            code: 'INVOICE_PAID_LINES_UNBALANCED',
-            details: { totalDebit, totalCredit },
-          }
+    // Edited rows must balance and the payment date needs an open period:
+    // both refused before the sale below is booked.
+    let customLinesPeriodId: string | null = null
+    if (customLines) {
+      const totalDebit = customLines.reduce((s, l) => s + l.debit_amount, 0)
+      const totalCredit = customLines.reduce((s, l) => s + l.credit_amount, 0)
+      if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
+        return {
+          ok: false,
+          code: 'INVOICE_PAID_LINES_UNBALANCED',
+          details: { totalDebit, totalCredit },
         }
+      }
 
-        const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
-        if (!fiscalPeriodId) {
-          return {
-            ok: false,
-            code: 'INVOICE_PAID_NO_FISCAL_PERIOD',
-            details: { paymentDate },
-          }
+      customLinesPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
+      if (!customLinesPeriodId) {
+        return {
+          ok: false,
+          code: 'INVOICE_PAID_NO_FISCAL_PERIOD',
+          details: { paymentDate },
         }
+      }
+    }
+
+    // Faktureringsmetoden with defer_invoice_booking: an invoice sent without
+    // its verifikat is booked first, by the Bokför step on its invoice date,
+    // then paid against the 1510 it debits (lib/invoices/sale-first.ts). The
+    // plan is the Bokför step's dry run plus the payment date's lock; a
+    // refusal there refuses the payment before anything is written: never a
+    // 1510 clearing without the sale that debits it. Edited rows that book
+    // the revenue themselves carry the sale already (clearsReceivable), and
+    // so does the generated cash entry: a kontantfaktura paid at issue
+    // (recognizeSaleAtPayment) books its sale in its one verifikat, in
+    // either accounting method, so booking the sale first would double the
+    // revenue and the utgående moms.
+    const paymentBooksSale = customLines ? !clearsReceivable(customLines) : useCashEntry
+    if (!paymentBooksSale) {
+      const opCtx = { supabase, companyId, userId, log: log.child({ invoiceId: invoice.id }) }
+      const salePlan = await planSaleBeforeSettlement(opCtx, invoice, { settlementDate: paymentDate })
+      if (!salePlan.ok) return { ok: false, code: 'SALE_FIRST_REFUSED', refusal: salePlan }
+      const sale = await bookSaleBeforeSettlement(opCtx, salePlan)
+      if (!sale.ok) return { ok: false, code: 'SALE_FIRST_REFUSED', refusal: sale }
+      if (sale.bookedHere) {
+        saleJournalEntryId = sale.journalEntryId
+        saleWarnings = sale.warnings
+      }
+    }
+
+    try {
+      // customLinesPeriodId is set whenever customLines is (checked above).
+      if (customLines && customLinesPeriodId) {
+        const fiscalPeriodId = customLinesPeriodId
         const sourceType = resolveInvoicePaymentSourceType({
           invoiceAlreadyBooked,
           // Settings store a raw string; anything but 'cash' books as accrual,
@@ -331,7 +394,7 @@ export async function settleInvoicePayment(
       return {
         ok: false,
         code: 'INVOICE_PAID_BOOK_FAILED',
-        details: { reason: err instanceof Error ? err.message : 'unknown' },
+        details: withSale({ reason: err instanceof Error ? err.message : 'unknown' }),
       }
     }
 
@@ -343,7 +406,7 @@ export async function settleInvoicePayment(
       return {
         ok: false,
         code: 'INVOICE_PAID_BOOK_FAILED',
-        details: { reason: 'no_journal_entry_created' },
+        details: withSale({ reason: 'no_journal_entry_created' }),
       }
     }
   }
@@ -378,7 +441,7 @@ export async function settleInvoicePayment(
       return {
         ok: false,
         code: 'INVOICE_PAID_BOOK_FAILED',
-        details: { reason: 'payment_row_insert_failed', error: recorded.error },
+        details: withSale({ reason: 'payment_row_insert_failed', error: recorded.error }),
       }
     }
     paymentRowId = recorded.id
@@ -445,6 +508,7 @@ export async function settleInvoicePayment(
     newStatus,
     invoice: {
       ...invoice,
+      ...(saleJournalEntryId ? { journal_entry_id: saleJournalEntryId } : {}),
       status: newStatus,
       paid_amount: newPaidAmount,
       remaining_amount: newRemaining,
@@ -463,5 +527,7 @@ export async function settleInvoicePayment(
     newRemaining,
     journalEntryId,
     paidAt,
+    saleJournalEntryId,
+    warnings: saleWarnings,
   }
 }

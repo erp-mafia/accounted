@@ -8,10 +8,13 @@ import type { Logger } from '@/lib/logger'
 import type { Customer, EntityType, Invoice, InvoiceItem } from '@/types'
 import { linkBasisColumns } from '@/lib/links/stamp'
 
-// Statuses where the revenue entry can still be created afterwards. Paid
-// invoices are excluded: their payment flow has already booked the full
-// cash-style entry (mark-paid routes on the missing journal-entry link), so
-// booking the sale now would double-post revenue.
+// Statuses where the revenue entry can still be created afterwards. Paid and
+// partially paid invoices are excluded: a payment that reached one without a
+// verifikat booked either the whole sale (kontantmetoden, before a switch of
+// method), which this step would double-post, or only the 1510 clearing (a
+// deferring company's payment before sale-first.ts), which is corrected by a
+// rättelse. Every settlement door now books the sale first, through
+// bookInvoice, while the invoice is still in one of these statuses.
 export const INVOICE_BOOKABLE_STATUSES = ['sent', 'overdue']
 
 export interface BookDeferredWarning {
