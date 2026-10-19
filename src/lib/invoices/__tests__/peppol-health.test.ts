@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createTableMockSupabase } from '@/tests/helpers'
 import type { Logger } from '@/lib/logger'
@@ -17,7 +17,7 @@ vi.mock('@/lib/email/brand-sender', () => ({
 }))
 vi.mock('@/lib/support', () => ({ getSupportRecipientEmail: () => 'ops@example.test' }))
 
-import { runPeppolHealthCheck } from '@/lib/invoices/peppol-health'
+import { getPeppolAlertRecipients, runPeppolHealthCheck } from '@/lib/invoices/peppol-health'
 
 const NOW = new Date('2026-09-29T12:00:00.000Z')
 const ago = (ms: number) => new Date(NOW.getTime() - ms).toISOString()
@@ -118,7 +118,7 @@ function setup(answers: {
   return { ...mock, service: mock.supabase as unknown as SupabaseClient }
 }
 
-const sentMails = () => emailMock.sendEmail.mock.calls.map(([mail]) => mail as { to: string; subject: string; text: string; html: string; fromName?: string; replyTo?: string })
+const sentMails = () => emailMock.sendEmail.mock.calls.map(([mail]) => mail as { to: string | string[]; subject: string; text: string; html: string; fromName?: string; replyTo?: string })
 
 describe('runPeppolHealthCheck', () => {
   beforeEach(() => {
@@ -163,7 +163,7 @@ describe('runPeppolHealthCheck', () => {
 
     const [digest, senderMail] = sentMails()
     expect(sentMails()).toHaveLength(2)
-    expect(digest.to).toBe('ops@example.test')
+    expect(digest.to).toEqual(['ops@example.test'])
     expect(digest.subject).toBe('[accounted peppol] 1 nytt Peppol-problem')
     expect(digest.text).toContain('Leverans misslyckades | Acme AB (company-1) | faktura 1042 (leverans delivery-failed) | 1 tim | Validation error: BR-CO-15')
 
@@ -253,6 +253,18 @@ describe('runPeppolHealthCheck', () => {
       'peppol health: sender mail failed, claim released for the next run',
       expect.objectContaining({ alert: true, reason: 'socket hang up' }),
     )
+  })
+
+  it('sends the digest to PEPPOL_ALERT_RECIPIENTS instead of the support address when set', async () => {
+    process.env.PEPPOL_ALERT_RECIPIENTS = 'founder@example.test'
+    try {
+      const { service } = setup({ stuck: [stuckDelivery], claimed: [{ kind: 'delivery_stuck', ref_id: 'delivery-stuck' }] })
+      await runPeppolHealthCheck(service, { now: NOW, log: makeLog() as unknown as Logger })
+      expect(sentMails()).toHaveLength(1)
+      expect(sentMails()[0].to).toEqual(['founder@example.test'])
+    } finally {
+      delete process.env.PEPPOL_ALERT_RECIPIENTS
+    }
   })
 
   it('releases every claim and mails no sender when the team digest fails, so nobody is mailed twice', async () => {
@@ -370,7 +382,7 @@ describe('runPeppolHealthCheck', () => {
 
     await runPeppolHealthCheck(service, { now: NOW, log: makeLog() as unknown as Logger })
 
-    const digests = sentMails().filter((mail) => mail.to === 'ops@example.test')
+    const digests = sentMails().filter((mail) => [mail.to].flat().includes('ops@example.test'))
     expect(digests).toHaveLength(1)
     expect(digests[0].subject).toBe('[accounted peppol] 4 nya Peppol-problem')
     expect(digests[0].text.split('\n').filter((line) => line.startsWith('- '))).toHaveLength(4)
@@ -422,5 +434,22 @@ describe('runPeppolHealthCheck', () => {
       /Failed to claim Peppol alerts: permission denied/,
     )
     expect(emailMock.sendEmail).not.toHaveBeenCalled()
+  })
+})
+
+describe('getPeppolAlertRecipients', () => {
+  afterEach(() => {
+    delete process.env.PEPPOL_ALERT_RECIPIENTS
+  })
+
+  it('uses PEPPOL_ALERT_RECIPIENTS, comma separated, dropping blanks and non-addresses', () => {
+    process.env.PEPPOL_ALERT_RECIPIENTS = ' a@example.test, ,nope, b@example.test '
+    expect(getPeppolAlertRecipients()).toEqual(['a@example.test', 'b@example.test'])
+  })
+
+  it('falls back to the support address when unset or empty', () => {
+    expect(getPeppolAlertRecipients()).toEqual(['ops@example.test'])
+    process.env.PEPPOL_ALERT_RECIPIENTS = ' , '
+    expect(getPeppolAlertRecipients()).toEqual(['ops@example.test'])
   })
 })
