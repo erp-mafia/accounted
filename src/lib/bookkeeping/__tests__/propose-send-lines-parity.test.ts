@@ -23,6 +23,8 @@ vi.mock('../engine', () => ({
 
 const { buildInvoiceJournalEntryInput, createCreditNoteJournalEntry } = await import('../invoice-entries')
 const { proposeSendLines } = await import('../propose-send-lines')
+const { buildCreditNoteFields } = await import('@/lib/invoices/build-credit-note')
+const { buildCreditNoteItem } = await import('@/lib/invoices/build-credit-note-item')
 
 const supabase = {} as SupabaseClient
 
@@ -63,22 +65,14 @@ function invoice(overrides: Partial<Invoice> = {}): Invoice {
   } as Invoice
 }
 
-/** A credit note as build-credit-note-item.ts writes it: every amount negated. */
+/** A credit note as createCreditNoteDraft writes it (buildCreditNoteFields, buildCreditNoteItem). */
 function creditNote(original: Invoice, overrides: Partial<Invoice> = {}): Invoice {
   return {
     ...original,
+    ...buildCreditNoteFields(original, { originalReference: original.invoice_number ?? '', today: '2026-10-19' }),
     id: 'cn-1',
     invoice_number: 'KR-2026-007',
-    credited_invoice_id: original.id,
-    total: -Math.abs(original.total),
-    subtotal: -Math.abs(original.subtotal),
-    vat_amount: -Math.abs(original.vat_amount),
-    items: (original.items ?? []).map((i) => ({
-      ...i,
-      quantity: -Math.abs(i.quantity),
-      line_total: -Math.abs(i.line_total),
-      vat_amount: -Math.abs(i.vat_amount),
-    })),
+    items: (original.items ?? []).map((i) => ({ ...i, ...buildCreditNoteItem('cn-1', i) })),
     ...overrides,
   } as Invoice
 }
@@ -210,6 +204,22 @@ describe('proposeSendLines proposes what the server books', () => {
     expect(proposed.find((l) => l.account_number === '3041')?.debit_amount).toBe('1000')
     expect(proposed.find((l) => l.account_number === '1510')?.credit_amount).toBe('1250')
     expect(accounts(proposed)).not.toContain('3001')
+  })
+
+  it('a credit note credits back a rabatt row the original debited (accounted#58)', async () => {
+    const inv = creditNote(invoice({
+      total: 1000,
+      subtotal: 800,
+      vat_amount: 200,
+      items: [
+        item(),
+        item({ id: 'rabatt', description: 'Rabatt', revenue_account: '3730', unit_price: -200, line_total: -200, vat_amount: -50 }),
+      ],
+    }))
+    const proposed = await expectParity(inv)
+    expect(proposed.find((l) => l.account_number === '3730')).toMatchObject({ debit_amount: '', credit_amount: '200' })
+    expect(proposed.find((l) => l.account_number === '2611')?.debit_amount).toBe('200')
+    expect(proposed.find((l) => l.account_number === '1510')?.credit_amount).toBe('1000')
   })
 
   it('a credit note on a periodiserad row reverses the 29xx interim account', async () => {

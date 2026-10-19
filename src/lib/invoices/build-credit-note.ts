@@ -19,14 +19,31 @@ export function creditNoteOriginalReference(
   return original.invoice_number ?? original.external_invoice_number ?? null
 }
 
+/**
+ * A credit note's amount for one of the original's: the same amount with the
+ * opposite sign, so the kreditfaktura takes back exactly what the original
+ * charged, row by row. A row the original books as a reduction (a rabatt, an
+ * öresavrundning downwards) is added back, not taken off a second time:
+ * -Math.abs credited it on the original's own side, which overstated the
+ * reversal of revenue and moms and printed rows that did not add up to the
+ * credit note's own total (accounted#58). Zero and a missing amount give 0,
+ * never -0. Header and rows (buildCreditNoteItem) both go through it: one
+ * rule.
+ */
+export function creditedAmount(amount: number | null | undefined): number {
+  const value = Number(amount ?? 0)
+  return value === 0 ? 0 : -value
+}
+
 /** The credit note's own number: deterministic, so a retry reuses it. */
 export function creditNoteNumber(originalReference: string): string {
   return `KR-${originalReference}`
 }
 
 /**
- * The credit note's header: the original's amounts negated, its VAT, payee
- * and references kept, dated `today`. The reason is printed as the note.
+ * The credit note's header: the original's amounts negated
+ * (creditedAmount), its VAT, payee and references kept, dated `today`. The
+ * reason is printed as the note.
  * Leaves out what the caller owns: user_id, company_id, invoice_number,
  * status and creation_complete.
  */
@@ -42,12 +59,12 @@ export function buildCreditNoteFields(
     currency: original.currency,
     exchange_rate: original.exchange_rate,
     exchange_rate_date: original.exchange_rate_date,
-    subtotal: -Math.abs(original.subtotal),
-    subtotal_sek: original.subtotal_sek ? -Math.abs(original.subtotal_sek) : null,
-    vat_amount: -Math.abs(original.vat_amount),
-    vat_amount_sek: original.vat_amount_sek ? -Math.abs(original.vat_amount_sek) : null,
-    total: -Math.abs(original.total),
-    total_sek: original.total_sek ? -Math.abs(original.total_sek) : null,
+    subtotal: creditedAmount(original.subtotal),
+    subtotal_sek: original.subtotal_sek ? creditedAmount(original.subtotal_sek) : null,
+    vat_amount: creditedAmount(original.vat_amount),
+    vat_amount_sek: original.vat_amount_sek ? creditedAmount(original.vat_amount_sek) : null,
+    total: creditedAmount(original.total),
+    total_sek: original.total_sek ? creditedAmount(original.total_sek) : null,
     vat_treatment: original.vat_treatment,
     vat_rate: original.vat_rate,
     moms_ruta: original.moms_ruta,
