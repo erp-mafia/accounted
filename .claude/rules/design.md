@@ -127,7 +127,7 @@ Never render raw `{x.invoice_date}` directly: always route through `formatDate()
 **Typography.**
 - Page title: use `PageHeader`. Its base classes (`font-display text-2xl leading-8 tracking-tight`) are restyled into the 13px/500 top-bar title by `.page-header-title` in `app/globals.css` (convention 2). Do not hand-roll an `<h1>`.
 - Card title: `<CardTitle className="text-base">` for sections, default for primary cards. The primitive already drops `font-medium`: do not add it back.
-- Section divider header inside a page: `<h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">`.
+- Section divider header inside a page: `<h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">`. An uppercase heading is a label: `globals.css` sets it in the body face, never the display serif in capitals.
 - Headline number: `font-display text-xl tabular-nums`. No `font-medium`: Hedvig's natural weight carries the gravitas.
 - Display font (`font-display`, Hedvig Letters Serif) reserved for h1/h2/h3 and primary financial numbers. If a specific `font-display` numeral reads weak inside a compact metric card, override that call site with `font-sans tabular-nums` (Geist), better legibility on small numerals.
 

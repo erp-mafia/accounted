@@ -468,6 +468,11 @@ summary,
     letter-spacing: -0.015em;
     font-optical-sizing: auto;
   }
+  /* A heading styled as an uppercase label (a section divider, a month band)
+     is a label, not a title: the body face, never the serif in capitals. */
+  :where(h1, h2, h3, h4, h5, h6).uppercase {
+    font-family: var(--font-body);
+  }
 }
 
 /* Number styling - tabular for alignment */
