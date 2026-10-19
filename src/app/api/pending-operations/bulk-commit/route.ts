@@ -6,6 +6,11 @@ import { commitPendingOperation } from '@/lib/pending-operations/commit'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { PendingOperation } from '@/types'
 
+// Commits run one after another, and an approved match_batch_allocate of
+// MAX_BANK_ROW_SPLIT invoices alone comes close to the platform's 60 s
+// default (lib/reconciliation/limits.ts).
+export const maxDuration = 300
+
 interface BulkCommitItemResult {
   id: string
   status: 'committed' | 'failed' | 'skipped' | 'rejected'

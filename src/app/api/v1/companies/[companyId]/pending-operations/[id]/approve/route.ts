@@ -30,6 +30,10 @@ import {
 } from '@/lib/pending-operations/view'
 import type { CommitResult } from '@/lib/pending-operations/commit'
 
+// Same budget as the app's commit route: an approved match_batch_allocate of
+// MAX_BANK_ROW_SPLIT invoices commits here (lib/reconciliation/limits.ts).
+export const maxDuration = 300
+
 const ApproveBody = z
   .object({
     confirmed: z

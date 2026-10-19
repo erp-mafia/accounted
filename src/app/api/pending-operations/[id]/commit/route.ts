@@ -5,6 +5,10 @@ import { bookkeepingErrorResponse, AccountsNotInChartError, ACCOUNTS_NOT_IN_CHAR
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { PendingOperation } from '@/types'
 
+// An approved match_batch_allocate of MAX_BANK_ROW_SPLIT invoices commits here
+// (lib/reconciliation/limits.ts): same budget as the match-batch route.
+export const maxDuration = 300
+
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'pending_operation.commit',
   async (_request, { supabase, user, companyId, log }, { params }) => {
