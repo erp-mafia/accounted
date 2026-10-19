@@ -107,10 +107,14 @@ describe('DuplicateBookingDialog sibling candidates', () => {
     )
   })
 
-  it('switches the body copy to the "matcha i stället" question for sibling candidates', () => {
+  it('switches the body fact and the "matcha i stället" help for sibling candidates', () => {
     expect(BOOKING_DIALOG_SRC).toContain("t('dialog_duplicate_body_sibling')")
     expect(BOOKING_DIALOG_SRC).toMatch(
       /isSiblingCandidate \? t\('dialog_duplicate_body_sibling'\) : t\('dialog_duplicate_body'\)/,
+    )
+    // The body states one fact; what to do about it sits behind the "?".
+    expect(BOOKING_DIALOG_SRC).toMatch(
+      /<HelpPopover[^>]*>\s*\{isSiblingCandidate \? t\('dialog_duplicate_help_sibling'\) : t\('dialog_duplicate_help'\)\}/,
     )
   })
 
@@ -119,6 +123,8 @@ describe('DuplicateBookingDialog sibling candidates', () => {
       const messages = readMessages(locale, 'transactions')
       for (const key of [
         'dialog_duplicate_body_sibling',
+        'dialog_duplicate_help',
+        'dialog_duplicate_help_sibling',
         'dialog_duplicate_ignore',
         'dialog_duplicate_ignore_hint',
         'dialog_duplicate_ignore_failed',
@@ -126,14 +132,15 @@ describe('DuplicateBookingDialog sibling candidates', () => {
         expect(messages[key], `${locale}.transactions.${key}`).toBeTruthy()
         expect(messages[key]).not.toMatch(/–|—/)
       }
-      // The ignore guidance lives in the gated hint, never in the body: two
-      // render sites (manual booking form, bulk dialog) show sibling
-      // candidates without the ignore action, and body copy must not point at
-      // a button that is not there.
+      // The ignore guidance lives in the gated hint, never in the body or
+      // the sibling help: two render sites (manual booking form, bulk
+      // dialog) show sibling candidates without the ignore action, and copy
+      // must not point at a button that is not there.
       expect(messages.dialog_duplicate_body_sibling).not.toMatch(/ignorera|ignore it/i)
+      expect(messages.dialog_duplicate_help_sibling).not.toMatch(/ignorera|ignore it/i)
     }
-    // The requested copy pattern: an offer to match instead, in question form.
-    expect(readMessages('sv', 'transactions').dialog_duplicate_body_sibling).toMatch(
+    // The requested copy pattern: an offer to match instead, behind the "?".
+    expect(readMessages('sv', 'transactions').dialog_duplicate_help_sibling).toMatch(
       /matcha[\s\S]*i stället/i,
     )
   })

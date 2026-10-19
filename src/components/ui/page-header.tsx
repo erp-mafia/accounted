@@ -8,6 +8,12 @@ interface PageHeaderProps {
    */
   title: React.ReactNode
   description?: React.ReactNode
+  /**
+   * A facts line (counterparty, dates, a count) that stays in the top bar,
+   * inline after the title, where a description is hidden. Same masking
+   * contract as the title: wrap user data in a data-ph-mask element.
+   */
+  meta?: React.ReactNode
   action?: React.ReactNode
   /**
    * Page help content, rendered as a small "?" popover right after the H1
@@ -16,7 +22,7 @@ interface PageHeaderProps {
   help?: React.ReactNode
 }
 
-export function PageHeader({ title, description, action, help }: PageHeaderProps) {
+export function PageHeader({ title, description, meta, action, help }: PageHeaderProps) {
   // The page-header* class hooks carry no styling of their own: the
   // .page-header rules in globals.css turn this header into the panel's top
   // bar, and pages that hand-roll a header reuse the same hooks.
@@ -32,6 +38,9 @@ export function PageHeader({ title, description, action, help }: PageHeaderProps
           <h1 data-ph-unmask="" className="page-header-title font-display text-2xl leading-8 tracking-tight">{title}</h1>
           {help}
         </div>
+        {meta ? (
+          <p data-ph-unmask="" className="page-header-meta text-muted-foreground">{meta}</p>
+        ) : null}
         {description && (
           <p data-ph-unmask="" className="page-header-desc text-muted-foreground mt-1 text-balance">{description}</p>
         )}

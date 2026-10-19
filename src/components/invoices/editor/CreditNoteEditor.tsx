@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
-import { FileText } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useToast } from '@/components/ui/use-toast'
 import { Badge } from '@/components/ui/badge'
@@ -495,18 +494,16 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
         }
         form={
           <div className="space-y-8">
-            {/* What is credited: one line of context, read only. */}
-            <div className="flex items-center gap-3 rounded-lg border border-border px-4 py-3 text-[13px]" data-ph-mask="">
-              <FileText className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-              <span className="min-w-0">
-                {t('credits_line', {
-                  number: originalNumber ?? '',
-                  date: formatDate(invoice.invoice_date),
-                  amount: formatCurrency(Math.abs(invoice.total), currency),
-                  status: statusLabel,
-                })}
-              </span>
-            </div>
+            {/* What is credited: one muted line, the only place besides the
+                breadcrumb that names the original invoice. */}
+            <p className="text-[12.5px] text-muted-foreground" data-ph-mask="">
+              {t('credits_line', {
+                number: originalNumber ?? '',
+                date: formatDate(invoice.invoice_date),
+                amount: formatCurrency(Math.abs(invoice.total), currency),
+                status: statusLabel,
+              })}
+            </p>
 
             <EditorSection label={t('customer_label')}>
               <div className="rounded-lg border border-border bg-secondary/35 px-4 py-3" data-ph-mask="">
@@ -522,10 +519,7 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
               </p>
             </EditorSection>
 
-            <EditorSection
-              label={t('rows_title')}
-              aside={t('rows_from', { count: productCount, number: originalNumber ?? '' })}
-            >
+            <EditorSection label={t('rows_title')}>
               <table className="w-full border-collapse text-[13px]">
                 <thead>
                   <tr className="border-b border-border text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
@@ -567,9 +561,6 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
                   )}
                 </tbody>
               </table>
-              <p className="mt-3 text-[12.5px] text-muted-foreground">
-                {t('rows_note', { number: originalNumber ?? '' })}
-              </p>
 
               <dl className="ml-auto mt-6 grid w-full max-w-xs grid-cols-[minmax(0,1fr)_auto] gap-x-6 gap-y-1 text-[13px] tabular-nums">
                 <dt className="text-muted-foreground">{t('subtotal')}</dt>

@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { HelpPopover } from '@/components/ui/help-popover'
 import {
   Dialog,
   DialogContent,
@@ -101,6 +102,19 @@ export function SkattekontoMatchDialog({
   const groupTotal = group
     ? roundOre(group.reduce((s, r) => s + Number(r.belopp_skatteverket), 0))
     : 0
+  // How the search works, and what to do when it finds nothing, sits behind
+  // the "?" (convention 7): the body states only what was found.
+  const help =
+    loading || !candidates
+      ? null
+      : covered && candidates.length === 0
+        ? t('covered_help', { count: group ? group.length : 1 })
+        : group
+          ? t.rich('group_no_candidates_help', { strong: (chunks) => <strong>{chunks}</strong> })
+          : t.rich('no_candidates_help', {
+              strong: (chunks) => <strong>{chunks}</strong>,
+              skattekonto: skattekontoAccount,
+            })
 
   useEffect(() => {
     const request: [string, RequestInit?] | null = group
@@ -207,7 +221,10 @@ export function SkattekontoMatchDialog({
     <Dialog open={open} onOpenChange={o => !o && onClose()}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{t('title')}</DialogTitle>
+          <div className="flex items-center gap-2">
+            <DialogTitle>{t('title')}</DialogTitle>
+            {help ? <HelpPopover className="shrink-0">{help}</HelpPopover> : null}
+          </div>
           {/* data-ph-mask: transaction text and amount are user data */}
           <DialogDescription data-ph-mask="">
             {group
@@ -244,7 +261,6 @@ export function SkattekontoMatchDialog({
         {!loading && candidates && candidates.length === 0 && covered && (
           <div className="space-y-2 py-4 text-sm">
             <p>{t('covered_title', { count: group ? group.length : 1, skattekonto: skattekontoAccount })}</p>
-            <p className="text-muted-foreground">{t('covered_help', { count: group ? group.length : 1 })}</p>
             <p>
               <Link href={MANUAL_MATCH_HREF} className="underline underline-offset-4" onClick={onClose}>
                 {t('covered_cta')}
@@ -254,23 +270,11 @@ export function SkattekontoMatchDialog({
         )}
 
         {!loading && candidates && candidates.length === 0 && !covered && (
-          <div className="space-y-2 py-4 text-sm">
-            <p>
-              {group
-                ? t('group_no_candidates_title', { skattekonto: skattekontoAccount })
-                : t('no_candidates_title', { skattekonto: skattekontoAccount })}
-            </p>
-            <p className="text-muted-foreground">
-              {group
-                ? t.rich('group_no_candidates_help', {
-                    strong: (chunks) => <strong>{chunks}</strong>,
-                  })
-                : t.rich('no_candidates_help', {
-                    strong: (chunks) => <strong>{chunks}</strong>,
-                    skattekonto: skattekontoAccount,
-                  })}
-            </p>
-          </div>
+          <p className="py-4 text-sm">
+            {group
+              ? t('group_no_candidates_title', { skattekonto: skattekontoAccount })
+              : t('no_candidates_title', { skattekonto: skattekontoAccount })}
+          </p>
         )}
 
         {!loading && candidates && candidates.length > 0 && (

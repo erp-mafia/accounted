@@ -159,7 +159,8 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
     <div className="space-y-8">
       <PageHeader
         title={view.title}
-        description={meta}
+        // The facts line stays in the top bar (a description is hidden there).
+        meta={<span data-ph-mask="">{meta}</span>}
         action={
           // The viewer below has its own "open in a new tab" link, so the header asks the document's one open question,
           // with a quiet delete beside it for a document nothing is booked on (crm#230).
@@ -200,10 +201,9 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
         onFailed={() => toast({ title: t('action_failed'), variant: 'destructive' })}
       />
       {view.classification?.summary && (
-        <Section title={t('record_classification')}>
-          {/* Written by a model, so it says so: the document itself, beside it, is the source (founder: raw first). */}
+        // Written by a model, so it says so behind the "?": the document itself, beside it, is the source (founder: raw first).
+        <Section title={t('record_classification')} help={t('record_classification_note')}>
           <p className="m-0 text-[13px]">{view.classification.summary}</p>
-          <p className="mt-1 text-[12.5px] text-muted-foreground">{t('record_classification_note')}</p>
         </Section>
       )}
 

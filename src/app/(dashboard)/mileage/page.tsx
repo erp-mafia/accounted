@@ -9,6 +9,13 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import {
   Dialog,
   DialogContent,
   DialogHeader,
@@ -34,7 +41,7 @@ import { mileageCounterAccounts, type MileageCounterAccount } from '@/lib/mileag
 import { applyRoutePrefill, locationSuggestions } from '@/lib/mileage/route-memory'
 import type { RoutePrefill } from '@/lib/mileage/route-memory'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { Car, Copy, Download, Plus, Trash2, Pencil, ChevronDown, ChevronUp } from 'lucide-react'
+import { Car, Copy, MoreHorizontal, Plus, Trash2, Pencil, ChevronDown, ChevronUp } from 'lucide-react'
 import type { MileageTrip, MileageVehicleType } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { parseDecimalInput } from '@/lib/money'
@@ -116,6 +123,7 @@ function formFromTrip(trip: MileageTrip, keepDate: boolean): TripFormState {
 
 export default function MileagePage() {
   const t = useTranslations('mileage')
+  const tCommon = useTranslations('common')
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
 
@@ -532,17 +540,51 @@ export default function MileagePage() {
   }, [month])
 
   const monthLabel = month === 'all' ? t('all_months') : month
+  // One primary in the top bar (Ny resa); settling the drafts (book them, or
+  // send them to a payroll run instead) and the CSV export sit in its menu,
+  // each behind the same gate as before.
+  const canSettle = canWrite && draftTrips.length > 0
+  const canExport = trips.length > 0
 
   return (
     <div className="space-y-8">
       <PageHeader
         title={t('title')}
         action={
-          canWrite ? (
-            <Button size="sm" onClick={openCreate}>
-              <Plus className="mr-2 h-4 w-4" />
-              {t('new_trip')}
-            </Button>
+          canWrite || canExport ? (
+            <div className="flex items-center gap-2">
+              {(canSettle || canExport) && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon-sm" aria-label={tCommon('more_options')}>
+                      <MoreHorizontal className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    {canSettle && (
+                      <>
+                        <DropdownMenuItem onSelect={openBook}>{t('book_period')}</DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => void openPush()}>{t('push_to_salary')}</DropdownMenuItem>
+                      </>
+                    )}
+                    {canSettle && canExport && <DropdownMenuSeparator />}
+                    {canExport && (
+                      <DropdownMenuItem asChild>
+                        <a href={exportHref} download>
+                          {t('export_csv')}
+                        </a>
+                      </DropdownMenuItem>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+              {canWrite && (
+                <Button size="sm" onClick={openCreate}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  {t('new_trip')}
+                </Button>
+              )}
+            </div>
           ) : undefined
         }
       />
@@ -554,24 +596,6 @@ export default function MileagePage() {
           </p>
         )}
         <div className="ml-auto flex items-center gap-2">
-          {canWrite && draftTrips.length > 0 && (
-            <>
-              <Button size="sm" variant="secondary" onClick={openBook}>
-                {t('book_period')}
-              </Button>
-              <Button size="sm" variant="ghost" onClick={openPush}>
-                {t('push_to_salary')}
-              </Button>
-            </>
-          )}
-          {trips.length > 0 && (
-            <Button size="sm" variant="ghost" asChild>
-              <a href={exportHref} download>
-                <Download className="mr-2 h-4 w-4" />
-                {t('export_csv')}
-              </a>
-            </Button>
-          )}
           <ContextPicker
             items={[
               { id: 'all', label: t('all_months') },

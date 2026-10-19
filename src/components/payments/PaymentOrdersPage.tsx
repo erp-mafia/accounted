@@ -414,6 +414,9 @@ export function PaymentOrdersPage() {
           if (rows.length === 0) return null
           const isToSign = section === 'to_sign'
           const isToApprove = section === 'to_approve'
+          // Every row under "Att godkänna" is a draft whose status is the
+          // section heading itself: no status column there (convention 5).
+          const showStatus = !isToApprove
           return (
             <section key={section} className="space-y-3">
               <div className="flex items-center justify-between gap-4">
@@ -444,7 +447,7 @@ export function PaymentOrdersPage() {
                       <th className={cn(TH_CLASS, 'w-full')}>{t('th_invoice')}</th>
                       <th className={TH_CLASS}>{t('th_payee')}</th>
                       <th className={TH_CLASS}>{t('th_date')}</th>
-                      <th className={TH_CLASS}>{t('th_status')}</th>
+                      {showStatus && <th className={TH_CLASS}>{t('th_status')}</th>}
                       <th className={cn(TH_CLASS, 'text-right')}>{t('th_amount')}</th>
                       <th className={cn(TH_CLASS, 'w-[200px]')} aria-hidden="true"></th>
                     </tr>
@@ -482,9 +485,15 @@ export function PaymentOrdersPage() {
                               </span>
                             </td>
                           )}
+                          {/* One line (convention 4): the reference is a muted
+                              suffix that gives way to the invoice label. */}
                           <td className={cn(TD_CLASS, 'max-w-0')}>
-                            <span className="block truncate">{orderInvoiceLabel(order)}</span>
-                            <span className="block truncate text-[11px] text-muted-foreground">{order.reference}</span>
+                            <span className="flex min-w-0 items-baseline gap-2">
+                              <span className="truncate">{orderInvoiceLabel(order)}</span>
+                              {order.reference ? (
+                                <span className="min-w-0 flex-1 basis-0 truncate text-[12.5px] text-muted-foreground">{order.reference}</span>
+                              ) : null}
+                            </span>
                           </td>
                           <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>
                             {payeeLabel(order)}
@@ -499,40 +508,46 @@ export function PaymentOrdersPage() {
                             )}
                           </td>
                           <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>{formatDate(order.requested_execution_date)}</td>
-                          <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
-                            {held ? (
-                              <Badge variant="warning" className="font-normal">
-                                {tStatus('status_outcome_unknown')}
-                              </Badge>
-                            ) : order.bank_confirming ? (
-                              <Badge variant="outline" className="font-normal">
-                                {tStatus('status_bank_confirming')}
-                              </Badge>
-                            ) : variant ? (
-                              <Badge variant={variant} className="font-normal">
-                                {statusLabel(order.status)}
-                              </Badge>
-                            ) : (
-                              <span className="text-muted-foreground">{statusLabel(order.status)}</span>
-                            )}
-                            {order.status === 'approved' && linkByOrder.has(order.id) && (
-                              <SigningLinkRowNote link={linkByOrder.get(order.id)!} canCancel={canWrite} onCancelled={refresh} />
-                            )}
-                            {order.provider_error_code && (order.status === 'failed' || order.status === 'rejected') && (
-                              <span className="ml-2 text-[11px] text-muted-foreground">{providerCodeText(tStatus, order.provider_error_code) ?? order.provider_error_code}</span>
-                            )}
-                          </td>
+                          {showStatus && (
+                            <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
+                              {held ? (
+                                <Badge variant="warning" className="font-normal">
+                                  {tStatus('status_outcome_unknown')}
+                                </Badge>
+                              ) : order.bank_confirming ? (
+                                <Badge variant="outline" className="font-normal">
+                                  {tStatus('status_bank_confirming')}
+                                </Badge>
+                              ) : variant ? (
+                                <Badge variant={variant} className="font-normal">
+                                  {statusLabel(order.status)}
+                                </Badge>
+                              ) : (
+                                <span className="text-muted-foreground">{statusLabel(order.status)}</span>
+                              )}
+                              {order.status === 'approved' && linkByOrder.has(order.id) && (
+                                <SigningLinkRowNote link={linkByOrder.get(order.id)!} canCancel={canWrite} onCancelled={refresh} />
+                              )}
+                              {order.provider_error_code && (order.status === 'failed' || order.status === 'rejected') && (
+                                <span className="ml-2 text-[11px] text-muted-foreground">{providerCodeText(tStatus, order.provider_error_code) ?? order.provider_error_code}</span>
+                              )}
+                            </td>
+                          )}
+                          {/* The paying account sits before the amount on the
+                              same line, so the amounts still align right. */}
                           <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask')}>
-                            {formatCurrency(Number(order.amount), order.currency)}
-                            {(() => {
-                              const from = availability?.accounts.find((a) => a.id === order.cash_account_id)
-                              return from ? (
-                                <span className="flex items-center justify-end gap-1.5 text-[11px] text-muted-foreground">
-                                  <BankMark bankName={from.bank_name} size={14} />
-                                  {from.ledger_account}
-                                </span>
-                              ) : null
-                            })()}
+                            <span className="inline-flex items-center justify-end gap-2">
+                              {(() => {
+                                const from = availability?.accounts.find((a) => a.id === order.cash_account_id)
+                                return from ? (
+                                  <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+                                    <BankMark bankName={from.bank_name} size={14} />
+                                    {from.ledger_account}
+                                  </span>
+                                ) : null
+                              })()}
+                              {formatCurrency(Number(order.amount), order.currency)}
+                            </span>
                           </td>
                           <td className={cn(TD_CLASS, 'whitespace-nowrap text-right')}>
                             {canWrite && (

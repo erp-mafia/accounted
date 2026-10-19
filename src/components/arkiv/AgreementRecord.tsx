@@ -121,7 +121,8 @@ export function AgreementRecord({ agreementId }: { agreementId: string }) {
       <PageHeader
         title={view.title}
         help={<HelpPopover>{t('agreement_help')}</HelpPopover>}
-        description={meta}
+        // The facts line stays in the top bar (a description is hidden there).
+        meta={meta ? <span data-ph-mask="">{meta}</span> : undefined}
         action={
           <Button asChild size="sm">
             <a href={inlineHref(view.source.document_id, view.source.page)} target="_blank" rel="noreferrer">

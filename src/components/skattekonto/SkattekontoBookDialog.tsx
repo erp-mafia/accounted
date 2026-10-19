@@ -405,6 +405,7 @@ export default function SkattekontoBookDialog({
         open={open}
         onOpenChange={handleOpenChange}
         title={t('direct_title')}
+        help={t('direct_hint', { skattekonto: skattekontoAccount })}
         isSubmitting={submitting}
         confirmLabel={t('direct_ignore_cta')}
         // The override records the event a second time: say so.
@@ -451,9 +452,6 @@ export default function SkattekontoBookDialog({
               ))}
             </ul>
           )}
-          <p className="text-xs leading-5 text-muted-foreground">
-            {t('direct_hint', { skattekonto: skattekontoAccount })}
-          </p>
           {reasonField}
         </div>
       </ConfirmationDialog>
@@ -469,6 +467,7 @@ export default function SkattekontoBookDialog({
         open={open}
         onOpenChange={handleOpenChange}
         title={t('cover_title')}
+        help={t('cover_hint')}
         isSubmitting={submitting}
         confirmLabel={t('cover_link_cta')}
         // The override records the event a second time: say so.
@@ -526,7 +525,6 @@ export default function SkattekontoBookDialog({
               ))}
             </ul>
           )}
-          <p className="text-xs leading-5 text-muted-foreground">{t('cover_hint')}</p>
           {reasonField}
         </div>
       </ConfirmationDialog>
@@ -546,6 +544,7 @@ export default function SkattekontoBookDialog({
         open={open}
         onOpenChange={handleOpenChange}
         title={t('twin_title')}
+        help={t('twin_hint')}
         isSubmitting={isBooking || isOpeningDraft}
         confirmLabel={
           primary === 'match' ? t('twin_match_cta') : primary === 'wait' ? t('twin_wait_cta') : anywayLabel
@@ -604,7 +603,6 @@ export default function SkattekontoBookDialog({
               ))}
             </ul>
           )}
-          <p className="text-xs leading-5 text-muted-foreground">{t('twin_hint')}</p>
           {reasonField}
         </div>
       </ConfirmationDialog>
