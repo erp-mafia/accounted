@@ -102,6 +102,15 @@ export function effectiveDependencies(module: ModuleDefinition): readonly Module
 }
 
 /**
+ * The modules a module's code may import besides itself, the kernel and
+ * shared infrastructure: its product dependencies (`dependsOn`) and its code
+ * dependencies (`uses`). The boundary ratchet counts every other import.
+ */
+export function importableModules(module: ModuleDefinition): ReadonlySet<ModuleId> {
+  return new Set([...module.dependsOn, ...module.uses])
+}
+
+/**
  * Every module with its dependencies before it (kernels first), stable in
  * manifest order otherwise. Throws when `dependsOn` forms a cycle or names
  * an unknown module; the manifest test keeps that from ever shipping.

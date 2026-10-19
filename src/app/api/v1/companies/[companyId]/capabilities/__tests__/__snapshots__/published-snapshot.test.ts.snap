@@ -80,7 +80,6 @@ exports[`GET /api/v1/companies/:companyId/capabilities for each representative c
     },
     {
       "depends_on": [
-        "supplier-invoices",
         "bank-feed",
       ],
       "id": "payments",
@@ -352,7 +351,6 @@ exports[`GET /api/v1/companies/:companyId/capabilities for each representative c
     },
     {
       "depends_on": [
-        "supplier-invoices",
         "bank-feed",
       ],
       "id": "payments",
@@ -618,7 +616,6 @@ exports[`GET /api/v1/companies/:companyId/capabilities for each representative c
     },
     {
       "depends_on": [
-        "supplier-invoices",
         "bank-feed",
       ],
       "id": "payments",
@@ -884,7 +881,6 @@ exports[`GET /api/v1/companies/:companyId/capabilities for each representative c
     },
     {
       "depends_on": [
-        "supplier-invoices",
         "bank-feed",
       ],
       "id": "payments",
@@ -1154,7 +1150,6 @@ exports[`GET /api/v1/companies/:companyId/capabilities for each representative c
     },
     {
       "depends_on": [
-        "supplier-invoices",
         "bank-feed",
       ],
       "id": "payments",
@@ -1428,7 +1423,6 @@ exports[`GET /api/v1/companies/:companyId/capabilities for each representative c
     },
     {
       "depends_on": [
-        "supplier-invoices",
         "bank-feed",
       ],
       "id": "payments",

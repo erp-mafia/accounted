@@ -278,10 +278,42 @@ switching off previews what stays open.
 1. A **kernel** (`platform`, `ledger`) never imports a block, and imports
    another kernel only in its `dependsOn` direction (ledger uses platform).
 2. A **block** imports the kernel, infrastructure, and only the blocks it
-   names in `dependsOn`. The kernel is implicit; never list it.
-3. Ids are published as experimental OpenAPI tags: until the module switch
+   names in `dependsOn` or `uses`. The kernel is implicit; never list it.
+3. **Layers**: every module sits in one layer, lowest first: `kernel`,
+   `foundation`, `integration`, `process`, `composite`, `surface`
+   (`MODULE_LAYERS`). `dependsOn` and `uses` never name a module in a higher
+   layer, and together they form an acyclic graph. This one is a wall:
+   `__tests__/manifest.test.ts` fails on the first upward or circular entry.
+4. Ids are published as experimental OpenAPI tags: until the module switch
    settles the boundaries a module may be split or renamed; after that, add
    modules and never rename one.
+
+`dependsOn` and `uses` differ in what they mean for a company. `dependsOn` is
+a product dependency: the module needs the other one present, and the
+capabilities report passes an absence on (`dependency_unavailable`).
+`uses` is a code dependency only: the module may import the other's code
+but needs nothing from it at runtime to be available, so adding an entry
+never changes what any company can use. Declare a code dependency in `uses`;
+put it in `dependsOn` only when the product truly cannot work without the
+other module.
+
+The layers today (2026-10-19, `docs/decisions/2026-10/2026-10-19-module-layers.md`):
+
+| Layer | Modules |
+| --- | --- |
+| kernel | platform, ledger |
+| foundation | transactions, inbox, vat, deadlines, parties |
+| integration | bank-feed, payments, skatteverket |
+| process | invoicing, supplier-invoices, payroll, expenses, assets, collections, pos, webshop |
+| composite | import, year-end |
+| surface | agent, byra |
+
+An import that points up a layer, or across to a module that is not
+declared, stays in the ratchet's baseline until it is removed: move the
+shared code down to where it belongs, or invert the call through a
+registry in `src/lib/composition` (the lower module offers a plug-in point,
+the higher one plugs in) or an event. Never declare it to make the count
+drop; the manifest tests refuse an upward or circular declaration anyway.
 
 Rules 1 and 2 are a ratchet, not yet a wall: `__tests__/boundary.test.ts`
 scans the runtime imports in `src/lib` (type-only imports are erased at
@@ -302,15 +334,17 @@ Add the id to `MODULE_IDS` and its definition to `MODULES` in `manifest.ts`,
 claiming its folders, operation prefixes and v1 segments. The tests in
 `__tests__/` fail until every new operation, v1 endpoint and `src/lib`
 folder resolves to exactly one module, until no claim is made twice, and
-while `dependsOn` has a cycle. A new top-level `src/lib` folder needs an
+while `dependsOn` and `uses` have a cycle or point up a layer. A new top-level `src/lib` folder needs an
 owner too: a module's `libFolders`, or `INFRA_LIB_FOLDERS` when it is shared
 infrastructure or a composition layer.
 
 ## When the ratchet fails
 
-Prefer removing the edge: move the shared code into the kernel or
-infrastructure, invert the call through an event or a registry, or, when the
-block genuinely needs the other block, add it to `dependsOn`. Only for a
+Prefer removing the edge: move the shared code into the kernel,
+infrastructure or the lower module that owns it, invert the call through an
+event or a registry, or, when the import points down the layers and the
+dependency is real, declare it (`uses` for code, `dependsOn` only for a
+product dependency). Only for a
 reviewed, deliberate coupling, or after removing edges, rewrite the baseline:
 
     UPDATE_BOUNDARY_BASELINE=1 npx vitest run --project unit src/lib/modules/__tests__/boundary.test.ts

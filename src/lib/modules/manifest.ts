@@ -20,7 +20,15 @@
  *     when one is added).
  *   - block: optional by design. A block may import the kernel, shared
  *     infrastructure (INFRA_LIB_FOLDERS) and the blocks it names in
- *     `dependsOn`, nothing else.
+ *     `dependsOn` or `uses`, nothing else.
+ *
+ * Layers order the modules so code dependencies only point down: kernel,
+ * foundation, integration, process, composite, surface (MODULE_LAYERS).
+ * `dependsOn` and `uses` together form an acyclic graph that never points to
+ * a higher layer (__tests__/manifest.test.ts). `dependsOn` is a product
+ * dependency (the module needs the other present: the capabilities report
+ * passes an absence on); `uses` is a code dependency only, so declaring one
+ * never changes what a company can use.
  *
  * Ids are published (OpenAPI tags and `x-module`), marked `x-experimental`
  * until the per-company module switch settles the boundaries; until then a
@@ -59,6 +67,24 @@ export type ModuleId = (typeof MODULE_IDS)[number]
 
 export type ModuleKind = 'kernel' | 'block'
 
+/**
+ * The layers, lowest first. A module's `dependsOn` and `uses` name modules in
+ * its own layer or a lower one, never a higher one:
+ *   - kernel: the ledger and the platform (every kernel module, nothing else).
+ *   - foundation: what most blocks build on: bank transactions and their
+ *     matching, documents, VAT rules, parties, the deadline calendar.
+ *   - integration: money movement and the outside services: payments, the
+ *     bank feed, Skatteverket.
+ *   - process: one business process each: invoicing, supplier invoices,
+ *     payroll, expenses, assets, collections, point of sale, webshop.
+ *   - composite: work across processes: import and migration, year-end.
+ *   - surface: what reads across everything for a person or an agent: the AI
+ *     agent, the accounting firm tools.
+ */
+export const MODULE_LAYERS = ['kernel', 'foundation', 'integration', 'process', 'composite', 'surface'] as const
+
+export type ModuleLayer = (typeof MODULE_LAYERS)[number]
+
 export interface ModuleDefinition {
   /** Kebab-case, stable, public (OpenAPI tag name and `x-module`). */
   readonly id: ModuleId
@@ -75,6 +101,14 @@ export interface ModuleDefinition {
    * kernels, never a block.
    */
   readonly dependsOn: readonly ModuleId[]
+  /** Where the module sits in MODULE_LAYERS; `kernel` exactly for the kernel kind. */
+  readonly layer: ModuleLayer
+  /**
+   * Blocks whose code this module may import without needing them present:
+   * a code dependency with no product meaning, unlike `dependsOn`. A kernel
+   * uses no block.
+   */
+  readonly uses: readonly ModuleId[]
   /**
    * Folders under src/lib this module owns. A path with a slash claims a
    * subfolder of a folder another module owns (`bokslut/assets`); the
@@ -107,6 +141,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     summary:
       'Identity, API keys, service accounts, company discovery and creation, async operation polling, staged operations and their approval, webhooks and health: what every other module runs on.',
     dependsOn: [],
+    layer: 'kernel',
+    uses: [],
     libFolders: ['auth', 'webhooks', 'service-accounts'],
     // packages: a company's package switches and their status (lib/operations/packages.ts).
     operationPrefixes: ['packages'],
@@ -133,6 +169,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     summary:
       'Double-entry bookkeeping under Bokföringslagen: journal entries and corrections, the chart of accounts, fiscal periods and locks, opening balances, dimensions, the bank and cash account register, the document archive, company settings and the statutory reports read from the ledger.',
     dependsOn: ['platform'],
+    layer: 'kernel',
+    uses: [],
     libFolders: [
       'bookkeeping',
       // The purchase-category list (what was bought) and its proposal: the
@@ -217,6 +255,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     summary:
       'Bank transactions and their booking: categorization rules, suggestions, matching against invoices and bank reconciliation.',
     dependsOn: [],
+    layer: 'foundation',
+    uses: ['deadlines', 'inbox'],
     libFolders: ['transactions', 'rules', 'reconciliation'],
     operationPrefixes: ['transactions'],
     v1Segments: ['transactions', 'reconciliation'],
@@ -230,6 +270,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     summary:
       'Reading the company bank through PSD2 aggregators and Open Payments, and the sync that turns it into transactions.',
     dependsOn: ['transactions'],
+    layer: 'integration',
+    uses: [],
     libFolders: ['bank-feed', 'bank-sync', 'feed-sync'],
     operationPrefixes: ['bank-feed'],
     v1Segments: ['bank-feed', 'bank-connections'],
@@ -244,6 +286,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     summary:
       'Customer invoices from draft to paid or credited, quotes and sales orders, the customer and article registers, and Peppol e-invoicing.',
     dependsOn: [],
+    layer: 'process',
+    uses: ['payments', 'transactions', 'vat'],
     libFolders: ['invoices', 'customers', 'articles', 'sales-orders'],
     operationPrefixes: ['invoices', 'peppol'],
     v1Segments: ['invoices', 'customers', 'articles', 'peppol'],
@@ -257,6 +301,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     summary:
       'Accounts payable: the supplier register and received supplier invoices with attest, booking, crediting and payment marking.',
     dependsOn: [],
+    layer: 'process',
+    uses: ['bank-feed', 'expenses', 'payments', 'vat'],
     libFolders: ['supplier-invoices', 'suppliers'],
     operationPrefixes: ['supplier-invoices', 'suppliers'],
     v1Segments: ['supplier-invoices', 'suppliers'],
@@ -269,7 +315,13 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     nameSv: 'Betalningar',
     summary:
       'Paying suppliers: payment files, bank payment orders signed with BankID, signing links, payee verification and Bankgiro lookups.',
-    dependsOn: ['supplier-invoices', 'bank-feed'],
+    // Payment orders go through the bank connection. Supplier invoices and
+    // payroll pay through this block, so it sits below them and needs
+    // neither present (2026-10-19 module layers; one package with
+    // supplier invoices, so a company never has one without the other).
+    dependsOn: ['bank-feed'],
+    layer: 'integration',
+    uses: ['deadlines', 'skatteverket', 'vat'],
     libFolders: ['payments'],
     operationPrefixes: [
       'payments',
@@ -289,6 +341,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     summary:
       'Swedish payroll: the employee register, salary runs from calculation to booking, payslips, payment files and the arbetsgivardeklaration (AGI).',
     dependsOn: [],
+    layer: 'process',
+    uses: ['deadlines', 'payments'],
     libFolders: ['salary'],
     operationPrefixes: ['salary-runs', 'employees', 'agi-filings'],
     v1Segments: ['employees', 'salary-runs', 'salary'],
@@ -302,6 +356,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     summary: 'Expense claims (utlägg) and mileage allowances, paid out directly or through a salary run.',
     // expense_claims.employee_id references employees: a claim belongs to an employee.
     dependsOn: ['payroll'],
+    layer: 'process',
+    uses: ['transactions', 'vat'],
     libFolders: ['expenses', 'mileage'],
     operationPrefixes: ['expense-claims'],
     v1Segments: ['expense-claims'],
@@ -315,6 +371,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     summary: 'VAT treatments and declaration boxes, VAT settlement booking and the record of filed VAT periods.',
     // A VAT period's due date comes from the deadline calendar (tax/deadline-config).
     dependsOn: ['deadlines'],
+    layer: 'foundation',
+    uses: ['parties'],
     libFolders: ['vat'],
     operationPrefixes: ['vat', 'vat-filings', 'vat-check-reviews'],
     v1Segments: ['vat'],
@@ -328,6 +386,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     summary:
       'The fixed asset register (anläggningsregister): acquisition, depreciation schedules, tax depreciation and disposal.',
     dependsOn: [],
+    layer: 'process',
+    uses: [],
     libFolders: ['bokslut/assets'],
     operationPrefixes: [],
     v1Segments: ['assets'],
@@ -341,6 +401,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     summary:
       'The bokslut workspace (accruals, reserves, tax provision, readiness) and the årsredovisning with its signatures and iXBRL.',
     dependsOn: ['assets'],
+    layer: 'composite',
+    uses: ['import', 'parties', 'payroll', 'transactions'],
     libFolders: ['bokslut'],
     operationPrefixes: ['arsredovisning'],
     v1Segments: ['fiscal-periods/:id/arsredovisning'],
@@ -354,6 +416,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     summary:
       'Incoming documents: the inbox, reading and extracting documents, the document graph archive, mail search and the receipt hunt that finds missing underlag.',
     dependsOn: [],
+    layer: 'foundation',
+    uses: ['parties'],
     libFolders: [
       'arkiv',
       // The new Inkorg page's rollout flag and its pure view logic (views,
@@ -386,6 +450,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     nameSv: 'Inkasso',
     summary: 'Reminders, debt collection and invoice delivery through a provider the company activates itself.',
     dependsOn: ['invoicing'],
+    layer: 'process',
+    uses: ['vat'],
     libFolders: ['collections'],
     operationPrefixes: ['collections'],
     v1Segments: [],
@@ -399,6 +465,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     nameSv: 'Kassasystem',
     summary: 'Business days from a connected point-of-sale system, booked as daily takings vouchers.',
     dependsOn: [],
+    layer: 'process',
+    uses: [],
     libFolders: ['pos-sales'],
     operationPrefixes: ['pos-sales'],
     v1Segments: ['pos-sales'],
@@ -411,6 +479,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     nameSv: 'Webbshopsordrar',
     summary: 'Orders and refunds from connected webshops, imported as a feed and booked.',
     dependsOn: [],
+    layer: 'process',
+    uses: [],
     libFolders: ['webshop-orders'],
     operationPrefixes: [],
     v1Segments: [],
@@ -424,6 +494,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     summary:
       'Filing with and reading from Skatteverket over its API: VAT and AGI submission and the skattekonto.',
     dependsOn: [],
+    layer: 'integration',
+    uses: ['transactions'],
     libFolders: ['skatteverket'],
     operationPrefixes: ['skatteverket', 'skattekonto'],
     v1Segments: ['skatteverket', 'skattekonto'],
@@ -438,6 +510,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     summary:
       'The tax and filing deadline calendar generated from the company tax settings, with Swedish holidays and status tracking.',
     dependsOn: [],
+    layer: 'foundation',
+    uses: [],
     libFolders: ['tax', 'deadlines'],
     operationPrefixes: [],
     v1Segments: [],
@@ -451,6 +525,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     summary:
       'Bringing books in: SIE and bank file import, migration from other accounting systems, and onboarding of existing books.',
     dependsOn: [],
+    layer: 'composite',
+    uses: ['bank-feed', 'invoicing', 'parties', 'skatteverket', 'transactions', 'vat'],
     libFolders: ['import', 'providers', 'onboarding-books'],
     operationPrefixes: ['imports'],
     v1Segments: ['imports'],
@@ -463,6 +539,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     nameSv: 'Motparter',
     summary: 'Counterparties observed in the books and the company register lookups that identify them.',
     dependsOn: [],
+    layer: 'foundation',
+    uses: [],
     // vendor-logos: each counterpart's own icon, fetched once per domain from its website.
     libFolders: ['parties', 'company-lookup', 'vendor-logos'],
     operationPrefixes: [],
@@ -476,6 +554,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     nameSv: 'AI-assistent',
     summary: 'The in-product AI assistant: chat, categorization reads, the ledger context it reasons over and its skills.',
     dependsOn: [],
+    layer: 'surface',
+    uses: ['deadlines', 'inbox', 'transactions'],
     libFolders: ['agent', 'agent-context', 'agent-panel', 'agent-skills', 'ai-handoff'],
     operationPrefixes: [],
     v1Segments: [],
@@ -489,6 +569,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     nameSv: 'Byrå',
     summary: 'Tools for accounting firms working across client companies: the client portfolio and cross-company reads.',
     dependsOn: [],
+    layer: 'surface',
+    uses: ['bank-feed', 'deadlines'],
     libFolders: ['byra', 'clients', 'portfolio'],
     operationPrefixes: [],
     v1Segments: ['portfolio'],
@@ -568,6 +650,7 @@ function freezeModule(def: ModuleDefinition): ModuleDefinition {
   return Object.freeze({
     ...def,
     dependsOn: Object.freeze([...def.dependsOn]),
+    uses: Object.freeze([...def.uses]),
     libFolders: Object.freeze([...def.libFolders]),
     operationPrefixes: Object.freeze([...def.operationPrefixes]),
     v1Segments: Object.freeze([...def.v1Segments]),
