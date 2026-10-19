@@ -23,8 +23,9 @@
  * (kind, ref_id) DO NOTHING RETURNING; only what this run claimed is
  * reported, so a problem is reported once however many runs see it, and two
  * overlapping runs never both report it. The team gets one digest per run
- * listing every new problem; the sender of a failed invoice gets a mail of
- * their own. The digest goes first: if it fails, every claim of the run is
+ * listing every new problem, sent to PEPPOL_ALERT_RECIPIENTS when set, else to
+ * the support address; the sender of a failed invoice gets a mail of their
+ * own. The digest goes first: if it fails, every claim of the run is
  * released and no sender is mailed, so the next run retries the lot without
  * mailing a customer twice. A sender mail that fails releases its own claim.
  * Without an e-mail service nothing is claimed, so the backlog is reported
@@ -325,6 +326,20 @@ async function release(service: SupabaseClient, problems: PeppolProblem[], log: 
 // Mails
 // ---------------------------------------------------------------------------
 
+/**
+ * Who gets the team digest: PEPPOL_ALERT_RECIPIENTS (comma separated) when
+ * set, else the support address. Hosted support mail opens a desk ticket, and
+ * while the access point reports no delivery status every send ends up in the
+ * digest as stuck, so hosted sends the digest to named people instead.
+ */
+export function getPeppolAlertRecipients(): string[] {
+  const configured = (process.env.PEPPOL_ALERT_RECIPIENTS ?? '')
+    .split(',')
+    .map((address) => address.trim())
+    .filter((address) => address.includes('@'))
+  return configured.length > 0 ? configured : [getSupportRecipientEmail()]
+}
+
 const KIND_LABEL: Record<PeppolAlertKind, string> = {
   delivery_failed: 'Leverans misslyckades',
   delivery_stuck: 'Leverans utan svar från operatören',
@@ -403,7 +418,7 @@ async function sendDigest(
     '</ul>',
   ].join('\n')
   try {
-    const result = await email.sendEmail({ to: getSupportRecipientEmail(), subject, text, html })
+    const result = await email.sendEmail({ to: getPeppolAlertRecipients(), subject, text, html })
     return result.success ? { ok: true } : { ok: false, reason: result.error ?? 'send failed' }
   } catch (err) {
     return { ok: false, reason: errorText(err) }
