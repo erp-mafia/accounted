@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type Dispatch, type SetStateAction } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { Check, FileQuestion } from 'lucide-react'
+import { Check, FileQuestion, Paperclip } from 'lucide-react'
 import { InboxArrivalProvenance } from '@/components/extensions/general/InboxArrivalProvenance'
 import { PurchaseCategoryChip } from '@/components/inbox/PurchaseCategoryChip'
 import BookingWhy from '@/components/bookkeeping/BookingWhy'
@@ -10,6 +10,7 @@ import { BrandMark, GlyphMark } from '@/components/parties/BrandMark'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { InboxPurchaseCategory } from '@/lib/categories/inbox-purchase-category'
+import type { PurchaseCategoryAlternative } from '@/lib/categories/propose-purchase-category'
 import type { DocumentReading } from '@/lib/documents/reading/types'
 import type { BankMatch } from '@/lib/documents/inbox-bank-match'
 import { formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
@@ -27,6 +28,8 @@ const ITEM_URL = (id: string) => `/api/extensions/ext/invoice-inbox/items/${id}`
 
 interface ItemDetail {
   purchase_category?: InboxPurchaseCategory | null
+  /** What else the evidence points to, offered in the category dialog. */
+  purchase_category_alternatives?: PurchaseCategoryAlternative[]
   reading?: DocumentReading
   /** The bank row the Inkorg found when the document arrived (match on arrival), or null. */
   bank_match?: BankMatch | null
@@ -113,6 +116,7 @@ export interface FinePrintOpen {
  */
 export function FocusStage({
   item,
+  companion = null,
   revision,
   finishing,
   finePrint,
@@ -124,6 +128,8 @@ export function FocusStage({
   onBack,
 }: {
   item: InkorgItem
+  /** The receipt the invoice came with as one purchase (its pairing): shown as its second document. */
+  companion?: InkorgItem | null
   /** Bumped after every action, so the detail is read again. */
   revision: number
   /** The item just finished: "Klart" sits over it while it leaves. */
@@ -146,10 +152,17 @@ export function FocusStage({
   const doorName = useDoorName(item.channel_context?.mail_provider ?? null)
   const locale = useLocale()
   const [docGeneration, setDocGeneration] = useState(0)
-  const { meta, state: docState } = useDocumentMeta(item.document_id, docGeneration)
+  // The sheet shows the invoice; with a receipt beside it, the person can turn to the receipt.
+  const [receiptShownFor, setReceiptShownFor] = useState<string | null>(null)
+  const receiptDocumentId = companion?.document_id ?? null
+  const showingReceipt = receiptShownFor === item.id && !!receiptDocumentId
+  const { meta: invoiceMeta, state: invoiceDocState } = useDocumentMeta(item.document_id, docGeneration)
+  const { meta: receiptMeta, state: receiptDocState } = useDocumentMeta(showingReceipt ? receiptDocumentId : null, docGeneration)
+  const meta = showingReceipt ? receiptMeta : invoiceMeta
+  const docState = showingReceipt ? receiptDocState : invoiceDocState
   const { detail, loading: detailLoading, readingFailed } = useItemDetail(item.id, revision)
   // Until the detail lands, the match the list read carried: the question does not change under the person.
-  const decision = focusDecision(item, { bankMatch: detail ? (detail.bank_match ?? null) : (item.bank_match ?? null), startable })
+  const decision = focusDecision(item, { bankMatch: detail ? (detail.bank_match ?? null) : (item.bank_match ?? null), startable, companion })
   const suggestion = useSuggestion(item.id, item.matched_transaction_id, decision.question === 'book_purchase')
   const headline = itemHeadline(item)
   const account = bookedOnAccount(suggestion?.lines)
@@ -175,7 +188,10 @@ export function FocusStage({
       <PurchaseCategoryChip
         itemId={item.id}
         value={detail.purchase_category}
+        alternatives={detail.purchase_category_alternatives}
         locked={!!item.created_supplier_invoice_id}
+        // "Varje gång" needs a matched supplier card; the headline is its name as read.
+        supplierName={detail.matched_supplier_id && item.extracted_data.supplier?.name?.trim() ? headline.name : null}
         label={account ? null : undefined}
       />
     ) : null
@@ -213,6 +229,11 @@ export function FocusStage({
               <a href={meta.url} target="_blank" rel="noopener noreferrer" className={QUIET_LINK_CLASS}>
                 {t('open_full_size')}
               </a>
+            )}
+            {receiptDocumentId && (
+              <button type="button" onClick={() => setReceiptShownFor(showingReceipt ? null : item.id)} className={QUIET_LINK_CLASS}>
+                {showingReceipt ? t('companion_show_invoice') : t('companion_show')}
+              </button>
             )}
             <InboxArrivalProvenance documentId={item.document_id} mailProvider={item.channel_context?.mail_provider ?? null} variant="original_link" />
           </div>
@@ -254,11 +275,19 @@ export function FocusStage({
             )}
           </header>
 
+          {companion && (
+            <CompanionReceipt
+              receipt={companion}
+              showing={showingReceipt}
+              onToggle={receiptDocumentId ? () => setReceiptShownFor(showingReceipt ? null : item.id) : undefined}
+            />
+          )}
+
           <FocusDecision
             item={item}
             decision={decision}
             suggestion={suggestion}
-            documentMeta={meta}
+            documentMeta={invoiceMeta}
             bookingLine={bookingLine}
             onDone={onDone}
             ownerAccount={ownerAccount}
@@ -321,6 +350,39 @@ export function FocusStage({
             {t('done')}
           </span>
         </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The receipt that came with the invoice as one purchase, as one hairline
+ * row: what it is, how it says it was paid, and a way to turn the sheet to
+ * it. Its own row in the list is hidden; it is booked with the invoice.
+ */
+function CompanionReceipt({ receipt, showing, onToggle }: { receipt: InkorgItem; showing: boolean; onToggle?: () => void }) {
+  const t = useTranslations('inkorg')
+  const payment = receipt.extracted_data?.payment
+  const paid = payment?.method
+    ? payment.method === 'card' && payment.cardLast4
+      ? t('ev_paid_card_last4', { last4: payment.cardLast4 })
+      : t(`ev_paid_${payment.method}`)
+    : null
+  return (
+    <div role="group" aria-label={t('companion_label')} className="flex items-center gap-3 rounded-lg border border-border px-4 py-3 text-[13px]">
+      <Paperclip aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 flex-1">
+        <span className="block">{t('companion_title')}</span>
+        {paid && (
+          <span data-ph-mask="" className="block text-[12.5px] text-muted-foreground">
+            {paid}
+          </span>
+        )}
+      </span>
+      {onToggle && (
+        <button type="button" onClick={onToggle} className={`${QUIET_LINK_CLASS} shrink-0 text-[12.5px]`}>
+          {showing ? t('companion_show_invoice') : t('companion_show')}
+        </button>
       )}
     </div>
   )

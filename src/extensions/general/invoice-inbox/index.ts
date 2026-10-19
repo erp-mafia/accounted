@@ -6,7 +6,7 @@ import type { EventPayload } from '@/lib/events/types'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 const extensionLog = createLogger('invoice-inbox')
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { z } from 'zod'
 import {
@@ -22,7 +22,9 @@ import { fetchOwnCompanyIdentity } from '@/lib/documents/inbox-extraction/extrac
 import { extractAndMirror } from '@/lib/documents/inbox-extraction/extract-and-mirror'
 import { loadDocumentReading } from '@/lib/documents/reading/load'
 import { peppolReader } from '@/lib/invoices/peppol-reading'
-import { proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
+import { checkNeverCheckedInboxItems, neverChecked, neverCheckedToCheck, proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
+import { mayPair, pairInboxItems, type InboxPairing, type PairableItem } from '@/lib/inkorg/pairs'
+import { readArrivalIds } from '@/lib/inkorg/pairs-read'
 import { bankMatchLinkEvidence, readInboxBankMatch, readInboxBankMatches, type BankMatch, type BankMatchItemRow } from '@/lib/documents/inbox-bank-match'
 import type { ReadingItemRow } from '@/lib/documents/reading/resolve'
 import type { DocumentReading } from '@/lib/documents/reading/types'
@@ -103,7 +105,7 @@ import {
 } from '@/lib/documents/inbox-item-actions'
 import { convertInboxItemToSupplierInvoice } from '@/lib/operations/inbox-convert'
 import { setInboxItemPurchaseCategory, SetInboxPurchaseCategorySchema } from '@/lib/documents/inbox-purchase-category'
-import { resolveInboxPurchaseCategories } from '@/lib/categories/inbox-purchase-category'
+import { resolveInboxPurchaseCategoryChoices } from '@/lib/categories/inbox-purchase-category'
 import { carriedPersonFields, keepPersonChoices } from '@/lib/documents/person-corrections'
 import { mirrorCorrectedReadingToDocument } from '@/lib/documents/reading-correction'
 import { resolveInboxKind, type InboxKindSource } from '@/lib/documents/inbox-kind'
@@ -563,7 +565,8 @@ export const invoiceInboxExtension: Extension = {
               matched_transaction_id, created_journal_entry_id,
               resend_email_id, extraction_skipped, channel_context, kind_hint,
               routed_to_arkiv_at, routed_doc_type,
-              bank_match_transaction_id, bank_match_basis, bank_match_evidence_level, bank_match_source_key
+              bank_match_transaction_id, bank_match_basis, bank_match_evidence_level, bank_match_source_key,
+              bank_match_checked_at
             `)
             .eq('company_id', ctx.companyId)
             .order('created_at', { ascending: false })
@@ -611,6 +614,21 @@ export const invoiceInboxExtension: Extension = {
           extensionLog.warn('inbox list bank match read failed', { err: err instanceof Error ? err.message : String(err) })
         }
 
+        // Items filed before match on arrival existed (or whose bank rows
+        // came before it) were never checked: the newest few are checked
+        // after this answer, at most one batch per company per cooldown, so
+        // old items heal as the list is read, without a backfill. Their
+        // writes reach the page as realtime changes and the next read shows
+        // the proposals. Never part of this answer, never its failure.
+        const neverCheckedIds = neverCheckedToCheck(rows as unknown as Parameters<typeof neverCheckedToCheck>[0], new Date())
+        if (neverCheckedIds.length > 0) {
+          try {
+            after(() => checkNeverCheckedInboxItems(ctx.supabase, ctx.companyId, neverCheckedIds, extensionLog).then(() => undefined))
+          } catch (err) {
+            extensionLog.warn('inbox list never-checked items not scheduled', { err: err instanceof Error ? err.message : String(err) })
+          }
+        }
+
         const items = rows.map((r) => ({
           ...r,
           matched_transaction_journal_entry_id: bookedState.get(r.id)?.journalEntryId ?? null,
@@ -656,7 +674,23 @@ export const invoiceInboxExtension: Extension = {
             }
           }),
         )
-        const withLogos = items.map((i) => ({ ...i, logo_url: logos.get(i.id) ?? null }))
+
+        // An invoice and its receipt from the same arrival are one purchase
+        // (lib/inkorg/pairs.ts): each row says which one it came with, read
+        // after the documents' readings stand in, from the open items only.
+        // A pairing that cannot be read is none: the rows stand alone.
+        let pairings = new Map<string, InboxPairing>()
+        try {
+          const pairable = (items as unknown as PairableItem[]).filter(mayPair)
+          if (pairable.length > 1) {
+            const arrivalIds = await readArrivalIds(ctx.supabase, ctx.companyId, pairable.map((i) => i.id))
+            pairings = pairInboxItems(pairable, { arrivalIds })
+          }
+        } catch (err) {
+          extensionLog.warn('inbox list pairing read failed', { err: err instanceof Error ? err.message : String(err) })
+        }
+
+        const withLogos = items.map((i) => ({ ...i, logo_url: logos.get(i.id) ?? null, pairing: pairings.get(i.id) ?? null }))
 
         // arkiv_section: whether the Dokument section is open for this company, so the
         // "routed to the archive" line links there only when the link leads somewhere.
@@ -755,6 +789,22 @@ export const invoiceInboxExtension: Extension = {
         // Match on arrival: the bank row it looks already paid by, checked
         // again now (lib/documents/inbox-bank-match.ts). A proposal, never a
         // booking; read from the row as stored, before the stand-in below.
+        // An item the bank was never checked for is checked now, before the
+        // read below, so the focus view opens with what the bank says. Once:
+        // the check stamps bank_match_checked_at whatever it finds.
+        if (neverChecked(data as Parameters<typeof neverChecked>[0])) {
+          const checked = await checkNeverCheckedInboxItems(ctx.supabase, ctx.companyId, [id], extensionLog)
+          if (checked.includes(id)) {
+            const { data: fresh } = await ctx.supabase
+              .from('invoice_inbox_items')
+              .select('bank_match_transaction_id, bank_match_basis, bank_match_evidence_level, bank_match_checked_at, bank_match_source_key')
+              .eq('id', id)
+              .eq('company_id', ctx.companyId)
+              .maybeSingle()
+            if (fresh) Object.assign(data as Record<string, unknown>, fresh)
+          }
+        }
+
         let bankMatch: BankMatch | null = null
         try {
           bankMatch = await readInboxBankMatch(ctx.supabase, ctx.companyId, { ...(data as BankMatchItemRow) })
@@ -772,15 +822,17 @@ export const invoiceInboxExtension: Extension = {
           }
         }
 
-        // What the underlag bought, computed at read time (null when ambiguous).
-        const purchaseCategory = (await resolveInboxPurchaseCategories(ctx.supabase, ctx.companyId, [row])).get(row.id) ?? null
+        // What the underlag bought, computed at read time (null when ambiguous),
+        // and what else the evidence points to for the picker.
+        const purchaseCategory = await resolveInboxPurchaseCategoryChoices(ctx.supabase, ctx.companyId, row)
 
         return NextResponse.json({
           data: {
             ...row,
             matched_transaction_journal_entry_id: matchedTransactionJournalEntryId,
             underlag_status: underlagStatus,
-            purchase_category: purchaseCategory,
+            purchase_category: purchaseCategory.proposal,
+            purchase_category_alternatives: purchaseCategory.alternatives,
             bank_match: bankMatch,
             ...(documentReading ? { reading: documentReading } : {}),
           },

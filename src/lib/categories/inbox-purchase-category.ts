@@ -20,6 +20,10 @@
  *
  * A failed read never fails the item read it enriches: the category is a
  * hint, so the item answers without one.
+ *
+ * The item's detail read also answers the alternatives the picker offers
+ * beside the proposal (resolveInboxPurchaseCategoryChoices), from the same
+ * evidence.
  */
 import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -35,10 +39,12 @@ import {
 import { createLogger } from '@/lib/logger'
 import {
   proposePurchaseCategory,
+  purchaseCategoryAlternatives,
+  type PurchaseCategoryAlternative,
   type PurchaseCategoryInput,
   type PurchaseCategoryProposal,
 } from './propose-purchase-category'
-import { PURCHASE_CATEGORY_CODES, PURCHASE_CATEGORY_VERSION } from './purchase-categories'
+import { PURCHASE_CATEGORY_CODES, PURCHASE_CATEGORY_VERSION, type PurchaseCategoryCode } from './purchase-categories'
 import { readPurchaseCategoryOverride } from './purchase-category-override'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
 
@@ -180,25 +186,33 @@ function readReading(extracted: Record<string, unknown> | null): Reading {
 }
 
 /**
- * The purchase category of each row, keyed by row id. Rows without a
- * reading, or with nothing to go on, map to null.
+ * The evidence for each row's proposal, keyed by row id; null for a row with
+ * nothing to go on. A person's choice on the item needs no evidence for the
+ * proposal, so it is read only when asked (evidenceUnderChoice: the picker's
+ * alternatives, which say what the system would answer without it).
  */
-export async function resolveInboxPurchaseCategories(
+async function readPurchaseCategoryInputs(
   supabase: SupabaseClient,
   companyId: string,
   rows: readonly InboxPurchaseCategoryRow[],
-): Promise<Map<string, InboxPurchaseCategory | null>> {
-  const out = new Map<string, InboxPurchaseCategory | null>()
-  const pending: Array<{ row: InboxPurchaseCategoryRow; reading: Reading | null; key: string | null }> = []
+  { evidenceUnderChoice }: { evidenceUnderChoice: boolean },
+): Promise<Map<string, PurchaseCategoryInput | null>> {
+  const out = new Map<string, PurchaseCategoryInput | null>()
+  const pending: Array<{
+    row: InboxPurchaseCategoryRow
+    reading: Reading | null
+    key: string | null
+    override: PurchaseCategoryCode | null
+  }> = []
   for (const row of rows) {
     const override = readPurchaseCategoryOverride(row.extracted_data)
-    if (override) {
-      out.set(row.id, { code: override, source: 'person', level: 'Ditt val', version: PURCHASE_CATEGORY_VERSION })
+    if (override && !evidenceUnderChoice) {
+      out.set(row.id, { override })
       continue
     }
     if (!row.extracted_data) {
       // Nothing to read, but the matched supplier may carry an instruction.
-      if (row.matched_supplier_id) pending.push({ row, reading: null, key: null })
+      if (row.matched_supplier_id) pending.push({ row, reading: null, key: null, override: null })
       else out.set(row.id, null)
       continue
     }
@@ -207,7 +221,7 @@ export async function resolveInboxPurchaseCategories(
       reading.supplierName && namesCounterparty(reading.supplierName)
         ? normalizeCounterpartyName(reading.supplierName)
         : null
-    pending.push({ row, reading, key: key && key.length >= 2 ? key : null })
+    pending.push({ row, reading, key: key && key.length >= 2 ? key : null, override })
   }
   if (pending.length === 0) return out
 
@@ -263,25 +277,68 @@ export async function resolveInboxPurchaseCategories(
     for (const alias of t.counterparty_aliases ?? []) if (!byAlias.has(alias)) byAlias.set(alias, t)
   }
 
-  for (const { row, reading, key } of pending) {
+  for (const { row, reading, key, override } of pending) {
     const supplierInstruction = row.matched_supplier_id ? supplierInstructions.get(row.matched_supplier_id) ?? null : null
     if (!reading) {
-      const proposal = proposePurchaseCategory({ supplierInstruction })
-      out.set(row.id, proposal ? { ...proposal, version: PURCHASE_CATEGORY_VERSION } : null)
+      out.set(row.id, { supplierInstruction })
       continue
     }
     const raw = reading.supplierName?.toLowerCase() ?? null
     const template = key ? (raw ? byAlias.get(raw) : undefined) ?? byName.get(key) ?? byAlias.get(key) : undefined
-    const proposal = proposePurchaseCategory({
+    out.set(row.id, {
+      override,
       supplierInstruction,
       counterparty: template ? counterpartyEvidence(template) : null,
       extraction: reading.extraction,
       suggestedAccount:
         reading.lineAccount ?? (row.matched_supplier_id ? supplierAccounts.get(row.matched_supplier_id) ?? null : null),
     })
-    out.set(row.id, proposal ? { ...proposal, version: PURCHASE_CATEGORY_VERSION } : null)
   }
   return out
+}
+
+function inboxProposal(input: PurchaseCategoryInput | null): InboxPurchaseCategory | null {
+  const proposal = input ? proposePurchaseCategory(input) : null
+  return proposal ? { ...proposal, version: PURCHASE_CATEGORY_VERSION } : null
+}
+
+/**
+ * The purchase category of each row, keyed by row id. Rows without a
+ * reading, or with nothing to go on, map to null.
+ */
+export async function resolveInboxPurchaseCategories(
+  supabase: SupabaseClient,
+  companyId: string,
+  rows: readonly InboxPurchaseCategoryRow[],
+): Promise<Map<string, InboxPurchaseCategory | null>> {
+  const inputs = await readPurchaseCategoryInputs(supabase, companyId, rows, { evidenceUnderChoice: false })
+  const out = new Map<string, InboxPurchaseCategory | null>()
+  for (const row of rows) out.set(row.id, inboxProposal(inputs.get(row.id) ?? null))
+  return out
+}
+
+/** One item's purchase category as the picker reads it. */
+export interface InboxPurchaseCategoryChoices {
+  /** What purchase_category answers on any read. */
+  proposal: InboxPurchaseCategory | null
+  /** What else the evidence points to, best first, never the proposal (purchaseCategoryAlternatives). */
+  alternatives: PurchaseCategoryAlternative[]
+}
+
+/**
+ * One item's proposal and the alternatives a person choosing by hand is
+ * offered: the item's detail read. Unlike a page read it reads the evidence
+ * under a person's choice too, so the alternatives can say what the system
+ * would answer without it.
+ */
+export async function resolveInboxPurchaseCategoryChoices(
+  supabase: SupabaseClient,
+  companyId: string,
+  row: InboxPurchaseCategoryRow,
+): Promise<InboxPurchaseCategoryChoices> {
+  const input =
+    (await readPurchaseCategoryInputs(supabase, companyId, [row], { evidenceUnderChoice: true })).get(row.id) ?? null
+  return { proposal: inboxProposal(input), alternatives: input ? purchaseCategoryAlternatives(input) : [] }
 }
 
 /** The contract of purchase_category on an inbox read (v1 and MCP). */

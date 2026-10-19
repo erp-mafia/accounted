@@ -8,6 +8,12 @@ import type { MissingPurchase } from '@/lib/inkorg/missing'
 export type { MissingPurchase }
 
 const ITEMS_URL = '/api/extensions/ext/invoice-inbox/items'
+/**
+ * Changes that land within this span are read as one: a check of several
+ * items (the bank check after a list read) writes one row each, and each
+ * write must not read the whole list again.
+ */
+const REALTIME_COALESCE_MS = 400
 const PURCHASES_URL = '/api/extensions/ext/invoice-inbox/purchases'
 
 export type LoadState = 'loading' | 'ready' | 'failed'
@@ -70,6 +76,7 @@ export function useInkorgData(companyId: string | null): InkorgData {
   useEffect(() => {
     if (!companyId) return
     const supabase = createClient()
+    let pending: ReturnType<typeof setTimeout> | null = null
     // The company filter is required: realtime applies the membership-wide
     // SELECT policy, so without it a user in two companies hears both.
     const channel = supabase
@@ -78,11 +85,16 @@ export function useInkorgData(companyId: string | null): InkorgData {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'invoice_inbox_items', filter: `company_id=eq.${companyId}` },
         () => {
-          void fetchItems()
+          if (pending) clearTimeout(pending)
+          pending = setTimeout(() => {
+            pending = null
+            void fetchItems()
+          }, REALTIME_COALESCE_MS)
         },
       )
       .subscribe()
     return () => {
+      if (pending) clearTimeout(pending)
       void supabase.removeChannel(channel)
     }
   }, [companyId, fetchItems])

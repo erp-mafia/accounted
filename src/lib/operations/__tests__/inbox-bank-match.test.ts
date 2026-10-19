@@ -10,7 +10,16 @@ vi.mock('@/lib/documents/bank-match/refresh', () => ({
 import { findSupplierInvoiceMatch } from '@/lib/invoices/supplier-invoice-matching'
 import { peppolReader } from '@/lib/invoices/peppol-reading'
 import { counterpartyGiroDigits, giroKey } from '@/lib/transactions/giro-counterparty'
-import { INBOX_BANK_MATCH_RULES, proposeBankMatchesForArrivedRows, proposeBankMatchForInboxItem } from '../inbox-bank-match'
+import {
+  checkNeverCheckedInboxItems,
+  INBOX_BANK_MATCH_RULES,
+  NEVER_CHECKED_COOLDOWN_MS,
+  NEVER_CHECKED_PER_LIST_READ,
+  neverChecked,
+  neverCheckedToCheck,
+  proposeBankMatchesForArrivedRows,
+  proposeBankMatchForInboxItem,
+} from '../inbox-bank-match'
 
 const supabase = {} as never
 const log = { warn: vi.fn() }
@@ -52,5 +61,115 @@ describe('proposeBankMatchesForArrivedRows', () => {
     refreshInboxBankMatchesForTransactions.mockRejectedValue(new Error('down'))
     await expect(proposeBankMatchesForArrivedRows(supabase, 'company-1', rows, log)).resolves.toBeUndefined()
     expect(log.warn).toHaveBeenCalled()
+  })
+})
+
+describe('never-checked items', () => {
+  const NOW = new Date('2026-10-19T10:00:00Z')
+  const open = (id: string, created_at: string, overrides: Record<string, unknown> = {}) => ({
+    id,
+    status: 'received',
+    document_id: `doc-${id}`,
+    created_at,
+    matched_transaction_id: null,
+    created_supplier_invoice_id: null,
+    created_journal_entry_id: null,
+    routed_to_arkiv_at: null,
+    bank_match_checked_at: null,
+    ...overrides,
+  })
+
+  describe('neverChecked', () => {
+    it('is an open, read item with a document the bank was never checked for', () => {
+      expect(neverChecked(open('a', '2026-09-01T00:00:00Z'))).toBe(true)
+    })
+
+    it.each([
+      ['checked once, nothing found', { bank_match_checked_at: '2026-10-01T00:00:00Z' }],
+      ['read without the column', { bank_match_checked_at: undefined }],
+      ['still being read', { status: 'processing' }],
+      ['unreadable', { status: 'error' }],
+      ['without a document', { document_id: null }],
+      ['paired with a bank row', { matched_transaction_id: 'tx-1' }],
+      ['registered', { created_supplier_invoice_id: 'si-1' }],
+      ['booked', { created_journal_entry_id: 'je-1' }],
+      ['in Arkiv', { routed_to_arkiv_at: '2026-10-01T00:00:00Z' }],
+    ])('is not an item %s', (_label, overrides) => {
+      expect(neverChecked(open('a', '2026-09-01T00:00:00Z', overrides))).toBe(false)
+    })
+  })
+
+  describe('neverCheckedToCheck', () => {
+    it('takes at most the bound, newest first', () => {
+      const rows = Array.from({ length: 12 }, (_, i) => open(`i${String(i).padStart(2, '0')}`, `2026-09-${String(i + 1).padStart(2, '0')}T00:00:00Z`))
+      expect(NEVER_CHECKED_PER_LIST_READ).toBe(5)
+      expect(neverCheckedToCheck(rows, NOW)).toEqual(['i11', 'i10', 'i09', 'i08', 'i07'])
+      expect(neverCheckedToCheck(rows, NOW, 2)).toEqual(['i11', 'i10'])
+    })
+
+    it('starts no batch while a check of the company landed within the cooldown', () => {
+      const justChecked = open('done', '2026-10-01T00:00:00Z', { bank_match_checked_at: new Date(NOW.getTime() - 5_000).toISOString() })
+      expect(neverCheckedToCheck([justChecked, open('a', '2026-09-01T00:00:00Z')], NOW)).toEqual([])
+      const longAgo = { ...justChecked, bank_match_checked_at: new Date(NOW.getTime() - NEVER_CHECKED_COOLDOWN_MS - 1).toISOString() }
+      expect(neverCheckedToCheck([longAgo, open('a', '2026-09-01T00:00:00Z')], NOW)).toEqual(['a'])
+    })
+
+    it('has nothing to do when every item was checked', () => {
+      expect(neverCheckedToCheck([open('a', '2026-09-01T00:00:00Z', { bank_match_checked_at: '2026-10-01T00:00:00Z' })], NOW)).toEqual([])
+    })
+  })
+
+  describe('checkNeverCheckedInboxItems', () => {
+    function claiming(claimed: string[] | null, error: { message: string } | null = null) {
+      const calls: Array<{ method: string; args: unknown[] }> = []
+      const chain: Record<string, unknown> = {}
+      for (const method of ['update', 'eq', 'in', 'is']) {
+        chain[method] = (...args: unknown[]) => {
+          calls.push({ method, args })
+          return chain
+        }
+      }
+      chain.select = (...args: unknown[]) => {
+        calls.push({ method: 'select', args })
+        return Promise.resolve({ data: claimed?.map((id) => ({ id })) ?? null, error })
+      }
+      return { client: { from: (table: string) => (calls.push({ method: 'from', args: [table] }), chain) } as never, calls }
+    }
+
+    it('claims the items in one write, then checks only the ones it claimed', async () => {
+      refreshInboxItemBankMatch.mockResolvedValue({ status: 'updated', decision: null })
+      const { client, calls } = claiming(['a'])
+      expect(await checkNeverCheckedInboxItems(client, 'company-1', ['a', 'b', 'a'], log)).toEqual(['a'])
+      expect(calls.filter((c) => c.method === 'update')).toHaveLength(1)
+      expect(calls).toContainEqual({ method: 'is', args: ['bank_match_checked_at', null] })
+      expect(calls).toContainEqual({ method: 'eq', args: ['company_id', 'company-1'] })
+      expect(calls).toContainEqual({ method: 'in', args: ['id', ['a', 'b']] })
+      const [payload] = calls.find((c) => c.method === 'update')!.args as [Record<string, unknown>]
+      expect(Object.keys(payload)).toEqual(['bank_match_checked_at'])
+      // b was claimed by someone else (another read, or checked meanwhile): not checked twice.
+      expect(refreshInboxItemBankMatch).toHaveBeenCalledTimes(1)
+      expect(refreshInboxItemBankMatch).toHaveBeenCalledWith(client, 'company-1', 'a', INBOX_BANK_MATCH_RULES)
+    })
+
+    it('a check that fails keeps its claim: the next read does not pick it again', async () => {
+      refreshInboxItemBankMatch.mockRejectedValue(new Error('statement timeout'))
+      const { client } = claiming(['a', 'b'])
+      expect(await checkNeverCheckedInboxItems(client, 'company-1', ['a', 'b'], log)).toEqual(['a', 'b'])
+      expect(refreshInboxItemBankMatch).toHaveBeenCalledTimes(2)
+      expect(log.warn).toHaveBeenCalledTimes(2)
+    })
+
+    it('never throws, and checks nothing when the claim fails', async () => {
+      const { client } = claiming(null, { message: 'down' })
+      await expect(checkNeverCheckedInboxItems(client, 'company-1', ['a'], log)).resolves.toEqual([])
+      expect(refreshInboxItemBankMatch).not.toHaveBeenCalled()
+      expect(log.warn).toHaveBeenCalledWith('inbox bank match: never-checked claim failed', { companyId: 'company-1', reason: 'down' })
+    })
+
+    it('writes nothing for no ids', async () => {
+      const { client, calls } = claiming([])
+      expect(await checkNeverCheckedInboxItems(client, 'company-1', [], log)).toEqual([])
+      expect(calls).toEqual([])
+    })
   })
 })

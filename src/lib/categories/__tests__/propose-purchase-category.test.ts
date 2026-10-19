@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest'
 import {
   categoryOfLine,
   dominantLineCategory,
+  LINE_ALTERNATIVE_SHARE,
   LINE_DOMINANT_SHARE,
+  lineCategoryShares,
+  MAX_PURCHASE_CATEGORY_ALTERNATIVES,
   merchantKindOfSupplierName,
   proposePurchaseCategory,
+  purchaseCategoryAlternatives,
   STRONG_MIN_CLEAN_HITS,
   type PurchaseCategoryInput,
 } from '../propose-purchase-category'
@@ -578,5 +582,163 @@ describe('proposePurchaseCategory: a shared account and the document agreeing is
         ]),
       }),
     ).toBeNull()
+  })
+})
+
+describe('lineCategoryShares', () => {
+  it('weighs each named category by amount, the undecided lines counted in the whole', () => {
+    expect(
+      lineCategoryShares([
+        { description: 'Kontorsstol', lineTotal: 300 },
+        { description: 'Skruvdragare', lineTotal: 500 },
+        { description: 'Okänd sak', lineTotal: 200 },
+      ]),
+    ).toEqual([
+      { code: 'expense.equipment.tools', share: 0.5 },
+      { code: 'expense.equipment.furniture', share: 0.3 },
+    ])
+  })
+
+  it('counts lines when the document has no amounts, and keeps line order on a tie', () => {
+    expect(lineCategoryShares([{ description: 'Kontorsstol' }, { description: 'Skruvdragare' }])).toEqual([
+      { code: 'expense.equipment.furniture', share: 0.5 },
+      { code: 'expense.equipment.tools', share: 0.5 },
+    ])
+  })
+
+  it('is empty without lines', () => {
+    expect(lineCategoryShares(null)).toEqual([])
+    expect(lineCategoryShares([])).toEqual([])
+  })
+})
+
+describe('purchaseCategoryAlternatives', () => {
+  it('offers what a restaurant receipt can mean, where the proposal stays null', () => {
+    const input: PurchaseCategoryInput = { extraction: receipt([], { merchantCategory: 'restaurant' }) }
+    expect(proposePurchaseCategory(input)).toBeNull()
+    expect(purchaseCategoryAlternatives(input)).toEqual([
+      { code: 'expense.representation.client', source: 'merchant_category' },
+      { code: 'expense.representation.staff', source: 'merchant_category' },
+      { code: 'expense.travel.meals', source: 'merchant_category' },
+    ])
+  })
+
+  it('offers the categories of a shared booked account, at most the limit', () => {
+    const input: PurchaseCategoryInput = { counterparty: { account: '5410', cleanHits: 9 } }
+    expect(proposePurchaseCategory(input)).toBeNull()
+    const alternatives = purchaseCategoryAlternatives(input)
+    expect(alternatives).toHaveLength(MAX_PURCHASE_CATEGORY_ALTERNATIVES)
+    expect(alternatives).toEqual([
+      { code: 'expense.equipment.hardware', source: 'counterparty' },
+      { code: 'expense.equipment.furniture', source: 'counterparty' },
+      { code: 'expense.equipment.tools', source: 'counterparty' },
+    ])
+    expect(purchaseCategoryAlternatives(input, undefined, 1)).toHaveLength(1)
+    expect(purchaseCategoryAlternatives(input, undefined, 0)).toEqual([])
+  })
+
+  it('puts a category two sources agree on first', () => {
+    // The chair carries 40 percent: too little to decide, enough to agree with the history.
+    const input: PurchaseCategoryInput = {
+      counterparty: { account: '5410', cleanHits: 9 },
+      extraction: receipt([
+        { description: 'Kontorsstol', lineTotal: 400 },
+        { description: 'Okänd sak', lineTotal: 600 },
+      ]),
+    }
+    expect(proposePurchaseCategory(input)).toBeNull()
+    expect(purchaseCategoryAlternatives(input).map((a) => a.code)).toEqual([
+      'expense.equipment.furniture',
+      'expense.equipment.hardware',
+      'expense.equipment.tools',
+    ])
+  })
+
+  it('puts a category the lines name alone before the categories of a shared account', () => {
+    // A hardware store booked on 5410: the drill decides, the paint is the lines' own second word.
+    const input: PurchaseCategoryInput = {
+      counterparty: { account: '5410', cleanHits: 9 },
+      extraction: receipt([
+        { description: 'Skruvdragare', lineTotal: 700 },
+        { description: 'Färg', lineTotal: 300 },
+      ]),
+    }
+    expect(proposePurchaseCategory(input)).toMatchObject({ code: 'expense.equipment.tools', source: 'counterparty', level: 'Stark' })
+    expect(purchaseCategoryAlternatives(input)).toEqual([
+      { code: 'expense.goods.materials', source: 'lines' },
+      { code: 'expense.equipment.hardware', source: 'counterparty' },
+      { code: 'expense.equipment.furniture', source: 'counterparty' },
+    ])
+  })
+
+  it('offers the booked history when the lines of a mixed store win the proposal', () => {
+    const input: PurchaseCategoryInput = {
+      counterparty: { account: '6110', cleanHits: 20 },
+      extraction: receipt([{ description: 'Skruvdragare', lineTotal: 1200 }]),
+    }
+    expect(proposePurchaseCategory(input)).toMatchObject({ code: 'expense.equipment.tools', source: 'lines' })
+    expect(purchaseCategoryAlternatives(input)).toEqual([{ code: 'expense.office.supplies', source: 'counterparty' }])
+  })
+
+  it('never offers the proposal itself, and invents nothing when the evidence names one category', () => {
+    const input: PurchaseCategoryInput = { extraction: receipt([], { merchantCategory: 'taxi' }) }
+    expect(proposePurchaseCategory(input)?.code).toBe('expense.travel.taxi')
+    expect(purchaseCategoryAlternatives(input)).toEqual([])
+    expect(purchaseCategoryAlternatives({})).toEqual([])
+  })
+
+  it('offers what the evidence alone proposes under a person\'s choice', () => {
+    const input: PurchaseCategoryInput = {
+      override: 'expense.equipment.furniture',
+      counterparty: { account: '6212', cleanHits: 12 },
+    }
+    expect(purchaseCategoryAlternatives(input)).toEqual([{ code: 'expense.telecom.mobile', source: 'counterparty' }])
+  })
+
+  it('offers the supplier\'s instruction first when a choice on this underlag outranks it', () => {
+    const input: PurchaseCategoryInput = {
+      override: 'expense.equipment.furniture',
+      supplierInstruction: 'expense.telecom.internet',
+      counterparty: { account: '6212', cleanHits: 12 },
+    }
+    expect(purchaseCategoryAlternatives(input)).toEqual([
+      { code: 'expense.telecom.internet', source: 'instruction' },
+      { code: 'expense.telecom.mobile', source: 'counterparty' },
+    ])
+  })
+
+  it('offers the history under the supplier\'s instruction', () => {
+    const input: PurchaseCategoryInput = {
+      supplierInstruction: 'expense.telecom.internet',
+      counterparty: { account: '6212', cleanHits: 12 },
+    }
+    expect(proposePurchaseCategory(input)?.source).toBe('instruction')
+    expect(purchaseCategoryAlternatives(input)).toEqual([{ code: 'expense.telecom.mobile', source: 'counterparty' }])
+  })
+
+  it('offers lines only from LINE_ALTERNATIVE_SHARE of the document', () => {
+    const shipping = (share: number): PurchaseCategoryInput => ({
+      extraction: receipt([
+        { description: 'Frakt', lineTotal: share * 1000 },
+        { description: 'Okänd sak', lineTotal: (1 - share) * 1000 },
+      ]),
+    })
+    expect(purchaseCategoryAlternatives(shipping(0.05))).toEqual([])
+    expect(purchaseCategoryAlternatives(shipping(LINE_ALTERNATIVE_SHARE))).toEqual([
+      { code: 'expense.goods.freight', source: 'lines' },
+    ])
+  })
+
+  it('offers only a person\'s instruction on a document that is not a purchase', () => {
+    expect(
+      purchaseCategoryAlternatives({
+        override: 'expense.fees.authorities',
+        supplierInstruction: 'expense.fees.memberships',
+        extraction: { documentKind: 'government_letter', merchantCategory: 'restaurant' },
+      }),
+    ).toEqual([{ code: 'expense.fees.memberships', source: 'instruction' }])
+    expect(
+      purchaseCategoryAlternatives({ extraction: { documentKind: 'government_letter', merchantCategory: 'restaurant' } }),
+    ).toEqual([])
   })
 })

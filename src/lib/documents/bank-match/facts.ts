@@ -38,6 +38,12 @@ export interface BankMatchFacts {
   names: string[]
   /** The day the item arrived, YYYY-MM-DD: the anchor when the document carries no date. */
   arrivedOn: string
+  /**
+   * The last four digits of the card the purchase was paid with, as the
+   * document or the receipt it came with says (extracted_data.payment); the
+   * reading carries no card, so the refresh adds it. Null or absent for none.
+   */
+  cardLast4?: string | null
 }
 
 /** The matched supplier's card, as far as matching reads it. */

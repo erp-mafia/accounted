@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useId, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -12,28 +12,26 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import {
-  PURCHASE_CATEGORIES,
-  PURCHASE_CATEGORY_GROUPS,
   isPurchaseCategoryCode,
-  purchaseCategoryGroupNameKey,
   purchaseCategoryNameKey,
   type PurchaseCategoryCode,
 } from '@/lib/categories/purchase-categories'
 import type { InboxPurchaseCategory } from '@/lib/categories/inbox-purchase-category'
+import type { PurchaseCategoryAlternative, PurchaseCategorySource } from '@/lib/categories/propose-purchase-category'
+import { PurchaseCategoryPicker, type PurchaseCategorySuggestion } from './PurchaseCategoryPicker'
 
 const LEVEL_KEY = { 'Ditt val': 'level_person', Stark: 'level_strong', Trolig: 'level_likely' } as const
+
+/** The evidence an alternative rests on, in the picker's words. */
+const SOURCE_KEY = {
+  counterparty: 'source_counterparty',
+  lines: 'source_lines',
+  account: 'source_account',
+  merchant_category: 'source_merchant_category',
+} as const satisfies Partial<Record<PurchaseCategorySource, string>>
 
 /**
  * What the underlag bought, as the inbox reads it (purchase_category), with
@@ -43,6 +41,10 @@ const LEVEL_KEY = { 'Ditt val': 'level_person', Stark: 'level_strong', Trolig: '
  * val. It never changes a choice made on another single underlag. The
  * category is a label beside the kontering, never the booking: changing it
  * books nothing.
+ *
+ * The dialog searches the whole list (PurchaseCategoryPicker) and opens on
+ * Förslag: what the item reads now with its level, then the alternatives the
+ * detail read found in the evidence, each with what it rests on.
  */
 export function PurchaseCategoryChip({
   itemId,
@@ -51,6 +53,7 @@ export function PurchaseCategoryChip({
   supplierName = null,
   onChange,
   label,
+  alternatives = null,
 }: {
   itemId: string
   value: InboxPurchaseCategory | null | undefined
@@ -66,6 +69,12 @@ export function PurchaseCategoryChip({
   onChange?: (next: InboxPurchaseCategory | null) => void
   /** Replaces the "Kategori" label in front of the chip; null leaves it out (the caller says what the chip is). */
   label?: ReactNode | null
+  /**
+   * What else the evidence points to (the detail read's
+   * purchase_category_alternatives), offered under Förslag. Leave it out
+   * where the read has none: the dialog then offers the proposal alone.
+   */
+  alternatives?: readonly PurchaseCategoryAlternative[] | null
 }) {
   const t = useTranslations('purchase_category_picker')
   const tc = useTranslations('purchaseCategories')
@@ -78,6 +87,7 @@ export function PurchaseCategoryChip({
   const [saving, setSaving] = useState<'save' | 'clear' | null>(null)
   const everyTimeId = useId()
   const hintId = useId()
+  const searchRef = useRef<HTMLInputElement>(null)
 
   // The detail read is the source of truth; a new item (or a re-read) replaces the local copy.
   useEffect(() => {
@@ -115,6 +125,23 @@ export function PurchaseCategoryChip({
     }
   }
 
+  function sourceHint(source: PurchaseCategorySource): string {
+    if (source === 'person') return t('level_person')
+    if (source === 'instruction') return supplierName ? t('from_instruction', { supplier: supplierName }) : t('from_instruction_plain')
+    return t(SOURCE_KEY[source])
+  }
+
+  // Förslag: what the item reads now, with its level; then the read's own
+  // proposal when a save in this session replaced it; then the alternatives.
+  // Never a code this build cannot pick, never one twice.
+  const suggestions: PurchaseCategorySuggestion[] = []
+  const offer = (code: string, hint: string) => {
+    if (isPurchaseCategoryCode(code) && !suggestions.some((s) => s.code === code)) suggestions.push({ code, hint })
+  }
+  if (current) offer(current.code, t(LEVEL_KEY[current.level]))
+  if (value && value.source !== 'person' && value.source !== 'instruction') offer(value.code, sourceHint(value.source))
+  for (const alternative of alternatives ?? []) offer(alternative.code, sourceHint(alternative.source))
+
   const fromInstruction = current?.source === 'instruction'
   // Clearing an instruction is "varje gång" with no category: offered while the box is ticked.
   const clearable = current?.source === 'person' || (fromInstruction && everyTime)
@@ -149,7 +176,17 @@ export function PurchaseCategoryChip({
       )}
 
       <Dialog open={open} onOpenChange={(next) => (saving ? undefined : setOpen(next))}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent
+          // On a touch screen the dialog itself holds focus (below): no outline for that.
+          className="focus-visible:outline-none sm:max-w-lg"
+          onOpenAutoFocus={(e) => {
+            e.preventDefault()
+            // The search field takes focus, except on a touch screen, where it
+            // would raise a keyboard over Förslag: there the dialog holds it.
+            if (window.matchMedia('(pointer: coarse)').matches) (e.currentTarget as HTMLElement | null)?.focus()
+            else searchRef.current?.focus()
+          }}
+        >
           <DialogHeader>
             <DialogTitle>
               {supplierName ? t('dialog_title_supplier', { supplier: supplierName }) : t('dialog_title')}
@@ -157,23 +194,15 @@ export function PurchaseCategoryChip({
             <DialogDescription>{t('dialog_description')}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <Select value={draft} onValueChange={(next) => setDraft(next as PurchaseCategoryCode)}>
-              <SelectTrigger aria-label={t('pick')}>
-                <SelectValue placeholder={t('pick')} />
-              </SelectTrigger>
-              <SelectContent className="max-h-80">
-                {PURCHASE_CATEGORY_GROUPS.map((group) => (
-                  <SelectGroup key={group}>
-                    <SelectLabel className="text-xs">{tc(purchaseCategoryGroupNameKey(group))}</SelectLabel>
-                    {PURCHASE_CATEGORIES.filter((c) => c.group === group).map((c) => (
-                      <SelectItem key={c.code} value={c.code} className="text-[13px]">
-                        {tc(c.nameKey)}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                ))}
-              </SelectContent>
-            </Select>
+            <PurchaseCategoryPicker
+              value={draft}
+              onPick={setDraft}
+              onSubmit={() => {
+                if (draft && saving === null) void save(draft, 'save')
+              }}
+              suggestions={suggestions}
+              inputRef={searchRef}
+            />
             {supplierName && (
               <div className="space-y-1">
                 <label htmlFor={everyTimeId} className="flex items-center gap-2 text-[13px]">

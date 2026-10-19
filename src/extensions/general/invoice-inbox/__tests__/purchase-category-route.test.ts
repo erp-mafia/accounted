@@ -140,8 +140,37 @@ describe('GET /items/:id', () => {
       createMockRequest(`/items/${ITEM}`, { searchParams: { _id: ITEM } }),
       buildCtx(mock.supabase),
     )
-    const { status, body } = await parseJsonResponse<{ data: { purchase_category: unknown } }>(res)
+    const { status, body } = await parseJsonResponse<{ data: { purchase_category: unknown; purchase_category_alternatives: unknown } }>(res)
     expect(status).toBe(200)
     expect(body.data.purchase_category).toMatchObject({ code: 'expense.travel.hotel', level: 'Ditt val' })
+    // Nothing in this reading points anywhere else.
+    expect(body.data.purchase_category_alternatives).toEqual([])
+  })
+
+  it('carries the alternatives the evidence points to when the proposal is ambiguous', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({
+      data: {
+        id: ITEM,
+        document_id: null,
+        matched_transaction_id: null,
+        created_journal_entry_id: null,
+        created_supplier_invoice_id: null,
+        extraction_skipped: false,
+        extracted_data: { ...READING, documentKind: 'receipt', merchantCategory: 'restaurant' },
+      },
+    })
+    const res = await detailRoute.handler(
+      createMockRequest(`/items/${ITEM}`, { searchParams: { _id: ITEM } }),
+      buildCtx(mock.supabase),
+    )
+    const { status, body } = await parseJsonResponse<{ data: { purchase_category: unknown; purchase_category_alternatives: unknown } }>(res)
+    expect(status).toBe(200)
+    expect(body.data.purchase_category).toBeNull()
+    expect(body.data.purchase_category_alternatives).toEqual([
+      { code: 'expense.representation.client', source: 'merchant_category' },
+      { code: 'expense.representation.staff', source: 'merchant_category' },
+      { code: 'expense.travel.meals', source: 'merchant_category' },
+    ])
   })
 })

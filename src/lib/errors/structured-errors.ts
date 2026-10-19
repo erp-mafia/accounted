@@ -5303,6 +5303,15 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
     message_sv: 'Bankraden är inte längre förslaget för underlaget, till exempel för att den har bokförts sedan. Ladda om och välj bankraden själv.',
     message_en: 'The bank row is no longer the proposal for this document, for example because it was booked since. Reload and pick the bank row yourself.',
   },
+  // The Inkorg brings the receipt that came with an invoice onto the
+  // invoice's booking. Refused when the two are not one purchase by the
+  // pairing rule (lib/inkorg/pairs.ts): another arrival, other amounts, or a
+  // receipt that fits more than one invoice.
+  INBOX_COMPANION_NOT_PAIRED: {
+    httpStatus: 409,
+    message_sv: 'Kvittot hör inte ihop med fakturan, så det kopplades inte till bokföringen. Det ligger kvar i inkorgen.',
+    message_en: 'The receipt does not belong with the invoice, so it was not linked to the booking. It stays in the inbox.',
+  },
   // Registered without a verifikat because the company books supplier
   // invoices in a separate Bokför step (defer_invoice_booking). A payment
   // matched now would clear 2440 for a debt never booked, and the Bokför step

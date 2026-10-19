@@ -11,6 +11,7 @@ import { INTAKE_SOURCE_IDS, intakeSourceForInboxItem, type IntakeSourceId } from
 import { resolveInboxKind, type InboxDocumentKind } from '@/lib/documents/inbox-kind'
 import type { BankMatch } from '@/lib/documents/inbox-bank-match'
 import { readableName } from './names'
+import type { InboxPairing } from './pairs'
 
 /**
  * Whether the item's own underlag reached the verifikat that books its
@@ -42,6 +43,11 @@ export interface InkorgItem {
   logo_url?: string | null
   /** The bank row it looks already paid by (match on arrival), checked when the list was read; null for none. */
   bank_match?: BankMatch | null
+  /**
+   * The invoice or receipt it arrived with as one purchase (./pairs.ts),
+   * computed when the list was read; null for none.
+   */
+  pairing?: InboxPairing | null
 }
 
 /**
@@ -61,11 +67,21 @@ export interface InkorgItem {
 export type InkorgStage = 'needs_action' | 'processing' | 'linked' | 'booked' | 'error'
 
 /** A booked matched transaction whose verifikat does not carry this item's underlag. */
-export function isUnderlagDivergent(item: Pick<InkorgItem, 'matched_transaction_journal_entry_id' | 'underlag_status'>): boolean {
+export function isUnderlagDivergent(item: { matched_transaction_journal_entry_id?: string | null; underlag_status?: string | null }): boolean {
   return !!item.matched_transaction_journal_entry_id && !!item.underlag_status && item.underlag_status !== 'anchored'
 }
 
-export function itemStage(item: InkorgItem): InkorgStage {
+/** The columns an item's stage is read from: a wire row, or the table row a server door reads. */
+export interface StageFields {
+  status?: string | null
+  matched_transaction_id?: string | null
+  created_supplier_invoice_id?: string | null
+  created_journal_entry_id?: string | null
+  matched_transaction_journal_entry_id?: string | null
+  underlag_status?: string | null
+}
+
+export function itemStage(item: StageFields): InkorgStage {
   if (item.created_supplier_invoice_id || item.created_journal_entry_id) return 'booked'
   if (item.matched_transaction_journal_entry_id && !isUnderlagDivergent(item)) return 'booked'
   if (item.status === 'processing') return 'processing'
@@ -79,16 +95,35 @@ function routedAway(item: InkorgItem): boolean {
   return !!item.routed_to_arkiv_at
 }
 
+/**
+ * The receipt that came with an invoice as one purchase: it rides on the
+ * invoice's row as its second document and has no row of its own.
+ */
+export function isCompanionReceipt(item: Pick<InkorgItem, 'pairing'>): boolean {
+  return item.pairing?.role === 'receipt'
+}
+
+/** The receipt an invoice's row carries, when the list has it. */
+export function companionOf(item: InkorgItem, items: readonly InkorgItem[]): InkorgItem | null {
+  if (item.pairing?.role !== 'invoice') return null
+  const receiptId = item.pairing.receipt_item_id
+  return items.find((other) => other.id === receiptId) ?? null
+}
+
 /** Waiting for a person's decision: the Behöver dig view. A reading in flight waits for nobody. */
 export function needsYou(item: InkorgItem): boolean {
-  if (routedAway(item)) return false
+  if (routedAway(item) || isCompanionReceipt(item)) return false
   const stage = itemStage(item)
   return stage === 'needs_action' || stage === 'linked' || stage === 'error'
 }
 
-/** Still in the inbox: came in and is not handled yet. Booked items live in Dokument and on their verifikat. */
+/**
+ * Still in the inbox: came in and is not handled yet. Booked items live in
+ * Dokument and on their verifikat; a companion receipt is in the inbox on
+ * its invoice's row.
+ */
 export function stillInInbox(item: InkorgItem): boolean {
-  return !routedAway(item) && itemStage(item) !== 'booked'
+  return !routedAway(item) && !isCompanionReceipt(item) && itemStage(item) !== 'booked'
 }
 
 /** The door the item came through, by the one vocabulary (lib/intake/sources.ts). */

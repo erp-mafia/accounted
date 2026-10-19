@@ -1,0 +1,1 @@
+[2026-10-19] Inkorg: an invoice and the receipt from the same arrival are one row when both totals agree to the öre in one currency and the invoice number (else supplier and date) agrees; the receipt is completed on the invoice's booking, never booked itself, so one purchase is booked once.

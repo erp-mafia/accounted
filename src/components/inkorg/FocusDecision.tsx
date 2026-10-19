@@ -55,8 +55,10 @@ export interface SuggestedBooking {
  * An action finished. `leaves`: the item is done here and leaves the queue
  * (the next opens by itself). `payInBank`: the invoice was registered to be
  * paid in the bank; the page shows what to type there, over the next item.
+ * `dropped`: it left as not an underlag, nothing booked (a receipt that came
+ * with it has no booking to follow).
  */
-export type DecisionDone = (outcome: { leaves: boolean; payInBank?: PayInBankTarget }) => Promise<void>
+export type DecisionDone = (outcome: { leaves: boolean; payInBank?: PayInBankTarget; dropped?: boolean }) => Promise<void>
 
 /**
  * The cost account the company booked this supplier on before (its
@@ -256,7 +258,7 @@ export function FocusDecision({
           await failed(t('drop_failed'), res)
           throw new Error('drop failed')
         }
-        await onDone({ leaves: true })
+        await onDone({ leaves: true, dropped: true })
       },
     )
   }

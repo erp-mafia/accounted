@@ -182,3 +182,64 @@ describe('decideBankMatch: another currency', () => {
     expect(decision?.evidenceLevel).toBe('trolig')
   })
 })
+
+describe('decideBankMatch: the card the document says paid it', () => {
+  // The X subscription (prod, company Arcim): invoice J0LVRPBD-0003, 83 kr, due 2026-10-03; its
+  // receipt from the same mail says card 3667; the bank row reads "X CORP. PAID FEATURES K3667".
+  const x = invoice({
+    amount: 83,
+    reference: null,
+    bankgiro: null,
+    issueDate: '2026-10-03',
+    dueDate: '2026-10-03',
+    names: ['X Corp.'],
+    arrivedOn: '2026-10-03',
+  })
+  const xRow = (overrides: Partial<ProposableBankRow> = {}) =>
+    row({ date: '2026-10-05', amount: -83, description: 'X CORP. PAID FEATURES K3667', original_description: null, ...overrides })
+
+  it('without a card, amount, name and window say trolig', () => {
+    expect(decideBankMatch(x, [xRow()], RULES, 83)).toEqual({ transactionId: 'tx-1', basis: 'rule_amount_date', evidenceLevel: 'trolig' })
+  })
+
+  it('the row naming the same card makes it stark, on the same basis', () => {
+    expect(decideBankMatch({ ...x, cardLast4: '3667' }, [xRow()], RULES, 83)).toEqual({
+      transactionId: 'tx-1',
+      basis: 'rule_amount_date',
+      evidenceLevel: 'stark',
+    })
+  })
+
+  it('a row naming another card is another payment', () => {
+    expect(decideBankMatch({ ...x, cardLast4: '1234' }, [xRow()], RULES, 83)).toBeNull()
+  })
+
+  it('a row naming no card neither strengthens nor refuses', () => {
+    expect(decideBankMatch({ ...x, cardLast4: '3667' }, [xRow({ description: 'X CORP. PAID FEATURES' })], RULES, 83)?.evidenceLevel).toBe('trolig')
+  })
+
+  it('the card never makes a proposal on its own: the name still has to agree', () => {
+    expect(decideBankMatch({ ...x, cardLast4: '3667' }, [xRow({ description: 'PAYMENT K3667' })], RULES, 83)).toBeNull()
+  })
+
+  it('the card picks the right row of two the date cannot tell apart', () => {
+    const rows = [xRow({ id: 'other-card', description: 'X CORP. PAID FEATURES K1234' }), xRow({ id: 'this-card' })]
+    expect(decideBankMatch(x, rows, RULES, 83)).toBeNull()
+    expect(decideBankMatch({ ...x, cardLast4: '3667' }, rows, RULES, 83)).toEqual({
+      transactionId: 'this-card',
+      basis: 'rule_amount_date',
+      evidenceLevel: 'stark',
+    })
+  })
+
+  it('a converted amount stays trolig with the card: the amount does not agree to the öre', () => {
+    const usd = invoice({ kind: 'receipt', currency: 'USD', amount: 20, reference: null, bankgiro: null, issueDate: '2026-09-10', dueDate: null, names: ['OpenAI, LLC'], cardLast4: '3667' })
+    const decision = decideBankMatch(usd, [row({ date: '2026-09-11', amount: -215, merchant_name: 'OPENAI', description: 'OPENAI K3667' })], RULES, 210)
+    expect(decision?.evidenceLevel).toBe('trolig')
+  })
+
+  it('an OCR match stays exakt whatever card the row names', () => {
+    const decision = decideBankMatch({ ...invoice(), cardLast4: '1234' }, [row({ reference: '4711000123', description: 'Betalning K9999' })], RULES, 1250)
+    expect(decision?.evidenceLevel).toBe('exakt')
+  })
+})

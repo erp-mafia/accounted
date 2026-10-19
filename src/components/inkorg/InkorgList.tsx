@@ -100,7 +100,7 @@ function InkorgRow({
   const subject = item.email_subject?.trim() || null
 
   // The document's own line: what the mail said, else its kind and number.
-  const docLine =
+  const ownLine =
     subject && subject !== headline.name
       ? subject
       : invoiceNumber && headline.kind
@@ -108,10 +108,14 @@ function InkorgRow({
         : headline.kind
           ? tKind(`doc_kind_${headline.kind}`)
           : null
+  // An invoice whose receipt came with it carries it on this row: the receipt has none of its own.
+  const docLine = ownLine && item.pairing?.role === 'invoice' ? t('row_doc_with_receipt', { line: ownLine }) : ownLine
 
   const pill =
     status.kind === 'looks_paid' ? (
       <Badge variant="warning">{t('q_already_paid')}</Badge>
+    ) : status.kind === 'paid_by_receipt' ? (
+      <Badge variant="secondary">{t('status_paid_by_receipt')}</Badge>
     ) : status.kind === 'to_pay' ? (
       <Badge variant="secondary">{t('status_to_pay', { date: shortDate(status.dueDate, locale) })}</Badge>
     ) : status.kind === 'unreadable' ? (
