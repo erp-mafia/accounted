@@ -62,7 +62,7 @@ import {
 import { assessRegisteredPayee, payeeAlertWarning } from '@/lib/payments/payee-registration'
 import type { Logger } from '@/lib/logger'
 import { rejectSupersededInboxConversions } from '@/lib/pending-operations/supersede'
-import type { Currency, EntityType, SupplierInvoice, SupplierInvoiceItem } from '@/types'
+import type { Currency, EntityType, SupplierInvoice, SupplierInvoiceItem, SupplierInvoiceReverseChargeKind } from '@/types'
 import { loadEntryLines, recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
 import { passed, warned, type DecisionCheck } from '@/lib/suggestion-log/checks'
 import { resultAccounts } from '@/lib/suggestion-log/inbox-classify'
@@ -125,6 +125,7 @@ export interface CreateSupplierInvoicePreview {
   exchange_rate_date: string | null
   vat_treatment: string
   reverse_charge: boolean
+  reverse_charge_kind: SupplierInvoiceReverseChargeKind | null
   subtotal: number
   subtotal_sek: number | null
   vat_amount: number
@@ -191,6 +192,28 @@ export function resolveSupplierInvoiceReverseCharge(
   const foreignSupplier = supplierType === 'eu_business' || supplierType === 'non_eu_business'
   const reverseCharge = body.reverse_charge ?? (foreignSupplier || body.vat_treatment === 'reverse_charge')
   return { reverseCharge, vatTreatment: reverseCharge ? 'reverse_charge' : (body.vat_treatment ?? 'standard_25') }
+}
+
+/**
+ * Goods or services under an EU supplier's reverse charge
+ * (supplier_invoices.reverse_charge_kind, crm#1323): eu_goods books the basis
+ * on 4515-4517 (ruta 20), eu_services or none on 4535-4537 (ruta 21). Only an
+ * EU supplier's reverse-charge invoice has the choice: a non-EU supplier's
+ * goods are import VAT and its services ruta 22, a Swedish supplier's
+ * omvänd skattskyldighet is ruta 24, so a kind there is refused rather than
+ * silently ignored.
+ */
+export function resolveSupplierInvoiceReverseChargeKind(
+  supplierType: string | null | undefined,
+  reverseCharge: boolean,
+  kind: SupplierInvoiceReverseChargeKind | null | undefined,
+): { ok: true; kind: SupplierInvoiceReverseChargeKind | null } | CreateSupplierInvoiceFailure {
+  if (kind == null) return { ok: true, kind: null }
+  if (!reverseCharge) return invalid('reverse_charge_kind is only accepted with reverse_charge')
+  if (supplierType !== 'eu_business') {
+    return invalid('reverse_charge_kind is only accepted for a supplier in another EU country (supplier_type eu_business)')
+  }
+  return { ok: true, kind }
 }
 
 /**
@@ -333,6 +356,10 @@ export async function createSupplierInvoice(
   // A foreign supplier defaults to reverse charge; the treatment follows the
   // flag (resolveSupplierInvoiceReverseCharge).
   const { reverseCharge, vatTreatment } = resolveSupplierInvoiceReverseCharge(supplier.supplier_type, body)
+  const reverseChargeKind = resolveSupplierInvoiceReverseChargeKind(
+    supplier.supplier_type, reverseCharge, body.reverse_charge_kind,
+  )
+  if (!reverseChargeKind.ok) return reverseChargeKind
 
   if (paidPrivately && reverseCharge) {
     // RC invoices come from registered businesses with formal invoices and
@@ -549,6 +576,7 @@ export async function createSupplierInvoice(
         exchange_rate_date: fx.rate.exchangeRateDate,
         vat_treatment: vatTreatment,
         reverse_charge: reverseCharge,
+        reverse_charge_kind: reverseChargeKind.kind,
         subtotal,
         subtotal_sek: subtotalSek,
         vat_amount: vatAmount,
@@ -646,6 +674,7 @@ export async function createSupplierInvoice(
       exchange_rate_date: fx.rate.exchangeRateDate,
       vat_treatment: vatTreatment,
       reverse_charge: reverseCharge,
+      reverse_charge_kind: reverseChargeKind.kind,
       payment_reference: body.payment_reference || null,
       // What the document itself says to pay to, validated. Kept on the
       // invoice even when the supplier card already has a different giro:

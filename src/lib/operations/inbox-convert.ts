@@ -68,6 +68,7 @@ import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { rejectSupersededInboxConversions } from '@/lib/pending-operations/supersede'
 import {
   resolveSupplierInvoiceReverseCharge,
+  resolveSupplierInvoiceReverseChargeKind,
   reverseChargeLineRateRefusal,
   supplierInvoicePayableTotal,
   type ComputedSupplierInvoiceItem,
@@ -132,6 +133,10 @@ export async function convertInboxItemToSupplierInvoice(
     supplier.supplier_type as string | null,
     body,
   )
+  const reverseChargeKind = resolveSupplierInvoiceReverseChargeKind(
+    supplier.supplier_type as string | null, reverseCharge, body.reverse_charge_kind,
+  )
+  if (!reverseChargeKind.ok) return reverseChargeKind
 
   // The scan (or Peppol's PaymentMeans) read the supplier's giro or IBAN with
   // everything else. The invoice keeps what it states (payee_*), compared
@@ -301,6 +306,7 @@ export async function convertInboxItemToSupplierInvoice(
         exchange_rate_date: fx.rate.exchangeRateDate,
         vat_treatment: vatTreatment,
         reverse_charge: reverseCharge,
+        reverse_charge_kind: reverseChargeKind.kind,
         subtotal: roundOre(subtotal),
         vat_amount: roundOre(totalVat),
         total,
@@ -352,6 +358,7 @@ export async function convertInboxItemToSupplierInvoice(
       exchange_rate_date: fx.rate.exchangeRateDate,
       vat_treatment: vatTreatment,
       reverse_charge: reverseCharge,
+      reverse_charge_kind: reverseChargeKind.kind,
       payment_reference: body.payment_reference || null,
       // What the document itself says to pay to, validated: a payment
       // compares it with the supplier card instead of trusting either.

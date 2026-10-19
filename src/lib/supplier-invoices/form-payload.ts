@@ -11,7 +11,7 @@
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { isPersonPayer, type PayerChoice } from '@/lib/expenses/payer'
 import { supplierInvoiceEditorAmounts } from './editor-amounts'
-import type { VatTreatment } from '@/types'
+import type { SupplierInvoiceReverseChargeKind, VatTreatment } from '@/types'
 
 export interface SupplierInvoiceLineItem {
   description: string
@@ -45,6 +45,8 @@ export interface SupplierInvoiceFormData {
   currency: string
   exchange_rate: string
   reverse_charge: boolean
+  /** Goods or services, asked only under reverse charge from an EU supplier. */
+  reverse_charge_kind: SupplierInvoiceReverseChargeKind
   payment_reference: string
   notes: string
   /** Vem betalade? Decides the endpoint, the primary action and the credit account. */
@@ -99,13 +101,15 @@ export interface BuildSupplierInvoicePayloadOptions {
   defaultDims: Record<string, string>
   /** Whether the flow supports periodisering (accrual method, not privately paid, not RC). */
   canUseAccrual: boolean
+  /** The supplier is in another EU country: its reverse charge says goods or services. */
+  euSupplier: boolean
 }
 
 export function buildSupplierInvoicePayload(
   data: SupplierInvoiceFormData,
   opts: BuildSupplierInvoicePayloadOptions,
 ) {
-  const { inboxItemId, uploadedDocumentId, oreRounding, defaultDims, canUseAccrual } = opts
+  const { inboxItemId, uploadedDocumentId, oreRounding, defaultDims, canUseAccrual, euSupplier } = opts
   const vatTreatment = inferVatTreatment(data.items, data.reverse_charge)
   const { roundingItem } = supplierInvoiceEditorAmounts(data.items, data.currency, data.reverse_charge, oreRounding)
   const items: SupplierInvoiceLineItem[] = roundingItem ? [...data.items, roundingItem] : data.items
@@ -126,6 +130,9 @@ export function buildSupplierInvoicePayload(
     exchange_rate: data.exchange_rate ? parseFloat(data.exchange_rate) : undefined,
     vat_treatment: vatTreatment,
     reverse_charge: data.reverse_charge,
+    // Goods (ruta 20) or services (ruta 21): only an EU supplier's reverse
+    // charge has the choice, and the API refuses it anywhere else.
+    ...(data.reverse_charge && euSupplier ? { reverse_charge_kind: data.reverse_charge_kind } : {}),
     payment_reference: data.payment_reference || undefined,
     notes: data.notes || undefined,
     paid_with_private_funds: paidByPerson,

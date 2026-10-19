@@ -1444,6 +1444,23 @@ describe('createSupplierInvoiceCashEntry', () => {
     assertBalanced(input)
   })
 
+  it('EU goods under kontantmetoden: the basis pair lands on 4515/4598, ruta 20 (crm#1323)', async () => {
+    const invoice = makeSupplierInvoice({
+      subtotal: 1000, vat_amount: 0, total: 1000, reverse_charge: true, reverse_charge_kind: 'eu_goods',
+    })
+    const items = [makeItem({ line_total: 1000, account_number: '4010', vat_rate: 0 })]
+
+    await createSupplierInvoiceCashEntry(
+      null as never, 'company-1', 'user-1', invoice, items, '2024-07-01', 'eu_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '4515')[0].debit_amount).toBe(1000)
+    expect(findByAccount(input.lines, '4598')[0].credit_amount).toBe(1000)
+    expect(findByAccount(input.lines, '4535')).toHaveLength(0)
+    assertBalanced(input)
+  })
+
   it('EU reverse charge: credits 1930', async () => {
     const invoice = makeSupplierInvoice({
       subtotal: 10000,
@@ -1842,6 +1859,24 @@ describe('createSupplierCreditNoteEntry', () => {
     // Only the 6540 part had a basis pair at registration.
     expect(findByAccount(input.lines, '4535')[0].credit_amount).toBe(4000)
     expect(findByAccount(input.lines, '4598')[0].debit_amount).toBe(4000)
+    assertBalanced(input)
+  })
+
+  it('reverses an EU goods purchase on 4515/4598, the box its registration booked (crm#1323)', async () => {
+    const creditNote = makeSupplierInvoice({
+      subtotal: -1000, vat_amount: 0, total: -1000, reverse_charge: true, reverse_charge_kind: 'eu_goods', is_credit_note: true,
+    })
+    const items = [makeItem({ line_total: 1000, account_number: '4010', vat_rate: 0 })]
+
+    await createSupplierCreditNoteEntry(
+      null as never, 'company-1', 'user-1', creditNote, items, 'eu_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '4515')[0].credit_amount).toBe(1000)
+    expect(findByAccount(input.lines, '4598')[0].debit_amount).toBe(1000)
+    expect(findByAccount(input.lines, '4535')).toHaveLength(0)
+    expect(findByAccount(input.lines, '2645')[0].credit_amount).toBe(250)
     assertBalanced(input)
   })
 

@@ -4,7 +4,7 @@ import { fxDifferenceLine } from './ore-rounding'
 import { buildSupplierDescription, supplierInvoiceReference } from './supplier-invoice-description'
 import {
   generateReverseChargePurchaseLines,
-  reverseChargeKindForSupplierType,
+  supplierInvoiceReverseChargeKind,
   type ChartVatTreatments,
 } from './vat-entries'
 import { fetchChartVatTreatments } from './chart-vat-treatments'
@@ -593,7 +593,7 @@ export function buildSupplierInvoiceCashLines(
         const rcLines = generateReverseChargePurchaseLines({
           base,
           rate,
-          kind: reverseChargeKindForSupplierType(rcSupplierType),
+          kind: supplierInvoiceReverseChargeKind(rcSupplierType, invoice.reverse_charge_kind),
           basisBase,
         })
         lines.push(...rcLines.map((l) => ({ ...l, dimensions: defaultDimensions })))

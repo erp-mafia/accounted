@@ -401,6 +401,7 @@ const ConvertInput = z.strictObject({
   exchange_rate: invoiceShape.exchange_rate,
   vat_treatment: invoiceShape.vat_treatment,
   reverse_charge: invoiceShape.reverse_charge,
+  reverse_charge_kind: invoiceShape.reverse_charge_kind,
   payment_reference: invoiceShape.payment_reference,
   notes: invoiceShape.notes,
   default_dimensions: invoiceShape.default_dimensions.describe(
@@ -426,7 +427,7 @@ export const inboxItemsConvertToSupplierInvoice = defineOperation({
       'An item already converted returns 409 INBOX_ITEM_ALREADY_CONVERTED; a supplier invoice number the supplier already has returns 409 SI_CREATE_DUPLICATE_INVOICE_NUMBER with details.existing.',
       'A credit note (read as one, or with a negative net or VAT) returns 409 INBOX_ITEM_IS_CREDIT_NOTE with details.credit_target: the invoice it credits, or the candidates to choose from.',
       'amount is per line EXCLUDING VAT; VAT is computed from vat_rate. Per-line vat_amount and private-payment fields are not accepted here.',
-      'Reverse charge follows POST /supplier-invoices: an EU or non-EU supplier without reverse_charge defaults to it, vat_treatment follows the flag, the payable is the net, and a line with a vat_rate other than 0 returns 400 VALIDATION_ERROR. Send reverse_charge: false for a foreign supplier that charged its own or no VAT.',
+      'Reverse charge follows POST /supplier-invoices: an EU or non-EU supplier without reverse_charge defaults to it, vat_treatment follows the flag, the payable is the net, and a line with a vat_rate other than 0 returns 400 VALIDATION_ERROR. Send reverse_charge: false for a foreign supplier that charged its own or no VAT. Goods from an EU supplier take reverse_charge_kind: "eu_goods" (basis 4515, ruta 20); omitted books services (4535, ruta 21).',
       'With dimensions enabled, an unknown or archived code in default_dimensions or items[].dimensions returns DIMENSION_VALIDATION_FAILED and registers nothing when the company books on registration; a company that defers booking meets it when the invoice is booked.',
       'No fiscal year for invoice_date returns SI_CREATE_NO_FISCAL_PERIOD and registers nothing.',
       'account_number is a STRING ("6110"), never a number.',

@@ -31,7 +31,7 @@ import {
   supplierInvoiceLinesInclVat,
   supplierInvoiceTotalsGap,
 } from '@/lib/bookkeeping/supplier-invoice-line-totals'
-import { resolveSupplierInvoiceReverseCharge } from '@/lib/supplier-invoices/create'
+import { resolveSupplierInvoiceReverseCharge, resolveSupplierInvoiceReverseChargeKind } from '@/lib/supplier-invoices/create'
 import { matchPairs, setItemIgnored, unmatchLink } from '@/lib/reconciliation/actions'
 import { signOffAccount } from '@/lib/reconciliation/signoff'
 import { bookResidualAndLink, ReconciliationResidualError } from '@/lib/reconciliation/residual'
@@ -4802,6 +4802,21 @@ async function commitCreateSupplierInvoiceFromInbox(
     supplier.supplier_type as string | null,
     stagedTreatment ? { reverse_charge: stagedTreatment === 'reverse_charge', vat_treatment: stagedTreatment } : {},
   )
+  // Goods or services under an EU supplier's reverse charge (crm#1323): the
+  // staged word, checked again by the rule every door shares, so an op
+  // staged against another supplier or a tampered one is refused.
+  const rawKind = params.reverse_charge_kind ?? null
+  const stagedKind = rawKind === 'eu_goods' || rawKind === 'eu_services' ? rawKind : null
+  const reverseChargeKind = rawKind !== null && stagedKind === null
+    ? null
+    : resolveSupplierInvoiceReverseChargeKind(supplier.supplier_type as string | null, reverseCharge, stagedKind)
+  if (!reverseChargeKind?.ok) {
+    return {
+      error: String(reverseChargeKind?.details?.reason ?? 'reverse_charge_kind must be eu_goods or eu_services'),
+      errorCode: 'SI_CREATE_INVALID_INPUT',
+      status: 400,
+    }
+  }
   // Icke momsregistrerad (feedback seq 708521): the seller's moms is part of
   // the cost, never 2641. Staging folds it into the lines; an op staged
   // before that fix (net lines plus 25 %) or a tampered one is folded here
@@ -4958,6 +4973,7 @@ async function commitCreateSupplierInvoiceFromInbox(
       exchange_rate_date: fx.rate.exchangeRateDate,
       vat_treatment: vatTreatment,
       reverse_charge: reverseCharge,
+      reverse_charge_kind: reverseChargeKind.kind,
       paid_with_private_funds: false,
       subtotal: subtotalRounded,
       subtotal_sek: subtotalSek,

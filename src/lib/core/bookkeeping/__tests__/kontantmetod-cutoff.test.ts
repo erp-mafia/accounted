@@ -1219,13 +1219,33 @@ describe('collectKontantmetodCutoff', () => {
         rate: 0.12,
         base: 9200,
         nonBasisBase: 9200,
-        supplierType: 'eu_business',
+        kind: 'eu_services',
       }],
     })
     const lines = buildCutoffLines([], result.payables, 'aktiebolag').payableLines
     expect(lines.find((line) => line.account_number === '2624')?.credit_amount).toBe(1104)
     expect(lines.find((line) => line.account_number === '2645')?.debit_amount).toBe(1104)
     expect(lines.find((line) => line.account_number === '4536')?.debit_amount).toBe(9200)
+  })
+
+  it('carries an EU goods purchase to its own basis box, apart from EU services (crm#1323)', async () => {
+    const invoice = (id: string, kind: string | null) => ({
+      id, supplier_invoice_number: id, invoice_date: '2026-12-01',
+      status: 'registered', total: 1000, total_sek: 1000, remaining_amount: 1000,
+      vat_amount: 0, vat_amount_sek: 0, reverse_charge: true, reverse_charge_kind: kind,
+      is_credit_note: false, currency: 'SEK', exchange_rate: 1,
+      supplier: { supplier_type: 'eu_business' },
+      items: [{ account_number: '4010', line_total: 1000, vat_rate: 0, reverse_charge_rate: null }],
+    })
+    const result = await collectKontantmetodCutoff(makePagedSupabase({
+      supplier_invoices: [invoice('si-goods', 'eu_goods'), invoice('si-services', null)],
+    }) as never, 'co-1', '2026-01-01', '2026-12-31')
+    expect(result.payables.map((p) => p.reverseChargeGroups?.[0].kind)).toEqual(['eu_goods', 'eu_services'])
+    const lines = buildCutoffLines([], result.payables, 'aktiebolag').payableLines
+    expect(lines.find((line) => line.account_number === '4515')?.debit_amount).toBe(1000)
+    expect(lines.find((line) => line.account_number === '4535')?.debit_amount).toBe(1000)
+    const outputVat = lines.filter((line) => line.account_number === '2614')
+    expect(outputVat.reduce((sum, line) => sum + line.credit_amount, 0)).toBe(500)
   })
 
   it('takes no basis pair for an item on an account whose momskod reports ruta 20-24 itself (crm#1096)', async () => {
@@ -1244,7 +1264,7 @@ describe('collectKontantmetodCutoff', () => {
       }],
     }) as never, 'co-1', '2026-01-01', '2026-12-31')
     expect(result.payables[0].reverseChargeGroups).toEqual([{
-      rate: 0.25, base: 1000, nonBasisBase: 400, supplierType: 'eu_business',
+      rate: 0.25, base: 1000, nonBasisBase: 400, kind: 'eu_services',
     }])
     const lines = buildCutoffLines([], result.payables, 'aktiebolag').payableLines
     expect(lines.find((line) => line.account_number === '2614')?.credit_amount).toBe(250)
@@ -1268,8 +1288,8 @@ describe('collectKontantmetodCutoff', () => {
       }],
     }) as never, 'co-1', '2026-01-01', '2026-12-31')
     expect(result.payables[0].reverseChargeGroups).toEqual([
-      { rate: 0.12, base: 600, nonBasisBase: 0, supplierType: 'eu_business' },
-      { rate: 0.25, base: 400, nonBasisBase: 400, supplierType: 'eu_business' },
+      { rate: 0.12, base: 600, nonBasisBase: 0, kind: 'eu_services' },
+      { rate: 0.25, base: 400, nonBasisBase: 400, kind: 'eu_services' },
     ])
     const lines = buildCutoffLines([], result.payables, 'aktiebolag').payableLines
     expect(lines.find((line) => line.account_number === '2624')?.credit_amount).toBe(72)
@@ -2403,7 +2423,7 @@ describe('buildCutoffLines: omvänd betalningsskyldighet', () => {
           rate: 0.25,
           base: 1000,
           nonBasisBase: 1000,
-          supplierType: 'eu_business',
+          kind: 'eu_services',
         }],
         netByAccount: [{ account: '6540', amount: 1000 }],
       })],

@@ -111,7 +111,7 @@ const ORIGINAL_COLUMNS = `
   id, supplier_id, supplier_invoice_number, invoice_date, status,
   currency, exchange_rate,
   subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek,
-  vat_treatment, reverse_charge, remaining_amount,
+  vat_treatment, reverse_charge, reverse_charge_kind, remaining_amount,
   registration_journal_entry_id, payment_journal_entry_id, paid_at, paid_amount,
   is_credit_note, credited_invoice_id, arrival_number, default_dimensions,
   supplier:suppliers(id, name, supplier_type),

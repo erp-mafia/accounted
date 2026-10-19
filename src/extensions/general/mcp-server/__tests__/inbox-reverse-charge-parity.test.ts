@@ -280,6 +280,64 @@ describe('MCP inbox supplier invoice: a foreign supplier is omvänd skattskyldig
   })
 })
 
+// crm#1323: an EU supplier's goods are a gemenskapsinternt förvärv, reported
+// in ruta 20 on 4515 (swedish-vat skill 2.3), not ruta 21 on 4535.
+describe('MCP inbox supplier invoice: EU goods or services (crm#1323)', () => {
+  it('stages eu_goods, shows it to the approver, and commits the goods basis 4515/4598', async () => {
+    setUp('eu_business')
+    const { result, params } = await mcpStage({ reverse_charge_kind: 'eu_goods' })
+
+    expect(params).toMatchObject({ vat_treatment: 'reverse_charge', reverse_charge_kind: 'eu_goods' })
+    expect(result.preview.reverse_charge_kind).toBe('eu_goods')
+
+    const row = await mcpCommit(params)
+    expect(row).toMatchObject({ reverse_charge: true, reverse_charge_kind: 'eu_goods' })
+    const lines = registrationLines(row)
+    expect(lines).toEqual(expect.arrayContaining([
+      { account: '4515', debit: 1000, credit: 0 },
+      { account: '4598', debit: 0, credit: 1000 },
+    ]))
+    expect(lines.some((line) => line.account === '4535')).toBe(false)
+  })
+
+  it('stages nothing extra without a kind, so a company grant still knows every param', async () => {
+    setUp('eu_business')
+    const { params } = await mcpStage()
+
+    expect(params).not.toHaveProperty('reverse_charge_kind')
+    const row = await mcpCommit(params)
+    expect(row.reverse_charge_kind).toBeNull()
+  })
+
+  it('refuses a kind for a supplier outside the EU at staging', async () => {
+    setUp('non_eu_business')
+
+    await expect(inboxTool().execute(
+      { inbox_item_id: ITEM_ID, reverse_charge_kind: 'eu_goods' },
+      'company-1',
+      'user-1',
+      db.supabase as never,
+    )).rejects.toThrow(/eu_business/)
+    expect(db.payloads('pending_operations', 'insert')).toHaveLength(0)
+  })
+
+  it('refuses at commit a kind the supplier cannot have, before an ankomstnummer is drawn', async () => {
+    setUp('swedish_business', SWEDISH_EXTRACTION)
+    const { params } = await mcpStage()
+    const op = { ...params, reverse_charge_kind: 'eu_goods' }
+
+    const result = await commitPendingOperation(db.supabase as never, 'user-1', 'company-1', {
+      id: 'op-1', user_id: 'user-1', company_id: 'company-1', operation_type: 'create_supplier_invoice_from_inbox',
+      status: 'pending', title: 'test', params: op, preview_data: {}, result_data: null, actor_type: 'user',
+      actor_id: null, actor_label: null, risk_level: 'medium', created_at: '2026-10-01T00:00:00Z',
+      resolved_at: null, updated_at: '2026-10-01T00:00:00Z',
+    } as unknown as PendingOperation)
+
+    expect(result.status).not.toBe('committed')
+    expect(db.payloads('supplier_invoices', 'insert')).toHaveLength(0)
+  })
+})
+
 /** What each door resolves, for one stated intent. */
 type Stated = 'nothing' | 'reverse charge' | 'exempt'
 

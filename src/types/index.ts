@@ -340,6 +340,11 @@ export type SupplierType = 'swedish_business' | 'eu_business' | 'non_eu_business
 // "Ångra kreditering". The row is preserved (BFL 7 kap) rather than hard-deleted.
 export type SupplierInvoiceStatus = 'registered' | 'approved' | 'paid' | 'partially_paid' | 'overdue' | 'disputed' | 'credited' | 'reversed'
 
+// What an EU supplier's reverse-charge invoice bought: goods (ruta 20) or
+// services (ruta 21). supplier_invoices.reverse_charge_kind; NULL = services.
+export const SUPPLIER_INVOICE_REVERSE_CHARGE_KINDS = ['eu_goods', 'eu_services'] as const
+export type SupplierInvoiceReverseChargeKind = (typeof SUPPLIER_INVOICE_REVERSE_CHARGE_KINDS)[number]
+
 // VAT treatment
 export type VatTreatment =
   | 'standard_25'       // 25% Swedish VAT
@@ -1422,6 +1427,13 @@ export interface SupplierInvoice {
 
   vat_treatment: VatTreatment
   reverse_charge: boolean
+  /**
+   * Under reverse charge from an EU supplier: goods (eu_goods, basis
+   * 4515-4517, ruta 20) or services (eu_services, 4535-4537, ruta 21). NULL
+   * books services, as every invoice did before 20261019160000. Optional:
+   * narrow selects do not carry it.
+   */
+  reverse_charge_kind?: SupplierInvoiceReverseChargeKind | null
 
   payment_reference: string | null
   /**

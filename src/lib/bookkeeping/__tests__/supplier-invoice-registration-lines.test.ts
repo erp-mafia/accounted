@@ -105,3 +105,42 @@ describe('supplierInvoiceRegistrationLines: deferAccruals', () => {
     expect(sum(carried, 'debit_amount')).toBe(sum(carried, 'credit_amount'))
   })
 })
+
+// crm#1323: the kind followed the supplier type alone, so an EU supplier's
+// goods booked the services basis (4535, ruta 21). The invoice now says goods.
+describe('supplierInvoiceRegistrationLines: EU goods or services', () => {
+  const rcInvoice = (kind: 'eu_goods' | 'eu_services' | null) => makeSupplierInvoice({
+    id: 'si-eu', supplier_invoice_number: 'LF-EU', arrival_number: 13,
+    invoice_date: '2026-11-22', subtotal: 1000, vat_amount: 0, total: 1000,
+    reverse_charge: true, vat_treatment: 'reverse_charge', reverse_charge_kind: kind,
+  })
+  const rcItems = [item({ id: 'f', account_number: '4010', line_total: 1000, vat_rate: 0, vat_amount: 0, reverse_charge_rate: 0.25 })]
+  const accounts = (lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>) =>
+    lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])
+
+  it('books goods on 4515/4598 (ruta 20) with the same fiktiv moms', () => {
+    const lines = supplierInvoiceRegistrationLines(rcInvoice('eu_goods'), rcItems, 'eu_business', DESC, NO_MOMSKODER)
+    expect(accounts(lines)).toEqual([
+      ['4010', 1000, 0],
+      ['2645', 250, 0],
+      ['2614', 0, 250],
+      ['4515', 1000, 0],
+      ['4598', 0, 1000],
+      ['2440', 0, 1000],
+    ])
+  })
+
+  it('books services on 4535/4598 (ruta 21) when the invoice says services or nothing, as before', () => {
+    const none = supplierInvoiceRegistrationLines(rcInvoice(null), rcItems, 'eu_business', DESC, NO_MOMSKODER)
+    const services = supplierInvoiceRegistrationLines(rcInvoice('eu_services'), rcItems, 'eu_business', DESC, NO_MOMSKODER)
+    expect(services).toEqual(none)
+    expect(none.find((l) => l.account_number === '4535')).toMatchObject({ debit_amount: 1000 })
+    expect(none.some((l) => l.account_number === '4515')).toBe(false)
+  })
+
+  it('ignores the kind for a supplier outside the EU: its type decides', () => {
+    const lines = supplierInvoiceRegistrationLines(rcInvoice('eu_goods'), rcItems, 'non_eu_business', DESC, NO_MOMSKODER)
+    expect(lines.find((l) => l.account_number === '4531')).toMatchObject({ debit_amount: 1000 })
+    expect(lines.some((l) => l.account_number === '4515')).toBe(false)
+  })
+})

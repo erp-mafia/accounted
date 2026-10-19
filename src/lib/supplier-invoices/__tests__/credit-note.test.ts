@@ -54,6 +54,12 @@ describe('buildSupplierCreditNoteRow', () => {
     })
   })
 
+  it('keeps the original\'s goods or services, so the credit reverses the same basis box (crm#1323)', () => {
+    const goods = makeSupplierInvoice({ id: 'si-1', reverse_charge: true, reverse_charge_kind: 'eu_goods' })
+    expect(buildSupplierCreditNoteRow(goods, CTX)).toMatchObject({ reverse_charge: true, reverse_charge_kind: 'eu_goods' })
+    expect(buildSupplierCreditNoteRow(makeSupplierInvoice({ id: 'si-2' }), CTX).reverse_charge_kind).toBeNull()
+  })
+
   it('defaults a missing dimension bag to an empty object', () => {
     const row = buildSupplierCreditNoteRow(makeSupplierInvoice({ id: 'si-1' }), CTX)
     expect(row.default_dimensions).toEqual({})

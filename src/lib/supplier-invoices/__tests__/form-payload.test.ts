@@ -32,6 +32,7 @@ function makeFormData(overrides: Partial<SupplierInvoiceFormData> = {}): Supplie
     currency: 'SEK',
     exchange_rate: '',
     reverse_charge: false,
+    reverse_charge_kind: 'eu_services',
     payment_reference: '',
     notes: '',
     payer: 'unpaid',
@@ -51,6 +52,7 @@ function makeOpts(
     oreRounding: true,
     defaultDims: {},
     canUseAccrual: true,
+    euSupplier: false,
     ...overrides,
   }
 }
@@ -243,6 +245,19 @@ describe('buildSupplierInvoicePayload', () => {
     expect(payload.items[0].reverse_charge_rate).toBe(0.12)
     expect(payload.items[1].vat_rate).toBe(0)
     expect(payload.items[1].reverse_charge_rate).toBe(0.25)
+  })
+
+  it('sends goods or services only for an EU supplier under reverse charge (crm#1323)', () => {
+    const goods = makeFormData({ reverse_charge: true, reverse_charge_kind: 'eu_goods' })
+    expect(buildSupplierInvoicePayload(goods, makeOpts({ euSupplier: true })).reverse_charge_kind).toBe('eu_goods')
+    expect(
+      buildSupplierInvoicePayload({ ...goods, reverse_charge_kind: 'eu_services' }, makeOpts({ euSupplier: true })).reverse_charge_kind,
+    ).toBe('eu_services')
+    // A Swedish or non-EU supplier, or no reverse charge: the API refuses the field there.
+    expect(buildSupplierInvoicePayload(goods, makeOpts({ euSupplier: false }))).not.toHaveProperty('reverse_charge_kind')
+    expect(
+      buildSupplierInvoicePayload({ ...goods, reverse_charge: false }, makeOpts({ euSupplier: true })),
+    ).not.toHaveProperty('reverse_charge_kind')
   })
 
   it('non-RC: reverse_charge_rate is stripped to undefined', () => {

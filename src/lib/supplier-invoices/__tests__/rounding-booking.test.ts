@@ -23,7 +23,7 @@ vi.mock('@/components/ui/account-number', () => ({ AccountNumber: ({ number }: {
 const form: SupplierInvoiceFormData = {
   supplier_id: 'supplier-1', supplier_invoice_number: 'ROUND-1', invoice_date: '2026-09-01',
   due_date: '2026-09-30', delivery_date: '', currency: 'SEK', exchange_rate: '',
-  reverse_charge: false, payment_reference: '', notes: '', payer: 'unpaid',
+  reverse_charge: false, reverse_charge_kind: 'eu_services', payment_reference: '', notes: '', payer: 'unpaid',
   claimant_name: '', employee_id: '',
   items: [
     { description: 'Purchase', amount: 16000, account_number: '6110', vat_rate: 0.25 },
@@ -39,7 +39,7 @@ it.each([false, true])('saves the previewed payable and keeps VAT unchanged (rev
     : form
   const payload = buildSupplierInvoicePayload(data, {
     oreRounding: true, inboxItemId: null, uploadedDocumentId: undefined,
-    defaultDims: {}, canUseAccrual: false,
+    defaultDims: {}, canUseAccrual: false, euSupplier: false,
   })
   const items: SupplierInvoiceItem[] = payload.items.map((item, i) => ({
     ...item, id: `item-${i}`, supplier_invoice_id: 'invoice-1', sort_order: i,
@@ -101,7 +101,7 @@ it.each([
   }
   const payload = buildSupplierInvoicePayload(data, {
     oreRounding: false, inboxItemId: null, uploadedDocumentId: undefined,
-    defaultDims: {}, canUseAccrual: false,
+    defaultDims: {}, canUseAccrual: false, euSupplier: false,
   })
   const items: SupplierInvoiceItem[] = payload.items.map((item, i) => ({
     ...item, id: `item-${i}`, supplier_invoice_id: 'invoice-1', sort_order: i,
