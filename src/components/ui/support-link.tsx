@@ -36,6 +36,7 @@ import {
   listTickets,
   loadThread,
   markThreadRead,
+  otherTickets,
   pickTicketToOpen,
   replyInThread,
   sortByActivity,
@@ -59,12 +60,12 @@ type AttachmentError = 'unsupported' | 'too_many' | 'too_large'
 
 /**
  * loading  fetching tickets or a thread
- * thread   the conversation with support (reply box when it is the active ticket;
+ * thread   the conversation with support (reply box while the ticket is open;
  *          read-only for a resolved ticket, e.g. one opened for an unread answer)
  * compose  write a new ticket, attachments allowed: when there is nothing to
  *          reply to or read, or on "Nytt ärende" beside a ticket (the thread
- *          stays loaded, so the customer can go back to it). Earlier tickets
- *          are listed here too, so history is never out of reach.
+ *          stays loaded, so the customer can go back to it). The other tickets
+ *          are listed here too, so they are never out of reach.
  * email    conversations unavailable (self-hosted, analytics off): same form, mail delivery
  * sent     delivered by mail (attachments, or the fallback)
  */
@@ -93,10 +94,9 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
   const open = openProp ?? openState
   const [view, setView] = useState<View>('loading')
   const [tickets, setTickets] = useState<TicketSummary[]>([])
-  const [active, setActive] = useState<TicketSummary | null>(null)
   const [thread, setThread] = useState<Thread | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
-  const [showEarlier, setShowEarlier] = useState(false)
+  const [showResolved, setShowResolved] = useState(false)
   const [message, setMessage] = useState('')
   const [attachments, setAttachments] = useState<File[]>([])
   const [isPreparing, setIsPreparing] = useState(false)
@@ -135,7 +135,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
   const bootstrap = useCallback(async () => {
     setView('loading')
     setThread(null)
-    setShowEarlier(false)
+    setShowResolved(false)
     if (!conversationsAvailable()) {
       setView('email')
       return
@@ -144,10 +144,6 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
     setTickets(list)
     setUnread(totalUnread(list))
     const next = pickTicketToOpen(list, currentTicketId())
-    // Only an open ticket is the active one. A resolved ticket opened for its
-    // unread answer stays read-only: canReply is false and "Nytt ärende" is
-    // the way to write again.
-    setActive(next?.mode === 'reply' ? next.ticket : null)
     if (!next) {
       setView('compose')
       return
@@ -350,28 +346,20 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
   // along to "Nytt ärende" (and back), which is what the customer who realises
   // mid-sentence that this is a separate matter wants.
   function startNewTicket() {
-    setShowEarlier(false)
+    setShowResolved(false)
     setView('compose')
   }
 
-  const canReply = Boolean(thread && active && thread.ticketId === active.id && !isResolved(thread.status))
-  const earlier = tickets.filter((x) => x.id !== viewingId)
+  // Any open ticket on screen takes a reply: loadThread made it the SDK's
+  // current ticket, so the reply lands in it (handleReply re-checks). Pinning
+  // replies to the ticket the dialog opened on left every other open ticket
+  // read-only, so switching to one was a dead end (crm#1138).
+  const canReply = Boolean(thread && !isResolved(thread.status))
+  const { open: otherOpen, resolved: otherResolved } = otherTickets(tickets, viewingId)
 
-  // Shared by the thread and the compose view: with nothing to reply to or
-  // read, the dialog opens on the composer, and history must not vanish then.
-  const earlierToggle = earlier.length > 0 && (
-    <button
-      type="button"
-      onClick={() => setShowEarlier((v) => !v)}
-      className="ml-auto text-xs text-muted-foreground hover:text-foreground transition-colors"
-    >
-      {showEarlier ? t('hide_earlier') : t('earlier_tickets', { count: earlier.length })}
-    </button>
-  )
-
-  const earlierList = showEarlier && (
+  const ticketList = (list: TicketSummary[]) => (
     <ul className="mt-2 flex flex-col gap-1">
-      {earlier.map((x) => (
+      {list.map((x) => (
         <li key={x.id}>
           <button
             type="button"
@@ -379,12 +367,42 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
             className="flex w-full items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-left text-sm hover:bg-secondary/35 transition-colors"
           >
             <span className="truncate text-foreground">{x.lastMessage || t('no_messages')}</span>
-            <span className="shrink-0 text-[11px] text-muted-foreground">{statusLabel(x.status)}</span>
+            <span className="flex shrink-0 items-center gap-2 text-[11px] text-muted-foreground">
+              {x.unreadCount > 0 && (
+                <span
+                  aria-label={t('unread_aria', { count: x.unreadCount })}
+                  className="inline-block h-1.5 w-1.5 rounded-full bg-primary"
+                />
+              )}
+              {statusLabel(x.status)}
+            </span>
           </button>
         </li>
       ))}
     </ul>
   )
+
+  // Shared by the thread and the compose view: with nothing to reply to or
+  // read, the dialog opens on the composer, and the other tickets must not
+  // vanish then.
+  const otherOpenList = otherOpen.length > 0 && (
+    <div className="mt-3">
+      <p className="text-[11px] text-muted-foreground">{t('other_open_tickets')}</p>
+      {ticketList(otherOpen)}
+    </div>
+  )
+
+  const resolvedToggle = otherResolved.length > 0 && (
+    <button
+      type="button"
+      onClick={() => setShowResolved((v) => !v)}
+      className="ml-auto text-xs text-muted-foreground hover:text-foreground transition-colors"
+    >
+      {showResolved ? t('hide_resolved') : t('resolved_tickets', { count: otherResolved.length })}
+    </button>
+  )
+
+  const resolvedList = showResolved && ticketList(otherResolved)
 
   const triggerLabel = (
     <>
@@ -567,7 +585,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
           </div>
         )}
 
-        {view === 'compose' && (thread || earlier.length > 0) && (
+        {view === 'compose' && (thread || otherOpen.length > 0 || otherResolved.length > 0) && (
           <div>
             <div className="flex items-center gap-3">
               {thread && (
@@ -579,9 +597,10 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
                   {t('back_to_ticket')}
                 </button>
               )}
-              {earlierToggle}
+              {resolvedToggle}
             </div>
-            {earlierList}
+            {otherOpenList}
+            {resolvedList}
           </div>
         )}
 
@@ -594,7 +613,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
                 {thread ? statusLabel(displayStatus(thread.status, thread.messages)) : ''}
               </span>
               <div className="flex items-center gap-3">
-                {earlierToggle}
+                {resolvedToggle}
                 {canReply && (
                   <button
                     type="button"
@@ -607,7 +626,8 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
               </div>
             </div>
 
-            {earlierList}
+            {otherOpenList}
+            {resolvedList}
 
             {loadFailed ? (
               <p className="mt-4 text-sm text-muted-foreground">{t('load_failed')}</p>
@@ -636,9 +656,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
               replyForm
             ) : (
               <div className="mt-4 flex items-center justify-between gap-3">
-                <p className="text-xs text-muted-foreground">
-                  {thread && !isResolved(thread.status) ? t('other_open_hint') : t('resolved_hint')}
-                </p>
+                <p className="text-xs text-muted-foreground">{t('resolved_hint')}</p>
                 <Button
                   type="button"
                   variant="outline"
