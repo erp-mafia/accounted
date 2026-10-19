@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { PaymentPreviewLinesCard, usePaymentPreviewEditor } from '@/components/bookkeeping/PaymentPreviewLinesCard'
+import { RegistrationFirstCard, type RegistrationEntryPreview } from '@/components/supplier-invoices/RegistrationFirstCard'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { isInvoiceBookingRateMissing, previewedFxGainSek } from './invoice-match-fx'
@@ -64,6 +65,11 @@ interface MatchPreview {
   /** Supplier match only: the settled invoice's bag, given to a row the user adds. */
   document_dimensions?: LineDimensions
   /**
+   * Supplier match only: an unbooked invoice of a company that books in a
+   * separate step, the registration verifikat the match books first.
+   */
+  registration_entry?: RegistrationEntryPreview | null
+  /**
    * Customer match only: a SEK payment a krona or more above what the invoice
    * still owes. `accounts` may take the excess; `account` is the one the
    * preview was asked for, null until the user picks one (then `lines` is
@@ -110,6 +116,8 @@ function parseRate(s: string): number {
 interface PreviewFailure {
   code: string | null
   message: string | null
+  /** The refusal came from booking the supplier invoice first. */
+  registrationFirst?: boolean
 }
 
 export default function InvoiceMatchDialog({
@@ -204,11 +212,14 @@ export default function InvoiceMatchDialog({
           // invites an action the server has already decided to reject.
           let failure: PreviewFailure = { code: null, message: null }
           try {
-            const body = (await res.json()) as { error?: { code?: unknown } }
+            const body = (await res.json()) as {
+              error?: { code?: unknown; details?: { registration_first?: unknown } }
+            }
             if (body?.error && typeof body.error === 'object') {
               failure = {
                 code: typeof body.error.code === 'string' ? body.error.code : null,
                 message: getErrorMessage(body, { locale: uiLocale }),
+                registrationFirst: body.error.details?.registration_first === true,
               }
             }
           } catch {
@@ -789,6 +800,12 @@ export default function InvoiceMatchDialog({
                 blocked the preview: the ochre panel above already owns that
                 story, and an empty "Bokföring" card with a second phrasing of
                 the same refusal reads as two separate problems. */}
+            {/* An unbooked supplier invoice is booked first: its
+                registration verifikat, read-only, above the payment's rows. */}
+            {!targetBlocked && isSupplierInvoice && preview?.registration_entry && (
+              <RegistrationFirstCard entry={preview.registration_entry} />
+            )}
+
             {!targetBlocked && (preview || (previewFailure && !invoiceRateMissing)) && (
               <PaymentPreviewLinesCard
                 editor={editor}
@@ -801,6 +818,9 @@ export default function InvoiceMatchDialog({
                     generic "continue or cancel" copy: when the server named a
                     reason the user can act on it, and "continue" is often not
                     actually available. */}
+                {previewFailure && !preview && previewFailure.registrationFirst && (
+                  <p className="text-sm text-muted-foreground">{t('registration_first_refused')}</p>
+                )}
                 {previewFailure && !preview && (
                   <p className="text-sm text-muted-foreground">
                     {previewFailure.message ?? t('booking_unavailable')}

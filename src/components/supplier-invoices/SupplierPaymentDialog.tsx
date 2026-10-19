@@ -12,6 +12,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import LinkVoucherPicker from '@/components/invoices/LinkVoucherPicker'
+import { RegistrationFirstCard, type RegistrationEntryPreview } from '@/components/supplier-invoices/RegistrationFirstCard'
 import { PaymentPreviewLinesCard, usePaymentPreviewEditor } from '@/components/bookkeeping/PaymentPreviewLinesCard'
 import type { LineDimensions } from '@/components/bookkeeping/payment-line-dimensions'
 import type { PaymentPreviewLine } from '@/components/bookkeeping/payment-preview-lines'
@@ -32,6 +33,11 @@ interface MarkPaidPreview {
   paid_sek?: number
   /** The invoice's bag, given to a row the user adds. */
   document_dimensions?: LineDimensions
+  /**
+   * An unbooked invoice of a company that books in a separate step: the
+   * registration verifikat the payment books first, else null.
+   */
+  registration_entry?: RegistrationEntryPreview | null
 }
 
 interface DuplicateCandidate {
@@ -90,7 +96,10 @@ export function SupplierPaymentDialog({
   // The refusal the preview returned (its Swedish message and code), shown in
   // place of the rows: e.g. SI_PAID_SEK_UNRESOLVED or an overpaid foreign
   // invoice, which the POST would refuse the same way.
-  const [markPaidPreviewError, setMarkPaidPreviewError] = useState<{ message: string; code: string | null } | null>(null)
+  // registrationFirst: the refusal came from booking the invoice first.
+  const [markPaidPreviewError, setMarkPaidPreviewError] = useState<
+    { message: string; code: string | null; registrationFirst: boolean } | null
+  >(null)
   const editor = usePaymentPreviewEditor(markPaidPreview?.lines, markPaidPreview?.document_dimensions)
   const { stopEditing } = editor
 
@@ -140,6 +149,7 @@ export function SupplierPaymentDialog({
         const qs = new URLSearchParams({
           amount: String(amountNum),
           payment_account: paymentAccount,
+          payment_date: paymentDate,
           ...(paySekOverride !== undefined ? { amount_sek: String(paySekOverride) } : {}),
         })
         const res = await fetch(
@@ -149,9 +159,11 @@ export function SupplierPaymentDialog({
         if (!res.ok) {
           const errBody = await res.json().catch(() => null)
           if (!cancelled) {
+            const errorField = (errBody as { error?: { code?: string; details?: { registration_first?: unknown } } } | null)?.error
             setMarkPaidPreviewError({
               message: getErrorMessage(errBody, { statusCode: res.status, context: 'supplier_invoice' }),
-              code: (errBody as { error?: { code?: string } } | null)?.error?.code ?? null,
+              code: errorField?.code ?? null,
+              registrationFirst: errorField?.details?.registration_first === true,
             })
             setMarkPaidPreviewFailed(true)
           }
@@ -168,7 +180,7 @@ export function SupplierPaymentDialog({
       cancelled = true
       ctrl.abort()
     }
-  }, [open, invoice.id, payAmount, paymentAccount, paySekOverride])
+  }, [open, invoice.id, payAmount, paymentAccount, paySekOverride, paymentDate])
 
   async function handleMarkPaid(force: boolean = false) {
     setIsProcessing(true)
@@ -295,6 +307,12 @@ export function SupplierPaymentDialog({
                   <p className="text-xs text-muted-foreground">{t('payment_account_help')}</p>
                 </div>
 
+                {/* An unbooked invoice is booked first: its registration
+                    verifikat, read-only, above the payment's rows. */}
+                {markPaidPreview?.registration_entry && !markPaidPreviewFailed && (
+                  <RegistrationFirstCard entry={markPaidPreview.registration_entry} />
+                )}
+
                 {/* The verifikat mark-paid will post, editable through Redigera. */}
                 {(markPaidPreview || markPaidPreviewFailed) && (
                   <PaymentPreviewLinesCard
@@ -307,6 +325,9 @@ export function SupplierPaymentDialog({
                         and says why; the user's own edited rows stay. */}
                     {markPaidPreviewFailed && !editor.isEditing && (
                       <div className="space-y-2">
+                        {markPaidPreviewError?.registrationFirst && (
+                          <p className="text-sm text-muted-foreground">{tMatch('registration_first_refused')}</p>
+                        )}
                         <p className="text-sm text-muted-foreground">
                           {markPaidPreviewError?.message ?? tMatch('booking_unavailable')}
                         </p>

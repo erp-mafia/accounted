@@ -19,11 +19,17 @@
  *      the batch unless force=true names exactly that set;
  *   3. kontantmetoden: an invoice with no booking yet cannot be cleared off
  *      1510/2440 (its revenue/cost + moms would never reach the ledger);
+ *   3b. faktureringsmetoden with defer_invoice_booking: a supplier invoice
+ *      registered without its verifikat is booked first by the Bokför step,
+ *      right before the RPC (lib/supplier-invoices/registration-first.ts);
+ *      its dry run runs here, so a refusal refuses the batch before anything
+ *      is written;
  *   4. the RPC: tenant scope, direction, sums, periods, locks.
  *
- * A dry run runs 1-3, then reads the transaction and the invoices and
+ * A dry run runs 1-3b, then reads the transaction and the invoices and
  * projects the verifikat the RPC would post (lib/invoices/batch-allocation-
- * preview.ts mirrors the migration). It writes nothing: no RPC, no events,
+ * preview.ts mirrors the migration), with the registrations 3b would book
+ * before it (registration_entries). It writes nothing: no RPC, no events,
  * no behandlingshistorik. It says when the guard in 2 was bypassed
  * (already_explained_by names the vouchers) or could not run
  * (duplicate_check_failed), so the approver never takes it for a clean check.
@@ -56,6 +62,11 @@ import { roundOre } from '@/lib/money'
 import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
 import { chunk } from '@/lib/utils'
 import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
+import {
+  bookRegistrationsBeforeBatchSettlement,
+  planRegistrationsBeforeBatchSettlement,
+  type RegistrationFirstPlan,
+} from '@/lib/supplier-invoices/registration-first'
 
 /** The request every door validates (MatchBatchSchema, the v1 and MCP contract). */
 export type MatchBatchInput = z.output<typeof MatchBatchSchema>
@@ -79,6 +90,11 @@ export interface MatchBatchResult {
   allocations: MatchBatchAllocationResult[]
   total_allocated: number
   leftover: number
+  /**
+   * Supplier invoice id to the registration verifikat the batch booked first
+   * (defer_invoice_booking); absent when it booked none.
+   */
+  registration_journal_entry_ids?: Record<string, string>
 }
 
 interface RpcOk extends MatchBatchResult {
@@ -194,10 +210,30 @@ export async function matchTransactionBatch(
     }
   }
 
+  // 3b. A deferring company's unbooked supplier invoices are booked first,
+  // dated as the Bokför step dates them; the batch's own date must take the
+  // samlingsverifikation, checked before anything is booked.
+  const supplierInvoiceIds = allocations.flatMap((a) =>
+    a.kind === 'supplier_invoice' && a.supplier_invoice_id ? [a.supplier_invoice_id] : [],
+  )
+  const registrations = await planRegistrationsBeforeBatchSettlement(ctx, supplierInvoiceIds, {
+    settlementDate: async () => {
+      const { data } = await supabase
+        .from('transactions')
+        .select('date')
+        .eq('id', transactionId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      return (data as { date?: string | null } | null)?.date ?? null
+    },
+  })
+  if (!registrations.ok) return registrations
+
   if (options.dryRun) {
     return previewMatchBatch(ctx, transactionId, input, {
       overriddenBy: explained.status === 'overridden' ? describeExplainingSet(explained.set) : null,
       detectFailed,
+      registrations: registrations.plans,
     })
   }
 
@@ -208,6 +244,20 @@ export async function matchTransactionBatch(
       userId,
     })
   }
+
+  // 3b, committed: the registrations first, so the RPC's 2440 debits clear
+  // a skuld the ledger carries. Each one posted is a correct booking of its
+  // invoice and stays if anything after it fails (named in partialPostedIds).
+  const booked = await bookRegistrationsBeforeBatchSettlement(ctx, registrations.plans)
+  if (!booked.ok) {
+    const { postedJournalEntryIds, ...refusal } = booked
+    return Object.keys(postedJournalEntryIds).length > 0
+      ? { ...refusal, partialPostedIds: registrationPostedIds(postedJournalEntryIds) }
+      : refusal
+  }
+  const postedRegistrations = registrationPostedIds(booked.postedJournalEntryIds)
+  const withPosted = <F extends { ok: false }>(failure: F): F =>
+    Object.keys(postedRegistrations).length > 0 ? { ...failure, partialPostedIds: postedRegistrations } : failure
 
   // The posting port (its SQL step): one payment event per allocation
   // (sale.payment_received or purchase.paid, as the single bank match
@@ -223,7 +273,7 @@ export async function matchTransactionBatch(
   } catch (err) {
     // strict: an event that could not be recorded stops the booking before any number.
     txLog.error('match-batch: business events not recorded (strict)', err)
-    return { ok: false, code: 'BATCH_RPC_FAILED', details: { message: getUserErrorMessage(err) } }
+    return withPosted({ ok: false, code: 'BATCH_RPC_FAILED', details: { message: getUserErrorMessage(err) } })
   }
 
   // 4. The RPC is the atomicity boundary, behind the engine door (through
@@ -238,13 +288,13 @@ export async function matchTransactionBatch(
   })
   if (error) {
     txLog.error('match_batch_allocate RPC error', error)
-    return { ok: false, code: 'BATCH_RPC_FAILED', details: { message: getUserErrorMessage(error) } }
+    return withPosted({ ok: false, code: 'BATCH_RPC_FAILED', details: { message: getUserErrorMessage(error) } })
   }
 
   const result = data as RpcOk | RpcErr | null
   if (!result || !result.ok) {
     const code = (result as RpcErr | null)?.code ?? 'BATCH_RPC_FAILED'
-    return { ok: false, code, details: (result as RpcErr | null)?.details }
+    return withPosted({ ok: false, code, details: (result as RpcErr | null)?.details })
   }
 
   // Payment rows the RPC wrote on an invoice under collection wait in the
@@ -284,8 +334,19 @@ export async function matchTransactionBatch(
       allocations: result.allocations,
       total_allocated: result.total_allocated,
       leftover: result.leftover,
+      ...(Object.keys(booked.journalEntryIds).length > 0
+        ? { registration_journal_entry_ids: booked.journalEntryIds }
+        : {}),
     },
+    ...(booked.warnings.length > 0 ? { warnings: booked.warnings } : {}),
   }
+}
+
+/** The registrations a batch posted, keyed for partialPostedIds. */
+function registrationPostedIds(byInvoice: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(byInvoice).map(([invoiceId, entryId]) => [`registration:${invoiceId}`, entryId]),
+  )
 }
 
 /**
@@ -362,7 +423,11 @@ async function previewMatchBatch(
   ctx: OperationContext,
   transactionId: string,
   input: MatchBatchInput,
-  guard: { overriddenBy: string | null; detectFailed: boolean },
+  guard: {
+    overriddenBy: string | null
+    detectFailed: boolean
+    registrations: Extract<RegistrationFirstPlan, { required: true }>[]
+  },
 ): Promise<OperationOutcome<MatchBatchResult>> {
   const { supabase, companyId, log } = ctx
   const { allocations } = input
@@ -455,6 +520,17 @@ async function previewMatchBatch(
       expected_fx: expected.fx,
       ...(guard.overriddenBy ? { already_explained_override: true, already_explained_by: guard.overriddenBy } : {}),
       ...(guard.detectFailed ? { duplicate_check_failed: true } : {}),
+      // The registration verifikat booked first per supplier invoice
+      // (defer_invoice_booking), before the samlingsverifikation.
+      ...(guard.registrations.length > 0
+        ? {
+            books_registration_first: true,
+            registration_entries: guard.registrations.map((plan) => ({
+              supplier_invoice_id: plan.supplierInvoiceId,
+              journal_entry: plan.entry,
+            })),
+          }
+        : {}),
     },
   }
 }

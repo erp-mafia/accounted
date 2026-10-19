@@ -1,4 +1,25 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+
+// The registration-first rule (defer_invoice_booking) has its own suites
+// (registration-first.test.ts and the deferred-door tests); here no invoice
+// needs its registration booked first.
+vi.mock('@/lib/supplier-invoices/registration-first', () => ({
+  planRegistrationBeforeSettlement: vi.fn(async () => ({ ok: true, required: false })),
+  planRegistrationBeforeSettlementById: vi.fn(async () => ({ ok: true, required: false })),
+  bookRegistrationBeforeSettlement: vi.fn(async () => ({
+    ok: true,
+    journalEntryId: null,
+    bookedHere: false,
+    warnings: [],
+  })),
+  planRegistrationsBeforeBatchSettlement: vi.fn(async () => ({ ok: true, plans: [] })),
+  bookRegistrationsBeforeBatchSettlement: vi.fn(async () => ({
+    ok: true,
+    journalEntryIds: {},
+    postedJournalEntryIds: {},
+    warnings: [],
+  })),
+}))
 import {
   validateVoucherForSupplierInvoiceLink,
   linkSupplierInvoiceToVoucher,
@@ -9,6 +30,10 @@ import {
   createQueuedMockSupabase,
 } from '@/tests/helpers'
 import { eventBus } from '@/lib/events/bus'
+import {
+  bookRegistrationBeforeSettlement,
+  planRegistrationBeforeSettlementById,
+} from '@/lib/supplier-invoices/registration-first'
 
 // Issue #1259: settling the invoice retires the suggestion pointers at it.
 // Mocked so it consumes no slot in the queued Supabase mock; the helper's own
@@ -949,5 +974,164 @@ describe('findMatchingVouchersForSupplierInvoice', () => {
       expect(result).toHaveLength(1)
       expect(result[0].confidence).toBe(0.99)
     })
+  })
+})
+
+// ============================================================
+// linkSupplierInvoiceToVoucher: a deferred invoice is booked first
+// ============================================================
+
+describe('linkSupplierInvoiceToVoucher: a deferring company whose invoice is not booked yet', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  const requiredPlan = {
+    ok: true as const,
+    required: true as const,
+    supplierInvoiceId: 'si-1',
+    entry: {
+      entry_date: '2024-06-01',
+      description: 'Leverantörsfaktura',
+      lines: [
+        { account_number: '4010', debit_amount: 800, credit_amount: 0, line_description: null },
+        { account_number: '2641', debit_amount: 200, credit_amount: 0, line_description: null },
+        { account_number: '2440', debit_amount: 0, credit_amount: 1000, line_description: null },
+      ],
+      total_debit: 1000,
+      total_credit: 1000,
+      balanced: true,
+      note: '',
+    },
+    payableSek: 1000,
+    createsAccrualSchedules: false,
+  }
+  const postedVoucher = {
+    id: 'je-1',
+    voucher_series: 'B',
+    voucher_number: 12,
+    entry_date: '2024-06-15',
+    description: '',
+    status: 'posted',
+    source_type: 'manual',
+    fiscal_period_id: 'fp-1',
+    company_id: 'company-1',
+  }
+  const rpcOk = {
+    ok: true,
+    payment_id: 'sip-1',
+    invoice_status: 'paid',
+    paid_amount: 1000,
+    remaining_amount: 0,
+    payment_amount: 1000,
+    journal_entry_id: 'je-1',
+    currency: 'SEK',
+  }
+  const unbookedInvoice = () =>
+    makeSupplierInvoice({ id: 'si-1', remaining_amount: 1000, paid_amount: 0, total: 1000, currency: 'SEK' })
+
+  it('validates the link, books the registration, then links the voucher', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    vi.mocked(planRegistrationBeforeSettlementById).mockResolvedValueOnce(requiredPlan)
+    vi.mocked(bookRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: true,
+      journalEntryId: 'je-registration',
+      bookedHere: true,
+      warnings: [],
+    })
+    enqueue({ data: unbookedInvoice() }) // the invoice, for the link validation
+    enqueue({ data: postedVoucher })
+    enqueue({
+      data: [
+        { account_number: '2440', debit_amount: 1000, credit_amount: 0, currency: 'SEK' },
+        { account_number: '1930', debit_amount: 0, credit_amount: 1000, currency: 'SEK' },
+      ],
+    })
+    enqueue({ data: [], error: null }) // existing links on the voucher
+    enqueue({ data: [], error: null }) // this invoice's own links to it
+    enqueue({ data: rpcOk, error: null }) // link_supplier_invoice_to_voucher
+    enqueue({ data: unbookedInvoice(), error: null }) // re-fetch for the event
+    vi.spyOn(eventBus, 'emit').mockResolvedValue(undefined)
+
+    const result = await linkSupplierInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      supplierInvoiceId: 'si-1',
+      journalEntryId: 'je-1',
+    })
+
+    expect(result.ok, JSON.stringify(result)).toBe(true)
+    if (result.ok) expect(result.result.registrationJournalEntryId).toBe('je-registration')
+    expect(vi.mocked(planRegistrationBeforeSettlementById)).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: 'company-1', userId: 'user-1' }),
+      'si-1',
+    )
+    expect(vi.mocked(bookRegistrationBeforeSettlement)).toHaveBeenCalledWith(expect.anything(), requiredPlan)
+  })
+
+  it('a voucher that does not fit refuses before the registration is booked', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    vi.mocked(planRegistrationBeforeSettlementById).mockResolvedValueOnce(requiredPlan)
+    enqueue({ data: unbookedInvoice() })
+    enqueue({ data: null, error: null }) // the voucher is missing
+
+    const result = await linkSupplierInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      supplierInvoiceId: 'si-1',
+      journalEntryId: 'je-missing',
+    })
+
+    expect(result).toMatchObject({ ok: false, code: 'LINK_SI_VOUCHER_VOUCHER_NOT_FOUND' })
+    expect(vi.mocked(bookRegistrationBeforeSettlement)).not.toHaveBeenCalled()
+  })
+
+  it('a refused registration refuses the link with the Bokför code: no voucher is linked', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    vi.mocked(planRegistrationBeforeSettlementById).mockResolvedValueOnce({
+      ok: false,
+      code: 'PERIOD_LOCKED',
+      details: { invoice_date: '2024-06-01', registration_first: true, supplier_invoice_id: 'si-1' },
+    })
+    // Would be the RPC's answer if it were (wrongly) called.
+    enqueue({ data: rpcOk, error: null })
+
+    const result = await linkSupplierInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      supplierInvoiceId: 'si-1',
+      journalEntryId: 'je-1',
+    })
+
+    expect(result).toMatchObject({ ok: false, code: 'PERIOD_LOCKED', details: { registration_first: true } })
+    expect(mockAnchorSupplierDoc).not.toHaveBeenCalled()
+  })
+
+  it('a typed bookkeeping error from the registration answers with its own code', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    vi.mocked(planRegistrationBeforeSettlementById).mockResolvedValueOnce({
+      ok: false,
+      code: 'SI_BOOK_FAILED',
+      error: Object.assign(new Error('accrual month locked'), { code: 'SI_ACCRUED_COST_PERIOD_LOCKED' }),
+      details: { registration_first: true, supplier_invoice_id: 'si-1' },
+    })
+
+    const result = await linkSupplierInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      supplierInvoiceId: 'si-1',
+      journalEntryId: 'je-1',
+    })
+
+    expect(result).toMatchObject({ ok: false, code: 'SI_ACCRUED_COST_PERIOD_LOCKED' })
+  })
+
+  it('the provider-migration pass never books a registration: it came in with the SIE journal', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: rpcOk, error: null })
+    enqueue({ data: unbookedInvoice(), error: null })
+    vi.spyOn(eventBus, 'emit').mockResolvedValue(undefined)
+
+    const result = await linkSupplierInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      registrationInLedger: true,
+      supplierInvoiceId: 'si-1',
+      journalEntryId: 'je-1',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(vi.mocked(planRegistrationBeforeSettlementById)).not.toHaveBeenCalled()
+    if (result.ok) expect(result.result.registrationJournalEntryId).toBeNull()
   })
 })

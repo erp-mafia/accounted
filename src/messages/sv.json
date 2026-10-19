@@ -4144,6 +4144,9 @@
     "booking_description_placeholder": "Beskrivning",
     "booking_unbalanced": "Debet och kredit måste vara lika och större än noll. Differens: {diff}",
     "booking_account_invalid": "Kontonummer måste vara 4 siffror.",
+    "registration_first_title": "Fakturan bokförs först",
+    "registration_first_note": "Fakturan är inte bokförd än. Den bokförs först, på fakturadatumet {date}, och betalningen nedan nollar sedan leverantörsskulden på 2440.",
+    "registration_first_refused": "Fakturan är inte bokförd än och bokförs innan betalningen registreras, men den kunde inte bokföras:",
     "cancel": "Avbryt",
     "confirming": "Bekräftar...",
     "confirm_match": "Bekräfta matchning"

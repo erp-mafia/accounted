@@ -5,7 +5,9 @@
  * Plans and books through the same functions as the dashboard route
  * (planSupplierBankMatch, createSupplierBankMatchEntry), so the same payment
  * gives the same verifikat and ledger update on both doors; same
- * optimistic-lock interlock.
+ * optimistic-lock interlock. A deferring company's unbooked invoice
+ * (defer_invoice_booking) is booked first by the Bokför step
+ * (lib/supplier-invoices/registration-first.ts), as on the dashboard door.
  */
 import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import { z } from 'zod'
@@ -40,6 +42,11 @@ import { emitSupplierInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import type { CreateJournalEntryInput, SupplierInvoice, Transaction } from '@/types'
 import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import { linkBasisColumns } from '@/lib/links/stamp'
+import {
+  bookRegistrationBeforeSettlement,
+  planRegistrationBeforeSettlement,
+  type RegistrationFirstRefusal,
+} from '@/lib/supplier-invoices/registration-first'
 
 const MatchSIResponse = z.object({
   success: z.boolean(),
@@ -48,6 +55,8 @@ const MatchSIResponse = z.object({
   remaining_amount: z.number(),
   journal_entry_id: z.string().uuid().nullable(),
   bank_fee_sek: z.number(),
+  /** The registration verifikat this match booked first (defer_invoice_booking), else null. */
+  registration_journal_entry_id: z.string().uuid().nullable(),
 })
 
 registerEndpoint({
@@ -66,6 +75,7 @@ registerEndpoint({
     'Öresavrundning (both accounting methods): a SEK bank row less than 1 kr off the remaining balance of a SEK invoice (a whole-krona payment of an öre total) settles it in full. The payment account is credited with the bank amount and the residual is booked on 3740 (no VAT); paid_amount records the debt settled, not the cash moved. A shortfall of 1 kr or more is a partial payment (on a never-booked cash-method invoice it returns SI_CASH_PARTIAL_UNSUPPORTED).',
     'Bank fee on top: a same-currency row that pays more than the remaining balance settles the invoice in full; 2440 is cleared by the remaining balance only and the excess (up to 5 000 kr) is booked on 6570 and returned as bank_fee_sek (0 when there is none, and always 0 with custom lines, which book what they say). paid_amount never exceeds the invoice total. Check bank_fee_sek: a large one usually means the row pays another invoice too.',
     'A same-currency excess above the fee cap returns 400 MATCH_SI_AMOUNT_EXCEEDS_REMAINING and books nothing: allocate the payment across several invoices with POST /transactions/{id}/match-batch. The check runs before any conflicting categorization is reversed. A cross-currency match is not capped: it settles the remaining balance and books the whole SEK difference as kursdifferens (7960/3960).',
+    'Faktureringsmetoden with defer_invoice_booking (Registrera men bokför inte): a supplier invoice registered without its verifikat is booked first by the supplier-invoices :book step (Debit cost + 2641 / Credit 2440, dated on the invoice date), then the payment clears that 2440; registration_journal_entry_id names it (null when nothing was booked first). When the book step refuses (invoice date in a locked period PERIOD_LOCKED, no fiscal year SI_BOOK_NO_FISCAL_PERIOD, a locked accrual month SI_ACCRUED_COST_PERIOD_LOCKED, a partially paid invoice SI_BOOK_INVALID_STATUS), the match is refused with that code, details.registration_first is true, and nothing is booked or reversed.',
     'Transaction must be negative (amount < 0). Positive returns MATCH_SI_NOT_EXPENSE.',
     'Supplier invoice must NOT be paid/credited already. paid/credited returns MATCH_SI_ALREADY_PAID; registered/approved/partially_paid/overdue are matchable.',
     'Idempotency-Key is mandatory.',
@@ -80,6 +90,7 @@ registerEndpoint({
         remaining_amount: 0,
         journal_entry_id: 'je_…',
         bank_fee_sek: 0,
+        registration_journal_entry_id: null,
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
@@ -243,6 +254,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         })
       }
     }
+
+    // Faktureringsmetoden with defer_invoice_booking: an invoice registered
+    // without its verifikat is booked first by the Bokför step, then paid.
+    // Planned and booked BEFORE the storno below: a refusal must leave no
+    // trace, and reversing the row's categorization cannot be undone.
+    const opCtx = { supabase: ctx.supabase, companyId: ctx.companyId!, userId: ctx.userId, log: txLog }
+    const registrationPlan = await planRegistrationBeforeSettlement(opCtx, invoice as SupplierInvoice, {
+      settlementDate: transaction.date,
+    })
+    if (!registrationPlan.ok) return registrationRefusalResponse(registrationPlan, txLog, ctx.requestId)
+    const registration = await bookRegistrationBeforeSettlement(opCtx, registrationPlan)
+    if (!registration.ok) return registrationRefusalResponse(registration, txLog, ctx.requestId)
 
     // Storno any conflicting auto-categorization JE before booking the
     // payment. Mirrors the match-invoice path. Without this, an earlier
@@ -592,9 +615,24 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         // No preview on this door: the caller learns here what went to 6570.
         // Custom lines book what they say, so the plan's fee is not theirs.
         bank_fee_sek: customLines ? 0 : plan.bankFeeSek,
+        registration_journal_entry_id: registration.bookedHere ? registration.journalEntryId : null,
       },
       { requestId: ctx.requestId },
     )
   },
   { requireIdempotencyKey: true },
 )
+
+/**
+ * The match's refusal when the registration it books first was refused: the
+ * Bokför step's own code (or its typed bookkeeping error), with
+ * details.registration_first.
+ */
+function registrationRefusalResponse(
+  refusal: RegistrationFirstRefusal,
+  log: Parameters<typeof v1ErrorResponse>[1],
+  requestId: string,
+) {
+  if (refusal.error) return v1ErrorResponse(refusal.error, log, { requestId })
+  return v1ErrorResponseFromCode(refusal.code, log, { requestId, details: refusal.details })
+}

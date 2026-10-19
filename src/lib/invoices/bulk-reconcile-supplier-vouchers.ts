@@ -348,6 +348,8 @@ export async function reconcileSupplierInvoiceVouchers(
     }
 
     const outcome = await linkSupplierInvoiceToVoucher(supabase, userId, companyId, {
+      // A migrated invoice's registration came in with the SIE journal: never book it again.
+      registrationInLedger: true,
       supplierInvoiceId: plan.invoice.id,
       journalEntryId: top.journal_entry_id,
       notes: `Auto-länkad vid avstämning (${Math.round(top.confidence * 100)}% säkerhet): ${top.match_reason}`,

@@ -2185,7 +2185,7 @@ Example response `200`:
 For companies with defer_invoice_booking=true (Registrera men bokför inte): POST /supplier-invoices registers the invoice without posting anything, and this step posts the registration verifikat afterwards (Debit cost accounts per line + 2641 ingående moms, or fiktiv moms for reverse charge; Credit 2440 Leverantörsskulder; periodiserade lines on 17xx or 29xx with their schedules). Dated on the invoice date. An upplupen kostnad (29xx line) books each month of its period on the last day of that month right after; a month that cannot take the entry refuses the booking with SI_ACCRUED_COST_PERIOD_LOCKED before anything is posted. The invoice is claimed with a compare-and-set, so a concurrent book, payment or credit cancels this entry instead of double-posting. The retained source document is anchored to the verifikat. Idempotent. Dry-runnable: the dry run previews the exact lines and writes nothing.
 
 **Use when:** A supplier invoice is registered, approved or overdue, has no registration_journal_entry_id, and the company books supplier invoices in a separate step (defer_invoice_booking).
-**Do not use for:** Paid or partially paid invoices (their payment booked them in full), credit notes, or any supplier invoice under kontantmetoden (booked at payment via :mark-paid).
+**Do not use for:** Paid or partially paid invoices (a payment books the registration first through this step; a kontantmetoden payment books the whole invoice), credit notes, or any supplier invoice under kontantmetoden (booked at payment via :mark-paid).
 
 **Pitfalls:**
 - An invoice that already has a registration_journal_entry_id answers 400 SI_BOOK_ALREADY_BOOKED.
@@ -2194,6 +2194,7 @@ For companies with defer_invoice_booking=true (Registrera men bokför inte): POS
 - A locked or closed period, or an invoice date on or before the company lock date (bookkeeping_locked_through), answers 400 PERIOD_LOCKED with details.reason, details.fiscal_period_id and details.invoice_date. Nothing is generated, so no voucher number is spent: unlock the period (only if the user asked for that correction) and retry.
 - No open fiscal year covering the invoice date answers 400 SI_BOOK_NO_FISCAL_PERIOD.
 - Booking does not attest the invoice: :approve is a separate step and may come before or after.
+- Settling an unbooked invoice (mark-paid, a bank match, a samlingsbetalning, a link to an existing verifikat) runs this step first and refuses the payment with its code when it refuses: there is no need to call it before paying, and no way to pay around it.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -2420,6 +2421,7 @@ Books the payment journal entry (Debit 2440 / Credit the payment account under a
 - Foreign-currency SIs under accrual: amount is in the invoice currency and the verifikat is in SEK. The SEK cleared off 2440 is read from the ledger (the registration verifikat minus earlier payments), never computed by the caller; an SI with no registration verifikat (migrated) clears at its own exchange_rate, and one with no rate either returns 400 SI_FX_RATE_MISSING. State what the payment cost in SEK with amount_sek (the SEK that left the payment account; the difference to the cleared SEK books on 3960 gain / 7960 loss) or with exchange_rate_difference (cleared SEK minus paid SEK; 0 for none). One of the two is required, not both.
 - Foreign-currency SI whose linked vouchers contradict each other (a batch voucher shared with another invoice, payment rows that do not add up to paid_amount, a registration or payment voucher reversed with no single correction), or whose 2440 balance is more than 10% away from remaining_amount x exchange_rate (reason ledger_rate_mismatch: the registration was corrected for something other than the rate), or whose history is longer than one request resolves (reason ledger_history_too_long: more than 50 payment rows or 20 storno hops), returns 409 SI_PAID_SEK_UNRESOLVED with details.reason and books nothing. Check the SEK against the ledger and resend with explicit SEK lines.
 - Kontantmetoden company paying an SI that was registered on 2440 (booked at receipt, before a switch of method): the payment clears 2440 like under faktureringsmetoden, so a foreign-currency one needs amount_sek or exchange_rate_difference too. Only an SI never registered gets the cash entry (expense + ingående moms at payment).
+- Faktureringsmetoden with defer_invoice_booking (Registrera men bokför inte): an SI registered without its verifikat is booked first by the :book step (Debit cost + 2641 / Credit 2440, dated on the invoice date, periodiseringar included), then the payment clears that 2440. registration_journal_entry_id in the response names it, and the dry run returns it as registration_journal_entry. When the book step refuses (invoice date in a locked period PERIOD_LOCKED, no fiscal year SI_BOOK_NO_FISCAL_PERIOD, a locked accrual month SI_ACCRUED_COST_PERIOD_LOCKED, a partially paid SI SI_BOOK_INVALID_STATUS), the payment is refused with that code, details.registration_first is true, and nothing is booked.
 - Strict-mode: a JE creation failure ABORTS before the status flip. There is no partial-state recovery banner: retry the call.
 - Cash basis (kontantmetoden) recognizes the expense + ingående moms HERE, not at :create.
 - Cash basis + öresavrundning: a SEK invoice with ore_rounding on and an öre-bearing total is paid in whole kronor, so the generated entry credits the payment account with the rounded amount and books the residual on 3740 (no VAT). amount, paid_amount and remaining_amount stay in exact öre. Invoices whose rounding is already an invoice row on 3740 have a whole-krona total and are unaffected.
@@ -2465,7 +2467,8 @@ Response `200`:
     paid_amount: number,
     remaining_amount: number,
     paid_at: string | null,
-    payment_journal_entry_id: string | null
+    payment_journal_entry_id: string | null,
+    registration_journal_entry_id: string | null
   },
   meta: {
     request_id: string,
@@ -2489,7 +2492,8 @@ Example response `200`:
     "paid_amount": 1250,
     "remaining_amount": 0,
     "paid_at": "2026-05-13",
-    "payment_journal_entry_id": "7b3a…"
+    "payment_journal_entry_id": "7b3a…",
+    "registration_journal_entry_id": "5d1f…"
   },
   "meta": {
     "request_id": "req_…",

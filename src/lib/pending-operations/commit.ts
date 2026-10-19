@@ -3647,6 +3647,11 @@ function voucherLinkOutcomeToResult(outcome: VoucherLinkOutcome): ExecutorResult
       payment_id: outcome.result.paymentId,
       journal_entry_id: outcome.result.journalEntryId,
       reconciled_transaction_id: outcome.result.reconciledTransactionId,
+      // Supplier side: the registration verifikat the link booked first
+      // (defer_invoice_booking), when it did.
+      ...('registrationJournalEntryId' in outcome.result && outcome.result.registrationJournalEntryId
+        ? { registration_journal_entry_id: outcome.result.registrationJournalEntryId }
+        : {}),
     },
   }
 }

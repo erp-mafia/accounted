@@ -12,11 +12,13 @@ import { linkSupplierInvoiceToVoucher } from '@/lib/invoices/supplier-voucher-ma
  * posted verifikat that already carries its settlement: a 244x debit, or, for
  * a kontantmetod company's invoice with no registration verifikat, a 19xx
  * credit (the side is decided by supplier_invoice_settlement_side, inside the
- * RPC). Creates no new journal entry: only a supplier_invoice_payments row +
- * invoice status advance.
+ * RPC). Creates no payment journal entry: only a supplier_invoice_payments
+ * row + invoice status advance.
  *
  * Rejects with LINK_SI_VOUCHER_NO_AP_DEBIT / LINK_SI_VOUCHER_NO_BANK_CREDIT
- * for a voucher without that side.
+ * for a voucher without that side. A deferring company's unbooked invoice
+ * (defer_invoice_booking) is booked first by the Bokför step, which posts
+ * its registration verifikat (lib/supplier-invoices/registration-first.ts).
  *
  * `amount` states the share of the voucher that is this invoice's when the
  * voucher pays several debts; the rest of it stays available
@@ -61,6 +63,10 @@ export const POST = withRouteContext(
         journal_entry_id: outcome.result.journalEntryId,
         voucher_remaining: outcome.result.voucherRemaining,
         reconciled_transaction_id: outcome.result.reconciledTransactionId,
+        // The registration verifikat booked first (defer_invoice_booking), when it was.
+        ...(outcome.result.registrationJournalEntryId
+          ? { registration_journal_entry_id: outcome.result.registrationJournalEntryId }
+          : {}),
       },
     })
   },

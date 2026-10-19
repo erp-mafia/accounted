@@ -5,7 +5,10 @@
  * would create. Mirrors the routing decision in the POST handler: if the
  * supplier invoice already has a registration JE (2440 posted at receipt),
  * payment clears 2440. Only true kontantmetoden SIs (no registration JE)
- * book expense + input VAT here.
+ * book expense + input VAT here. A deferring company's unbooked invoice
+ * (defer_invoice_booking) is booked first by the Bokför step:
+ * `registration_entry` is that verifikat as its dry run builds it, and
+ * `lines` the payment that clears it (lib/supplier-invoices/registration-first.ts).
  */
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -16,6 +19,8 @@ import { fetchChartVatTreatments } from '@/lib/bookkeeping/chart-vat-treatments'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { planSupplierBankMatch } from '@/lib/invoices/apply-supplier-payment'
+import { sessionFailureResponse } from '@/lib/operations/session'
+import { planRegistrationBeforeSettlement } from '@/lib/supplier-invoices/registration-first'
 import type { SupplierInvoice } from '@/types'
 
 type PreviewLine = {
@@ -35,7 +40,7 @@ export const GET = withRouteContext(
   'transaction.match_supplier_invoice_preview',
   async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id: transactionId } = await params
-    const { supabase, companyId, log, requestId } = ctx
+    const { supabase, companyId, user, log, requestId } = ctx
 
     const url = new URL(request.url)
     const parsed = QuerySchema.safeParse({
@@ -111,6 +116,16 @@ export const GET = withRouteContext(
     }
     const { plan } = planned
 
+    // The POST books a deferring company's unbooked invoice first, through
+    // the Bokför step: its dry run is every check that booking runs, and the
+    // verifikat the dialog shows above the payment.
+    const registrationPlan = await planRegistrationBeforeSettlement(
+      { supabase, companyId: companyId!, userId: user.id, log },
+      si,
+      { settlementDate: transaction.date },
+    )
+    if (!registrationPlan.ok) return sessionFailureResponse(registrationPlan, log, requestId)
+
     // The momskoder the cash booking reads for a reverse-charge invoice.
     const chartVatTreatments = plan.booking.kind === 'cash' && si.reverse_charge
       ? await fetchChartVatTreatments(supabase, companyId!)
@@ -148,6 +163,9 @@ export const GET = withRouteContext(
       lines: previewLines,
       invoice_already_booked: siAlreadyBooked,
       accounting_method: accountingMethod,
+      // The registration verifikat the POST books before the payment, or null.
+      books_registration_first: registrationPlan.required,
+      registration_entry: registrationPlan.required ? registrationPlan.entry : null,
       // Drives the dialog's "markeras som betald" / öresavrundning copy.
       is_fully_paid: plan.isFullyPaid,
       ore_rounding: built.oreDiffSek !== 0,

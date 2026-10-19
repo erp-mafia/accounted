@@ -15,6 +15,12 @@
  * 'matched'), and the debit of a bank payment order the owner already
  * BankID-signed (lib/payments/orders/auto-settle.ts, action 'auto_matched').
  *
+ * A deferring company's unbooked invoice (defer_invoice_booking) is booked
+ * first by the Bokför step, once every check has run, and the payment then
+ * clears the 2440 it credits (lib/supplier-invoices/registration-first.ts).
+ * A refusal there refuses the match with the Bokför step's code before
+ * anything is written.
+ *
  * Posting port (step 2e): the payment verifikat, the generator's or the
  * person's own rows, goes through lib/posting and, while POSTING_EVENTS is
  * shadow or strict, records purchase.paid with the door's link basis and
@@ -49,6 +55,10 @@ import type { CreateJournalEntryInput, CreateJournalEntryLineInput, SupplierInvo
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import { linkBasisColumns, linkBasisColumnsFor, type LinkBasisInput } from '@/lib/links/stamp'
+import {
+  bookRegistrationBeforeSettlement,
+  planRegistrationBeforeSettlement,
+} from '@/lib/supplier-invoices/registration-first'
 
 /**
  * The transactions row as the doors read it (`select('*')`): the fields the
@@ -95,6 +105,8 @@ export type BookSupplierBankMatchResult =
       /** The invoice as it stands after the settlement. */
       settledInvoice: SupplierInvoice
       paidAt: string | null
+      /** The registration verifikat this match booked first (defer_invoice_booking), else null. */
+      registrationJournalEntryId: string | null
     }
   | {
       ok: false
@@ -168,6 +180,30 @@ export async function bookSupplierBankMatch(
     }
   }
 
+  // User-edited lines must balance: refused before the registration below.
+  if (customLines) {
+    const totalDebit = customLines.reduce((s, l) => s + l.debit_amount, 0)
+    const totalCredit = customLines.reduce((s, l) => s + l.credit_amount, 0)
+    if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
+      return {
+        ok: false,
+        code: 'INVOICE_PAID_LINES_UNBALANCED',
+        details: { totalDebit, totalCredit },
+      }
+    }
+  }
+
+  // Faktureringsmetoden with defer_invoice_booking: an invoice registered
+  // without its verifikat is booked first by the Bokför step, then paid. Its
+  // dry run runs every check first, so a refusal books nothing.
+  const opCtx = { supabase, companyId, userId, log }
+  const registrationPlan = await planRegistrationBeforeSettlement(opCtx, invoice, {
+    settlementDate: transaction.date,
+  })
+  if (!registrationPlan.ok) return registrationPlan
+  const registration = await bookRegistrationBeforeSettlement(opCtx, registrationPlan)
+  if (!registration.ok) return registration
+
   let journalEntryId: string | null = null
   // The door's side of the purchase.paid event, read only while the port is on.
   const posting = (): SupplierPaymentPostingContext => ({
@@ -177,15 +213,6 @@ export async function bookSupplierBankMatch(
 
   try {
     if (customLines) {
-      const totalDebit = customLines.reduce((s, l) => s + l.debit_amount, 0)
-      const totalCredit = customLines.reduce((s, l) => s + l.credit_amount, 0)
-      if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
-        return {
-          ok: false,
-          code: 'INVOICE_PAID_LINES_UNBALANCED',
-          details: { totalDebit, totalCredit },
-        }
-      }
       const sourceType = plan.booking.kind === 'cash' ? 'supplier_invoice_cash_payment' : 'supplier_invoice_paid'
       const input: CreateJournalEntryInput = {
         fiscal_period_id: fiscalPeriodId,
@@ -431,5 +458,12 @@ export async function bookSupplierBankMatch(
     companyId,
   })
 
-  return { ok: true, journalEntryId, plan, settledInvoice, paidAt }
+  return {
+    ok: true,
+    journalEntryId,
+    plan,
+    settledInvoice,
+    paidAt,
+    registrationJournalEntryId: registration.bookedHere ? registration.journalEntryId : null,
+  }
 }

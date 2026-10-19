@@ -1,4 +1,25 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The registration-first rule (defer_invoice_booking) has its own suites
+// (registration-first.test.ts and the deferred-door tests); here no invoice
+// needs its registration booked first.
+vi.mock('@/lib/supplier-invoices/registration-first', () => ({
+  planRegistrationBeforeSettlement: vi.fn(async () => ({ ok: true, required: false })),
+  planRegistrationBeforeSettlementById: vi.fn(async () => ({ ok: true, required: false })),
+  bookRegistrationBeforeSettlement: vi.fn(async () => ({
+    ok: true,
+    journalEntryId: null,
+    bookedHere: false,
+    warnings: [],
+  })),
+  planRegistrationsBeforeBatchSettlement: vi.fn(async () => ({ ok: true, plans: [] })),
+  bookRegistrationsBeforeBatchSettlement: vi.fn(async () => ({
+    ok: true,
+    journalEntryIds: {},
+    postedJournalEntryIds: {},
+    warnings: [],
+  })),
+}))
 import {
   createQueuedMockSupabase,
   createMockRouteParams,
@@ -80,6 +101,10 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
 
 import { POST } from '../route'
 import { eventBus } from '@/lib/events/bus'
+import {
+  bookRegistrationBeforeSettlement,
+  planRegistrationBeforeSettlement,
+} from '@/lib/supplier-invoices/registration-first'
 import { syncInvoiceStatusFromPaymentEntry } from '@/lib/bookkeeping/payment-sync'
 import { fetchPaymentsAsOf, outstandingAsOf } from '@/lib/reports/reskontra-payments'
 
@@ -1201,5 +1226,120 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: user-edited lines'
     )
     expect(res.status).toBe(400)
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/transactions/[id]/match-supplier-invoice: a deferred invoice paid before Bokför', () => {
+  const registrationEntry = {
+    entry_date: '2026-05-02',
+    description: 'Leverantörsfaktura',
+    lines: [
+      { account_number: '6110', debit_amount: 1912, credit_amount: 0, line_description: null },
+      { account_number: '2641', debit_amount: 478, credit_amount: 0, line_description: null },
+      { account_number: '2440', debit_amount: 0, credit_amount: 2390, line_description: null },
+    ],
+    total_debit: 2390,
+    total_credit: 2390,
+    balanced: true,
+    note: '',
+  }
+  const requiredPlan = {
+    ok: true as const,
+    required: true as const,
+    supplierInvoiceId: SI_UUID,
+    entry: registrationEntry,
+    payableSek: 2390,
+    createsAccrualSchedules: false,
+  }
+
+  it('books the registration first, then the 2440 clearing, and names the registration', async () => {
+    enqueueHappyPath({
+      transaction: { amount: -2390, currency: 'SEK' },
+      invoice: { currency: 'SEK', remaining_amount: 2390 },
+    })
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce(requiredPlan)
+    vi.mocked(bookRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: true,
+      journalEntryId: 'je-registration',
+      bookedHere: true,
+      warnings: [],
+    })
+
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{
+      journal_entry_id: string
+      registration_journal_entry_id?: string
+    }>(res)
+
+    expect(status).toBe(200)
+    expect(body.registration_journal_entry_id).toBe('je-registration')
+    expect(vi.mocked(planRegistrationBeforeSettlement)).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: 'company-1', userId: 'user-1' }),
+      expect.objectContaining({ id: SI_UUID }),
+      { settlementDate: '2026-05-12' },
+    )
+    const bookOrder = vi.mocked(bookRegistrationBeforeSettlement).mock.invocationCallOrder[0]
+    expect(bookOrder).toBeLessThan(mockCreatePaymentEntry.mock.invocationCallOrder[0])
+    const input = mockCreateJournalEntry.mock.calls[0][3] as {
+      lines: Array<{ account_number: string; debit_amount: number }>
+    }
+    expect(input.lines.find((l) => l.account_number === '2440')?.debit_amount).toBe(2390)
+  })
+
+  it('a refused registration refuses the match: no payment verifikat, no ledger update, no link', async () => {
+    enqueueHappyPath({
+      transaction: { amount: -2390, currency: 'SEK' },
+      invoice: { currency: 'SEK', remaining_amount: 2390 },
+    })
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: false,
+      code: 'SI_ACCRUED_COST_PERIOD_LOCKED',
+      details: { registration_first: true, supplier_invoice_id: SI_UUID },
+    })
+
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details?: Record<string, unknown> }
+    }>(res)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_ACCRUED_COST_PERIOD_LOCKED')
+    expect(body.error.details).toMatchObject({ registration_first: true })
+    expect(vi.mocked(bookRegistrationBeforeSettlement)).not.toHaveBeenCalled()
+    expect(mockCreatePaymentEntry).not.toHaveBeenCalled()
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(findCalls('supplier_invoices', 'update')).toHaveLength(0)
+    expect(findCalls('transactions', 'update')).toHaveLength(0)
+  })
+
+  it('a refusal at booking time (a concurrent change) books no payment', async () => {
+    enqueueHappyPath({
+      transaction: { amount: -2390, currency: 'SEK' },
+      invoice: { currency: 'SEK', remaining_amount: 2390 },
+    })
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce(requiredPlan)
+    vi.mocked(bookRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: false,
+      code: 'SI_BOOK_CONFLICT',
+      details: { registration_first: true, supplier_invoice_id: SI_UUID },
+    })
+
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    expect(res.status).toBe(409)
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('a booked or kontantmetoden invoice matches as before, with no registration id', async () => {
+    enqueueHappyPath({
+      transaction: { amount: -2390, currency: 'SEK' },
+      invoice: { currency: 'SEK', remaining_amount: 2390 },
+    })
+
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<Record<string, unknown>>(res)
+
+    expect(status).toBe(200)
+    expect(body).not.toHaveProperty('registration_journal_entry_id')
+    expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
   })
 })

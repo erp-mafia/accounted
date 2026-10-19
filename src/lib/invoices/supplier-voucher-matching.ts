@@ -45,6 +45,11 @@ import { postingPort } from '@/lib/posting/port'
 import type { BusinessEventDraft } from '@/lib/posting/types'
 import type { SupplierInvoice, Supplier } from '@/types'
 import {
+  bookRegistrationBeforeSettlement,
+  planRegistrationBeforeSettlementById,
+  type RegistrationFirstRefusal,
+} from '@/lib/supplier-invoices/registration-first'
+import {
   resolveSupplierSettlementSide,
   type SupplierSettlementSide,
   type SupplierSettlementSideName,
@@ -562,6 +567,14 @@ export async function validateVoucherForSupplierInvoiceLink(
 }
 
 export interface LinkSupplierInvoiceToVoucherParams {
+  /**
+   * Set only by the provider-migration pass (bulk-reconcile-supplier-
+   * vouchers.ts): its invoices' registrations arrived with the imported SIE
+   * journal, unlinked, so a missing link does not mean unbooked there and the
+   * registration is never booked a second time. Every other caller leaves it
+   * unset, and a deferring company's unbooked invoice is booked first.
+   */
+  registrationInLedger?: boolean
   supplierInvoiceId: string
   journalEntryId: string
   notes?: string
@@ -584,6 +597,8 @@ export interface LinkSupplierInvoiceToVoucherResult {
   /** Bank transaction auto-reconciled to the linked voucher, if exactly one
    *  unbooked line matched it; null when nothing was safely linkable. */
   reconciledTransactionId: string | null
+  /** The registration verifikat this link booked first (defer_invoice_booking), else null. */
+  registrationJournalEntryId: string | null
 }
 
 /**
@@ -619,8 +634,22 @@ export async function linkSupplierInvoiceToVoucher(
   params: LinkSupplierInvoiceToVoucherParams,
 ): Promise<
   | { ok: true; result: LinkSupplierInvoiceToVoucherResult }
-  | { ok: false; code: SupplierVoucherLinkErrorCode; details?: Record<string, unknown> }
+  // A link refusal, or the Bokför step's code when the registration the link
+  // books first was refused (details.registration_first).
+  | { ok: false; code: SupplierVoucherLinkErrorCode | RegistrationFirstRefusal['code']; details?: Record<string, unknown> }
 > {
+  // Faktureringsmetoden with defer_invoice_booking: an invoice registered
+  // without its verifikat is booked first by the Bokför step, so the linked
+  // voucher's 244x debit clears a skuld the ledger carries
+  // (lib/supplier-invoices/registration-first.ts). The link is validated
+  // first, so neither refusal leaves the registration booked.
+  let registrationJournalEntryId: string | null = null
+  if (!params.registrationInLedger) {
+    const registration = await bookRegistrationBeforeVoucherLink(supabase, userId, companyId, params)
+    if (!registration.ok) return registration
+    registrationJournalEntryId = registration.journalEntryId
+  }
+
   // All validation + writes happen inside link_supplier_invoice_to_voucher
   // (PL/pgSQL). The function locks the invoice row, validates the voucher,
   // and applies UPDATE + INSERT in a single PG transaction so a failure on
@@ -774,7 +803,63 @@ export async function linkSupplierInvoiceToVoucher(
       journalEntryId: result.journal_entry_id,
       voucherRemaining: result.voucher_remaining ?? null,
       reconciledTransactionId,
+      registrationJournalEntryId,
     },
+  }
+}
+
+/**
+ * The registration-first step of a voucher link. When the invoice must be
+ * booked first, validates the link (the RPC re-checks it) and runs the Bokför
+ * step; a no-op otherwise, with no read beyond the company setting.
+ */
+async function bookRegistrationBeforeVoucherLink(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: LinkSupplierInvoiceToVoucherParams,
+): Promise<
+  | { ok: true; journalEntryId: string | null }
+  | { ok: false; code: string; details?: Record<string, unknown> }
+> {
+  const opCtx = { supabase, companyId, userId, log }
+  const plan = await planRegistrationBeforeSettlementById(opCtx, params.supplierInvoiceId)
+  if (!plan.ok) return linkRefusal(plan)
+  if (!plan.required) return { ok: true, journalEntryId: null }
+
+  const { data: row, error } = await supabase
+    .from('supplier_invoices')
+    .select(
+      'id, supplier_invoice_number, arrival_number, status, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, supplier_id, supplier:suppliers(id, name)',
+    )
+    .eq('id', params.supplierInvoiceId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error) return { ok: false, code: 'LINK_SI_VOUCHER_DB_ERROR', details: { reason: error.message } }
+  if (!row) return { ok: false, code: 'LINK_SI_VOUCHER_INVOICE_NOT_FOUND' }
+  const invoice = row as unknown as SupplierInvoice & { supplier?: Supplier }
+
+  const validation = await validateVoucherForSupplierInvoiceLink(
+    supabase,
+    companyId,
+    invoice,
+    params.journalEntryId,
+    params.amount,
+  )
+  if (!validation.ok) return { ok: false, code: validation.code, details: validation.details }
+
+  const booked = await bookRegistrationBeforeSettlement(opCtx, plan)
+  if (!booked.ok) return linkRefusal(booked)
+  return { ok: true, journalEntryId: booked.bookedHere ? booked.journalEntryId : null }
+}
+
+/** A registration refusal as a link refusal: a typed bookkeeping error answers with its own code. */
+function linkRefusal(refusal: RegistrationFirstRefusal): { ok: false; code: string; details?: Record<string, unknown> } {
+  const errorCode = (refusal.error as { code?: unknown } | null | undefined)?.code
+  return {
+    ok: false,
+    code: typeof errorCode === 'string' ? errorCode : refusal.code,
+    details: refusal.details,
   }
 }
 

@@ -5,7 +5,9 @@
  * entry via createSupplierInvoicePaymentEntry (accrual) or
  * createSupplierInvoiceCashEntry (cash basis: recognizes the expense here),
  * then flips status to `paid` or `partially_paid` with an optimistic-lock
- * UPDATE that prevents double-booking under concurrent calls.
+ * UPDATE that prevents double-booking under concurrent calls. A deferring
+ * company's unbooked invoice (defer_invoice_booking) is booked first by the
+ * Bokför step (lib/supplier-invoices/registration-first.ts).
  *
  * The credited payment account is `payment_account` when the body names one,
  * otherwise DEFAULT_SUPPLIER_PAYMENT_ACCOUNT (1930): the same resolution the
@@ -58,9 +60,14 @@ import type { CreateJournalEntryInput, SupplierInvoice, SupplierInvoiceItem } fr
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { linkBasisColumns } from '@/lib/links/stamp'
+import {
+  bookRegistrationBeforeSettlement,
+  planRegistrationBeforeSettlement,
+  type RegistrationFirstRefusal,
+} from '@/lib/supplier-invoices/registration-first'
 
 const SI_PAID_RESPONSE_COLUMNS =
-  'id, supplier_id, arrival_number, supplier_invoice_number, status, currency, total, paid_amount, remaining_amount, paid_at, payment_journal_entry_id'
+  'id, supplier_id, arrival_number, supplier_invoice_number, status, currency, total, paid_amount, remaining_amount, paid_at, payment_journal_entry_id, registration_journal_entry_id'
 
 const PAYABLE_STATUSES = ['registered', 'approved', 'partially_paid', 'overdue'] as const
 
@@ -72,6 +79,7 @@ const SupplierInvoicePaidResponse = z.object({
   remaining_amount: z.number(),
   paid_at: z.string().nullable(),
   payment_journal_entry_id: z.string().uuid().nullable(),
+  registration_journal_entry_id: z.string().uuid().nullable(),
 })
 
 registerEndpoint({
@@ -91,6 +99,7 @@ registerEndpoint({
     'Foreign-currency SIs under accrual: amount is in the invoice currency and the verifikat is in SEK. The SEK cleared off 2440 is read from the ledger (the registration verifikat minus earlier payments), never computed by the caller; an SI with no registration verifikat (migrated) clears at its own exchange_rate, and one with no rate either returns 400 SI_FX_RATE_MISSING. State what the payment cost in SEK with amount_sek (the SEK that left the payment account; the difference to the cleared SEK books on 3960 gain / 7960 loss) or with exchange_rate_difference (cleared SEK minus paid SEK; 0 for none). One of the two is required, not both.',
     'Foreign-currency SI whose linked vouchers contradict each other (a batch voucher shared with another invoice, payment rows that do not add up to paid_amount, a registration or payment voucher reversed with no single correction), or whose 2440 balance is more than 10% away from remaining_amount x exchange_rate (reason ledger_rate_mismatch: the registration was corrected for something other than the rate), or whose history is longer than one request resolves (reason ledger_history_too_long: more than 50 payment rows or 20 storno hops), returns 409 SI_PAID_SEK_UNRESOLVED with details.reason and books nothing. Check the SEK against the ledger and resend with explicit SEK lines.',
     'Kontantmetoden company paying an SI that was registered on 2440 (booked at receipt, before a switch of method): the payment clears 2440 like under faktureringsmetoden, so a foreign-currency one needs amount_sek or exchange_rate_difference too. Only an SI never registered gets the cash entry (expense + ingående moms at payment).',
+    'Faktureringsmetoden with defer_invoice_booking (Registrera men bokför inte): an SI registered without its verifikat is booked first by the :book step (Debit cost + 2641 / Credit 2440, dated on the invoice date, periodiseringar included), then the payment clears that 2440. registration_journal_entry_id in the response names it, and the dry run returns it as registration_journal_entry. When the book step refuses (invoice date in a locked period PERIOD_LOCKED, no fiscal year SI_BOOK_NO_FISCAL_PERIOD, a locked accrual month SI_ACCRUED_COST_PERIOD_LOCKED, a partially paid SI SI_BOOK_INVALID_STATUS), the payment is refused with that code, details.registration_first is true, and nothing is booked.',
     'Strict-mode: a JE creation failure ABORTS before the status flip. There is no partial-state recovery banner: retry the call.',
     'Cash basis (kontantmetoden) recognizes the expense + ingående moms HERE, not at :create.',
     'Cash basis + öresavrundning: a SEK invoice with ore_rounding on and an öre-bearing total is paid in whole kronor, so the generated entry credits the payment account with the rounded amount and books the residual on 3740 (no VAT). amount, paid_amount and remaining_amount stay in exact öre. Invoices whose rounding is already an invoice row on 3740 have a whole-krona total and are unaffected.',
@@ -109,6 +118,7 @@ registerEndpoint({
         remaining_amount: 0,
         paid_at: '2026-05-13',
         payment_journal_entry_id: '7b3a…',
+        registration_journal_entry_id: '5d1f…',
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
@@ -388,6 +398,24 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
+    // Faktureringsmetoden with defer_invoice_booking: an SI registered
+    // without its verifikat is booked first by the Bokför step, then paid
+    // (lib/supplier-invoices/registration-first.ts). Planned here, before the
+    // dry-run, so a preview shows both verifikat and cannot mask a refusal;
+    // a refusal books nothing.
+    const opCtx = { supabase: ctx.supabase, companyId: ctx.companyId!, userId: ctx.userId, log: ctx.log }
+    const registrationPlan = await planRegistrationBeforeSettlement(
+      opCtx,
+      {
+        id: typed.id,
+        is_credit_note: typed.is_credit_note,
+        registration_journal_entry_id:
+          (typed as { registration_journal_entry_id?: string | null }).registration_journal_entry_id ?? null,
+      },
+      { settlementDate: paymentDate },
+    )
+    if (!registrationPlan.ok) return registrationRefusalResponse(registrationPlan, ctx.log, ctx.requestId)
+
     // The 2440 clearing books SEK, read from the ledger (#2955): the invoice-
     // currency amount used to be posted as if it were kronor. Resolved before
     // the dry-run so a preview shows the SEK and cannot mask a refusal.
@@ -397,7 +425,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         ctx.supabase,
         ctx.companyId!,
         typed as unknown as SupplierInvoice,
-        { amount: paymentAmount, amountSek: bodyAmountSek, exchangeRateDifference },
+        {
+          amount: paymentAmount,
+          amountSek: bodyAmountSek,
+          exchangeRateDifference,
+          ...(registrationPlan.required ? { pendingRegistrationPayableSek: registrationPlan.payableSek } : {}),
+        },
       )
       if (!sek.ok) {
         return v1ErrorResponseFromCode(sek.code, ctx.log, {
@@ -474,10 +507,39 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           // a caller can verify the routing before committing.
           payment_account: bodyPaymentAccount ?? DEFAULT_SUPPLIER_PAYMENT_ACCOUNT,
           would_create_payment_journal_entry: true,
+          // The registration verifikat the commit books first, or null.
+          would_book_registration_first: registrationPlan.required,
+          registration_journal_entry: registrationPlan.required ? registrationPlan.entry : null,
         },
         { requestId: ctx.requestId, log: ctx.log },
       )
     }
+
+    // Custom lines must balance and the payment date needs an open period:
+    // both refused before the registration below is booked.
+    let customLinesPeriodId: string | null = null
+    if (customLines) {
+      const totalDebit = customLines.reduce((s, l) => s + l.debit_amount, 0)
+      const totalCredit = customLines.reduce((s, l) => s + l.credit_amount, 0)
+      if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
+        return v1ErrorResponseFromCode('INVOICE_PAID_LINES_UNBALANCED', ctx.log, {
+          requestId: ctx.requestId,
+          details: { totalDebit, totalCredit },
+        })
+      }
+      customLinesPeriodId = await findFiscalPeriod(ctx.supabase, ctx.companyId!, paymentDate)
+      if (!customLinesPeriodId) {
+        return v1ErrorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', ctx.log, {
+          requestId: ctx.requestId,
+          details: { payment_date: paymentDate },
+        })
+      }
+    }
+
+    // Every check has run: the registration first (a no-op unless required),
+    // then the payment against the 2440 it credits.
+    const registration = await bookRegistrationBeforeSettlement(opCtx, registrationPlan)
+    if (!registration.ok) return registrationRefusalResponse(registration, ctx.log, ctx.requestId)
 
     // Strict-mode: book the JE FIRST. Failure aborts before any SI mutation.
     let journalEntryId: string | null = null
@@ -502,22 +564,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         role: 'reversal',
       })
     try {
-      if (customLines) {
-        const totalDebit = customLines.reduce((s, l) => s + l.debit_amount, 0)
-        const totalCredit = customLines.reduce((s, l) => s + l.credit_amount, 0)
-        if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
-          return v1ErrorResponseFromCode('INVOICE_PAID_LINES_UNBALANCED', ctx.log, {
-            requestId: ctx.requestId,
-            details: { totalDebit, totalCredit },
-          })
-        }
-        const fiscalPeriodId = await findFiscalPeriod(ctx.supabase, ctx.companyId!, paymentDate)
-        if (!fiscalPeriodId) {
-          return v1ErrorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', ctx.log, {
-            requestId: ctx.requestId,
-            details: { payment_date: paymentDate },
-          })
-        }
+      // customLinesPeriodId is set whenever customLines is (checked above).
+      if (customLines && customLinesPeriodId) {
+        const fiscalPeriodId = customLinesPeriodId
         const sourceType = useCashEntry ? 'supplier_invoice_cash_payment' : 'supplier_invoice_paid'
         const desc = buildSupplierDescription(
           'Utbetalning leverantörsfaktura',
@@ -767,3 +816,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
   },
   { requireIdempotencyKey: true },
 )
+
+/**
+ * The payment's refusal when the registration it books first was refused:
+ * the Bokför step's own code (or its typed bookkeeping error), with
+ * details.registration_first.
+ */
+function registrationRefusalResponse(
+  refusal: RegistrationFirstRefusal,
+  log: Parameters<typeof v1ErrorResponse>[1],
+  requestId: string,
+) {
+  if (refusal.error) return v1ErrorResponse(refusal.error, log, { requestId })
+  return v1ErrorResponseFromCode(refusal.code, log, { requestId, details: refusal.details })
+}

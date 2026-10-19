@@ -18,6 +18,10 @@
  *     is never used here: it cannot reproduce the registration's per-line
  *     rounding, a rättelse that changed the skuld, or the SEK an earlier bank
  *     match cleared.
+ *   - Foreign invoice whose registration the settlement books first (a
+ *     deferring company's unbooked invoice): the 244x SEK of that
+ *     registration as the Bokför dry run builds it
+ *     (pendingRegistrationPayableSek).
  *   - Foreign invoice with no registration verifikat (typically migrated from
  *     another system, whose skuld arrived with the imported journal): nothing
  *     links it to the ledger, so the invoice's own booked rate, the same
@@ -320,6 +324,14 @@ export interface SupplierPaymentSekInput {
   amountSek?: number
   /** Legacy v1 input: SEK cleared minus SEK paid. Never together with amountSek. */
   exchangeRateDifference?: number
+  /**
+   * The SEK on 244x of a registration the settlement books first
+   * (lib/supplier-invoices/registration-first.ts), read off the Bokför dry
+   * run: the skuld the ledger will carry once it posts. Used in place of the
+   * invoice's rate while no registration is linked yet, so the clearing takes
+   * exactly what the registration credits, per-line rounding included.
+   */
+  pendingRegistrationPayableSek?: number
 }
 
 export type SupplierPaymentSekResult =
@@ -379,7 +391,13 @@ export async function resolveSupplierPaymentSek(
   }
 
   let clearingSek: number
-  if (!invoice.registration_journal_entry_id) {
+  if (!invoice.registration_journal_entry_id && input.pendingRegistrationPayableSek !== undefined) {
+    clearingSek = prorateSupplierPaymentSek({
+      amount: input.amount,
+      remaining,
+      remainingSek: input.pendingRegistrationPayableSek,
+    })
+  } else if (!invoice.registration_journal_entry_id) {
     const rate = Number(invoice.exchange_rate)
     if (!(rate > 0)) {
       return { ok: false, code: 'SI_FX_RATE_MISSING', details: { invoice_currency: invoice.currency } }

@@ -8,9 +8,12 @@
  * "Bokför" routes (POST /api/supplier-invoices/[id]/book,
  * POST /api/invoices/[id]/book) instead.
  *
- * The payment flows need no gate of their own: both mark-paid paths already
- * route on whether a live journal-entry link exists, so an invoice that is
- * still unbooked when paid gets the full cash-style entry at payment.
+ * The payment flows route on whether a live journal-entry link exists, but
+ * only kontantmetoden books the whole invoice at payment. Under
+ * faktureringsmetoden a payment is a clearing (2440 or 1510), so a supplier
+ * invoice still unbooked when it is settled is booked first through the
+ * Bokför step (lib/supplier-invoices/registration-first.ts). The customer
+ * payment doors have no such step yet.
  */
 export function booksInvoicesOnIssue(
   settings:

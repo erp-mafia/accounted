@@ -42,7 +42,14 @@ vi.mock('@/lib/payments/orders/signed-payment', async (importOriginal) => ({
   findSignedBankPayment: (...args: unknown[]) => mockFindSignedBankPayment(...args),
 }))
 
+// The registration-first planner (defer_invoice_booking) has its own suite;
+// here it answers per test, by default "nothing to book first".
+vi.mock('@/lib/supplier-invoices/registration-first', () => ({
+  planRegistrationBeforeSettlement: vi.fn(async () => ({ ok: true, required: false })),
+}))
+
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { planRegistrationBeforeSettlement } from '@/lib/supplier-invoices/registration-first'
 import {
   createSupplierInvoiceCashEntry,
   createSupplierInvoicePaymentEntry,
@@ -392,5 +399,109 @@ describe('GET /api/supplier-invoices/[id]/mark-paid/preview: a foreign-currency 
     expect(status).toBe(409)
     expect(body.error.code).toBe('SI_PAID_SEK_UNRESOLVED')
     expect(body.error.details.reason).toBe('registration_voucher_shared')
+  })
+})
+
+describe('GET /api/supplier-invoices/[id]/mark-paid/preview: a deferred invoice paid before Bokför', () => {
+  const registrationEntry = {
+    entry_date: '2026-09-01',
+    description: 'Leverantörsfaktura',
+    lines: [
+      { account_number: '6110', debit_amount: 987.65, credit_amount: 0, line_description: null },
+      { account_number: '2641', debit_amount: 246.91, credit_amount: 0, line_description: null },
+      { account_number: '2440', debit_amount: 0, credit_amount: 1234.56, line_description: null },
+    ],
+    total_debit: 1234.56,
+    total_credit: 1234.56,
+    balanced: true,
+    note: '',
+  }
+  type DeferredBody = PreviewBody & {
+    books_registration_first: boolean
+    registration_entry: typeof registrationEntry | null
+  }
+  const enqueueUnbooked = () => {
+    enqueue({
+      data: { ...roundedInvoice({ ore_rounding: false }), supplier: { supplier_type: 'swedish_business' }, items },
+      error: null,
+    })
+    enqueue({ data: { accounting_method: 'accrual', defer_invoice_booking: true }, error: null })
+  }
+
+  it('shows both verifikat: the registration Bokför books first, then the 2440 clearing', async () => {
+    enqueueUnbooked()
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: true,
+      required: true,
+      supplierInvoiceId: 'si-1',
+      entry: registrationEntry,
+      payableSek: 1234.56,
+      createsAccrualSchedules: false,
+    })
+
+    const res = await GET(
+      makeReq('amount=1234.56&payment_account=1930&payment_date=2026-09-20'),
+      createMockRouteParams({ id: 'si-1' }),
+    )
+    const { status, body } = await parseJsonResponse<DeferredBody>(res)
+
+    expect(status).toBe(200)
+    expect(body.books_registration_first).toBe(true)
+    expect(body.registration_entry).toEqual(registrationEntry)
+    expect(body.entry_type).toBe('clearing')
+    expect(body.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['2440', 1234.56, 0],
+      ['1930', 0, 1234.56],
+    ])
+    // The payment date is checked the way the POST checks it.
+    expect(vi.mocked(planRegistrationBeforeSettlement)).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: 'company-1', userId: 'user-1' }),
+      expect.objectContaining({ id: 'si-1' }),
+      { settlementDate: '2026-09-20' },
+    )
+  })
+
+  it('answers the Bokför refusal the POST would give, with details.registration_first', async () => {
+    enqueueUnbooked()
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: false,
+      code: 'SI_BOOK_INVALID_STATUS',
+      details: { currentStatus: 'partially_paid', registration_first: true, supplier_invoice_id: 'si-1' },
+    })
+
+    const res = await GET(makeReq(), createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details?: Record<string, unknown> }
+    }>(res)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_BOOK_INVALID_STATUS')
+    expect(body.error.details).toMatchObject({ registration_first: true })
+  })
+
+  it('without a payment date the preview does not check one', async () => {
+    enqueueUnbooked()
+    await GET(makeReq(), createMockRouteParams({ id: 'si-1' }))
+    expect(vi.mocked(planRegistrationBeforeSettlement)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      { settlementDate: null },
+    )
+  })
+
+  it('an invoice that needs nothing booked first previews one verifikat, as before', async () => {
+    enqueueUnbooked()
+    const res = await GET(makeReq(), createMockRouteParams({ id: 'si-1' }))
+    const { body } = await parseJsonResponse<DeferredBody>(res)
+    expect(body.books_registration_first).toBe(false)
+    expect(body.registration_entry).toBeNull()
+  })
+
+  it('a payment_date that is not an ISO date is a 400', async () => {
+    const res = await GET(
+      makeReq('amount=10&payment_account=1930&payment_date=20-09-2026'),
+      createMockRouteParams({ id: 'si-1' }),
+    )
+    expect(res.status).toBe(400)
   })
 })
