@@ -236,7 +236,6 @@ export default function ArticleDetailPage({
             <span className="tabular-nums">
               {t(ARTICLE_TYPE_KEY[article.type])}
               {article.article_number ? ` · #${article.article_number}` : ''}
-              {article.active ? ` · ${t('status_active')}` : ''}
             </span>
             {!article.active && (
               <Badge variant="outline" className="font-normal">

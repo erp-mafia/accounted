@@ -24,10 +24,7 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useAgiSubmission } from '@/lib/hooks/use-agi-submission'
-import {
-  deriveAgiFilingState,
-  resolveRunAgiKvittensnummer,
-} from '@/lib/salary/agi-submission-state'
+import { deriveAgiFilingState } from '@/lib/salary/agi-submission-state'
 import {
   buildPayslipZipReport,
   payslipEmployeeLabel,
@@ -56,6 +53,9 @@ import {
 import { runCalculationState } from '@/lib/salary/calculation-state'
 import { parseAmountInput, roundOre } from '@/lib/money'
 import type { SalaryRunEmployee } from '@/types'
+
+/** Anchor of the AGI section, the target of a booked run's header action. */
+const AGI_SECTION_ID = 'salary-run-agi'
 
 /** The fields of GET /api/expense-claims?status=registered the run page reads. */
 interface OpenClaimRow {
@@ -901,11 +901,6 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   // Real AGI filing state: run-row timestamps + the extension's submission
   // record. Falls back gracefully when the extension is unavailable.
   const agiState = deriveAgiFilingState(run, agiSubmission)
-  // The submission record is cached per PERIOD, but a corrected month holds two
-  // runs and each files its own complete replacement declaration, so each gets
-  // its own kvittens from Skatteverket. Resolving the record against this run
-  // keeps the rail from labelling one run's step with the sibling's receipt.
-  const agiKvittensnummer = resolveRunAgiKvittensnummer(run, agiSubmission)
 
   // Advancing a draft to review. For a nollkörning confirm first: an empty
   // declaration is filed to Skatteverket, which should be deliberate.
@@ -962,6 +957,15 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     handleAction('book')
   }
 
+  // A booked run's next step is the AGI, filed in the section further down:
+  // the header button takes the user there instead of the rail describing it.
+  function scrollToAgi() {
+    const section = document.getElementById(AGI_SECTION_ID)
+    if (!section) return
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    section.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' })
+  }
+
   // The one next step for the current status, mirrored as a prominent header
   // button - the rail alone buried it (nobody found Godkänn).
   const primaryAction = !canWrite
@@ -987,7 +991,9 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
           ? { key: 'paid', label: noPayout ? t('action_continue') : t('action_mark_paid'), onClick: handleMarkPaid }
           : run.status === 'paid'
             ? { key: 'book', label: t('action_book'), onClick: handleBook }
-            : null
+            : run.status === 'booked' && agiState !== 'signed'
+              ? { key: 'agi', label: t('action_submit_agi'), onClick: scrollToAgi }
+              : null
 
   return (
     <div className="space-y-8 stagger-enter">
@@ -1026,13 +1032,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
 
       {/* The month's steps as a flat rail: where the run stands and what the
           stage means. Actions live in the header. */}
-      <RunProgressBar
-        run={run}
-        isCalculated={isCalculated}
-        noPayout={noPayout}
-        agiState={agiState}
-        agiKvittensnummer={agiKvittensnummer}
-      />
+      <RunProgressBar run={run} isCalculated={isCalculated} agiState={agiState} />
 
       {/* Totals of a stale calculation are not the run's figures any more. */}
       {!isStale && <RunKpiCards run={run} employees={employees} />}
@@ -1087,6 +1087,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
           senderBankgiro={senderBankgiro}
           senderIban={senderIban}
           readOnly={!canWrite}
+          settled={run.status === 'paid' || run.status === 'booked'}
           onDownloaded={loadRun}
         />
       )}
@@ -1126,17 +1127,21 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
       {/* AGI (Arbetsgivardeklaration): available once the run is booked. The
           XML download for manual filing lives in the header's ⋯ menu. */}
       {run.status === 'booked' && (
-        <AGIPanel
-          salaryRunId={id}
-          arbetsgivare={run.arbetsgivare ?? ''}
-          period={formatAgiPeriodCompact(agiReportingPeriod(run))}
-          agiGeneratedAt={run.agi_generated_at}
-          agiSubmittedAt={run.agi_submitted_at}
-          submission={agiSubmission}
-          onRefreshSubmission={refreshAgiSubmission}
-          readOnly={!canWrite}
-          onChange={loadRun}
-        />
+        // The anchor of the header's "Lämna in AGI"; scroll-mt clears the
+        // sticky top bar.
+        <div id={AGI_SECTION_ID} className="scroll-mt-24">
+          <AGIPanel
+            salaryRunId={id}
+            arbetsgivare={run.arbetsgivare ?? ''}
+            period={formatAgiPeriodCompact(agiReportingPeriod(run))}
+            agiGeneratedAt={run.agi_generated_at}
+            agiSubmittedAt={run.agi_submitted_at}
+            submission={agiSubmission}
+            onRefreshSubmission={refreshAgiSubmission}
+            readOnly={!canWrite}
+            onChange={loadRun}
+          />
+        </div>
       )}
 
       {/* Overridable approval guard: missing bank details don't dead-end -

@@ -14,7 +14,8 @@ import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
 import { AttnLine } from '@/components/ui/attn-line'
-import { AlertTriangle, Download } from 'lucide-react'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { Download } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { downloadFile } from '@/lib/browser/download-file'
 import { failureDescription } from '@/lib/browser/action-failure'
@@ -336,13 +337,6 @@ export default function PaymentFileDialog({
               </div>
             )}
 
-            {/* The file downloads fine and only fails at the bank if the
-                upload agreement is missing: say the precondition up front. */}
-            <div className="flex items-start gap-2 rounded-lg border border-border p-3 text-xs">
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              <span className="text-muted-foreground">{t('pain001_agreement_warning')}</span>
-            </div>
-
             {hasAlreadyBatched && (
               <label className="flex items-start gap-2 text-xs">
                 <Checkbox
@@ -366,6 +360,10 @@ export default function PaymentFileDialog({
                 {!creating && <Download className="mr-2 h-4 w-4" />}
                 {t('create_and_download')}
               </Button>
+              {/* The file downloads fine and only fails at the bank if the
+                  upload agreement is missing: the precondition, one click
+                  away, the same on every file. */}
+              <HelpPopover>{t('pain001_agreement_warning')}</HelpPopover>
             </div>
           </div>
         )}

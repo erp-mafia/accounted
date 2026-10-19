@@ -18,11 +18,11 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
 import { SettingsSelect } from '@/components/settings/SettingsRows'
 import { PaymentBankList } from '@/components/salary/PaymentBankList'
-import { Download, ChevronDown } from 'lucide-react'
+import { Download, ChevronDown, ChevronRight } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { downloadFile } from '@/lib/browser/download-file'
 import { failureDescription } from '@/lib/browser/action-failure'
-import { cn, formatDateTime } from '@/lib/utils'
+import { cn, formatDate, formatDateTime } from '@/lib/utils'
 import type { ErrorLocale } from '@/lib/errors/get-error-message'
 import { parseSalaryPaymentFormat, type SalaryPaymentFileFormat } from '@/lib/salary/payment/payment-format'
 
@@ -48,6 +48,12 @@ interface PaymentFilePanelProps {
   senderBankgiro?: string | null
   senderIban?: string | null
   readOnly?: boolean
+  /**
+   * The run is paid or booked: the file has done its job, so a run that has
+   * one shows a single line (date, download again) with the rest folded
+   * behind it.
+   */
+  settled?: boolean
   onDownloaded?: () => void
 }
 
@@ -78,6 +84,7 @@ export function PaymentFilePanel({
   senderBankgiro,
   senderIban,
   readOnly,
+  settled,
   onDownloaded,
 }: PaymentFilePanelProps) {
   const t = useTranslations('salary_payments')
@@ -97,14 +104,17 @@ export function PaymentFilePanel({
     ? [matchedBank, ...banks.filter((b) => b !== matchedBank)]
     : banks
   const [showInstructions, setShowInstructions] = useState(Boolean(matchedBank))
+  // The settled one-liner's fold: closed until asked for.
+  const [settledOpen, setSettledOpen] = useState(false)
+  const generatedFormat = paymentFileFormat ? parseSalaryPaymentFormat(paymentFileFormat) : null
 
   const FORMAT_LABEL: Record<PaymentFormat, string> = {
     bg_lb: t('format_bg_lb'),
     pain001: t('format_pain001'),
   }
 
-  const endpoint =
-    format === 'bg_lb'
+  const endpointFor = (fileFormat: PaymentFormat) =>
+    fileFormat === 'bg_lb'
       ? `/api/salary/runs/${salaryRunId}/payment/bg-lb`
       : `/api/salary/runs/${salaryRunId}/payment/pain001`
 
@@ -116,7 +126,9 @@ export function PaymentFilePanel({
     (format === 'bg_lb' && senderBankgiro === null) ||
     (format === 'pain001' && senderIban === null)
 
-  async function handleDownload() {
+  // fileFormat: the format to download; the settled line's "download again"
+  // passes the one the run's file was made in, not the select's.
+  async function handleDownload(fileFormat: PaymentFormat = format) {
     // The button is disabled while a file is in flight; this guard closes the
     // double-click / Enter-repeat race before React has re-rendered it. Two
     // payment files for one salary run is not a cosmetic problem: each one is
@@ -125,12 +137,12 @@ export function PaymentFilePanel({
     if (downloading) return
     setDownloading(true)
     try {
-      const ext = format === 'bg_lb' ? 'txt' : 'xml'
+      const ext = fileFormat === 'bg_lb' ? 'txt' : 'xml'
       // Bounded, and no file is written unless the server answered 2xx with a
       // complete body: an error envelope saved as lon_2026-04.xml is a file the
       // user would carry to the bank before discovering it pays nobody.
       const result = await downloadFile({
-        url: endpoint,
+        url: endpointFor(fileFormat),
         filename: `lon_${periodLabel}.${ext}`,
         locale,
       })
@@ -184,38 +196,21 @@ export function PaymentFilePanel({
     }
   }
 
-  // The flow looked clean all the way until the bank said no: the file
-  // downloads fine and only fails at upload, on the pay date. Say the delivery
-  // precondition of the chosen format up front. It is one sentence per
-  // format: the pain.001 agreement caveat, or the LB sunset with its link.
-  const formatCaveat =
-    format === 'pain001' ? (
-      t('pain001_agreement_warning')
-    ) : (
-      <>
-        {t('sunset_warning')}{' '}
-        <Link href="/settings/salary" className="underline underline-offset-2 hover:text-foreground">
-          {t('sunset_link')}
-        </Link>
-      </>
-    )
+  const sectionHelp = (
+    <HelpPopover>
+      <p>
+        <span className="font-medium">{FORMAT_LABEL.pain001}</span>: {t('format_description_pain001')}
+      </p>
+      <p className="mt-2">
+        <span className="font-medium">{FORMAT_LABEL.bg_lb}</span>: {t('format_description_bg_lb')}
+      </p>
+      <p className="mt-2">{t('bank_list_help')}</p>
+      <p className="mt-2 text-muted-foreground">{t('open_payments_note')}</p>
+    </HelpPopover>
+  )
 
-  return (
-    <DetailSection
-      kicker={t('title')}
-      help={
-        <HelpPopover>
-          <p>
-            <span className="font-medium">{FORMAT_LABEL.pain001}</span>: {t('format_description_pain001')}
-          </p>
-          <p className="mt-2">
-            <span className="font-medium">{FORMAT_LABEL.bg_lb}</span>: {t('format_description_bg_lb')}
-          </p>
-          <p className="mt-2">{t('bank_list_help')}</p>
-          <p className="mt-2 text-muted-foreground">{t('open_payments_note')}</p>
-        </HelpPopover>
-      }
-    >
+  const body = (
+    <>
       <div>
         {paymentFileFormat && paymentFileGeneratedAt && (
           <DefRow label={t('last_generated')}>
@@ -256,23 +251,29 @@ export function PaymentFilePanel({
       {!readOnly && (
         <div className="mt-3 space-y-3">
           {/* One attention sentence per section (convention 6). A missing
-              sender account outranks the format caveat: without it the
-              download fails outright. The caveat then drops to a muted line
-              so the delivery precondition is still said. */}
+              sender account outranks the LB sunset: without it the download
+              fails outright. The sunset then drops to a muted line so it is
+              still said. The pain.001 delivery caveat is the same on every
+              file, so it sits behind the "?" beside the download instead. */}
           {senderMissing ? (
             <>
               <AttnLine action={{ label: t('missing_sender_link'), href: '/settings/invoicing' }}>
                 {format === 'bg_lb' ? t('missing_bankgiro_warning') : t('missing_iban_warning')}
               </AttnLine>
-              <p className="text-xs text-muted-foreground">{formatCaveat}</p>
+              {format === 'bg_lb' && (
+                <p className="text-xs text-muted-foreground">
+                  {t('sunset_warning')}{' '}
+                  <Link href="/settings/salary" className="underline underline-offset-2 hover:text-foreground">
+                    {t('sunset_link')}
+                  </Link>
+                </p>
+              )}
             </>
-          ) : format === 'pain001' ? (
-            <AttnLine>{t('pain001_agreement_warning')}</AttnLine>
-          ) : (
+          ) : format === 'bg_lb' ? (
             <AttnLine action={{ label: t('sunset_link'), href: '/settings/salary' }}>
               {t('sunset_warning')}
             </AttnLine>
-          )}
+          ) : null}
 
           {/* The one action row: the bank instructions are an appendix that
               folds out under it, so the button stays where the section ends. */}
@@ -288,10 +289,15 @@ export function PaymentFilePanel({
               />
               {t('instructions_toggle')}
             </button>
-            <Button onClick={handleDownload} loading={downloading}>
-              {!downloading && <Download className="mr-2 h-4 w-4" />}
-              {t('download')}
-            </Button>
+            <span className="inline-flex items-center gap-3">
+              <Button onClick={() => void handleDownload()} loading={downloading}>
+                {!downloading && <Download className="mr-2 h-4 w-4" />}
+                {t('download')}
+              </Button>
+              {/* The file downloads fine and only fails at the bank if the
+                  delivery route is missing: the precondition, one click away. */}
+              {format === 'pain001' && <HelpPopover>{t('pain001_agreement_warning')}</HelpPopover>}
+            </span>
           </div>
 
           {/* A new version only once a pain.001 has been made: it exists for a
@@ -326,36 +332,92 @@ export function PaymentFilePanel({
           )}
         </div>
       )}
-      <Dialog
-        open={newVersionOpen}
-        onOpenChange={(open) => {
-          setNewVersionOpen(open)
-          if (!open) setNewVersionConfirmed(false)
-        }}
-      >
-        <DialogContent className="sm:max-w-[440px]">
-          <DialogHeader>
-            <DialogTitle>{t('new_version_title')}</DialogTitle>
-            <DialogDescription>{t('new_version_body')}</DialogDescription>
-          </DialogHeader>
-          <label className="flex items-start gap-2 text-[13px]">
-            <Checkbox
-              className="mt-0.5"
-              checked={newVersionConfirmed}
-              onCheckedChange={(v) => setNewVersionConfirmed(v === true)}
+    </>
+  )
+
+  const newVersionDialog = (
+    <Dialog
+      open={newVersionOpen}
+      onOpenChange={(open) => {
+        setNewVersionOpen(open)
+        if (!open) setNewVersionConfirmed(false)
+      }}
+    >
+      <DialogContent className="sm:max-w-[440px]">
+        <DialogHeader>
+          <DialogTitle>{t('new_version_title')}</DialogTitle>
+          <DialogDescription>{t('new_version_body')}</DialogDescription>
+        </DialogHeader>
+        <label className="flex items-start gap-2 text-[13px]">
+          <Checkbox
+            className="mt-0.5"
+            checked={newVersionConfirmed}
+            onCheckedChange={(v) => setNewVersionConfirmed(v === true)}
+          />
+          {t('new_version_confirm')}
+        </label>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setNewVersionOpen(false)} disabled={downloading}>
+            {t('new_version_cancel')}
+          </Button>
+          <Button onClick={() => void handleNewVersion()} disabled={!newVersionConfirmed} loading={downloading}>
+            {t('new_version_submit', { version: nextVersion })}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+
+  // Paid or booked with a file made: one line, the date and a download of the
+  // same file again (the same version, so the bank's duplicate check holds).
+  // The format, banklista, instructions and new-version action fold out
+  // behind it.
+  if (settled && generatedFormat && paymentFileGeneratedAt) {
+    return (
+      <section>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+          <button
+            type="button"
+            onClick={() => setSettledOpen((open) => !open)}
+            aria-expanded={settledOpen}
+            className="inline-flex items-center gap-2 transition-colors duration-150 hover:text-foreground"
+          >
+            <ChevronRight
+              className={cn(
+                'h-3.5 w-3.5 text-muted-foreground transition-transform duration-150',
+                settledOpen && 'rotate-90',
+              )}
             />
-            {t('new_version_confirm')}
-          </label>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setNewVersionOpen(false)} disabled={downloading}>
-              {t('new_version_cancel')}
-            </Button>
-            <Button onClick={() => void handleNewVersion()} disabled={!newVersionConfirmed} loading={downloading}>
-              {t('new_version_submit', { version: nextVersion })}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            {t('settled_label')}
+          </button>
+          <span className="text-muted-foreground" aria-hidden>·</span>
+          <span className="tabular-nums text-muted-foreground">{formatDate(paymentFileGeneratedAt)}</span>
+          {!readOnly && (
+            <>
+              <span className="text-muted-foreground" aria-hidden>·</span>
+              <Button
+                type="button"
+                variant="link"
+                className="h-auto p-0 text-sm"
+                onClick={() => void handleDownload(generatedFormat)}
+                loading={downloading}
+              >
+                {t('download_again')}
+              </Button>
+            </>
+          )}
+          {settledOpen && sectionHelp}
+        </div>
+        {settledOpen && <div className="mt-3">{body}</div>}
+        {newVersionDialog}
+      </section>
+    )
+  }
+
+  return (
+    <DetailSection kicker={t('title')} help={sectionHelp}>
+      {body}
+      {newVersionDialog}
     </DetailSection>
   )
 }

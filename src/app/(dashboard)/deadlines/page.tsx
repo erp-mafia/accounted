@@ -14,7 +14,13 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { CalendarPlus, Lock, Plus } from 'lucide-react'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { CalendarPlus, Lock, MoreHorizontal, Plus } from 'lucide-react'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCompanySettings } from '@/components/settings/useSettings'
@@ -48,6 +54,7 @@ export default function DeadlinesPage() {
   const { company } = useCompany()
   const companyId = company?.id
   const t = useTranslations('deadlines')
+  const tCommon = useTranslations('common')
   const { canWrite } = useCanWrite()
   const [deadlines, setDeadlines] = useState<Deadline[]>([])
   const [overdueInvoices, setOverdueInvoices] = useState<{ count: number; total: number; unconverted: number }>({ count: 0, total: 0, unconverted: 0 })
@@ -453,17 +460,8 @@ export default function DeadlinesPage() {
         </HelpPopover>
       }
       action={
-        // Stacks full-width on mobile: PageHeader's [&>*]:w-full lands on
-        // this wrapper, so the buttons themselves must go w-full below sm
-        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center [&>*]:w-full sm:[&>*]:w-auto">
-          {ENABLED_EXTENSION_IDS.has('calendar') && (
-            <Button size="sm" variant="outline" asChild>
-              <Link href="/settings/account">
-                <CalendarPlus className="mr-2 h-4 w-4" />
-                {t('subscribe_calendar')}
-              </Link>
-            </Button>
-          )}
+        // The primary, and the calendar subscription behind the ⋯ beside it.
+        <div className="flex items-center gap-2">
           <Button size="sm"
             onClick={() => setShowForm(true)}
             disabled={!canWrite}
@@ -472,6 +470,23 @@ export default function DeadlinesPage() {
             {canWrite ? <Plus className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
             {t('new_deadline')}
           </Button>
+          {ENABLED_EXTENSION_IDS.has('calendar') && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon-sm" aria-label={tCommon('more_options')}>
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem asChild>
+                  <Link href="/settings/account">
+                    <CalendarPlus className="h-4 w-4" />
+                    {t('subscribe_calendar')}
+                  </Link>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
       }
     />
@@ -485,10 +500,7 @@ export default function DeadlinesPage() {
           {[1, 2, 3, 4].map((i) => (
             <div key={i} className="flex items-center gap-3 py-3">
               <Skeleton className="h-7 w-7 rounded-full" />
-              <div className="flex-1 space-y-2">
-                <Skeleton className="h-4 w-48" />
-                <Skeleton className="h-3 w-24" />
-              </div>
+              <Skeleton className="h-4 w-48" />
             </div>
           ))}
         </div>
@@ -516,7 +528,7 @@ export default function DeadlinesPage() {
             },
           }}
         >
-          {t('no_system_deadlines_title')} {t('no_system_deadlines_description')}
+          {t('no_system_deadlines')}
         </AttnLine>
       ) : euTradeCheckApplies && euTradeOff ? (
         <AttnLine action={{ label: t('eu_trade_off_action'), href: '/settings/tax' }}>
