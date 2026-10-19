@@ -178,9 +178,20 @@ beforeEach(() => {
 
 describe('creditNoteRefusal', () => {
   it('refuses a credit note: crediting it would reverse the same sale twice', () => {
-    expect(creditNoteRefusal({ status: 'sent', document_type: 'invoice', credited_invoice_id: 'x', invoice_number: 'KR-1' }))
+    expect(creditNoteRefusal({ status: 'sent', total: -1250, document_type: 'invoice', credited_invoice_id: 'x', invoice_number: 'KR-1' }))
       .toEqual({ code: 'INVOICE_CREDIT_NOT_INVOICE', details: { reason: 'credit_note' } })
   })
+
+  it.each(['paid', 'sent', 'overdue', 'credited'])(
+    'refuses a credit note imported without a link to its original, status %s (accounted#58)',
+    (status) => {
+      // What an import at a system change wrote: the credit sign on the
+      // header, no credited_invoice_id, and before the importer's fix an
+      // open-looking status such as 'paid'.
+      expect(creditNoteRefusal({ status: status as never, total: -9556, document_type: 'invoice', credited_invoice_id: null, invoice_number: '344' }))
+        .toEqual({ code: 'INVOICE_CREDIT_NOT_INVOICE', details: { reason: 'credit_note' } })
+    },
+  )
 
   it.each([
     [{ status: 'sent', document_type: 'proforma', invoice_number: 'P-1' }, 'INVOICE_CREDIT_NOT_INVOICE'],
@@ -195,8 +206,10 @@ describe('creditNoteRefusal', () => {
 
   it('takes a sent, paid or overdue invoice', () => {
     for (const status of ['sent', 'paid', 'overdue']) {
-      expect(creditNoteRefusal({ status: status as never, invoice_number: 'F-1' })).toBeNull()
+      expect(creditNoteRefusal({ status: status as never, total: 1250, invoice_number: 'F-1' })).toBeNull()
     }
+    // A zero total is not a credit note.
+    expect(creditNoteRefusal({ status: 'sent', total: 0, invoice_number: 'F-1' })).toBeNull()
   })
 })
 
@@ -334,6 +347,29 @@ describe('creditInvoice', () => {
 
     expect(result).toMatchObject({ ok: false, code: 'INVOICE_CREDIT_NOT_INVOICE' })
     expect(calls.filter((c) => c.method === 'insert' || c.method === 'update')).toEqual([])
+  })
+
+  it('refuses an imported credit note with no link to its original, before anything is written (accounted#58)', async () => {
+    const imported = {
+      ...ORIGINAL,
+      status: 'paid',
+      invoice_number: '344',
+      subtotal: -10000,
+      subtotal_sek: -10000,
+      vat_amount: -2500,
+      vat_amount_sek: -2500,
+      total: -12500,
+      total_sek: -12500,
+      deduction_total: 0,
+      credited_invoice_id: null,
+    }
+    const { supabase, calls } = setup(imported)
+
+    const result = await creditInvoice(ctx(supabase), ORIGINAL_ID, {})
+
+    expect(result).toMatchObject({ ok: false, code: 'INVOICE_CREDIT_NOT_INVOICE', details: { reason: 'credit_note' } })
+    expect(calls.filter((c) => c.method === 'insert' || c.method === 'update')).toEqual([])
+    expect(mocks.createJournalEntry).not.toHaveBeenCalled()
   })
 
   it.each([

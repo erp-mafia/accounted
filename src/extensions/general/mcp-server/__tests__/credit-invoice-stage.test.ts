@@ -147,6 +147,12 @@ describe('gnubok_credit_invoice: refusals at staging', () => {
     ).rejects.toMatchObject({ code: 'INVOICE_CREDIT_NOT_INVOICE' })
   })
 
+  it('refuses a credit note imported without a link to its original (accounted#58)', async () => {
+    await expect(
+      refusal(original({ status: 'paid', total: -1250, credited_invoice_id: null })),
+    ).rejects.toMatchObject({ code: 'INVOICE_CREDIT_NOT_INVOICE' })
+  })
+
   it.each([
     [{ status: 'credited' }, 'INVOICE_CREDIT_ALREADY_CREDITED'],
     [{ status: 'draft' }, 'INVOICE_CREDIT_NOT_SENT'],

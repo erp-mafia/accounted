@@ -20,6 +20,23 @@ export function creditNoteOriginalReference(
 }
 
 /**
+ * Whether a document of document_type 'invoice' is itself a credit note,
+ * which can never be credited: that would post a second reversal of the same
+ * sale. One issued in-app points at its original (credited_invoice_id). One
+ * imported at a system change often does not (the provider named no
+ * original, or the import predates the pairing pass) and older imports
+ * carry an open-looking status such as 'paid', but every one totals below
+ * zero, as does any invoice that only takes money back. Pure, so the
+ * invoice page hides Kreditera by the same rule the doors refuse by
+ * (creditNoteRefusal).
+ */
+export function isCreditNoteDocument(
+  invoice: Partial<Pick<Invoice, 'credited_invoice_id' | 'total'>>,
+): boolean {
+  return !!invoice.credited_invoice_id || Number(invoice.total ?? 0) < 0
+}
+
+/**
  * A credit note's amount for one of the original's: the same amount with the
  * opposite sign, so the kreditfaktura takes back exactly what the original
  * charged, row by row. A row the original books as a reduction (a rabatt, an
