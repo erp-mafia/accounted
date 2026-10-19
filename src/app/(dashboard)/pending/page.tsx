@@ -147,18 +147,11 @@ function getPeriodStatus(op: PendingOperation): PeriodStatusShape | null {
   }
 }
 
-// Concept gact buttons (scene 11): tinted outline pills under the op text.
-// The tint is sanctioned here by the concept spec: approve reads sage,
-// reject terracotta. Details has no pill: the whole row opens them.
-const GACT_CLASS =
-  'inline-flex items-center gap-1.5 rounded-full border px-3.5 py-[5px] text-xs transition-colors duration-150 disabled:pointer-events-none disabled:opacity-50'
-const GACT_OK_CLASS = 'border-success/40 text-success hover:bg-success/10'
 const SORT_ORDER_STORAGE_KEY = 'pending.sortOrder'
 // Operations per page of a status stream, and the most the list API returns
 // per request (PendingOperationsQuerySchema).
 const LIST_PAGE_SIZE = 50
 const PENDING_API_MAX_LIMIT = 100
-const GACT_NO_CLASS = 'border-destructive/40 text-destructive hover:bg-destructive/10'
 
 /**
  * Human origin line for a staged operation. Many reviewers never used the AI
@@ -1003,9 +996,10 @@ export default function PendingOperationsPage() {
               const isSelected = selectedIds.has(op.id)
               const isCollectionsBatch = op.operation_type === COLLECTIONS_BATCH_TYPE
               const isAgent = op.actor_type && op.actor_type !== 'user'
-              // High risk, and a registration of an already-booked invoice:
-              // it cannot be undone but is approved without a dialog.
-              const rowWarning = rowConsentSentence(op)
+              // High risk, and a registration of an already-booked invoice
+              // (it cannot be undone): the consent sentence the approval
+              // confirms in a dialog.
+              const rowConsent = rowConsentSentence(op)
               const complianceWarning = complianceWarningOf(op)
 
               if (op.status !== 'pending') {
@@ -1095,6 +1089,12 @@ export default function PendingOperationsPage() {
                 )
               }
 
+              // One line per operation (convention 4): who staged it, the
+              // title, its age, a risk chip only when it deviates, and the
+              // two decisions as hover-revealed icon buttons. The kicker
+              // (type, origin, retrieved instructions) and the consent
+              // sentence live in the slide-over the row opens.
+              const approveLabel = isCollectionsBatch ? t('review_collections_batch') : t('approve')
               return (
                 <div
                   key={op.id}
@@ -1103,20 +1103,23 @@ export default function PendingOperationsPage() {
                   aria-label={op.title}
                   onClick={() => openReview(op)}
                   onKeyDown={(e) => {
+                    // Only the row itself: Enter or Space on the checkbox or
+                    // an icon button inside it is that control's own.
+                    if (e.target !== e.currentTarget) return
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault()
                       openReview(op)
                     }
                   }}
                   className={cn(
-                    'group flex cursor-pointer items-start gap-3 border-b border-border px-1 py-4 transition-colors duration-150',
+                    'group flex cursor-pointer items-center gap-3 border-b border-border px-1 py-2 transition-colors duration-150',
                     detailOpId === op.id ? 'bg-secondary/25' : 'hover:bg-secondary/35',
                     isSelected && 'bg-secondary/40',
                   )}
                 >
                   {/* Always-visible selection checkbox (concept .cb) */}
                   <span
-                    className="w-[18px] shrink-0 select-none pt-1.5"
+                    className="flex w-[18px] shrink-0 select-none items-center"
                     onClick={(e) => e.stopPropagation()}
                   >
                     {canBulkSelect && (
@@ -1134,91 +1137,84 @@ export default function PendingOperationsPage() {
                       />
                     )}
                   </span>
-                  {/* Actor column with the curved thread (concept op-thread):
-                      drops from the icon and elbows toward the action row. */}
-                  <span className="flex w-7 shrink-0 flex-col self-stretch" aria-hidden>
-                    <span className="flex h-7 w-7 items-center justify-center rounded-full border border-border text-muted-foreground">
-                      {isAgent ? <Bot className="h-3.5 w-3.5" /> : <ClipboardCheck className="h-3.5 w-3.5" />}
-                    </span>
-                    <span className="relative min-h-0 flex-1">
-                      <span className="absolute bottom-[11px] left-1/2 top-1 w-3 rounded-bl-lg border-b border-l border-border" />
-                    </span>
+                  <span
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground"
+                    aria-hidden
+                  >
+                    {isAgent ? <Bot className="h-3.5 w-3.5" /> : <ClipboardCheck className="h-3.5 w-3.5" />}
                   </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="pt-0.5 text-[11px] uppercase tracking-[0.07em] text-muted-foreground">
-                      {sourceLine(op)}
-                    </div>
-                    <div className="mt-1 break-words text-[13px] leading-snug">{op.title}</div>
-                    {/* The staged compliance warning on the row itself: it
-                        used to live in the detail panel only, so approving
-                        from the row or with "Godkänn alla" never showed it
-                        (crm#1003). Clamped here; the panel has it in full. */}
+                  <span className="flex min-w-0 flex-1 items-center gap-2 text-[13px]">
+                    <span className="min-w-0 truncate">{op.title}</span>
+                    {/* The staged compliance warning stays on the row, as a
+                        truncated suffix: approving from the row or with
+                        "Godkänn alla" must not pass it unseen (crm#1003).
+                        The slide-over has it in full. */}
                     {complianceWarning && (
-                      <p className="mt-1 flex items-start gap-1 text-[12.5px] leading-5 text-attn">
-                        <AlertTriangle className="mt-1 h-3 w-3 shrink-0" aria-hidden />
-                        <span className="line-clamp-2 min-w-0 break-words">
-                          {complianceWarningText(complianceWarning)}
-                        </span>
-                      </p>
-                    )}
-                    {rowWarning && (
-                      <p className="mt-1 flex items-start gap-1 text-xs text-destructive">
-                        <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
-                        <span>{rowWarning}</span>
-                      </p>
-                    )}
-                    {/* Action pills under the text (concept gact) */}
-                    <div className="mt-2.5 flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        className={cn(GACT_CLASS, GACT_OK_CLASS)}
-                        disabled={periodLocked || isCommitting || isBulkCommitting}
-                        title={periodLocked ? 'Perioden är låst' : undefined}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          if (periodLocked) return
-                          if (isCollectionsBatch) {
-                            setBatchOpId(op.id)
-                          } else if (op.risk_level === 'high') {
-                            // High risk keeps the confirmation dialog: its
-                            // warning sentence carries real information.
-                            setSelectedOp(op)
-                            setShowCommitDialog(true)
-                          } else {
-                            // Low/medium: the pill on the review row is the
-                            // approval; a second Godkann in a dialog restated
-                            // what the row already shows.
-                            void commitOp(op)
-                          }
-                        }}
+                      <span
+                        className="flex min-w-[35%] flex-1 items-center gap-1 text-[12.5px] text-attn"
+                        title={complianceWarningText(complianceWarning)}
                       >
-                        <Check className="h-3.5 w-3.5" />
-                        {isCollectionsBatch ? t('review_collections_batch') : t('approve')}
-                      </button>
-                      <button
-                        type="button"
-                        className={cn(GACT_CLASS, GACT_NO_CLASS)}
-                        disabled={isRejecting}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          openRejectDialog(op)
-                        }}
-                      >
-                        <X className="h-3.5 w-3.5" />
-                        {t('reject')}
-                      </button>
-                    </div>
-                  </div>
+                        <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden />
+                        <span className="min-w-0 truncate">{complianceWarningText(complianceWarning)}</span>
+                      </span>
+                    )}
+                  </span>
+                  <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                    {formatRelativeTime(op.created_at)}
+                  </span>
                   {/* Risk chip (concept op-risk), exceptions only: low risk is
                       the normal case and a chip on every row said nothing. */}
                   {op.risk_level !== 'low' && (
                     <Badge
                       variant={op.risk_level === 'high' ? 'destructive' : 'outline'}
-                      className="mt-1 shrink-0 font-normal"
+                      className="shrink-0 font-normal"
                     >
                       {op.risk_level === 'high' ? t('badge_high_risk') : t('badge_medium_risk')}
                     </Badge>
                   )}
+                  <span className={cn('flex shrink-0 items-center gap-1', HOVER_REVEAL_CLASS)}>
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      className="text-success hover:text-success"
+                      aria-label={approveLabel}
+                      title={periodLocked ? t('period_locked_short') : approveLabel}
+                      disabled={periodLocked || isCommitting || isBulkCommitting}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        if (periodLocked) return
+                        if (isCollectionsBatch) {
+                          setBatchOpId(op.id)
+                        } else if (op.risk_level === 'high' || rowConsent) {
+                          // High risk, and an approval that cannot be undone
+                          // (a registration of an already-booked invoice),
+                          // confirm in the dialog that carries the consent
+                          // sentence: the row no longer shows it.
+                          setSelectedOp(op)
+                          setShowCommitDialog(true)
+                        } else {
+                          // Low/medium: the row's button is the approval.
+                          void commitOp(op)
+                        }
+                      }}
+                    >
+                      <Check className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      className="text-destructive hover:text-destructive"
+                      aria-label={t('reject')}
+                      title={t('reject')}
+                      disabled={isRejecting}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        openRejectDialog(op)
+                      }}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </span>
                 </div>
               )
             })}
@@ -1415,7 +1411,7 @@ export default function PendingOperationsPage() {
             <DialogTitle>
               {rejectTarget === 'bulk'
                 ? t('reject_bulk_title', { count: selectedCount })
-                : 'Avvisa operation'}
+                : t('reject_title')}
             </DialogTitle>
             {/* data-ph-mask: the operation title carries counterparty and amount */}
             <DialogDescription data-ph-mask="">
@@ -1434,7 +1430,7 @@ export default function PendingOperationsPage() {
                 onValueChange={(v) => setRejectCategory(v as PendingOperationRejectionCategory)}
               >
                 <SelectTrigger id="reject-category">
-                  <SelectValue placeholder="Välj kategori" />
+                  <SelectValue placeholder={t('reject_category_placeholder')} />
                 </SelectTrigger>
                 <SelectContent>
                   {(Object.keys(REJECTION_CATEGORY_LABELS) as PendingOperationRejectionCategory[]).map((cat) => (
@@ -1445,31 +1441,25 @@ export default function PendingOperationsPage() {
             </div>
             <div className="space-y-1">
               <label className="text-sm font-medium" htmlFor="reject-reason">
-                Notering (valfritt)
+                {t('reject_note_label')}
               </label>
               <Textarea
                 id="reject-reason"
                 value={rejectReason}
                 onChange={(e) => setRejectReason(e.target.value)}
-                placeholder="T.ex. fel kund matchades, beloppet stämmer inte med fakturan…"
+                placeholder={t('reject_note_placeholder')}
                 rows={3}
                 maxLength={2000}
               />
-              <p className="text-xs text-muted-foreground">
-                Synlig för agenten via gnubok_get_recent_rejections: hjälper den att korrigera nästa förslag.
-              </p>
+              <p className="text-xs text-muted-foreground">{t('reject_note_help')}</p>
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setRejectTarget(null)} disabled={isRejecting}>
-              Avbryt
+              {tCommon('cancel')}
             </Button>
             <Button variant="destructive" onClick={handleReject} loading={isRejecting} disabled={!rejectCategory}>
-              {rejectTarget === 'bulk' ? (
-                t('reject_count', { count: selectedCount })
-              ) : (
-                'Avvisa'
-              )}
+              {rejectTarget === 'bulk' ? t('reject_count', { count: selectedCount }) : t('reject')}
             </Button>
           </DialogFooter>
         </DialogContent>

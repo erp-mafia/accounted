@@ -5,8 +5,9 @@
  *
  * The decision is lib/cash-accounts/ledger-evidence.ts; the reads are
  * lib/cash-accounts/ledger-suggestions.ts. This file is the shape between
- * them and the sentence a suggestion is shown as (message keys in the
- * bank_ledger_suggestion namespace, sv and en).
+ * them and the sentences a suggestion is shown as: the one-sentence attention
+ * line, and the confirm dialog's evidence and consequences (message keys in
+ * the bank_ledger_suggestion namespace, sv and en).
  *
  * Pure: no Supabase, no logger, safe in the client bundle.
  */
@@ -86,6 +87,40 @@ export interface LedgerSuggestionMessage {
 /** "1920 PlusGiro", or the number alone when the chart has no name for it. */
 export function ledgerWithName(ledger: string, name: string | null): string {
   return name ? `${ledger} ${name}` : ledger
+}
+
+/**
+ * The attention line: one sentence naming the bank account and the ledger
+ * account the books say it belongs on. The evidence and what the change does
+ * (ledgerSuggestionBody, ledgerSuggestionBookedNote) are the confirm dialog's,
+ * which the line's action opens (design conventions 6 and 10).
+ */
+export function ledgerSuggestionLine(suggestion: LedgerSuggestionView): LedgerSuggestionMessage {
+  const [first, second] = suggestion.accounts
+  if (suggestion.kind === 'one_sided_swap' && second) {
+    return {
+      key: 'line_one_sided_swap',
+      values: {
+        accountA: first.label,
+        fromA: first.from_ledger,
+        toA: ledgerWithName(first.to_ledger, first.to_ledger_name),
+        accountB: second.label,
+      },
+    }
+  }
+  if (suggestion.kind === 'swap' && second) {
+    return { key: 'line_swap', values: { accountA: first.label, accountB: second.label } }
+  }
+  return {
+    key: 'line_move',
+    values: { account: first.label, from: first.from_ledger, to: ledgerWithName(first.to_ledger, first.to_ledger_name) },
+  }
+}
+
+/** The confirm dialog's title: the change as a question, with the numbers the button names. */
+export function ledgerSuggestionConfirmTitle(suggestion: LedgerSuggestionView): LedgerSuggestionMessage {
+  const action = ledgerSuggestionAction(suggestion)
+  return { key: action.key === 'action_move' ? 'confirm_title_move' : 'confirm_title_swap', values: action.values }
 }
 
 /** The sentence that says what is wrong and which ledger account is right. */

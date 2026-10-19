@@ -28,7 +28,8 @@ interface AgentPromoProps {
  * Build-assistant nudge on Hem, shown until the company has a verified
  * agent_profile (the caller gates on that plus the first-run checklist
  * being dismissed or completed, since the checklist already carries the
- * assistant as its last step).
+ * assistant as its last step, and on a connected agent, since until then the
+ * Kopplingar agent chip is the page's agent prompt).
  * Shape: one quiet sentence with the action link at the end and the same
  * "Dölj" text control the Skatteverket promo uses, not a boxed card. It is
  * an optional offer, not an exception, so it stays muted (convention 6/12).

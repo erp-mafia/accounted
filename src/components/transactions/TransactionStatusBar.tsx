@@ -33,8 +33,9 @@ export default function TransactionStatusBar({
   const formatAge = useAgeFormatter()
 
   // "Synka bank nu" (concept: first menu row) only renders once a bank is
-  // actually connected and the plan includes PSD2 sync; the footer
-  // BankSyncNowButton stays the gated conversion surface for free users.
+  // actually connected and the plan includes PSD2 sync; for a connected
+  // company without the plan the footer status chip ('paused') carries the
+  // upgrade link.
   const showSync = hasBankSync && (connections?.length ?? 0) > 0
 
   const options: SplitButtonOption[] = [

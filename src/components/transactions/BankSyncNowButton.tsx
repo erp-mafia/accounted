@@ -3,16 +3,8 @@
 import { useEffect, useSyncExternalStore } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { RefreshCw } from 'lucide-react'
-import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { createClient } from '@/lib/supabase/client'
 import { notifyBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
@@ -30,7 +22,6 @@ import {
 } from '@/lib/transactions/bank-sync-store'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
-import { isSelfHosted } from '@/lib/env/public-flags'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { chooseAccountsHref, isOpenPaymentsRow, renewOpenPaymentsHref } from '@/lib/bank-feed/connection-links'
 import { isBankBusy, isSyncCooldown, OpenPaymentsClientError, syncOpenPaymentsConnection } from '@/components/bank-feed/open-payments-client'
@@ -38,10 +29,10 @@ import { isBankBusy, isSyncCooldown, OpenPaymentsClientError, syncOpenPaymentsCo
 export type { BankConn }
 
 /**
- * Shared on-demand bank sync state + actions. Powers the footer "Synka nu"
- * button below and the "Synka bank nu" row in the Importera split-button menu
- * (TransactionStatusBar). Reuses the per-connection sync endpoint that
- * BankingSettingsPanel already calls.
+ * Shared on-demand bank sync state + actions. Powers the "Synka bank nu" row
+ * in the Importera split-button menu (TransactionStatusBar) and the
+ * collections bank check (BankCheckResult). Reuses the per-connection sync
+ * endpoint that BankingSettingsPanel already calls.
  *
  * Also handles dead PSD2 sessions: a connection whose consent has closed or
  * expired re-authorizes in place via `reconnect` (no disconnect needed), and a
@@ -55,8 +46,8 @@ export function useBankSync() {
   const { company } = useCompany()
   const hasBankSync = useCapability(CAPABILITY.bank_sync)
   // Busy state and the connection list live in a module-level store so every
-  // useBankSync() instance (header split button, footer button) sees the same
-  // sync in flight and cannot start a concurrent one (#1162).
+  // useBankSync() instance sees the same sync in flight and cannot start a
+  // concurrent one (#1162).
   const store = useSyncExternalStore(subscribeBankSync, getBankSyncSnapshot, getBankSyncSnapshot)
   // Never present another company's cached list while a switch is loading.
   const connections = store.companyId === company?.id ? store.connections : null
@@ -127,8 +118,7 @@ export function useBankSync() {
     // Surface skipped duplicates too: a renewal that dedupes correctly
     // imports 0 rows, which without this line reads as a broken sync.
     // Joined with '. ' so the two sentences do not run together (the
-    // imported-count strings are shared with the BankSyncSinceLastVisit
-    // chip and deliberately carry no trailing period).
+    // imported-count strings deliberately carry no trailing period).
     return [
       imported === 1
         ? t('bank_sync_new_since_last_visit_one')
@@ -286,102 +276,4 @@ export function useBankSync() {
     syncAll,
     lastSyncedAt,
   }
-}
-
-/**
- * On-demand "Sync now" button beside BankSyncStatusChip. If the user has
- * multiple connections, a dropdown lets them pick which one to sync/reconnect.
- */
-export default function BankSyncNowButton() {
-  const t = useTranslations('transactions')
-  const { connections, isBusy, hasBankSync, runFor } = useBankSync()
-
-  if (!connections || connections.length === 0) return null
-
-  const syncLabel = isBusy ? t('bank_sync_button_syncing') : t('bank_sync_button_now')
-
-  // Bank sync (and reconnect) is a paid external PSD2 call. Without the
-  // capability we keep the button VISIBLE as the conversion surface but inert,
-  // and surface an Uppgradera link. CSV/SIE import stays free (separate UI).
-  // Self-host: the remedy is a connector key (or own EB credentials), never
-  // the hosted Stripe billing page; same branch as UpgradeNote.
-  const selfHosted = isSelfHosted()
-  const gateTitle = !hasBankSync
-    ? selfHosted
-      ? t('bank_sync_requires_connector_key')
-      : t('bank_sync_requires_subscription')
-    : undefined
-  const upsellNote = !hasBankSync ? (
-    selfHosted ? (
-      <span className="text-xs text-muted-foreground">{t('bank_sync_upsell_connector_key')}</span>
-    ) : (
-      <span className="text-xs text-muted-foreground">
-        {t('bank_sync_upsell_subscription')}{' '}
-        <a href="/settings/billing" className="underline underline-offset-2">
-          {t('bank_sync_upsell_upgrade')}
-        </a>
-      </span>
-    )
-  ) : null
-
-  if (connections.length === 1) {
-    const conn = connections[0]
-    const singleLabel =
-      conn.status === 'active'
-        ? syncLabel
-        : conn.status === 'pending_selection'
-          ? t('bank_choose_accounts')
-          : t('bank_reconnect')
-    return (
-      <div className="flex items-center gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={!hasBankSync}
-          loading={isBusy}
-          title={gateTitle}
-          onClick={() => runFor(conn)}
-        >
-          {!isBusy && <RefreshCw className="mr-2 h-3.5 w-3.5" />}
-          <span>{singleLabel}</span>
-        </Button>
-        {upsellNote}
-      </div>
-    )
-  }
-
-  return (
-    <div className="flex items-center gap-2">
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={!hasBankSync}
-          loading={isBusy}
-          title={gateTitle}
-        >
-          {!isBusy && <RefreshCw className="mr-2 h-3.5 w-3.5" />}
-          <span>{syncLabel}</span>
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start">
-        {connections.map((conn) => (
-          <DropdownMenuItem
-            key={conn.id}
-            disabled={isBusy}
-            onSelect={() => runFor(conn)}
-          >
-            {conn.status === 'active'
-              ? conn.bank_name
-              : conn.status === 'pending_selection'
-                ? `${conn.bank_name} · ${t('bank_choose_accounts')}`
-                : `${conn.bank_name} · ${t('bank_reconnect')}`}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-    {upsellNote}
-    </div>
-  )
 }

@@ -3,6 +3,8 @@ import {
   ledgerSuggestionAction,
   ledgerSuggestionBody,
   ledgerSuggestionBookedNote,
+  ledgerSuggestionConfirmTitle,
+  ledgerSuggestionLine,
   ledgerSuggestionPickerReason,
   ledgerWithName,
   pickerPreselection,
@@ -82,6 +84,50 @@ function oneSidedSwap(first: Partial<LedgerSuggestionAccount> = {}, holder: Part
     two_connections: false,
   }
 }
+
+describe('the attention line of a ledger suggestion', () => {
+  it('is one sentence naming the account, where it books and where the books say it belongs', () => {
+    expect(ledgerSuggestionLine(move())).toEqual({
+      key: 'line_move',
+      values: { account: '••4417', from: '1940', to: '1920 PlusGiro' },
+    })
+  })
+
+  it('reads the same whatever the evidence: the balance and its day are the dialog\'s', () => {
+    expect(ledgerSuggestionLine(move({ basis: 'balance', hits: 0, balance_date: '2025-12-31' }))).toEqual(
+      ledgerSuggestionLine(move()),
+    )
+  })
+
+  it('names both accounts of a swap', () => {
+    expect(ledgerSuggestionLine(swap())).toEqual({ key: 'line_swap', values: { accountA: '••4417', accountB: '••2210' } })
+  })
+
+  it('names who holds the ledger account in a one-sided swap', () => {
+    expect(ledgerSuggestionLine(oneSidedSwap())).toEqual({
+      key: 'line_one_sided_swap',
+      values: { accountA: '••4417', fromA: '1931', toA: '1930 Företagskonto', accountB: '••2210' },
+    })
+  })
+
+  it('asks the change as the confirm title, with the numbers the button names', () => {
+    expect(ledgerSuggestionConfirmTitle(move())).toEqual({ key: 'confirm_title_move', values: { to: '1920' } })
+    expect(ledgerSuggestionConfirmTitle(swap())).toEqual({ key: 'confirm_title_swap', values: { a: '1920', b: '1940' } })
+    expect(ledgerSuggestionConfirmTitle(oneSidedSwap())).toEqual({ key: 'confirm_title_swap', values: { a: '1930', b: '1931' } })
+  })
+
+  it('only uses message keys that exist in both locales', async () => {
+    const [sv, en] = await Promise.all([
+      import('@/messages/sv.json').then((m) => m.default.bank_ledger_suggestion as Record<string, string>),
+      import('@/messages/en.json').then((m) => m.default.bank_ledger_suggestion as Record<string, string>),
+    ])
+    const keys = [move(), swap(), oneSidedSwap()].flatMap((s) => [ledgerSuggestionLine(s).key, ledgerSuggestionConfirmTitle(s).key])
+    for (const key of [...keys, 'swap_two_connections', 'booked_rows']) {
+      expect(sv[key], `sv ${key}`).toBeTypeOf('string')
+      expect(en[key], `en ${key}`).toBeTypeOf('string')
+    }
+  })
+})
 
 describe('the sentence of a ledger suggestion', () => {
   it('counts the transactions already booked on the other account', () => {
