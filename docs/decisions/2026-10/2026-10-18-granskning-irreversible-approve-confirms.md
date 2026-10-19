@@ -1,0 +1,1 @@
+[2026-10-18] Granskning approvals that cannot be undone (registering an already-booked invoice) open the confirm dialog when approved from the one-line row, since the row no longer carries the consent sentence (crm#1094).

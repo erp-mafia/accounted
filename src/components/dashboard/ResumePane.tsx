@@ -11,7 +11,10 @@ import type { ResumeItem } from '@/lib/worklist/resume'
 /**
  * "Fortsätt" (concept scene 14, right pane): in-progress work you can jump
  * back into, derived purely from draft state (lib/worklist/resume). Renders
- * null when empty: never a blank-but-present card.
+ * null when empty: never a blank-but-present card. Each row is one line
+ * (convention 4): the title with its context and amount as a muted suffix,
+ * and how long ago it was edited, muted at the right edge where the Att
+ * göra rows beside it keep their counts.
  */
 export default function ResumePane({ items }: { items: ResumeItem[] }) {
   const t = useTranslations('dashboard')
@@ -34,12 +37,7 @@ export default function ResumePane({ items }: { items: ResumeItem[] }) {
         return {
           icon: FileText,
           title: t('resume_invoice_draft', { customer: item.context ?? '' }),
-          sub: [
-            item.amount != null ? formatCurrency(item.amount, item.currency ?? 'SEK') : null,
-            t('resume_edited', { when: relativeLabel(item.updated_at) }),
-          ]
-            .filter(Boolean)
-            .join(' · '),
+          meta: item.amount != null ? formatCurrency(item.amount, item.currency ?? 'SEK') : null,
         }
       case 'invoice_unsent':
       case 'quote_unsent':
@@ -54,10 +52,9 @@ export default function ResumePane({ items }: { items: ResumeItem[] }) {
                 : 'resume_invoice_unsent',
             { number: item.number ?? '' },
           ),
-          sub: [
+          meta: [
             item.context,
             item.amount != null ? formatCurrency(item.amount, item.currency ?? 'SEK') : null,
-            t('resume_edited', { when: relativeLabel(item.updated_at) }),
           ]
             .filter(Boolean)
             .join(' · '),
@@ -74,7 +71,7 @@ export default function ResumePane({ items }: { items: ResumeItem[] }) {
         return {
           icon: HandCoins,
           title: t(key, { period: item.context ?? '' }),
-          sub: t('resume_edited', { when: relativeLabel(item.updated_at) }),
+          meta: null,
         }
       }
       case 'journal_draft':
@@ -82,9 +79,7 @@ export default function ResumePane({ items }: { items: ResumeItem[] }) {
         return {
           icon: BookOpen,
           title: t('resume_journal_draft'),
-          sub: [item.context, t('resume_edited', { when: relativeLabel(item.updated_at) })]
-            .filter(Boolean)
-            .join(' · '),
+          meta: item.context,
         }
     }
   }
@@ -99,6 +94,7 @@ export default function ResumePane({ items }: { items: ResumeItem[] }) {
         {items.map((item) => {
           const row = rowFor(item)
           const Icon = row.icon
+          const edited = relativeLabel(item.updated_at)
           return (
             <Link
               key={item.ref}
@@ -108,13 +104,9 @@ export default function ResumePane({ items }: { items: ResumeItem[] }) {
               <span className="mt-px w-[18px] shrink-0 text-muted-foreground" aria-hidden>
                 <Icon className="h-[15px] w-[15px]" />
               </span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[13px]">{row.title}</span>
-                {row.sub && (
-                  <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-                    {row.sub}
-                  </span>
-                )}
+              <span className="min-w-0 flex-1 truncate text-[13px]">
+                {row.title}
+                {row.meta && <span className="text-muted-foreground"> · {row.meta}</span>}
               </span>
               <span className="ml-auto flex shrink-0 items-center gap-2.5 pt-px">
                 {item.late && (
@@ -122,6 +114,12 @@ export default function ResumePane({ items }: { items: ResumeItem[] }) {
                     {t('resume_late')}
                   </Badge>
                 )}
+                <span
+                  className="text-xs tabular-nums text-muted-foreground"
+                  title={t('resume_edited', { when: edited })}
+                >
+                  {edited}
+                </span>
                 <ChevronRight
                   className={cn(
                     'h-3.5 w-3.5 text-muted-foreground opacity-0 transition-opacity duration-150 group-hover:opacity-100',

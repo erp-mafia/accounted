@@ -22,6 +22,7 @@ import { listMissingUnderlagSample } from '@/lib/worklist/missing-underlag'
 import { listOpenSuggestions } from '@/lib/suggestions/list'
 import { loadGrantReview } from '@/lib/grants/review'
 import { getCompanyNotices } from '@/lib/notices'
+import type { Notice } from '@/lib/notices/types'
 import { expiringBankConnectionsFrom } from '@/lib/notices/categories'
 import { vatDeadlineLine } from '@/lib/onboarding/checklist'
 import { findUnfinishedConnect } from '@/lib/providers/unfinished-connect'
@@ -74,11 +75,24 @@ export async function HemNoticesSection({
     now,
     deferReap: (task) => after(task),
   })
-  // The Skatteverket reconnect has its own places (the Konton row and the
-  // Skattekonto page); a line about it over every visit to Att göra was
-  // noise (founder feedback 2026-09-09).
-  return <HemNotices notices={notices.filter((n) => n.category !== 'skv_disconnected')} />
+  return <HemNotices notices={notices.filter((n) => !HEM_NOTICE_SLOT_SKIPS.has(n.category))} />
 }
+
+/**
+ * Notice categories Hem leaves out of its notice slot. The Skatteverket
+ * reconnect has its own places (the Konton row and the Skattekonto page); a
+ * line about it over every visit to Att göra was noise (founder feedback
+ * 2026-09-09). The bank switch and the expiring consent are Att göra rows
+ * (the switch rows and the Bevaka consent row in AttGoraSection), fed by the
+ * same computations as the notices (switchStateFor, expiringBankConnectionsFrom),
+ * so the row shows in every case the notice would and saying it twice on one
+ * page is clutter (convention 6).
+ */
+const HEM_NOTICE_SLOT_SKIPS: ReadonlySet<Notice['category']> = new Set([
+  'skv_disconnected',
+  'bank_switch_needed',
+  'bank_connection_expiring',
+])
 
 export async function HemChecklistSection({
   companyId,
@@ -229,9 +243,9 @@ export async function HemPanesSection({
   aiConnection: AiConnection
 }) {
   const { supabase, user } = await getDashboardAuthContext()
-  // Fetched once at the scan cap: the Att göra pane shows the first five and
-  // the worklist count is the list's length (it used to scan the same rows
-  // twice). Everything else runs in the same wave.
+  // Fetched once at the scan cap: the worklist count is the list's length,
+  // which the Att göra suggested-matches row shows. Everything else runs in
+  // the same wave.
   const suggestedMatchesPromise = listSuggestedMatches(supabase, companyId, SUGGESTED_MATCH_SCAN_CAP)
   // Same pattern for people owed for utlägg: Hem renders one row per person
   // and the worklist count is the list's length.
@@ -264,7 +278,6 @@ export async function HemPanesSection({
   const grantReviewPromise = loadGrantReview(supabase, companyId)
   const [
     worklist,
-    suggestedMatches,
     expensePayouts,
     skattekontoPayment,
     missingUnderlag,
@@ -291,7 +304,6 @@ export async function HemPanesSection({
         supplierPayeeChangesDue: supplierPayeeChangesPromise,
         openSuggestions: openSuggestionsPromise,
       }),
-      suggestedMatchesPromise,
       expensePayoutsPromise,
       skattekontoPaymentPromise,
       missingUnderlagPromise,
@@ -333,7 +345,6 @@ export async function HemPanesSection({
       <div className={resumeItems.length > 0 ? 'grid items-start gap-x-6 gap-y-8 md:grid-cols-2' : undefined}>
         <AttGoraSection
           worklist={worklist}
-          suggestedMatches={suggestedMatches.slice(0, 5)}
           expensePayouts={expensePayouts}
           attestsDue={attestsDue}
           skattekontoPayment={skattekontoPayment}

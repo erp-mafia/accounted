@@ -5,12 +5,10 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { useToast } from '@/components/ui/use-toast'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { useFormat } from '@/lib/hooks/use-format'
 import { switchDeepLink } from '@/lib/bank-feed/switch-link'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { visibleWorklistTotal } from '@/lib/worklist/visible-total'
@@ -29,13 +27,12 @@ import type { OpenSuggestion } from '@/lib/suggestions/types'
 import { BATCH_REVIEW_HREF } from '@/lib/collections/batch-dialog'
 import {
   ArrowLeftRight,
-  ArrowRight,
   BookOpen,
   CalendarClock,
   CheckCircle2,
   ChevronRight,
-  Eye,
   FileWarning,
+  Link2,
   HandCoins,
   Inbox,
   Landmark,
@@ -52,7 +49,6 @@ import type {
   BankSwitchDue,
   ExpensePayoutDue,
   SkattekontoPaymentDue,
-  SuggestedMatch,
   SupplierInvoiceAttestDue,
   WorklistCounts,
 } from '@/lib/worklist/types'
@@ -66,9 +62,10 @@ import type {
  * (time-driven). Every count comes from lib/worklist (the same
  * source as the sidebar badges) so the numbers can never disagree.
  *
- * Suggested transaction↔invoice matches render inline with one-click confirm:
- * the row posts to the existing match endpoints, fades out optimistically,
- * and the counts refetch from /api/worklist/counts.
+ * Suggested transaction↔invoice matches are one Bokför row with their count
+ * (lib/worklist suggested_match), leading to Transaktioner, whose inbox lists
+ * the rows with a match first. They are a subset of the transactions the row
+ * above counts, so the row carries no list of its own.
  */
 
 interface ExpiringBankConnection {
@@ -79,7 +76,6 @@ interface ExpiringBankConnection {
 
 interface AttGoraSectionProps {
   worklist: WorklistCounts
-  suggestedMatches: SuggestedMatch[]
   /** People owed for registered, unpaid utlägg: one Betala row each. */
   expensePayouts?: ExpensePayoutDue[]
   /**
@@ -226,7 +222,6 @@ function BandHeader({ children }: { children: React.ReactNode }) {
 
 export default function AttGoraSection({
   worklist,
-  suggestedMatches,
   expensePayouts = [],
   attestsDue = [],
   skattekontoPayment = null,
@@ -247,7 +242,6 @@ export default function AttGoraSection({
   const t = useTranslations('dashboard')
   const tAttest = useTranslations('att_gora_attest')
   const router = useRouter()
-  const { toast } = useToast()
   const { formatDateLong } = useFormat()
   // The Dokumentinkorg is a paid (AI) surface: a non-payer's home to-do list
   // must not offer a row that jumps to the gated workspace. Mirrors the sidebar
@@ -259,15 +253,9 @@ export default function AttGoraSection({
   // The grouped overdue row's facts, refreshed with the counts so its
   // count, amount and date never disagree.
   const [overdueInvoices, setOverdueInvoices] = useState(worklist.overdueInvoices ?? null)
-  const [matches, setMatches] = useState(suggestedMatches)
-  const [leavingIds, setLeavingIds] = useState<Set<string>>(new Set())
-  const [confirmingId, setConfirmingId] = useState<string | null>(null)
   const [payeeChanges, setPayeeChanges] = useState(supplierPayeeChanges)
   const [openSuggestions, setOpenSuggestions] = useState(suggestions)
   const [reviewingPayeeId, setReviewingPayeeId] = useState<string | null>(null)
-  // A confirmed match books a journal entry, so the server-derived
-  // emptyLedger flag goes stale the moment one succeeds in this session.
-  const [postedSinceLoad, setPostedSinceLoad] = useState(false)
   // A router.refresh() (RefreshWhenRestored) hands this mounted section a new
   // server render: take its numbers instead of keeping the first ones. Same
   // adjust-state-during-render pattern as DashboardNav.
@@ -277,10 +265,8 @@ export default function AttGoraSection({
     setCounts(worklist.counts)
     setTotal(worklist.total)
     setOverdueInvoices(worklist.overdueInvoices ?? null)
-    setMatches(suggestedMatches)
     setPayeeChanges(supplierPayeeChanges)
     setOpenSuggestions(suggestions)
-    setPostedSinceLoad(false)
   }
 
   async function refetchCounts() {
@@ -303,79 +289,12 @@ export default function AttGoraSection({
     }
   }
 
-  async function handleConfirmMatch(match: SuggestedMatch) {
-    setConfirmingId(match.transaction_id)
-    try {
-      const url =
-        match.kind === 'invoice'
-          ? `/api/transactions/${match.transaction_id}/match-invoice`
-          : match.kind === 'rot_rut_payout'
-            ? `/api/transactions/${match.transaction_id}/match-rot-rut-payout`
-            : match.kind === 'expense_payout'
-              ? `/api/transactions/${match.transaction_id}/match-expense-payout`
-              : `/api/transactions/${match.transaction_id}/match-supplier-invoice`
-      const body =
-        match.kind === 'invoice'
-          ? { invoice_id: match.candidate_id }
-          : match.kind === 'rot_rut_payout'
-            ? { request_ids: match.request_ids ?? [match.candidate_id] }
-            : match.kind === 'expense_payout'
-              ? { claim_ids: match.claim_ids ?? [] }
-              : { supplier_invoice_id: match.candidate_id }
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      const result = await res.json().catch(() => ({}))
-      // A SEK payment a krona or more above what the invoice owes: where the
-      // excess goes (3740 or 2420) is the user's choice, made in the match
-      // dialog, so open it on the transaction instead of reporting a failure
-      // whose text tells them to split the payment.
-      if (
-        match.kind === 'invoice' &&
-        match.transaction_currency === 'SEK' &&
-        result?.error?.code === 'MATCH_AMOUNT_EXCEEDS_REMAINING'
-      ) {
-        toast({ title: t('suggested_overpayment_toast') })
-        router.push(`/transactions?highlight=${match.transaction_id}&open=match`)
-        return
-      }
-      if (!res.ok || result.error) {
-        toast({
-          title: t('suggested_failed_toast'),
-          description: getErrorMessage(result, { context: 'transaction', statusCode: res.status }),
-          variant: 'destructive',
-        })
-        return
-      }
-      toast({ title: t('suggested_confirmed_toast') })
-      setPostedSinceLoad(true)
-      // Fade the row out, drop it, then re-sync every count from the source
-      // of truth (the match also booked a transaction, so several numbers move).
-      setLeavingIds((prev) => new Set(prev).add(match.transaction_id))
-      setTimeout(() => {
-        setMatches((prev) => prev.filter((m) => m.transaction_id !== match.transaction_id))
-        setLeavingIds((prev) => {
-          const next = new Set(prev)
-          next.delete(match.transaction_id)
-          return next
-        })
-      }, 300)
-      void refetchCounts()
-    } catch {
-      toast({ title: t('suggested_failed_toast'), variant: 'destructive' })
-    } finally {
-      setConfirmingId(null)
-    }
-  }
-
   const showInboxDocuments = hasAi && counts.inbox_document > 0
   const bokforRows =
     counts.book_transaction > 0 ||
     counts.book_skattekonto > 0 ||
     showInboxDocuments ||
-    matches.length > 0
+    counts.suggested_match > 0
   const betalaRows = expensePayouts.length > 0 || skattekontoPayment !== null
   const granskaRows =
     attestsDue.length > 0 ||
@@ -465,7 +384,7 @@ export default function AttGoraSection({
             ? t('row_payments_verification_expired')
             : t('row_payments_verification_expiring')
       }
-      detail={item.state === 'not_started' ? t('row_payments_verification_start_detail') : t('row_payments_verification_detail')}
+      hint={item.state === 'not_started' ? t('row_payments_verification_start_detail') : t('row_payments_verification_detail')}
       badge={
         item.state === 'not_started' ? undefined : item.state === 'expired' ? (
           <Badge variant="destructive">{t('payments_verification_expired_badge')}</Badge>
@@ -512,7 +431,7 @@ export default function AttGoraSection({
           ? t('row_bank_switch_stopped', { bank: item.bank_name })
           : t('row_bank_switch', { bank: item.bank_name, date: formatDateLong(item.deadline) })
       }
-      detail={t('row_bank_switch_detail')}
+      hint={t('row_bank_switch_detail')}
       badge={
         item.passed ? (
           <Badge variant="destructive">{t('bank_switch_stopped_badge')}</Badge>
@@ -530,7 +449,7 @@ export default function AttGoraSection({
         <h2 className="font-sans text-sm font-medium">{t('att_gora_title')}</h2>
         <p className="text-xs text-muted-foreground tabular-nums" role="status" aria-live="polite">
           {allClear
-            ? emptyLedger && !postedSinceLoad
+            ? emptyLedger
               ? t('att_gora_new_status')
               : t('all_done')
             : t('att_gora_left', { count: displayTotal })}
@@ -543,11 +462,11 @@ export default function AttGoraSection({
             // an empty list should draw the eye to (founder direction 2026-09-14).
             <p className="flex items-center gap-3 border-b border-border px-1 py-3.5 text-[13px] text-muted-foreground">
               <span className="flex w-[18px] shrink-0 justify-center" aria-hidden>
-                {emptyLedger && !postedSinceLoad
+                {emptyLedger
                   ? <BookOpen className="h-[15px] w-[15px]" />
                   : <CheckCircle2 className="h-[15px] w-[15px]" />}
               </span>
-              {emptyLedger && !postedSinceLoad ? t('att_gora_new_body') : t('att_gora_empty_body')}
+              {emptyLedger ? t('att_gora_new_body') : t('att_gora_empty_body')}
             </p>
           ) : (
             <div className="pb-2">
@@ -584,75 +503,13 @@ export default function AttGoraSection({
                         count={counts.book_skattekonto}
                       />
                     )}
-                    {matches.length > 0 && (
-                      <div className="px-4 py-3">
-                        <p className="text-xs text-muted-foreground mb-2">
-                          {t('suggested_title')}
-                        </p>
-                        <div>
-                          {matches.map((match) => {
-                            const isLeaving = leavingIds.has(match.transaction_id)
-                            const isConfirming = confirmingId === match.transaction_id
-                            return (
-                              <div
-                                key={match.transaction_id}
-                                className={cn(
-                                  'grid transition-[grid-template-rows,opacity] duration-300 motion-reduce:transition-none',
-                                  isLeaving ? 'grid-rows-[0fr] opacity-0' : 'grid-rows-[1fr]',
-                                )}
-                              >
-                                <div className="overflow-hidden pb-1">
-                                  <div className="flex items-center gap-3 rounded-sm bg-secondary/40 px-3 py-2">
-                                <div className="flex-1 min-w-0">
-                                  <p className="text-sm truncate">
-                                    {match.transaction_description}
-                                    <span className="text-muted-foreground tabular-nums">
-                                      {' '}
-                                      · {formatCurrency(
-                                        Math.abs(match.transaction_amount),
-                                        match.transaction_currency,
-                                      )}
-                                    </span>
-                                  </p>
-                                  <p className="text-xs text-muted-foreground mt-0.5 truncate tabular-nums">
-                                    <ArrowRight className="inline h-3 w-3 mr-1" aria-hidden />
-                                    {match.kind === 'invoice'
-                                      ? t('suggested_kind_invoice')
-                                      : match.kind === 'rot_rut_payout'
-                                        ? t('suggested_kind_rot_rut_payout')
-                                        : match.kind === 'expense_payout'
-                                          ? t('suggested_kind_expense_payout')
-                                          : t('suggested_kind_supplier_invoice')}
-                                    {match.candidate_number ? ` ${match.candidate_number}` : ''}
-                                    {match.counterparty_name ? ` · ${match.counterparty_name}` : ''}
-                                    {' · '}
-                                    {formatDate(match.transaction_date)}
-                                  </p>
-                                </div>
-                                <Link
-                                  href={`/transactions?highlight=${match.transaction_id}`}
-                                  aria-label={t('suggested_view')}
-                                  title={t('suggested_view')}
-                                  className="shrink-0 h-10 w-10 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
-                                >
-                                  <Eye className="h-4 w-4" />
-                                </Link>
-                                <Button
-                                  size="sm"
-                                  className="shrink-0"
-                                  disabled={!!confirmingId || isLeaving}
-                                  loading={isConfirming}
-                                  onClick={() => void handleConfirmMatch(match)}
-                                >
-                                  {t('suggested_confirm')}
-                                </Button>
-                                  </div>
-                                </div>
-                              </div>
-                            )
-                          })}
-                        </div>
-                      </div>
+                    {counts.suggested_match > 0 && (
+                      <WorklistRow
+                        href="/transactions"
+                        icon={Link2}
+                        label={t('row_suggested_matches')}
+                        count={counts.suggested_match}
+                      />
                     )}
                     {showInboxDocuments && (
                       <WorklistRow

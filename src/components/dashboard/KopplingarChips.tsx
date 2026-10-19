@@ -4,7 +4,7 @@ import { useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { Bot, Landmark } from 'lucide-react'
+import { Landmark } from 'lucide-react'
 import { AiConnectorDialog } from '@/components/onboarding/AiConnectorDialog'
 import {
   DropdownMenu,
@@ -21,13 +21,17 @@ import { useOmbudAppointWithToasts } from '@/components/skatteverket/ombud-appoi
 
 /**
  * Kopplingar: the three things Att göra can be wired to (an AI agent, the
- * bank, Skatteverket), one chip each on a single row under the list. Each
- * chip names the connection, says whether it is on, and carries the connect
- * pill while it is off; a connected chip stays as a quiet status readout.
- * What the three give is explained behind the page's "?" (convention 7),
- * not in a sentence under the row. Founder direction 2026-09-14: the connections
- * are part of the Att göra section, in the same visual language, with the
- * connect action as a pill like every other control.
+ * bank, Skatteverket), one chip each on a single row under the list, for the
+ * ones that are NOT connected: the chip names the connection, says it is off
+ * and carries the connect pill. A connected one renders nothing, and with
+ * all three connected the row is gone: "connected" is the normal state, and
+ * a chip on every visit saying so marks nothing (convention 5). While the
+ * agent is off its chip is Hem's one agent prompt (DashboardContent holds
+ * AgentPromo back until an agent is connected). What the three give is
+ * explained behind the page's "?" (convention 7), not in a sentence under
+ * the row. Founder direction 2026-09-14: the connections are part of the Att
+ * göra section, in the same visual language, with the connect action as a
+ * pill like every other control.
  */
 export function KopplingarChips({
   aiConnection,
@@ -61,11 +65,13 @@ export function KopplingarChips({
   // the chip is pointless without the extension or the plan capability.
   const showSkv = skvExtension && skvCapability && !isSandbox
   // On for any connected agent, named ones or not (agentChipView): an agent
-  // connected through a client we cannot name still reads as connected.
+  // connected through a client we cannot name still reads as connected. Off,
+  // the chip shows the three connectable logos.
   const agentChip = agentChipView(aiConnection)
-  const aiOn = agentChip.on
+  const showAgent = !agentChip.on
   const agentLogos = AI_CLIENTS.filter((c) => agentChip.logos.includes(c.id))
-  const agentNames = AI_CLIENTS.filter((c) => agentChip.named.includes(c.id)).map((c) => c.name)
+  const showBank = !hasBank
+  const showSkvChip = showSkv && !hasSkatteverket
 
   function connect(client: AiClient) {
     const action = aiConnectAction(client, { origin: window.location.origin, appName })
@@ -73,64 +79,66 @@ export function KopplingarChips({
     else openAiConnector(action.open)
   }
 
+  if (!showAgent && !showBank && !showSkvChip) return null
+
   return (
     <div className="px-1 pt-4 pb-2">
       <AiConnectorDialog action={connectAction} onClose={() => setConnectAction(null)} />
       <ul aria-label={t('kopplingar_title')} className="flex flex-wrap items-center gap-2">
-        <Chip
-          icon={
-            agentLogos.length > 0 ? (
+        {showAgent && (
+          <Chip
+            icon={
               <span className="flex items-center -space-x-1">
                 {agentLogos.map((c) => (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img key={c.id} src={c.logo} alt="" className="h-4 w-4 rounded-full bg-background ring-1 ring-background" />
                 ))}
               </span>
-            ) : (
-              <Bot className="h-[13px] w-[13px] text-muted-foreground" aria-hidden />
-            )
-          }
-          name={agentNames.length > 0 ? agentNames.join(', ') : t('kopplingar_agent')}
-          status={aiOn ? t('kopplingar_agent_on') : t('kopplingar_agent_off')}
-          action={aiOn ? null : (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button type="button" className={pillClass} aria-label={t('kopplingar_agent_aria')}>
-                  {t('kopplingar_agent_connect')}
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start">
-                {AI_CLIENTS.map((c) => (
-                  <DropdownMenuItem key={c.id} onSelect={() => connect(c.id)}>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={c.logo} alt="" className="mr-2 h-4 w-4" />
-                    {c.name}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
-        />
-        <Chip
-          icon={<Landmark className="h-[13px] w-[13px] text-muted-foreground" aria-hidden />}
-          name={t('kopplingar_bank_short')}
-          status={hasBank ? t('kopplingar_bank_on') : t('kopplingar_bank_off')}
-          action={hasBank ? null : (
-            <Link
-              href={hasBankingExtension ? '/import?mode=psd2' : '/import?mode=bank'}
-              className={pillClass}
-              aria-label={t('kopplingar_bank_aria')}
-            >
-              {t('kopplingar_connect')}
-            </Link>
-          )}
-        />
-        {showSkv && (
+            }
+            name={t('kopplingar_agent')}
+            status={t('kopplingar_agent_off')}
+            action={
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button type="button" className={pillClass} aria-label={t('kopplingar_agent_aria')}>
+                    {t('kopplingar_agent_connect')}
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  {AI_CLIENTS.map((c) => (
+                    <DropdownMenuItem key={c.id} onSelect={() => connect(c.id)}>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={c.logo} alt="" className="mr-2 h-4 w-4" />
+                      {c.name}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            }
+          />
+        )}
+        {showBank && (
+          <Chip
+            icon={<Landmark className="h-[13px] w-[13px] text-muted-foreground" aria-hidden />}
+            name={t('kopplingar_bank_short')}
+            status={t('kopplingar_bank_off')}
+            action={
+              <Link
+                href={hasBankingExtension ? '/import?mode=psd2' : '/import?mode=bank'}
+                className={pillClass}
+                aria-label={t('kopplingar_bank_aria')}
+              >
+                {t('kopplingar_connect')}
+              </Link>
+            }
+          />
+        )}
+        {showSkvChip && (
           <Chip
             icon={<Landmark className="h-[13px] w-[13px] text-muted-foreground" aria-hidden />}
             name={t('kopplingar_skv_short')}
-            status={hasSkatteverket ? t('kopplingar_skv_on') : t('kopplingar_skv_off')}
-            action={hasSkatteverket ? null : skvOmbudEnabled ? (
+            status={t('kopplingar_skv_off')}
+            action={skvOmbudEnabled ? (
               <button
                 type="button"
                 onClick={() => void ombud.appoint()}
@@ -173,13 +181,7 @@ function Chip({
   action: ReactNode
 }) {
   return (
-    <li
-      className={
-        action
-          ? 'inline-flex h-8 items-center gap-2 rounded-full border border-border pl-3 pr-1 text-[12.5px]'
-          : 'inline-flex h-8 items-center gap-2 rounded-full border border-border px-3 text-[12.5px] text-muted-foreground'
-      }
-    >
+    <li className="inline-flex h-8 items-center gap-2 rounded-full border border-border pl-3 pr-1 text-[12.5px]">
       <span className="flex shrink-0 items-center" aria-hidden>{icon}</span>
       <span className="truncate">{name}</span>
       <span className="text-[11px] text-muted-foreground">{status}</span>

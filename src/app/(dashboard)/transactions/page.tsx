@@ -39,9 +39,7 @@ import { ContextPicker, type ContextPickerItem } from '@/components/common/Conte
 import { FyPicker } from '@/components/common/FyPicker'
 import { ALL_YEARS_VALUE } from '@/components/common/FiscalYearSelector'
 import { AttnLine } from '@/components/ui/attn-line'
-import BankSyncNowButton from '@/components/transactions/BankSyncNowButton'
 import { useBankLedgerSuggestionNotice } from '@/components/transactions/BankLedgerSuggestionNotice'
-import BankSyncSinceLastVisit from '@/components/transactions/BankSyncSinceLastVisit'
 import TransactionInboxCard from '@/components/transactions/TransactionInboxCard'
 import TransactionHistoryList from '@/components/transactions/TransactionHistoryList'
 import InboxZeroState from '@/components/transactions/InboxZeroState'
@@ -4350,6 +4348,22 @@ export default function TransactionsPage() {
         >
           {t('review_attn_body', { count: suggestionItems.length })}
         </AttnLine>
+      ) : !isLoading && mode === 'inbox' && selectableInboxIds.length >= 5 ? (
+        // Bridge to the bulk-match flow: a backlog of unbooked bank rows is
+        // usually a migration/import whose counterpart vouchers already
+        // exist, and the only match affordance here is per-row. Static text
+        // + count (no probe): the reconciliation preview is the honest source
+        // of how many actually match. Last in the chain: the lines above name
+        // a more precise cause or destination for the same backlog (the
+        // ledger mapping, the persisted review suggestions).
+        <AttnLine
+          action={{
+            label: t('recon_attn_action'),
+            href: '/reconciliation?autorun=1',
+          }}
+        >
+          {t('recon_attn', { count: selectableInboxIds.length })}
+        </AttnLine>
       ) : null}
 
       {/* Toolbar (concept order): [Att bokföra/Alla-seg] [sök] [Välj flera]
@@ -4480,10 +4494,7 @@ export default function TransactionsPage() {
               }
             />
           ) : (
-            <InboxZeroState
-              hasTransactions={transactions.length > 0 || skvRows.length > 0}
-              onCreateTransaction={() => setIsDialogOpen(true)}
-            />
+            <InboxZeroState hasTransactions={transactions.length > 0 || skvRows.length > 0} />
           )
         ) : (
           <div>
@@ -4654,27 +4665,6 @@ export default function TransactionsPage() {
                 </tbody>
               </table>
             </div>
-            {/* Bridge to the bulk-match flow: a backlog of unbooked bank rows
-                is usually a migration/import whose counterpart vouchers
-                already exist, and the only match affordance here is per-row.
-                Static text + count (no probe): the reconciliation preview is
-                the honest source of how many actually match. Sits below the
-                list so the rows themselves stay first, and yields to the
-                review-suggestions attn at the top of the page (max one ochre
-                sentence per page): when the sweep has already persisted
-                suggestions, "Granska förslagen" is the more precise
-                destination for the same backlog. */}
-            {selectableInboxIds.length >= 5 && suggestionItems.length === 0 && !ledgerSuggestionNotice && (
-              <AttnLine
-                className="px-1 pt-3"
-                action={{
-                  label: t('recon_attn_action'),
-                  href: '/reconciliation?autorun=1',
-                }}
-              >
-                {t('recon_attn', { count: selectableInboxIds.length })}
-              </AttnLine>
-            )}
           </div>
         )
       ) : (
@@ -4700,15 +4690,12 @@ export default function TransactionsPage() {
         />
       )}
 
-      {/* Footer status line (concept): honest counter from the visible
-          rows + bank sync status/actions + the Bankavstämning path (the
-          ignore flows point users there). */}
+      {/* Footer status line (concept): what the current scope hides, the
+          bank sync status (silent while healthy) and the Bankavstämning path
+          (the ignore flows point users there). The count of rows to handle
+          lives on the segment chip and the sync action in the header split
+          button, so neither repeats here. */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-1 text-xs text-muted-foreground">
-        {/* The count only when there is one: "Inget att hantera" over an
-            empty list says what the empty list already says. */}
-        {mode === 'inbox' && inboxItems.length > 0 && (
-          <span className="tabular-nums">{t('footer_to_handle', { count: inboxItems.length })}</span>
-        )}
         {mode === 'inbox' && inboxScope.outsidePeriod > 0 && (
           <span className="tabular-nums">
             {t('period_pending_outside', { count: inboxScope.outsidePeriod })}{' '}
@@ -4730,8 +4717,6 @@ export default function TransactionsPage() {
           </span>
         )}
         <BankSyncStatusChip />
-        <BankSyncNowButton />
-        <BankSyncSinceLastVisit />
         <Link
           href="/reconciliation"
           className="ml-auto transition-colors duration-150 hover:text-foreground"

@@ -73,8 +73,9 @@ export default function BankSyncStatusChip() {
   if (state.kind === 'none') return null
 
   if (state.kind === 'paused') {
-    // Same remedy split as BankSyncNowButton: hosted points at billing,
-    // self-host at the connector key (never the Stripe page).
+    // Hosted points at billing, self-host at the connector key (never the
+    // Stripe page). This chip is the transactions page's upgrade path for a
+    // company with a bank connection but no bank_sync plan.
     const selfHosted = isSelfHosted()
     return (
       <Link

@@ -20,6 +20,12 @@ interface DashboardContentProps {
    */
   agentBuilt?: boolean
   /**
+   * An agent is connected over MCP (AiConnection.connected). Until one is,
+   * the Kopplingar agent chip under Att göra is Hem's agent prompt, so the
+   * build-assistant promo waits: one agent prompt on the page, not two.
+   */
+  agentConnected?: boolean
+  /**
    * Streamed sections (server components behind Suspense in
    * app/(dashboard)/page.tsx): the notice line, the setup checklist and the
    * Att göra + Fortsätt panes. The shell renders the greeting immediately
@@ -43,6 +49,7 @@ export default function DashboardContent({
   userFirstName,
   initialSetup,
   agentBuilt = true,
+  agentConnected = false,
   notices,
   checklist,
   panes,
@@ -89,8 +96,10 @@ export default function DashboardContent({
           agent_profile, so existing/migrated users get a clear prompt instead
           of a full-screen onboarding takeover. While the stepped first-run
           checklist is visible it already carries the assistant as its last
-          step, so the promo waits until that block is dismissed or completed. */}
-      {!agentBuilt && (initialSetup.dismissedAt || initialSetup.completedAt) && (
+          step, so the promo waits until that block is dismissed or completed.
+          It also waits for a connected agent: until then the Kopplingar
+          agent chip (same checklist gate) is the page's agent prompt. */}
+      {!agentBuilt && agentConnected && (initialSetup.dismissedAt || initialSetup.completedAt) && (
         <AgentPromo companyId={companyId} />
       )}
 

@@ -188,6 +188,7 @@ export default async function DashboardPage() {
     <DashboardContent
       companyId={companyId}
       agentBuilt={agentBuilt}
+      agentConnected={aiConnection.connected}
       userFirstName={userFirstName}
       initialSetup={initialSetup}
       notices={notices}
