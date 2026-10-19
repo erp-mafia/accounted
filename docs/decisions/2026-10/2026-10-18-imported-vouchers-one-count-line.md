@@ -1,0 +1,1 @@
+[2026-10-18] Imported vouchers without underlag get one count line on Verifikat instead of a chip per row (founder); it counts loaded rows and says so when paginated, since a period-wide count needs a source filter on the missing-underlag API.

@@ -2,8 +2,8 @@
 
 import { useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { CheckCircle2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -40,12 +40,13 @@ interface VatFilingStatusCardProps {
 }
 
 /**
- * Filing status of the selected period under "Lämna in" (issues #2746,
- * #2786), for every cadence including helårsmoms: shows
- * the recorded filing (through the Skatteverket connection or marked by
- * hand), or offers "Markera som inlämnad" for a declaration filed on
+ * Filing status of the selected period in the "Lämna in" action row (issues
+ * #2746, #2786), for every cadence including helårsmoms: the recorded filing
+ * (through the Skatteverket connection or marked by hand) as one muted line,
+ * or the "Markera som inlämnad" button for a declaration filed on
  * skatteverket.se. Recording the filing is free and sends nothing to
  * Skatteverket; it is what lets the page open the next period by default.
+ * Why it exists is explained behind the step's "?", not here.
  *
  * Hidden while the period is still running: it cannot have been filed yet.
  */
@@ -134,49 +135,37 @@ export function VatFilingStatusCard({
   }
 
   return (
-    <section>
-      <div className="mb-3 flex items-center gap-3 px-1">
-        <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
-          {t('vat_filing_section')}
-        </h3>
-        <div className="h-px flex-1 bg-border/60" />
-      </div>
-
+    <>
       {record ? (
-        <div className="space-y-1 rounded-lg border border-success/40 bg-success/5 px-4 py-3 text-[13px] leading-6">
-          <p className="flex items-center gap-2 font-medium">
-            <CheckCircle2 className="h-4 w-4 shrink-0 text-success" aria-hidden="true" />
-            {t('vat_filing_filed_on', { date: formatDate(record.filed_on) })}
-          </p>
-          <p className="text-muted-foreground">
-            {record.source === 'skatteverket'
-              ? t('vat_filing_source_skatteverket')
-              : t('vat_filing_source_manual')}
-          </p>
+        // Filed is a normal state: muted text in the row (convention 12),
+        // never a green box.
+        <p className="text-[13px] leading-5 text-muted-foreground tabular-nums">
+          {t('vat_filing_filed_on', { date: formatDate(record.filed_on) })}
+          {' · '}
+          {record.source === 'skatteverket'
+            ? t('vat_filing_source_skatteverket')
+            : t('vat_filing_source_manual')}
           {record.reference && (
-            <p className="text-muted-foreground">
+            <>
+              {' · '}
               {t('vat_filing_reference', { reference: record.reference })}
-            </p>
+            </>
           )}
           {record.source === 'manual' && canWrite && (
-            <div className="pt-1">
-              <Button variant="ghost" size="sm" onClick={unmark} loading={busy}>
+            <>
+              {' · '}
+              <button type="button" className={QUIET_LINK_CLASS} onClick={unmark} disabled={busy}>
                 {t('vat_filing_unmark')}
-              </Button>
-            </div>
+              </button>
+            </>
           )}
-          {error && <p className="text-destructive">{error}</p>}
-        </div>
-      ) : (
-        <div className="space-y-3">
-          <p className="text-[13px] leading-6 text-muted-foreground">{t('vat_filing_prompt')}</p>
-          {canWrite && (
-            <Button variant="outline" onClick={() => setOpen(true)}>
-              {t('vat_filing_mark')}
-            </Button>
-          )}
-        </div>
-      )}
+          {error && <span className="text-destructive">{` ${error}`}</span>}
+        </p>
+      ) : canWrite ? (
+        <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+          {t('vat_filing_mark')}
+        </Button>
+      ) : null}
 
       <Dialog
         open={open}
@@ -226,6 +215,6 @@ export function VatFilingStatusCard({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </section>
+    </>
   )
 }

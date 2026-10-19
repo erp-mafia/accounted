@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { AlertCircle, Check, ExternalLink, FileCode, FileDown, Percent } from 'lucide-react'
+import { AlertCircle, Check, ChevronDown, FileCode, FileDown, Percent } from 'lucide-react'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -13,6 +13,13 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { PageHeader } from '@/components/ui/page-header'
 import { Table, TableBody } from '@/components/ui/table'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { ReportBodyLoading } from '@/components/reports/ReportLoading'
@@ -21,8 +28,7 @@ import { useReportRowExpansion } from '@/components/reports/ReportRowExpansion'
 import { VatFilingStatusCard } from '@/components/reports/VatFilingStatusCard'
 import { PayDeclarationViaBankButton } from '@/components/payments/PayDeclarationViaBankButton'
 import { VatChecksCard } from '@/components/reports/VatChecksCard'
-import { SkatteverketPanel } from '@/components/reports/SkatteverketPanel'
-import { VatAlreadyBookedBanner } from '@/components/reports/VatAlreadyBookedBanner'
+import { SKATTEVERKET_DIRECT_FILING, SkatteverketPanel } from '@/components/reports/SkatteverketPanel'
 import { useVatSettlementProposal } from '@/components/reports/use-vat-settlement-proposal'
 import { useCompanySettings } from '@/components/settings/useSettings'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -82,59 +88,82 @@ const SKATTEVERKET_MOMS_URL =
   'https://www.skatteverket.se/foretag/etjansterochblanketter/etjanster/momsocharbetsgivardeklarationer'
 
 /**
- * Manual-filing affordance shown directly under the calculated momsdeklaration.
- * The report is generated purely from the bookkeeping and never depends on the
- * Skatteverket connection, so every user (including core builds with the
- * skatteverket extension disabled) can file manually. Two paths are offered:
- * an eSKD XML file to upload directly under "Deklarera via fil" (the fast path),
- * and a PDF (in hela kronor) to read off if the user would rather type the
- * boxes into the form. A PDF cannot be uploaded to Skatteverket, only the XML.
+ * "Ladda ner" in the Lämna in row: the filing artifacts for filing by hand.
+ * The report is generated purely from the bookkeeping and never depends on
+ * the Skatteverket connection, so every user (including core builds with the
+ * skatteverket extension disabled) can file manually: the eSKD XML to upload
+ * under "Deklarera via fil" (the fast path), or the PDF (in hela kronor) to
+ * read off when typing the boxes in. A PDF cannot be uploaded, only the XML.
  */
-function VatManualFilingCard({ xmlHref, pdfHref }: { xmlHref: string; pdfHref: string }) {
+function VatFilingDownloadMenu({ xmlHref, pdfHref }: { xmlHref: string; pdfHref: string }) {
   return (
-    <section>
-      <div className="mb-3 flex items-center gap-3 px-1">
-        <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
-          Lämna in själv, med fil
-        </h3>
-        <div className="h-px flex-1 bg-border/60" />
-      </div>
-      <div className="space-y-4">
-        <p className="text-[13px] leading-6 text-muted-foreground">
-          Du behöver inte vara ansluten till Skatteverket för att lämna in.
-        </p>
-        <ol className="list-decimal pl-6 space-y-1 text-sm text-muted-foreground">
-          <li>Ladda ner XML-filen nedan.</li>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm" className="gap-2">
+          <FileDown className="h-4 w-4" />
+          Ladda ner
+          <ChevronDown className="h-4 w-4 text-muted-foreground" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        <DropdownMenuItem asChild>
+          <a href={xmlHref} target="_blank" rel="noopener noreferrer">
+            <FileCode className="h-4 w-4" />
+            Fil för uppladdning (XML)
+          </a>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <a href={pdfHref} target="_blank" rel="noopener noreferrer">
+            <FileDown className="h-4 w-4" />
+            Momsdeklaration (PDF)
+          </a>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/**
+ * The one "?" of the Lämna in step (convention 7): what each action in the
+ * row does, including the manual filing steps that used to fill the step
+ * as always-visible copy.
+ */
+function VatFilingHelp({ markPrompt }: { markPrompt: string }) {
+  return (
+    <HelpPopover>
+      <div className="space-y-2">
+        {SKATTEVERKET_DIRECT_FILING && (
+          <p>
+            Skicka till Skatteverket: deklarationen kontrolleras, sparas som utkast i
+            Eget utrymme (företagets privata yta hos Skatteverket) och låses för
+            signering med BankID. Inget lämnas in förrän du har signerat. Första
+            gången ansluter du med BankID.
+          </p>
+        )}
+        <p>Lämna in själv, med fil. Du behöver inte vara ansluten till Skatteverket.</p>
+        <ol className="list-decimal space-y-1 pl-4">
+          <li>Ladda ner XML-filen under Ladda ner.</li>
           <li>Logga in på skatteverket.se med BankID.</li>
           <li>Öppna Moms- och arbetsgivardeklarationer och välj Deklarera via fil.</li>
           <li>Ladda upp filen, granska och signera.</li>
         </ol>
-        <p className="text-xs text-muted-foreground">
+        <p>
           Vill du hellre fylla i rutorna för hand laddar du ner PDF:en och skriver av
           beloppen (i hela kronor).
         </p>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" asChild className="gap-2">
-            <a href={xmlHref} target="_blank" rel="noopener noreferrer">
-              <FileCode className="h-4 w-4" />
-              Ladda ner fil för uppladdning (XML)
-            </a>
-          </Button>
-          <Button variant="outline" asChild className="gap-2">
-            <a href={pdfHref} target="_blank" rel="noopener noreferrer">
-              <FileDown className="h-4 w-4" />
-              Ladda ner momsdeklaration (PDF)
-            </a>
-          </Button>
-          <Button variant="outline" asChild className="gap-2">
-            <a href={SKATTEVERKET_MOMS_URL} target="_blank" rel="noopener noreferrer">
-              <ExternalLink className="h-4 w-4" />
-              Öppna skatteverket.se
-            </a>
-          </Button>
-        </div>
+        <p>{markPrompt}</p>
+        <p>
+          <a
+            href={SKATTEVERKET_MOMS_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2 hover:opacity-80"
+          >
+            Öppna skatteverket.se
+          </a>
+        </p>
       </div>
-    </section>
+    </HelpPopover>
   )
 }
 
@@ -322,6 +351,7 @@ function VatStepper({
   warningCount,
   ruta49,
   bookingStatus,
+  bookedVoucher,
   filed,
 }: {
   active: number
@@ -330,6 +360,12 @@ function VatStepper({
   warningCount: number
   ruta49: number
   bookingStatus: 'booked' | 'draft' | 'none' | null
+  /**
+   * The posted settlement's voucher ("A-217"), named in step 3's sub so the
+   * stepper carries what the removed "redan bokförd" banner said; the link
+   * to it lives in step 3 itself (a link cannot sit inside the tab button).
+   */
+  bookedVoucher?: string | null
   /** The period has a filing record (Skatteverket kvittens or marked by hand). */
   filed: boolean
 }) {
@@ -363,7 +399,9 @@ function VatStepper({
       label: 'Bokför',
       sub:
         bookingStatus === 'booked'
-          ? 'bokförd'
+          ? bookedVoucher
+            ? `bokförd ${bookedVoucher}`
+            : 'bokförd'
           : bookingStatus === 'draft'
             ? 'utkast finns'
             : 'mot 2650',
@@ -441,6 +479,11 @@ const MONTH_NAMES = [
   'Juli', 'Augusti', 'September', 'Oktober', 'November', 'December',
 ]
 const QUARTER_SPANS = ['jan-mar', 'apr-jun', 'jul-sep', 'okt-dec']
+const PERIOD_TYPE_ITEMS: { id: VatPeriodType; label: string }[] = [
+  { id: 'monthly', label: 'Månadsvis' },
+  { id: 'quarterly', label: 'Kvartalsvis' },
+  { id: 'yearly', label: 'Årsvis' },
+]
 
 // Inline momsperiod setup for the "registered but no period picked" state.
 // Writes through the same PUT /api/settings validation as the tax settings
@@ -732,7 +775,6 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
     filedByPeriod && periodType
       ? (filedByPeriod.get(vatFilingKey(periodType, year, period)) ?? null)
       : null
-  const deadlineCompleted = !!settlement.booked && filingRecord !== null
 
   useEffect(() => {
     setChosenStep(null)
@@ -1051,83 +1093,90 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
       })
     : fusedLabel
 
+  // Cadence and period, side by side. The cadence chip is the only way to
+  // view a period under another granularity than the Skatt setting (a
+  // company that switched cadence and still files an older period); it is
+  // never persisted (the mount-time seed re-applies the setting), and it
+  // shows its value so it reads as the picker it is.
+  const periodPickers = (
+    <>
+      <ContextPicker
+        items={PERIOD_TYPE_ITEMS}
+        value={periodType}
+        onChange={(value) => handlePeriodTypeChange(value as VatPeriodType)}
+        triggerLabel={PERIOD_TYPE_ITEMS.find((item) => item.id === periodType)?.label ?? 'Period'}
+        ariaLabel="Periodicitet"
+      />
+      {isYearly ? (
+        // Annual VAT covers a räkenskapsår: picked here, not a
+        // calendar year.
+        <FyPicker
+          value={fiscalPeriodId || null}
+          onChange={(id, fp) => {
+            setPickedFiscalPeriodId(id || '')
+            // The yearly key follows the pick: the year it ends in.
+            if (fp) {
+              setYear(Number(fp.period_end.slice(0, 4)))
+              setPeriod(1)
+            }
+          }}
+          includeAllOption={false}
+          hideFuturePeriods
+          preferLatestEnded
+        />
+      ) : (
+        <ContextPicker
+          items={fusedPeriodItems}
+          value={`${year}:${period}`}
+          onChange={(id) => {
+            const [y, p] = id.split(':').map(Number)
+            setYear(y)
+            setPeriod(p)
+          }}
+          triggerLabel={fusedLabel}
+          ariaLabel="Redovisningsperiod"
+        />
+      )}
+    </>
+  )
+
   return (
     <VatDrillContext.Provider value={{ fiscalPeriodId: isYearly ? fiscalPeriodId : undefined }}>
     <div className="space-y-8">
-      {/* Standalone page: Exportera sits beside the H1 as a secondary
-          control. The primary action belongs to the step in front of the
-          person (Korrigera alla, Bokför momsen, Lämna in), not to the
+      {/* Standalone page: the top bar carries Exportera and the period
+          pickers (convention 8: the context picker far right), so no row is
+          spent on them. The primary action belongs to the step in front of
+          the person (Korrigera alla, Bokför momsen, Lämna in), not to the
           spreadsheet (Jakob, 2026-09-09). XML and PDF live in "Lämna in":
           they are filing artifacts, not report exports. */}
-      {pageTitle && (
+      {pageTitle ? (
         <PageHeader
           title={pageTitle}
           action={
-            <div className="flex items-center gap-2">
-            <ReportExportMenu
-              variant="outline"
-              items={[
-                { format: 'xlsx', href: `/api/reports/vat-declaration/xlsx?${vatQueryString()}` },
-              ]}
-            />
-            </div>
-          }
-        />
-      )}
-      <div className="flex flex-wrap items-center justify-end gap-2">
-              {/* Cadence lives behind a settings-style "Period" chip: the
-                  concrete period chip next to it already shows the cadence
-                  ("Kvartal 2" implies quarterly, "Räkenskapsår ..." yearly). */}
-              <ContextPicker
-                items={[
-                  { id: 'monthly', label: 'Månadsvis' },
-                  { id: 'quarterly', label: 'Kvartalsvis' },
-                  { id: 'yearly', label: 'Årsvis' },
-                ]}
-                value={periodType}
-                onChange={(value) => handlePeriodTypeChange(value as VatPeriodType)}
-                triggerLabel="Period"
-                ariaLabel="Periodicitet"
-              />
-            {isYearly ? (
-              // Annual VAT covers a räkenskapsår: picked here, not a
-              // calendar year.
-              <FyPicker
-                value={fiscalPeriodId || null}
-                onChange={(id, fp) => {
-                  setPickedFiscalPeriodId(id || '')
-                  // The yearly key follows the pick: the year it ends in.
-                  if (fp) {
-                    setYear(Number(fp.period_end.slice(0, 4)))
-                    setPeriod(1)
-                  }
-                }}
-                includeAllOption={false}
-                hideFuturePeriods
-                preferLatestEnded
-              />
-            ) : (
-              <ContextPicker
-                items={fusedPeriodItems}
-                value={`${year}:${period}`}
-                onChange={(id) => {
-                  const [y, p] = id.split(':').map(Number)
-                  setYear(y)
-                  setPeriod(p)
-                }}
-                triggerLabel={fusedLabel}
-                ariaLabel="Redovisningsperiod"
-              />
-            )}
-            {!pageTitle && (
+            // Three controls: on a phone they wrap inside the bar rather
+            // than push past the panel edge.
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <ReportExportMenu
                 variant="outline"
                 items={[
                   { format: 'xlsx', href: `/api/reports/vat-declaration/xlsx?${vatQueryString()}` },
                 ]}
               />
-            )}
-      </div>
+              {periodPickers}
+            </div>
+          }
+        />
+      ) : (
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {periodPickers}
+          <ReportExportMenu
+            variant="outline"
+            items={[
+              { format: 'xlsx', href: `/api/reports/vat-declaration/xlsx?${vatQueryString()}` },
+            ]}
+          />
+        </div>
+      )}
 
       {error && (
         <Card>
@@ -1147,13 +1196,6 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
         <div
           className={`space-y-8 transition-opacity duration-150 ${loading ? 'opacity-60' : ''}`}
         >
-          {settlement.booked && (
-            <VatAlreadyBookedBanner
-              entry={settlement.booked}
-              deadlineCompleted={deadlineCompleted}
-            />
-          )}
-
           {/* Stegen (concept): the filing pipeline as a horizontal stepper
               (kontrollera, granska, bokför, lämna in), showing one step's
               content at a time. Errors land on step 1, otherwise Granska. */}
@@ -1164,6 +1206,7 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
             warningCount={warningCount}
             ruta49={buildFiledAmounts(data.rutor).net}
             bookingStatus={bookingStatus}
+            bookedVoucher={settlement.booked ? formatVoucher(settlement.booked) : null}
             filed={filingRecord !== null}
           />
 
@@ -1191,14 +1234,11 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
           {activeStep === 2 && (
             <section className="space-y-3">
               <div>
-            <div className="flex flex-wrap items-baseline justify-between gap-3 px-1">
-              <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Momsdeklaration · {data.period.start} till {data.period.end}
-              </h3>
-              <span className="text-[11px] tabular-nums text-muted-foreground">
-                {data.invoiceCount} fakturor · {data.transactionCount} transaktioner
-              </span>
-            </div>
+            {/* The title and the period picker already name the declaration
+                and its period; only the basis counts are new here. */}
+            <p className="px-1 text-[11px] tabular-nums text-muted-foreground">
+              {data.invoiceCount} fakturor · {data.transactionCount} transaktioner
+            </p>
             <div className="mt-4 space-y-8">
               <div>
                 {/* Utgående moms */}
@@ -1470,7 +1510,12 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
           )}
 
           {activeStep === 4 && (
-            <section className="mx-auto max-w-3xl space-y-8">
+            <section className="space-y-4">
+              {/* One action row: Skicka till Skatteverket (or Anslut med
+                  BankID), Ladda ner, and Markera som inlämnad or the filed
+                  line, with every explanation behind the step's one "?". The
+                  panel owns the Skatteverket action and its state; the rest
+                  rides along in its row. */}
               <SkatteverketPanel
                 periodType={periodType}
                 year={year}
@@ -1486,25 +1531,32 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
                 }
                 hasData={data !== null}
                 localBlocked={checksBlocked}
+                onFilingConfirmed={() => setFilingsRefreshKey((k) => k + 1)}
+                actions={
+                  <>
+                    <VatFilingDownloadMenu
+                      xmlHref={`/api/reports/vat-declaration/eskd?${vatQueryString()}`}
+                      pdfHref={`/api/reports/vat-declaration/pdf?${vatQueryString()}`}
+                    />
+                    {/* Filing record (#2746, #2786): what makes the page
+                        open the next period once this one is done, for
+                        every cadence. */}
+                    {periodType && (
+                      <VatFilingStatusCard
+                        periodType={periodType}
+                        year={year}
+                        period={period}
+                        fiscalYearEndMonth={fiscalYearEndMonth}
+                        periodLabel={filingPeriodLabel}
+                        record={filingRecord}
+                        canWrite={canWrite}
+                        onChanged={() => setFilingsRefreshKey((k) => k + 1)}
+                      />
+                    )}
+                  </>
+                }
+                help={<VatFilingHelp markPrompt={tReports('vat_filing_prompt')} />}
               />
-              <VatManualFilingCard
-              xmlHref={`/api/reports/vat-declaration/eskd?${vatQueryString()}`}
-              pdfHref={`/api/reports/vat-declaration/pdf?${vatQueryString()}`}
-            />
-              {/* Filing record (#2746, #2786): what makes the page open the
-                  next period once this one is done, for every cadence. */}
-              {periodType && (
-                <VatFilingStatusCard
-                  periodType={periodType}
-                  year={year}
-                  period={period}
-                  fiscalYearEndMonth={fiscalYearEndMonth}
-                  periodLabel={filingPeriodLabel}
-                  record={filingRecord}
-                  canWrite={canWrite}
-                  onChanged={() => setFilingsRefreshKey((k) => k + 1)}
-                />
-              )}
               {/* Filed with moms to pay: pay it in to the skattekonto from the
                   bank, where bank payments are switched on (crm#1260). */}
               {periodType && filingRecord && canWrite && buildFiledAmounts(data.rutor).net > 0 && (
@@ -1529,24 +1581,31 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
       {/* Skatteverket integration panel for the no-data states (fetch error,
           empty period): with data it lives inside steg 4. Hidden while the
           räkenskapsår for helårsmoms is unresolved, so its actions can never
-          target an unconfirmed period. */}
-      {!awaitingFiscalPeriod && !data && (
-        <SkatteverketPanel
-          periodType={periodType}
-          year={year}
-          period={period}
-          fiscalPeriodId={isYearly ? fiscalPeriodId : undefined}
-          fiscalYearEnd={
-            isYearly && fiscalPeriodEnd
-              ? {
-                  year: Number(fiscalPeriodEnd.slice(0, 4)),
-                  month: Number(fiscalPeriodEnd.slice(5, 7)),
-                }
-              : undefined
-          }
-          hasData={data !== null}
-          localBlocked={checksBlocked}
-        />
+          target an unconfirmed period. Out of the stepper the row needs its
+          own label, which the panel no longer draws. */}
+      {!awaitingFiscalPeriod && !data && SKATTEVERKET_DIRECT_FILING && (
+        <section className="space-y-3">
+          <h3 className="px-1 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Skatteverket
+          </h3>
+          <SkatteverketPanel
+            periodType={periodType}
+            year={year}
+            period={period}
+            fiscalPeriodId={isYearly ? fiscalPeriodId : undefined}
+            fiscalYearEnd={
+              isYearly && fiscalPeriodEnd
+                ? {
+                    year: Number(fiscalPeriodEnd.slice(0, 4)),
+                    month: Number(fiscalPeriodEnd.slice(5, 7)),
+                  }
+                : undefined
+            }
+            hasData={data !== null}
+            localBlocked={checksBlocked}
+            onFilingConfirmed={() => setFilingsRefreshKey((k) => k + 1)}
+          />
+        </section>
       )}
     </div>
     </VatDrillContext.Provider>

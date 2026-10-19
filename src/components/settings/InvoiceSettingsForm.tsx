@@ -3,7 +3,6 @@
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Switch } from '@/components/ui/switch'
-import { AttnLine } from '@/components/ui/attn-line'
 import {
   SettingsGroup,
   SettingsInput,
@@ -11,7 +10,6 @@ import {
   SettingsRow,
   SettingsTextarea,
 } from '@/components/settings/SettingsRows'
-import { REMINDERS_SENDING_ENABLED } from '@/lib/invoices/reminders-enabled'
 import type { CompanySettings } from '@/types'
 
 interface InvoiceSettingsFormProps {
@@ -114,17 +112,14 @@ export function InvoiceSettingsForm({ settings, afterInvoiceSettings }: InvoiceS
 
 /**
  * Automatiska påminnelser: whether reminders go out and after how many days.
- * Lives on Försäljning → Utskick with the reminder texts since 2026-09-24;
- * the host wraps it in its own SettingsFormWrapper.
+ * Lives on Försäljning → Utskick since 2026-09-24; the host wraps it in its
+ * own SettingsFormWrapper and mounts it only while REMINDERS_SENDING_ENABLED.
  */
 export function InvoiceReminderSettingsForm({ settings }: { settings: CompanySettings }) {
   const t = useTranslations('settings_invoice_form')
   const [sendReminders, setSendReminders] = useState(settings.send_invoice_reminders ?? true)
   return (
     <SettingsGroup label={t('reminder_days_heading')} help={t('reminder_days_help')}>
-        {!REMINDERS_SENDING_ENABLED && (
-          <AttnLine className="px-1 pt-2">{t('sending_disabled_notice')}</AttnLine>
-        )}
         <SettingsRow
           label={t('send_reminders_label')}
           htmlFor="send_invoice_reminders"

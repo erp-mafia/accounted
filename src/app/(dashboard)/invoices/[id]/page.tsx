@@ -21,6 +21,7 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { getVatTreatmentLabel } from '@/lib/invoices/vat-rules'
+import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import { invoiceDisplayNumber, isTextLikeLine } from '@/lib/invoices/display'
 import { getDisplayTotal, getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
 import { workTypeLabel } from '@/lib/bookkeeping/rot-rut-rules'
@@ -185,6 +186,32 @@ const accrualMonth = (date: string): string => date.slice(0, 7)
 // actions next to plain values, the hairline underline darkening on hover.
 const ROW_ACTION_CLASS =
   'underline decoration-border underline-offset-4 transition-colors duration-150 hover:decoration-foreground disabled:opacity-50'
+
+type CorrectionHandle = { open: () => void; isLoading: boolean }
+
+/**
+ * The header menu's "Skapa ändringsverifikation" item needs the opener of
+ * CorrectionAffordance, and the affordance (it owns the correction dialog)
+ * must outlive the menu content, which unmounts on select. So it wraps the
+ * whole menu when there is a voucher to correct, and is a pass-through
+ * otherwise.
+ */
+function WithCorrection({
+  journalEntryId,
+  onCorrected,
+  children,
+}: {
+  journalEntryId: string | null
+  onCorrected: () => void
+  children: (correction: CorrectionHandle | null) => React.ReactNode
+}) {
+  if (!journalEntryId) return <>{children(null)}</>
+  return (
+    <CorrectionAffordance journalEntryId={journalEntryId} onCorrected={onCorrected}>
+      {(correction) => children(correction)}
+    </CorrectionAffordance>
+  )
+}
 
 export default function InvoiceDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { canWrite } = useCanWrite()
@@ -1925,7 +1952,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const collectionRemindersAside: string | null = collectionAside
     ? tCollections(collectionAside.key, collectionAside.key === 'reminders_batch' ? { days: collectionAside.days } : {})
     : null
+  // Correcting the invoice's voucher (storno + rättelse) is a rare repair,
+  // so it lives in the header menu rather than as a line in Detaljer.
+  const showCorrectionItem = canWrite && !!invoice.journal_entry_id
   const hasMenu =
+    showCorrectionItem ||
     showCollectionItem ||
     canCreateOrder ||
     (quoteDecisionInMenu && canDecideQuote) ||
@@ -2159,204 +2190,217 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           )}
 
           {hasMenu && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={tCommon('more_options')}
-                  loading={isDownloading || isDownloadingPeppol || isPreparingPeppol || isCreatingOrder}
-                >
-                  {isDownloading || isDownloadingPeppol || isPreparingPeppol || isCreatingOrder ? null : (
-                    <MoreHorizontal className="h-4 w-4" />
-                  )}
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-[240px]">
-                {/* An unsent quote's decisions (crm#1202): reachable for a yes
-                    given another way, confirmed before anything is recorded. */}
-                {quoteDecisionInMenu && canDecideQuote && quoteStatus !== 'accepted' && (
-                  <DropdownMenuItem
-                    onSelect={acceptQuote}
-                    disabled={isDeciding || isConverting || !canWrite}
-                  >
-                    <CheckCircle className="h-4 w-4" />
-                    {t('quote_accept')}
-                  </DropdownMenuItem>
-                )}
-                {quoteDecisionInMenu && canConvertQuote && (
-                  <DropdownMenuItem
-                    onSelect={startQuoteConvert}
-                    disabled={isDeciding || isConverting || !canWrite}
-                  >
-                    <FileText className="h-4 w-4" />
-                    {t('quote_create_invoice')}
-                  </DropdownMenuItem>
-                )}
-                {quoteDecisionInMenu && canDecideQuote && !canCreateOrder && <DropdownMenuSeparator />}
-                {canCreateOrder && (
-                  <>
-                    <DropdownMenuItem
-                      onSelect={() => void (isQuote ? startQuoteOrder() : convertToOrder())}
-                      disabled={isCreatingOrder || isConverting || isDeciding || !canWrite}
+            <WithCorrection
+              journalEntryId={showCorrectionItem ? (invoice.journal_entry_id ?? null) : null}
+              onCorrected={fetchInvoice}
+            >
+              {(correction) => (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={tCommon('more_options')}
+                      loading={isDownloading || isDownloadingPeppol || isPreparingPeppol || isCreatingOrder || correction?.isLoading}
                     >
-                      <ClipboardList className="h-4 w-4" />
-                      {t('create_order')}
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                  </>
-                )}
-                {canPartInvoiceQuote && (
-                  <>
-                    <DropdownMenuItem
-                      onSelect={() => setShowQuotePartDialog(true)}
-                      disabled={isConverting || isDeciding || !canWrite}
-                    >
-                      <FileText className="h-4 w-4" />
-                      {t('quote_create_part')}
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                  </>
-                )}
-                {offersOwnPdf && (
-                  <DropdownMenuItem onSelect={() => void downloadPDF()} disabled={isDownloading}>
-                    <Download className="h-4 w-4" />
-                    {t('download_pdf')}
-                  </DropdownMenuItem>
-                )}
-                {isCopyable && canWrite && (
-                  <DropdownMenuItem asChild>
-                    <Link href={newEditorHref({ copyFromId: invoice.id })}>
-                      <Copy className="h-4 w-4" />
-                      {t('copy_invoice')}
-                    </Link>
-                  </DropdownMenuItem>
-                )}
-                {/* The header offers "Skicka via e-post" as the next step; the
-                    manual path stays reachable for invoices sent another way. */}
-                {showManualSendAlternative && (
-                  <DropdownMenuItem
-                    onSelect={() => openSendDialog('manual')}
-                    disabled={!canWrite}
-                    className="items-start"
-                  >
-                    <Send className="mt-0.5 h-4 w-4" />
-                    <span className="min-w-0">
-                      <span className="block">{t(booksOnIssue ? 'mark_sent_and_book' : 'mark_as_sent')}</span>
-                      <span className="block text-[11px] leading-snug text-muted-foreground">
-                        {t('send_manual_hint_with_email')}
-                      </span>
-                    </span>
-                  </DropdownMenuItem>
-                )}
-                {canCreateCreditNote && (
-                  <DropdownMenuItem asChild>
-                    <Link href={`/invoices/${invoice.id}/credit`}>
-                      <ReceiptText className="h-4 w-4" />
-                      {t('create_credit_note')}
-                    </Link>
-                  </DropdownMenuItem>
-                )}
-                {showCollectionItem && (
-                  <DropdownMenuItem onSelect={() => setShowCollectionDialog(true)} disabled={!canWrite}>
-                    <Gavel className="h-4 w-4" />
-                    {tCollections('menu_send')}
-                  </DropdownMenuItem>
-                )}
-                {showPeppolActions && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      onSelect={() => void downloadPeppolXml()}
-                      disabled={isDownloadingPeppol || !invoice.invoice_number}
-                    >
-                      <FileText className="h-4 w-4" />
-                      {t('download_peppol_xml')}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onSelect={() => void preparePeppolDelivery()}
-                      disabled={isPreparingPeppol || !canWrite || !invoice.invoice_number}
-                    >
-                      <FileCheck2 className="h-4 w-4" />
-                      {t('prepare_peppol_delivery')}
-                    </DropdownMenuItem>
-                    {peppolTransportAvailable && peppolSendGranted && peppolSendsLeft ? (
+                      {isDownloading || isDownloadingPeppol || isPreparingPeppol || isCreatingOrder || correction?.isLoading ? null : (
+                        <MoreHorizontal className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="min-w-[240px]">
+                    {/* An unsent quote's decisions (crm#1202): reachable for a yes
+                        given another way, confirmed before anything is recorded. */}
+                    {quoteDecisionInMenu && canDecideQuote && quoteStatus !== 'accepted' && (
                       <DropdownMenuItem
-                        onSelect={() => setShowPeppolSendDialog(true)}
-                        disabled={isSendingPeppol || !canWrite || !canSendPeppol}
+                        onSelect={acceptQuote}
+                        disabled={isDeciding || isConverting || !canWrite}
                       >
-                        <Send className="h-4 w-4" />
-                        {t('send_via_peppol')}
+                        <CheckCircle className="h-4 w-4" />
+                        {t('quote_accept')}
                       </DropdownMenuItem>
-                    ) : peppolTransportAvailable ? (
-                      <DropdownMenuItem disabled className="items-start">
+                    )}
+                    {quoteDecisionInMenu && canConvertQuote && (
+                      <DropdownMenuItem
+                        onSelect={startQuoteConvert}
+                        disabled={isDeciding || isConverting || !canWrite}
+                      >
+                        <FileText className="h-4 w-4" />
+                        {t('quote_create_invoice')}
+                      </DropdownMenuItem>
+                    )}
+                    {quoteDecisionInMenu && canDecideQuote && !canCreateOrder && <DropdownMenuSeparator />}
+                    {canCreateOrder && (
+                      <>
+                        <DropdownMenuItem
+                          onSelect={() => void (isQuote ? startQuoteOrder() : convertToOrder())}
+                          disabled={isCreatingOrder || isConverting || isDeciding || !canWrite}
+                        >
+                          <ClipboardList className="h-4 w-4" />
+                          {t('create_order')}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                      </>
+                    )}
+                    {canPartInvoiceQuote && (
+                      <>
+                        <DropdownMenuItem
+                          onSelect={() => setShowQuotePartDialog(true)}
+                          disabled={isConverting || isDeciding || !canWrite}
+                        >
+                          <FileText className="h-4 w-4" />
+                          {t('quote_create_part')}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                      </>
+                    )}
+                    {offersOwnPdf && (
+                      <DropdownMenuItem onSelect={() => void downloadPDF()} disabled={isDownloading}>
+                        <Download className="h-4 w-4" />
+                        {t('download_pdf')}
+                      </DropdownMenuItem>
+                    )}
+                    {isCopyable && canWrite && (
+                      <DropdownMenuItem asChild>
+                        <Link href={newEditorHref({ copyFromId: invoice.id })}>
+                          <Copy className="h-4 w-4" />
+                          {t('copy_invoice')}
+                        </Link>
+                      </DropdownMenuItem>
+                    )}
+                    {/* The header offers "Skicka via e-post" as the next step; the
+                        manual path stays reachable for invoices sent another way. */}
+                    {showManualSendAlternative && (
+                      <DropdownMenuItem
+                        onSelect={() => openSendDialog('manual')}
+                        disabled={!canWrite}
+                        className="items-start"
+                      >
                         <Send className="mt-0.5 h-4 w-4" />
                         <span className="min-w-0">
-                          <span className="block">{t('send_via_peppol')}</span>
+                          <span className="block">{t(booksOnIssue ? 'mark_sent_and_book' : 'mark_as_sent')}</span>
                           <span className="block text-[11px] leading-snug text-muted-foreground">
-                            {peppolSendGranted ? t('peppol_send_limit_reached') : t('peppol_access_required')}
-                          </span>
-                        </span>
-                      </DropdownMenuItem>
-                    ) : (
-                      <DropdownMenuItem disabled className="items-start">
-                        <Send className="mt-0.5 h-4 w-4" />
-                        <span className="min-w-0">
-                          <span className="block">{t('send_via_peppol')}</span>
-                          <span className="block text-[11px] leading-snug text-muted-foreground">
-                            {t('peppol_provider_required')}
+                            {t('send_manual_hint_with_email')}
                           </span>
                         </span>
                       </DropdownMenuItem>
                     )}
-                  </>
-                )}
-                {canDecideQuote && quoteStatus !== 'declined' && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      onSelect={() => void setQuoteDecision('declined')}
-                      disabled={isDeciding || isConverting || !canWrite}
-                    >
-                      <XCircle className="h-4 w-4" />
-                      {t('quote_decline')}
-                    </DropdownMenuItem>
-                  </>
-                )}
-                {showDestructive && (
-                  <>
-                    <DropdownMenuSeparator />
-                    {isProforma || isQuote ? (
-                      <DropdownMenuItem
-                        // A cancelled quote is done with: back to Offerter,
-                        // the way deleting a draft returns to its list.
-                        onSelect={() =>
-                          void updateStatus('cancelled').then((ok) => {
-                            if (ok && isQuote) router.push('/quotes')
-                          })
-                        }
-                        disabled={isUpdating || !canWrite}
-                        className="text-destructive focus:text-destructive"
-                      >
-                        <XCircle className="h-4 w-4" />
-                        {t('cancel_action')}
-                      </DropdownMenuItem>
-                    ) : (
-                      <DropdownMenuItem
-                        onSelect={() => setShowDeleteDialog(true)}
-                        disabled={isDeleting || !canWrite}
-                        className="text-destructive focus:text-destructive"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                        {isUnnumberedDraft
-                          ? t('remove_action')
-                          : t(isCreditNote ? 'remove_credit_draft' : 'delete_draft')}
+                    {canCreateCreditNote && (
+                      <DropdownMenuItem asChild>
+                        <Link href={`/invoices/${invoice.id}/credit`}>
+                          <ReceiptText className="h-4 w-4" />
+                          {t('create_credit_note')}
+                        </Link>
                       </DropdownMenuItem>
                     )}
-                  </>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
+                    {correction && (
+                      <DropdownMenuItem onSelect={correction.open} disabled={correction.isLoading}>
+                        <Pencil className="h-4 w-4" />
+                        {correction.isLoading ? t('correction_loading') : t('correction_menu_item')}
+                      </DropdownMenuItem>
+                    )}
+                    {showCollectionItem && (
+                      <DropdownMenuItem onSelect={() => setShowCollectionDialog(true)} disabled={!canWrite}>
+                        <Gavel className="h-4 w-4" />
+                        {tCollections('menu_send')}
+                      </DropdownMenuItem>
+                    )}
+                    {showPeppolActions && (
+                      <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          onSelect={() => void downloadPeppolXml()}
+                          disabled={isDownloadingPeppol || !invoice.invoice_number}
+                        >
+                          <FileText className="h-4 w-4" />
+                          {t('download_peppol_xml')}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onSelect={() => void preparePeppolDelivery()}
+                          disabled={isPreparingPeppol || !canWrite || !invoice.invoice_number}
+                        >
+                          <FileCheck2 className="h-4 w-4" />
+                          {t('prepare_peppol_delivery')}
+                        </DropdownMenuItem>
+                        {peppolTransportAvailable && peppolSendGranted && peppolSendsLeft ? (
+                          <DropdownMenuItem
+                            onSelect={() => setShowPeppolSendDialog(true)}
+                            disabled={isSendingPeppol || !canWrite || !canSendPeppol}
+                          >
+                            <Send className="h-4 w-4" />
+                            {t('send_via_peppol')}
+                          </DropdownMenuItem>
+                        ) : peppolTransportAvailable ? (
+                          <DropdownMenuItem disabled className="items-start">
+                            <Send className="mt-0.5 h-4 w-4" />
+                            <span className="min-w-0">
+                              <span className="block">{t('send_via_peppol')}</span>
+                              <span className="block text-[11px] leading-snug text-muted-foreground">
+                                {peppolSendGranted ? t('peppol_send_limit_reached') : t('peppol_access_required')}
+                              </span>
+                            </span>
+                          </DropdownMenuItem>
+                        ) : (
+                          <DropdownMenuItem disabled className="items-start">
+                            <Send className="mt-0.5 h-4 w-4" />
+                            <span className="min-w-0">
+                              <span className="block">{t('send_via_peppol')}</span>
+                              <span className="block text-[11px] leading-snug text-muted-foreground">
+                                {t('peppol_provider_required')}
+                              </span>
+                            </span>
+                          </DropdownMenuItem>
+                        )}
+                      </>
+                    )}
+                    {canDecideQuote && quoteStatus !== 'declined' && (
+                      <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          onSelect={() => void setQuoteDecision('declined')}
+                          disabled={isDeciding || isConverting || !canWrite}
+                        >
+                          <XCircle className="h-4 w-4" />
+                          {t('quote_decline')}
+                        </DropdownMenuItem>
+                      </>
+                    )}
+                    {showDestructive && (
+                      <>
+                        <DropdownMenuSeparator />
+                        {isProforma || isQuote ? (
+                          <DropdownMenuItem
+                            // A cancelled quote is done with: back to Offerter,
+                            // the way deleting a draft returns to its list.
+                            onSelect={() =>
+                              void updateStatus('cancelled').then((ok) => {
+                                if (ok && isQuote) router.push('/quotes')
+                              })
+                            }
+                            disabled={isUpdating || !canWrite}
+                            className="text-destructive focus:text-destructive"
+                          >
+                            <XCircle className="h-4 w-4" />
+                            {t('cancel_action')}
+                          </DropdownMenuItem>
+                        ) : (
+                          <DropdownMenuItem
+                            onSelect={() => setShowDeleteDialog(true)}
+                            disabled={isDeleting || !canWrite}
+                            className="text-destructive focus:text-destructive"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            {isUnnumberedDraft
+                              ? t('remove_action')
+                              : t(isCreditNote ? 'remove_credit_draft' : 'delete_draft')}
+                          </DropdownMenuItem>
+                        )}
+                      </>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+            </WithCorrection>
           )}
         </div>
       </div>
@@ -2491,8 +2535,14 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               <span className="tabular-nums">{formatDate(invoice.due_date)}</span>
             </DefRow>
           )}
-          <DefRow label={t('currency_label')}>{invoice.currency}</DefRow>
-          <DefRow label={t('vat_treatment_label')}>{getVatTreatmentLabel(invoice.vat_treatment)}</DefRow>
+          {/* SEK and domestic 25 % are the norm; the rows show only when the
+              invoice deviates (the totals block carries the VAT either way). */}
+          {!isLedgerCurrency(invoice.currency) && (
+            <DefRow label={t('currency_label')}>{invoice.currency}</DefRow>
+          )}
+          {invoice.vat_treatment && invoice.vat_treatment !== 'standard_25' && (
+            <DefRow label={t('vat_treatment_label')}>{getVatTreatmentLabel(invoice.vat_treatment)}</DefRow>
+          )}
           {invoice.our_reference && (
             <DefRow label={t('our_reference_label')}>
               {invoice.our_reference.split(',').map((ref) => ref.trim()).join(', ')}
@@ -2599,28 +2649,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           )}
           {invoice.journal_entry_id && (
             <DefRow label={t('bookkeeping_label')}>
-              <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                <Link href={`/bookkeeping/${invoice.journal_entry_id}`} className={ROW_ACTION_CLASS}>
-                  {t('view_voucher')}
-                </Link>
-                {canWrite && (
-                  <CorrectionAffordance
-                    journalEntryId={invoice.journal_entry_id}
-                    onCorrected={fetchInvoice}
-                  >
-                    {({ open, isLoading }) => (
-                      <button
-                        type="button"
-                        onClick={open}
-                        disabled={isLoading}
-                        className="text-xs text-muted-foreground hover:text-foreground hover:underline disabled:opacity-50"
-                      >
-                        {isLoading ? t('correction_loading') : t('correction_prompt')}
-                      </button>
-                    )}
-                  </CorrectionAffordance>
-                )}
-              </span>
+              <Link href={`/bookkeeping/${invoice.journal_entry_id}`} className={ROW_ACTION_CLASS}>
+                {t('view_voucher')}
+              </Link>
             </DefRow>
           )}
 
@@ -2988,7 +3019,13 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         />
       )}
 
-      {(invoice.status === 'sent' || invoice.status === 'overdue' || reminders.length > 0) && (
+      {/* Only when there is something to say: reminders were sent, or the
+          invoice is owed and automatic reminders actually run (product
+          switch and company toggle, remindersActiveFor) or collections
+          speaks for them. A card that only says "avstängda" is noise. */}
+      {(reminders.length > 0 ||
+        ((invoice.status === 'sent' || invoice.status === 'overdue') &&
+          (autoRemindersEnabled === true || collectionRemindersAside !== null))) && (
         <DetailSection
           kicker={t('reminders_card_title')}
           aside={

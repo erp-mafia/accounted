@@ -10,12 +10,14 @@ import { SettingsLoadError } from '@/components/settings/SettingsLoadError'
 import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSkeleton'
 import { SettingsSectionHeader } from '@/components/settings/SettingsRows'
 import { useSettings } from '@/components/settings/useSettings'
+import { REMINDERS_SENDING_ENABLED } from '@/lib/invoices/reminders-enabled'
 import type { CompanySettings } from '@/types'
 
 /**
  * Försäljning → Utskick: who invoice mail comes from, where replies and copies
- * go, what the invoice and reminder mails say, and when reminders go out.
- * Split out of Fakturering on 2026-09-24, which had grown to ten blocks.
+ * go, what the invoice mails say, and (while reminder sending exists) when
+ * reminders go out. Split out of Fakturering on 2026-09-24, which had grown to
+ * ten blocks.
  */
 export function SendingSettingsContent() {
   const tNav = useTranslations('settings_nav')
@@ -55,9 +57,15 @@ export function SendingSettingsContent() {
       {/* Invoice email texts: autosaves on blur */}
       <InvoiceEmailTextsSettings settings={settings} onUpdate={updateSettings} />
 
-      <SettingsFormWrapper onSave={handleSave}>
-        <InvoiceReminderSettingsForm settings={settings} />
-      </SettingsFormWrapper>
+      {/* The reminder schedule only renders while automatic sending exists:
+          with it switched off product-wide, a switch and three day fields
+          that change nothing are noise. The saved values stay untouched in
+          company_settings, since the form (and its save) is not mounted. */}
+      {REMINDERS_SENDING_ENABLED && (
+        <SettingsFormWrapper onSave={handleSave}>
+          <InvoiceReminderSettingsForm settings={settings} />
+        </SettingsFormWrapper>
+      )}
     </div>
   )
 }
