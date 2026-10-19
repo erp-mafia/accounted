@@ -1,0 +1,1 @@
+[2026-10-18] Milersättning keeps Ny resa as the one primary; Bokför milersättning, Skicka till lön and Exportera CSV move into a ⋯ menu with their gates unchanged (a split button stays the alternative if Bokför needs to be more discoverable).

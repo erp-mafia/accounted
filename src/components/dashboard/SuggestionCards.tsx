@@ -3,9 +3,11 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { Lightbulb } from 'lucide-react'
+import { Lightbulb, MoreHorizontal } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/info-tooltip'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { OpenSuggestion } from '@/lib/suggestions/types'
@@ -15,7 +17,8 @@ import type { OpenSuggestion } from '@/lib/suggestions/types'
  * ranked; lib/suggestions/list.ts), the same records the customer's agent
  * finds in its briefing. The question and the reason are the record's own
  * plain Swedish, as every staged operation's title is; the chrome around
- * them is translated.
+ * them is translated. Each card is one line: the question with the reason
+ * as its hover hint, Ja, and a menu with the two ways to say no.
  *
  * The three answers go through the doors every staged operation has, so an
  * answer here and an answer in chat are the same decision:
@@ -48,6 +51,7 @@ export function SuggestionCards({
   onResolved: (suggestion: OpenSuggestion) => void
 }) {
   const t = useTranslations('dashboard')
+  const tCommon = useTranslations('common')
   const router = useRouter()
   const { toast } = useToast()
   const [busy, setBusy] = useState<{ id: string; answer: Answer } | null>(null)
@@ -96,45 +100,65 @@ export function SuggestionCards({
     <div>
       {suggestions.map((s) => {
         const working = busy?.id === s.suggestion_id
+        const titleId = `suggestion-${s.suggestion_id}`
         return (
-          <div key={s.suggestion_id} className="flex items-start gap-3 border-b border-border px-1 py-3.5">
-            <span className="mt-px w-[18px] shrink-0 text-muted-foreground" aria-hidden>
+          <div
+            key={s.suggestion_id}
+            role="group"
+            aria-labelledby={titleId}
+            className="flex items-center gap-3 border-b border-border px-1 py-3.5"
+          >
+            <span className="w-[18px] shrink-0 text-muted-foreground" aria-hidden>
               <Lightbulb className="h-[15px] w-[15px]" />
             </span>
-            <div className="flex min-w-0 flex-1 flex-col gap-3 md:flex-row md:items-start md:justify-between md:gap-4">
-              <div className="min-w-0">
-                <p className="text-[13px]">{s.title}</p>
-                {s.reason && <p className="mt-1 text-xs text-muted-foreground">{s.reason}</p>}
-              </div>
-              <div className="flex shrink-0 flex-wrap items-center gap-2" role="group" aria-label={s.title}>
+            <p id={titleId} className="min-w-0 flex-1 text-[13px]">
+              {s.reason ? (
+                // The reason is the question's hover (and focus) hint. A
+                // tooltip, not a title attribute: the reason names the
+                // counterparty, and replays record attributes unmasked.
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span
+                      tabIndex={0}
+                      className="rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                    >
+                      {s.title}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" align="start" className="max-w-sm" data-ph-mask="">
+                    {s.reason}
+                  </TooltipContent>
+                </Tooltip>
+              ) : (
+                s.title
+              )}
+            </p>
+            <Button
+              size="sm"
+              className="shrink-0"
+              loading={working && busy?.answer === 'yes'}
+              disabled={working}
+              onClick={() => (s.operation_type === 'create_grant' ? setConfirming(s) : void answer(s, 'yes'))}
+            >
+              {t('suggestion_yes')}
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
                 <Button
-                  size="sm"
-                  loading={working && busy?.answer === 'yes'}
-                  disabled={working}
-                  onClick={() => (s.operation_type === 'create_grant' ? setConfirming(s) : void answer(s, 'yes'))}
-                >
-                  {t('suggestion_yes')}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  loading={working && busy?.answer === 'not_now'}
-                  disabled={working}
-                  onClick={() => void answer(s, 'not_now')}
-                >
-                  {t('suggestion_not_now')}
-                </Button>
-                <Button
-                  size="sm"
                   variant="ghost"
-                  loading={working && busy?.answer === 'never'}
+                  size="icon-sm"
+                  className="shrink-0 text-muted-foreground hover:text-foreground"
                   disabled={working}
-                  onClick={() => void answer(s, 'never')}
+                  aria-label={tCommon('more_options')}
                 >
-                  {t('suggestion_never')}
+                  <MoreHorizontal className="h-4 w-4" />
                 </Button>
-              </div>
-            </div>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => void answer(s, 'not_now')}>{t('suggestion_not_now')}</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => void answer(s, 'never')}>{t('suggestion_never')}</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         )
       })}

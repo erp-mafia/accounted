@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { AttnLine } from '@/components/ui/attn-line'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { ClipboardCheck } from 'lucide-react'
 
 interface ConfirmationDialogProps {
@@ -19,6 +20,9 @@ interface ConfirmationDialogProps {
   onConfirm: () => void
   isSubmitting: boolean
   title: string
+  /** Help behind a "?" beside the title (convention 7): the why and the
+   *  how, so the body can state one fact. */
+  help?: ReactNode
   warningText?: string
   confirmLabel?: string
   extraActions?: ReactNode
@@ -38,6 +42,7 @@ export function ConfirmationDialog({
   onConfirm,
   isSubmitting,
   title,
+  help,
   // No default warning: an accounting-immutability sentence used to be baked
   // in here, which put it into dialogs whose authors never asked for one.
   // Callers that commit a voucher directly pass their own warningText.
@@ -68,7 +73,10 @@ export function ConfirmationDialog({
                   object being acted on (convention 10), so the title is user
                   data in session replays. The description is a static
                   sentence and stays readable. */}
-              <DialogTitle data-ph-mask="" className="text-lg sm:text-xl">{title}</DialogTitle>
+              <div className="flex items-center gap-2">
+                <DialogTitle data-ph-mask="" className="text-lg sm:text-xl">{title}</DialogTitle>
+                {help ? <HelpPopover className="shrink-0">{help}</HelpPopover> : null}
+              </div>
               <DialogDescription>Granska uppgifterna innan du bekräftar</DialogDescription>
             </div>
           </div>

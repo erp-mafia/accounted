@@ -5,6 +5,7 @@ import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { useTranslations, useLocale } from 'next-intl'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { useToast } from '@/components/ui/use-toast'
 import { AlertTriangle } from 'lucide-react'
 import { formatCurrency, formatDate } from '@/lib/utils'
@@ -192,19 +193,25 @@ export default function DuplicateBookingDialog({
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{t('dialog_duplicate_title')}</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-4">
-          {/* Sibling candidates get the "vill du matcha i stället?" copy: the
-              generic body's "en annan transaktion eller en befintlig
+          {/* The body states one fact; what to do about it sits behind the
+              "?" (convention 7). Sibling candidates get the "matcha hellre"
+              help: the generic "en annan transaktion eller en befintlig
               verifikation" hedge reads as noise once the twin is known. The
               ignore hint renders only when the action itself does (callers
               without onIgnored, e.g. the manual booking form and the bulk
               dialog, must not have copy pointing at a button that is not
               there). */}
+          <div className="flex items-center gap-2">
+            <DialogTitle>{t('dialog_duplicate_title')}</DialogTitle>
+            <HelpPopover className="shrink-0">
+              {isSiblingCandidate ? t('dialog_duplicate_help_sibling') : t('dialog_duplicate_help')}
+              {canIgnore && <> {t('dialog_duplicate_ignore_hint')}</>}
+            </HelpPopover>
+          </div>
+        </DialogHeader>
+        <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
             {isSiblingCandidate ? t('dialog_duplicate_body_sibling') : t('dialog_duplicate_body')}
-            {canIgnore && <> {t('dialog_duplicate_ignore_hint')}</>}
           </p>
           {candidate && (
             <div className="space-y-1 rounded-lg border bg-muted/30 p-3">

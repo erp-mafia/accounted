@@ -1,0 +1,1 @@
+[2026-10-18] CorrectionAffordance must wrap a row menu, never sit inside DropdownMenuContent: the content unmounts on select and the correction dialog never opened from Transaktioner history (fixed with a WithCorrection wrapper, regression test added).

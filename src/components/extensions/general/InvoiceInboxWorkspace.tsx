@@ -1946,6 +1946,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               accountingMethod={accountingMethod}
               arkivQuestion={selected.document_id ? questionForDocument(arkivQuestions, selected.document_id) : null}
               onArkivMore={(q) => setArkivDecision(decisionDocumentFor(q))}
+              onArkivAnswered={() => void fetchArkivQuestions()}
               onDelete={() => handleDelete(selected.id)}
               onBookDirect={() => setBookDirectOpen(true)}
               onCreateSupplierInvoice={() => setCreateSupplierInvoiceOpen(true)}
@@ -2883,6 +2884,7 @@ function FieldsRail({
   onBookedLocally,
   arkivQuestion = null,
   onArkivMore,
+  onArkivAnswered,
 }: {
   item: InboxItem
   docMime: string | null
@@ -2890,6 +2892,8 @@ function FieldsRail({
   /** The question Arkiv has about this document, asked at the top of the rail. */
   arkivQuestion?: ArkivQuestion | null
   onArkivMore?: (question: ArkivQuestion) => void
+  /** The rail question was answered and its card has faded out: re-read the questions. */
+  onArkivAnswered?: () => void
   onDelete: () => void
   onBookDirect: () => void
   onCreateSupplierInvoice: () => void
@@ -3021,7 +3025,7 @@ function FieldsRail({
       {arkivQuestion && (
         <div className="border-b px-4 pb-1 pt-2">
           <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/80">{tArkivRail('question_rail_title')}</div>
-          <QuestionCard question={arkivQuestion} compact onMore={onArkivMore} />
+          <QuestionCard key={arkivQuestion.id} question={arkivQuestion} compact onMore={onArkivMore} onAnswered={onArkivAnswered} />
         </div>
       )}
       {/* Where the item came from: the provenance line from its arrivals

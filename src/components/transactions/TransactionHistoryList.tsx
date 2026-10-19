@@ -47,6 +47,31 @@ type HistoryRow =
   | { source: 'bank'; date: string; data: TransactionWithInvoice }
   | { source: 'skatteverket'; date: string; data: SkattekontoTransactionWithSuggestion }
 
+type CorrectionHandle = { open: () => void; isLoading: boolean }
+
+/**
+ * The row menu's "Skapa ändringsverifikation" item needs the opener of
+ * CorrectionAffordance, and the affordance (it owns the correction dialog)
+ * must outlive the menu content, which unmounts on select: rendered inside
+ * the menu, the fetch resolved into an unmounted component and the dialog
+ * never opened. So it wraps the whole menu when there is a voucher to
+ * correct, and is a pass-through otherwise.
+ */
+function WithCorrection({
+  journalEntryId,
+  children,
+}: {
+  journalEntryId: string | null
+  children: (correction: CorrectionHandle | null) => React.ReactNode
+}) {
+  if (!journalEntryId) return <>{children(null)}</>
+  return (
+    <CorrectionAffordance journalEntryId={journalEntryId}>
+      {(correction) => children(correction)}
+    </CorrectionAffordance>
+  )
+}
+
 interface TransactionHistoryListProps {
   transactions: TransactionWithInvoice[]
   skvRows?: SkattekontoTransactionWithSuggestion[]
@@ -84,7 +109,8 @@ interface TransactionHistoryListProps {
 /**
  * "Alla" view: every transaction (booked and not), rendered in the same
  * dry-table language as the inbox so the two modes read as one page.
- * Bokförd is the normal state (muted text); Ej bokförd is the exception chip.
+ * Bokförd is the normal state (muted text); an unbooked row shows its
+ * action (Bokför, Matcha) and nothing else, one signal per row.
  */
 export default function TransactionHistoryList({
   transactions,
@@ -300,6 +326,7 @@ function BankHistoryRow({
   // Same affordance as the inbox card: an unbooked row may need to be linked
   // to an already-booked voucher (e.g. the other leg of a transfer).
   const showMatchVoucherItem = canWrite && !isBooked && !!onOpenMatchVoucher
+  const correctionEntryId = isBooked && canWrite ? primaryEntryId : null
   const showOverflowMenu =
     hasInvoiceMatch || (canDelete && !!onDelete) || (isBooked && canWrite) || showAttachItem || showDetachItem || showMatchVoucherItem
 
@@ -412,85 +439,82 @@ function BankHistoryRow({
           ) : isPrivate ? (
             <span className="text-muted-foreground">{t('private_badge')}</span>
           ) : (
-            <>
-              <Badge variant="secondary" className="font-normal">
-                {t('not_posted')}
-              </Badge>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => onOpenCategoryDialog(transaction)}
-              >
-                {t('book')}
-              </Button>
-            </>
+            // One signal per row: the Bokför button already says the row is
+            // not booked, so no "Ej bokförd" chip beside it.
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onOpenCategoryDialog(transaction)}
+            >
+              {t('book')}
+            </Button>
           )}
           {showOverflowMenu && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                {/* mr-2 tucks the button in so the dots glyph sits under
-                    the middle of the STATUS header, not at the page edge. */}
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  className={cn('mr-2 text-muted-foreground hover:text-foreground data-[state=open]:opacity-100', HOVER_REVEAL_CLASS)}
-                  aria-label="Fler alternativ"
-                >
-                  <MoreHorizontal className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                {hasInvoiceMatch && (
-                  <DropdownMenuItem onSelect={() => onOpenMatchDialog(transaction)}>
-                    <FileText className="h-3.5 w-3.5" />
-                    {t('possible_match_invoice', {
-                      number: transaction.potential_invoice!.invoice_number ?? '',
-                    })}
-                  </DropdownMenuItem>
-                )}
-                {showMatchVoucherItem && (
-                  <DropdownMenuItem onSelect={() => onOpenMatchVoucher!(transaction)}>
-                    <FileSearch className="h-3.5 w-3.5" />
-                    {t('match_voucher')}
-                  </DropdownMenuItem>
-                )}
-                {/* Attach underlag: available on both booked rows (the route
-                    propagates the doc onto the verifikation) and unbooked. */}
-                {showAttachItem && (
-                  <DropdownMenuItem onSelect={() => onOpenAttachDocument!(transaction)}>
-                    <Paperclip className="h-3.5 w-3.5" />
-                    {t('attach_document')}
-                  </DropdownMenuItem>
-                )}
-                {showDetachItem && (
-                  <DropdownMenuItem onSelect={() => onDetachDocument!(transaction)}>
-                    <Unlink className="h-3.5 w-3.5" />
-                    {tDetach('menu_item')}
-                  </DropdownMenuItem>
-                )}
-                {isBooked && canWrite && primaryEntryId && (
-                  <CorrectionAffordance journalEntryId={primaryEntryId}>
-                    {({ open, isLoading }) => (
-                      <DropdownMenuItem onSelect={() => open()} disabled={isLoading}>
-                        {isLoading ? t('fetching') : t('create_correction')}
+            <WithCorrection journalEntryId={correctionEntryId}>
+              {(correction) => (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    {/* mr-2 tucks the button in so the dots glyph sits under
+                        the middle of the STATUS header, not at the page edge. */}
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      className={cn('mr-2 text-muted-foreground hover:text-foreground data-[state=open]:opacity-100', HOVER_REVEAL_CLASS)}
+                      aria-label="Fler alternativ"
+                    >
+                      <MoreHorizontal className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    {hasInvoiceMatch && (
+                      <DropdownMenuItem onSelect={() => onOpenMatchDialog(transaction)}>
+                        <FileText className="h-3.5 w-3.5" />
+                        {t('possible_match_invoice', {
+                          number: transaction.potential_invoice!.invoice_number ?? '',
+                        })}
                       </DropdownMenuItem>
                     )}
-                  </CorrectionAffordance>
-                )}
-                {canDelete && onDelete && (
-                  <>
-                    {(hasInvoiceMatch || showAttachItem || showDetachItem || showMatchVoucherItem) && <DropdownMenuSeparator />}
-                    <DropdownMenuItem
-                      onSelect={() => onDelete(transaction.id)}
-                      className="text-destructive focus:text-destructive"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                      {t('delete')}
-                    </DropdownMenuItem>
-                  </>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
+                    {showMatchVoucherItem && (
+                      <DropdownMenuItem onSelect={() => onOpenMatchVoucher!(transaction)}>
+                        <FileSearch className="h-3.5 w-3.5" />
+                        {t('match_voucher')}
+                      </DropdownMenuItem>
+                    )}
+                    {/* Attach underlag: available on both booked rows (the route
+                        propagates the doc onto the verifikation) and unbooked. */}
+                    {showAttachItem && (
+                      <DropdownMenuItem onSelect={() => onOpenAttachDocument!(transaction)}>
+                        <Paperclip className="h-3.5 w-3.5" />
+                        {t('attach_document')}
+                      </DropdownMenuItem>
+                    )}
+                    {showDetachItem && (
+                      <DropdownMenuItem onSelect={() => onDetachDocument!(transaction)}>
+                        <Unlink className="h-3.5 w-3.5" />
+                        {tDetach('menu_item')}
+                      </DropdownMenuItem>
+                    )}
+                    {correction && (
+                      <DropdownMenuItem onSelect={() => correction.open()} disabled={correction.isLoading}>
+                        {correction.isLoading ? t('fetching') : t('create_correction')}
+                      </DropdownMenuItem>
+                    )}
+                    {canDelete && onDelete && (
+                      <>
+                        {(hasInvoiceMatch || showAttachItem || showDetachItem || showMatchVoucherItem) && <DropdownMenuSeparator />}
+                        <DropdownMenuItem
+                          onSelect={() => onDelete(transaction.id)}
+                          className="text-destructive focus:text-destructive"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          {t('delete')}
+                        </DropdownMenuItem>
+                      </>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+            </WithCorrection>
           )}
         </span>
       </td>
@@ -555,10 +579,8 @@ function SkattekontoHistoryRow({
               </Link>
             </>
           ) : (
+            // The actions say the row is not booked: no chip beside them.
             <>
-              <Badge variant="secondary" className="font-normal">
-                {t('not_posted')}
-              </Badge>
               {onMatch && (
                 <Button
                   size="sm"

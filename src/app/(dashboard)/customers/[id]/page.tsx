@@ -286,10 +286,12 @@ export default function CustomerDetailPage({
 
       <div className="grid gap-8 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:items-start lg:gap-x-12">
       <div className="space-y-8">
+      {/* Empty optional rows are left out rather than drawn as "–". The
+          e-mail row stays: without it an invoice cannot be e-mailed. */}
       <DetailSection kicker={t('section_contact')}>
-        <DefRow label={t('def_contact_person')}>
-          {customer.contact_person || <DefEmpty />}
-        </DefRow>
+        {customer.contact_person && (
+          <DefRow label={t('def_contact_person')}>{customer.contact_person}</DefRow>
+        )}
         <DefRow label={t('def_email')}>
           {customer.email ? (
             <a href={`mailto:${customer.email}`} className="hover:underline">
@@ -299,11 +301,9 @@ export default function CustomerDetailPage({
             <DefEmpty />
           )}
         </DefRow>
-        <DefRow label={t('def_phone')}>
-          {customer.phone || <DefEmpty />}
-        </DefRow>
-        <DefRow label={t('def_address')}>
-          {customer.address_line1 || customer.city ? (
+        {customer.phone && <DefRow label={t('def_phone')}>{customer.phone}</DefRow>}
+        {(customer.address_line1 || customer.city) && (
+          <DefRow label={t('def_address')}>
             <div>
               {customer.address_line1 && <p>{customer.address_line1}</p>}
               {customer.address_line2 && <p>{customer.address_line2}</p>}
@@ -312,10 +312,8 @@ export default function CustomerDetailPage({
               )}
               {customer.country && <p>{getCountryName(customer.country, errorLocale)}</p>}
             </div>
-          ) : (
-            <DefEmpty />
-          )}
-        </DefRow>
+          </DefRow>
+        )}
         {registryNote}
       </DetailSection>
 
@@ -335,9 +333,9 @@ export default function CustomerDetailPage({
       ) : null}
 
       <DetailSection kicker={t('section_business')}>
-        <DefRow label={t('def_customer_number')}>
-          {customer.customer_number || <DefEmpty />}
-        </DefRow>
+        {customer.customer_number && (
+          <DefRow label={t('def_customer_number')}>{customer.customer_number}</DefRow>
+        )}
         {customer.customer_type !== 'individual' && (
           <DefRow label={t('def_org_number')}>
             {customer.org_number ? (

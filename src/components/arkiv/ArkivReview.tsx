@@ -14,8 +14,9 @@ import { QuestionCard, decisionDocumentFor } from './QuestionCard'
 
 /**
  * Granska (canvas artboard Granska): the questions Arkiv has for a person,
- * each answered with one tap and its consequence stated in place. The
- * decision sheet is one link away for an answer that is not on a chip.
+ * each answered with one tap: the card fades out and a toast says what
+ * happens next. The count sits in the top bar. The decision sheet is one
+ * link away for an answer that is not on a chip.
  */
 export function ArkivReview() {
   const t = useTranslations('arkiv')
@@ -54,13 +55,20 @@ export function ArkivReview() {
     ],
     [t],
   )
-  const left = questions.filter((q) => !answered.has(q.id)).length
+  // An answered card fades out and then reports itself answered: from then on
+  // it is gone from its group and from the count in the top bar.
+  const unanswered = questions.filter((q) => !answered.has(q.id))
+  const left = unanswered.length
 
   const openSheet = (q: ArkivQuestion) => setOpen(decisionDocumentFor(q))
 
   return (
     <div className="space-y-6">
-      <PageHeader title={t('review_title')} help={<HelpPopover>{t('review_help')}</HelpPopover>} />
+      <PageHeader
+        title={t('review_title')}
+        help={<HelpPopover>{t('review_help')}</HelpPopover>}
+        meta={data ? t('review_count', { count: left }) : undefined}
+      />
 
       {failed && <p className="text-[13px] text-muted-foreground">{t('load_failed')}</p>}
       {!data && !failed && (
@@ -72,13 +80,9 @@ export function ArkivReview() {
 
       {data && (
         <div>
-          <div className="flex items-baseline justify-between border-b border-border px-1 pb-2.5">
-            <h2 className="text-sm font-medium">{t('review_title')}</h2>
-            <span className="text-xs text-muted-foreground">{t('review_count', { count: left })}</span>
-          </div>
-          {questions.length === 0 && <p className="px-1 py-6 text-[13px] text-muted-foreground">{t('review_all_clear')}</p>}
+          {left === 0 && <p className="px-1 py-6 text-[13px] text-muted-foreground">{t('review_all_clear')}</p>}
           {groups.map((group) => {
-            const list = questions.filter((q) => q.kind === group.key)
+            const list = unanswered.filter((q) => q.kind === group.key)
             if (list.length === 0) return null
             return (
               <section key={group.id} id={group.id}>
