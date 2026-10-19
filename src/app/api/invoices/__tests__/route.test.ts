@@ -754,6 +754,23 @@ describe('POST /api/invoices (create credit note)', () => {
     expect((body.error as unknown as { code: string }).code).toBe('INVOICE_CREDIT_NOT_INVOICE')
   })
 
+  // accounted#58: imported at a system change, a credit note often has no
+  // credited_invoice_id and, from older imports, status 'paid'.
+  it('returns 400 INVOICE_CREDIT_NOT_INVOICE for an imported credit note with no link to its original', async () => {
+    const original = makeInvoice({ id: VALID_UUID, status: 'paid', subtotal: -1000, vat_amount: -250, total: -1250, credited_invoice_id: null })
+    enqueue({ data: original, error: null })
+
+    const request = createMockRequest('/api/invoices', {
+      method: 'POST',
+      body: { credited_invoice_id: VALID_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({}))
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect((body.error as unknown as { code: string }).code).toBe('INVOICE_CREDIT_NOT_INVOICE')
+  })
+
   // Documents a KNOWN GAP, not a rule. ML (2023:200) 17 kap 22-23 SS permits an
   // aendringsfaktura against a part-paid invoice; the app refuses it because
   // issueCreditNote() cannot flip a 'partially_paid' original to 'credited' and

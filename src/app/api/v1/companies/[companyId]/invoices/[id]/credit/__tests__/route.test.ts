@@ -351,6 +351,8 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/credit', () => {
     [{ status: 'draft' }, 'INVOICE_CREDIT_NOT_SENT'],
     [{ invoice_number: 'KR-2026-0041', credited_invoice_id: 'ffffffff-ffff-4fff-8fff-ffffffffffff' }, 'INVOICE_CREDIT_NOT_INVOICE'],
     [{ document_type: 'delivery_note' }, 'INVOICE_CREDIT_NOT_INVOICE'],
+    // accounted#58: a credit note imported without a link to its original.
+    [{ status: 'paid', subtotal: -1000, vat_amount: -250, total: -1250, credited_invoice_id: null }, 'INVOICE_CREDIT_NOT_INVOICE'],
   ])('refuses %o with 400 %s, writing nothing', async (overrides, code) => {
     const { supabase, calls } = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },

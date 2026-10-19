@@ -47,6 +47,7 @@ import {
   buildCreditNoteFields,
   creditNoteNumber,
   creditNoteOriginalReference,
+  isCreditNoteDocument,
 } from './build-credit-note'
 import { buildCreditNoteItem } from './build-credit-note-item'
 import {
@@ -78,8 +79,11 @@ export interface CreditRefusal {
   details?: Record<string, unknown>
 }
 
-/** What creditNoteRefusal reads off the original. */
-export type CreditableOriginal = Pick<Invoice, 'status'> &
+/**
+ * What creditNoteRefusal reads off the original. `total` is required: it is
+ * how a credit note without a link to its original is recognised.
+ */
+export type CreditableOriginal = Pick<Invoice, 'status' | 'total'> &
   Partial<Pick<Invoice, 'document_type' | 'credited_invoice_id' | 'invoice_number' | 'external_invoice_number'>> & {
     deduction_reclaimed_total?: number | null
   }
@@ -93,8 +97,10 @@ export function creditNoteRefusal(original: CreditableOriginal): CreditRefusal |
     return { code: 'INVOICE_CREDIT_NOT_INVOICE', details: { document_type: original.document_type } }
   }
   // A credit note is document_type 'invoice' too: crediting it would post a
-  // second reversal of the same sale (Dr revenue/26xx, Cr 1510 again).
-  if (original.credited_invoice_id) {
+  // second reversal of the same sale (Dr revenue/26xx, Cr 1510 again). One
+  // imported without a link to its original is recognised by its total
+  // below zero (isCreditNoteDocument), whatever status the import gave it.
+  if (isCreditNoteDocument(original)) {
     return { code: 'INVOICE_CREDIT_NOT_INVOICE', details: { reason: 'credit_note' } }
   }
   if (original.status === 'credited') {

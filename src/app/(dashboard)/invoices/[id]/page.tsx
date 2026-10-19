@@ -34,6 +34,7 @@ import {
 import { creditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { getCreditNoteSendMode } from '@/lib/invoices/credit-note-send-mode'
 import { canCopyInvoice } from '@/lib/invoices/copy-invoice'
+import { isCreditNoteDocument } from '@/lib/invoices/build-credit-note'
 import { isRegisteredFromBooks } from '@/lib/bookkeeping/registered-from-books'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import {
@@ -1886,6 +1887,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const canCreateCreditNote =
     (invoice.status === 'sent' || invoice.status === 'overdue' || invoice.status === 'paid') &&
     isRealInvoice &&
+    // A credit note, linked or imported without its original, is never
+    // credited (the doors refuse it by the same rule).
+    !isCreditNoteDocument(invoice) &&
     !creditNote
   // Download/prepare need the F-number (the XML carries it); sending a draft
   // assigns the number server-side, so the menu shows once a provider is on.
