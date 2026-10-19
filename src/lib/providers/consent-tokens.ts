@@ -11,8 +11,9 @@
  * value written before the seal. No provider token contains a colon (JWTs,
  * UUIDs and base64 never do), so the prefix tells them apart. Reads accept
  * both, writes always seal, and resolveConsent reseals a legacy row the first
- * time it serves one. scripts/checks/consent-token-access.mjs fails CI on a
- * token read or write of this table anywhere else.
+ * time it serves one; sealLegacyConsentTokens (run by the provider OAuth
+ * cleanup cron) seals the rows nobody reads. scripts/checks/consent-token-access.mjs
+ * fails CI on a token read or write of this table anywhere else.
  */
 import { scryptSync } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -147,4 +148,54 @@ export async function resealConsentTokens(
     })
     return revision
   }
+}
+
+/** Legacy rows sealed per run: about 100 guarded updates, a few seconds. */
+export const LEGACY_SEAL_BATCH = 100
+
+/**
+ * Seal up to `limit` rows still holding a plaintext token, the rows written
+ * before accounted#58 that no read or refresh has touched since. Each write
+ * goes through resealConsentTokens, guarded on the row's credential revision,
+ * so a refresh or reconnect landing in between is never overwritten; that row
+ * is found again next run. Idempotent: once every row is sealed this is two
+ * empty reads. Counts only, never a token: `found` is how many legacy rows
+ * this run saw (at most `limit`), `sealed` how many it sealed.
+ */
+export async function sealLegacyConsentTokens(
+  supabase: SupabaseClient,
+  limit = LEGACY_SEAL_BATCH,
+): Promise<{ found: number; sealed: number }> {
+  const columns = 'consent_id, access_token, refresh_token, credential_revision'
+  const sealedPattern = `${SEALED_PREFIX}%`
+  const [byAccess, byRefresh] = await Promise.all([
+    supabase.from(TABLE).select(columns).not('access_token', 'like', sealedPattern).limit(limit),
+    supabase.from(TABLE).select(columns).not('refresh_token', 'like', sealedPattern).limit(limit),
+  ])
+  const readError = byAccess.error ?? byRefresh.error
+  if (readError) throw new Error(`legacy provider tokens could not be read: ${readError.message}`)
+
+  const rows = new Map<string, ConsentTokenRow>()
+  for (const row of [...(byAccess.data ?? []), ...(byRefresh.data ?? [])] as ConsentTokenRow[]) {
+    if (rows.size < limit) rows.set(row.consent_id as string, row)
+  }
+  if (rows.size === 0) return { found: 0, sealed: 0 }
+  if (!process.env.PERSONNUMMER_ENCRYPTION_KEY) {
+    log.warn('provider consent tokens left unsealed: PERSONNUMMER_ENCRYPTION_KEY is not configured', { found: rows.size })
+    return { found: rows.size, sealed: 0 }
+  }
+
+  let sealed = 0
+  for (const [consentId, stored] of rows) {
+    let tokens: ConsentTokenRow
+    try {
+      tokens = openColumns(stored)
+    } catch {
+      log.warn('provider consent token row could not be opened; left as is', { consentId })
+      continue
+    }
+    const revision = await resealConsentTokens(supabase, consentId, tokens)
+    if (revision !== undefined && revision !== stored.credential_revision) sealed++
+  }
+  return { found: rows.size, sealed }
 }
