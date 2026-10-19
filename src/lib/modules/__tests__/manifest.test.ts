@@ -8,8 +8,8 @@ import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { CAPABILITY } from '@/lib/entitlements/keys'
-import { INFRA_LIB_FOLDERS, MODULES, MODULE_IDS } from '../manifest'
-import { effectiveDependencies, modulesInDependencyOrder } from '../resolve'
+import { INFRA_LIB_FOLDERS, MODULES, MODULE_IDS, MODULE_LAYERS } from '../manifest'
+import { effectiveDependencies, importableModules, modulesInDependencyOrder } from '../resolve'
 
 const LIB_ROOT = join(__dirname, '..', '..')
 
@@ -67,7 +67,7 @@ describe('module manifest', () => {
     expect(Object.isFrozen(INFRA_LIB_FOLDERS)).toBe(true)
     for (const m of MODULES) {
       expect(Object.isFrozen(m), m.id).toBe(true)
-      for (const list of [m.dependsOn, m.libFolders, m.operationPrefixes, m.v1Segments, m.jurisdictions]) {
+      for (const list of [m.dependsOn, m.uses, m.libFolders, m.operationPrefixes, m.v1Segments, m.jurisdictions]) {
         expect(Object.isFrozen(list), m.id).toBe(true)
       }
     }
@@ -103,6 +103,54 @@ describe('module manifest', () => {
           expect(order.indexOf(dep), `${dep} before ${m.id}`).toBeLessThan(order.indexOf(m.id))
         }
       }
+    })
+  })
+
+  describe('layers and code dependencies', () => {
+    const ids = new Set<string>(MODULE_IDS)
+    const rank = (id: string) => MODULE_LAYERS.indexOf(MODULES.find((m) => m.id === id)!.layer)
+
+    it('put every module in a known layer, and the kernel layer holds exactly the kernels', () => {
+      for (const m of MODULES) {
+        expect(MODULE_LAYERS, `${m.id}: ${m.layer}`).toContain(m.layer)
+        expect(m.layer === 'kernel', `${m.id}: kind ${m.kind}, layer ${m.layer}`).toBe(m.kind === 'kernel')
+      }
+    })
+
+    it('name existing blocks in uses, never the module itself or a dependsOn entry again, and none for a kernel', () => {
+      for (const m of MODULES) {
+        if (m.kind === 'kernel') expect(m.uses, `kernel ${m.id} uses a block`).toEqual([])
+        expect(new Set(m.uses).size, `${m.id}: uses lists a module twice`).toBe(m.uses.length)
+        for (const used of m.uses) {
+          expect(ids.has(used), `${m.id} uses ${used}`).toBe(true)
+          expect(used, `${m.id} uses itself`).not.toBe(m.id)
+          expect(m.dependsOn, `${m.id}: ${used} is already in dependsOn`).not.toContain(used)
+          expect(MODULES.find((x) => x.id === used)?.kind, `${m.id} uses kernel ${used}: it is implicit`).toBe('block')
+        }
+      }
+    })
+
+    it('never point dependsOn or uses at a higher layer', () => {
+      for (const m of MODULES) {
+        for (const target of importableModules(m)) {
+          expect(rank(target), `${m.id} (${m.layer}) -> ${target}`).toBeLessThanOrEqual(rank(m.id))
+        }
+      }
+    })
+
+    it('form an acyclic graph together (dependsOn plus uses)', () => {
+      const state = new Map<string, 'open' | 'done'>()
+      const cycles: string[] = []
+      const visit = (id: string, path: string[]) => {
+        state.set(id, 'open')
+        for (const next of importableModules(MODULES.find((m) => m.id === id)!)) {
+          if (state.get(next) === 'open') cycles.push([...path, next].join(' -> '))
+          else if (!state.has(next)) visit(next, [...path, next])
+        }
+        state.set(id, 'done')
+      }
+      for (const m of MODULES) if (!state.has(m.id)) visit(m.id, [m.id])
+      expect(cycles).toEqual([])
     })
   })
 

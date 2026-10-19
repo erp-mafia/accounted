@@ -23,8 +23,7 @@
  */
 import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
-import { getModule, moduleForLibPath } from '../resolve'
-import type { ModuleId } from '../manifest'
+import { getModule, importableModules, moduleForLibPath } from '../resolve'
 
 export interface ImportSpecifier {
   specifier: string
@@ -140,7 +139,7 @@ export function scanLibImports(libRoot: string): LibImportEdge[] {
 export interface BoundaryReport {
   /** `kernel -> block` edge counts. */
   kernelToBlock: Record<string, number>
-  /** `block -> block` edge counts where the target is not in the importer's dependsOn. */
+  /** `block -> block` edge counts where the target is in neither the importer's dependsOn nor its uses. */
   undeclaredBlockToBlock: Record<string, number>
   /** `kernel -> kernel` edge counts against the declared direction (platform must not import ledger). */
   undeclaredKernelToKernel: Record<string, number>
@@ -165,7 +164,7 @@ export function boundaryReport(edges: readonly LibImportEdge[]): BoundaryReport 
     if (!fromId || !toId || fromId === toId) continue
     const from = getModule(fromId)
     const to = getModule(toId)
-    const declared = from.dependsOn.includes(toId as ModuleId)
+    const declared = importableModules(from).has(toId)
     let bucket: Record<string, number>
     if (from.kind === 'kernel' && to.kind === 'block') bucket = kernelToBlock
     else if (from.kind === 'kernel' && !declared) bucket = undeclaredKernelToKernel

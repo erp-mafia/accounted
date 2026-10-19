@@ -80,14 +80,15 @@ describe('boundaryReport', () => {
       { from: 'invoices/book-service.ts', to: 'bookkeeping/engine', line: 3 }, // block -> kernel: allowed
       { from: 'bookkeeping/engine.ts', to: 'auth/claims', line: 4 }, // ledger -> platform: declared
       { from: 'auth/api-keys.ts', to: 'company/active-company', line: 10 }, // platform -> ledger: undeclared
-      { from: 'payments/batch-service.ts', to: 'supplier-invoices/create', line: 5 }, // declared dependency
-      { from: 'invoices/vat.ts', to: 'vat/gross-split', line: 6 }, // undeclared
+      { from: 'bank-sync/run.ts', to: 'transactions/ingest', line: 5 }, // dependsOn
+      { from: 'invoices/vat.ts', to: 'vat/gross-split', line: 6 }, // uses
+      { from: 'transactions/link.ts', to: 'invoices/paid-events', line: 11 }, // neither: undeclared
       { from: 'invoices/x.ts', to: 'invoices/y', line: 7 }, // same module
       { from: 'invoices/x.ts', to: 'supabase/server', line: 8 }, // into infrastructure
       { from: 'operations/invoices.ts', to: 'invoices/y', line: 9 }, // from infrastructure
     ])
     expect(report.kernelToBlock).toEqual({ 'ledger -> invoicing': 2 })
-    expect(report.undeclaredBlockToBlock).toEqual({ 'invoicing -> vat': 1 })
+    expect(report.undeclaredBlockToBlock).toEqual({ 'transactions -> invoicing': 1 })
     expect(report.undeclaredKernelToKernel).toEqual({ 'platform -> ledger': 1 })
     expect(report.edgesByKey['ledger -> invoicing']).toHaveLength(2)
   })
