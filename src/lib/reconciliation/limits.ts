@@ -3,17 +3,30 @@
  * documents. Pure constants: the API schemas import them, and those reach
  * client bundles.
  */
+import { MAX_ROWS_PER_REQUEST } from '@/lib/lists/collect-pages'
 
 /**
  * Most verifikat one bank row can be split across (the reconciliation 1:N
  * link and the transactions-page link), and most invoices one bank row can
- * pay in a batch match. A ROT/RUT payout from Skatteverket pays one invoice
- * per buyer, so one bank row can carry 100+ of them: the old caps of 50 and
- * 100 refused a real payout of 138 verifikat (crm#1144). 200 is also the
- * reconciliation view's page size (MAX_ITEMS_LIMIT), so the view never offers
- * a selection the server refuses.
+ * pay in a batch match. The largest such row is a ROT/RUT payout:
+ * Skatteverket pays every beslut of the day in one transfer, one invoice per
+ * buyer, and a begäran filed in another system is settled here invoice by
+ * invoice on 1510. 200, sized to one payout of 138 verifikat (crm#1144),
+ * refused three bundled begäran of up to 100 ärenden each (crm#1297).
+ *
+ * The cap is what one verifikat can carry and still be read whole. A batch
+ * match books up to two lines per invoice (1510 or 2440, plus an öre or
+ * kursdifferens line) and one bank line, and the rättelse preview and the
+ * reconciliation read a verifikat's lines in one select, which PostgREST cuts
+ * at MAX_ROWS_PER_REQUEST without an error. 499 invoices make at most 999
+ * lines.
+ *
+ * The reconciliation view pages at MAX_ITEMS_LIMIT, below this, so it never
+ * offers a selection the server refuses. The per-invoice events after the
+ * RPC take about 70 ms each, so the routes that commit a batch export a
+ * maxDuration above the 60 s platform default.
  */
-export const MAX_BANK_ROW_SPLIT = 200
+export const MAX_BANK_ROW_SPLIT = Math.floor((MAX_ROWS_PER_REQUEST - 1) / 2)
 
 /**
  * Most verifikat ids one links request may name across all its pairs: the

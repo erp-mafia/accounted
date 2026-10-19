@@ -5,6 +5,11 @@ import { MatchBatchSchema } from '@/lib/api/schemas'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { matchTransactionBatch } from '@/lib/transactions/match-batch'
 
+// A batch of MAX_BANK_ROW_SPLIT invoices (lib/reconciliation/limits.ts) emits
+// its per-invoice events one by one after the RPC, about 70 ms each: too close
+// to the platform's 60 s default to risk a committed batch half announced.
+export const maxDuration = 300
+
 /**
  * POST /api/transactions/[id]/match-batch
  *
