@@ -26,8 +26,15 @@ vi.mock('@/lib/invoices/supplier-settlement-side', async (importOriginal) => ({
   resolveSupplierSettlementSide: vi.fn(async () => AP_DEBIT),
 }))
 
+// The registration-first planner (defer_invoice_booking) has its own suite;
+// here it answers per test, by default "nothing to book first".
+vi.mock('@/lib/supplier-invoices/registration-first', () => ({
+  planRegistrationBeforeSettlement: vi.fn(async () => ({ ok: true, required: false })),
+}))
+
 import { tools } from '../server'
 import { toToolError } from '../tool-result'
+import { planRegistrationBeforeSettlement } from '@/lib/supplier-invoices/registration-first'
 
 const link = tools.find((t) => t.name === 'gnubok_link_supplier_invoice_to_voucher')!
 const find = tools.find((t) => t.name === 'gnubok_find_voucher_candidates_for_supplier_invoice')!
@@ -205,5 +212,75 @@ describe('gnubok_find_voucher_candidates_for_supplier_invoice: verifikat that pa
 
     expect(mockFind.mock.calls[0][3]).toEqual({ limit: 10, settlementSide: AP_DEBIT, includeShared: true })
     expect(result.candidates[0].link_amount).toBe(1250)
+  })
+})
+
+describe('gnubok_link_supplier_invoice_to_voucher: a deferred invoice not booked yet', () => {
+  const registrationEntry = {
+    entry_date: '2026-04-01',
+    description: 'Leverantörsfaktura LF-77001',
+    lines: [
+      { account_number: '6110', debit_amount: 1000, credit_amount: 0, line_description: null },
+      { account_number: '2641', debit_amount: 250, credit_amount: 0, line_description: null },
+      { account_number: '2440', debit_amount: 0, credit_amount: 1250, line_description: null },
+    ],
+    total_debit: 1250,
+    total_credit: 1250,
+    balanced: true,
+    note: '',
+  }
+
+  it('shows the approver the registration approval books first', async () => {
+    const { supabase, findCall } = mockDb()
+    mockValidate.mockResolvedValue({ ...validated(1250, 0), apDebitAmount: 1250 })
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: true,
+      required: true,
+      supplierInvoiceId: SI_ID,
+      entry: registrationEntry,
+      payableSek: 1250,
+      createsAccrualSchedules: false,
+    })
+
+    const result = (await run(supabase)) as { staged: boolean; next?: { description?: string } }
+
+    expect(result.staged).toBe(true)
+    const inserted = findCall('pending_operations', 'insert')![0] as { preview_data: Record<string, unknown> }
+    expect(inserted.preview_data).toMatchObject({
+      books_registration_first: true,
+      registration_entry: registrationEntry,
+    })
+    expect(vi.mocked(planRegistrationBeforeSettlement)).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: 'company-1', userId: 'user-1' }),
+      expect.objectContaining({ id: SI_ID }),
+    )
+  })
+
+  it('refuses to stage what approval would refuse: the Bokför code, nothing staged', async () => {
+    const { supabase, findCall } = mockDb()
+    mockValidate.mockResolvedValue({ ...validated(1250, 0), apDebitAmount: 1250 })
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: false,
+      code: 'SI_BOOK_NO_FISCAL_PERIOD',
+      details: { invoiceDate: '2026-04-01', registration_first: true, supplier_invoice_id: SI_ID },
+    })
+
+    const error = await run(supabase).then(
+      () => null,
+      (err: unknown) => toToolError(err, { toolName: link.name }).error,
+    )
+
+    expect(error).toMatchObject({ code: 'SI_BOOK_NO_FISCAL_PERIOD' })
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+
+  it('an invoice that needs nothing booked first stages as before', async () => {
+    const { supabase, findCall } = mockDb()
+    mockValidate.mockResolvedValue({ ...validated(1250, 0), apDebitAmount: 1250 })
+
+    await run(supabase)
+
+    const inserted = findCall('pending_operations', 'insert')![0] as { preview_data: Record<string, unknown> }
+    expect('books_registration_first' in inserted.preview_data).toBe(false)
   })
 })

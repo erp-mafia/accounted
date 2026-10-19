@@ -74,6 +74,7 @@ import {
 } from './public-tools'
 import { isEagerAuthRequested } from './auth-mode'
 import { createLogger } from '@/lib/logger'
+import { planRegistrationBeforeSettlement } from '@/lib/supplier-invoices/registration-first'
 import { ORE_ROUNDING_SETTLEMENT_MAX, roundOre, sumOre } from '@/lib/money'
 import { grossVat } from '@/lib/bookkeeping/gross-split'
 import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
@@ -13935,7 +13936,7 @@ export const tools: McpTool[] = [
       const { data: invoice, error: invErr } = await supabase
         .from('supplier_invoices')
         .select(
-          'id, supplier_invoice_number, arrival_number, status, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, supplier_id, supplier:suppliers(id, name)'
+          'id, supplier_invoice_number, arrival_number, status, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, supplier_id, registration_journal_entry_id, is_credit_note, supplier:suppliers(id, name)'
         )
         .eq('id', supplierInvoiceId)
         .eq('company_id', companyId)
@@ -13953,6 +13954,21 @@ export const tools: McpTool[] = [
         amount,
       )
       if (!validation.ok) throw voucherLinkRefusal(validation)
+
+      // A deferring company's unbooked invoice (defer_invoice_booking) is
+      // booked first on approval, by the Bokför step: its dry run refuses
+      // here what approval would refuse, and the approver sees the verifikat.
+      const registrationPlan = await planRegistrationBeforeSettlement(
+        { supabase, companyId, userId, log },
+        invoice as { id: string; registration_journal_entry_id?: string | null; is_credit_note?: boolean | null },
+      )
+      if (!registrationPlan.ok) {
+        const errorCode = (registrationPlan.error as { code?: unknown } | undefined)?.code
+        throw voucherLinkRefusal({
+          code: typeof errorCode === 'string' ? errorCode : registrationPlan.code,
+          details: registrationPlan.details,
+        })
+      }
 
       const voucherLabel = validation.voucher.voucher_series && validation.voucher.voucher_number != null
         ? `${validation.voucher.voucher_series}-${validation.voucher.voucher_number}`
@@ -13988,10 +14004,16 @@ export const tools: McpTool[] = [
             ? { voucher_remaining_after: validation.voucherRemainingAfter }
             : {}),
           supplier_name: (invoice.supplier as unknown as { name?: string } | null)?.name ?? null,
+          // The registration verifikat approval books first (defer_invoice_booking).
+          ...(registrationPlan.required
+            ? { books_registration_first: true, registration_entry: registrationPlan.entry }
+            : {}),
         },
         actor,
         next: {
-          description: 'After approval the supplier invoice transitions to paid (or partially_paid). No new verifikat is created: the existing voucher is the payment posting.',
+          description: registrationPlan.required
+            ? 'After approval the invoice\'s registration verifikat is booked first (preview.registration_entry, the Bokför step), then the supplier invoice transitions to paid (or partially_paid) against the existing voucher, which is the payment posting.'
+            : 'After approval the supplier invoice transitions to paid (or partially_paid). No new verifikat is created: the existing voucher is the payment posting.',
           tool: 'gnubok_get_supplier_ledger',
         },
       })

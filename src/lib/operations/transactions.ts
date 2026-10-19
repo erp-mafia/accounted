@@ -449,6 +449,7 @@ export const transactionsMatchBatch = defineOperation({
       'The allocation amounts must sum to |amount| of the transaction: BATCH_AMOUNT_EXCEEDS_TX / BATCH_AMOUNT_BELOW_TX otherwise.',
       'A row that posted vouchers already explain (each invoice marked paid by hand) returns 409 BATCH_TX_POSSIBLE_DUPLICATE with the vouchers: link the row to them instead. force=true needs expected_journal_entry_ids naming exactly that set.',
       'Under kontantmetoden an invoice with no booking yet returns 400 BATCH_CASH_METHOD_UNBOOKED_INVOICE.',
+      'Faktureringsmetoden with defer_invoice_booking (Registrera men bokför inte): each supplier invoice registered without its verifikat is booked first by the supplier-invoices :book step (dated on its invoice date), then the samlingsverifikation clears its 2440; registration_journal_entry_ids names them and the dry run shows them as registration_entries. A refusal of the book step (PERIOD_LOCKED on an invoice date, SI_BOOK_NO_FISCAL_PERIOD, SI_ACCRUED_COST_PERIOD_LOCKED, SI_BOOK_INVALID_STATUS for a partially paid invoice) refuses the batch with that code and details.registration_first, before anything is booked.',
       'Proformas and quotes return 400 MATCH_INVOICE_NOT_INVOICE_TYPE.',
     ],
     example: {
@@ -479,6 +480,8 @@ export const transactionsMatchBatch = defineOperation({
     allocations: z.array(BatchAllocationOut),
     total_allocated: z.number(),
     leftover: z.number(),
+    /** Supplier invoice id to the registration verifikat booked first (defer_invoice_booking). */
+    registration_journal_entry_ids: z.record(z.string(), z.string().uuid()).optional(),
   }),
   errorCodes: [
     'MATCH_INVOICE_NOT_INVOICE_TYPE',
@@ -497,6 +500,10 @@ export const transactionsMatchBatch = defineOperation({
     'BATCH_AMOUNT_BELOW_TX',
     'BATCH_PERIOD_LOCKED',
     'BATCH_RPC_FAILED',
+    'PERIOD_LOCKED',
+    'SI_BOOK_NO_FISCAL_PERIOD',
+    'SI_BOOK_INVALID_STATUS',
+    'SI_BOOK_FAILED',
   ],
   http: {
     method: 'POST',

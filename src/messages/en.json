@@ -4144,6 +4144,9 @@
     "booking_description_placeholder": "Description",
     "booking_unbalanced": "Debit and credit must match and be greater than zero. Difference: {diff}",
     "booking_account_invalid": "Account number must be 4 digits.",
+    "registration_first_title": "The invoice is booked first",
+    "registration_first_note": "The invoice is not booked yet. It is booked first, on its invoice date {date}, and the payment below then clears the supplier debt on 2440.",
+    "registration_first_refused": "The invoice is not booked yet and is booked before the payment is recorded, but it could not be booked:",
     "cancel": "Cancel",
     "confirming": "Confirming...",
     "confirm_match": "Confirm match"

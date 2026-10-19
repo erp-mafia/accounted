@@ -12,7 +12,8 @@ import type { SupplierInvoice } from '@/types'
  * Match a negative transaction (expense) to a supplier invoice: a person
  * confirms a suggestion. The booking itself (plan, verifikat, ledger update,
  * payment row, link, log, events) is bookSupplierBankMatch, shared with the
- * debit of a bank payment order, which books without this door.
+ * debit of a bank payment order, which books without this door. A deferring
+ * company's unbooked invoice is booked first there, by the Bokför step.
  */
 export const POST = withRouteContext(
   'transaction.match_supplier_invoice',
@@ -97,6 +98,10 @@ export const POST = withRouteContext(
       paid_amount: outcome.plan.newPaidAmount,
       remaining_amount: outcome.plan.newRemaining,
       journal_entry_id: outcome.journalEntryId,
+      // The registration verifikat this match booked first, when it did.
+      ...(outcome.registrationJournalEntryId
+        ? { registration_journal_entry_id: outcome.registrationJournalEntryId }
+        : {}),
     })
   },
   { requireWrite: true },

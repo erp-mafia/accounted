@@ -1,4 +1,25 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The registration-first rule (defer_invoice_booking) has its own suites
+// (registration-first.test.ts and the deferred-door tests); here no invoice
+// needs its registration booked first.
+vi.mock('@/lib/supplier-invoices/registration-first', () => ({
+  planRegistrationBeforeSettlement: vi.fn(async () => ({ ok: true, required: false })),
+  planRegistrationBeforeSettlementById: vi.fn(async () => ({ ok: true, required: false })),
+  bookRegistrationBeforeSettlement: vi.fn(async () => ({
+    ok: true,
+    journalEntryId: null,
+    bookedHere: false,
+    warnings: [],
+  })),
+  planRegistrationsBeforeBatchSettlement: vi.fn(async () => ({ ok: true, plans: [] })),
+  bookRegistrationsBeforeBatchSettlement: vi.fn(async () => ({
+    ok: true,
+    journalEntryIds: {},
+    postedJournalEntryIds: {},
+    warnings: [],
+  })),
+}))
 import {
   createMockRequest,
   parseJsonResponse,
@@ -65,6 +86,11 @@ import { eventBus } from '@/lib/events'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { recordSupplierInvoiceDuplicateGuardBypass } from '@/lib/invoices/duplicate-guard-history'
+import {
+  bookRegistrationBeforeSettlement,
+  planRegistrationBeforeSettlement,
+} from '@/lib/supplier-invoices/registration-first'
+import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 
 import { POST } from '../route'
 
@@ -952,5 +978,263 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
         }),
       })
     )
+  })
+})
+
+describe('POST /api/supplier-invoices/[id]/mark-paid: a deferred invoice paid before Bokför', () => {
+  const mockUser = { id: 'user-1', email: 'test@test.se' }
+  const registrationEntry = {
+    entry_date: '2026-05-02',
+    description: 'Leverantörsfaktura LF-001',
+    lines: [
+      { account_number: '6110', debit_amount: 8000, credit_amount: 0, line_description: null },
+      { account_number: '2641', debit_amount: 2000, credit_amount: 0, line_description: null },
+      { account_number: '2440', debit_amount: 0, credit_amount: 10000, line_description: null },
+    ],
+    total_debit: 10000,
+    total_credit: 10000,
+    balanced: true,
+    note: '',
+  }
+  const requiredPlan = {
+    ok: true as const,
+    required: true as const,
+    supplierInvoiceId: 'si-1',
+    entry: registrationEntry,
+    payableSek: 10000,
+    createsAccrualSchedules: false,
+  }
+  const unbooked = () =>
+    makeSupplierInvoice({
+      id: 'si-1',
+      status: 'approved',
+      total: 10000,
+      remaining_amount: 10000,
+      paid_amount: 0,
+      registration_journal_entry_id: null,
+      supplier: makeSupplier(),
+      items: [],
+    })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    eventBus.clear()
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+  })
+
+  it('books the registration through the Bokför step first, then the payment against its 2440', async () => {
+    enqueue({ data: unbooked(), error: null })
+    enqueue({ data: [], error: null }) // duplicate guard
+    enqueue({ data: { accounting_method: 'accrual', defer_invoice_booking: true }, error: null })
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce(requiredPlan)
+    vi.mocked(bookRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: true,
+      journalEntryId: 'je-registration',
+      bookedHere: true,
+      warnings: [],
+    })
+    mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-payment' })
+    enqueue({ data: [{ id: 'si-1' }], error: null }) // CAS update
+    enqueue({ data: null, error: null }) // payment row
+
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      body: { payment_date: '2026-05-12' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<{
+      status: string
+      journal_entry_id: string
+      registration_journal_entry_id?: string
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.status).toBe('paid')
+    expect(body.journal_entry_id).toBe('je-payment')
+    expect(body.registration_journal_entry_id).toBe('je-registration')
+    // Planned for this invoice and payment date, as the person paying.
+    expect(vi.mocked(planRegistrationBeforeSettlement)).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: 'company-1', userId: 'user-1' }),
+      expect.objectContaining({ id: 'si-1', registration_journal_entry_id: null }),
+      { settlementDate: '2026-05-12' },
+    )
+    expect(vi.mocked(bookRegistrationBeforeSettlement)).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: 'company-1' }),
+      requiredPlan,
+    )
+    // The registration posts before the payment, and the payment clears 2440.
+    const bookOrder = vi.mocked(bookRegistrationBeforeSettlement).mock.invocationCallOrder[0]
+    const paymentOrder = mockCreateSupplierInvoicePaymentEntry.mock.invocationCallOrder[0]
+    expect(bookOrder).toBeLessThan(paymentOrder)
+    expect(mockCreateSupplierInvoicePaymentEntry.mock.calls[0][4]).toBe(10000)
+    expect(mockCreateSupplierInvoiceCashEntry).not.toHaveBeenCalled()
+  })
+
+  it('refuses the payment with the Bokför code and books nothing when the registration is refused', async () => {
+    enqueue({ data: unbooked(), error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: { accounting_method: 'accrual', defer_invoice_booking: true }, error: null })
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: false,
+      code: 'PERIOD_LOCKED',
+      details: {
+        reason: 'period_locked_at_set',
+        invoice_date: '2026-03-02',
+        registration_first: true,
+        supplier_invoice_id: 'si-1',
+      },
+    })
+
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      body: { payment_date: '2026-05-12' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details?: Record<string, unknown> }
+    }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('PERIOD_LOCKED')
+    expect(body.error.details).toMatchObject({ registration_first: true, invoice_date: '2026-03-02' })
+    // Nothing written: no registration, no clearing-only payment, no status flip.
+    expect(vi.mocked(bookRegistrationBeforeSettlement)).not.toHaveBeenCalled()
+    expect(mockCreateSupplierInvoicePaymentEntry).not.toHaveBeenCalled()
+    expect(mockCreateSupplierInvoiceCashEntry).not.toHaveBeenCalled()
+    expect(findCalls('supplier_invoices', 'update')).toHaveLength(0)
+    expect(findCalls('supplier_invoice_payments', 'insert')).toHaveLength(0)
+  })
+
+  it('answers a typed bookkeeping error from the registration builder with its own code', async () => {
+    enqueue({ data: unbooked(), error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: { accounting_method: 'accrual', defer_invoice_booking: true }, error: null })
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: false,
+      code: 'SI_BOOK_FAILED',
+      error: new AccountsNotInChartError(['6110']),
+      details: { registration_first: true, supplier_invoice_id: 'si-1' },
+    })
+
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      body: { payment_date: '2026-05-12' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('ACCOUNTS_NOT_IN_CHART')
+    expect(mockCreateSupplierInvoicePaymentEntry).not.toHaveBeenCalled()
+  })
+
+  it('books no payment when the Bokför step refuses at commit (a concurrent change)', async () => {
+    enqueue({ data: unbooked(), error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: { accounting_method: 'accrual', defer_invoice_booking: true }, error: null })
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce(requiredPlan)
+    vi.mocked(bookRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: false,
+      code: 'SI_BOOK_CONFLICT',
+      details: { registration_first: true, supplier_invoice_id: 'si-1' },
+    })
+
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      body: { payment_date: '2026-05-12' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SI_BOOK_CONFLICT')
+    expect(mockCreateSupplierInvoicePaymentEntry).not.toHaveBeenCalled()
+    expect(findCalls('supplier_invoices', 'update')).toHaveLength(0)
+  })
+
+  it('refuses unbalanced edited rows before the registration is booked', async () => {
+    enqueue({ data: unbooked(), error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: { accounting_method: 'accrual', defer_invoice_booking: true }, error: null })
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce(requiredPlan)
+
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      body: {
+        payment_date: '2026-05-12',
+        lines: [
+          { account_number: '2440', debit_amount: 10000, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 9000 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_PAID_LINES_UNBALANCED')
+    expect(vi.mocked(bookRegistrationBeforeSettlement)).not.toHaveBeenCalled()
+  })
+
+  it('a foreign invoice clears the SEK the registration credits, not the invoice rate', async () => {
+    const invoice = makeSupplierInvoice({
+      id: 'si-1',
+      status: 'approved',
+      currency: 'EUR',
+      exchange_rate: 11.5,
+      total: 100,
+      remaining_amount: 100,
+      paid_amount: 0,
+      registration_journal_entry_id: null,
+      supplier: makeSupplier(),
+      items: [],
+    })
+    enqueue({ data: invoice, error: null })
+    // force: the duplicate guard is not what this test is about.
+    enqueue({ data: { accounting_method: 'accrual', defer_invoice_booking: true }, error: null })
+    // Per-line rounding: the registration credits 2440 with 1150.02, not 100 x 11.5.
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce({ ...requiredPlan, payableSek: 1150.02 })
+    vi.mocked(bookRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: true,
+      journalEntryId: 'je-registration',
+      bookedHere: true,
+      warnings: [],
+    })
+    mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-payment' })
+    enqueue({ data: [{ id: 'si-1' }], error: null })
+    enqueue({ data: null, error: null })
+
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      body: { payment_date: '2026-05-12', amount_sek: 1140, force: true },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse(response)
+    expect(status, JSON.stringify(body)).toBe(200)
+
+    const args = mockCreateSupplierInvoicePaymentEntry.mock.calls[0]
+    expect(args[4]).toBe(1150.02) // SEK cleared off 2440
+    expect(args[6]).toBe(10.02) // kursvinst: cleared 1150.02, paid 1140
+  })
+
+  it('an invoice that needs nothing booked first pays as before, with no registration id', async () => {
+    enqueue({ data: unbooked(), error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-payment' })
+    enqueue({ data: [{ id: 'si-1' }], error: null })
+    enqueue({ data: null, error: null })
+
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      body: { payment_date: '2026-05-12' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<Record<string, unknown>>(response)
+
+    expect(status).toBe(200)
+    expect(body.journal_entry_id).toBe('je-payment')
+    expect(body).not.toHaveProperty('registration_journal_entry_id')
   })
 })

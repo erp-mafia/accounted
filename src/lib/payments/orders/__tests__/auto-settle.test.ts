@@ -26,6 +26,22 @@ vi.mock('@/lib/events/bus', () => ({ eventBus: { emit: vi.fn() } }))
 vi.mock('@/lib/core/documents/supplier-invoice-underlag', () => ({ anchorSupplierInvoiceDocument: vi.fn() }))
 vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({ clearSettledInvoiceSuggestions: vi.fn() }))
 
+// The registration-first planner (defer_invoice_booking) has its own suite;
+// here it answers per test, by default "nothing to book first".
+vi.mock('@/lib/supplier-invoices/registration-first', () => ({
+  planRegistrationBeforeSettlement: vi.fn(async () => ({ ok: true, required: false })),
+  bookRegistrationBeforeSettlement: vi.fn(async () => ({
+    ok: true,
+    journalEntryId: null,
+    bookedHere: false,
+    warnings: [],
+  })),
+}))
+
+import {
+  bookRegistrationBeforeSettlement,
+  planRegistrationBeforeSettlement,
+} from '@/lib/supplier-invoices/registration-first'
 import { loadOpenPaymentOrders, settleOrderWithDebit } from '../auto-settle'
 import { ARCIM, arcimDebit, arcimInvoice, arcimOrder } from './fixtures'
 
@@ -241,5 +257,73 @@ describe('loadOpenPaymentOrders', () => {
   it('answers an empty list when the read fails', async () => {
     db.setTable('payment_orders', { data: null, error: { message: 'boom' } })
     expect(await loadOpenPaymentOrders(db.supabase as unknown as SupabaseClient, ARCIM.companyId)).toEqual([])
+  })
+})
+
+describe('settleOrderWithDebit: a deferring company whose invoice is not booked yet', () => {
+  const requiredPlan = {
+    ok: true as const,
+    required: true as const,
+    supplierInvoiceId: ARCIM.invoiceId,
+    entry: {
+      entry_date: '2026-10-01',
+      description: 'Leverantörsfaktura',
+      lines: [
+        { account_number: '6540', debit_amount: 8, credit_amount: 0, line_description: null },
+        { account_number: '2641', debit_amount: 2, credit_amount: 0, line_description: null },
+        { account_number: '2440', debit_amount: 0, credit_amount: 10, line_description: null },
+      ],
+      total_debit: 10,
+      total_credit: 10,
+      balanced: true,
+      note: '',
+    },
+    payableSek: 10,
+    createsAccrualSchedules: false,
+  }
+
+  it('books the registration first, as the user who approved the order, then the 2440 clearing', async () => {
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce(requiredPlan)
+    vi.mocked(bookRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: true,
+      journalEntryId: 'je-registration',
+      bookedHere: true,
+      warnings: [],
+    })
+
+    const result = await settle()
+
+    expect(result).toMatchObject({ ok: true, journalEntryId: 'je-payment' })
+    expect(vi.mocked(planRegistrationBeforeSettlement)).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: ARCIM.companyId, userId: ARCIM.userId }),
+      expect.objectContaining({ id: ARCIM.invoiceId }),
+      { settlementDate: '2026-10-13' },
+    )
+    const bookOrder = vi.mocked(bookRegistrationBeforeSettlement).mock.invocationCallOrder[0]
+    expect(bookOrder).toBeLessThan(mockCreateJournalEntry.mock.invocationCallOrder[0])
+    const input = mockCreateJournalEntry.mock.calls[0][3] as CreateJournalEntryInput
+    expect(shape(input)).toEqual([['2440', 10, 0], ['1930', 0, 10]])
+  })
+
+  it('a refused registration leaves the order for a person: booking_failed with the Bokför code, nothing written', async () => {
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: false,
+      code: 'PERIOD_LOCKED',
+      details: { invoice_date: '2026-09-30', registration_first: true, supplier_invoice_id: ARCIM.invoiceId },
+    })
+
+    const result = await settle()
+
+    expect(result).toEqual({
+      ok: false,
+      reason: 'booking_failed',
+      code: 'PERIOD_LOCKED',
+      details: expect.objectContaining({ registration_first: true }),
+    })
+    expect(vi.mocked(bookRegistrationBeforeSettlement)).not.toHaveBeenCalled()
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(db.findCalls('supplier_invoices', 'update')).toEqual([])
+    expect(db.findCalls('supplier_invoice_payments', 'insert')).toEqual([])
+    expect(db.findCalls('payment_orders', 'update')).toEqual([])
   })
 })

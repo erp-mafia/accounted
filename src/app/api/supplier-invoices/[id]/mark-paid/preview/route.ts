@@ -1,11 +1,16 @@
 /**
  * GET /api/supplier-invoices/[id]/mark-paid/preview?amount=...&payment_account=...&amount_sek=...
  *
- * Read-only preview of the journal entry mark-paid would post. Mirrors the
+ * Read-only preview of the journal entries mark-paid would post. Mirrors the
  * POST handler's routing: if the SI has a registration JE, payment clears
- * 2440. Otherwise (kontantmetoden + never booked), expense + input VAT
- * book here. `amount` is in the invoice's currency; the lines are SEK, and
- * `clearing_sek` / `paid_sek` say what leaves 2440 and the payment account.
+ * 2440. Under kontantmetoden a never-booked invoice books expense + input VAT
+ * here. A deferring company's unbooked invoice (defer_invoice_booking) is
+ * booked first by the Bokför step: `registration_entry` is that verifikat, as
+ * its dry run builds it, and `lines` the payment that clears it
+ * (lib/supplier-invoices/registration-first.ts). `amount` is in the
+ * invoice's currency; the lines are SEK, and `clearing_sek` / `paid_sek` say
+ * what leaves 2440 and the payment account. `payment_date`, when given, is
+ * checked for an open period the way the POST checks it.
  */
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -25,6 +30,9 @@ import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { fetchChartVatTreatments } from '@/lib/bookkeeping/chart-vat-treatments'
 import { roundOre } from '@/lib/money'
 import { findSignedBankPayment, signedBankPaymentDetails } from '@/lib/payments/orders/signed-payment'
+import { sessionFailureResponse } from '@/lib/operations/session'
+import { planRegistrationBeforeSettlement } from '@/lib/supplier-invoices/registration-first'
+import { ISO_DATE_RE } from '@/lib/invariants'
 import type { CreateJournalEntryLineInput, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
 type PreviewLine = {
@@ -53,24 +61,28 @@ const QuerySchema = z.object({
   payment_account: z.string().min(1).optional(),
   // The SEK that left the payment account, as the POST body's amount_sek.
   amount_sek: z.coerce.number().positive().optional(),
+  // The POST body's payment_date: checked for an open period when the
+  // invoice's registration is booked first.
+  payment_date: z.string().regex(ISO_DATE_RE).optional(),
 })
 
 export const GET = withRouteContext(
   'supplier_invoice.mark_paid_preview',
   async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
-    const { supabase, companyId, log, requestId } = ctx
+    const { supabase, companyId, user, log, requestId } = ctx
 
     const url = new URL(request.url)
     const parsed = QuerySchema.safeParse({
       amount: url.searchParams.get('amount'),
       payment_account: url.searchParams.get('payment_account') ?? undefined,
       amount_sek: url.searchParams.get('amount_sek') ?? undefined,
+      payment_date: url.searchParams.get('payment_date') ?? undefined,
     })
     if (!parsed.success) {
       return errorResponseFromCode('VALIDATION_ERROR', log, { requestId })
     }
-    const { amount, payment_account, amount_sek } = parsed.data
+    const { amount, payment_account, amount_sek, payment_date } = parsed.data
 
     const { data: invoice, error: invErr } = await supabase
       .from('supplier_invoices')
@@ -132,6 +144,17 @@ export const GET = withRouteContext(
       })
     }
 
+    // The POST books a deferring company's unbooked invoice first, through
+    // the Bokför step: its dry run is every check that booking runs, and the
+    // verifikat the dialog shows above the payment. A refusal there is the
+    // POST's refusal too.
+    const registrationPlan = await planRegistrationBeforeSettlement(
+      { supabase, companyId: companyId!, userId: user.id, log },
+      invoice as SupplierInvoice,
+      { settlementDate: payment_date ?? null },
+    )
+    if (!registrationPlan.ok) return sessionFailureResponse(registrationPlan, log, requestId)
+
     const lines: PreviewLine[] = []
     let entryType: 'clearing' | 'cash' = 'clearing'
     // SEK off 2440 (clearing only) and SEK credited to the payment account.
@@ -188,6 +211,7 @@ export const GET = withRouteContext(
       const sek = await resolveSupplierPaymentSek(supabase, companyId!, si, {
         amount,
         amountSek: amount_sek,
+        ...(registrationPlan.required ? { pendingRegistrationPayableSek: registrationPlan.payableSek } : {}),
       })
       if (!sek.ok) {
         return errorResponseFromCode(sek.code, log, { requestId, details: sek.details })
@@ -208,6 +232,9 @@ export const GET = withRouteContext(
       lines,
       invoice_already_booked: siAlreadyBooked,
       accounting_method: accountingMethod,
+      // The registration verifikat the POST books before the payment, or null.
+      books_registration_first: registrationPlan.required,
+      registration_entry: registrationPlan.required ? registrationPlan.entry : null,
       // The amount is in the invoice's currency; every line is SEK.
       currency: invoice.currency,
       clearing_sek: clearingSek,

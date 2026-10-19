@@ -32,6 +32,11 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { findSignedBankPayment, signedBankPaymentDetails } from '@/lib/payments/orders/signed-payment'
 import { linkBasisColumns } from '@/lib/links/stamp'
+import { sessionFailureResponse } from '@/lib/operations/session'
+import {
+  bookRegistrationBeforeSettlement,
+  planRegistrationBeforeSettlement,
+} from '@/lib/supplier-invoices/registration-first'
 
 export const POST = withRouteContext(
   'supplier_invoice.mark_paid',
@@ -179,6 +184,17 @@ export const POST = withRouteContext(
       })
     }
 
+    // Faktureringsmetoden with defer_invoice_booking: an invoice registered
+    // without its verifikat is booked first, by the Bokför step, then paid
+    // (lib/supplier-invoices/registration-first.ts). A refusal there refuses
+    // the payment before anything is written: never a 2440 clearing without
+    // the registration that credits it.
+    const opCtx = { supabase, companyId: companyId!, userId: user.id, log: opLog }
+    const registrationPlan = await planRegistrationBeforeSettlement(opCtx, invoice as SupplierInvoice, {
+      settlementDate: paymentDate,
+    })
+    if (!registrationPlan.ok) return sessionFailureResponse(registrationPlan, opLog, requestId)
+
     // The 2440 clearing books SEK: resolve it from the ledger before posting,
     // never hand the builder the invoice-currency amount (#2955). Custom rows
     // are SEK already and the cash entry converts on its own.
@@ -189,6 +205,7 @@ export const POST = withRouteContext(
         amount: paymentAmount,
         amountSek: body.amount_sek,
         exchangeRateDifference: body.exchange_rate_difference,
+        ...(registrationPlan.required ? { pendingRegistrationPayableSek: registrationPlan.payableSek } : {}),
       })
       if (!sek.ok) {
         return errorResponseFromCode(sek.code, opLog, { requestId, details: sek.details })
@@ -196,6 +213,32 @@ export const POST = withRouteContext(
       clearingSek = sek.clearingSek
       exchangeRateDifference = sek.exchangeRateDifference
     }
+
+    // Edited rows must balance and the payment date needs an open period:
+    // both refused before the registration below is booked.
+    let customLinesPeriodId: string | null = null
+    if (body.lines) {
+      const totalDebit = body.lines.reduce((s, l) => s + l.debit_amount, 0)
+      const totalCredit = body.lines.reduce((s, l) => s + l.credit_amount, 0)
+      if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
+        return errorResponseFromCode('INVOICE_PAID_LINES_UNBALANCED', opLog, {
+          requestId,
+          details: { totalDebit, totalCredit },
+        })
+      }
+      customLinesPeriodId = await findFiscalPeriod(supabase, companyId!, paymentDate)
+      if (!customLinesPeriodId) {
+        return errorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', opLog, {
+          requestId,
+          details: { paymentDate },
+        })
+      }
+    }
+
+    // Every check has run: book the registration (a no-op unless required),
+    // then the payment against the 2440 it credits.
+    const registration = await bookRegistrationBeforeSettlement(opCtx, registrationPlan)
+    if (!registration.ok) return sessionFailureResponse(registration, opLog, requestId)
 
     let journalEntryId: string | null = null
     // Posting port (step 2e): the door's side of the purchase.paid event,
@@ -206,22 +249,8 @@ export const POST = withRouteContext(
     })
 
     try {
-      if (body.lines) {
-        const totalDebit = body.lines.reduce((s, l) => s + l.debit_amount, 0)
-        const totalCredit = body.lines.reduce((s, l) => s + l.credit_amount, 0)
-        if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
-          return errorResponseFromCode('INVOICE_PAID_LINES_UNBALANCED', opLog, {
-            requestId,
-            details: { totalDebit, totalCredit },
-          })
-        }
-        const fiscalPeriodId = await findFiscalPeriod(supabase, companyId!, paymentDate)
-        if (!fiscalPeriodId) {
-          return errorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', opLog, {
-            requestId,
-            details: { paymentDate },
-          })
-        }
+      // customLinesPeriodId is set whenever body.lines is (checked above).
+      if (body.lines && customLinesPeriodId) {
         const sourceType = useCashEntry ? 'supplier_invoice_cash_payment' : 'supplier_invoice_paid'
         const desc = buildSupplierDescription(
           'Utbetalning leverantörsfaktura',
@@ -229,7 +258,7 @@ export const POST = withRouteContext(
           invoice.supplier?.name || undefined,
         )
         const input: CreateJournalEntryInput = {
-          fiscal_period_id: fiscalPeriodId,
+          fiscal_period_id: customLinesPeriodId,
           entry_date: paymentDate,
           description: desc,
           source_type: sourceType,
@@ -475,6 +504,11 @@ export const POST = withRouteContext(
       paid_amount: newPaidAmount,
       remaining_amount: Math.max(0, newRemaining),
       journal_entry_id: journalEntryId,
+      // The registration verifikat this payment booked first, when it did.
+      ...(registration.bookedHere ? { registration_journal_entry_id: registration.journalEntryId } : {}),
+      ...(registration.warnings.length > 0
+        ? { warnings: registration.warnings.map((w) => ({ code: w.code, message: w.message_sv })) }
+        : {}),
     })
   },
   { requireWrite: true },

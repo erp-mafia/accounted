@@ -35,7 +35,23 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
   reverseEntry: vi.fn(),
 }))
 
+// The registration-first planner (defer_invoice_booking) has its own suite;
+// here it answers per test, by default "nothing to book first".
+vi.mock('@/lib/supplier-invoices/registration-first', () => ({
+  planRegistrationBeforeSettlement: vi.fn(async () => ({ ok: true, required: false })),
+  bookRegistrationBeforeSettlement: vi.fn(async () => ({
+    ok: true,
+    journalEntryId: null,
+    bookedHere: false,
+    warnings: [],
+  })),
+}))
+
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import {
+  bookRegistrationBeforeSettlement,
+  planRegistrationBeforeSettlement,
+} from '@/lib/supplier-invoices/registration-first'
 import {
   createSupplierInvoicePaymentEntry as mockedCreatePaymentEntry,
   createSupplierInvoiceCashEntry as mockedCreateCashEntry,
@@ -543,5 +559,115 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invo
     expect(mockedReverseEntry).not.toHaveBeenCalled()
     expect(mockedCreateJournalEntry).not.toHaveBeenCalled()
     expect(writes).toEqual([])
+  })
+})
+
+describe('POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invoice: a deferred invoice paid before Bokför', () => {
+  const url = `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-supplier-invoice`
+  const registrationEntry = {
+    entry_date: '2026-05-02',
+    description: 'Leverantörsfaktura F-2026001',
+    lines: [
+      { account_number: '6110', debit_amount: 800, credit_amount: 0, line_description: null },
+      { account_number: '2641', debit_amount: 200, credit_amount: 0, line_description: null },
+      { account_number: '2440', debit_amount: 0, credit_amount: 1000, line_description: null },
+    ],
+    total_debit: 1000,
+    total_credit: 1000,
+    balanced: true,
+    note: '',
+  }
+  const requiredPlan = {
+    ok: true as const,
+    required: true as const,
+    supplierInvoiceId: SI_ID,
+    entry: registrationEntry,
+    payableSek: 1000,
+    createsAccrualSchedules: false,
+  }
+
+  async function match(transaction: Record<string, unknown> = {}) {
+    const { supabase, calls } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: { data: { ...TRANSACTION, ...transaction }, error: null },
+      supplier_invoices: [
+        { data: REGISTERED_INVOICE, error: null },
+        { data: [{ id: SI_ID }], error: null },
+      ],
+      company_settings: { data: { accounting_method: 'accrual', defer_invoice_booking: true }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+    const response = await matchSupplierInvoice(
+      makeRequest(url, { supplier_invoice_id: SI_ID }),
+      detailParams(COMPANY_ID, TX_ID),
+    )
+    const body = await response.json()
+    const writes = calls.filter(
+      (c) => c.table !== 'idempotency_keys' && (c.method === 'update' || c.method === 'insert'),
+    )
+    return { response, body, writes }
+  }
+
+  it('books the registration first, then the payment, and names it in the response', async () => {
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce(requiredPlan)
+    vi.mocked(bookRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: true,
+      journalEntryId: 'je-registration',
+      bookedHere: true,
+      warnings: [],
+    })
+
+    const { response, body } = await match()
+
+    expect(response.status).toBe(200)
+    expect(body.data.registration_journal_entry_id).toBe('je-registration')
+    expect(vi.mocked(planRegistrationBeforeSettlement)).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: COMPANY_ID, userId: USER_ID }),
+      expect.objectContaining({ id: SI_ID, registration_journal_entry_id: null }),
+      { settlementDate: '2026-05-12' },
+    )
+    const bookOrder = vi.mocked(bookRegistrationBeforeSettlement).mock.invocationCallOrder[0]
+    expect(bookOrder).toBeLessThan(mockCreatePaymentEntry.mock.invocationCallOrder[0])
+  })
+
+  it('books the registration before reversing a prior categorization of the bank row', async () => {
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce(requiredPlan)
+    vi.mocked(bookRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: true,
+      journalEntryId: 'je-registration',
+      bookedHere: true,
+      warnings: [],
+    })
+
+    const { response } = await match({ journal_entry_id: 'je-categorised' })
+
+    expect(response.status).toBe(200)
+    const bookOrder = vi.mocked(bookRegistrationBeforeSettlement).mock.invocationCallOrder[0]
+    expect(bookOrder).toBeLessThan(vi.mocked(mockedReverseEntry).mock.invocationCallOrder[0])
+  })
+
+  it('a refused registration refuses the match before the storno: nothing booked, reversed or written', async () => {
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: false,
+      code: 'PERIOD_LOCKED',
+      details: { invoice_date: '2026-03-02', registration_first: true, supplier_invoice_id: SI_ID },
+    })
+
+    const { response, body, writes } = await match({ journal_entry_id: 'je-categorised' })
+
+    expect(response.status).toBe(400)
+    expect(body.error.code).toBe('PERIOD_LOCKED')
+    expect(body.error.details).toMatchObject({ registration_first: true })
+    expect(vi.mocked(bookRegistrationBeforeSettlement)).not.toHaveBeenCalled()
+    expect(mockedReverseEntry).not.toHaveBeenCalled()
+    expect(mockCreatePaymentEntry).not.toHaveBeenCalled()
+    expect(writes).toEqual([])
+  })
+
+  it('an invoice that needs nothing booked first matches as before: registration_journal_entry_id is null', async () => {
+    const { response, body } = await match()
+    expect(response.status).toBe(200)
+    expect(body.data.registration_journal_entry_id).toBeNull()
+    expect(mockCreatePaymentEntry).toHaveBeenCalledTimes(1)
   })
 })

@@ -207,7 +207,8 @@
           "paymentAmount": 80,
           "journalEntryId": "00000000-0000-4000-8000-000000009001",
           "voucherRemaining": 0,
-          "reconciledTransactionId": null
+          "reconciledTransactionId": null,
+          "registrationJournalEntryId": null
         }
       }
     },
@@ -238,7 +239,8 @@
           "paymentAmount": 40,
           "journalEntryId": "00000000-0000-4000-8000-000000009001",
           "voucherRemaining": 60,
-          "reconciledTransactionId": null
+          "reconciledTransactionId": null,
+          "registrationJournalEntryId": null
         }
       }
     },
@@ -778,7 +780,8 @@
           "paymentAmount": 80,
           "journalEntryId": "00000000-0000-4000-8000-000000009001",
           "voucherRemaining": 0,
-          "reconciledTransactionId": null
+          "reconciledTransactionId": null,
+          "registrationJournalEntryId": null
         }
       }
     },
@@ -809,7 +812,8 @@
           "paymentAmount": 40,
           "journalEntryId": "00000000-0000-4000-8000-000000009001",
           "voucherRemaining": 60,
-          "reconciledTransactionId": null
+          "reconciledTransactionId": null,
+          "registrationJournalEntryId": null
         }
       }
     },
@@ -1359,7 +1363,8 @@
           "paymentAmount": 80,
           "journalEntryId": "00000000-0000-4000-8000-000000009001",
           "voucherRemaining": 0,
-          "reconciledTransactionId": null
+          "reconciledTransactionId": null,
+          "registrationJournalEntryId": null
         }
       }
     },
@@ -1390,7 +1395,8 @@
           "paymentAmount": 40,
           "journalEntryId": "00000000-0000-4000-8000-000000009001",
           "voucherRemaining": 60,
-          "reconciledTransactionId": null
+          "reconciledTransactionId": null,
+          "registrationJournalEntryId": null
         }
       }
     },
@@ -1922,7 +1928,8 @@
           "paymentAmount": 80,
           "journalEntryId": "00000000-0000-4000-8000-000000009001",
           "voucherRemaining": 0,
-          "reconciledTransactionId": null
+          "reconciledTransactionId": null,
+          "registrationJournalEntryId": null
         }
       }
     },
@@ -1953,7 +1960,8 @@
           "paymentAmount": 40,
           "journalEntryId": "00000000-0000-4000-8000-000000009001",
           "voucherRemaining": 60,
-          "reconciledTransactionId": null
+          "reconciledTransactionId": null,
+          "registrationJournalEntryId": null
         }
       }
     },
@@ -2401,7 +2409,8 @@
           "paymentAmount": 40,
           "journalEntryId": "00000000-0000-4000-8000-000000009001",
           "voucherRemaining": 60,
-          "reconciledTransactionId": null
+          "reconciledTransactionId": null,
+          "registrationJournalEntryId": null
         }
       }
     },

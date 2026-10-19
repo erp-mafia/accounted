@@ -271,7 +271,7 @@ export const supplierInvoicesBook = defineOperation({
     useWhen:
       'A supplier invoice is registered, approved or overdue, has no registration_journal_entry_id, and the company books supplier invoices in a separate step (defer_invoice_booking).',
     doNotUseFor:
-      'Paid or partially paid invoices (their payment booked them in full), credit notes, or any supplier invoice under kontantmetoden (booked at payment via :mark-paid).',
+      'Paid or partially paid invoices (a payment books the registration first through this step; a kontantmetoden payment books the whole invoice), credit notes, or any supplier invoice under kontantmetoden (booked at payment via :mark-paid).',
     pitfalls: [
       'An invoice that already has a registration_journal_entry_id answers 400 SI_BOOK_ALREADY_BOOKED.',
       'Status other than registered, approved or overdue answers 400 SI_BOOK_INVALID_STATUS with details.currentStatus.',
@@ -279,6 +279,7 @@ export const supplierInvoicesBook = defineOperation({
       PERIOD_LOCKED_PITFALL,
       'No open fiscal year covering the invoice date answers 400 SI_BOOK_NO_FISCAL_PERIOD.',
       'Booking does not attest the invoice: :approve is a separate step and may come before or after.',
+      'Settling an unbooked invoice (mark-paid, a bank match, a samlingsbetalning, a link to an existing verifikat) runs this step first and refuses the payment with its code when it refuses: there is no need to call it before paying, and no way to pay around it.',
     ],
     example: {
       response: {

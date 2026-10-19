@@ -1,0 +1,1 @@
+[2026-10-16] Settling an unbooked supplier invoice of a defer_invoice_booking company books its registration through the Bokför step first, at every door, then the 2440 clearing: faktureringsmetoden books the invoice at fakturadatum; a cash-style payment entry would date the cost and moms wrong.

@@ -2,7 +2,8 @@
  * The deferred "Bokför" step for supplier invoices (#967), one implementation
  * behind every door: the dashboard route POST /api/supplier-invoices/[id]/book,
  * the v1 operation supplier-invoices.book and its MCP tool
- * (lib/operations/invoice-booking.ts).
+ * (lib/operations/invoice-booking.ts), and every settlement of a still
+ * unbooked invoice, which books it here first (registration-first.ts).
  *
  * Companies with company_settings.defer_invoice_booking=true register
  * supplier invoices without a verifikat; ekonomi books the registration entry
@@ -11,9 +12,14 @@
  * Rules, in order:
  *   - the invoice exists in the company, is not a credit note and is not
  *     booked yet;
- *   - status registered, approved or overdue: paid and partially paid
- *     invoices were booked in full by their payment, so booking the
- *     registration now would double-post;
+ *   - status registered, approved or overdue. A settlement never reaches an
+ *     unbooked invoice of a deferring company first: every door that settles
+ *     one books its registration through this function beforehand
+ *     (registration-first.ts). So a paid or partially paid invoice without
+ *     a registration is either a kontantmetoden payment that booked the
+ *     whole invoice (a later switch to faktureringsmetoden would double-post
+ *     it here) or a payment made before that rule (2026-10-16) that booked
+ *     only the 2440 clearing, which needs a rättelse, not this step;
  *   - faktureringsmetoden: under kontantmetoden the invoice books at payment;
  *   - the invoice date is not in a locked or closed period, nor on or before
  *     the company lock date (PERIOD_LOCKED, checked before anything is
@@ -46,9 +52,13 @@ import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
 // Statuses where the registration entry can still be created afterwards.
-// Paid/partially paid invoices are excluded: their payment flow has already
-// booked the full cash-style entry (mark-paid routes on the missing
-// registration link), so booking registration now would double-post.
+// Paid and partially paid invoices are excluded: a payment that reached one
+// without a registration booked either the whole invoice (kontantmetoden,
+// before a switch of method), which this step would double-post, or only the
+// 2440 clearing (a deferring company's payment before registration-first.ts),
+// which is corrected by a rättelse. Every settlement door now books the
+// registration first, through bookSupplierInvoice, while the invoice is still
+// in one of these statuses.
 export const SUPPLIER_INVOICE_BOOKABLE_STATUSES = ['registered', 'approved', 'overdue']
 
 const ACCRUAL_PARTIAL: OperationWarning = {
