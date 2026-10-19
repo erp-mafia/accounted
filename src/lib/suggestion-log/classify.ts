@@ -1,5 +1,6 @@
 import { agentBookingFor, businessAccount, type BookingProposal, type ProposalBooking, type ProposalSource } from '@/lib/bookkeeping/proposal'
-import { confidenceBand, type ConfidenceBand } from '@/lib/transactions/direct-booking'
+import { BANK_LINE_SUGGESTIONS } from '@/lib/composition/bank-line-suggestions'
+import type { ConfidenceBand } from './bank-line-suggestions'
 import type { EntityType, LinePatternEntry, VatTreatment } from '@/types'
 
 /**
@@ -209,6 +210,6 @@ export function classifyBankLineDecision(input: {
     suggestions,
     acted_on: index,
     outcome: suggestions[index].matches_final ? 'accepted' : 'changed',
-    confidence_band: confidenceBand(offered[index]),
+    confidence_band: BANK_LINE_SUGGESTIONS.confidenceBand(offered[index]),
   }
 }

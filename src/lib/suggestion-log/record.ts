@@ -1,6 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { BANK_PROPOSAL_RULES_REVISION, proposeForTransactions } from '@/lib/transactions/propose'
-import { DIRECT_BOOKING_POLICY_VERSION } from '@/lib/transactions/direct-booking'
+import { BANK_LINE_SUGGESTIONS } from '@/lib/composition/bank-line-suggestions'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { getActor } from '@/lib/bookkeeping/actor-context'
 import { getTemplateById } from '@/lib/bookkeeping/booking-templates'
@@ -116,7 +115,7 @@ export async function snapshotSuggestions(
     const transactions = (data ?? []) as Transaction[]
     const [entityType, proposed] = await Promise.all([
       resolveCompanyEntityType(supabase, companyId),
-      proposeForTransactions(supabase, companyId, transactions),
+      BANK_LINE_SUGGESTIONS.propose(supabase, companyId, transactions),
     ])
     snapshot.entityType = entityType
     const hashes = await documentHashes(
@@ -141,7 +140,7 @@ export async function snapshotSuggestions(
           : null,
       })
     }
-    snapshot.ruleVersion = withProgramVersion(BANK_PROPOSAL_RULES_REVISION)
+    snapshot.ruleVersion = withProgramVersion(BANK_LINE_SUGGESTIONS.rulesRevision())
   } catch (err) {
     log.warn('suggestion snapshot failed; decisions are recorded without suggestions', {
       companyId,
@@ -195,7 +194,7 @@ export async function recordDecisions(
         rule_version: taken ? (snapshot.ruleVersion ?? null) : null,
         input_hash: taken?.inputHash ?? null,
         // The policy is recorded with the band it decided, never without.
-        policy_version: classified.confidence_band ? DIRECT_BOOKING_POLICY_VERSION : null,
+        policy_version: classified.confidence_band ? BANK_LINE_SUGGESTIONS.policyVersion() : null,
         confidence_band: classified.confidence_band,
         checks: d.checks ?? null,
         pending_operation_id: pendingOperationId,

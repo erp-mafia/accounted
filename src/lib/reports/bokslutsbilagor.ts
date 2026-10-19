@@ -1,16 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
-import { listReconciliationAccounts } from '@/lib/reconciliation/service'
-import {
-  loadBalanceSheetSnapshot,
-  loadSpecificationAmounts,
-  SPECIFICATION_PROVIDERS,
-  type BalanceSheetSnapshot,
-} from '@/lib/reconciliation/manual-reconciliation'
-import { getLatestSignoffs, mapSignoffRow } from '@/lib/reconciliation/signoff-store'
-import { listAttachmentRowsInRange, type AttachmentRow } from '@/lib/reconciliation/attachments-store'
+import { CLOSING_RECONCILIATION } from '@/lib/composition/closing-reconciliation'
+import { RECONCILIATION_SIGNOFFS } from '@/lib/composition/reconciliation-signoffs'
+import type { BalanceSheetSnapshot } from '@/lib/reconciliation/manual-reconciliation'
+import type { AttachmentRow } from '@/lib/reconciliation/attachments-store'
 import type { ReconciliationAccount, ReconciliationSignoff } from '@/lib/reconciliation/schemas'
+import type { ReconciliationSignoffRow } from './reconciliation-signoffs'
 import { buildBokslutChecklist } from '@/lib/bokslut/checklist'
 import type { BilagaAccount, BilagaAttachment, BilagaSignoff, BokslutsbilagorReport } from './bokslutsbilagor-types'
 
@@ -37,7 +33,7 @@ function externalLabels(account: ReconciliationAccount, hasSpecification: boolea
   if (account.kind === 'bank') return { sv: 'Banken (saldo vid signering)', en: 'The bank (balance at sign-off)' }
   if (account.kind === 'skattekonto') return { sv: 'Skatteverket (saldo vid signering)', en: 'Skatteverket (balance at sign-off)' }
   if (hasSpecification) {
-    const p = SPECIFICATION_PROVIDERS[account.account_number]
+    const p = CLOSING_RECONCILIATION.specificationProviders[account.account_number]
     return { sv: p.label_sv, en: p.label_en }
   }
   return { sv: 'Saldo enligt underlag (angivet vid signering)', en: 'Balance per supporting documents (stated at sign-off)' }
@@ -65,14 +61,14 @@ export async function generateBokslutsbilagor(
   const balansdag = period.period_end
 
   const [accounts, snapshot, balansdagSignoffs, latestSignoffs, attachmentRows, checklist] = await Promise.all([
-    listReconciliationAccounts(supabase, companyId, { today: balansdag, windowFrom: period.period_start, windowTo: balansdag }),
-    loadBalanceSheetSnapshot(supabase, companyId, balansdag).catch((err): BalanceSheetSnapshot | null => {
+    CLOSING_RECONCILIATION.listAccounts(supabase, companyId, { today: balansdag, windowFrom: period.period_start, windowTo: balansdag }),
+    CLOSING_RECONCILIATION.balanceSheetSnapshot(supabase, companyId, balansdag).catch((err): BalanceSheetSnapshot | null => {
       log.warn('balance snapshot failed', { companyId, periodId, error: String(err) })
       return null
     }),
     signoffsOn(supabase, companyId, balansdag),
-    getLatestSignoffs(supabase, companyId).catch(() => new Map<string, ReconciliationSignoff | null>()),
-    listAttachmentRowsInRange(supabase, companyId, period.period_start, balansdag, { includeRemoved: true }).catch((err): AttachmentRow[] => {
+    RECONCILIATION_SIGNOFFS.latest(supabase, companyId).catch(() => new Map<string, ReconciliationSignoff | null>()),
+    CLOSING_RECONCILIATION.attachmentRowsInRange(supabase, companyId, period.period_start, balansdag, { includeRemoved: true }).catch((err): AttachmentRow[] => {
       log.warn('attachment read failed', { companyId, periodId, error: String(err) })
       return []
     }),
@@ -80,11 +76,11 @@ export async function generateBokslutsbilagor(
   ])
 
   const specifications = snapshot
-    ? await loadSpecificationAmounts(
+    ? await CLOSING_RECONCILIATION.specificationAmounts(
         supabase,
         companyId,
         snapshot,
-        new Set(accounts.filter((a) => a.kind === 'manual' && SPECIFICATION_PROVIDERS[a.account_number]).map((a) => a.account_number)),
+        new Set(accounts.filter((a) => a.kind === 'manual' && CLOSING_RECONCILIATION.specificationProviders[a.account_number]).map((a) => a.account_number)),
       )
     : new Map()
 
@@ -213,8 +209,8 @@ async function signoffsOn(supabase: SupabaseClient, companyId: string, throughDa
     log.warn('balansdag sign-off read failed', { companyId, throughDate, error: error.message })
     return out
   }
-  for (const row of (data ?? []) as Parameters<typeof mapSignoffRow>[0][]) {
-    const mapped = mapSignoffRow(row)
+  for (const row of (data ?? []) as ReconciliationSignoffRow[]) {
+    const mapped = RECONCILIATION_SIGNOFFS.fromRow(row)
     out.set(mapped.account_key, mapped)
   }
   return out
