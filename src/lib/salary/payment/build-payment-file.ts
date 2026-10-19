@@ -66,7 +66,7 @@ import {
   maskPayeeAccount,
   normalizeBankNumber,
   payeeAccountProblem,
-} from './bank-account'
+} from '@/lib/payments/bank-account'
 
 import { SALARY_PAYMENT_FILE_FORMATS, type SalaryPaymentFileFormat } from './payment-format'
 

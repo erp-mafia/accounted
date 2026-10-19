@@ -32,7 +32,7 @@ import {
 import { REDACTED_PERSONNUMMER } from '@/lib/salary/personnummer-format'
 import { getCompanyEntityType } from '@/lib/company/context'
 import { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } from '@/lib/salary/employment-rules'
-import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
+import { validateEmployeeBankAccount } from '@/lib/payments/bank-account'
 import { jamkningIssueFromDbError, validateJamkning, type JamkningFields } from '@/lib/salary/jamkning-rules'
 import { extraTaxIssueFromDbError, validateExtraTax } from '@/lib/salary/extra-tax'
 import { validateEmployeeUpdate, type EmployeeUpdateIssue } from '@/lib/salary/employee-update-rules'

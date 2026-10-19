@@ -23,7 +23,7 @@ import { executionDateFor } from '@/lib/payments/bank-days'
 import { formatPayeeLabel, type SupplierPayee } from '@/lib/payments/supplier-payee'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { createServiceClient } from '@/lib/supabase/server'
-import { loadAttestBlockedInvoiceIds } from '@/lib/supplier-invoices/attest-policy-read'
+import { PAYMENT_ATTEST_GATE } from '@/lib/composition/payment-attest-gate'
 import { loadDebtor } from './debtor'
 import { resolveOrderPayee } from './payee'
 import { loadInvoiceDocumentFacts, withInvoiceDocument } from './invoice-document'
@@ -191,7 +191,7 @@ export async function preparePaymentOrders(
   }
 
   // The attest policy's exclusion: the same read the payment file makes.
-  const attestBlocked = await loadAttestBlockedInvoiceIds(supabase, companyId, ids)
+  const attestBlocked = await PAYMENT_ATTEST_GATE.blockedInvoiceIds(supabase, companyId, ids)
   const useStated = new Set(input.useStatedPayeeFor ?? [])
   const skipped: PreparePaymentOrdersResult['skipped'] = []
   const warnings: PreparedOrderWarning[] = []

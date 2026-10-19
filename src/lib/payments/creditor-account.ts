@@ -31,7 +31,7 @@
  *    (lib/payments/swedbank.ts).
  */
 
-import { payeeAccountParts } from '@/lib/salary/payment/bank-account'
+import { payeeAccountParts } from '@/lib/payments/bank-account'
 import { swedbankCreditorAccount, type SwedbankFileIds } from './swedbank'
 
 export type CreditorAccountForm = 'split' | 'full_bban' | 'swedbank_iso2'

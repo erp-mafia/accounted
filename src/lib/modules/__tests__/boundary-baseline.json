@@ -22,10 +22,8 @@
     "inbox -> supplier-invoices": 1,
     "invoicing -> collections": 6,
     "invoicing -> payroll": 8,
-    "invoicing -> supplier-invoices": 4,
+    "invoicing -> supplier-invoices": 3,
     "payments -> invoicing": 1,
-    "payments -> payroll": 5,
-    "payments -> supplier-invoices": 4,
     "supplier-invoices -> invoicing": 2,
     "transactions -> agent": 2,
     "transactions -> bank-feed": 1,
@@ -42,6 +40,8 @@
       "lib/bookkeeping/engine.ts -> lib/composition/reversal-hooks",
       "lib/events/outbox-dispatcher.ts -> lib/composition/async-event-consumers",
       "lib/init.ts -> lib/composition/event-consumers",
+      "lib/payments/batch-service.ts -> lib/composition/payment-attest-gate",
+      "lib/payments/orders/prepare.ts -> lib/composition/payment-attest-gate",
       "lib/transactions/ingest.ts -> lib/composition/ingest-matchers"
     ],
     "imports": [
@@ -62,6 +62,7 @@
       "lib/composition/ingest-matchers.ts -> lib/invoices/rot-rut-ingest-matchers",
       "lib/composition/ingest-matchers.ts -> lib/invoices/supplier-invoice-ingest-matcher",
       "lib/composition/ingest-matchers.ts -> lib/payments/orders/ingest-matcher",
+      "lib/composition/payment-attest-gate.ts -> lib/supplier-invoices/attest-policy-read",
       "lib/composition/reversal-hooks.ts -> lib/bookkeeping/payment-sync",
       "lib/composition/reversal-hooks.ts -> lib/invoices/migrated-deduction-reversal",
       "lib/composition/reversal-hooks.ts -> lib/invoices/rot-rut-reclaim-reversal"

@@ -26,7 +26,7 @@ import {
   checkEmployeeAccountChecksum,
   BANK_ISSUE_MESSAGES_SV,
   BANK_CHECKSUM_WARNING_SV,
-} from '@/lib/salary/payment/bank-account'
+} from '@/lib/payments/bank-account'
 import EmployeeTaxCard, { type EmployeeTaxValue } from '@/components/salary/EmployeeTaxCard'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'

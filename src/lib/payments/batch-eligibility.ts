@@ -11,8 +11,8 @@
  * no attest step), while a missing payee is an exclusion (there is nothing to
  * route the payment to). With the company's attest policy on, an invoice the
  * policy requires attest for and has not got it is an exclusion instead
- * (attest_required): the caller reads which ones through
- * loadAttestBlockedInvoiceIds (lib/supplier-invoices/attest-service.ts).
+ * (attest_required): the caller reads which ones through the attest gate
+ * (attest-gate.ts).
  */
 
 import { ORE_TOLERANCE, roundOre } from '@/lib/money'

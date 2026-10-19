@@ -27,7 +27,7 @@
 
 import { touchesJamkning, validateJamkning, type JamkningFields } from '@/lib/salary/jamkning-rules'
 import { touchesExtraTax, validateExtraTax, type ExtraTaxFields } from '@/lib/salary/extra-tax'
-import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
+import { validateEmployeeBankAccount } from '@/lib/payments/bank-account'
 
 export interface EmployeeUpdateIssue {
   field: string

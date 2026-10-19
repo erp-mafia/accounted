@@ -7,7 +7,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { statedPayeeColumns, type StatedPayeeColumns, type SupplierPaymentDetails } from '@/lib/supplier-invoices/payment-details-backfill'
+import { statedPayeeColumns, type StatedPayeeColumns, type SupplierPaymentDetails } from './payment-details'
 import { CARD_PAYEE_COLUMNS, loadPaidSuppliers } from './payee-alerts'
 import { classifyPayeeChange, payeeAlertFor, statedPayeeKey, type CardPayeeSource, type PayeeAlert } from './payee-change'
 

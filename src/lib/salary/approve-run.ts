@@ -30,7 +30,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
 import { eventBus } from '@/lib/events'
 import { effectiveNetPayout, type EffectiveNetInput } from '@/lib/salary/payment/effective-net'
-import { employeeBankDetailsRemark } from '@/lib/salary/payment/bank-account'
+import { employeeBankDetailsRemark } from '@/lib/payments/bank-account'
 import { runCalculationState, type RunCalculationSource } from '@/lib/salary/calculation-state'
 import { refreshRunYtd } from '@/lib/salary/ytd'
 

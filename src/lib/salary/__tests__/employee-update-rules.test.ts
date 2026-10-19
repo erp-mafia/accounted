@@ -15,7 +15,7 @@ import {
 } from '../employee-update-rules'
 import { JAMKNING_END_REQUIRED } from '../jamkning-rules'
 import { EXTRA_TAX_ONE_FORM } from '../extra-tax'
-import { BANK_ISSUE_MESSAGES_SV } from '../payment/bank-account'
+import { BANK_ISSUE_MESSAGES_SV } from '@/lib/payments/bank-account'
 
 const VALID_ROW = {
   salary_type: 'monthly',

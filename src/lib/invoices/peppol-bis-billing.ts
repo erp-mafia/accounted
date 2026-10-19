@@ -7,7 +7,7 @@ import {
 import { isSaneDateString, normalizeOrgNumber } from '@/lib/invariants'
 import { normalizeIban } from '@/lib/cash-accounts/service'
 import { isEntityType, legalFormProfile, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
-import { isValidBic, isValidIban } from '@/lib/supplier-invoices/payment-details-backfill'
+import { isValidBic, isValidIban } from '@/lib/payments/payment-details'
 import { resolveInvoicePaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { computeLineAmounts, hasLineDiscount } from '@/lib/bookkeeping/invoice-line-amounts'
 import { getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'

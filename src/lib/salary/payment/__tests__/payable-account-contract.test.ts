@@ -18,7 +18,7 @@ import {
   PayeeAccountError,
   resolveDomesticBankAccount,
   validateEmployeeBankAccount,
-} from '@/lib/salary/payment/bank-account'
+} from '@/lib/payments/bank-account'
 import { generateBgLb } from '@/lib/salary/payment/bg-lb-generator'
 import { generatePain001 } from '@/lib/salary/payment/pain001-generator'
 import { generateSupplierPain001 } from '@/lib/payments/pain001-supplier'

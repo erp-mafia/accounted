@@ -11,8 +11,8 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { normalizeIban } from '@/lib/cash-accounts/ledger-slots'
-import { isValidIban } from '@/lib/supplier-invoices/payment-details-backfill'
-import { lookupBicByBankName, lookupBicByClearing } from '@/lib/salary/payment/bank-account'
+import { isValidIban } from '@/lib/payments/payment-details'
+import { lookupBicByBankName, lookupBicByClearing } from '@/lib/payments/bank-account'
 
 export interface DebtorAccountSource {
   iban: string | null

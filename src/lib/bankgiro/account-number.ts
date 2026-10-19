@@ -49,7 +49,7 @@ interface ClearingRule {
 // Ordered resolution: exact-clearing exceptions win over ranges. Only the
 // major banks are mapped; anything else returns null -> 'unknown'. The bank
 // names in the comments are for reference; the display name comes from
-// lookupBankByClearing in lib/salary/payment/bank-account.ts.
+// lookupBankByClearing in lib/payments/bank-account.ts.
 function resolveClearingRule(clearing4: number): ClearingRule | null {
   // Nordea personkonto (10-digit mod10 account): exceptions inside the 3xxx range.
   if (clearing4 === 3300 || clearing4 === 3782) return { type: 2, comment: 1 }

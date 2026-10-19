@@ -34,7 +34,7 @@
  */
 
 import { luhnCheckDigit } from '@/lib/bankgiro/luhn'
-import { payeeAccountParts } from './bank-account'
+import { payeeAccountParts } from '@/lib/payments/bank-account'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
 export interface BgLbCompanyData {
