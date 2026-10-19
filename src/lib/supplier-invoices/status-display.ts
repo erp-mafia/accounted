@@ -21,8 +21,29 @@ const SUPPLIER_INVOICE_STATUS_DISPLAY: Record<SupplierInvoiceStatus, StatusDispl
   reversed: { labelKey: 'status_reversed', chip: 'secondary' },
 }
 
+/**
+ * A company that never attests (kontantmetoden, see
+ * companyAttestsSupplierInvoices) leaves every unpaid invoice on
+ * 'registered', so the "waiting for attest" chip would sit on every open
+ * row. There registered is the normal state and reads as muted "Att betala".
+ */
+const REGISTERED_WITHOUT_ATTEST: StatusDisplay = { labelKey: 'status_registered_to_pay', chip: null }
+
+export interface SupplierInvoiceStatusDisplayOptions {
+  /**
+   * Whether the company attests supplier invoices
+   * (companyAttestsSupplierInvoices). Defaults to true: the chip stays where
+   * attest is the real gate.
+   */
+  attests?: boolean
+}
+
 /** Null for a status this build does not know, so the caller can show the raw value. */
-export function supplierInvoiceStatusDisplay(status: string): StatusDisplay | null {
+export function supplierInvoiceStatusDisplay(
+  status: string,
+  options: SupplierInvoiceStatusDisplayOptions = {},
+): StatusDisplay | null {
+  if (status === 'registered' && options.attests === false) return REGISTERED_WITHOUT_ATTEST
   return SUPPLIER_INVOICE_STATUS_DISPLAY[status as SupplierInvoiceStatus] ?? null
 }
 

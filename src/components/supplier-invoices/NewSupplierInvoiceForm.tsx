@@ -1445,9 +1445,6 @@ export default function NewSupplierInvoiceForm({
   const selectedSupplier = suppliers.find((s) => s.id === watchedSupplierId)
   const supplierHasGiro = Boolean(selectedSupplier?.bankgiro || selectedSupplier?.plusgiro)
   const underlagFile = documentFiles[0]
-  const underlagAttached = Boolean(inboxItemId || uploadedDocumentId)
-
-  const detailsFilled = Boolean((watchedInvoiceNumber || '').trim() && watchedInvoiceDate)
 
   // Next-step line (the page's ONLY ochre line): same predicates and order as
   // the submit-time checks in useSupplierInvoiceSubmit, so the always-enabled
@@ -1473,19 +1470,6 @@ export default function NewSupplierInvoiceForm({
     }
     return null
   })()
-  const readyLineText =
-    watchedPaidPrivately || isEF
-      ? willBookAtRegistration
-        ? t('ready_line_register')
-        : bookingMoment === 'payment'
-          ? t('ready_line_register_cash')
-          : t('ready_line_register_deferred')
-      : bookingMoment === 'issue'
-        ? t('ready_line_review')
-        : bookingMoment === 'payment'
-          ? t('ready_line_review_cash')
-          : t('ready_line_review_deferred')
-
   const forvalChips: string[] = [
     willBookAtRegistration
       ? t('forval_books_at_registration')
@@ -1506,13 +1490,9 @@ export default function NewSupplierInvoiceForm({
   if ((watchedNotes || '').trim()) forvalChips.push(t('chip_notes'))
   if (dimensionsEnabled && defaultDimsSummary) forvalChips.push(defaultDimsSummary)
 
-  const underlagCaption = inboxItemId
-    ? null
-    : extractionPhase === 'done'
-      ? t('underlag_caption_done')
-      : underlagFile?.status === 'uploaded' && extractionPhase === 'idle'
-        ? t('underlag_caption_attached')
-        : t('underlag_caption_default')
+  // Only a finished tolkning earns a caption: before it the drop zone and the
+  // file row say what is going on.
+  const underlagCaption = !inboxItemId && extractionPhase === 'done' ? t('underlag_caption_done') : null
 
   // The primary action follows "Vem betalade?": a person -> book the utlägg,
   // the company -> register and match the bank line, no one yet -> register.
@@ -1559,15 +1539,7 @@ export default function NewSupplierInvoiceForm({
         <div className="divide-y divide-border">
           {/* ── Underlag (first: dokument-först) ─────────────────── */}
           <section className="pb-6">
-            <SectionLabel>
-              {t('section_underlag')}
-              <span className="ml-2 normal-case tracking-normal">({t('underlag_recommended')})</span>
-              {underlagAttached && (
-                <span className="ml-2 normal-case tracking-normal text-success">
-                  {'✓'} {t('mark_attached')}
-                </span>
-              )}
-            </SectionLabel>
+            <SectionLabel>{t('section_underlag')}</SectionLabel>
             {inboxItemId ? (
               <div className="flex items-center gap-3 rounded-lg border border-border px-4 py-3 text-[13px] text-muted-foreground">
                 <FileText className="h-4 w-4 shrink-0" />
@@ -1660,11 +1632,6 @@ export default function NewSupplierInvoiceForm({
             <SectionLabel>
               {t('section_supplier')}
               <RequiredMark />
-              {watchedSupplierId && (
-                <span className="ml-2 normal-case tracking-normal text-success">
-                  {'✓'} {t('mark_selected')}
-                </span>
-              )}
             </SectionLabel>
 
             {showAISupplierHint && (
@@ -1719,11 +1686,6 @@ export default function NewSupplierInvoiceForm({
             <SectionLabel>
               {t('section_details')}
               <RequiredMark />
-              {detailsFilled && (
-                <span className="ml-2 normal-case tracking-normal text-success">
-                  {'✓'} {t('mark_filled')}
-                </span>
-              )}
             </SectionLabel>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-2">
@@ -2364,35 +2326,13 @@ export default function NewSupplierInvoiceForm({
               </p>
             )}
 
-            {/* AI totals comparison: only when extracted */}
-            {extractedData?.totals && (extractedData.totals.subtotal != null || extractedData.totals.total != null) && (
-              <div className="mt-4 flex flex-wrap gap-2 text-xs">
-                <span className="text-muted-foreground">{t('ai_totals_label')}</span>
-                {extractedData.totals.subtotal != null && (
-                  <span className="px-2 py-1 rounded-sm bg-muted tabular-nums">
-                    {t('ai_net', { amount: formatAmount(extractedData.totals.subtotal) })}
-                  </span>
-                )}
-                {extractedData.totals.vatAmount != null && (
-                  <span className="px-2 py-1 rounded-sm bg-muted tabular-nums">
-                    {t('ai_vat', { amount: formatAmount(extractedData.totals.vatAmount) })}
-                  </span>
-                )}
-                {extractedData.totals.total != null && (
-                  <span className="px-2 py-1 rounded-sm bg-muted tabular-nums">
-                    {t('ai_total', { amount: formatAmount(extractedData.totals.total) })}
-                  </span>
-                )}
-              </div>
-            )}
-
             {/* The page's single ochre line: what stands between the user and
-                a registered invoice, sage once nothing does. */}
-            <p
-              aria-live="polite"
-              className={cn('pt-6 text-[12.5px]', nextStep ? 'text-attn' : 'text-success')}
-            >
-              {nextStep ? (
+                a registered invoice. Gone once nothing does: the Förval line
+                names the booking moment and the confirm dialog the outcome
+                (convention 10). The live region stays mounted so the change
+                is announced. */}
+            <p aria-live="polite" className={cn('text-[12.5px] text-attn', nextStep && 'pt-6')}>
+              {nextStep && (
                 <>
                   {t('next_step_prefix')}
                   <button
@@ -2404,8 +2344,6 @@ export default function NewSupplierInvoiceForm({
                   </button>
                   .
                 </>
-              ) : (
-                readyLineText
               )}
             </p>
           </section>
@@ -2419,44 +2357,37 @@ export default function NewSupplierInvoiceForm({
             bare && '-mx-6 -mb-6 rounded-b-xl px-6',
           )}
         >
-          <div className="flex flex-wrap items-center justify-between gap-3 py-3">
-            <div className="whitespace-nowrap text-[13px] text-muted-foreground">
-              {t('total_label')}
-              <strong className="ml-2 text-[15px] font-semibold tabular-nums text-foreground">
-                {formatCurrency(figures.toPay, watchedCurrency)}
-              </strong>
-            </div>
-            <div className="flex flex-wrap items-center justify-end gap-3">
-              <button
-                type="button"
-                className={cn(QUIET_LINK_CLASS, 'disabled:opacity-50')}
-                onClick={handleCancel}
-                disabled={isSubmitting || documentUploadInProgress}
-              >
-                {t('cancel')}
-              </button>
-              {/* Always enabled pre-click for writable users: clicking with
-                  something missing routes focus to the first missing field
-                  (submit-time hard blocks stay in onSubmit). Viewers keep the
-                  disabled + lock treatment: authorization, not validation. */}
-              <Button
-                type="submit"
-                disabled={!canWrite}
-                loading={isSubmitting}
-                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-              >
-                {isSubmitting ? (
-                  t('registering')
-                ) : !canWrite ? (
-                  <>
-                    <Lock className="mr-2 h-4 w-4" />
-                    {primaryLabel}
-                  </>
-                ) : (
-                  primaryLabel
-                )}
-              </Button>
-            </div>
+          {/* The total lives once, as the Summering headline above. */}
+          <div className="flex flex-wrap items-center justify-end gap-3 py-3">
+            <button
+              type="button"
+              className={cn(QUIET_LINK_CLASS, 'disabled:opacity-50')}
+              onClick={handleCancel}
+              disabled={isSubmitting || documentUploadInProgress}
+            >
+              {t('cancel')}
+            </button>
+            {/* Always enabled pre-click for writable users: clicking with
+                something missing routes focus to the first missing field
+                (submit-time hard blocks stay in onSubmit). Viewers keep the
+                disabled + lock treatment: authorization, not validation. */}
+            <Button
+              type="submit"
+              disabled={!canWrite}
+              loading={isSubmitting}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            >
+              {isSubmitting ? (
+                t('registering')
+              ) : !canWrite ? (
+                <>
+                  <Lock className="mr-2 h-4 w-4" />
+                  {primaryLabel}
+                </>
+              ) : (
+                primaryLabel
+              )}
+            </Button>
           </div>
         </div>
       </form>

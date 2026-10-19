@@ -61,6 +61,31 @@ describe('the shared rules', () => {
   })
 })
 
+describe('registered supplier invoices and attest', () => {
+  it('keeps the attest chip where attest is the gate (the default)', () => {
+    expect(supplierInvoiceStatusDisplay('registered')).toEqual({ labelKey: 'status_registered', chip: 'outline' })
+    expect(supplierInvoiceStatusDisplay('registered', { attests: true })).toEqual({
+      labelKey: 'status_registered',
+      chip: 'outline',
+    })
+  })
+
+  it('reads as muted "Att betala" for a company that never attests', () => {
+    const display = supplierInvoiceStatusDisplay('registered', { attests: false })
+    expect(display).toEqual({ labelKey: 'status_registered_to_pay', chip: null })
+    expect(catalog('sv').supplier_invoices[display!.labelKey]).toBe('Att betala')
+    expect(typeof catalog('en').supplier_invoices[display!.labelKey]).toBe('string')
+  })
+
+  it('leaves every other status alone when the company does not attest', () => {
+    for (const status of SUPPLIER_INVOICE_STATUSES.filter((s) => s !== 'registered')) {
+      expect(supplierInvoiceStatusDisplay(status, { attests: false }), status).toEqual(
+        supplierInvoiceStatusDisplay(status),
+      )
+    }
+  })
+})
+
 /*
  * Every surface reads these helpers: no page keeps its own status-to-label or
  * status-to-variant map for these three records. The maps this replaced were

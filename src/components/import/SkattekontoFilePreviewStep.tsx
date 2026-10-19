@@ -16,6 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { ArrowLeft, ArrowRight, AlertTriangle } from 'lucide-react'
 import { formatCurrency, cn } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
@@ -177,11 +178,15 @@ export default function SkattekontoFilePreviewStep({
         </p>
       )}
 
-      {/* What happens after import: nothing is booked automatically, and an
-          event that already has a 1630 verifikat (a deposit booked from the
-          bank side) is offered as a link, not a second booking. Answers the
-          "some of these are already booked" question before the click. */}
-      <p className="text-sm text-muted-foreground">{t('skattekonto_after_import_note')}</p>
+      {/* What happens after import: nothing is booked automatically. The
+          "?" says the rest: an event that already has a 1630 verifikat (a
+          deposit booked from the bank side) is offered as a link, not a
+          second booking, which answers "some of these are already booked"
+          before the click. */}
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <span>{t('skattekonto_after_import_note')}</span>
+        <HelpPopover className="shrink-0">{t('skattekonto_after_import_help')}</HelpPopover>
+      </div>
 
       {/* Rows the parser could not fully read: folded, all of them. */}
       <ImportNotices notices={noticesFromParseIssues(warnings)} />

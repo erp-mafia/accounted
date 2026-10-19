@@ -4,7 +4,8 @@ import { useCallback } from 'react'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { FileDropzone } from '@/components/ui/file-dropzone'
-import { Upload, FileText, AlertCircle, HelpCircle, Loader2 } from 'lucide-react'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { Upload, FileText, AlertCircle, Loader2 } from 'lucide-react'
 
 interface SkattekontoFileUploadStepProps {
   onFileSelect: (file: File) => void
@@ -41,6 +42,12 @@ export default function SkattekontoFileUploadStep({
           <CardTitle className="flex items-center gap-2">
             <Upload className="h-5 w-5" />
             {t('skattekonto_upload_title')}
+            {/* Where Skatteverket keeps the file: the description says what
+                to download, the clicks live behind the "?". */}
+            <HelpPopover className="shrink-0">
+              <p>{t('skattekonto_howto_steps')}</p>
+              <p className="mt-2">{t('skattekonto_howto_note')}</p>
+            </HelpPopover>
           </CardTitle>
           <CardDescription>{t('skattekonto_upload_description')}</CardDescription>
         </CardHeader>
@@ -85,22 +92,6 @@ export default function SkattekontoFileUploadStep({
               </div>
             </div>
           )}
-        </CardContent>
-      </Card>
-
-      <Card className="bg-muted/50">
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <HelpCircle className="h-4 w-4" />
-            {t('skattekonto_howto_title')}
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="text-sm space-y-3">
-          <div>
-            <p className="font-medium">Skatteverket</p>
-            <p className="text-muted-foreground">{t('skattekonto_howto_steps')}</p>
-          </div>
-          <p className="text-muted-foreground">{t('skattekonto_howto_note')}</p>
         </CardContent>
       </Card>
     </div>
