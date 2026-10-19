@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
 const { mockBlGet, mockBokioGetCompany, mockWintGet, mockLoginWint, mockLogWarn } = vi.hoisted(() => ({
@@ -83,6 +83,7 @@ vi.mock('@/lib/providers/wint/oauth', async (importOriginal) => {
 })
 
 import { createServiceClient } from '@/lib/supabase/server'
+import { openConsentToken } from '@/lib/providers/consent-tokens'
 import { BjornLundenApiError } from '@/lib/providers/bjornlunden/client'
 import { BokioApiError } from '@/lib/providers/bokio/client'
 import { WintApiError } from '@/lib/providers/wint/client'
@@ -99,9 +100,11 @@ describe('submitProviderToken', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.stubEnv('PERSONNUMMER_ENCRYPTION_KEY', 'test-personnummer-key')
     mock = createQueuedMockSupabase()
     vi.mocked(createServiceClient).mockReturnValue(mock.supabase as never)
   })
+  afterEach(() => vi.unstubAllEnvs())
 
   const tablesTouched = () => vi.mocked(mock.supabase.from).mock.calls.map((c) => c[0])
 
@@ -351,10 +354,9 @@ describe('submitProviderToken', () => {
     )
 
     expect(mockBokioGetCompany).toHaveBeenCalledWith('copied-token==', 'bokio-guid')
-    expect(mock.findCall('provider_consent_tokens', 'upsert')?.[0]).toMatchObject({
-      access_token: 'copied-token==',
-      provider_company_id: 'bokio-guid',
-    })
+    const upsert = mock.findCall('provider_consent_tokens', 'upsert')?.[0] as Record<string, string>
+    expect(upsert).toMatchObject({ provider_company_id: 'bokio-guid' })
+    expect(openConsentToken(upsert.access_token!)).toBe('copied-token==')
   })
 
   it('does NOT map another Bokio 4xx to invalid credentials', async () => {
@@ -590,13 +592,11 @@ describe('submitProviderToken', () => {
       ])
       // The stored row carries the token pair and the WINT company id; the
       // login mail and password must never reach the database.
-      const upsert = mock.findCall('provider_consent_tokens', 'upsert')?.[0] as Record<string, unknown>
-      expect(upsert).toMatchObject({
-        provider: 'wint',
-        access_token: 'wint-jwt',
-        refresh_token: 'wint-refresh',
-        provider_company_id: '4711',
-      })
+      const upsert = mock.findCall('provider_consent_tokens', 'upsert')?.[0] as Record<string, string>
+      expect(upsert).toMatchObject({ provider: 'wint', provider_company_id: '4711' })
+      expect(openConsentToken(upsert.access_token!)).toBe('wint-jwt')
+      expect(openConsentToken(upsert.refresh_token!)).toBe('wint-refresh')
+      expect(JSON.stringify(upsert)).not.toContain('wint-jwt')
       expect(JSON.stringify(upsert)).not.toContain('user@bolag.se')
       expect(JSON.stringify(upsert)).not.toContain('hemligt')
     })
