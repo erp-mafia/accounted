@@ -4,7 +4,6 @@ import {
   assistantSuggestionFromRead,
   categoryForAccount,
   firstSentence,
-  mergeAssistantSuggestion,
   readIsFresh,
   storeRead,
   type AssistantRead,
@@ -49,12 +48,6 @@ const read = (over: Partial<AssistantRead> = {}): AssistantRead => ({
   candidates: [{ account: '6570', label: 'Bankavgifter', vatTreatment: 'exempt', source: 'pattern', confidence: 0.3 }],
   model: 'm',
   ...over,
-})
-
-const sug = (source: SuggestedTemplate['source'], confidence = 0.9): SuggestedTemplate => ({
-  template_id: `${source}-x`, source, booking: { kind: 'template', template_id: 'x', category: 'expense_other' },
-  name_sv: 'x', name_en: 'x', group: 'g', debit_account: '5410', credit_account: '1930',
-  confidence, description_sv: '', risk_level: 'LOW', requires_review: false,
 })
 
 describe('readIsFresh', () => {
@@ -188,21 +181,6 @@ describe('categoryForAccount', () => {
   it('falls back by account class', () => {
     expect(categoryForAccount('3990')).toBe('income_other')
     expect(categoryForAccount('7631')).toBe('expense_other')
-  })
-})
-
-describe('mergeAssistantSuggestion', () => {
-  it('sits behind a rule and a counterpart but ahead of the catalog when likely', () => {
-    const out = mergeAssistantSuggestion([sug('rule'), sug('counterparty'), sug('catalog')], sug('assistant', 0.6))
-    expect(out.map((s) => s.source)).toEqual(['rule', 'counterparty', 'assistant', 'catalog'])
-  })
-  it('goes last when unsure', () => {
-    const out = mergeAssistantSuggestion([sug('catalog')], sug('assistant', 0.2))
-    expect(out.map((s) => s.source)).toEqual(['catalog', 'assistant'])
-  })
-  it('replaces an earlier assistant suggestion instead of stacking', () => {
-    const out = mergeAssistantSuggestion([sug('assistant', 0.9), sug('catalog')], sug('assistant', 0.6))
-    expect(out.filter((s) => s.source === 'assistant')).toHaveLength(1)
   })
 })
 

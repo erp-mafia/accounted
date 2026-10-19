@@ -1,8 +1,8 @@
 /**
  * Applying a Bankgirot split to a stored bank row: store the parts beside
  * the row (storeTransactionParts), suggest the open invoice behind each part
- * (suggestPartInvoices) for a row a person has not yet decided, and mark the
- * row when the split explains it.
+ * (the invoice blocks' answer, lib/transactions/open-invoices.ts) for a row a
+ * person has not yet decided, and mark the row when the split explains it.
  *
  * Two doors bring a split: Open Payments' enrichment during ingest
  * (lib/transactions/ingest.ts) and Bankgirot's own deposit specification, the
@@ -19,11 +19,11 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import type { MatchableInvoice } from '@/lib/invoices/invoice-matching'
 import type { BankTransactionPartInput, SupplierInvoice, Transaction } from '@/types'
+import { OPEN_INVOICES } from '@/lib/composition/open-invoices'
 import {
   BANKGIRO_SPLIT_CONFIDENCE,
   BANKGIRO_SPLIT_METHOD,
   splitIsComplete,
-  suggestPartInvoices,
   type PartSuggestion,
 } from './part-suggestions'
 import { storeTransactionParts } from './parts-store'
@@ -67,7 +67,7 @@ export interface ApplySplitResult {
 export async function applyTransactionSplit(supabase: SupabaseClient, input: ApplySplitInput): Promise<ApplySplitResult> {
   const { companyId, userId, tx, parts, pools } = input
   const suggestions = pools
-    ? suggestPartInvoices({
+    ? OPEN_INVOICES.suggestSplitParts({
         parentAmount: tx.amount,
         parts,
         customerInvoices: tx.amount > 0 ? pools.customerInvoices : [],

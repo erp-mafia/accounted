@@ -48,7 +48,7 @@ vi.mock('@/lib/bookkeeping/mapping-engine', async (importActual) => ({
   ...(await importActual<typeof import('@/lib/bookkeeping/mapping-engine')>()),
   saveUserMappingRule: saveRule,
 }))
-vi.mock('@/lib/transactions/invoice-match-suggestion', () => ({
+vi.mock('@/lib/invoices/invoice-match-suggestion', () => ({
   findInvoiceMatchSuggestion: intercept,
 }))
 
@@ -137,6 +137,31 @@ describe('categorizeTransaction: dry run', () => {
       dryRun: true,
     })
     expect(matched).toMatchObject({ ok: false, code: 'TX_CATEGORIZE_SUGGEST_SI_MATCH' })
+  })
+
+  it('hands the invoice-match intercept the row, the mapping\'s accounts and the override, and refuses with its code and details', async () => {
+    const candidates = [{ supplier_invoice_id: 'si-1' }]
+    intercept.mockResolvedValue({ code: 'TX_CATEGORIZE_SUGGEST_SI_MATCH', details: { candidates } })
+    const { supabase } = ledger()
+
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, { ...business, confirm_no_match: false }, {
+      ...live,
+      dryRun: true,
+    })
+
+    expect(outcome).toMatchObject({ ok: false, code: 'TX_CATEGORIZE_SUGGEST_SI_MATCH', details: { candidates } })
+    expect(intercept).toHaveBeenCalledTimes(1)
+    const [client, companyId, input, log] = intercept.mock.calls[0]!
+    expect(client).toBe(supabase)
+    expect(companyId).toBe(COMPANY_ID)
+    expect(input).toEqual({
+      transaction: expect.objectContaining({ id: TX_ID, amount: -1250, merchant_name: 'Kontorsbolaget' }),
+      debitAccount: '6110',
+      creditAccount: '1930',
+      isBusiness: true,
+      confirmNoMatch: false,
+    })
+    expect(typeof (log as { warn?: unknown }).warn).toBe('function')
   })
 
   it('leaves the invoice-match intercept to the doors that keep it', async () => {

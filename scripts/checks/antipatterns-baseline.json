@@ -466,7 +466,7 @@
       "lib/tax/deadline-config.ts": 1,
       "lib/transactions/category-suggestions.ts": 16,
       "lib/transactions/invoice-match-side.ts": 4,
-      "lib/transactions/invoice-match-suggestion.ts": 2,
+      "lib/invoices/invoice-match-suggestion.ts": 2,
       "lib/transactions/underlag-read.ts": 1,
       "lib/vat/account-vat-box.ts": 2,
       "lib/vat/account-vat-treatment.ts": 1,

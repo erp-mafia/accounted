@@ -1,3 +1,4 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   TransactionCategory,
   MappingResult,
@@ -17,7 +18,12 @@ import { resolveSekAmount } from './currency-utils'
 import { getOutputVatAccount } from './invoice-accounts'
 import { grossVat } from '@/lib/bookkeeping/gross-split'
 import { templateAccountForForm } from '@/lib/company/entity-type'
-import { templateSkattekontoAccount, type SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
+import {
+  resolveSkattekontoAccount,
+  templateSkattekontoAccount,
+  templateTouchesSkattekonto,
+  type SkattekontoLedgerAccount,
+} from '@/lib/skatteverket/skattekonto-account'
 import { vatTreatmentForRegistration, type VatRegistration } from './vat-registration'
 
 // ============================================================
@@ -2656,4 +2662,25 @@ export function buildMappingResultFromTemplate(
     vat_lines: vatLines,
     description,
   }
+}
+
+/**
+ * The skattekonto account buildMappingResultFromTemplate takes for this
+ * company: read (resolveSkattekontoAccount, which throws when it cannot be
+ * read) only when the template names the skattekonto (1630) on either form's
+ * accounts; undefined, without a read, otherwise.
+ */
+export async function templateSkattekontoAccountFor(
+  supabase: SupabaseClient,
+  companyId: string,
+  template: Pick<BookingTemplate, 'debit_account' | 'credit_account' | 'debit_account_ab' | 'credit_account_ab'>,
+): Promise<SkattekontoLedgerAccount | undefined> {
+  return templateTouchesSkattekonto([
+    template.debit_account,
+    template.credit_account,
+    template.debit_account_ab,
+    template.credit_account_ab,
+  ])
+    ? await resolveSkattekontoAccount(supabase, companyId)
+    : undefined
 }

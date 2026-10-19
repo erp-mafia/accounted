@@ -49,12 +49,7 @@ import type { BulkBookSchema } from '@/lib/api/schemas'
 import type { Logger } from '@/lib/logger'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type { BookingTemplateLibraryLine, Transaction } from '@/types'
-import {
-  applyTemplate,
-  libraryLinesForSkattekonto,
-  libraryLinesTouchSkattekonto,
-} from '@/lib/bookkeeping/template-library'
-import { resolveSkattekontoAccount } from '@/lib/skatteverket/skattekonto-account'
+import { applyTemplate, libraryLinesForCompanySkattekonto } from '@/lib/bookkeeping/template-library'
 import type { SqlBusinessEventLink } from '@/lib/bookkeeping/business-event-link'
 import { bulkBookedBankLineBusinessEvent } from '@/lib/bookkeeping/sql-posting-business-events'
 import { linkBasisColumns } from '@/lib/links/stamp'
@@ -273,10 +268,9 @@ export async function bulkBookTransactions(
     // skattekonto account, 2012 for an enskild firma that runs it there
     // (PH 175). A company's own template keeps its author's accounts.
     const rawLines = (tpl.lines ?? []) as BookingTemplateLibraryLine[]
-    const templateLines =
-      tpl.is_system && libraryLinesTouchSkattekonto(rawLines)
-        ? libraryLinesForSkattekonto(rawLines, await resolveSkattekontoAccount(ctx.supabase, ctx.companyId))
-        : rawLines
+    const templateLines = tpl.is_system
+      ? await libraryLinesForCompanySkattekonto(ctx.supabase, ctx.companyId, rawLines)
+      : rawLines
     const totalAbs = roundOre(txTyped.reduce((s, t) => s + Math.abs(t.amount), 0))
     const lines: ComputedLine[] = []
     let sortOrder = 0

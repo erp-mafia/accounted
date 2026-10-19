@@ -30,7 +30,7 @@ vi.mock('@/lib/bookkeeping/account-validation', async (importActual) => ({
   findUnresolvableAccounts: vi.fn().mockResolvedValue([]),
 }))
 vi.mock('@/lib/api/v1/check-period-lock', () => ({ checkPeriodLock: vi.fn().mockResolvedValue({ locked: false }) }))
-vi.mock('@/lib/transactions/invoice-match-suggestion', () => ({
+vi.mock('@/lib/invoices/invoice-match-suggestion', () => ({
   findInvoiceMatchSuggestion: vi.fn().mockResolvedValue(null),
 }))
 

@@ -4,17 +4,19 @@ import { evaluateMappingRules } from '@/lib/bookkeeping/mapping-engine'
 import { chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { upsertCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
-import { loadInvoiceMatchPool, type InvoiceMatchPool } from '@/lib/invoices/invoice-matching'
+import type { InvoiceMatchPool } from '@/lib/invoices/invoice-matching'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { amountToOre, contentBucketKey, descriptionsBridge, normalizeImportedDescription, reconcileStableExternalIds } from '@/lib/transactions/external-id'
-import { OPEN_PAYMENTS_AGGREGATOR } from '@/lib/bank-sync/aggregator'
 import { classifyTransactionMethod } from '@/lib/transactions/transaction-method'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { applyTransactionSplit } from '@/lib/transactions/parts-apply'
 import { createLogger } from '@/lib/logger'
 import { INGEST_MATCHERS } from '@/lib/composition/ingest-matchers'
+import { OPEN_INVOICES } from '@/lib/composition/open-invoices'
+import { INGEST_FEEDS } from '@/lib/composition/ingest-feeds'
+import { feedCarriesSplits, feedRereadsStoredRows } from '@/lib/transactions/ingest-feed'
 import { createIngestClaims, INGEST_POOL_OWNERS, startIngestMatchers, type IngestBatch } from '@/lib/transactions/ingest-matcher'
 import {
   gateIngestMatchers,
@@ -1069,7 +1071,7 @@ export async function ingestTransactions(
     result,
     claims,
     pools: {
-      customerInvoices: async () => (invoiceMatchPool ??= await loadInvoiceMatchPool(supabase, companyId)),
+      customerInvoices: async () => (invoiceMatchPool ??= await OPEN_INVOICES.loadCustomerInvoicePool(supabase, companyId)),
       supplierInvoices: [],
     },
     logMatch(transactionId, action, opts) {
@@ -1166,7 +1168,7 @@ export async function ingestTransactions(
   // duplicates exactly as before and never pay for this read.
   const storedIdsOfBatch = externalIds.filter((id) => storedExternalIds.has(id))
   const enrichable =
-    rawTransactions[0]?.import_source === OPEN_PAYMENTS_AGGREGATOR && storedIdsOfBatch.length > 0
+    feedRereadsStoredRows(INGEST_FEEDS, rawTransactions[0]?.import_source) && storedIdsOfBatch.length > 0
       ? await fetchStoredEnrichmentRows(supabase, companyId, storedIdsOfBatch)
       : new Map<string, Transaction>()
 
@@ -1231,7 +1233,7 @@ export async function ingestTransactions(
    * applyTransactionSplit (lib/transactions/parts-apply.ts, shared with the
    * BG Max import): store the parts
    * beside the row, replacing what it had, and suggest the open invoice
-   * behind each part (suggestPartInvoices) for a row a person has not yet
+   * behind each part (OPEN_INVOICES) for a row a person has not yet
    * decided. When two or more parts all resolved and sum to the row, the row
    * is marked potential_match_method = 'bankgiro_split' and a single-invoice
    * hint it carried is cleared: the row pays several invoices, so the
@@ -1242,7 +1244,7 @@ export async function ingestTransactions(
    */
   const storePartsForRow = async (tx: Transaction, raw: RawTransaction): Promise<boolean> => {
     const parts = raw.parts
-    if (raw.import_source !== OPEN_PAYMENTS_AGGREGATOR || !parts || parts.length === 0) return false
+    if (!feedCarriesSplits(INGEST_FEEDS, raw.import_source) || !parts || parts.length === 0) return false
     try {
       const open =
         !options?.rawInsertOnly && !tx.journal_entry_id && !tx.invoice_id && !tx.supplier_invoice_id && !tx.is_ignored

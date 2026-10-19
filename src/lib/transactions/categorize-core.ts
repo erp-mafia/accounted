@@ -35,10 +35,10 @@ import { applyVatAmountOverride } from '@/lib/bookkeeping/vat-amount-override'
 import {
   getTemplateById,
   buildMappingResultFromTemplate,
+  templateSkattekontoAccountFor,
   validateTemplateForEntity,
   type BookingTemplate,
 } from '@/lib/bookkeeping/booking-templates'
-import { resolveSkattekontoAccount, templateTouchesSkattekonto } from '@/lib/skatteverket/skattekonto-account'
 import { isSkatteverketPayment } from '@/lib/bookkeeping/skatteverket-payment'
 import { reconcileRcBasisWithChart } from '@/lib/bookkeeping/rc-basis-reconcile'
 import { chartVatTreatmentsLoader, type ChartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
@@ -72,7 +72,7 @@ import {
 } from '@/lib/transactions/booking-duplicate-detection'
 import { runBookingDuplicateGuard } from '@/lib/transactions/booking-duplicate-guard'
 import { assertTransactionBookable } from '@/lib/transactions/is-booked'
-import { findInvoiceMatchSuggestion } from '@/lib/transactions/invoice-match-suggestion'
+import { OPEN_INVOICES } from '@/lib/composition/open-invoices'
 import { invoiceMatchSide } from '@/lib/transactions/invoice-match-side'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
@@ -451,14 +451,7 @@ export async function buildCategorizeMapping(
   } else if (template) {
     // A template that names the skattekonto (1630) books the company's
     // skattekonto account: 2012 for an enskild firma that runs it there.
-    const skattekontoAccount = templateTouchesSkattekonto([
-      template.debit_account,
-      template.credit_account,
-      template.debit_account_ab,
-      template.credit_account_ab,
-    ])
-      ? await resolveSkattekontoAccount(supabase, companyId)
-      : undefined
+    const skattekontoAccount = await templateSkattekontoAccountFor(supabase, companyId, template)
     mappingResult = buildMappingResultFromTemplate(template, transaction, entityType, vatRegistered, skattekontoAccount)
     if (input.vat_amount != null) {
       // The underlag's moms replaces the template's rate-based line; the
@@ -772,7 +765,7 @@ export async function categorizeTransaction(
   // supplier / customer invoice covers is refused with the candidates, so the
   // payment is matched instead of booked twice; confirm_no_match keeps it.
   if (wouldBook && options.invoiceMatchIntercept !== false) {
-    const invoiceSuggestion = await findInvoiceMatchSuggestion(
+    const invoiceSuggestion = await OPEN_INVOICES.findCategorizeInterception(
       supabase,
       companyId,
       {

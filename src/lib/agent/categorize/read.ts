@@ -9,8 +9,8 @@ import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { EntityType, Transaction } from '@/types'
-import { readIsFresh, underlagKeyFor, firstSentence, type AssistantRead } from './read-shape'
-import { ASSISTANT_LIKELY } from '@/lib/transactions/direct-booking'
+import { readIsFresh, firstSentence, type AssistantRead } from './read-shape'
+import { underlagKeyFor } from '@/lib/transactions/underlag-key'
 
 /**
  * The assistant's read of one transaction, done before anyone opens it.
@@ -24,7 +24,7 @@ import { ASSISTANT_LIKELY } from '@/lib/transactions/direct-booking'
  */
 
 export type { AssistantRead } from './read-shape'
-export { underlagKeyFor, readIsFresh, firstSentence } from './read-shape'
+export { readIsFresh, firstSentence } from './read-shape'
 export { ASSISTANT_SURE, ASSISTANT_LIKELY } from '@/lib/transactions/direct-booking'
 
 export interface ReadOptions {
@@ -170,19 +170,6 @@ export function assistantSuggestionFromRead(
     description: firstSentence(read.reasoning),
     has_underlag: read.has_underlag,
   })
-}
-
-/**
- * Where the assistant's suggestion sits among the row's others: a rule and
- * a counterpart come first, then the assistant when it is at least likely,
- * then the catalog's keyword matches, then an unsure assistant last.
- */
-export function mergeAssistantSuggestion(list: BookingProposal[], s: BookingProposal): BookingProposal[] {
-  const rest = list.filter((x) => x.source !== 'assistant')
-  if (s.confidence < ASSISTANT_LIKELY) return [...rest, s]
-  const firstCatalog = rest.findIndex((x) => x.source !== 'rule' && x.source !== 'counterparty')
-  if (firstCatalog === -1) return [...rest, s]
-  return [...rest.slice(0, firstCatalog), s, ...rest.slice(firstCatalog)]
 }
 
 export interface PlannedRead {

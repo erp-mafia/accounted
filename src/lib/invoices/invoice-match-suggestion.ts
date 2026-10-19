@@ -9,11 +9,12 @@
  * candidate invoices, so the caller matches the payment to the invoice
  * instead; `confirm_no_match: true` keeps the plain categorization.
  *
- * Called by categorizeTransaction (lib/transactions/categorize-core.ts), so
- * the dashboard and the v1 :categorize / batch-categorize doors refuse the
- * same bookings with the same code (TX_CATEGORIZE_SUGGEST_SI_MATCH /
- * TX_CATEGORIZE_SUGGEST_CI_MATCH) and honour the same override. Read-only:
- * safe on a dry-run.
+ * Called by categorizeTransaction (lib/transactions/categorize-core.ts)
+ * through the bank side's open-invoice plug-in point
+ * (lib/transactions/open-invoices.ts), so the dashboard and the v1
+ * :categorize / batch-categorize doors refuse the same bookings with the same
+ * code (TX_CATEGORIZE_SUGGEST_SI_MATCH / TX_CATEGORIZE_SUGGEST_CI_MATCH) and
+ * honour the same override. Read-only: safe on a dry-run.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
