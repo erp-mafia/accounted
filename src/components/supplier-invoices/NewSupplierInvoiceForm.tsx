@@ -29,6 +29,7 @@ import { uploadViaSignedUrl } from '@/lib/documents/direct-upload'
 import { INBOX_UPLOAD_ACCEPT, isAllowedInboxFile } from '@/lib/documents/upload-types'
 import { cn, formatAmount, formatCurrency, formatDate } from '@/lib/utils'
 import { supplierInvoiceEditorAmounts } from '@/lib/supplier-invoices/editor-amounts'
+import { isWholeKronaRoundingOf, rowNetFromInvoiceTotals } from '@/lib/supplier-invoices/total-first'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import BankTransactionPicker from '@/components/transactions/BankTransactionPicker'
@@ -208,7 +209,7 @@ export default function NewSupplierInvoiceForm({
     entityType,
     accountingMethod,
     bookingMoment,
-    oreRounding,
+    oreRoundingChoice,
     setOreRounding,
     dimensionsEnabled,
     vatRegistered,
@@ -260,8 +261,15 @@ export default function NewSupplierInvoiceForm({
   } | null>(null)
   const duplicateSeqRef = useRef(0)
 
-  // Total cross-check (change 2): client-only compare, never in the payload.
+  // Fakturabelopp and Moms as the invoice states them (total-first): they
+  // fill a single empty row, switch öresavrundning on when the gap is
+  // whole-krona rounding, and otherwise cross-check. Never in the payload.
   const [fakturaTotalStr, setFakturaTotalStr] = useState('')
+  const [fakturaVatStr, setFakturaVatStr] = useState('')
+  // The net the total-first fill last put on the single row: a row amount
+  // still equal to it is the fill's to update, any other amount is the
+  // person's and is never overwritten.
+  const totalFillRef = useRef<number | null>(null)
 
   // Shell state
   const [forvalOpen, setForvalOpen] = useState(false)
@@ -347,6 +355,23 @@ export default function NewSupplierInvoiceForm({
   // person's liability, an open claim on Hem) instead of a 2440 payable.
   const watchedPaidPrivately = isPersonPayer(watchedPayer)
   const watchedReverseCharge = watch('reverse_charge')
+  // An icke momsregistrerad company books the gross as the cost, and a
+  // reverse-charge invoice carries no moms: the Moms field only exists
+  // where an invoice moms can be booked.
+  const fakturaVatVisible = vatRegistered && !watchedReverseCharge
+  const enteredFakturaTotal = parseAmountInput(fakturaTotalStr)
+  const enteredFakturaVat = fakturaVatVisible ? parseAmountInput(fakturaVatStr) : null
+  // The net a single row takes from the totals at a moms sats, or null
+  // without a Fakturabelopp.
+  function totalFirstNetAt(rate: number): number | null {
+    if (enteredFakturaTotal == null) return null
+    return rowNetFromInvoiceTotals({
+      total: enteredFakturaTotal,
+      vat: enteredFakturaVat,
+      rate,
+      reverseCharge: watchedReverseCharge,
+    })
+  }
   // Watched values used to decide whether the AI-filled indicator should
   // still be visible. Once the user edits a field, its value no longer
   // matches what the extractor wrote, and the dot fades out.
@@ -788,9 +813,13 @@ export default function NewSupplierInvoiceForm({
     const description =
       accountNumber.length === 4 ? getAccountDescription(accountNumber)?.name ?? '' : ''
     const index = getValues('items').length
+    // Total-first: the first row is born with the net the invoice totals
+    // give, so the amount cell that takes focus already shows it.
+    const net = index === 0 ? totalFirstNetAt(vatRate) : null
+    if (net != null) totalFillRef.current = net
     append({
       description,
-      amount: 0,
+      amount: net ?? 0,
       account_number: accountNumber,
       vat_rate: vatRate,
       reverse_charge_rate: 0.25,
@@ -1065,16 +1094,42 @@ export default function NewSupplierInvoiceForm({
   // else moms-related disappears when the company isn't VAT-registered.
   const vatColsVisible = vatRegistered || watchedReverseCharge
 
-  const { itemTotals, subtotal, totalVat, figures } = supplierInvoiceEditorAmounts(
-    watchedItems || [], watchedCurrency || 'SEK', watchedReverseCharge, oreRounding,
+  // Öresavrundning follows the invoice until the person flips the switch:
+  // a Fakturabelopp that is the rows' exact total rounded to whole kronor
+  // turns it on, so the 3740 line books the difference with its sign.
+  const exactAmounts = supplierInvoiceEditorAmounts(
+    watchedItems || [], watchedCurrency || 'SEK', watchedReverseCharge, false,
   )
+  const oreRounding =
+    oreRoundingChoice ?? isWholeKronaRoundingOf(exactAmounts.total, enteredFakturaTotal, watchedCurrency || 'SEK')
+  const { itemTotals, subtotal, totalVat, figures } = oreRounding
+    ? supplierInvoiceEditorAmounts(watchedItems || [], watchedCurrency || 'SEK', watchedReverseCharge, true)
+    : exactAmounts
 
-  // Total cross-check (change 2): client-only compare against the displayed
-  // payable; a mismatch renders field-adjacent, never blocks, never travels.
-  const enteredFakturaTotal = parseAmountInput(fakturaTotalStr)
+  // Total-first fill: a single row whose amount is still empty, or still the
+  // one this fill put there, takes its net from Fakturabelopp and Moms (and
+  // follows a later change of either, or of the row's moms sats). With
+  // several rows the fields only cross-check.
+  const singleRow = watchedItems?.length === 1 ? watchedItems[0] : null
+  const singleRowAmount = singleRow ? singleRow.amount || 0 : null
+  const singleRowNet = singleRow ? totalFirstNetAt(singleRow.vat_rate || 0) : null
+  useEffect(() => {
+    if (singleRowAmount == null || singleRowNet == null) return
+    if (singleRowAmount !== 0 && singleRowAmount !== totalFillRef.current) return
+    if (singleRowAmount === singleRowNet) return
+    totalFillRef.current = singleRowNet
+    setValue('items.0.amount', singleRowNet, { shouldDirty: true })
+  }, [singleRowAmount, singleRowNet, setValue])
+
+  // Cross-check: client-only compare against the displayed payable and the
+  // rows' moms; a mismatch renders field-adjacent, never blocks, never travels.
   const crosscheckDiff =
     enteredFakturaTotal == null ? null : roundOre(enteredFakturaTotal - figures.toPay)
   const crosscheckMatches = crosscheckDiff != null && Math.abs(crosscheckDiff) <= 0.005
+  const vatCrosscheckDiff =
+    enteredFakturaVat == null ? null : roundOre(enteredFakturaVat - totalVat)
+  const signedAmount = (amount: number) =>
+    (amount > 0 ? '+' : '') + formatCurrency(amount, watchedCurrency)
 
   // Show the AI-suggested supplier card when we have an extraction, the AI
   // surfaced a supplier name, and we couldn't match it to an existing record.
@@ -1831,7 +1886,68 @@ export default function NewSupplierInvoiceForm({
                   </div>
                 </>
               )}
+              <div className="space-y-2">
+                <Label htmlFor="si-faktura-total" className="text-xs font-normal text-muted-foreground">
+                  {t('invoice_total_label')}
+                </Label>
+                <Input
+                  id="si-faktura-total"
+                  type="text"
+                  inputMode="decimal"
+                  autoComplete="off"
+                  placeholder="0,00"
+                  className={cn('h-9 text-right tabular-nums', settledFields.has('faktura_total') && 'prefill-settle')}
+                  value={fakturaTotalStr}
+                  onChange={(e) => setFakturaTotalStr(e.target.value)}
+                  onBlur={() => {
+                    const parsed = parseAmountInput(fakturaTotalStr)
+                    if (parsed != null) setFakturaTotalStr(formatAmount(parsed))
+                  }}
+                />
+              </div>
+              {fakturaVatVisible && (
+                <div className="space-y-2">
+                  <Label htmlFor="si-faktura-vat" className="text-xs font-normal text-muted-foreground">
+                    {t('invoice_vat_label')}
+                  </Label>
+                  <Input
+                    id="si-faktura-vat"
+                    type="text"
+                    inputMode="decimal"
+                    autoComplete="off"
+                    placeholder="0,00"
+                    className="h-9 text-right tabular-nums"
+                    value={fakturaVatStr}
+                    onChange={(e) => setFakturaVatStr(e.target.value)}
+                    onBlur={() => {
+                      const parsed = parseAmountInput(fakturaVatStr)
+                      if (parsed != null) setFakturaVatStr(formatAmount(parsed))
+                    }}
+                  />
+                </div>
+              )}
             </div>
+
+            {/* Total-first cross-check (client-only, never sent): quiet until
+                the kontering has a row to compare with. */}
+            {fields.length > 0 && (crosscheckDiff != null || vatCrosscheckDiff != null) && (
+              <div className="mt-3 space-y-1 text-right text-xs">
+                {crosscheckDiff != null && (
+                  <p className={crosscheckMatches ? 'text-success' : 'text-destructive'}>
+                    {!crosscheckMatches
+                      ? t('crosscheck_diff', { diff: signedAmount(crosscheckDiff) })
+                      : figures.rounding.applies
+                        ? t('crosscheck_match_rounded', { amount: signedAmount(figures.rounding.roundingDelta) })
+                        : t('crosscheck_match')}
+                  </p>
+                )}
+                {vatCrosscheckDiff != null && Math.abs(vatCrosscheckDiff) > 0.005 && (
+                  <p className="text-destructive">
+                    {t('crosscheck_vat_diff', { diff: signedAmount(vatCrosscheckDiff) })}
+                  </p>
+                )}
+              </div>
+            )}
 
             {showNoPeriodWarning && (
               <div
@@ -2273,9 +2389,7 @@ export default function NewSupplierInvoiceForm({
             {figures.rounding.applies && (
               <div className="flex items-baseline justify-between border-b border-border py-2 text-[13px]">
                 <span className="text-muted-foreground">{t('ore_rounding_label')}</span>
-                <span className="tabular-nums">
-                  {formatCurrency(figures.rounding.roundingDelta, watchedCurrency)}
-                </span>
+                <span className="tabular-nums">{signedAmount(figures.rounding.roundingDelta)}</span>
               </div>
             )}
             <div className="flex items-baseline justify-between pt-4">
@@ -2284,47 +2398,6 @@ export default function NewSupplierInvoiceForm({
                 {formatCurrency(figures.toPay, watchedCurrency)}
               </span>
             </div>
-
-            {/* Total cross-check (client-only, never sent) */}
-            <div className="mt-4 flex items-center justify-between gap-4">
-              <Label htmlFor="si-faktura-total" className="text-[13px] font-normal text-muted-foreground">
-                {t('crosscheck_label')}{' '}
-                <span className="text-muted-foreground">({t('crosscheck_optional')})</span>
-              </Label>
-              <Input
-                id="si-faktura-total"
-                type="text"
-                inputMode="decimal"
-                autoComplete="off"
-                placeholder="0,00"
-                className={cn(
-                  'h-8 w-32 text-right tabular-nums',
-                  settledFields.has('faktura_total') && 'prefill-settle',
-                )}
-                value={fakturaTotalStr}
-                onChange={(e) => setFakturaTotalStr(e.target.value)}
-                onBlur={() => {
-                  const parsed = parseAmountInput(fakturaTotalStr)
-                  if (parsed != null) setFakturaTotalStr(formatAmount(parsed))
-                }}
-              />
-            </div>
-            {crosscheckDiff != null && (
-              <p
-                className={cn(
-                  'mt-2 text-right text-xs',
-                  crosscheckMatches ? 'text-success' : 'text-destructive',
-                )}
-              >
-                {crosscheckMatches
-                  ? t('crosscheck_match')
-                  : t('crosscheck_diff', {
-                      diff:
-                        (crosscheckDiff > 0 ? '+' : '') +
-                        formatCurrency(crosscheckDiff, watchedCurrency),
-                    })}
-              </p>
-            )}
 
             {/* The page's single ochre line: what stands between the user and
                 a registered invoice. Gone once nothing does: the Förval line
