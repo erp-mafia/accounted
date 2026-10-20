@@ -253,6 +253,7 @@ const CUSTOMER_INVOICES: PackageDoors = {
     'POST /api/invoices/:id/peppol/send',
     'POST /api/invoices/:id/quote-status',
     'POST /api/invoices/:id/refresh-exchange-rate',
+    'POST /api/invoices/:id/resend',
     'POST /api/invoices/:id/send',
     'POST /api/invoices/:id/send-payment-confirmation',
     'POST /api/invoices/bulk-book',

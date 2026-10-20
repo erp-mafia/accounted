@@ -320,6 +320,58 @@ describe('invoice delivery tracking', () => {
     expect(mockDeleteDocument).not.toHaveBeenCalled()
   })
 
+  describe('resending an archived file (crm#1339)', () => {
+    const archivedDocument = { id: 'archived-document', sha256Hash: 'sha256-archived' }
+
+    it('points the delivery at the archived document instead of archiving a copy', async () => {
+      const { supabase, rpcSpy } = makeSupabase()
+      const sendEmail = vi.fn().mockResolvedValue({ success: true, provider: 'resend', messageId: 'm-2' })
+
+      const result = await sendTrackedInvoiceEmail({
+        ...makeInput(supabase, makeEmailService(sendEmail)),
+        archivedDocument,
+      })
+
+      expect(mockUploadDocument).not.toHaveBeenCalled()
+      expect(rpcSpy).toHaveBeenCalledWith(
+        'capture_invoice_delivery_payload',
+        expect.objectContaining({
+          p_document_attachment_id: 'archived-document',
+          p_attachment_sha256: 'sha256-archived',
+        }),
+      )
+      expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+        attachments: [expect.objectContaining({ content: Buffer.from('exact-pdf') })],
+      }))
+      expect(result).toMatchObject({ success: true, documentId: 'archived-document' })
+    })
+
+    it('never deletes the archived document when the provider fails', async () => {
+      const { supabase } = makeSupabase()
+      const sendEmail = vi.fn().mockResolvedValue({ success: false, error: 'provider rejected the request' })
+
+      const result = await sendTrackedInvoiceEmail({
+        ...makeInput(supabase, makeEmailService(sendEmail)),
+        archivedDocument,
+      })
+
+      expect(result.success).toBe(false)
+      expect(result.trackingWarning).toBeUndefined()
+      expect(mockDeleteDocument).not.toHaveBeenCalled()
+    })
+
+    it('never deletes the archived document when the snapshot cannot be saved', async () => {
+      const { supabase } = makeSupabase({ snapshotData: null, snapshotError: { message: 'update failed' } })
+      const sendEmail = vi.fn()
+
+      await expect(
+        sendTrackedInvoiceEmail({ ...makeInput(supabase, makeEmailService(sendEmail)), archivedDocument }),
+      ).rejects.toBeInstanceOf(InvoiceDeliverySnapshotError)
+      expect(sendEmail).not.toHaveBeenCalled()
+      expect(mockDeleteDocument).not.toHaveBeenCalled()
+    })
+  })
+
   it('returns the reservation selected by the privileged RPC', async () => {
     const { supabase } = makeSupabase({
       reserveData: 'delivery-existing',

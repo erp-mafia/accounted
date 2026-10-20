@@ -138,6 +138,28 @@ export function paymentConfirmationPdfSource(
   }
 }
 
+function latestCompletedDelivery<T extends InvoicePdfDelivery>(deliveries: T[]): T | undefined {
+  return deliveries.find((delivery) =>
+    (COMPLETED_DELIVERY_STATUSES as readonly string[]).includes(delivery.status),
+  )
+}
+
+/**
+ * The delivery whose archived file is the document the customer holds: the
+ * newest completed delivery, when Accounted emailed it and kept the file.
+ * Null when that delivery was a manual mark or there is none. The download
+ * serves this file and "Skicka igen" emails it again (crm#1339), so both
+ * read the same rule. `deliveries` is newest first, as listed by
+ * `list_invoice_delivery_summaries`.
+ */
+export function findArchivedInvoiceDelivery<T extends InvoicePdfDelivery>(
+  deliveries: T[],
+): (T & { status: 'sent'; document_attachment_id: string }) | null {
+  const latest = latestCompletedDelivery(deliveries)
+  if (latest?.status !== 'sent' || !latest.document_attachment_id) return null
+  return latest as T & { status: 'sent'; document_attachment_id: string }
+}
+
 /**
  * Decide which file the download button may fetch.
  *
@@ -168,16 +190,15 @@ export function resolveInvoicePdfSource(input: {
       : { kind: 'rerender', url: rerenderUrl, reason: 'not_sent_yet' }
   }
 
-  const latestCompleted = input.deliveries.find((delivery) =>
-    (COMPLETED_DELIVERY_STATUSES as readonly string[]).includes(delivery.status),
-  )
+  const latestCompleted = latestCompletedDelivery(input.deliveries)
+  const archived = findArchivedInvoiceDelivery(input.deliveries)
 
-  if (latestCompleted?.status === 'sent' && latestCompleted.document_attachment_id) {
+  if (archived) {
     return {
       kind: 'archived',
-      url: `/api/documents/${encodeURIComponent(latestCompleted.document_attachment_id)}/inline`,
-      deliveryId: latestCompleted.id,
-      sentAt: latestCompleted.sent_at,
+      url: `/api/documents/${encodeURIComponent(archived.document_attachment_id)}/inline`,
+      deliveryId: archived.id,
+      sentAt: archived.sent_at,
     }
   }
 

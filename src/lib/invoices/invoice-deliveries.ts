@@ -38,6 +38,12 @@ export interface TrackedInvoiceEmailInput {
    * emailed after the PDF in this order with their original file names.
    */
   extraAttachments?: NonNullable<SendEmailOptions['attachments']>
+  /**
+   * The archive already holds `pdfBuffer`: a resend of the file an earlier
+   * delivery archived (crm#1339). The delivery then points at that document
+   * instead of archiving a copy, and a failed send never deletes it.
+   */
+  archivedDocument?: { id: string; sha256Hash: string }
 }
 
 export interface TrackedInvoiceEmailResult extends SendEmailResult {
@@ -99,20 +105,25 @@ export async function sendTrackedInvoiceEmail(
     filename,
     pdfBuffer,
     extraAttachments = [],
+    archivedDocument,
   } = input
 
-  const pdfArrayBuffer = new Uint8Array(pdfBuffer).buffer as ArrayBuffer
-  const document = await uploadDocument(
-    supabase,
-    userId,
-    companyId,
-    {
-      name: filename,
-      buffer: pdfArrayBuffer,
-      type: PDF_CONTENT_TYPE,
-    },
-    { upload_source: 'system' },
-  )
+  // Only a document archived for this delivery is this delivery's to clean
+  // up; a reused one belongs to the delivery that archived it.
+  const ownsDocument = !archivedDocument
+  const document = archivedDocument
+    ? { id: archivedDocument.id, sha256_hash: archivedDocument.sha256Hash }
+    : await uploadDocument(
+        supabase,
+        userId,
+        companyId,
+        {
+          name: filename,
+          buffer: new Uint8Array(pdfBuffer).buffer as ArrayBuffer,
+          type: PDF_CONTENT_TYPE,
+        },
+        { upload_source: 'system' },
+      )
 
   // These service-only RPCs re-authorize userId against companyId and bind
   // every transition to the reserved invoice, so no caller-supplied tenant or
@@ -141,11 +152,13 @@ export async function sendTrackedInvoiceEmail(
   )
 
   if (deliveryError || capturedDeliveryId !== deliveryId) {
-    try {
-      await deleteDocument(supabase, companyId, document.id)
-    } catch {
-      // Best-effort cleanup only. The send must remain blocked even if the
-      // unlinked archive cannot be removed after a snapshot insert failure.
+    if (ownsDocument) {
+      try {
+        await deleteDocument(supabase, companyId, document.id)
+      } catch {
+        // Best-effort cleanup only. The send must remain blocked even if the
+        // unlinked archive cannot be removed after a snapshot insert failure.
+      }
     }
     throw new InvoiceDeliverySnapshotError(
       `Failed to persist invoice delivery snapshot: ${deliveryError?.message || 'unknown error'}`,
@@ -199,7 +212,7 @@ export async function sendTrackedInvoiceEmail(
 
     const failureRecorded = !failureRecordError && failedDeliveryId === deliveryId
     let cleanupFailed = false
-    if (failureRecorded) {
+    if (failureRecorded && ownsDocument) {
       try {
         const cleanup = await deleteDocument(supabase, companyId, document.id)
         cleanupFailed = !cleanup.ok

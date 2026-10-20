@@ -49,6 +49,7 @@ import {
 } from '@/lib/invoices/draft-download-decision'
 import type { QuoteStatus } from '@/types'
 import {
+  findArchivedInvoiceDelivery,
   invoiceDocumentCaveat,
   invoiceRerenderUrl,
   paymentConfirmationPdfSource,
@@ -57,6 +58,7 @@ import {
   type InvoicePdfSource,
 } from '@/lib/invoices/invoice-pdf-source'
 import { isPaymentConfirmationEligible } from '@/lib/invoices/payment-confirmation'
+import { isInvoiceResendEligible } from '@/lib/invoices/resend-eligibility'
 import { downloadFile, RENDERED_DOWNLOAD_TIMEOUT_MS } from '@/lib/browser/download-file'
 import { failureDescription } from '@/lib/browser/action-failure'
 import {
@@ -375,6 +377,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // Betalningsbekräftelse (#1693): the paid re-render handed to the customer.
   const [isDownloadingConfirmation, setIsDownloadingConfirmation] = useState(false)
   const [showConfirmationSendDialog, setShowConfirmationSendDialog] = useState(false)
+  // "Skicka igen" (crm#1339): the archived invoice emailed once more as a copy.
+  const [showResendDialog, setShowResendDialog] = useState(false)
   const [isPreparingPeppol, setIsPreparingPeppol] = useState(false)
   const [isSendingPeppol, setIsSendingPeppol] = useState(false)
   const [showPeppolSendDialog, setShowPeppolSendDialog] = useState(false)
@@ -1242,6 +1246,39 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     }
   }
 
+  /**
+   * Email the invoice to the customer again (crm#1339): the archived PDF they
+   * were first sent, marked as a copy. Confirmed up front; the new send then
+   * shows in the delivery history.
+   */
+  async function resendInvoice() {
+    if (!invoice) return
+    try {
+      const response = await fetch(`/api/invoices/${invoice.id}/resend`, { method: 'POST' })
+      const body = await response.json().catch(() => null) as {
+        error?: { code?: string; message?: string; message_en?: string }
+      } | null
+      if (!response.ok) {
+        throw body?.error ?? new Error(t('resend_failed_description'))
+      }
+
+      toast({
+        title: t('resend_sent_title'),
+        description: t('resend_sent_description', { email: invoice.customer?.email ?? '' }),
+      })
+      await retryLoadDeliveries()
+    } catch (error) {
+      toast({
+        title: t('resend_failed_title'),
+        description: getUserErrorMessage(error, {
+          context: 'invoice',
+          locale: locale.startsWith('sv') ? 'sv' : 'en',
+        }),
+        variant: 'destructive',
+      })
+    }
+  }
+
   async function downloadPeppolXml() {
     if (!invoice) return
     setIsDownloadingPeppol(true)
@@ -1685,6 +1722,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const quoteDecisionInMenu = isQuote && quoteAwaitsSending(invoice)
   // #1693: only a fully paid faktura has a betalningsbekräftelse to offer.
   const canSendPaymentConfirmation = isPaymentConfirmationEligible(invoice)
+  // crm#1339: only an unpaid invoice whose emailed file is in the archive can
+  // be sent again; the route reads the same two rules.
+  const resendDelivery = deliveriesUnreadable ? null : findArchivedInvoiceDelivery(deliveries)
+  const canResend = isInvoiceResendEligible(invoice) && resendDelivery !== null
   // Paid header but no payment row (#2213): the row must state where the
   // payment lives instead of implying none happened. When vouchers settled
   // the invoice here without a row, they stand in for the rows.
@@ -1967,6 +2008,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     offersOwnPdf ||
     (isCopyable && canWrite) ||
     showManualSendAlternative ||
+    canResend ||
     canCreateCreditNote ||
     showPeppolActions ||
     showDestructive
@@ -2285,6 +2327,21 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                           <span className="block">{t(booksOnIssue ? 'mark_sent_and_book' : 'mark_as_sent')}</span>
                           <span className="block text-[11px] leading-snug text-muted-foreground">
                             {t('send_manual_hint_with_email')}
+                          </span>
+                        </span>
+                      </DropdownMenuItem>
+                    )}
+                    {canResend && (
+                      <DropdownMenuItem
+                        onSelect={() => setShowResendDialog(true)}
+                        disabled={!canWrite || !customerHasEmail || !canEmail}
+                        className="items-start"
+                      >
+                        <Mail className="mt-0.5 h-4 w-4" />
+                        <span className="min-w-0">
+                          <span className="block">{t('resend_action')}</span>
+                          <span className="block text-[11px] leading-snug text-muted-foreground">
+                            {customerHasEmail ? t('resend_hint') : t('resend_no_email')}
                           </span>
                         </span>
                       </DropdownMenuItem>
@@ -3485,6 +3542,21 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         confirmLabel={t('payment_confirmation_confirm_action')}
         onConfirm={sendPaymentConfirmation}
       />
+
+      {resendDelivery && (
+        <ConfirmDialog
+          open={showResendDialog}
+          onOpenChange={setShowResendDialog}
+          title={t('resend_confirm_title')}
+          description={t('resend_confirm_description', {
+            number: invoiceDisplayNumber(invoice as Invoice),
+            email: invoice.customer?.email ?? '',
+            date: resendDelivery.sent_at ? formatDate(resendDelivery.sent_at) : '',
+          })}
+          confirmLabel={t('resend_confirm_action')}
+          onConfirm={resendInvoice}
+        />
+      )}
 
       {isQuote && quoteProgress && (
         <QuotePartDialog
