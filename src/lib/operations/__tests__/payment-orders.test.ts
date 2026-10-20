@@ -3,7 +3,7 @@
  * answer, that a dry run writes nothing and asks no bank, and that signing
  * stays a person's act (the doors only hand out the Betalningar link).
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/entitlements/has-capability')>()),
   hasCapability: vi.fn().mockResolvedValue(true),
@@ -127,6 +127,18 @@ const SUPPLIER_ROW = { id: 'sup-1', name: 'Derome Bygg AB', bankgiro: '5050-1055
 
 let db: ReturnType<typeof createTableMockSupabase>
 let ctx: OperationContext
+
+// The fixtures' execution dates are fixed calendar days, and approval moves a
+// date that is no longer a future banking day (bankDayFor). A fixed clock keeps
+// them in the future; on the wall clock the approve test broke the day its
+// fixture date became today.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date('2026-10-15T10:00:00Z'))
+})
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 beforeEach(() => {
   resetPaymentInitiationProviders()
