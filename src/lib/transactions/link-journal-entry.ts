@@ -70,6 +70,7 @@ export type LinkTransactionJournalEntryErrorCode =
   | 'LINK_TX_TX_ALREADY_LINKED'
   | 'LINK_TX_TX_IGNORED'
   | 'BANK_ANCHOR_SETTLEMENT_CHANGED'
+  | 'VOUCHER_BANK_LEG_CONSUMED'
   | 'LINK_TX_JE_NOT_FOUND'
   | 'LINK_TX_JE_NOT_POSTED'
   | 'LINK_TX_INVOICE_NOT_FOUND'
@@ -176,6 +177,19 @@ function linkRefusal(
       return { ok: false, code: 'LINK_TX_JE_NOT_POSTED', details: { currentStatus: prepared.entryStatus ?? null } }
     case 'CURRENCY_MISMATCH':
       return { ok: false, code: 'BANK_BOOKING_CURRENCY_MISMATCH', details: { reason: prepared.error } }
+    // Other rows already hold the verifikat's bank leg (GitHub #3507): its
+    // own code, so an agent books the row instead of retrying the link.
+    case 'VOUCHER_BANK_LEG_CONSUMED':
+      return {
+        ok: false,
+        code: 'VOUCHER_BANK_LEG_CONSUMED',
+        details: {
+          reason: prepared.error,
+          booked: prepared.bankLeg?.booked ?? null,
+          held: prepared.bankLeg?.held ?? null,
+          remaining: prepared.bankLeg?.remaining ?? null,
+        },
+      }
     default:
       // NOT_SETTLED (and TRANSACTION_OTHER_ACCOUNT, which cannot happen on
       // the row's own account): the answer the bank-anchor guard gives the

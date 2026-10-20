@@ -428,6 +428,8 @@ describe('matchPairs', () => {
       ['LINK_RACE', 'LINK_RACE'],
       ['BANK_ANCHOR_REFUSED', 'BANK_ANCHOR_REFUSED'],
       ['OVER_ALLOCATED', 'PAIR_NOT_CLOSED'],
+      // Its own code: the remedy is a verifikat of the row's own, not a residual (GitHub #3507).
+      ['VOUCHER_BANK_LEG_CONSUMED', 'VOUCHER_BANK_LEG_CONSUMED'],
       ['WRITE_FAILED', 'UNKNOWN'],
     ]
     for (const [engineCode, skipCode] of cases) {
@@ -650,6 +652,55 @@ describe('matchPairs dry run: every pair is checked against the ledger before an
     linkGroupMock.mockReset()
     linkToVouchersMock.mockReset()
     emitMock.mockResolvedValue(undefined)
+  })
+
+  it("refuses the rows the verifikat's bank leg has no room for, as the live link would, counting the run's own rows (GitHub #3507)", async () => {
+    // E1 books 2 800 out on 1930. R1 and R2 (1 400 each) are instalments
+    // that fit; R3 does not fit after them. On E2 (2 800 in) another row
+    // already holds the whole leg, so R4 of the same amount does not fit.
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        bankRow(R1, { amount: -1400 }),
+        bankRow(R2, { amount: -1400 }),
+        bankRow(R3, { amount: -1400 }),
+        bankRow(R4, { amount: 2800 }),
+      ],
+    })
+    enqueue({ data: [posted(E1, 105), posted(E2, 17)] })
+    enqueue({ data: { ledger_account: '1930', currency: 'SEK' } }) // the account's ledger
+    enqueue({ data: [{ debit_amount: 0, credit_amount: 2800, currency: null, amount_in_currency: null }] }) // E1 on 1930
+    enqueue({ data: [] }) // E1: bank_line slices
+    enqueue({ data: [] }) // E1: pointers
+    enqueue({ data: [{ debit_amount: 2800, credit_amount: 0, currency: null, amount_in_currency: null }] }) // E2 on 1930
+    enqueue({ data: [] }) // E2: bank_line slices
+    enqueue({ data: [{ id: 'tx-a', journal_entry_id: E2, amount: 2800, currency: 'SEK', cash_account_id: CASH }] }) // E2: pointers
+
+    const result = await matchPairs(
+      supabase as never,
+      COMPANY,
+      USER,
+      `bank:${CASH}`,
+      {
+        pairs: [
+          { external_ids: [R1, R2, R3], journal_entry_ids: [E1] },
+          { external_ids: [R4], journal_entry_ids: [E2] },
+        ],
+      },
+      { dryRun: true },
+    )
+
+    expect(result?.applied).toEqual([
+      { external_id: R1, journal_entry_id: E1 },
+      { external_id: R2, journal_entry_id: E1 },
+    ])
+    expect(result?.skipped.map((s) => [s.pair.external_ids[0], s.code])).toEqual([
+      [R3, 'VOUCHER_BANK_LEG_CONSUMED'],
+      [R4, 'VOUCHER_BANK_LEG_CONSUMED'],
+    ])
+    expect(result?.skipped[1].message).toContain('Verifikat A17 bokför 2800 på 1930')
+    expect(findCalls('transactions', 'update')).toEqual([])
+    expect(manualLinkMock).not.toHaveBeenCalled()
   })
 
   it('skips a pair whose verifikat is not in the company with ENTRY_NOT_FOUND naming the id, and keeps the rest', async () => {

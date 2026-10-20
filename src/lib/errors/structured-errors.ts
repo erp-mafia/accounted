@@ -1367,6 +1367,24 @@ const LINK_TX_JE: Record<string, StructuredErrorEntry> = {
         'details.accountPrefix and details.entrySide name the line the verifikat must have. Link a verifikat with that line, or settle the invoice through the bank match (gnubok_match_transaction_to_invoice), which books the right shape.',
     },
   },
+  // Other bank rows already hold the verifikat's bank leg, in this row's
+  // direction, so the row does not fit in what is left (GitHub #3507: a
+  // second Swish payment of the same amount linked to the verifikat of the
+  // first). Every door that links a row to a posted verifikat refuses it:
+  // the bank link core, the account-keyed reconciliation, the 1:N split and
+  // the bulk link to an existing verifikat. N:1 rows that together stay
+  // within the leg (instalments) still link.
+  VOUCHER_BANK_LEG_CONSUMED: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationens bankrad är redan kopplad till andra banktransaktioner, så den här transaktionen ryms inte i den. Är transaktionen en egen affärshändelse, bokför den som ett eget verifikat. Är den andra kopplingen fel, koppla bort den transaktionen först.',
+    message_en:
+      "The voucher's bank line is already linked to other bank transactions, so this transaction does not fit in it. If the transaction is a business event of its own, book it as its own voucher. If the other link is wrong, unlink that transaction first.",
+    remediation: {
+      description:
+        'details.remaining is what the voucher still books on the bank account in this transaction\'s direction, details.held what other transactions already hold. Book the transaction as its own voucher (gnubok_categorize_transaction), or undo the wrong link (gnubok_reconcile_unmatch) and link again.',
+    },
+  },
   // Raw database failure on the transaction or invoice UPDATE. The service
   // puts the Postgres message in details.reason; callers append it so the
   // constraint or trigger that fired is visible to the agent instead of a

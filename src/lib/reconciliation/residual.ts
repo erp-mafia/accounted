@@ -307,13 +307,16 @@ export async function bookResidualAndLink(
 
   // Link first (reversible), then book. If the booking is refused (a lock, a
   // trigger), the links are undone so the selection is back where it was.
+  // The rows may take the residual beyond the main verifikat's bank leg: the
+  // residual verifikat booked right below is what explains it (the room
+  // check, lib/transactions/voucher-bank-leg.ts, GitHub #3507).
   const linkResult = await matchPairs(
     supabase,
     companyId,
     userId,
     accountKey,
     { pairs: [{ external_ids: ids, journal_entry_ids: [entry.id] }] },
-    { dryRun: false },
+    { dryRun: false, bankLegOverrun: residual },
   )
   if (!linkResult || linkResult.applied.length !== ids.length) {
     // Undo whatever did link before reporting.
