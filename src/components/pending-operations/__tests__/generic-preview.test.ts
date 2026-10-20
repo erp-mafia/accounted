@@ -152,6 +152,70 @@ describe('the generic approval card', () => {
   })
 })
 
+/**
+ * Reported (crm#1300): an agent's change to a customer or an article showed
+ * only the new value, so the approver opened the kundkort or artikelkort to
+ * see what it replaced. Each changed field states what it held, struck, then
+ * what it becomes, whichever way the staging tool said the old value.
+ */
+describe('the approval card of an update (crm#1300)', () => {
+  const struck = (before: string, after: string) =>
+    `<del class="text-muted-foreground">${before}</del> → <ins class="no-underline">${after}</ins>`
+
+  it('shows an article price change against the stored price, in the article’s currency', () => {
+    const html = render('update_article', {
+      article_id: '44444444-4444-4444-8444-444444444444',
+      name: 'Takarbete',
+      article_number: '920',
+      current: { name: 'Takarbete', price_excl_vat: 1180, currency: 'EUR', vat_rate: 25 },
+      changes: { price_excl_vat: 1220 },
+    })
+    expect(html).toContain('Artikelnummer')
+    expect(html).toContain('Ändringar')
+    expect(html).toContain('Pris exkl. moms')
+    expect(html).toContain(struck(formatCurrency(1180, 'EUR'), formatCurrency(1220, 'EUR')))
+    // The stored fields the update leaves alone are not listed as changes.
+    expect(html).not.toContain('Momssats')
+  })
+
+  it('reads a customer’s old values from the stored record beside the changes', () => {
+    const html = render('update_customer', {
+      current: { name: 'Kunden AB', email: 'old@example.se', customer_type: 'swedish_business', contact_person: 'Anna' },
+      changes: { email: 'new@example.se', customer_type: 'eu_business', contact_person: null },
+      proposed: { name: 'Kunden AB', email: 'new@example.se', customer_type: 'eu_business', contact_person: null },
+    })
+    expect(html).toContain(struck('old@example.se', 'new@example.se'))
+    // A code reads as its word, and a cleared field shows as cleared.
+    expect(html).toContain(struck('Svenskt företag eller organisation', 'EU-företag'))
+    expect(html).toContain('Kontaktperson')
+    expect(html).toContain(struck('Anna', '-'))
+  })
+
+  it('reads a supplier’s { from, to } pairs, which used to show nothing', () => {
+    const html = render('update_supplier', {
+      name: 'Leverantören AB',
+      email: 'ny@leverantor.se',
+      changes: { email: { from: 'gammal@leverantor.se', to: 'ny@leverantor.se' } },
+    })
+    expect(html).toContain(struck('gammal@leverantor.se', 'ny@leverantor.se'))
+    expect(html).not.toContain('&quot;from&quot;')
+  })
+
+  it('reads a settings change’s old values from previous', () => {
+    const html = render('update_company_settings', {
+      changes: { iban: 'SE4550000000058398257466' },
+      previous: { iban: 'SE3550000000054910000003' },
+    })
+    expect(html).toContain(struck('SE3550000000054910000003', 'SE4550000000058398257466'))
+  })
+
+  it('shows the new value alone when the update was staged without the old one', () => {
+    const html = render('update_cash_account', { changes: { name: 'Företagskonto' } })
+    expect(html).toContain('Företagskonto')
+    expect(html).not.toContain('<del')
+  })
+})
+
 describe('preview field formatting', () => {
   it('reads money from the field name', () => {
     for (const key of ['amount', 'total', 'total_amount', 'vat_amount', 'invoice_remaining', 'remaining_after', 'price_excl_vat', 'monthly_salary', 'reminder_fee_amount']) {

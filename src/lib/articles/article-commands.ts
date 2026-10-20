@@ -132,7 +132,8 @@ export async function createArticle(
 
 /**
  * Update one article with the fields sent. The dry run answers the columns
- * the update would set, after the same checks.
+ * the update would set, after the same checks, beside the article as it is
+ * (current), so the approval card can show what each field held before.
  */
 export async function updateArticle(
   ctx: OperationContext,
@@ -148,7 +149,7 @@ export async function updateArticle(
   if (options.dryRun) {
     const { data: existing, error: readError } = await supabase
       .from('articles')
-      .select('id, name, article_number')
+      .select('id, name, name_en, type, unit, price_excl_vat, vat_rate, currency, revenue_account, cost_price, ean, housework_type, notes, article_number, active')
       .eq('id', articleId)
       .eq('company_id', companyId)
       .maybeSingle()
@@ -157,7 +158,13 @@ export async function updateArticle(
       return { ok: false, code: 'ARTICLE_UPDATE_FAILED', error: readError }
     }
     if (!existing) return { ok: false, code: 'ARTICLE_NOT_FOUND' }
-    return { ok: true, dryRun: true, preview: { article_id: articleId, ...existing, changes: row } }
+    const stored = existing as Record<string, unknown>
+    const current = Object.fromEntries(UPDATE_FIELDS.map((key) => [key, stored[key] ?? null]))
+    return {
+      ok: true,
+      dryRun: true,
+      preview: { article_id: articleId, id: existing.id, name: existing.name, article_number: existing.article_number, current, changes: row },
+    }
   }
 
   const { data, error } = await supabase

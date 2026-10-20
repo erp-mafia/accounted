@@ -1132,7 +1132,29 @@
       "iban": "IBAN",
       "bic": "BIC",
       "plusgiro": "Plusgiro",
-      "address_line2": "Adress, rad 2"
+      "address_line2": "Adress, rad 2",
+      "customer_type": "Kundtyp",
+      "customer_number": "Kundnummer",
+      "contact_person": "Kontaktperson",
+      "invoice_email_cc_addresses": "Kopia på fakturamejl",
+      "invoice_email_bcc_addresses": "Dold kopia på fakturamejl",
+      "personal_number_masked": "Personnummer",
+      "language": "Språk",
+      "invoice_reference": "Fakturareferens",
+      "housework_type": "Skattereduktion",
+      "active": "Aktiv"
+    },
+    "preview_value": {
+      "customer_type": {
+        "individual": "Privatperson",
+        "swedish_business": "Svenskt företag eller organisation",
+        "eu_business": "EU-företag",
+        "non_eu_business": "Utanför EU"
+      },
+      "language": {
+        "sv": "Svenska",
+        "en": "Engelska"
+      }
     },
     "preview_entries_heading": "Verifikat som bokförs: {count}",
     "preview_entries_more": "och {count} till",

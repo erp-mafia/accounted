@@ -791,6 +791,45 @@ function isFactValue(value: unknown): value is string | number | boolean | strin
   return Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === 'string')
 }
 
+// A changed field as the supplier dry run stages it.
+function isChangePair(value: unknown): value is { from: unknown; to: unknown } {
+  return isPlainObject(value) && Object.keys(value).length === 2 && 'from' in value && 'to' in value
+}
+
+// An update's changes (crm#1300) as two readings of the record: before, what
+// the staged preview says each field held, and after, with the changes
+// applied. Staging tools say it two ways: a { from, to } pair per field
+// (suppliers), or the stored record beside the changes, as current
+// (accounts, customers, articles) or previous (company settings). A field
+// missing from before was staged without its old value.
+function readUpdate(data: Record<string, unknown>) {
+  const changes = isPlainObject(data.changes) ? data.changes : {}
+  const stored = isPlainObject(data.current) ? data.current : isPlainObject(data.previous) ? data.previous : {}
+  const before: Record<string, unknown> = { ...stored }
+  const after: Record<string, unknown> = { ...stored }
+  for (const [field, value] of Object.entries(changes)) {
+    if (isChangePair(value)) {
+      before[field] = value.from
+      after[field] = value.to
+    } else {
+      after[field] = value
+    }
+  }
+  return { fields: Object.keys(changes), before, after }
+}
+
+// What an update replaces, struck, then what it becomes: the reading of the
+// rättelse log on a verifikat.
+function ValueChange({ before, after }: { before: ReactNode; after: ReactNode }) {
+  return (
+    <>
+      <del className="text-muted-foreground">{before}</del>
+      {' → '}
+      <ins className="no-underline">{after}</ins>
+    </>
+  )
+}
+
 // Outside the detail panel (the chat card, the confirm dialog) a long list of
 // verifikat stops after a few; the Granskning panel shows them all.
 const ENTRY_LIST_COMPACT = 3
@@ -809,20 +848,34 @@ function GenericPreview({ data, detail = false }: { data: Record<string, unknown
   // under a preview_field label (sv and en), never as its raw key, and a
   // number shows as money when it is one (crm#1104). What the approval posts
   // is the verifikat above, from the executor's own builders.
+  const stated = (v: unknown): v is string | number | boolean | string[] =>
+    v != null && v !== '' && !isUuid(v) && isFactValue(v)
   const labelled = (obj: Record<string, unknown>) =>
-    Object.entries(obj).filter(
-      ([k, v]) => v != null && v !== '' && !isUuid(v) && isFactValue(v) && t.has(`preview_field.${k}`),
-    ) as Array<[string, string | number | boolean | string[]]>
+    Object.entries(obj).filter(([k, v]) => stated(v) && t.has(`preview_field.${k}`)) as Array<
+      [string, string | number | boolean | string[]]
+    >
   const facts = labelled(Object.fromEntries(entries))
-  // A labelled group (changes: the fields an update sets) shows its own
-  // labelled fields, one level down, instead of a JSON dump of raw keys.
+  // A labelled group shows its own labelled fields, one level down, instead
+  // of a JSON dump of raw keys. An update's changes are the one group read
+  // against what the record held, below.
   const groups = entries
-    .filter(([k, v]) => isPlainObject(v) && !isEntryPreview(v) && t.has(`preview_field.${k}`))
+    .filter(([k, v]) => k !== 'changes' && isPlainObject(v) && !isEntryPreview(v) && t.has(`preview_field.${k}`))
     .map(([k, v]) => [k, v as Record<string, unknown>, labelled(v as Record<string, unknown>)] as const)
     .filter(([, , rows]) => rows.length > 0)
+  // Each changed field with what it held, when the preview says, so the
+  // approver judges the change without opening the record (crm#1300). A
+  // field cleared shows as a change when its old value is known.
+  const update = readUpdate(data)
+  const changeFields = update.fields.filter((field) => {
+    const after = update.after[field]
+    const cleared = after == null || after === ''
+    return t.has(`preview_field.${field}`) && (stated(after) || (cleared && stated(update.before[field])))
+  })
   const fact = (key: string, value: string | number | boolean | string[], scope: Record<string, unknown>): ReactNode => {
     if (typeof value === 'boolean') return value ? t('preview_yes') : t('preview_no')
     if (typeof value === 'number') return formatPreviewNumber(key, value, scope)
+    // A code (customer_type: eu_business) reads as its word where one exists.
+    if (typeof value === 'string' && t.has(`preview_value.${key}.${value}`)) return t(`preview_value.${key}.${value}`)
     return Array.isArray(value) ? value.join(', ') : value
   }
   const factRow = (key: string, value: string | number | boolean | string[], scope: Record<string, unknown>, nested = false) => (
@@ -833,7 +886,29 @@ function GenericPreview({ data, detail = false }: { data: Record<string, unknown
       </span>
     </Fragment>
   )
-  if (entryPreviews.length + entryLists.length + konteringEntries.length + facts.length + groups.length === 0) {
+  // An empty or unreadable value (a dimension bag) shows as '-'.
+  const changeValue = (field: string, value: unknown, scope: Record<string, unknown>): ReactNode =>
+    stated(value) ? fact(field, value, scope) : '-'
+  const changeRow = (field: string) => {
+    const before = update.before[field]
+    const after = update.after[field]
+    const known = field in update.before && (stated(before) || before == null || before === '')
+    const beforeScope = { ...data, ...update.before }
+    const afterScope = { ...data, ...update.after }
+    return (
+      <Fragment key={field}>
+        <span className="min-w-0 break-words pl-3 text-muted-foreground">{t(`preview_field.${field}`)}</span>
+        <span className={cn('min-w-0 break-words', (typeof after === 'number' || typeof before === 'number') && 'font-mono tabular-nums')}>
+          {known ? (
+            <ValueChange before={changeValue(field, before, beforeScope)} after={changeValue(field, after, afterScope)} />
+          ) : (
+            changeValue(field, after, afterScope)
+          )}
+        </span>
+      </Fragment>
+    )
+  }
+  if (entryPreviews.length + entryLists.length + konteringEntries.length + facts.length + groups.length + changeFields.length === 0) {
     // An empty box under the title reads as "nothing to review". Say so.
     return <p className="text-sm text-muted-foreground">{t('preview_generic_none')}</p>
   }
@@ -866,7 +941,7 @@ function GenericPreview({ data, detail = false }: { data: Record<string, unknown
       {konteringEntries.map(([key, value]) => (
         <PreviewKonteringTable key={key} lines={value as PreviewKonteringLine[]} />
       ))}
-      {facts.length + groups.length > 0 && (
+      {facts.length + groups.length + changeFields.length > 0 && (
         <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-x-4 gap-y-1 text-sm">
           {facts.map(([key, value]) => factRow(key, value, data))}
           {groups.map(([key, obj, rows]) => (
@@ -875,6 +950,12 @@ function GenericPreview({ data, detail = false }: { data: Record<string, unknown
               {rows.map(([k, v]) => factRow(k, v, { ...data, ...obj }, true))}
             </Fragment>
           ))}
+          {changeFields.length > 0 && (
+            <>
+              <span className="col-span-2 pt-1 text-muted-foreground">{t('preview_field.changes')}</span>
+              {changeFields.map(changeRow)}
+            </>
+          )}
         </div>
       )}
     </div>
@@ -914,9 +995,7 @@ function UpdateAccountPreview({ data }: { data: Record<string, unknown> }) {
         <Fragment key={field}>
           <span className="text-muted-foreground">{label(field)}</span>
           <span className="min-w-0 break-words">
-            <span className="text-muted-foreground">{show(field, current[field])}</span>
-            {' → '}
-            {show(field, value)}
+            <ValueChange before={show(field, current[field])} after={show(field, value)} />
           </span>
         </Fragment>
       ))}

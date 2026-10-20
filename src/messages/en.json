@@ -1132,7 +1132,29 @@
       "iban": "IBAN",
       "bic": "BIC",
       "plusgiro": "Plusgiro",
-      "address_line2": "Address line 2"
+      "address_line2": "Address line 2",
+      "customer_type": "Customer type",
+      "customer_number": "Customer number",
+      "contact_person": "Contact person",
+      "invoice_email_cc_addresses": "Cc on invoice emails",
+      "invoice_email_bcc_addresses": "Bcc on invoice emails",
+      "personal_number_masked": "Personal identity number",
+      "language": "Language",
+      "invoice_reference": "Invoice reference",
+      "housework_type": "Tax reduction",
+      "active": "Active"
+    },
+    "preview_value": {
+      "customer_type": {
+        "individual": "Individual",
+        "swedish_business": "Swedish company or organization",
+        "eu_business": "EU business",
+        "non_eu_business": "Outside EU"
+      },
+      "language": {
+        "sv": "Swedish",
+        "en": "English"
+      }
     },
     "preview_entries_heading": "Vouchers to be posted: {count}",
     "preview_entries_more": "and {count} more",
