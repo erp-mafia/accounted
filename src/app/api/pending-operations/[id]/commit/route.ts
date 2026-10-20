@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
+import { recordAppApproval } from '@/lib/pending-operations/record-app-approval'
 import { bookkeepingErrorResponse, AccountsNotInChartError, ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { PendingOperation } from '@/types'
@@ -37,6 +38,13 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
           actor: { type: 'user', ...(user.email ? { label: user.email } : {}) },
         }
       )
+      await recordAppApproval({
+        companyId,
+        userId: user.id,
+        operation: op as PendingOperation,
+        commitMethod: 'user_accept',
+        outcome: result.status,
+      })
 
       if (result.status === 'committed') {
         return NextResponse.json({ data: result.data })

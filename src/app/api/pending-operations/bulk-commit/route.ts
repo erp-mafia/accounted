@@ -3,6 +3,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { PendingOperationsBulkSchema } from '@/lib/api/schemas'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
+import { recordAppApproval } from '@/lib/pending-operations/record-app-approval'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { PendingOperation } from '@/types'
 
@@ -78,6 +79,7 @@ export const POST = withRouteContext(
         commitMethod: 'bulk_accept',
         actor: { type: 'user', ...(user.email ? { label: user.email } : {}) },
       })
+      await recordAppApproval({ companyId, userId: user.id, operation: op, commitMethod: 'bulk_accept', outcome: result.status })
       if (result.status === 'committed') {
         results.push({ id, status: 'committed' })
       } else {

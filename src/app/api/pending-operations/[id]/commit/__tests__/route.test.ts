@@ -69,6 +69,10 @@ vi.mock('@/lib/bookkeeping/account-validation', async (importActual) => ({
 vi.mock('@/lib/api/v1/check-period-lock', () => ({
   checkPeriodLock: vi.fn().mockResolvedValue({ locked: false }),
 }))
+const mockRecordAppApproval = vi.fn()
+vi.mock('@/lib/pending-operations/record-app-approval', () => ({
+  recordAppApproval: (...args: unknown[]) => mockRecordAppApproval(...args),
+}))
 
 import { POST } from '../route'
 
@@ -103,6 +107,7 @@ describe('POST /api/pending-operations/:id/commit', () => {
 
     expect(status).toBe(404)
     expect(body.error).toContain('not found')
+    expect(mockRecordAppApproval).not.toHaveBeenCalled()
   })
 
   it('returns 409 when operation already committed', async () => {
@@ -126,6 +131,10 @@ describe('POST /api/pending-operations/:id/commit', () => {
     // The executor's English error string maps to the Swedish HTTP-409
     // fallback: raw English never reaches the toast (issue #337).
     expect(body.error).toBe('En konflikt uppstod. Ladda om sidan och försök igen.')
+    // The attempt is recorded with its outcome, as the MCP and API doors do.
+    expect(mockRecordAppApproval).toHaveBeenCalledWith(
+      expect.objectContaining({ commitMethod: 'user_accept', outcome: 'failed' }),
+    )
   })
 
   describe('categorize_transaction', () => {
@@ -254,6 +263,16 @@ describe('POST /api/pending-operations/:id/commit', () => {
 
       expect(status).toBe(200)
       expect(body.data.customer_id).toBe('cust-1')
+      // A person approving in the app leaves the same approval record as
+      // the MCP and API doors, so the approval channel is never unknown.
+      expect(mockRecordAppApproval).toHaveBeenCalledTimes(1)
+      expect(mockRecordAppApproval).toHaveBeenCalledWith({
+        companyId: 'company-1',
+        userId: 'user-1',
+        operation: expect.objectContaining({ id: 'op-1', operation_type: 'create_customer' }),
+        commitMethod: 'user_accept',
+        outcome: 'committed',
+      })
     })
   })
 
