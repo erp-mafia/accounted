@@ -53,6 +53,29 @@ describe('BAS_REFERENCE data integrity', () => {
     expect(corrupted).toEqual([])
   })
 
+  it('Swedish names and descriptions keep their å, ä and ö (#3518)', () => {
+    // A word written without diacritics that is spelled with them elsewhere
+    // in the data, or in the list of common words below, is an ASCII-ified
+    // copy (utanfor for utanför). Words that are real both ways are exempt.
+    const fold = (word: string) => word.replace(/[åä]/g, 'a').replace(/ö/g, 'o')
+    const commonWords = [
+      'för', 'över', 'på', 'från', 'när', 'är', 'år', 'får', 'rätt', 'möbler', 'äldre',
+      'bokförs', 'utgör', 'förvärv', 'öret', 'öreskillnad', 'bruttolönen',
+      'affärsrelaterade', 'måltider',
+    ]
+    const homographs = new Set(['har', 'var', 'vara', 'sa', 'far', 'bar', 'lag', 'mal'])
+    const words = BAS_REFERENCE.flatMap((a) =>
+      `${a.account_name} ${a.description ?? ''}`.toLowerCase().match(/[a-zåäö]+/g) ?? [],
+    )
+    const spelledWithDiacritics = new Set(
+      [...words, ...commonWords].filter((w) => /[åäö]/.test(w)).map(fold),
+    )
+    const asciiCopies = [...new Set(words)].filter(
+      (w) => !/[åäö]/.test(w) && spelledWithDiacritics.has(w) && !homographs.has(w),
+    )
+    expect(asciiCopies).toEqual([])
+  })
+
   it('every account has a valid account_type', () => {
     const validTypes = ['asset', 'liability', 'equity', 'revenue', 'expense', 'untaxed_reserves']
     for (const account of BAS_REFERENCE) {
