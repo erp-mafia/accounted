@@ -48,7 +48,7 @@ export const CAPITALIZATION_THRESHOLD_YEARS: ReadonlySet<number> = new Set(
   Object.keys(PRISBASBELOPP_HALVES).map(Number),
 )
 
-function getCapitalizationThreshold(year: number): number {
+export function getCapitalizationThreshold(year: number): number {
   const threshold = PRISBASBELOPP_HALVES[year]
   if (threshold) return threshold
   log.warn(`No prisbasbelopp for ${year}, using ${LATEST_KNOWN_YEAR} value`)
