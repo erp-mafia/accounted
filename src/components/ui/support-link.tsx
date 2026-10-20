@@ -326,7 +326,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
     const text = message.trim()
     if (!text || !viewingId) return
     setIsSending(true)
-    const res = await replyInThread(text)
+    const res = await replyInThread(viewingId, text)
     setIsSending(false)
     if (!res) {
       toast({ title: t('send_failed_title'), description: t('reply_failed'), variant: 'destructive' })
@@ -350,8 +350,8 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
     setView('compose')
   }
 
-  // Any open ticket on screen takes a reply: loadThread made it the SDK's
-  // current ticket, so the reply lands in it (handleReply re-checks). Pinning
+  // Any open ticket on screen takes a reply, and the reply names that ticket
+  // (replyInThread; handleReply still checks where it landed). Pinning
   // replies to the ticket the dialog opened on left every other open ticket
   // read-only, so switching to one was a dead end (crm#1138).
   const canReply = Boolean(thread && !isResolved(thread.status))

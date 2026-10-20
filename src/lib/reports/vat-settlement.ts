@@ -3,12 +3,25 @@ import { addDaysIso } from '@/lib/dates/iso'
 import { roundOre } from '@/lib/money'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import {
+  calculatePeriodDates,
   formatPeriodLabel,
   loadVatDeclarationLedger,
   resolvePeriodDates,
   vatClearingAccounts,
+  type VatDeclarationLedger,
 } from './vat-declaration'
 import { buildFiledAmounts } from './vat-manual-filing'
+import {
+  FILED_ROUNDING,
+  carriedIntoPeriod,
+  lateSettlementLookupEnd,
+  nearFiled,
+  settlementsDated,
+  settlesPeriod,
+  summarizeSettlements,
+  type PeriodVatBalance,
+  type SettlementVerifikat,
+} from './vat-settlement-match'
 import type { VatPeriodType } from '@/types'
 
 /**
@@ -55,9 +68,12 @@ export interface VatSettlementProposalLine {
 }
 
 /**
- * A settlement entry already booked (or drafted) inside the period: tagged
- * (source_type 'vat_settlement') or detected by shape (a manual momsomföring
- * clearing 26xx to 2650/1650, see fetchVatAccountTotals in vat-declaration.ts).
+ * A settlement entry already booked (or drafted) for the period: inside it,
+ * tagged (source_type 'vat_settlement') or detected by shape (a manual
+ * momsomföring clearing 26xx to 2650/1650 or straight to the skattekonto, see
+ * fetchVatAccountTotals in vat-declaration.ts), unless its amounts make it
+ * the previous period's; or dated after it, tagged with this period's text or
+ * tied to it by amount (late_settlement).
  */
 export interface VatSettlementExistingEntry {
   id: string
@@ -66,6 +82,12 @@ export interface VatSettlementExistingEntry {
   source_type: string | null
   voucher_series: string | null
   voucher_number: number | null
+  /**
+   * Set on a posted momsredovisning dated after the period that settles it by
+   * amount: it clears exactly the period's VAT balances (`cleared`) and moves
+   * the filed net (`net`) to 2650/1650 or straight to the skattekonto (`via`).
+   */
+  late_settlement?: Pick<SettlementVerifikat, 'cleared' | 'net' | 'via'>
 }
 
 /**
@@ -201,79 +223,16 @@ async function resolveSettlementEntryDate(
 }
 
 /**
- * Build the settlement verifikat proposal for a VAT period. Reads the rutor
- * from the same definition as the momsdeklaration (loadVatDeclarationLedger,
- * the company's own momskoder and momsrutor included), so the net it books is
- * the whole-krona net the eSKD file, the PDF and the Skatteverket integration
- * file (buildFiledAmounts).
+ * The momsredovisning lines of a period's ledger: every 26xx account the
+ * declaration reads cleared at exact öre, the whole-krona filed net on
+ * 2650/1650, the öre gap on 3740. Pure.
  */
-export async function buildVatSettlementProposal(
-  supabase: SupabaseClient,
-  companyId: string,
-  periodType: VatPeriodType,
-  year: number,
-  period: number,
-  options: { fiscalPeriodId?: string } = {}
-): Promise<VatSettlementProposal> {
-  // Yearly (helårsmoms) resolves to the räkenskapsår bounds when a fiscal
-  // period is supplied: same resolution as the declaration itself.
-  const { start, end } = await resolvePeriodDates(
-    supabase, companyId, periodType, year, period, options.fiscalPeriodId
-  )
-
-  const periodLabel = formatPeriodLabel(periodType, year, period)
-  const description = `Momsredovisning ${periodLabel}`
-
-  const [{ totals, settlementShapedEntries, dynamicVatAccounts, rutor }, entryDate] = await Promise.all([
-    loadVatDeclarationLedger(supabase, companyId, start, end),
-    resolveSettlementEntryDate(supabase, companyId, end),
-  ])
-
-  // A settlement dated after the period (its year was closed) lies outside
-  // the period's own range, so the lookup reaches the proposed date. Out
-  // there only a verifikat with this period's own text counts: several
-  // periods of a closed year all move to the same first open day, and one
-  // period's settlement must not gate another's.
-  const existingResult = await supabase
-    .from('journal_entries')
-    .select('id, status, entry_date, source_type, voucher_series, voucher_number, description')
-    .eq('company_id', companyId)
-    .eq('source_type', 'vat_settlement')
-    .in('status', ['draft', 'posted'])
-    .gte('entry_date', start)
-    .lte('entry_date', entryDate.entry_date > end ? entryDate.entry_date : end)
-    .order('entry_date', { ascending: false })
-    .limit(20)
-
-  // The existing-settlement lookup gates the UI's "already booked" warning
-  // and its create button; a swallowed error here would silently re-enable
-  // booking a period that already has a settlement, so fail loud instead.
-  if (existingResult.error) {
-    throw new Error(
-      `existing vat_settlement lookup failed: ${existingResult.error.message}`
-    )
-  }
-
-  // Shape-detected settlements (manual momsomföring, SIE imports) gate the
-  // booking button exactly like tagged ones (#984): the proposal re-clears
-  // the FULL period, so booking on top of a manual settlement would corrupt
-  // the 26xx balances. Stornos are the CANCELLATION of a settlement and must
-  // not gate, or annullera could never re-enable the button. Only posted
-  // entries gate: the shape of an unposted draft has no balance effect.
-  const shapedExisting = settlementShapedEntries.filter(
-    (e) => e.status === 'posted' && e.source_type !== 'storno'
-  )
-  const taggedExisting = ((existingResult.data ?? []) as Array<VatSettlementExistingEntry & { description?: string | null }>)
-    .filter((e) => e.entry_date <= end || e.description === description)
-    .map(({ description: _description, ...entry }) => entry)
-  const existingEntries = [
-    ...taggedExisting,
-    ...shapedExisting,
-  ]
-    .sort((a, b) => (a.entry_date < b.entry_date ? 1 : a.entry_date > b.entry_date ? -1 : 0))
-    .slice(0, 5)
-
-  const { net: filedNet } = buildFiledAmounts(rutor)
+function settlementLines(ledger: Pick<VatDeclarationLedger, 'totals' | 'dynamicVatAccounts' | 'rutor'>): {
+  lines: VatSettlementProposalLine[]
+  filed_net: number
+  rounding_amount: number
+} {
+  const { net: filedNet } = buildFiledAmounts(ledger.rutor)
 
   // Clear every 26xx account the declaration reads from, at exact öre, so the
   // accounts land on zero for the period. A positive (credit) balance clears
@@ -281,10 +240,9 @@ export async function buildVatSettlementProposal(
   // periods where an account sits on the "wrong" side. The company's own
   // momsruta accounts are cleared too: their balance is in the filed net, and
   // leaving them out would put the whole amount on 3740.
-  const clearingAccounts = vatClearingAccounts(dynamicVatAccounts)
   const lines: VatSettlementProposalLine[] = []
-  for (const account of clearingAccounts) {
-    const t = totals.get(account)
+  for (const account of vatClearingAccounts(ledger.dynamicVatAccounts)) {
+    const t = ledger.totals.get(account)
     if (!t) continue
     const balance = roundOre(t.credit - t.debit)
     if (balance > 0) {
@@ -328,6 +286,286 @@ export async function buildVatSettlementProposal(
       })
     }
   }
+
+  return { lines, filed_net: filedNet, rounding_amount: roundingAmount }
+}
+
+const NET_LINE_ACCOUNTS = new Set([VAT_SETTLEMENT_ACCOUNT, VAT_REFUND_ACCOUNT, VAT_ROUNDING_ACCOUNT])
+
+/**
+ * The period's VAT as the proposal clears it: its clearing lines, debit minus
+ * credit (the net that should reach 2650/1650, at exact öre), and ruta 49 as
+ * filed. What a momsredovisning is compared with to tell which period it
+ * settles (vat-settlement-match.ts).
+ */
+export function proposalBalance(proposal: Pick<VatSettlementProposal, 'lines' | 'filed_net'>): PeriodVatBalance {
+  let cleared = 0
+  for (const line of proposal.lines) {
+    if (!NET_LINE_ACCOUNTS.has(line.account_number)) cleared += roundOre(line.debit_amount - line.credit_amount)
+  }
+  return { cleared: roundOre(cleared), filed_net: proposal.filed_net }
+}
+
+interface PeriodRange {
+  type: VatPeriodType
+  start: string
+  end: string
+}
+
+/**
+ * The momsperiod of the same cadence that holds a date: its calendar month or
+ * quarter, or for helårsmoms the räkenskapsår (the fiscal period covering
+ * it, the calendar year when none does, as resolvePeriodDates falls back).
+ */
+async function vatPeriodHolding(
+  supabase: SupabaseClient,
+  companyId: string,
+  type: VatPeriodType,
+  date: string,
+): Promise<PeriodRange> {
+  if (type === 'yearly') {
+    const { data, error } = await supabase
+      .from('fiscal_periods')
+      .select('period_start, period_end')
+      .eq('company_id', companyId)
+      .lte('period_start', date)
+      .gte('period_end', date)
+      .limit(1)
+      .maybeSingle()
+    if (error) throw new Error(`fiscal period lookup failed: ${error.message}`)
+    const fp = data as { period_start: string; period_end: string } | null
+    if (fp?.period_start && fp?.period_end) return { type, start: fp.period_start, end: fp.period_end }
+  }
+  const year = Number(date.slice(0, 4))
+  const month = Number(date.slice(5, 7))
+  const period = type === 'monthly' ? month : type === 'quarterly' ? Math.ceil(month / 3) : 1
+  return { type, ...calculatePeriodDates(type, year, period) }
+}
+
+/** Reads the VAT balances of other periods while one proposal is built, each period once. */
+function periodBalances(supabase: SupabaseClient, companyId: string) {
+  const balances = new Map<string, Promise<PeriodVatBalance>>()
+  const carried = new Map<string, Promise<number>>()
+  return {
+    balance(period: PeriodRange): Promise<PeriodVatBalance> {
+      const key = `${period.start}:${period.end}`
+      if (!balances.has(key)) {
+        balances.set(
+          key,
+          loadVatDeclarationLedger(supabase, companyId, period.start, period.end).then((ledger) => {
+            const built = settlementLines(ledger)
+            return proposalBalance(built)
+          }),
+        )
+      }
+      return balances.get(key)!
+    },
+    carried(period: PeriodRange): Promise<number> {
+      const key = `${period.start}:${period.end}`
+      if (!carried.has(key)) carried.set(key, carriedIntoPeriod(supabase, companyId, period.start, period.end))
+      return carried.get(key)!
+    },
+  }
+}
+
+type Balances = ReturnType<typeof periodBalances>
+
+/**
+ * The posted momsredovisningar dated inside the period that settle the period
+ * before it instead. One booked on the filing or debit day lies inside the
+ * next period (crm#1316), and its shape alone would count it as this period's
+ * own, offering this period as already booked. It is the previous period's
+ * when it clears neither this period's balances nor what an opening balance
+ * carried into it, but exactly the previous period's, and nothing dated in
+ * the previous period settles that one. Anything less certain stays this
+ * period's, so it gates booking as before.
+ */
+async function previousPeriodSettlements(
+  supabase: SupabaseClient,
+  companyId: string,
+  period: PeriodRange,
+  balance: PeriodVatBalance,
+  candidateIds: string[],
+  balances: Balances,
+): Promise<Set<string>> {
+  const earlier = new Set<string>()
+  if (candidateIds.length === 0) return earlier
+  const suspects = (await summarizeSettlements(supabase, companyId, candidateIds)).filter(
+    (s) => !nearFiled(s.cleared, balance.cleared),
+  )
+  if (suspects.length === 0) return earlier
+  const previous = await vatPeriodHolding(supabase, companyId, period.type, addDaysIso(period.start, -1))
+  const [previousBalance, carried, previousOwn] = await Promise.all([
+    balances.balance(previous),
+    balances.carried(period),
+    settlementsDated(supabase, companyId, previous.start, previous.end),
+  ])
+  if (previousOwn.some((s) => settlesPeriod(s, previousBalance))) return earlier
+  for (const s of suspects) {
+    if (!settlesPeriod(s, previousBalance)) continue
+    if (Math.abs(carried) >= FILED_ROUNDING && nearFiled(s.cleared, carried)) continue
+    earlier.add(s.journal_entry_id)
+  }
+  return earlier
+}
+
+/**
+ * The momsredovisning dated after the period that settles it, if one does
+ * (crm#1316): a verifikat dated up to LATE_LOOKAHEAD_DAYS after the period (or
+ * the first open day the proposal itself moved to) that clears exactly the
+ * period's balances and moves the filed net, to 2650/1650 or straight to the
+ * skattekonto. It is not this period's when it is the own momsredovisning of
+ * the period it is dated in (it clears that period's activity, an opening
+ * balance aside) or of a period between the two: equal VAT in two periods
+ * (a fixed rent, a monthly subscription) is common, and the latest period it
+ * fits is the one it was booked for.
+ */
+async function lateSettlement(
+  supabase: SupabaseClient,
+  companyId: string,
+  period: PeriodRange,
+  balance: PeriodVatBalance,
+  proposedEntryDate: string,
+  balances: Balances,
+): Promise<SettlementVerifikat | null> {
+  if (Math.abs(balance.filed_net) < FILED_ROUNDING) return null
+  const candidates = await settlementsDated(
+    supabase,
+    companyId,
+    addDaysIso(period.end, 1),
+    lateSettlementLookupEnd(period.end, proposedEntryDate),
+  )
+  for (const candidate of candidates) {
+    if (!settlesPeriod(candidate, balance)) continue
+    const datedIn = await vatPeriodHolding(supabase, companyId, period.type, candidate.entry_date)
+    const [own, carried] = await Promise.all([balances.balance(datedIn), balances.carried(datedIn)])
+    if (nearFiled(candidate.cleared, roundOre(own.cleared - carried))) continue
+    let fitsLater = false
+    for (
+      let between = await vatPeriodHolding(supabase, companyId, period.type, addDaysIso(datedIn.start, -1));
+      between.end > period.end;
+      between = await vatPeriodHolding(supabase, companyId, period.type, addDaysIso(between.start, -1))
+    ) {
+      if (settlesPeriod(candidate, await balances.balance(between))) {
+        fitsLater = true
+        break
+      }
+    }
+    if (!fitsLater) return candidate
+  }
+  return null
+}
+
+/**
+ * Build the settlement verifikat proposal for a VAT period. Reads the rutor
+ * from the same definition as the momsdeklaration (loadVatDeclarationLedger,
+ * the company's own momskoder and momsrutor included), so the net it books is
+ * the whole-krona net the eSKD file, the PDF and the Skatteverket integration
+ * file (buildFiledAmounts).
+ */
+export async function buildVatSettlementProposal(
+  supabase: SupabaseClient,
+  companyId: string,
+  periodType: VatPeriodType,
+  year: number,
+  period: number,
+  options: { fiscalPeriodId?: string } = {}
+): Promise<VatSettlementProposal> {
+  // Yearly (helårsmoms) resolves to the räkenskapsår bounds when a fiscal
+  // period is supplied: same resolution as the declaration itself.
+  const { start, end } = await resolvePeriodDates(
+    supabase, companyId, periodType, year, period, options.fiscalPeriodId
+  )
+
+  const periodLabel = formatPeriodLabel(periodType, year, period)
+  const description = `Momsredovisning ${periodLabel}`
+
+  const [ledger, entryDate] = await Promise.all([
+    loadVatDeclarationLedger(supabase, companyId, start, end),
+    resolveSettlementEntryDate(supabase, companyId, end),
+  ])
+
+  // A settlement dated after the period (its year was closed) lies outside
+  // the period's own range, so the lookup reaches the proposed date. Out
+  // there only a verifikat with this period's own text counts: several
+  // periods of a closed year all move to the same first open day, and one
+  // period's settlement must not gate another's.
+  const existingResult = await supabase
+    .from('journal_entries')
+    .select('id, status, entry_date, source_type, voucher_series, voucher_number, description')
+    .eq('company_id', companyId)
+    .eq('source_type', 'vat_settlement')
+    .in('status', ['draft', 'posted'])
+    .gte('entry_date', start)
+    .lte('entry_date', entryDate.entry_date > end ? entryDate.entry_date : end)
+    .order('entry_date', { ascending: false })
+    .limit(20)
+
+  // The existing-settlement lookup gates the UI's "already booked" warning
+  // and its create button; a swallowed error here would silently re-enable
+  // booking a period that already has a settlement, so fail loud instead.
+  if (existingResult.error) {
+    throw new Error(
+      `existing vat_settlement lookup failed: ${existingResult.error.message}`
+    )
+  }
+
+  const { lines, filed_net: filedNet, rounding_amount: roundingAmount } = settlementLines(ledger)
+  const balance = proposalBalance({ lines, filed_net: filedNet })
+  const range: PeriodRange = { type: periodType, start, end }
+  const balances = periodBalances(supabase, companyId)
+
+  // Shape-detected settlements (manual momsomföring, SIE imports) gate the
+  // booking button exactly like tagged ones (#984): the proposal re-clears the
+  // FULL period, so booking on top of a manual settlement would corrupt the
+  // 26xx balances. Stornos are the CANCELLATION of a settlement and must not
+  // gate, or annullera could never re-enable the button. Only posted entries
+  // gate: the shape of an unposted draft has no balance effect.
+  const shapedExisting = ledger.settlementShapedEntries.filter(
+    (e) => e.status === 'posted' && e.source_type !== 'storno'
+  )
+  const taggedExisting = ((existingResult.data ?? []) as Array<VatSettlementExistingEntry & { description?: string | null }>)
+    .filter((e) => e.entry_date <= end || e.description === description)
+
+  // A posted one dated inside the period without this period's text may be
+  // the previous period's momsredovisning, booked on its filing or debit day.
+  const earlier = await previousPeriodSettlements(
+    supabase,
+    companyId,
+    range,
+    balance,
+    [
+      ...shapedExisting.map((e) => e.id),
+      ...taggedExisting.filter((e) => e.status === 'posted' && e.description !== description).map((e) => e.id),
+    ],
+    balances,
+  )
+
+  const existing: VatSettlementExistingEntry[] = [
+    ...taggedExisting.map(({ description: _description, ...entry }) => entry),
+    ...shapedExisting,
+  ].filter((e) => !earlier.has(e.id))
+
+  // No posted momsredovisning for the period yet: one dated after it may
+  // settle it by amount, and booking another would clear its accounts twice.
+  if (lines.length > 0 && !findPostedVatSettlement(existing)) {
+    const late = await lateSettlement(supabase, companyId, range, balance, entryDate.entry_date, balances)
+    if (late) {
+      existing.push({
+        id: late.journal_entry_id,
+        status: late.status,
+        entry_date: late.entry_date,
+        source_type: late.source_type,
+        voucher_series: late.voucher_series,
+        voucher_number: late.voucher_number,
+        late_settlement: { cleared: late.cleared, net: late.net, via: late.via },
+      })
+    }
+  }
+
+  const existingEntries = existing
+    .sort((a, b) => (a.entry_date < b.entry_date ? 1 : a.entry_date > b.entry_date ? -1 : 0))
+    .slice(0, 5)
 
   return {
     period: { type: periodType, year, period, start, end },

@@ -48,6 +48,12 @@ function makeClient(data: MockData) {
   return {
     rpc: vi.fn().mockImplementation(async (fn: string, params: Record<string, unknown>) => {
       rpcCalls.push({ fn, params })
+      // The seeded ledger is the period's own range (the first read); the
+      // look-ahead and look-back over other ranges find nothing here (they
+      // are tested against a real ledger in vat-settlement-match.test.ts).
+      if (rpcCalls[0].params.p_start !== params.p_start || rpcCalls[0].params.p_end !== params.p_end) {
+        return { data: { totals: [], settlement_shaped_entries: [], source_type_counts: {} }, error: null }
+      }
       return {
         data: {
           totals: data.totals ?? [],
@@ -73,6 +79,7 @@ function makeClient(data: MockData) {
       )
       const listResult = () => {
         if (table === 'chart_of_accounts') return { data: data.chart ?? [], error: null }
+        if (table === 'journal_entry_lines') return { data: [], error: null }
         if (table === 'fiscal_periods') return { data: data.fiscalPeriods ?? [], error: null }
         return data.existingError
           ? { data: null, error: data.existingError }
@@ -136,8 +143,8 @@ describe('buildVatSettlementProposal', () => {
     // The projection must ignore already-booked settlements, or booking once
     // would change the next proposal: the RPC receives the settlement net
     // accounts so it can shape-detect and exclude them.
-    expect(rpcCalls).toHaveLength(1)
     expect(rpcCalls[0].fn).toBe('get_vat_declaration_totals')
+    expect(rpcCalls[0].params).toMatchObject({ p_start: '2026-01-01', p_end: '2026-03-31' })
     expect(rpcCalls[0].params.p_net_accounts).toEqual(['2650', '1650'])
     expect(rpcCalls[0].params.p_company_id).toBe('company-1')
   })

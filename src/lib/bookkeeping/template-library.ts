@@ -8,6 +8,7 @@ import {
   RC_BASIS_OFFSET_ACCOUNT,
 } from '@/lib/bookkeeping/vat-entries'
 import { rcBasisAccountRate } from '@/lib/reports/vat-filing-gate'
+import { isCashLedger } from '@/lib/bookkeeping/bank-leg'
 import { roundOre } from '@/lib/money'
 import { grossVat, treatmentForRate } from '@/lib/bookkeeping/gross-split'
 import {
@@ -294,15 +295,16 @@ function fiktivRateFromBasis(
  *   - a 26xx line → a VAT line, its rate snapped to the nearest standard rate;
  *     a fiktiv-moms leg takes the rate of the basis line it was self-assessed
  *     on when the booking has one (fiktivRateFromBasis), else the total's
- *   - the single non-VAT line closest to the total → the settlement leg (the
- *     bank / counter account), ratio 1
+ *   - the non-VAT line closest to the total → the settlement leg (the bank /
+ *     counter account), ratio 1; on a tie the bank or cash line (BAS 19xx)
  *   - every other non-VAT line → a business (cost/revenue) line, ratio = amount/total
  *
- * Which non-VAT leg is tagged settlement vs business is only cosmetic — a
- * template books its literal accounts regardless of the tag (see the
- * "blind to business/settlement tagging" regression). The classification is a
- * best-effort starting point that the user reviews and can re-tag in the editor
- * before saving.
+ * Which non-VAT leg is tagged settlement vs business does not change the
+ * accounts: a template books its literal accounts regardless of the tag (see
+ * the "blind to business/settlement tagging" regression), and on a bank
+ * transaction only its bank line moves to the transaction's ledger
+ * (templateBankLeg). The classification is a best-effort starting point that
+ * the user reviews and can re-tag in the editor before saving.
  *
  * Rows without a 4-digit account or with no amount are dropped. Returns [] when
  * fewer than two usable lines remain or the total is non-positive.
@@ -336,21 +338,27 @@ export function deriveTemplateLinesFromBooking(
   const isVat = (account: string) => account.startsWith('26')
 
   // Pick the settlement leg among the non-VAT lines: the one closest to the
-  // total (the bank / counter account). Equal distances prefer a credit leg,
-  // then the later row.
+  // total, which it takes in full (ratio 1). Equal distances prefer a bank or
+  // cash line (BAS 19xx), where the money moved, then a credit leg, then the
+  // later row. Without the bank preference 1930 D / 1580 K at one amount
+  // tagged the receivable "Betalning" (crm#1321).
   let settlementIndex = -1
   let bestDistance = Infinity
   let bestIsCredit = false
+  let bestIsCash = false
   parsed.forEach((row, index) => {
     if (isVat(row.account) || isBasisPairLeg(row.account)) return
     const distance = Math.abs(row.amount - total)
+    const isCash = isCashLedger(row.account)
+    const isCredit = row.side === 'credit'
     const closer = distance < bestDistance - 0.005
-    const tiePreferCredit =
-      Math.abs(distance - bestDistance) <= 0.005 && (row.side === 'credit' || !bestIsCredit)
-    if (settlementIndex === -1 || closer || tiePreferCredit) {
+    const tie = Math.abs(distance - bestDistance) <= 0.005
+    const tieWins = tie && (isCash !== bestIsCash ? isCash : isCredit || !bestIsCredit)
+    if (settlementIndex === -1 || closer || tieWins) {
       settlementIndex = index
       bestDistance = distance
-      bestIsCredit = row.side === 'credit'
+      bestIsCredit = isCredit
+      bestIsCash = isCash
     }
   })
 

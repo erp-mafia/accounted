@@ -43,6 +43,8 @@ export interface CheckFixtureOptions {
   skvSaldo?: { amount: number; at: string } | null
   skvRows?: Row[]
   extraEntries?: FakeEntry[]
+  /** Entries the VAT totals RPC lists as momsredovisning by shape (the SQL's decision, stated). */
+  vatShapedEntryIds?: string[]
   invoices?: Row[]
   supplierInvoices?: Row[]
 }
@@ -195,6 +197,7 @@ export function checkFixture(options: CheckFixtureOptions = {}): FakeLedgerData 
       { account_number: '1630', account_name: 'Avräkning för skatter och avgifter (skattekonto)', account_class: 1 },
     ],
     entries,
+    vatShapedEntryIds: options.vatShapedEntryIds,
     invoices: options.invoices ?? (base.invoices ?? []).map((inv) => (inv.id === INV1 ? { ...inv, journal_entry_id: 'e0000000-0000-4000-8000-000000000001' } : inv)),
     supplierInvoices:
       options.supplierInvoices ??

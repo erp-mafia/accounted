@@ -194,6 +194,11 @@ export interface CheckBreakdown {
   reconciles: boolean
   /** Why not, or what else bears on it, in English, for the agent. */
   note?: string
+  /**
+   * The fix when the parts show the check's own next_action does not apply
+   * (it names the usual cause). Taken as is, arguments complete for its tool.
+   */
+  next_action?: CheckNextAction
 }
 
 /** Paging of the item list. */

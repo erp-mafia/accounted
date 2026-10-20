@@ -291,6 +291,9 @@ import { CreateDimensionValueParamsSchema } from '@/lib/pending-operations/schem
 import { RetagLineDimensionsParamsSchema, RETAG_MAX_LINES } from '@/lib/pending-operations/schemas/retag-line-dimensions'
 import {
   dimensionsLabel,
+  requiredDimensionRemovedMessage,
+  requiredDimensionsRemoved,
+  requiredRulesFor,
   resultingDimensions,
   sameDimensions,
   storedDimensions,
@@ -1829,12 +1832,14 @@ function buildApprovalGuidance(operationId: string, riskLevel: 'low' | 'medium' 
  * gnubok_bulk_book_transactions: resolve-don't-select for its dimension bags
  * (./dimensions.ts). The operation transactions.bulk-book (the v1 contract)
  * takes registry codes; an agent may also send a name ("Villa Almgren tak").
- * Manual lines get the header default merged into each line's own bag and
- * resolved in one pass, and the default is dropped (the lines carry it); a
- * template's header default is resolved on its own. Every non-exact
- * resolution is echoed in the staged preview so the agent can verify what a
- * name attached to. A link to a posted verifikat carries no tags (the input
- * refuses them), so it is left alone.
+ * Manual lines and the header default are resolved in one pass and stay
+ * apart: the operation puts the default on the business lines only, never
+ * on the bank side or a moms line (crm#1313), and the staged lines then
+ * carry what the approver saw (pinParams); a template's header default is
+ * resolved on its own. Every non-exact resolution is echoed in the staged
+ * preview so the agent can verify what a name attached to. A link to a
+ * posted verifikat carries no tags (the input refuses them), so it is left
+ * alone.
  */
 async function prepareBulkBookDimensions(
   args: Record<string, unknown>,
@@ -1846,20 +1851,19 @@ async function prepareBulkBookDimensions(
     resolutions.length > 0 ? { preview: { dimension_resolutions: resolutions } } : {}
   if (Array.isArray(args.manual_lines)) {
     const lines = args.manual_lines as Array<Record<string, unknown>>
-    const { bags, resolutions } = await resolveDimensionBags(
-      supabase,
-      companyId,
-      lines.map((l, i) =>
-        mergeLineDimensions({ dimensions: parseDimensionsArg(l.dimensions, `manual_lines[${i}].dimensions`) }, defaults),
-      ),
-    )
-    const { default_dimensions: _merged, ...rest } = args
+    const { bags, resolutions } = await resolveDimensionBags(supabase, companyId, [
+      defaults,
+      ...lines.map((l, i) => parseDimensionsArg(l.dimensions, `manual_lines[${i}].dimensions`)),
+    ])
+    const [resolvedDefaults, ...lineBags] = bags
+    const { default_dimensions: _raw, ...rest } = args
     return {
       args: {
         ...rest,
+        ...(resolvedDefaults ? { default_dimensions: resolvedDefaults } : {}),
         manual_lines: lines.map((l, i) => {
-          const { dimensions: _raw, ...line } = l
-          const bag = bags[i]
+          const { dimensions: _rawLine, ...line } = l
+          const bag = lineBags[i]
           return bag && Object.keys(bag).length > 0 ? { ...line, dimensions: bag } : line
         }),
       },
@@ -12025,7 +12029,7 @@ export const tools: McpTool[] = [
         dimensions: {
           type: 'object',
           additionalProperties: { type: 'string' },
-          description: 'Pairs set on every matched line: {"<sie_dim_no>":"<kod eller namn>"}, e.g. {"6":"P01"}. Codes or names, resolved server-side.',
+          description: 'Pairs set on every matched line: {"<sie_dim_no>":"<kod eller namn>"}, e.g. {"6":"P01"}. Codes or names, resolved server-side. "" removes that dimension: {"6":""}.',
         },
         mode: {
           type: 'string',
@@ -12066,9 +12070,27 @@ export const tools: McpTool[] = [
         throw badArgument('reason', 'reason must be 3-500 characters: it is stored in the immutable dimension_retag_log.')
       }
 
-      const inputBag = parseDimensionsArg(args.dimensions, 'dimensions')
-      if (!inputBag) {
-        throw badArgument('dimensions', 'dimensions must contain at least one {"<sie_dim_no>":"<kod eller namn>"} pair, e.g. {"6":"P01"}.')
+      // An empty code removes that dimension (crm#1313): those keys skip
+      // name resolution and stay "" in the staged bag.
+      const removals: Record<string, string> = {}
+      let toSet: unknown = args.dimensions
+      if (args.dimensions && typeof args.dimensions === 'object' && !Array.isArray(args.dimensions)) {
+        const entries = Object.entries(args.dimensions as Record<string, unknown>)
+        for (const [key, value] of entries) {
+          if (typeof value !== 'string' || value.trim() !== '') continue
+          if (!/^[1-9]\d*$/.test(key)) {
+            throw badArgument('dimensions', `Invalid dimensions: nyckeln måste vara ett SIE-dimensionsnummer (t.ex. "1" eller "6"), fick "${key}".`)
+          }
+          removals[key] = ''
+        }
+        toSet = Object.fromEntries(entries.filter(([key]) => !(key in removals)))
+      }
+      const inputBag = parseDimensionsArg(toSet, 'dimensions')
+      if (!inputBag && Object.keys(removals).length === 0) {
+        throw badArgument(
+          'dimensions',
+          'dimensions must contain at least one {"<sie_dim_no>":"<kod eller namn>"} pair, e.g. {"6":"P01"}; "" removes that dimension, e.g. {"6":""}.',
+        )
       }
 
       // merge by default: tagging projekt on a line that carries a
@@ -12114,7 +12136,7 @@ export const tools: McpTool[] = [
       //    DimensionResolutionError propagates with candidates/create-first
       //    guidance: nothing unresolved is ever staged.
       const { bags, resolutions } = await resolveDimensionBags(supabase, companyId, [inputBag])
-      const resolvedBag = bags[0] as Record<string, string>
+      const resolvedBag: Record<string, string> = { ...(bags[0] ?? {}), ...removals }
 
       // ── Match the lines. POSTED entries only: drafts are edited directly
       //    (the retag RPC rejects them too).
@@ -12306,6 +12328,24 @@ export const tools: McpTool[] = [
         const after = resultingDimensions(before, resolvedBag, mode)
         return { before, after }
       })
+
+      // A dimension an account requires is never taken off a line that
+      // carries it (the approval refuses the same per line): refused before
+      // staging, like a code that does not resolve.
+      const rules = await requiredRulesFor(supabase, companyId, resolvedBag, mode)
+      if (rules) {
+        const refusals = new Map<string, string>()
+        rows.forEach((r, i) => {
+          const removed = requiredDimensionsRemoved(r.account_number, outcomes[i].before, outcomes[i].after, rules)
+          if (removed.length > 0) refusals.set(r.account_number, requiredDimensionRemovedMessage(r.account_number, removed))
+        })
+        if (refusals.size > 0) {
+          throw badArgument(
+            'dimensions',
+            `${[...refusals.values()].join(' ')} Avgränsa filtret så att de raderna inte ingår.`,
+          )
+        }
+      }
       const resultingBags: Record<string, number> = {}
       for (const { after } of outcomes) {
         const label = dimensionsLabel(after)
@@ -12353,7 +12393,7 @@ export const tools: McpTool[] = [
           })),
           ...(resolutions.length > 0 ? { dimension_resolutions: resolutions } : {}),
           will: mode === 'merge'
-            ? 'set these dimensions on every matched POSTED line and keep its other dimensions, via the audited retag RPC: internal reporting only, the verifikat itself is untouched'
+            ? 'set these dimensions (an empty code removes one) on every matched POSTED line and keep its other dimensions, via the audited retag RPC: internal reporting only, the verifikat itself is untouched'
             : 'replace the dimensions bag on every matched POSTED line via the audited retag RPC: internal reporting only, the verifikat itself is untouched',
         },
         actor,

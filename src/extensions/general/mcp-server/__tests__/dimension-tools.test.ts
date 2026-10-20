@@ -1021,7 +1021,7 @@ const BULK_JE = '33333333-3333-4333-8333-333333333333'
  * dimension policy and names the accounts on the approval card.
  */
 describe('gnubok_bulk_book_transactions: dimensions bag', () => {
-  it('merges default_dimensions into per-line bags and drops the default from staged params', async () => {
+  it('puts default_dimensions on the business lines only, never on the bank line (crm#1313), and drops the default from staged params', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     noDuplicateFor(1)
     const inserts = captureInserts(supabase)
@@ -1036,6 +1036,8 @@ describe('gnubok_bulk_book_transactions: dimensions bag', () => {
       error: null,
     })
     enqueue({ data: [{ account_number: '4010' }, { account_number: '1930' }], error: null })
+    // the rows' settlement ledger (no cash account: no enabled SEK account, so 1930)
+    enqueue({ data: [], error: null })
     // enforceBulkBookDimensionPolicy: rules (none) → validateEntryDimensions
     // (settings → dimensions → dimension_values)
     enqueue({ data: [], error: null })
@@ -1092,16 +1094,17 @@ describe('gnubok_bulk_book_transactions: dimensions bag', () => {
       { account_number: '1930', account_name: 'Företagskonto', debit_amount: 0, credit_amount: 400, line_description: null },
     ])
 
-    // Contract: per-line `manual_lines[].dimensions` carries the MERGED
-    // (line-over-default) resolved bags; the top-level default is dropped:
-    // the RPC reads per-line dims only.
+    // Contract: per-line `manual_lines[].dimensions` carries the lines as
+    // previewed: the default merged under the line's own bag on the business
+    // line, the bank line (1930) untagged (crm#1313); the top-level default
+    // is dropped: the RPC reads per-line dims only.
     const params = inserts.find((i) => i.table === 'pending_operations')!.payload.params as {
       default_dimensions?: Record<string, string>
       manual_lines: Array<{ dimensions?: Record<string, string> }>
     }
     expect(params.default_dimensions).toBeUndefined()
     expect(params.manual_lines[0].dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
-    expect(params.manual_lines[1].dimensions).toEqual({ '6': 'P001' })
+    expect(params.manual_lines[1].dimensions).toBeUndefined()
 
     // (d) Non-exact name resolution echoed once in the preview.
     expect(result.preview.dimension_resolutions).toHaveLength(1)

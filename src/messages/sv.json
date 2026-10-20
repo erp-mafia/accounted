@@ -4171,7 +4171,8 @@
     "registration_first_refused": "Fakturan är inte bokförd än och bokförs innan betalningen registreras, men den kunde inte bokföras:",
     "cancel": "Avbryt",
     "confirming": "Bekräftar...",
-    "confirm_match": "Bekräfta matchning"
+    "confirm_match": "Bekräfta matchning",
+    "split_across_invoices": "Betalar raden fler fakturor? Fördela den på flera"
   },
   "tx_rot_rut_match": {
     "title": "Bekräfta ROT/RUT-utbetalning",
@@ -4236,7 +4237,15 @@
     "exact_match": "Exakt match",
     "no_search_results": "Ingen faktura matchar \"{term}\"",
     "capped_hint": "Visar de {limit} senaste. Sök på nummer eller namn för att hitta äldre.",
-    "capped_search_hint": "Visar de {limit} senaste träffarna. Skriv mer för att smalna av."
+    "capped_search_hint": "Visar de {limit} senaste träffarna. Skriv mer för att smalna av.",
+    "invoice_pick_aria": "Välj {number} till en samlad betalning",
+    "invoices_picked_sum": "{count, plural, one {# vald faktura} other {# valda fakturor}} · {amount}",
+    "invoices_picked_exact": "Stämmer med bankraden",
+    "invoices_picked_ore_rounding": "Skiljer {amount} mot bankraden: bokförs som öresavrundning",
+    "invoices_picked_partial": "{amount} mer än bankraden: {number} blir delbetald",
+    "invoices_picked_over": "{amount} mer än bankraden: avmarkera en faktura",
+    "invoices_picked_short": "{amount} av bankraden saknar faktura: välj fler fakturor",
+    "invoices_match_picked": "Matcha {count, plural, one {vald} other {# valda}}"
   },
   "tx_bulk_book": {
     "title": "Bokför {count} transaktioner från {date}",
@@ -4273,7 +4282,7 @@
     "manual_remove_line": "Ta bort rad",
     "manual_description_placeholder": "Beskrivning (valfritt)",
     "docs_inherit_hint": "{count, plural, one {# verifikationsunderlag följer med (sparas i 7 år enligt BFL 7 kap)} other {# verifikationsunderlag följer med (sparas i 7 år enligt BFL 7 kap)}}",
-    "dimensions_hint": "Dimensionerna sätts på verifikatets rader.",
+    "dimensions_hint": "Dimensionerna sätts på verifikatets rader utom bank- och momsraderna.",
     "mixed_currency_description": "Markeringen innehåller transaktioner i flera valutor.",
     "mixed_currency_totals_label": "Summa per valuta",
     "mixed_currency_blocked": "En samlingsverifikation måste redovisas i en och samma valuta (BFL 4 kap 6 §). Beloppen går inte att summera ihop, så markeringen kan inte bokföras. Välj transaktioner i en valuta i taget.",

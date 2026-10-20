@@ -324,6 +324,7 @@ describe('gnubok_tag_journal_lines: staging', () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: { dimensions_enabled: false }, error: null })
     enqueueMatchedLines(enqueue, [makeLineRow(1, { dimensions: { '1': 'KS01', '6': 'P99' } })])
+    enqueue({ data: [], error: null }) // account_dimension_rules: a replace may remove a dimension, none is required
     enqueue({ data: { id: 'op-retag-replace' }, error: null }) // pending_operations insert
 
     const result = (await tagJournalLines.execute(
@@ -339,6 +340,65 @@ describe('gnubok_tag_journal_lines: staging', () => {
     const insert = findCall('pending_operations', 'insert')?.[0] as { title: string; params: Record<string, unknown> }
     expect(insert.params).toMatchObject({ mode: 'replace' })
     expect(insert.title).toBe('Ersätt dimensionerna på 1 verifikationsrader: 6=P01')
+  })
+
+  // crm#1313: the agent could not take a project tag off its bank lines:
+  // {} and {"6":""} were both refused.
+  it('an empty code removes that dimension: stages it, previews the line without it and keeps the others', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    // No name to resolve, so no registry read.
+    enqueueMatchedLines(enqueue, [
+      makeLineRow(1, { account_number: '1930', dimensions: { '1': 'KS01', '6': 'P01' } }),
+      makeLineRow(2, { account_number: '1930', dimensions: { '6': 'P01' } }),
+    ])
+    enqueue({ data: [], error: null }) // account_dimension_rules: none required
+    enqueue({ data: { id: 'op-retag-remove' }, error: null }) // pending_operations insert
+
+    const result = (await tagJournalLines.execute(
+      { dimensions: { '6': '' }, reason: 'Projekt hör inte till bankraden', filters: { accounts: ['1930'] } },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: { mode: string; resulting_dimensions: Record<string, number> } }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.mode).toBe('merge')
+    expect(result.preview.resulting_dimensions).toEqual({ '1=KS01': 1, 'inga dimensioner': 1 })
+    const insert = findCall('pending_operations', 'insert')?.[0] as { title: string; params: Record<string, unknown> }
+    expect(insert.params).toMatchObject({ mode: 'merge', dimensions: { '6': '' } })
+    expect(insert.title).toBe('Tagga om 2 verifikationsrader: 6 tas bort')
+  })
+
+  it('refuses before staging to take off a dimension the account requires', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueMatchedLines(enqueue, [makeLineRow(1, { dimensions: { '6': 'P01' } })])
+    enqueue({
+      data: [{ account_number: '4010', rule_type: 'required', dimensions: { sie_dim_no: 6, name: 'Projekt' }, dimension_values: null }],
+      error: null,
+    })
+
+    await expect(
+      tagJournalLines.execute(
+        { dimensions: { '6': '' }, reason: 'Rensa projekt', filters: { accounts: ['4010'] } },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/Konto 4010 kräver Projekt/)
+    expect((supabase.from as ReturnType<typeof vi.fn>).mock.calls.some((c) => c[0] === 'pending_operations')).toBe(false)
+  })
+
+  it('still refuses a bag without any pair, and says how to remove one', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      tagJournalLines.execute(
+        { dimensions: {}, mode: 'replace', reason: 'Rensa allt', filters: { accounts: ['1930'] } },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/"" removes that dimension/)
+    expect(supabase.from).not.toHaveBeenCalled()
   })
 
   it('rejects a mode that is neither merge nor replace before any DB work', async () => {

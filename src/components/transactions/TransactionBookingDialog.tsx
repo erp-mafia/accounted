@@ -21,6 +21,7 @@ import { useTransactionUnderlag } from './use-transaction-underlag'
 import UnderlagFileRow from './UnderlagFileRow'
 import { resolveSekAmount, buildCurrencyMetadata } from '@/lib/bookkeeping/currency-utils'
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
+import { bankSideOf, templateBankLeg } from '@/lib/bookkeeping/bank-leg'
 import { proposalLinesToFormLines } from '@/lib/bookkeeping/proposal-lines'
 import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
 import type { BookingTemplateLibrary } from '@/types'
@@ -124,12 +125,17 @@ function buildInitialLinesFromTemplate(
       )
     : {}
 
+  // The mall books the accounts it was saved with; only its bank line moves
+  // to the bank this transaction came from (templateBankLeg). The FX
+  // metadata goes on that line.
+  const bankLeg = templateBankLeg(template.lines, bankSideOf(transaction.amount), bankAccount)
   return lines.map((line, i) => {
-    const raw = template.lines[i]
-    if (raw?.type === 'settlement') {
-      return { ...line, ...(isForeign ? currencyMeta : {}), account_number: bankAccount }
+    if (i !== bankLeg?.index) return line
+    return {
+      ...line,
+      ...(isForeign ? currencyMeta : {}),
+      ...(bankLeg.moves ? { account_number: bankAccount } : {}),
     }
-    return line
   })
 }
 

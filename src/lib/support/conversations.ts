@@ -193,7 +193,7 @@ export async function listTickets(): Promise<TicketSummary[]> {
 
 /**
  * Loading a thread also makes it the SDK's current ticket (getMessages
- * switches to it), so a later send without newTicket lands in this ticket.
+ * switches to it). That is not enough to route a reply: see replyInThread.
  */
 export async function loadThread(ticketId: string): Promise<Thread | null> {
   try {
@@ -210,9 +210,20 @@ export async function loadThread(ticketId: string): Promise<Thread | null> {
   }
 }
 
-/** Continues the SDK's current ticket. The response says which ticket it landed in. */
-export async function replyInThread(text: string): Promise<{ ticketId: string } | null> {
+/**
+ * Replies in `ticketId`, the thread on screen. sendMessage takes no ticket: it
+ * continues the SDK's current ticket, which moves on its own as well (a
+ * background reload of the thread shown before a click, an identity reset
+ * that clears it so the reply would open a new ticket). So the SDK is pointed
+ * at the ticket first, and the check and the send run in the same tick:
+ * sendMessage reads the current ticket synchronously. Null when it cannot be
+ * pointed there; a reply never goes to another ticket instead (crm#1311).
+ * The response says which ticket it landed in.
+ */
+export async function replyInThread(ticketId: string, text: string): Promise<{ ticketId: string } | null> {
   try {
+    if (currentTicketId() !== ticketId) await posthog.conversations.getMessages(ticketId).catch(() => null)
+    if (currentTicketId() !== ticketId) return null
     const res = await posthog.conversations.sendMessage(text)
     return res ? { ticketId: res.ticket_id } : null
   } catch {

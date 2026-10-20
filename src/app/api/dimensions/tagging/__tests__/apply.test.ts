@@ -106,6 +106,7 @@ describe('POST /api/dimensions/tagging/apply', () => {
   })
 
   it('calls the RPC once per line and aggregates changed/unchanged', async () => {
+    enqueue({ data: [] }) // account_dimension_rules: a replace may remove a dimension, none is required
     enqueue({ data: { changed: true, log_id: 'log-1' } })
     enqueue({ data: { changed: false, log_id: null } })
 
@@ -133,6 +134,7 @@ describe('POST /api/dimensions/tagging/apply', () => {
   })
 
   it('accepts an empty dimensions bag (replace mode clears the tags)', async () => {
+    enqueue({ data: [] }) // account_dimension_rules: a replace may remove a dimension, none is required
     enqueue({ data: { changed: true, log_id: 'log-1' } })
 
     const response = await POST(
@@ -153,6 +155,7 @@ describe('POST /api/dimensions/tagging/apply', () => {
   })
 
   it('returns 200 with per-line errors on partial failure', async () => {
+    enqueue({ data: [] }) // account_dimension_rules: a replace may remove a dimension, none is required
     enqueue({ data: { changed: true, log_id: 'log-1' } })
     enqueue({
       error: {
@@ -178,6 +181,7 @@ describe('POST /api/dimensions/tagging/apply', () => {
   })
 
   it('keeps processing after a failure (failure first, success second)', async () => {
+    enqueue({ data: [] }) // account_dimension_rules: a replace may remove a dimension, none is required
     enqueue({ error: { message: 'Verifikationsraden hittades inte.' } })
     enqueue({ data: { changed: true, log_id: 'log-2' } })
 

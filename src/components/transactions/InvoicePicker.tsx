@@ -25,6 +25,8 @@ import { invoiceStatusDisplay } from '@/lib/invoices/status-display'
 import { effectiveInvoiceStatus } from '@/lib/invoices/overdue'
 import { supplierInvoiceStatusDisplay } from '@/lib/supplier-invoices/status-display'
 import { statusChipTextClass } from '@/lib/status-display'
+import { planPickedAllocations } from '@/lib/transactions/split-match'
+import type { BatchAllocationPrefill } from '@/lib/transactions/parts-read'
 
 /** Pause after the last keystroke before the search goes to the database. */
 const SEARCH_DEBOUNCE_MS = 250
@@ -38,12 +40,19 @@ export type OpenSupplierInvoice = SupplierInvoice & { supplier?: Supplier }
  * money out. The rows, the search (in the database, via
  * loadOpenInvoicesForMatch) and the amount ranking are the same for both; only
  * the customer side offers Skatteverket's ROT/RUT payouts.
+ *
+ * A row click matches that one invoice. With onSelectSeveral, the invoices in
+ * the row's currency also carry a checkbox: one payment for several invoices
+ * (PH 192) is ticked here and handed over, planned by the batch rules
+ * (planPickedAllocations), to the batch allocation dialog.
  */
 type InvoicePickerProps =
   | {
       kind?: 'customer'
       transaction: TransactionWithInvoice
       onSelect: (invoice: OpenInvoice) => void
+      /** Pay several ticked invoices with this one row (POST match-batch). */
+      onSelectSeveral?: (allocations: BatchAllocationPrefill[]) => void
       /** Pick one or several open ROT/RUT begäran instead of an invoice
        *  (Skatteverkets utbetalning). A row click hands over that begäran alone;
        *  the checkboxes build a bundle for a transfer that paid several beslut,
@@ -55,6 +64,7 @@ type InvoicePickerProps =
       kind: 'supplier'
       transaction: TransactionWithInvoice
       onSelect: (invoice: OpenSupplierInvoice) => void
+      onSelectSeveral?: (allocations: BatchAllocationPrefill[]) => void
       onSelectRotRutPayout?: never
     }
 
@@ -69,7 +79,7 @@ function rowCounterparty(row: PickerRow): string | null {
 }
 
 export default function InvoicePicker(props: InvoicePickerProps) {
-  const { transaction, onSelectRotRutPayout } = props
+  const { transaction, onSelectRotRutPayout, onSelectSeveral } = props
   const kind = props.kind ?? 'customer'
   const isSupplier = kind === 'supplier'
   const t = useTranslations('tx_invoice_picker')
@@ -92,6 +102,9 @@ export default function InvoicePicker(props: InvoicePickerProps) {
   const [appliedSearch, setAppliedSearch] = useState('')
   // Begäran ticked for a bundled handoff; empty until the user ticks one.
   const [pickedRequestIds, setPickedRequestIds] = useState<ReadonlySet<string>>(() => new Set())
+  // Invoices ticked for one payment of several, kept with their row so a
+  // later search never drops one from the sum.
+  const [pickedInvoices, setPickedInvoices] = useState<ReadonlyMap<string, PickerRow>>(() => new Map())
   // Boolean, not the callback: a fresh function identity per parent render
   // must not refetch the list.
   const wantRotRutRequests = !!onSelectRotRutPayout
@@ -168,13 +181,31 @@ export default function InvoicePicker(props: InvoicePickerProps) {
       // Amount proximity is only meaningful between comparable amounts: ranking
       // a 1 000 EUR invoice as a perfect hit for a 1 000 SEK deposit put the
       // wrong row first. Foreign invoices stay in the list either way; see
-      // ./invoice-candidate-ranking.
-      rankInvoicesByAmountProximity(invoices, {
-        amount: transaction.amount,
-        currency: transaction.currency,
-        amountSek: transaction.amount_sek,
-      }),
-    [invoices, transaction.amount, transaction.currency, transaction.amount_sek],
+      // ./invoice-candidate-ranking. A ticked invoice the search no longer
+      // returns stays listed, so it can be unticked.
+      rankInvoicesByAmountProximity(
+        [...invoices, ...[...pickedInvoices.values()].filter((row) => !invoices.some((i) => i.id === row.id))],
+        {
+          amount: transaction.amount,
+          currency: transaction.currency,
+          amountSek: transaction.amount_sek,
+        },
+      ),
+    [invoices, pickedInvoices, transaction.amount, transaction.currency, transaction.amount_sek],
+  )
+
+  const invoicePlan = useMemo(
+    () =>
+      planPickedAllocations(
+        transaction.amount,
+        [...pickedInvoices.values()].map((row) => ({
+          kind: isSupplier ? ('supplier_invoice' as const) : ('customer_invoice' as const),
+          id: row.id,
+          remaining: Number(row.remaining_amount ?? row.total ?? 0),
+          dueDate: row.due_date ?? null,
+        })),
+      ),
+    [pickedInvoices, transaction.amount, isSupplier],
   )
 
   if (isLoading) {
@@ -295,6 +326,39 @@ export default function InvoicePicker(props: InvoicePickerProps) {
       </div>
     ) : null
 
+  const txCurrency = normalizeCurrency(transaction.currency)
+  const invoicePicked = [...pickedInvoices.values()]
+  const toggleInvoice = (row: PickerRow, checked: boolean) => {
+    setPickedInvoices((prev) => {
+      const next = new Map(prev)
+      if (checked) next.set(row.id, row)
+      else next.delete(row.id)
+      return next
+    })
+  }
+  // The batch has no line for a gap: the row must be covered (short) and
+  // every ticked invoice must get something (over) before it books.
+  const invoiceHandOverBlocked = invoicePlan.outcome === 'short' || invoicePlan.outcome === 'over'
+  const gap = formatCurrency(Math.abs(invoicePlan.difference), txCurrency)
+  const partialRow = invoicePlan.partiallyPaidId ? pickedInvoices.get(invoicePlan.partiallyPaidId) : undefined
+  const invoicePlanLine =
+    invoicePlan.outcome === 'exact'
+      ? t('invoices_picked_exact')
+      : invoicePlan.outcome === 'ore_rounding'
+        ? t('invoices_picked_ore_rounding', { amount: gap })
+        : invoicePlan.outcome === 'partial'
+          ? t('invoices_picked_partial', {
+              amount: gap,
+              number: (partialRow && rowNumber(partialRow)) ?? t('no_number'),
+            })
+          : invoicePlan.outcome === 'over'
+            ? t('invoices_picked_over', { amount: gap })
+            : t('invoices_picked_short', { amount: gap })
+  const handOverInvoices = () => {
+    if (!onSelectSeveral || invoiceHandOverBlocked || invoicePlan.allocations.length === 0) return
+    onSelectSeveral(invoicePlan.allocations)
+  }
+
   if (!hasOpenInvoices) {
     return (
       <div className="space-y-3">
@@ -342,63 +406,104 @@ export default function InvoicePicker(props: InvoicePickerProps) {
             ? supplierInvoiceStatusDisplay(invoice.status)
             : invoiceStatusDisplay(effectiveInvoiceStatus(invoice as OpenInvoice))
 
-          return (
-            <button
-              key={invoice.id}
-              type="button"
-              onClick={() =>
-                props.kind === 'supplier'
-                  ? props.onSelect(invoice as OpenSupplierInvoice)
-                  : props.onSelect(invoice as OpenInvoice)
-              }
-              className={cn(
-                'w-full text-left rounded-lg border px-3 py-2.5 transition-colors',
-                'hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                exact && 'border-success/50 bg-success/5',
-                close && 'border-primary/30'
-              )}
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <FileText className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                    <span className="font-medium text-sm">
-                      {rowNumber(invoice) ?? t('no_number')}
+          // Only invoices in the row's own currency are ticked into one
+          // payment: a foreign invoice's share is the SEK the bank took, which
+          // the batch dialog in the row's menu asks for.
+          const pickable = !!onSelectSeveral && proximity.basis === 'same_currency'
+          const picked = pickedInvoices.has(invoice.id)
+          const selectRow = () =>
+            props.kind === 'supplier'
+              ? props.onSelect(invoice as OpenSupplierInvoice)
+              : props.onSelect(invoice as OpenInvoice)
+          const rowContent = (
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <FileText className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                  <span className="font-medium text-sm">
+                    {rowNumber(invoice) ?? t('no_number')}
+                  </span>
+                  {statusDisplay?.chip && (
+                    <span className={cn('text-[11px] uppercase tracking-wide', statusChipTextClass(statusDisplay.chip))}>
+                      {isSupplier ? tSupplierInvoices(statusDisplay.labelKey) : tInvoices(statusDisplay.labelKey)}
                     </span>
-                    {statusDisplay?.chip && (
-                      <span className={cn('text-[11px] uppercase tracking-wide', statusChipTextClass(statusDisplay.chip))}>
-                        {isSupplier ? tSupplierInvoices(statusDisplay.labelKey) : tInvoices(statusDisplay.labelKey)}
-                      </span>
-                    )}
-                    {foreignCurrency && (
-                      <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                        {invoiceCurrency}
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-0.5 truncate">
-                    {rowCounterparty(invoice) || (isSupplier ? t('unknown_supplier') : t('unknown_customer'))} ·{' '}
-                    {t('due_short', { date: formatDate(invoice.due_date) })}
-                  </p>
-                </div>
-                <div className="text-right flex-shrink-0">
-                  <p
-                    className={cn(
-                      'text-sm font-medium tabular-nums',
-                      exact && 'text-success'
-                    )}
-                  >
-                    {formatCurrency(remaining, invoiceCurrency)}
-                  </p>
-                  {exact && <p className="text-[11px] text-success">{t('exact_match')}</p>}
-                  {candidateSek != null && (
-                    <p className="text-[11px] text-muted-foreground tabular-nums">
-                      ≈ {formatCurrency(candidateSek, DOMESTIC_CURRENCY)}
-                    </p>
+                  )}
+                  {foreignCurrency && (
+                    <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                      {invoiceCurrency}
+                    </span>
                   )}
                 </div>
+                <p className="text-xs text-muted-foreground mt-0.5 truncate">
+                  {rowCounterparty(invoice) || (isSupplier ? t('unknown_supplier') : t('unknown_customer'))} ·{' '}
+                  {t('due_short', { date: formatDate(invoice.due_date) })}
+                </p>
               </div>
-            </button>
+              <div className="text-right flex-shrink-0">
+                <p
+                  className={cn(
+                    'text-sm font-medium tabular-nums',
+                    exact && 'text-success'
+                  )}
+                >
+                  {formatCurrency(remaining, invoiceCurrency)}
+                </p>
+                {exact && <p className="text-[11px] text-success">{t('exact_match')}</p>}
+                {candidateSek != null && (
+                  <p className="text-[11px] text-muted-foreground tabular-nums">
+                    ≈ {formatCurrency(candidateSek, DOMESTIC_CURRENCY)}
+                  </p>
+                )}
+              </div>
+            </div>
+          )
+
+          if (!pickable) {
+            return (
+              <button
+                key={invoice.id}
+                type="button"
+                onClick={selectRow}
+                className={cn(
+                  'w-full text-left rounded-lg border px-3 py-2.5 transition-colors',
+                  'hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  exact && 'border-success/50 bg-success/5',
+                  close && 'border-primary/30'
+                )}
+              >
+                {rowContent}
+              </button>
+            )
+          }
+
+          return (
+            <div
+              key={invoice.id}
+              className={cn(
+                'flex items-stretch rounded-lg border transition-colors',
+                exact && 'border-success/50 bg-success/5',
+                close && 'border-primary/30',
+                picked && 'border-primary/40 bg-secondary/40',
+              )}
+            >
+              <label className="flex cursor-pointer items-center pl-3 pr-1">
+                <Checkbox
+                  checked={picked}
+                  onCheckedChange={(checked) => toggleInvoice(invoice, checked === true)}
+                  aria-label={t('invoice_pick_aria', { number: rowNumber(invoice) ?? t('no_number') })}
+                />
+              </label>
+              <button
+                type="button"
+                onClick={selectRow}
+                className={cn(
+                  'min-w-0 flex-1 rounded-r-lg py-2.5 pl-2 pr-3 text-left transition-colors',
+                  'hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                )}
+              >
+                {rowContent}
+              </button>
+            </div>
           )
         })}
         {sorted.length === 0 && (
@@ -414,6 +519,33 @@ export default function InvoicePicker(props: InvoicePickerProps) {
           </p>
         )}
       </div>
+      {invoicePicked.length > 0 && (
+        <div className="flex items-center justify-between gap-3 border-t pt-3">
+          <div className="min-w-0 text-xs">
+            <p className="tabular-nums text-muted-foreground">
+              {t('invoices_picked_sum', {
+                count: invoicePicked.length,
+                amount: formatCurrency(invoicePlan.pickedTotal, txCurrency),
+              })}
+            </p>
+            <p
+              className={cn(
+                'tabular-nums',
+                invoicePlan.outcome === 'exact'
+                  ? 'text-success'
+                  : invoicePlan.outcome === 'ore_rounding'
+                    ? 'text-muted-foreground'
+                    : 'text-attn',
+              )}
+            >
+              {invoicePlanLine}
+            </p>
+          </div>
+          <Button type="button" size="sm" onClick={handOverInvoices} disabled={invoiceHandOverBlocked}>
+            {t('invoices_match_picked', { count: invoicePicked.length })}
+          </Button>
+        </div>
+      )}
     </div>
   )
 }

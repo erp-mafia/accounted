@@ -232,7 +232,18 @@ export interface PaymentInitiationProvider {
  *     anything (connection refused, a rate limit); trying again later is safe.
  *   - neither: a definitive refusal. The bank holds nothing, and the same
  *     instruction would be refused again.
+ *
+ * `instanceof` answers by a process-wide mark, not by the prototype. A
+ * production server holds more than one copy of this module (one per bundler
+ * layer, lib/global-singleton.ts): lib/init builds the Connect adapter in the
+ * instrumentation hook's copy, so the adapter throws that copy's class while
+ * a route catches with its own. A prototype check then answered false for
+ * every provider failure, and the signing read each one as UNEXPECTED_ERROR:
+ * a refused create held as an unknown outcome, a bank that would not start a
+ * second authorisation never sent to the recreate (crm#1282).
  */
+const PAYMENT_PROVIDER_ERROR = Symbol.for('accounted.payments.providerError')
+
 export class PaymentProviderError extends Error {
   readonly name = 'PaymentProviderError'
   constructor(
@@ -243,6 +254,12 @@ export class PaymentProviderError extends Error {
     readonly outcomeUnknown: boolean = false,
   ) {
     super(message)
+    // Non-enumerable, so the mark never rides along into a logged or returned payload.
+    Object.defineProperty(this, PAYMENT_PROVIDER_ERROR, { value: true, enumerable: false })
+  }
+
+  static [Symbol.hasInstance](value: unknown): value is PaymentProviderError {
+    return typeof value === 'object' && value !== null && (value as Record<symbol, unknown>)[PAYMENT_PROVIDER_ERROR] === true
   }
 }
 

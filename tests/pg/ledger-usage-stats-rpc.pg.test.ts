@@ -7,8 +7,9 @@
  * window, dominant category/account derivation (19xx contra exclusion),
  * splinter-merging merchant normalization (payment-rail prefixes, dates,
  * legal suffixes), storno exclusion from account_usage, supplier-side
- * aggregation (credit notes and reversed invoices excluded), and two-company
- * isolation (a foreign company id yields empty sections).
+ * aggregation (credit notes and reversed invoices excluded; moms,
+ * öresavrundning, skuld and bank rows never the dominant account, crm#1310),
+ * and two-company isolation (a foreign company id yields empty sections).
  */
 import { describe, it, expect, beforeAll } from 'vitest'
 import { randomUUID } from 'node:crypto'
@@ -363,6 +364,29 @@ describe('get_ledger_usage_stats', () => {
         { invoiceDate: '2026-01-02', account: '4010' },
       ],
     })
+    // crm#1310: rows in the shape the provider migration and register-booked
+    // store, the ingående moms as a row of its own (2641) and an
+    // öresavrundning row (3740). 2641 is on all three invoices, the cost
+    // only on two: counting every row named 2641 the dominant account.
+    await insertSupplierWithInvoices({
+      userId, companyId, name: 'Programvara AB', arrivalStart: 20,
+      invoices: [
+        { invoiceDate: '2026-05-03', account: '5420', extraItemAccounts: ['2641', '3740'] },
+        { invoiceDate: '2026-06-03', account: '5420', extraItemAccounts: ['2641'] },
+        { invoiceDate: '2026-06-13', account: '6540', extraItemAccounts: ['2641'] },
+      ],
+    })
+    // One invoice, one cost row and one moms row: a tie the account_number
+    // tiebreak used to hand to '2641'.
+    await insertSupplierWithInvoices({
+      userId, companyId, name: 'Momsrad AB', arrivalStart: 30,
+      invoices: [{ invoiceDate: '2026-06-14', account: '2641', extraItemAccounts: ['5420'] }],
+    })
+    // Only moms (a forwarder's import-VAT bill): no kontering to report.
+    await insertSupplierWithInvoices({
+      userId, companyId, name: 'Bara Moms AB', arrivalStart: 40,
+      invoices: [{ invoiceDate: '2026-06-15', account: '2641' }],
+    })
 
     // Invoices carrying VAT treatments: one in-window, one before the window.
     await getPool().query(
@@ -464,6 +488,23 @@ describe('get_ledger_usage_stats', () => {
     // Only the two in-window invoices; 1/2 agree on the dominant account.
     expect(blandat!.invoices).toBe(2)
     expect(blandat!.dominant_account_count).toBe(1)
+  })
+
+  it('reports the cost account as the dominant account, never moms or öresavrundning (crm#1310)', async () => {
+    const stats = await callRpc(companyId, '2026-04-01')
+    const programvara = stats.supplier_patterns.find((s) => s.supplier === 'Programvara AB')
+    expect(programvara).toMatchObject({ invoices: 3, dominant_account_number: '5420', dominant_account_count: 2 })
+
+    const tie = stats.supplier_patterns.find((s) => s.supplier === 'Momsrad AB')
+    expect(tie).toMatchObject({ invoices: 1, dominant_account_number: '5420', dominant_account_count: 1 })
+
+    // Still listed (the invoices happened), with no account to follow.
+    const onlyVat = stats.supplier_patterns.find((s) => s.supplier === 'Bara Moms AB')
+    expect(onlyVat).toMatchObject({ invoices: 1, dominant_account_number: null, dominant_account_count: 0 })
+
+    for (const s of stats.supplier_patterns) {
+      expect(s.dominant_account_number ?? '').not.toMatch(/^(19|244|26)|^3740$/)
+    }
   })
 
   it('reports window-scoped VAT treatments and median booking lag', async () => {

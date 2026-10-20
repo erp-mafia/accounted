@@ -1,12 +1,17 @@
 /**
  * The paying side of a bank payment: the company's own account and its bank.
  *
- * A payment API addresses the bank by BIC (Open Payments' X-BicFi). A Swedish
- * IBAN carries a three-digit bank code right after the check digits, and that
- * code is the start of the bank's clearing series, so the clearing table the
- * salary payment file already trusts (lookupBicByClearing) resolves it; the
- * bank name of the connection is the fallback for banks outside that table.
- * An account whose bank cannot be named confidently is refused, never guessed.
+ * A payment API addresses the bank by BIC (Open Payments' X-BicFi). The
+ * account's bank connection names it first: an Open Payments connection
+ * stores the BIC of the bank the provider read the account from, the very
+ * identifier every payment call sends, so a bank outside the tables below
+ * (Lunar, for one) pays as its reads do (crm#1314). An Enable Banking
+ * connection stores none; then the tables decide: a Swedish IBAN carries a
+ * three-digit bank code right after the check digits, the start of the
+ * bank's clearing series, so the clearing table the salary payment file
+ * already trusts (lookupBicByClearing) resolves it, and the bank name of the
+ * connection is the fallback for banks outside that table. An account whose
+ * bank cannot be named confidently is refused, never guessed.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -24,6 +29,8 @@ export interface DebtorAccountSource {
 /** What the paying account's bank connection knows about the bank behind it; null for an account with no connection. */
 export interface DebtorConnectionSource {
   bank_name: string | null
+  /** The bank's BIC as the connection's provider names it (Open Payments: the X-BicFi of every call); null on Enable Banking connections. */
+  bic?: string | null
   /** The sparbank (or Ölands Bank) behind a shared BIC, as the Open Payments connection stores it; null elsewhere. */
   affiliated_aspsp_id?: string | null
   /** 'business' or 'personal': the account context chosen when the bank was connected. */
@@ -66,13 +73,19 @@ export function bicFromSwedishIban(iban: string): string | null {
   return lookupBicByClearing(`${bankCode}0`)
 }
 
+/** The connection's own BIC in the form a payment call carries (8 or 11 characters), or null when it stores none. */
+function connectionBic(connection: DebtorConnectionSource | null): string | null {
+  const bic = (connection?.bic ?? '').replace(/\s/g, '').toUpperCase()
+  return /^[A-Z0-9]{8}([A-Z0-9]{3})?$/.test(bic) ? bic : null
+}
+
 export function resolveDebtor(account: DebtorAccountSource, connection: DebtorConnectionSource | null): DebtorResolution {
   if (!account.enabled) return { ok: false, reason: 'account_disabled' }
   if ((account.currency ?? '').toUpperCase() !== 'SEK') return { ok: false, reason: 'not_sek' }
   if (!account.iban || !isValidIban(account.iban)) return { ok: false, reason: 'iban_missing' }
   const iban = normalizeIban(account.iban) as string
   const bankName = connection?.bank_name ?? null
-  const bic = bicFromSwedishIban(iban) ?? lookupBicByBankName(bankName)
+  const bic = connectionBic(connection) ?? bicFromSwedishIban(iban) ?? lookupBicByBankName(bankName)
   if (!bic) return { ok: false, reason: 'bank_unknown' }
   return {
     ok: true,
@@ -104,7 +117,7 @@ export async function loadDebtor(
 ): Promise<DebtorResolution | { ok: false; reason: 'not_found' }> {
   const { data: account } = await supabase
     .from('cash_accounts')
-    .select('id, iban, currency, name, enabled, bank_connection:bank_connections(bank_name, affiliated_aspsp_id, psu_type)')
+    .select('id, iban, currency, name, enabled, bank_connection:bank_connections(bank_name, bic, affiliated_aspsp_id, psu_type)')
     .eq('id', cashAccountId)
     .eq('company_id', companyId)
     .maybeSingle()

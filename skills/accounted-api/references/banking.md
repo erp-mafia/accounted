@@ -4501,6 +4501,7 @@ Puts up to 200 transactions on ONE verifikat (samlingsverifikation, BFL 5 kap 6 
 - All rows must share one direction and currency SEK, and one date unless they are linked to an existing verifikat: BULK_BOOK_DATE_MISMATCH / BULK_BOOK_DIRECTION_MISMATCH / BULK_BOOK_MIXED_CURRENCY / BULK_BOOK_FOREIGN_CURRENCY otherwise.
 - A row that looks already booked returns 409 TRANSACTION_BOOK_POSSIBLE_DUPLICATE naming it; resend with force=true only after reviewing the candidate (each dismissal is logged in behandlingshistorik).
 - manual_lines accounts must be active in the company's chart (BULK_BOOK_INVALID_ACCOUNT) and balance; amounts are kronor, account numbers strings.
+- default_dimensions tag the business lines only: the bank side and the moms lines stay untagged. A line's own dimensions are kept as given.
 - A posted samlingsverifikat is permanent: undo with storno (POST /journal-entries/{id}/reverse).
 
 | Parameter | In | Type | Required | Notes |

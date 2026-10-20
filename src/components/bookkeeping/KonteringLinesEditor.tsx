@@ -6,6 +6,7 @@ import { AccountNumber } from '@/components/ui/account-number'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn, formatAmount } from '@/lib/utils'
+import { KONTERING_ICON_WIDTH_CLASS, konteringGridColumns } from '@/components/bookkeeping/kontering-grid'
 import { Plus, Trash2 } from 'lucide-react'
 import type { BASAccount } from '@/types'
 import type { SearchableAccount } from '@/lib/bookkeeping/account-search'
@@ -84,7 +85,10 @@ interface KonteringLinesEditorProps {
   renderDescriptionExtra?: (index: number) => ReactNode
   /** One read-only column after the amounts, e.g. the account's saldo. */
   extraColumn?: { label: string; render: (index: number) => ReactNode }
-  /** Row controls placed before the remove button. */
+  /**
+   * Row controls placed before the remove button: at most two icon-sm
+   * buttons, the width the column keeps on every row (kontering-grid.ts).
+   */
   renderRowActions?: (index: number) => ReactNode
   /** Rows a line generates, listed under it in the same columns. */
   readOnlyLines?: (index: number) => { title?: string; lines: readonly KonteringReadOnlyLine[] } | undefined
@@ -92,23 +96,6 @@ interface KonteringLinesEditorProps {
   totals?: { label: string; debit: ReactNode; credit: ReactNode; amountClassName?: string }
   /** Buttons beside "add row". */
   toolbar?: ReactNode
-}
-
-// Literal class names: Tailwind only generates the classes it finds in source.
-const GRID_COLUMNS = {
-  plain: 'sm:grid-cols-[minmax(0,1fr)_120px_120px_32px]',
-  plainActions: 'sm:grid-cols-[minmax(0,1fr)_120px_120px_auto]',
-  plainExtra: 'sm:grid-cols-[minmax(0,1fr)_120px_120px_112px_32px]',
-  plainExtraActions: 'sm:grid-cols-[minmax(0,1fr)_120px_120px_112px_auto]',
-  described: 'sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_120px_32px]',
-  describedActions: 'sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_120px_auto]',
-  describedExtra: 'sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_120px_112px_32px]',
-  describedExtraActions: 'sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_120px_112px_auto]',
-} as const
-
-function gridColumns(described: boolean, extra: boolean, actions: boolean): string {
-  const key = `${described ? 'described' : 'plain'}${extra ? 'Extra' : ''}${actions ? 'Actions' : ''}`
-  return GRID_COLUMNS[key as keyof typeof GRID_COLUMNS]
 }
 
 /**
@@ -151,7 +138,7 @@ export function KonteringLinesEditor({
   toolbar,
 }: KonteringLinesEditorProps) {
   const withDescription = onDescriptionChange !== undefined
-  const columns = gridColumns(withDescription, extraColumn !== undefined, renderRowActions !== undefined)
+  const columns = konteringGridColumns(withDescription, extraColumn !== undefined, renderRowActions !== undefined)
   // The cells a sum or a generated row leaves empty after the amounts.
   const trailingCells = (extraColumn ? 1 : 0) + 1
 
@@ -212,7 +199,7 @@ export function KonteringLinesEditor({
   }
 
   return (
-    <div className="space-y-2">
+    <div className={cn('space-y-2', KONTERING_ICON_WIDTH_CLASS)}>
       {header && (
         <div
           aria-hidden="true"
