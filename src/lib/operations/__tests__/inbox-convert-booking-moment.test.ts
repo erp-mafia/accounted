@@ -11,6 +11,13 @@
  * tests mock emit and never reached it, so this test runs the real bus.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+// The pair guard (lib/operations/inbox-pair-guard.ts, tested there): here only that the door asks and obeys.
+const refuseWhenPairBookedMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/operations/inbox-pair-guard', () => ({
+  refuseWhenPairBooked: (...args: unknown[]) => refuseWhenPairBookedMock(...args),
+}))
+
 import { eventBus } from '@/lib/events/bus'
 import { createLogger } from '@/lib/logger'
 import {

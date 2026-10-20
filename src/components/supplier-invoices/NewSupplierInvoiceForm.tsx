@@ -464,7 +464,14 @@ export default function NewSupplierInvoiceForm({
   // books at payment and deferred booking at the Bokför step, so an
   // out-of-period date is fine there and we stay quiet. periodsLoaded gates the
   // warning so it never flashes before the fiscal periods have been fetched.
-  const willBookAtRegistration = bookingMoment === 'issue' || watchedPaidPrivately
+  // Registered and settled against the bank row in one request (the Inkorg's
+  // register-and-settle): a company that books supplier invoices in a
+  // separate Bokför step gets the registration verifikat booked now, first,
+  // by the settlement (lib/supplier-invoices/registration-first.ts), so the
+  // form says what happens, not "when you choose Bokför".
+  const settlesNow = !!(settleWith && inboxItemId && watchedPayer === 'company')
+  const effectiveBookingMoment = settlesNow && bookingMoment === 'manual' ? 'issue' : bookingMoment
+  const willBookAtRegistration = effectiveBookingMoment === 'issue' || watchedPaidPrivately
   const invoiceDateOutsidePeriod =
     periodsLoaded &&
     !!watchedInvoiceDate &&
@@ -1538,7 +1545,7 @@ export default function NewSupplierInvoiceForm({
   const forvalChips: string[] = [
     willBookAtRegistration
       ? t('forval_books_at_registration')
-      : bookingMoment === 'payment'
+      : effectiveBookingMoment === 'payment'
         ? t('forval_books_at_payment')
         : t('forval_books_on_book_step'),
   ]
@@ -2519,9 +2526,9 @@ export default function NewSupplierInvoiceForm({
             isSubmitting={isSubmitting}
             title={t('review_dialog_title')}
             warningText={
-              bookingMoment === 'issue'
+              effectiveBookingMoment === 'issue'
                 ? t('review_dialog_warning')
-                : bookingMoment === 'payment'
+                : effectiveBookingMoment === 'payment'
                   ? t('review_dialog_warning_cash')
                   : t('review_dialog_warning_deferred')
             }
@@ -2540,7 +2547,7 @@ export default function NewSupplierInvoiceForm({
               paymentReference={pendingData.payment_reference || undefined}
               items={pendingData.items}
               oreRounding={oreRounding}
-              bookingMoment={bookingMoment}
+              bookingMoment={effectiveBookingMoment}
               chartVatTreatments={chartVatTreatmentsOf(accounts)}
               defaultDimensions={defaultDims}
             />

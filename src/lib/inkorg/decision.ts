@@ -19,7 +19,12 @@
  *   - not_underlag: DELETE /items/:id (the document stays in the archive);
  *   - retry_reading: POST /items/:id/retry-extraction;
  *   - credit: InboxCreditNotePanel (POST /api/supplier-invoices/:id/credit);
- *   - open_entry, open_supplier_invoice, open_matched_entry: links.
+ *   - open_entry, open_supplier_invoice, open_matched_entry: links;
+ *   - attach_to_booking: the half of a purchase whose other half is booked
+ *     already (./pairs.ts pairWithBookedHalves) is added to that booking's
+ *     verifikat as one more underlag (POST /api/inkorg/items/:id/companion),
+ *     never booked or paid again; open_booked_entry links to that verifikat
+ *     when its period is locked and nothing can be added.
  *
  * What the company has switched off decides too (lib/modules/package-doors.ts:
  * an off or winding-down package refuses its start doors), so no answer is
@@ -52,6 +57,7 @@
 import type { ExtractedPaymentMethod } from '@/types'
 import { resolveInboxKind, type InboxDocumentKind } from '@/lib/documents/inbox-kind'
 import type { BankMatch } from '@/lib/documents/inbox-bank-match'
+import { cardEvidence } from '@/lib/documents/bank-match/card-token'
 import { isUnderlagDivergent, itemHeadline, itemStage, type InkorgItem, type UnderlagStatus } from './items'
 
 export type DecisionAction =
@@ -74,6 +80,8 @@ export type DecisionAction =
   | 'owner_paid'
   | 'turn_on_supplier_invoices'
   | 'turn_on_expenses'
+  | 'attach_to_booking'
+  | 'open_booked_entry'
 
 export type DecisionQuestion =
   | 'already_paid'
@@ -86,6 +94,7 @@ export type DecisionQuestion =
   | 'underlag_off_entry'
   | 'booked'
   | 'supplier_invoice_done'
+  | 'already_booked_with'
 
 export type DecisionEvidence =
   | { kind: 'reading' }
@@ -99,6 +108,13 @@ export type DecisionEvidence =
   | { kind: 'credit_note' }
   | { kind: 'booked' }
   | {
+      /** The other half of the purchase is booked: on this verifikat, its period open or locked. */
+      kind: 'booked_with'
+      bookedKind: 'invoice' | 'receipt'
+      voucher: string | null
+      locked: boolean
+    }
+  | {
       kind: 'bank_match'
       transactionId: string
       date: string
@@ -108,6 +124,8 @@ export type DecisionEvidence =
       /** What paired them: the OCR, the payee's giro, or the amount near the date. */
       basis: BankMatch['basis']
       level: BankMatch['evidence_level']
+      /** The bank row names the card the document (or its receipt) was paid with, and that weighed in. */
+      cardAgrees: boolean
     }
 
 export interface FocusDecision {
@@ -173,6 +191,19 @@ function receiptEvidence(item: InkorgItem, companion: InkorgItem | null): Decisi
   return headline.amount != null ? { kind: 'amount', amount: headline.amount, currency: headline.currency, date: headline.documentDate } : null
 }
 
+/**
+ * Whether the card that paid the purchase weighed in on the proposal: on the
+ * amount-and-date basis a stark level only comes from the card
+ * (lib/documents/bank-match/decide.ts), and a trolig one may rest on it in
+ * place of the name. The card is the document's own, else its receipt's.
+ */
+function cardWeighedIn(item: InkorgItem, companion: InkorgItem | null | undefined, match: BankMatch): boolean {
+  if (match.basis !== 'rule_amount_date') return false
+  if (match.evidence_level === 'stark') return true
+  const card = item.extracted_data?.payment?.cardLast4 ?? companion?.extracted_data?.payment?.cardLast4 ?? null
+  return cardEvidence(card, [match.counterparty]) === 'agrees'
+}
+
 /** An invoice its receipt from the same arrival says is paid (./pairs.ts). */
 export function paidByReceipt(item: Pick<InkorgItem, 'pairing' | 'kind_hint' | 'extracted_data'>): boolean {
   return item.pairing?.role === 'invoice' && resolveInboxKind({ kind_hint: item.kind_hint ?? null, extracted_data: item.extracted_data }) === 'supplier_invoice'
@@ -199,6 +230,21 @@ export function focusDecision(
 
   if (stage === 'processing') {
     return { question: 'reading', evidence: { kind: 'reading' }, actions: [], quietActions: [], editorEscape: false }
+  }
+
+  // The other half of this purchase is booked already: it is the same
+  // purchase, so it is never paid or booked again. Its one answer adds it to
+  // that booking; in a locked period nothing can be added, and the page says so.
+  if (item.pairing?.role === 'booked_companion') {
+    const pairing = item.pairing
+    const locked = pairing.locked === true
+    return {
+      question: 'already_booked_with',
+      evidence: { kind: 'booked_with', bookedKind: pairing.booked_kind, voucher: pairing.voucher ?? null, locked },
+      actions: locked ? (pairing.journal_entry_id ? ['open_booked_entry'] : []) : ['attach_to_booking'],
+      quietActions: [],
+      editorEscape: false,
+    }
   }
 
   if (stage === 'error') {
@@ -261,6 +307,7 @@ export function focusDecision(
         counterparty: match.counterparty,
         basis: match.basis,
         level: match.evidence_level,
+        cardAgrees: cardWeighedIn(item, context.companion, match),
       },
       actions,
       quietActions: ['not_underlag'],
@@ -349,6 +396,8 @@ export function canUndo(action: DecisionAction): boolean {
  *     no bank row found for it yet;
  *   - to_pay: an invoice with a due date that nothing says is paid;
  *   - unreadable, reading, linked: its stage;
+ *   - booked_with: the other half of the purchase is booked already, on
+ *     this verifikat;
  *   - waiting: everything else waiting for a decision;
  *   - done: booked or registered.
  * `bankMatch` is what a later read said (the focus view reads the item again
@@ -364,11 +413,14 @@ export type RowStatus =
   | { kind: 'linked' }
   | { kind: 'waiting' }
   | { kind: 'done' }
+  | { kind: 'booked_with'; voucher: string | null }
 
 export function rowStatus(item: InkorgItem, bankMatch: BankMatch | null | undefined = item.bank_match): RowStatus {
   const stage = itemStage(item)
   if (stage === 'booked') return { kind: 'done' }
   if (stage === 'processing') return { kind: 'reading' }
+  // The other half of the purchase is booked: "Redan bokförd" with its verifikat.
+  if (item.pairing?.role === 'booked_companion') return { kind: 'booked_with', voucher: item.pairing.voucher ?? null }
   if (stage === 'error') return { kind: 'unreadable' }
   if (stage === 'linked') return { kind: 'linked' }
   const kind = itemHeadline(item).kind

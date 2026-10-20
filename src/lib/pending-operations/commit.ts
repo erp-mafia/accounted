@@ -285,6 +285,8 @@ import {
 } from '@/lib/api/schemas'
 import { z } from 'zod'
 import { operationForPendingType } from '@/lib/operations/registry'
+import { followPairedReceipt } from '@/lib/operations/inbox-companion'
+import { refuseWhenPairBooked } from '@/lib/operations/inbox-pair-guard'
 import { startPackageForPendingType } from '@/lib/modules/package-doors'
 import { packageStartRefusal } from '@/lib/modules/package-gate'
 import { rejectSupersededInboxConversions } from './supersede'
@@ -5728,6 +5730,9 @@ async function commitCreateVoucher(
       }
     }
     replacesEntryId = booking.replaces
+    // The other half of this purchase is booked already: approving would book it twice.
+    const pairBooked = await refuseWhenPairBooked(supabase, companyId, inboxItemId)
+    if (pairBooked) return { error: pairBooked.messageSv, errorCode: pairBooked.code, status: 409, data: pairBooked.details }
   }
 
   try {
@@ -5823,6 +5828,11 @@ async function commitCreateVoucher(
         })
       }
     }
+
+    // The receipt this invoice came with as one purchase follows it onto the
+    // voucher (lib/operations/inbox-companion.ts), so an agent's booking
+    // never leaves it in the inbox to be booked twice. Best effort.
+    if (inboxItemId) await followPairedReceipt({ supabase, companyId, userId, log }, inboxItemId)
 
     return {
       data: {

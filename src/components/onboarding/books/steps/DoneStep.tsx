@@ -10,7 +10,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { useFormat } from '@/lib/hooks/use-format'
 import { aiConnectionFromWire, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
 import { createAiStatusPoller, type AiStatusPoller } from '@/lib/onboarding/ai-status-poll'
-import { AI_TASK_HREF, AI_TASK_LABEL_KEY, listAiTasks } from '@/lib/worklist/ai-task'
+import { AI_TASK_LABEL_KEY, aiTaskHref, listAiTasks } from '@/lib/worklist/ai-task'
 import type { WorklistCounts } from '@/lib/worklist/types'
 import { AiTaskAction } from '@/components/dashboard/AiTaskAction'
 import { InkText } from '@/components/onboarding/journey/ink'
@@ -159,7 +159,7 @@ export function DoneStep({ ctx, onLeave, leaving }: {
                     <span className="n">{task.count}</span>
                   </span>
                   <span className="a">
-                    <Button variant="outline" size="sm" disabled={leaving} onClick={() => onLeave('done', AI_TASK_HREF[task.category])}>
+                    <Button variant="outline" size="sm" disabled={leaving} onClick={() => onLeave('done', aiTaskHref(task.category, worklist?.inboxHref))}>
                       {t('task_open')}
                     </Button>
                     <AiTaskAction

@@ -34,6 +34,7 @@ import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
 import { hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
 import { findPayslipLineForClaim } from '@/lib/salary/expense-claim-lines'
 import { readInboxItemBookingState } from '@/lib/documents/inbox-item-claim'
+import { refuseWhenPairBooked } from '@/lib/operations/inbox-pair-guard'
 import { roundOre, sumOre } from '@/lib/money'
 import {
   createPayoutBatch,
@@ -177,6 +178,7 @@ const REGISTER_CODES: Record<RegisterExpenseClaimFailure['code'], string> = {
   LINK_WRITE_FAILED: 'EXPENSE_CLAIM_LINK_FAILED',
   INBOX_ITEM_NOT_FOUND: 'EXPENSE_CLAIM_INBOX_ITEM_NOT_FOUND',
   INBOX_ITEM_BOOKED: 'INBOX_ITEM_ALREADY_BOOKED',
+  INBOX_ITEM_PAIR_BOOKED: 'INBOX_ITEM_PAIR_ALREADY_BOOKED',
 }
 
 function registerFailure(ctx: OperationContext, failure: RegisterExpenseClaimFailure): Failure {
@@ -188,6 +190,8 @@ function registerFailure(ctx: OperationContext, failure: RegisterExpenseClaimFai
     ok: false,
     code,
     ...(failure.code === 'INVALID_LINES' && failure.detail ? { details: { reason: failure.detail } } : {}),
+    // The pair guard's sentence names the verifikat the other half is on.
+    ...(failure.code === 'INBOX_ITEM_PAIR_BOOKED' && failure.detail ? { messageSv: failure.detail } : {}),
   }
 }
 
@@ -245,6 +249,9 @@ async function underlagFailure(ctx: OperationContext, input: RegisterExpenseClai
         },
       }
     }
+    // The other half of this purchase is booked already: an utlägg of it books the purchase twice.
+    const pairBooked = await refuseWhenPairBooked(ctx.supabase, ctx.companyId, input.inbox_item_id)
+    if (pairBooked) return { ok: false, code: pairBooked.code, details: pairBooked.details, messageSv: pairBooked.messageSv }
   }
   return null
 }

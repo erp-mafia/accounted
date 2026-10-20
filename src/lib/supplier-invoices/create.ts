@@ -67,6 +67,7 @@ import { loadEntryLines, recordInboxDecision, snapshotInboxExtraction } from '@/
 import { passed, warned, type DecisionCheck } from '@/lib/suggestion-log/checks'
 import { resultAccounts } from '@/lib/suggestion-log/inbox-classify'
 import { linkBasisColumns } from '@/lib/links/stamp'
+import { refuseWhenPairBooked } from '@/lib/operations/inbox-pair-guard'
 
 export type CreateSupplierInvoiceInput = z.infer<typeof CreateSupplierInvoiceSchema>
 
@@ -304,6 +305,9 @@ export async function createSupplierInvoice(
     if (item.created_supplier_invoice_id || item.created_journal_entry_id) {
       return invalid('inbox item is already booked')
     }
+    // The other half of this purchase is booked already: an utlägg of this one books it twice.
+    const pairBooked = await refuseWhenPairBooked(supabase, companyId, item.id as string)
+    if (pairBooked) return { ok: false, code: pairBooked.code, details: { ...pairBooked.details, reason: pairBooked.messageSv } }
     inboxItem = {
       id: item.id as string,
       document_id: (item.document_id as string | null) ?? null,
@@ -794,6 +798,10 @@ export async function createSupplierInvoice(
         return { ok: false, code: 'SI_CREATE_NO_FISCAL_PERIOD', details: { invoice_date: body.invoice_date } }
       }
       if (claimResult.code === 'EMPLOYEE_NOT_FOUND') return { ok: false, code: 'EMPLOYEE_NOT_FOUND' }
+      // The pair guard in the claims writer: the other half of this purchase is booked already.
+      if (claimResult.code === 'INBOX_ITEM_PAIR_BOOKED') {
+        return { ok: false, code: 'INBOX_ITEM_PAIR_ALREADY_BOOKED', details: { reason: claimResult.detail ?? claimResult.code } }
+      }
       if (claimResult.code === 'INVALID_LINES') {
         return invalid(`expense claim lines: ${claimResult.detail ?? 'invalid'}`)
       }

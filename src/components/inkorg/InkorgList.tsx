@@ -109,7 +109,8 @@ function InkorgRow({
           ? tKind(`doc_kind_${headline.kind}`)
           : null
   // An invoice whose receipt came with it carries it on this row: the receipt has none of its own.
-  const docLine = ownLine && item.pairing?.role === 'invoice' ? t('row_doc_with_receipt', { line: ownLine }) : ownLine
+  // The marker sits beside the line, never inside it, so a long subject truncates without hiding it.
+  const withReceipt = item.pairing?.role === 'invoice'
 
   const pill =
     status.kind === 'looks_paid' ? (
@@ -122,6 +123,8 @@ function InkorgRow({
       <Badge variant="destructive">{t('row_unreadable')}</Badge>
     ) : status.kind === 'linked' ? (
       <Badge variant="secondary">{t('status_linked')}</Badge>
+    ) : status.kind === 'booked_with' ? (
+      <Badge variant="secondary">{status.voucher ? t('status_booked_with', { voucher: status.voucher }) : t('status_booked_with_no_voucher')}</Badge>
     ) : status.kind === 'waiting' ? (
       <Badge variant="secondary">{t('status_waiting')}</Badge>
     ) : status.kind === 'reading' ? (
@@ -152,8 +155,15 @@ function InkorgRow({
           name={headline.name ?? t('row_unknown')}
           meta={`${doorName(doorOf(item))} · ${shortDateTime(item.created_at, locale)}`}
         />
-        <span data-ph-mask="" className="hidden truncate text-muted-foreground sm:block">
-          {docLine}
+        <span className="hidden min-w-0 items-baseline gap-1 text-muted-foreground sm:flex">
+          {ownLine && (
+            <span data-ph-mask="" className="min-w-0 truncate">
+              {ownLine}
+            </span>
+          )}
+          {withReceipt && (
+            <span className="shrink-0 whitespace-nowrap">{ownLine ? t('row_with_receipt_after_line') : t('row_with_receipt')}</span>
+          )}
         </span>
         {/* On a phone the status rides under the amount. */}
         <span className="hidden justify-end sm:flex">{pill}</span>

@@ -52,6 +52,7 @@ import type { BusinessEventDraft } from '@/lib/posting/types'
 import type { SqlBusinessEventLink } from '@/lib/bookkeeping/business-event-link'
 import { expensePayoutBusinessEvent, type PayoutClaimFacts } from '@/lib/bookkeeping/sql-posting-business-events'
 import { chunk } from '@/lib/utils'
+import { refuseWhenPairBooked } from '@/lib/operations/inbox-pair-guard'
 
 const log = createLogger('expenses/claims')
 
@@ -154,6 +155,7 @@ export type RegisterExpenseClaimResult =
         | 'LINK_WRITE_FAILED'
         | 'INBOX_ITEM_NOT_FOUND'
         | 'INBOX_ITEM_BOOKED'
+        | 'INBOX_ITEM_PAIR_BOOKED'
       detail?: string
     }
 
@@ -496,6 +498,10 @@ export async function registerExpenseClaim(
     if (booking.state === 'missing') return { ok: false, code: 'INBOX_ITEM_NOT_FOUND' }
     if (booking.state === 'booked') return { ok: false, code: 'INBOX_ITEM_BOOKED' }
     replacesEntryId = booking.replaces
+    // The other half of this purchase is booked already (SofClo booked one Anthropic purchase twice as
+    // utlägg, from the invoice and from the receipt of the same mail): refused before anything is written.
+    const pairBooked = await refuseWhenPairBooked(supabase, companyId, input.inbox_item_id)
+    if (pairBooked) return { ok: false, code: 'INBOX_ITEM_PAIR_BOOKED', detail: pairBooked.messageSv }
   }
 
   // Claim row first, then the verifikat with source_id pointing back at it;

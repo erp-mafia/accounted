@@ -58,6 +58,20 @@ export interface UnderlagPaymentFacts {
   supplier: string | null
   /** Printed amounts, used only when there is no total. */
   prominentAmounts: { amount: number; label: string | null }[]
+  /**
+   * Which way the money went: out for a purchase (an invoice, a receipt), in
+   * for a credit note or a refund (a total below zero). Null when the
+   * document says neither; then a row of either sign may be its payment.
+   */
+  direction: 'out' | 'in' | null
+}
+
+function paymentDirection(extracted: InvoiceExtractionResult | null): UnderlagPaymentFacts['direction'] {
+  const kind = extracted?.documentKind
+  if (kind === 'credit_note') return 'in'
+  if (kind !== 'supplier_invoice' && kind !== 'receipt') return null
+  const total = extracted?.totals?.total
+  return typeof total === 'number' && total < 0 ? 'in' : 'out'
 }
 
 export function underlagPaymentFacts(extracted: InvoiceExtractionResult | null): UnderlagPaymentFacts {
@@ -77,6 +91,7 @@ export function underlagPaymentFacts(extracted: InvoiceExtractionResult | null):
       total == null
         ? (extracted?.prominentAmounts ?? []).filter((a) => Number.isFinite(a.amount) && a.amount !== 0)
         : [],
+    direction: paymentDirection(extracted),
   }
 }
 
@@ -98,7 +113,17 @@ export interface RankedBankRow<T extends UnbookedBankRow = UnbookedBankRow> {
   reasons: string[]
 }
 
-/** Best match first. `today` anchors the date score when the underlag has no date. */
+/** A row whose money went the way the underlag says: a purchase is never paid by money coming in. */
+function sameDirection(row: UnbookedBankRow, direction: UnderlagPaymentFacts['direction']): boolean {
+  if (direction === null) return true
+  return direction === 'out' ? row.amount < 0 : row.amount > 0
+}
+
+/**
+ * Best match first. `today` anchors the date score when the underlag has no
+ * date. A row going the other way (money in for a purchase, money out for a
+ * credit note) is not a candidate at all.
+ */
 export function rankBankRowsForUnderlag<T extends UnbookedBankRow>(
   rows: readonly T[],
   facts: UnderlagPaymentFacts,
@@ -107,7 +132,7 @@ export function rankBankRowsForUnderlag<T extends UnbookedBankRow>(
 ): RankedBankRow<T>[] {
   const totalSek = underlagTotalSek(facts, fxRate)
   const anchor = facts.invoiceDate ? new Date(facts.invoiceDate) : today
-  const ranked = rows.map((row) => {
+  const ranked = rows.filter((row) => sameDirection(row, facts.direction)).map((row) => {
     const currency = (row.currency ?? 'SEK').toUpperCase()
     const rowSek =
       currency === 'SEK'

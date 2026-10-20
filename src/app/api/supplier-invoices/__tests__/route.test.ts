@@ -1,4 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The pair guard (lib/operations/inbox-pair-guard.ts, tested there): here only that the door asks and obeys.
+const refuseWhenPairBookedMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/operations/inbox-pair-guard', () => ({
+  refuseWhenPairBooked: (...args: unknown[]) => refuseWhenPairBookedMock(...args),
+}))
 import {
   createMockRequest,
   parseJsonResponse,
@@ -1021,6 +1027,24 @@ describe('POST /api/supplier-invoices', () => {
 
     expect(status).toBe(400)
     expect(body.error.code).toBe('SI_CREATE_INVALID_INPUT')
+    expect(mockRegisterExpenseClaim).not.toHaveBeenCalled()
+  })
+
+  it('refuses an utlägg of an inbox item whose other half is booked already, before anything is written', async () => {
+    setTable('invoice_inbox_items', {
+      data: { id: INBOX_UUID, document_id: DOCUMENT_UUID, created_supplier_invoice_id: null, created_journal_entry_id: null },
+    })
+    refuseWhenPairBookedMock.mockResolvedValueOnce({
+      ok: false,
+      code: 'INBOX_ITEM_PAIR_ALREADY_BOOKED',
+      details: { inbox_item_id: INBOX_UUID, sibling_item_id: 'receipt', sibling_kind: 'receipt', journal_entry_id: 'je-66', voucher: 'A66', supplier_invoice_id: null },
+      messageSv: 'Kvittot från samma köp är redan bokfört på verifikat A66. Lägg till det här underlaget där i stället, så bokförs köpet inte två gånger.',
+      messageEn: 'x',
+    })
+    const request = createMockRequest('/api/supplier-invoices', { method: 'POST', body: privatelyPaidBody({ inbox_item_id: INBOX_UUID }) })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await POST(request))
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('INBOX_ITEM_PAIR_ALREADY_BOOKED')
     expect(mockRegisterExpenseClaim).not.toHaveBeenCalled()
   })
 

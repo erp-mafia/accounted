@@ -81,7 +81,6 @@ const REGISTERED = {
   },
 }
 const INVOICE = { id: SI_ID, status: 'registered', registration_journal_entry_id: 'je-reg', total: 1250, remaining_amount: 1250, currency: 'SEK' }
-const ACCRUAL = { accounting_method: 'accrual', defer_invoice_booking: false }
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -193,7 +192,7 @@ describe('POST /api/inkorg/items/:id/register-and-settle', () => {
 
   it('registers the invoice and settles it against the proposed row (faktureringsmetoden)', async () => {
     enqueueBeforeRegistration()
-    enqueueMany([{ data: INVOICE }, { data: ACCRUAL }])
+    enqueueMany([{ data: INVOICE }])
     const { status, body } = await parseJsonResponse<Answer>(await post())
 
     expect(status).toBe(200)
@@ -229,7 +228,7 @@ describe('POST /api/inkorg/items/:id/register-and-settle', () => {
   it('settles a kontantmetoden invoice, which has no registration verifikat, against the row', async () => {
     convertMock.mockResolvedValue({ ...REGISTERED, data: { ...REGISTERED.data, registration_journal_entry_id: null } })
     enqueueBeforeRegistration()
-    enqueueMany([{ data: { ...INVOICE, registration_journal_entry_id: null } }, { data: { accounting_method: 'cash', defer_invoice_booking: false } }])
+    enqueueMany([{ data: { ...INVOICE, registration_journal_entry_id: null } }])
     const { status, body } = await parseJsonResponse<Answer>(await post())
     expect(status).toBe(200)
     expect(body.data.settled).toBe(true)
@@ -240,7 +239,7 @@ describe('POST /api/inkorg/items/:id/register-and-settle', () => {
   it('keeps the invoice registered and unpaid when settling fails, and says why', async () => {
     settleMock.mockResolvedValue({ ok: false, code: 'INVOICE_PAID_NO_FISCAL_PERIOD', details: { paymentDate: '2026-10-03' } })
     enqueueBeforeRegistration()
-    enqueueMany([{ data: INVOICE }, { data: ACCRUAL }])
+    enqueueMany([{ data: INVOICE }])
     const { status, body } = await parseJsonResponse<Answer>(await post())
 
     expect(status).toBe(200)
@@ -253,15 +252,53 @@ describe('POST /api/inkorg/items/:id/register-and-settle', () => {
     expect(findCalls('supplier_invoices', 'delete')).toEqual([])
   })
 
-  it('does not settle an invoice the company books in a separate step, and keeps it registered', async () => {
+  it('settles a deferring company\'s invoice too: the settlement books its registration first, then the payment', async () => {
+    // defer_invoice_booking: the convert door registers without a verifikat.
     convertMock.mockResolvedValue({ ...REGISTERED, data: { ...REGISTERED.data, registration_journal_entry_id: null } })
+    settleMock.mockResolvedValue({
+      ok: true,
+      journalEntryId: 'je-pay',
+      plan: { newStatus: 'paid', newPaidAmount: 1250, newRemaining: 0 },
+      settledInvoice: { ...INVOICE, status: 'paid', registration_journal_entry_id: 'je-reg-first' },
+      paidAt: '2026-10-03',
+      registrationJournalEntryId: 'je-reg-first',
+    })
     enqueueBeforeRegistration()
-    enqueueMany([{ data: { ...INVOICE, registration_journal_entry_id: null } }, { data: { accounting_method: 'accrual', defer_invoice_booking: true } }])
+    enqueueMany([{ data: { ...INVOICE, registration_journal_entry_id: null } }])
+    const { status, body } = await parseJsonResponse<Answer>(await post())
+
+    expect(status).toBe(200)
+    expect(body.data).toEqual({
+      supplier_invoice_id: SI_ID,
+      arrival_number: 17,
+      // The registration verifikat the settlement booked first: the cost once, on 2440.
+      registration_journal_entry_id: 'je-reg-first',
+      settled: true,
+      invoice_status: 'paid',
+      payment_journal_entry_id: 'je-pay',
+      settlement_error: null,
+    })
+    // No refusal ahead of the settlement: the match door's own service decides, registration first.
+    expect(settleMock).toHaveBeenCalledTimes(1)
+    expect(settleMock).toHaveBeenCalledWith(
+      mockSupabase,
+      expect.objectContaining({ invoice: expect.objectContaining({ id: SI_ID, registration_journal_entry_id: null }) }),
+    )
+    // The company's booking mode is the settlement's to read, not this route's.
+    expect(findCalls('company_settings', 'select')).toEqual([])
+  })
+
+  it('keeps a deferring company\'s invoice registered and unpaid when the Bokför step refuses, and says why', async () => {
+    convertMock.mockResolvedValue({ ...REGISTERED, data: { ...REGISTERED.data, registration_journal_entry_id: null } })
+    settleMock.mockResolvedValue({ ok: false, code: 'INVOICE_PAID_NO_FISCAL_PERIOD', details: { paymentDate: '2026-10-03' } })
+    enqueueBeforeRegistration()
+    enqueueMany([{ data: { ...INVOICE, registration_journal_entry_id: null } }])
     const { status, body } = await parseJsonResponse<Answer>(await post())
 
     expect(status).toBe(200)
     expect(body.data.settled).toBe(false)
-    expect(body.data.settlement_error?.code).toBe('INBOX_SETTLE_INVOICE_NOT_BOOKED')
-    expect(settleMock).not.toHaveBeenCalled()
+    expect(body.data.registration_journal_entry_id).toBeNull()
+    expect(body.data.invoice_status).toBe('registered')
+    expect(body.data.settlement_error?.code).toBe('INVOICE_PAID_NO_FISCAL_PERIOD')
   })
 })

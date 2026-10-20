@@ -132,8 +132,23 @@ describe('focusDecision: the bank was checked on arrival', () => {
     const d = focusDecision(makeItem({ extracted_data: reading({ documentKind: 'supplier_invoice' }) }), { bankMatch: MATCH })
     expect(d.question).toBe('already_paid')
     expect(d.evidence).toEqual({
-      kind: 'bank_match', transactionId: 'tx-1', date: '2026-10-02', amount: -1250, currency: 'SEK', counterparty: 'Leverantören AB', basis: 'rule_ocr_reference', level: 'exakt',
+      kind: 'bank_match', transactionId: 'tx-1', date: '2026-10-02', amount: -1250, currency: 'SEK', counterparty: 'Leverantören AB', basis: 'rule_ocr_reference', level: 'exakt', cardAgrees: false,
     })
+  })
+
+  it('says the card agreed when the card raised the level, or stood in for the name', () => {
+    const x = { ...MATCH, amount: -83, counterparty: 'X CORP. PAID FEATURES K3667', basis: 'rule_amount_date' as const }
+    const invoice = makeItem({ extracted_data: reading({ documentKind: 'supplier_invoice' }) })
+    const receipt = makeItem({ id: 'receipt', extracted_data: reading({ documentKind: 'receipt', payment: { method: 'card', cardLast4: '3667' } }) })
+    // Stark on the amount and date: only the card raises it there.
+    expect(focusDecision(invoice, { bankMatch: { ...x, evidence_level: 'stark' } }).evidence).toMatchObject({ cardAgrees: true })
+    // Trolig with the receipt's card on the row: the card stood in for the name.
+    expect(focusDecision(invoice, { bankMatch: { ...x, evidence_level: 'trolig' }, companion: receipt }).evidence).toMatchObject({ cardAgrees: true })
+    // A receipt's own card.
+    expect(focusDecision(receipt, { bankMatch: { ...x, evidence_level: 'trolig' } }).evidence).toMatchObject({ cardAgrees: true })
+    // No card known, or another basis: the card says nothing.
+    expect(focusDecision(invoice, { bankMatch: { ...x, evidence_level: 'trolig' } }).evidence).toMatchObject({ cardAgrees: false })
+    expect(focusDecision(invoice, { bankMatch: { ...x, basis: 'rule_ocr_reference', evidence_level: 'exakt' }, companion: receipt }).evidence).toMatchObject({ cardAgrees: false })
   })
 
   it('registers a paid-looking invoice and settles it against the row, picks another row, or registers it unpaid', () => {
@@ -379,5 +394,31 @@ describe('focusDecision: an invoice its receipt says is paid', () => {
     expect(rowStatus(invoice, null)).toEqual({ kind: 'paid_by_receipt' })
     expect(rowStatus(invoice, MATCH)).toEqual({ kind: 'looks_paid' })
     expect(rowStatus({ ...invoice, pairing: null }, null)).toEqual({ kind: 'to_pay', dueDate: '2026-10-03' })
+  })
+})
+
+describe('focusDecision: the other half of the purchase is booked already', () => {
+  const pairing = { role: 'booked_companion' as const, booked_item_id: 'receipt', booked_kind: 'receipt' as const, basis: 'invoice_number' as const, journal_entry_id: 'je-41', voucher: 'A41', locked: false }
+
+  it('asks nothing about paying or booking: its one answer adds it to that verifikat', () => {
+    const d = focusDecision(makeItem({ extracted_data: reading({ documentKind: 'supplier_invoice' }), pairing }))
+    expect(d.question).toBe('already_booked_with')
+    expect(d.evidence).toEqual({ kind: 'booked_with', bookedKind: 'receipt', voucher: 'A41', locked: false })
+    expect(d.actions).toEqual(['attach_to_booking'])
+    expect(d.quietActions).toEqual([])
+    expect(d.editorEscape).toBe(false)
+  })
+
+  it('a locked verifikat takes nothing: the answer is to open it, and the evidence says why', () => {
+    const d = focusDecision(makeItem({ extracted_data: reading({ documentKind: 'supplier_invoice' }), pairing: { ...pairing, locked: true } }))
+    expect(d.actions).toEqual(['open_booked_entry'])
+    expect(d.evidence).toMatchObject({ kind: 'booked_with', locked: true })
+  })
+
+  it('outranks a bank row it looks paid by: the purchase is booked already', () => {
+    const match = { transaction_id: 'tx-1', date: '2026-10-02', amount: -20, currency: 'USD', counterparty: 'RESEND', basis: 'rule_amount_date' as const, evidence_level: 'trolig' as const }
+    const item = makeItem({ extracted_data: reading({ documentKind: 'supplier_invoice' }), pairing })
+    expect(focusDecision(item, { bankMatch: match }).question).toBe('already_booked_with')
+    expect(rowStatus(item, match)).toEqual({ kind: 'booked_with', voucher: 'A41' })
   })
 })

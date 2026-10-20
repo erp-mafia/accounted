@@ -1,4 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The pair guard (lib/operations/inbox-pair-guard.ts, tested there): here only that the door asks and obeys.
+const refuseWhenPairBookedMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/operations/inbox-pair-guard', () => ({
+  refuseWhenPairBooked: (...args: unknown[]) => refuseWhenPairBookedMock(...args),
+}))
+
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
 const createJournalEntryMock = vi.fn()
@@ -288,6 +295,24 @@ describe('registerExpenseClaim', () => {
     const result = await registerExpenseClaim(sb, COMPANY, USER, INBOX_CLAIM_INPUT)
 
     expect(result).toEqual({ ok: false, code: 'INBOX_ITEM_BOOKED' })
+    expect(createJournalEntryMock).not.toHaveBeenCalled()
+    expect(findCall('expense_claims', 'insert')).toBeUndefined()
+  })
+
+  it('refuses an utlägg of an item whose other half is booked already (SofClo 2026-10-15), before writing anything', async () => {
+    refuseWhenPairBookedMock.mockResolvedValueOnce({
+      ok: false,
+      code: 'INBOX_ITEM_PAIR_ALREADY_BOOKED',
+      details: { inbox_item_id: 'item-1', sibling_item_id: 'item-receipt', sibling_kind: 'receipt', journal_entry_id: 'je-66', voucher: 'A66', supplier_invoice_id: null },
+      messageSv: 'Kvittot från samma köp är redan bokfört på verifikat A66. Lägg till det här underlaget där i stället, så bokförs köpet inte två gånger.',
+      messageEn: 'The receipt from the same purchase is booked already on voucher A66. Add this document there instead, so the purchase is not booked twice.',
+    })
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: { created_journal_entry_id: null, created_supplier_invoice_id: null } }) // the item itself is unbooked
+    const result = await registerExpenseClaim(sb, COMPANY, USER, INBOX_CLAIM_INPUT)
+    expect(result).toMatchObject({ ok: false, code: 'INBOX_ITEM_PAIR_BOOKED' })
+    expect((result as { detail?: string }).detail).toContain('A66')
+    expect(refuseWhenPairBookedMock).toHaveBeenCalledWith(sb, COMPANY, 'inbox-1')
     expect(createJournalEntryMock).not.toHaveBeenCalled()
     expect(findCall('expense_claims', 'insert')).toBeUndefined()
   })

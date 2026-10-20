@@ -78,6 +78,7 @@ import { passed, warned } from '@/lib/suggestion-log/checks'
 import { resultAccounts } from '@/lib/suggestion-log/inbox-classify'
 import type { InboxChannelContext, InvoiceInboxItem, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { linkBasisColumns } from '@/lib/links/stamp'
+import { refuseWhenPairBooked } from './inbox-pair-guard'
 
 export type ConvertInboxItemInput = z.infer<typeof CreateSupplierInvoiceSchema>
 
@@ -117,6 +118,9 @@ export async function convertInboxItemToSupplierInvoice(
     const creditTarget = await resolveInboxCreditTarget(supabase, companyId, item, { supplierId: body.supplier_id })
     return { ok: false, code: 'INBOX_ITEM_IS_CREDIT_NOTE', details: { credit_target: creditTarget } }
   }
+  // The other half of this purchase is booked already: registering it would book the purchase twice.
+  const pairBooked = await refuseWhenPairBooked(supabase, companyId, inboxItemId)
+  if (pairBooked) return { ok: false, code: pairBooked.code, details: pairBooked.details, messageSv: pairBooked.messageSv }
 
   const { data: supplier, error: supplierError } = await supabase
     .from('suppliers')

@@ -174,7 +174,8 @@
     "webhooks"
   ],
   "supplier_invoice.match_confirmed": [
-    "event-log"
+    "event-log",
+    "inbox-receipt-follow"
   ],
   "supplier_invoice.paid": [
     "event-log",

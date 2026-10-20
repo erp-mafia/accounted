@@ -12,6 +12,8 @@ import type { MissingUnderlagSample } from './missing-underlag'
 import { listOpenSuggestions } from '@/lib/suggestions/list'
 import type { OpenSuggestion } from '@/lib/suggestions/types'
 import { isArkivBrainEnabled, isArkivSectionEnabled } from '@/lib/arkiv/flag'
+import { inboxHref, isInkorgV2Enabled } from '@/lib/inkorg/flag'
+import { inboxCompanionIds } from './inbox-companions'
 import {
   countBankSwitchDue,
   countDeadlinesNeedingAction,
@@ -140,7 +142,7 @@ export async function getWorklistCounts(
   ] = await Promise.all([
     countUnbookedTransactions(supabase, companyId),
     countUnbookedSkattekontoRows(supabase, companyId),
-    countInboxDocuments(supabase, companyId),
+    countInboxDocuments(supabase, companyId, { companionIds: inboxCompanionIds(supabase, companyId) }),
     options.suggestedMatches
       ? Promise.resolve(options.suggestedMatches).then((m) => m.length)
       : countSuggestedMatches(supabase, companyId),
@@ -241,5 +243,6 @@ export async function getWorklistCounts(
       paymentsVerificationRenewal +
       supplierPayeeChange,
     overdueInvoices: overdueInvoice > 0 ? overdueInvoices : null,
+    inboxHref: inboxHref(isInkorgV2Enabled(companyId)),
   }
 }

@@ -189,6 +189,23 @@ describe('countInboxDocuments', () => {
     expect(mockSupabase.from).toHaveBeenCalledWith('document_attachments')
   })
 
+  it('leaves out a receipt riding on its invoice and an open half whose other half is booked, as Behöver dig does', async () => {
+    const companionIds = vi.fn().mockResolvedValue(new Set(['i2', 'i3']))
+    enqueue({ data: [{ id: 'i1', document_id: 'd1' }, { id: 'i2', document_id: 'd2' }, { id: 'i3', document_id: 'd3' }, { id: 'i4', document_id: 'd4' }] })
+    enqueue({ count: 2 })
+    await expect(countInboxDocuments(supabase, COMPANY, { companionIds })).resolves.toBe(2)
+    // Only the invoice and the lone item are asked about.
+    expect(findCall('document_attachments', 'in')).toEqual(['id', ['d1', 'd4']])
+    expect(companionIds).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ id: 'i1' })]))
+  })
+
+  it('counts every item when the pairing cannot be read', async () => {
+    const companionIds = vi.fn().mockRejectedValue(new Error('boom'))
+    enqueue({ data: [{ id: 'i1', document_id: 'd1' }, { id: 'i2', document_id: 'd2' }] })
+    enqueue({ count: 2 })
+    await expect(countInboxDocuments(supabase, COMPANY, { companionIds })).resolves.toBe(2)
+  })
+
   it('returns 0 without a document query when no unconsumed items exist', async () => {
     enqueue({ data: [] })
     await expect(countInboxDocuments(supabase, COMPANY)).resolves.toBe(0)

@@ -4,6 +4,13 @@
  * helper alone, and wired into the dashboard / v1 conversion door.
  */
 import { describe, it, expect, vi } from 'vitest'
+
+// The pair guard (lib/operations/inbox-pair-guard.ts, tested there): here only that the door asks and obeys.
+const refuseWhenPairBookedMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/operations/inbox-pair-guard', () => ({
+  refuseWhenPairBooked: (...args: unknown[]) => refuseWhenPairBookedMock(...args),
+}))
+
 import { createLogger } from '@/lib/logger'
 import { createQueuedMockSupabase, makeCompanySettings, makeInvoiceInboxItem, makeSupplier } from '@/tests/helpers'
 

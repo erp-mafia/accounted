@@ -5,6 +5,11 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 vi.mock('@/lib/core/documents/document-service', () => ({
   linkToJournalEntry: vi.fn().mockResolvedValue({}),
 }))
+// The delivery an item came in (lib/inkorg/pairs-read.ts); the pairing rule itself runs for real.
+const readDeliverySiblings = vi.fn()
+vi.mock('@/lib/inkorg/pairs-read', () => ({
+  readDeliverySiblings: (...args: unknown[]) => readDeliverySiblings(...args),
+}))
 
 import {
   completeInboxItemOnEntry,
@@ -602,5 +607,103 @@ describe('completeInboxItemOnEntry: a receipt onto the verifikat its invoice was
     enqueue({ data: [] }) // the stamp matched nothing
     expect(await completeInboxItemOnEntry(supabase as unknown as SupabaseClient, COMPANY, RECEIPT, JE1, BASIS)).toBe('taken')
     expect(linkToJournalEntry).not.toHaveBeenCalled()
+  })
+})
+
+describe('propagateUnderlagForBookedTransaction: the receipt that came with the invoice follows it onto the row', () => {
+  const reading = (documentKind: string, extra: Record<string, unknown> = {}) => ({
+    documentKind,
+    supplier: { name: 'X Internet Unlimited Company' },
+    invoice: { invoiceNumber: 'J0LVRPBD-0003', invoiceDate: '2026-10-03', currency: 'SEK' },
+    totals: { total: 83 },
+    ...extra,
+  })
+  const row = (id: string, documentKind: string, overrides: Record<string, unknown> = {}) => ({
+    id,
+    status: 'received',
+    source: 'email',
+    document_id: `doc-${id}`,
+    resend_email_id: 'mail-x',
+    channel_context: null,
+    kind_hint: null,
+    extracted_data: reading(documentKind),
+    routed_to_arkiv_at: null,
+    matched_transaction_id: null,
+    created_supplier_invoice_id: null,
+    created_journal_entry_id: null,
+    ...overrides,
+  })
+  const invoice = row('invoice', 'supplier_invoice', { matched_transaction_id: TX1 })
+  const receipt = row('receipt', 'receipt', { extracted_data: reading('receipt', { payment: { method: 'card', cardLast4: '3667' } }) })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    readDeliverySiblings.mockResolvedValue({ items: [invoice, receipt], arrivalIds: new Map() })
+  })
+
+  /** The invoice matched to the row, its document not yet on a verifikat, its stamp landing. */
+  function bookedRow(enqueue: ReturnType<typeof createQueuedMockSupabase>['enqueue']) {
+    enqueue({ data: { document_id: null } }) // tx pin lookup: nothing pinned
+    enqueue({ data: [invoice] }) // matched items: the invoice
+    enqueue({ data: { journal_entry_id: null } }) // the invoice's document, not yet anchored
+    enqueue({ data: [{ id: 'invoice' }] }) // its stamp lands
+  }
+
+  it('links the receipt\'s document to the same verifikat, then stamps it and matches it to the row', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    bookedRow(enqueue)
+    enqueue({ data: { journal_entry_id: null } }) // the receipt's document, not yet anchored
+    enqueue({ data: [{ id: 'receipt' }] }) // its stamp lands
+
+    await propagateUnderlagForBookedTransaction(supabase as unknown as SupabaseClient, COMPANY, TX1, JE1)
+
+    expect(linkToJournalEntry).toHaveBeenCalledWith(expect.anything(), COMPANY, 'doc-receipt', JE1, {
+      link_basis: 'system_derived',
+      link_evidence: { rule_id: 'inbox_receipt_pair:invoice_number' },
+    })
+    expect(findCalls('invoice_inbox_items', 'update')).toEqual([
+      [{ created_journal_entry_id: JE1 }],
+      [{ created_journal_entry_id: JE1, matched_transaction_id: TX1 }],
+    ])
+    // The delivery is read from the invoice as it stood before its stamp.
+    expect(readDeliverySiblings).toHaveBeenCalledWith(expect.anything(), COMPANY, expect.objectContaining({ id: 'invoice' }))
+  })
+
+  it('leaves a receipt matched to another bank row alone: another payment', async () => {
+    readDeliverySiblings.mockResolvedValue({ items: [invoice, { ...receipt, matched_transaction_id: 'tx-other' }], arrivalIds: new Map() })
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    bookedRow(enqueue)
+    await propagateUnderlagForBookedTransaction(supabase as unknown as SupabaseClient, COMPANY, TX1, JE1)
+    expect(findCalls('invoice_inbox_items', 'update')).toEqual([[{ created_journal_entry_id: JE1 }]])
+  })
+
+  it('takes nothing along for an invoice that came alone, or a receipt that is not the same purchase', async () => {
+    readDeliverySiblings.mockResolvedValueOnce({ items: [invoice], arrivalIds: new Map() })
+    const alone = createQueuedMockSupabase()
+    bookedRow(alone.enqueue)
+    await propagateUnderlagForBookedTransaction(alone.supabase as unknown as SupabaseClient, COMPANY, TX1, JE1)
+    expect(alone.findCalls('invoice_inbox_items', 'update')).toEqual([[{ created_journal_entry_id: JE1 }]])
+
+    readDeliverySiblings.mockResolvedValueOnce({ items: [invoice, { ...receipt, extracted_data: reading('receipt', { totals: { total: 90 } }) }], arrivalIds: new Map() })
+    const other = createQueuedMockSupabase()
+    bookedRow(other.enqueue)
+    await propagateUnderlagForBookedTransaction(other.supabase as unknown as SupabaseClient, COMPANY, TX1, JE1)
+    expect(other.findCalls('invoice_inbox_items', 'update')).toEqual([[{ created_journal_entry_id: JE1 }]])
+    expect(linkToJournalEntry).toHaveBeenCalledTimes(2) // the two invoices' own documents only
+  })
+
+  it('a receipt whose document the period lock refuses stays in the inbox, and the booking stands', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    bookedRow(enqueue)
+    enqueue({ data: { journal_entry_id: 'je-elsewhere' } }) // the receipt's document is on another verifikat
+    await expect(propagateUnderlagForBookedTransaction(supabase as unknown as SupabaseClient, COMPANY, TX1, JE1)).resolves.toBeUndefined()
+    expect(findCalls('invoice_inbox_items', 'update')).toEqual([[{ created_journal_entry_id: JE1 }]])
+  })
+
+  it('never fails the booking when the delivery cannot be read', async () => {
+    readDeliverySiblings.mockRejectedValue(new Error('boom'))
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    bookedRow(enqueue)
+    await expect(propagateUnderlagForBookedTransaction(supabase as unknown as SupabaseClient, COMPANY, TX1, JE1)).resolves.toBeUndefined()
   })
 })

@@ -42,6 +42,8 @@ import { claimInboxItemForEntry } from '@/lib/documents/inbox-item-claim'
 import { createLogger } from '@/lib/logger'
 import { chunk } from '@/lib/utils'
 import { linkBasisColumnsFor, type LinkBasisInput } from '@/lib/links/stamp'
+import { pairInboxItems } from '@/lib/inkorg/pairs'
+import { readDeliverySiblings, type PairableRow } from '@/lib/inkorg/pairs-read'
 
 const log = createLogger('transactions/inbox-underlag')
 
@@ -222,7 +224,7 @@ export async function resolveUnderlagAnchoring(
   }
   if (unlinked.length === 0) return map
 
-  const lockedEntryIds = await resolveLockedJournalEntryIds(
+  const lockedEntryIds = await lockedJournalEntryIds(
     supabase,
     companyId,
     Array.from(new Set(unlinked.map((i) => i.journalEntryId))),
@@ -241,7 +243,7 @@ export async function resolveUnderlagAnchoring(
  * a document link to them is known to fail before it is attempted. A read
  * error yields an empty set (nothing is reported as locked on a guess).
  */
-async function resolveLockedJournalEntryIds(
+export async function lockedJournalEntryIds(
   supabase: SupabaseClient,
   companyId: string,
   entryIds: string[],
@@ -431,6 +433,12 @@ export async function stampNewInboxItemIfDocumentLinked(
  *      never stolen
  *   4. stamp invoice_inbox_items.created_journal_entry_id so the inbox row
  *      visibly moves to "Bokförda" and shows "Öppna verifikation"
+ *   5. an invoice stamped here that came with its receipt as one purchase
+ *      (lib/inkorg/pairs.ts) takes the receipt along: its document is
+ *      linked to the same verifikat and it is stamped and matched to the
+ *      same row, so whichever door booked the row, the purchase is booked
+ *      once and the receipt never asks to be booked again
+ *      (lib/operations/inbox-companion.ts has the rest of that rule)
  * Errors are logged but never fail the caller: the verifikation itself is
  * already posted, and the link can be repaired by re-running this step.
  */
@@ -470,15 +478,13 @@ export async function propagateUnderlagForBookedTransaction(
 
     const { data: matchedInboxItems } = await supabase
       .from('invoice_inbox_items')
-      .select('id, document_id')
+      .select('id, status, source, document_id, resend_email_id, channel_context, kind_hint, extracted_data, routed_to_arkiv_at, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id')
       .eq('company_id', companyId)
       .eq('matched_transaction_id', txId)
       .is('created_journal_entry_id', null)
       .is('created_supplier_invoice_id', null)
-    for (const inbox of (matchedInboxItems ?? []) as Array<{
-      id: string
-      document_id: string | null
-    }>) {
+    const stamped: PairableRow[] = []
+    for (const inbox of (matchedInboxItems ?? []) as unknown as PairableRow[]) {
       // Whether this item's underlag actually references a verifikat. The
       // stamp below is conditional on it: stamping after a FAILED document
       // link would hide the item from every future run of this same query
@@ -516,9 +522,65 @@ export async function propagateUnderlagForBookedTransaction(
           error: stamp.error.message,
         })
       }
+      if (stamp.status === 'claimed') stamped.push(inbox)
     }
+    for (const invoice of stamped) await completePairedReceiptOnRow(supabase, companyId, invoice, txId, journalEntryId)
   } catch (err) {
     log.error('Failed to propagate underlag from matched inbox items', err)
+  }
+}
+
+/**
+ * The receipt that came with `invoice` as one purchase, onto the verifikat
+ * that booked the invoice's bank row: its document linked with the guards
+ * every booking path shares, then the item stamped and matched to the row by
+ * the shared compare-and-set. Nothing when the invoice came alone, the
+ * receipt is handled already or is matched to another row. Never throws.
+ */
+async function completePairedReceiptOnRow(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoice: PairableRow,
+  txId: string,
+  journalEntryId: string,
+): Promise<void> {
+  try {
+    const { items, arrivalIds } = await readDeliverySiblings(supabase, companyId, invoice)
+    if (items.length < 2) return
+    // The booked half read as it stood before its stamp: the other half must still be open. Usually
+    // the invoice was booked and its receipt follows; a receipt booked first takes its invoice along.
+    const pairing = pairInboxItems(items, { arrivalIds, assumeOpen: new Set([invoice.id]) }).get(invoice.id)
+    if (!pairing) return
+    const otherId = pairing.role === 'invoice' ? pairing.receipt_item_id : pairing.invoice_item_id
+    const receipt = items.find((item) => item.id === otherId)
+    if (!receipt || (receipt.matched_transaction_id && receipt.matched_transaction_id !== txId)) return
+    if (receipt.document_id) {
+      const anchored = await anchorDocumentToJournalEntry(
+        supabase,
+        companyId,
+        receipt.document_id,
+        journalEntryId,
+        { inbox_item_id: receipt.id, source: 'inbox_companion' },
+        // Follows from the pairing rule and the invoice's booking; nobody chose it apart.
+        { basis: 'system_derived', evidence: { rule_id: `inbox_receipt_pair:${pairing.basis}` } },
+      )
+      if (!anchored) return
+    }
+    const stamp = await claimInboxItemForEntry(supabase, companyId, receipt.id, journalEntryId, {
+      also: { matched_transaction_id: txId },
+    })
+    if (stamp.status === 'failed') {
+      log.error('Failed to stamp the paired receipt on its invoice\'s verifikat', {
+        inbox_item_id: receipt.id,
+        journal_entry_id: journalEntryId,
+        error: stamp.error.message,
+      })
+    }
+  } catch (err) {
+    log.warn('Failed to bring the paired receipt onto its invoice\'s verifikat', {
+      inbox_item_id: invoice.id,
+      error: err instanceof Error ? err.message : String(err),
+    })
   }
 }
 

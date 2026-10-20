@@ -23,8 +23,8 @@ import { extractAndMirror } from '@/lib/documents/inbox-extraction/extract-and-m
 import { loadDocumentReading } from '@/lib/documents/reading/load'
 import { peppolReader } from '@/lib/invoices/peppol-reading'
 import { checkNeverCheckedInboxItems, neverChecked, neverCheckedToCheck, proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
-import { mayPair, pairInboxItems, type InboxPairing, type PairableItem } from '@/lib/inkorg/pairs'
-import { readArrivalIds } from '@/lib/inkorg/pairs-read'
+import type { InboxPairing } from '@/lib/inkorg/pairs'
+import { readInboxPairings, type ListedItem } from '@/lib/operations/inbox-pairings'
 import { bankMatchLinkEvidence, readInboxBankMatch, readInboxBankMatches, type BankMatch, type BankMatchItemRow } from '@/lib/documents/inbox-bank-match'
 import type { ReadingItemRow } from '@/lib/documents/reading/resolve'
 import type { DocumentReading } from '@/lib/documents/reading/types'
@@ -94,6 +94,8 @@ import { fetchPurchasesWithoutUnderlag } from '@/lib/transactions/purchases-with
 import { vendorLogoUrls } from '@/lib/vendor-logos/read'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { matchInboxItemTransaction } from '@/lib/documents/inbox-match'
+import { followPairedReceipt } from '@/lib/operations/inbox-companion'
+import { refuseWhenPairBooked } from '@/lib/operations/inbox-pair-guard'
 import type { OperationContext } from '@/lib/operations/types'
 import {
   deleteInboxItem,
@@ -677,15 +679,14 @@ export const invoiceInboxExtension: Extension = {
 
         // An invoice and its receipt from the same arrival are one purchase
         // (lib/inkorg/pairs.ts): each row says which one it came with, read
-        // after the documents' readings stand in, from the open items only.
-        // A pairing that cannot be read is none: the rows stand alone.
+        // after the documents' readings stand in. An invoice registered and
+        // still unpaid keeps its receipt with it, and an open half whose
+        // other half is booked already is that booking's companion, with its
+        // verifikat (lib/operations/inbox-pairings.ts). A pairing that cannot
+        // be read is none: the rows stand alone.
         let pairings = new Map<string, InboxPairing>()
         try {
-          const pairable = (items as unknown as PairableItem[]).filter(mayPair)
-          if (pairable.length > 1) {
-            const arrivalIds = await readArrivalIds(ctx.supabase, ctx.companyId, pairable.map((i) => i.id))
-            pairings = pairInboxItems(pairable, { arrivalIds })
-          }
+          pairings = await readInboxPairings(ctx.supabase, ctx.companyId, items as unknown as ListedItem[])
         } catch (err) {
           extensionLog.warn('inbox list pairing read failed', { err: err instanceof Error ? err.message : String(err) })
         }
@@ -2167,6 +2168,18 @@ export const invoiceInboxExtension: Extension = {
             { status: 409 }
           )
         }
+        // The other half of this purchase (the invoice or the receipt it came
+        // with) is booked already: refused before anything is posted, naming
+        // that verifikat, so the purchase is never booked twice.
+        const pairBooked = await refuseWhenPairBooked(ctx.supabase, ctx.companyId, item.id)
+        if (pairBooked) {
+          return errorResponseFromCode(pairBooked.code, ctx.log, {
+            requestId: ctx.requestId,
+            details: pairBooked.details,
+            messageSv: pairBooked.messageSv,
+            messageEn: pairBooked.messageEn,
+          })
+        }
 
         // If a transaction is provided, validate it before booking.
         let transaction: Pick<Transaction, 'id' | 'journal_entry_id' | 'cash_account_id' | 'date' | 'amount' | 'currency' | 'amount_sek' | 'exchange_rate'> | null = null
@@ -2413,6 +2426,13 @@ export const invoiceInboxExtension: Extension = {
             checks,
           }], ctx.userId)
         }
+
+        // The receipt this invoice came with as one purchase follows it onto
+        // this booking, here on the server, so no surface (a closed tab, the
+        // Underlag workspace, a client that never asks) leaves it in the
+        // inbox to be booked a second time. Best effort and idempotent: the
+        // Inkorg's own follow-up call then answers already_done.
+        await followPairedReceipt(operationContext(ctx), id)
 
         // The engine already emits journal_entry.committed: no need to
         // re-emit. Transaction categorization is implicit: the entry is

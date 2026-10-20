@@ -438,6 +438,12 @@ export interface WorklistCounts {
    * nothing is overdue; absent from older payloads.
    */
   overdueInvoices?: OverdueInvoicesDue | null
+  /**
+   * Where the inbox lives for this company (lib/inkorg/flag.ts inboxHref):
+   * the new Inkorg in the rollout, else the workspace under Inköp. The
+   * inbox row links here. Absent from older payloads.
+   */
+  inboxHref?: string
 }
 
 /**

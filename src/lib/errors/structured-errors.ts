@@ -5307,19 +5307,19 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
   // invoice's booking. Refused when the two are not one purchase by the
   // pairing rule (lib/inkorg/pairs.ts): another arrival, other amounts, or a
   // receipt that fits more than one invoice.
+  // The other half of the purchase (the invoice or the receipt this one came
+  // with, lib/inkorg/pairs.ts) is booked already: booking this one too books
+  // the purchase twice (SofClo, 2026-10-15). The doors name the verifikat in
+  // the message; this is the fallback for an envelope without one.
+  INBOX_ITEM_PAIR_ALREADY_BOOKED: {
+    httpStatus: 409,
+    message_sv: 'Det andra underlaget från samma köp är redan bokfört. Lägg till det här underlaget på det verifikatet i stället, så bokförs köpet inte två gånger.',
+    message_en: 'The other document from the same purchase is booked already. Add this document to that voucher instead, so the purchase is not booked twice.',
+  },
   INBOX_COMPANION_NOT_PAIRED: {
     httpStatus: 409,
     message_sv: 'Kvittot hör inte ihop med fakturan, så det kopplades inte till bokföringen. Det ligger kvar i inkorgen.',
     message_en: 'The receipt does not belong with the invoice, so it was not linked to the booking. It stays in the inbox.',
-  },
-  // Registered without a verifikat because the company books supplier
-  // invoices in a separate Bokför step (defer_invoice_booking). A payment
-  // matched now would clear 2440 for a debt never booked, and the Bokför step
-  // refuses a paid invoice, so the cost would never reach the books.
-  INBOX_SETTLE_INVOICE_NOT_BOOKED: {
-    httpStatus: 409,
-    message_sv: 'Fakturan är registrerad men inte bokförd, eftersom företaget bokför leverantörsfakturor i ett eget steg. Bokför fakturan först och koppla sedan betalningen.',
-    message_en: 'The invoice is registered but not booked, because the company books supplier invoices in a separate step. Book the invoice first, then link the payment.',
   },
   // Book-direct on a foreign-currency underlag (crm#1146). The lines arrive as
   // bare numbers that are stored as SEK, so a receipt for 100 EUR used to post
