@@ -58,7 +58,8 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
   >(null)
   const [entryDate, setEntryDate] = useState(() => todayIsoStockholm())
   const [amountInput, setAmountInput] = useState('')
-  const [submitting, setSubmitting] = useState(false)
+  // Which button's request is in flight: only that one spins, both stay disabled.
+  const [submitting, setSubmitting] = useState<'book' | 'draft' | null>(null)
 
   // Reset per open so yesterday's half-typed amount never leaks into today.
   useEffect(() => {
@@ -97,15 +98,22 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
     (p) => p.period_start <= entryDate && entryDate <= p.period_end,
   )
 
-  const handleBook = async () => {
+  // `asDraft` posts with ?as_draft=true, which the route already understands
+  // (createDraftEntry vs createJournalEntry). A draft gets no voucher number
+  // and stays editable, matching the "Spara som utkast" affordance the manual
+  // JournalEntryForm has always had. Booking from a template previously
+  // committed straight away, with no way to review first.
+  const handleBook = async (asDraft = false) => {
     if (!selected || !balanced) return
     if (!periodForDate) {
       toast({ title: t('tpl_no_period'), variant: 'destructive' })
       return
     }
-    setSubmitting(true)
+    setSubmitting(asDraft ? 'draft' : 'book')
     try {
-      const res = await fetch('/api/bookkeeping/journal-entries', {
+      const res = await fetch(
+        `/api/bookkeeping/journal-entries${asDraft ? '?as_draft=true' : ''}`,
+        {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -119,11 +127,12 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
             line_description: l.line_description || undefined,
           })),
         }),
-      })
+        },
+      )
       const result = await res.json()
       if (!res.ok) {
         toast({
-          title: t('toast_post_failed'),
+          title: asDraft ? t('tpl_toast_draft_failed') : t('toast_post_failed'),
           description: getErrorMessage(result, { context: 'journal_entry' }),
           variant: 'destructive',
         })
@@ -136,17 +145,19 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
         }).catch(() => {})
       }
       toast({
-        title: t('toast_posted_title'),
-        description: t('toast_posted_description', {
-          voucher: formatVoucher(result.data ?? {}),
-        }),
+        title: asDraft ? t('tpl_toast_draft_saved_title') : t('toast_posted_title'),
+        description: asDraft
+          ? t('tpl_toast_draft_saved_description')
+          : t('toast_posted_description', {
+              voucher: formatVoucher(result.data ?? {}),
+            }),
       })
       onOpenChange(false)
       onCreated()
     } catch {
       toast({ title: t('toast_post_failed_generic'), variant: 'destructive' })
     } finally {
-      setSubmitting(false)
+      setSubmitting(null)
     }
   }
 
@@ -254,10 +265,23 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
             </div>
 
             <div className="flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={submitting}>
+              <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={submitting !== null}>
                 {t('tpl_cancel')}
               </Button>
-              <Button onClick={() => void handleBook()} disabled={!balanced} loading={submitting}>
+              <Button
+                variant="outline"
+                onClick={() => void handleBook(true)}
+                disabled={!balanced || submitting !== null}
+                loading={submitting === 'draft'}
+                title={t('tpl_save_draft_tooltip')}
+              >
+                {t('tpl_save_draft')}
+              </Button>
+              <Button
+                onClick={() => void handleBook()}
+                disabled={!balanced || submitting !== null}
+                loading={submitting === 'book'}
+              >
                 {t('tpl_book')}
               </Button>
             </div>

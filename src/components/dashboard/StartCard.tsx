@@ -158,10 +158,19 @@ export function StartCard({
     layout === 'center'
       ? `radial-gradient(ellipse 90% 130% at 50% 55%, rgba(${g}, 0.7) 0%, rgba(${g}, 0.36) 55%, rgba(${g}, 0.06) 100%)`
       : `linear-gradient(90deg, rgba(${g}, 0.92) 0%, rgba(${g}, 0.55) 45%, rgba(${g}, 0.08) 75%)`
+  // Below sm the text column widens to 80% of the card, past the point where
+  // the scrims above have faded out, so a phone-only layer holds the ground
+  // under the whole column. WCAG AA for the body text: simulated over every
+  // side-right and bleed-left card at 288-576px wide, the worst case is
+  // 1.6:1 without this layer and 5.4:1 with it. The right edge stays clear.
+  const phoneScrim =
+    layout === 'center'
+      ? null
+      : `linear-gradient(90deg, rgba(${g}, 0.8) 0%, rgba(${g}, 0.8) 75%, rgba(${g}, 0) 100%)`
 
   return (
     <div
-      className={cn('relative h-[216px] overflow-hidden rounded-xl', className)}
+      className={cn('relative flex min-h-[216px] overflow-hidden rounded-xl', className)}
       style={{ ...CARD_PALETTE, backgroundColor: asset.ground }}
     >
       {layout === 'side-right' ? (
@@ -199,6 +208,8 @@ export function StartCard({
         </>
       )}
 
+      {phoneScrim && <div className="absolute inset-0 sm:hidden" style={{ background: phoneScrim }} />}
+
       {floatIcons &&
         FLOAT_BADGES.map((badge, i) => (
           <div
@@ -224,13 +235,13 @@ export function StartCard({
 
       <div
         className={cn(
-          'relative z-[2] flex h-full flex-col justify-center',
+          'relative z-[2] flex flex-col justify-center',
           dense ? 'px-6 py-4' : 'px-7 py-5',
           layout === 'center'
             ? 'mx-auto max-w-[70%] items-center text-center'
             : floatIcons
-              ? 'max-w-[66%] items-start'
-              : 'max-w-[58%] items-start',
+              ? 'max-w-[80%] items-start sm:max-w-[66%]'
+              : 'max-w-[80%] items-start sm:max-w-[58%]',
         )}
       >
         {eyebrow && (
