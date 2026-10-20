@@ -14,6 +14,7 @@ import { buildSystemPrompt } from './system-prompt'
 import { loadFiscalYearInventory } from '@/lib/agent/fiscal-years'
 import { createLogger } from '@/lib/logger'
 import { swedishToday } from '@/lib/utils'
+import type { Locale } from '@/i18n/config'
 
 const log = createLogger('agent.chat.run-turn')
 
@@ -182,6 +183,8 @@ interface RunTurnArgs {
   // last_accessed_at. Reusing it there would silently change both the prompt
   // and memory touch.
   preloadedProfileSummary?: string | null
+  // The user's UI locale: the agent answers in it. Default 'sv'.
+  locale?: Locale
   // Emit events back to the caller. Returns false if the stream was cancelled
   // and the loop should stop emitting (best-effort).
   emit: (event: StreamEvent) => boolean
@@ -278,6 +281,7 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
     vatStatus,
     today: swedishToday(),
     fiscalYears,
+    locale: args.locale,
     supabase,
   })
 

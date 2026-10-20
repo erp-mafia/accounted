@@ -21,6 +21,7 @@ vi.mock('../ui-map', () => ({
 
 import { answerAssistantQuestion } from '../ask-service'
 import { EmptyModelAnswerError } from '../errors'
+import { replyLanguageRule } from '@/lib/agent/reply-language'
 
 function supabaseWith(company: { name?: string; entity_type?: string } | null): SupabaseClient {
   const chain = {
@@ -217,5 +218,21 @@ describe('answerAssistantQuestion', () => {
       maxSteps: 3,
     })
     expect(generateText.mock.calls[0][0].maxSteps).toBe(3)
+  })
+})
+
+describe('answerAssistantQuestion: answer language', () => {
+  it('answers in the UI locale: English for en, Swedish otherwise', async () => {
+    for (const [locale, rule] of [
+      ['en', replyLanguageRule('en')],
+      ['sv', replyLanguageRule('sv')],
+      [undefined, replyLanguageRule('sv')],
+    ] as const) {
+      generateText.mockClear()
+      await answerAssistantQuestion({ supabase: supabaseWith(null), companyId: 'c1', question: 'Hej?', locale })
+      const system = generateText.mock.calls[0][0].system as string
+      expect(system).toContain(rule)
+      if (locale === 'en') expect(system).not.toContain('Du svarar alltid på svenska')
+    }
   })
 })

@@ -59,11 +59,57 @@ function lookup(table: MessageTable | undefined): (key: string) => string {
   }
 }
 
+type Messages = { nav?: MessageTable; settings_nav?: MessageTable; journal_detail?: MessageTable }
+
+async function loadMessages(locale: Locale): Promise<Messages> {
+  const mod = locale === 'en' ? await import('@/messages/en.json') : await import('@/messages/sv.json')
+  return (mod.default ?? mod) as unknown as Messages
+}
+
 /** The nav and settings_nav labels in the locale the user's UI renders in. */
 export async function loadUiLabels(locale: Locale = 'sv'): Promise<UiLabels> {
-  const mod = locale === 'en' ? await import('@/messages/en.json') : await import('@/messages/sv.json')
-  const messages = (mod.default ?? mod) as unknown as { nav?: MessageTable; settings_nav?: MessageTable }
+  const messages = await loadMessages(locale)
   return { nav: lookup(messages.nav), settings: lookup(messages.settings_nav) }
+}
+
+/**
+ * The verifikation page's correction menu, which AGENT_GROUND_RULES
+ * (intents/shared-rules.ts) walks through button by button.
+ */
+export const GROUND_RULE_BUTTON_KEYS = [
+  'correct_menu',
+  'strike_lines',
+  'correct_metadata',
+  'correct_lines',
+  'correct_date',
+  'reverse_action',
+  'delete_entry',
+  'correct_opening_balances',
+] as const
+
+/**
+ * The app's labels as "Swedish = English" lines, for the intent chats.
+ *
+ * Those prompts name pages and buttons in Swedish ("Inköp → Underlag",
+ * "Stryk rader i verifikatet"). A user running the app in English sees other
+ * words, so the English chat gets this table and names them as the user's
+ * screen does instead of translating by guess. The sidebar's own tree and
+ * messages, ungated: it translates names, it does not offer pages.
+ */
+export async function uiLabelGlossary(): Promise<string[]> {
+  const [sv, en] = await Promise.all([loadMessages('sv'), loadMessages('en')])
+  const svNav = lookup(sv.nav)
+  const enNav = lookup(en.nav)
+  const pairs = new Map<string, string>([[svNav('settings'), enNav('settings')]])
+  for (const section of [...NAV_V2_TOP, ...NAV_V2_COMPANY]) {
+    for (const item of [section, ...(section.sub ?? [])]) {
+      pairs.set(svNav(item.labelKey), enNav(item.labelKey))
+    }
+  }
+  const svJournal = lookup(sv.journal_detail)
+  const enJournal = lookup(en.journal_detail)
+  for (const key of GROUND_RULE_BUTTON_KEYS) pairs.set(svJournal(key), enJournal(key))
+  return [...pairs].filter(([s, e]) => s !== e).map(([s, e]) => `${s} = ${e}`)
 }
 
 /**

@@ -11,6 +11,7 @@ import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { localeFromCookieHeader } from '@/i18n/config'
 
 // Deep turns (thinking at high/xhigh effort, up to 12 tool iterations, a
 // 15-27k-token prompt prefix) can outlive the plan default duration cap; a
@@ -302,6 +303,8 @@ export async function POST(request: Request) {
           userMessageHidden,
           persist: true,
           preloadedProfileSummary,
+          // The language the app renders in, so the agent answers in it.
+          locale: localeFromCookieHeader(request.headers.get('cookie')),
           emit: (event) => emit(event),
         })
       } catch (err) {

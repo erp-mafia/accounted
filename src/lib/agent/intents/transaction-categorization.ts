@@ -478,11 +478,11 @@ export const transactionCategorization = defineAgentIntent<
     lines.push('- STÄLL en kort följdfråga (2-3 alternativ) när kategorin beror på syfte som inte syns på kvittot: restaurang/café, Systembolaget, detaljhandel (ICA/Clas Ohlson/Apoteket), resor, drivmedel, gåvor. Hellre en fråga än en felaktig bokning. Spara användarens svar via gnubok_remember_fact så du inte behöver fråga igen nästa gång liknande motpart dyker upp.')
     lines.push('- REPRESENTATION (måltid): fånga ANTAL deltagare, vilka (namn + företag) och syftet innan du bokför: antalet styr momsavdraget (tak per person på underlaget). Använd kvittots FAKTISKA momssats, gissa aldrig. Fråga "Hur många var ni, och vilka?" om det inte framgår. När du har uppgifterna: (1) anropa gnubok_remember_fact med content som beskriver deltagare + syfte; (2) stagea med notes="X deltagare: [namn + företag]. Syfte: [text]." så det landar i verifikationen. Saknas uppgifterna medges inget momsavdrag: säg det.')
     lines.push(`- När du är säker, staga via gnubok_categorize_transaction med transaction_id=${tx.id} (ALDRIG document_id). Välj kategori från enum-listan i verktygets schema.`)
-    lines.push('- Förklara dina val kort på svenska: använd kategori-namn (t.ex. "Mjukvara/IT-tjänster", "Tele & internet"), ALDRIG ett BAS-kontonummer. Verktyget mappar kategori → konto, och godkännandekortet visar det faktiska BAS-kontot.')
+    lines.push('- Förklara dina val kort: använd kategori-namn (t.ex. "Mjukvara/IT-tjänster", "Tele & internet"), ALDRIG ett BAS-kontonummer. Verktyget mappar kategori → konto, och godkännandekortet visar det faktiska BAS-kontot.')
     lines.push('- Berätta INTE för användaren att du "stagear nu", att operationen är "stagead", att de ska "godkänna i appen", eller upprepa siffror som ändå visas i godkännandekortet (kategori, BAS-konto, momsbelopp). Kortet renderas direkt under ditt svar och säger allt det. Avsluta i stället med en mening eller två om VARFÖR du valde som du valde, och stanna där.')
     lines.push('- Upprepa INTE underlag-uppmaningen efter stagning. Om du redan har bett användaren ladda upp via Underlag (i pre-stage-meddelandet) räcker det: påminn inte igen efter Godkänn-kortet. Och om underlag saknas och bokningen ändå stagas: säg att det ska bifogas till VERIFIKATIONEN (öppna den i Bokföring), inte under Underlag. Underlag är för dokument som inte ännu hör till en verifikation.')
     lines.push('')
-    lines.push('Svara på svenska och var direkt: ditt första svar är det första användaren ser.')
+    lines.push('Var direkt: ditt första svar är det första användaren ser.')
     return lines.join('\n')
   },
 })

@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import sv from '@/messages/sv.json'
+import en from '@/messages/en.json'
+import { renderAgentGroundRules } from '@/lib/agent/intents/shared-rules'
 import { NAV_V2_COMPANY, NAV_V2_TOP } from '@/components/dashboard/nav-v2'
 
 const getDashboardNavFlags = vi.fn()
@@ -13,11 +15,13 @@ vi.mock('@/lib/entitlements/has-capability', () => ({
 }))
 
 import {
+  GROUND_RULE_BUTTON_KEYS,
   buildUiGrounding,
   loadNavGateContext,
   loadUiLabels,
   menuTrail,
   renderUiGrounding,
+  uiLabelGlossary,
 } from '../ui-map'
 import { SV_LABELS, gateContext, svMenuPath } from './ui-fixture'
 
@@ -239,5 +243,38 @@ describe('buildUiGrounding', () => {
       { route: '/bookkeeping' },
     )
     expect(out).toBe('')
+  })
+})
+
+describe('uiLabelGlossary', () => {
+  const enNav = en.nav as Record<string, string>
+  const svJournal = sv.journal_detail as Record<string, string>
+  const enJournal = en.journal_detail as Record<string, string>
+
+  it('pairs the sidebar labels Swedish = English, from the same messages the menu renders', async () => {
+    const glossary = await uiLabelGlossary()
+    expect(glossary).toContain(`${nav.v2_purchases} = ${enNav.v2_purchases}`)
+    expect(glossary).toContain(`${nav.invoice_inbox} = ${enNav.invoice_inbox}`)
+    expect(glossary).toContain(`${nav.v2_vouchers} = ${enNav.v2_vouchers}`)
+    expect(glossary).toContain(`${nav.settings} = ${enNav.settings}`)
+  })
+
+  it('pairs the correction buttons the ground rules name, and every one is named there', async () => {
+    const glossary = await uiLabelGlossary()
+    const rules = renderAgentGroundRules()
+    for (const key of GROUND_RULE_BUTTON_KEYS) {
+      expect(glossary).toContain(`${svJournal[key]} = ${enJournal[key]}`)
+      // A renamed button in either place must update the other.
+      expect(rules).toContain(svJournal[key])
+    }
+  })
+
+  it('leaves out labels that read the same in both languages, and never repeats one', async () => {
+    const glossary = await uiLabelGlossary()
+    for (const line of glossary) {
+      const [s, e] = line.split(' = ')
+      expect(s).not.toBe(e)
+    }
+    expect(new Set(glossary).size).toBe(glossary.length)
   })
 })

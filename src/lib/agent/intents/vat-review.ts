@@ -125,7 +125,7 @@ export const vatReview = defineAgentIntent<VatReviewArgs, CapturedVatReview>({
     lines.push('4. Varna explicit för anomalier: stora avvikelser mot förra perioden, oväntade reverse-charge-belopp, saknad motpost.')
     lines.push('5. Påminn om deadline (deklarationsdatum + betalningsdatum) och rekommendera fortsatta steg om allt ser bra ut.')
     lines.push('')
-    lines.push('Svara på svenska, kort och konkret. Använd tabellform när det hjälper användaren skanna siffrorna. Ditt första svar är det första användaren ser.')
+    lines.push('Svara kort och konkret. Använd tabellform när det hjälper användaren skanna siffrorna. Ditt första svar är det första användaren ser.')
     return lines.join('\n')
   },
 })
