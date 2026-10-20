@@ -446,7 +446,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
       <SidebarV2
         top={v2Top}
         company={v2Company}
-        groupLabel={cockpitMode ? '' : tNav('v2_group_company')}
+        // The group is headed by the company it acts on, so a byrå moving
+        // between clients sees which books it is in (crm#1279).
+        groupLabel={cockpitMode ? '' : company?.name || tNav('v2_group_company')}
         label={(key) => tNav(key as NavLabelKey)}
         isActive={isActive}
         isEnabled={isItemEnabled}

@@ -2,13 +2,14 @@
 
 import React, { useState } from 'react'
 import dynamic from 'next/dynamic'
+import Link from 'next/link'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { AccountNumber } from '@/components/ui/account-number'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
-import { accountDrilldownClick } from '@/components/reports/drilldown-click'
+import { accountDrilldownClick, type AccountDrilldown } from '@/components/reports/drilldown-click'
 import { useReportRowExpansion } from '@/components/reports/ReportRowExpansion'
 import {
   ReportEmptyState,
@@ -28,7 +29,7 @@ const TrialBalanceChart = dynamic(
   { ssr: false, loading: () => <Skeleton className="h-64 w-full" /> },
 )
 
-export default function TrialBalanceView({ periodId, onNavigateToAccount }: { periodId: string; onNavigateToAccount: (account: string) => void }) {
+export default function TrialBalanceView({ periodId, drilldown }: { periodId: string; drilldown: AccountDrilldown }) {
   const { data, loading, error } = useReportData<{
     rows: TrialBalanceRow[]
     totalDebit: number
@@ -121,7 +122,7 @@ export default function TrialBalanceView({ periodId, onNavigateToAccount }: { pe
                       key={row.account_number}
                       row={row}
                       periodId={periodId}
-                      onNavigateToAccount={onNavigateToAccount}
+                      drilldown={drilldown}
                       getNetBalance={getNetBalance}
                       formatSigned={formatSigned}
                     />
@@ -147,7 +148,7 @@ export default function TrialBalanceView({ periodId, onNavigateToAccount }: { pe
                       key={row.account_number}
                       row={row}
                       periodId={periodId}
-                      onNavigateToAccount={onNavigateToAccount}
+                      drilldown={drilldown}
                     />
                   ))}
                 </tbody>
@@ -195,13 +196,13 @@ function makeTrialBalanceFetcher(accountNumber: string, periodId: string): Repor
 function TrialBalanceSimplifiedRow({
   row,
   periodId,
-  onNavigateToAccount,
+  drilldown,
   getNetBalance,
   formatSigned,
 }: {
   row: TrialBalanceRow
   periodId: string
-  onNavigateToAccount: (account: string) => void
+  drilldown: AccountDrilldown
   getNetBalance: (row: TrialBalanceRow, type: 'opening' | 'period' | 'closing') => number
   formatSigned: (amount: number) => string
 }) {
@@ -223,15 +224,15 @@ function TrialBalanceSimplifiedRow({
         </td>
         <td
           className="py-2 cursor-pointer"
-          onClick={accountDrilldownClick(onNavigateToAccount, row.account_number)}
+          onClick={accountDrilldownClick(drilldown, row.account_number)}
         >
           <AccountNumber number={row.account_number} name={row.account_name} />
         </td>
         <td
           className="py-2 cursor-pointer"
-          onClick={accountDrilldownClick(onNavigateToAccount, row.account_number)}
+          onClick={accountDrilldownClick(drilldown, row.account_number)}
         >
-          {row.account_name}
+          <Link href={drilldown.href(row.account_number)} className="block">{row.account_name}</Link>
         </td>
         <td className={`py-2 text-right tabular-nums ${ob < 0 ? 'text-destructive' : ''}`}>
           {formatSigned(ob)}
@@ -251,11 +252,11 @@ function TrialBalanceSimplifiedRow({
 function TrialBalanceDetailedRow({
   row,
   periodId,
-  onNavigateToAccount,
+  drilldown,
 }: {
   row: TrialBalanceRow
   periodId: string
-  onNavigateToAccount: (account: string) => void
+  drilldown: AccountDrilldown
 }) {
   const fetcher = React.useMemo(
     () => makeTrialBalanceFetcher(row.account_number, periodId),
@@ -271,15 +272,15 @@ function TrialBalanceDetailedRow({
         </td>
         <td
           className="py-2 cursor-pointer"
-          onClick={accountDrilldownClick(onNavigateToAccount, row.account_number)}
+          onClick={accountDrilldownClick(drilldown, row.account_number)}
         >
           <AccountNumber number={row.account_number} name={row.account_name} />
         </td>
         <td
           className="py-2 cursor-pointer"
-          onClick={accountDrilldownClick(onNavigateToAccount, row.account_number)}
+          onClick={accountDrilldownClick(drilldown, row.account_number)}
         >
-          {row.account_name}
+          <Link href={drilldown.href(row.account_number)} className="block">{row.account_name}</Link>
         </td>
         <td className="py-2 text-right">
           {row.period_debit > 0 ? formatAmount(row.period_debit) : ''}

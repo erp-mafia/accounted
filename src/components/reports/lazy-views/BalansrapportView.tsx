@@ -1,12 +1,13 @@
 'use client'
 
 import React from 'react'
+import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { AccountNumber } from '@/components/ui/account-number'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
-import { accountDrilldownClick } from '@/components/reports/drilldown-click'
+import { accountDrilldownClick, type AccountDrilldown } from '@/components/reports/drilldown-click'
 import {
   ReportEmptyState,
   ReportErrorCard,
@@ -19,7 +20,7 @@ import { formatLatestVouchers } from '@/lib/reports/latest-vouchers-format'
 import type { DateRangeValue } from '@/components/common/ReportDateRange'
 import type { BalansrapportReport, BalansrapportSection } from '@/types'
 
-export default function BalansrapportView({ periodId, dateRange, onNavigateToAccount }: { periodId: string; dateRange: DateRangeValue; onNavigateToAccount: (account: string) => void }) {
+export default function BalansrapportView({ periodId, dateRange, drilldown }: { periodId: string; dateRange: DateRangeValue; drilldown: AccountDrilldown }) {
   const t = useTranslations('reports')
   const reportQs = reportQuery(periodId, dateRange)
   const { data, loading, error } = useReportData<BalansrapportReport>(
@@ -88,7 +89,7 @@ export default function BalansrapportView({ periodId, dateRange, onNavigateToAcc
                         key={section.key}
                         section={section}
                         depth={0}
-                        onNavigateToAccount={onNavigateToAccount}
+                        drilldown={drilldown}
                       />
                     ))}
                     <BalansrapportTotalRow
@@ -154,11 +155,11 @@ export default function BalansrapportView({ periodId, dateRange, onNavigateToAcc
 function BalansrapportSectionRows({
   section,
   depth,
-  onNavigateToAccount,
+  drilldown,
 }: {
   section: BalansrapportSection
   depth: 0 | 1
-  onNavigateToAccount: (account: string) => void
+  drilldown: AccountDrilldown
 }) {
   return (
     <>
@@ -185,19 +186,19 @@ function BalansrapportSectionRows({
           key={child.key}
           section={child}
           depth={1}
-          onNavigateToAccount={onNavigateToAccount}
+          drilldown={drilldown}
         />
       ))}
       {section.rows.map((row) => (
         <tr
           key={row.account_number}
           className="border-b cursor-pointer hover:bg-secondary/35 transition-colors"
-          onClick={accountDrilldownClick(onNavigateToAccount, row.account_number)}
+          onClick={accountDrilldownClick(drilldown, row.account_number)}
         >
           <td className="px-4 py-1.5">
             <AccountNumber number={row.account_number} name={row.account_name} />
           </td>
-          <td className="px-4 py-1.5">{row.account_name}</td>
+          <td className="px-4 py-1.5"><Link href={drilldown.href(row.account_number)} className="block">{row.account_name}</Link></td>
           <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{formatAmount(row.ib)}</td>
           <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{formatAmount(row.period_change)}</td>
           <td className="px-4 py-1.5 text-right tabular-nums">{formatAmount(row.ub)}</td>

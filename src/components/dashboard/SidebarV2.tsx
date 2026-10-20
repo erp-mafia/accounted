@@ -8,7 +8,7 @@ import { activeSubHref, type NavV2Item } from './nav-v2'
 interface SidebarV2Props {
   top: NavV2Item[]
   company: NavV2Item[]
-  /** BOLAGET group header; empty string hides the group (cockpit mode). */
+  /** Company group header: the active company's name; empty string hides the group (cockpit mode). */
   groupLabel: string
   label: (labelKey: string) => string
   isActive: (href: string) => boolean
@@ -145,7 +145,12 @@ export function SidebarV2({
           {company.length > 0 && (
             <div className="mb-4">
               {groupLabel && (
-                <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                // data-ph-mask: a company name inside the unmasked nav.
+                <div
+                  data-ph-mask
+                  title={groupLabel}
+                  className="truncate px-3 pb-1 text-[13px] font-medium text-foreground"
+                >
                   {groupLabel}
                 </div>
               )}
