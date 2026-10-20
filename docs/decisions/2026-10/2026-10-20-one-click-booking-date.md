@@ -1,0 +1,1 @@
+[2026-10-20] Inkorg one click date: faktureringsmetoden books the document's purchase date when it lies 31 days before to 3 days after the bank date, else the bank date; kontantmetoden the bank date; a locked period is refused, never moved: BFL 5 kap 7 §, ML 7 kap 31 and 33 §§.

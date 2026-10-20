@@ -23,6 +23,8 @@ interface Props {
    * navigate to the invoice detail (id given) or refresh their list in place.
    */
   onCreated: (invoiceId?: string) => void
+  /** With an inbox item: the cost account of what was bought, on every line the reading gives. */
+  prefillAccount?: string | null
 }
 
 /**
@@ -44,6 +46,7 @@ export default function NewSupplierInvoiceDialog({
   inboxItemId,
   settleWith = null,
   onCreated,
+  prefillAccount = null,
 }: Props) {
   const t = useTranslations('supplier_invoice_editor')
 
@@ -84,6 +87,7 @@ export default function NewSupplierInvoiceDialog({
           bare
           inboxItemId={inboxItemId}
           settleWith={settleWith}
+          prefillAccount={prefillAccount}
           onCreated={onCreated}
           onCancel={() => onOpenChange(false)}
         />

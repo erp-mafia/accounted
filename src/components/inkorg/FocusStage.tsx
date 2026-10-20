@@ -7,6 +7,7 @@ import { InboxArrivalProvenance } from '@/components/extensions/general/InboxArr
 import { PurchaseCategoryChip } from '@/components/inbox/PurchaseCategoryChip'
 import BookingWhy from '@/components/bookkeeping/BookingWhy'
 import { BrandMark, GlyphMark } from '@/components/parties/BrandMark'
+import { Button } from '@/components/ui/button'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { InboxPurchaseCategory } from '@/lib/categories/inbox-purchase-category'
@@ -15,16 +16,23 @@ import type { DocumentReading } from '@/lib/documents/reading/types'
 import type { BankMatch } from '@/lib/documents/inbox-bank-match'
 import { formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
 import { shortDate, shortDateTime } from '@/lib/inkorg/dates'
-import { bookedOnAccount, focusDecision, type InkorgStartable } from '@/lib/inkorg/decision'
+import { bookedOnAccount, focusDecision, type DecisionQuestion, type InkorgStartable } from '@/lib/inkorg/decision'
 import { doorOf, itemHeadline, type InkorgItem } from '@/lib/inkorg/items'
 import { formatCurrency } from '@/lib/utils'
+import type { SellerRegion } from '@/lib/vat/seller-country'
 import { FocusDecision, type DecisionDone, type SuggestedBooking } from './FocusDecision'
+import { useBookingPlan, type OneClickBooking } from './use-booking-plan'
 import { FocusDocumentFields } from './FocusDocumentFields'
 import { FocusDocumentPreview, useDocumentMeta } from './FocusDocumentPreview'
 import { Fold } from './motion'
 import { useDoorName } from './door-icon'
 
 const ITEM_URL = (id: string) => `/api/extensions/ext/invoice-inbox/items/${id}`
+
+/** The questions a first decision asks: what one click can answer, so its plan is read for them. */
+const FIRST_DECISION: ReadonlySet<DecisionQuestion> = new Set(['already_paid', 'invoice_paid', 'who_paid', 'book_purchase'])
+
+const SELLER_REGIONS: readonly SellerRegion[] = ['se', 'eu', 'non_eu']
 
 interface ItemDetail {
   purchase_category?: InboxPurchaseCategory | null
@@ -126,6 +134,8 @@ export function FocusStage({
   startable,
   ownerAccount = null,
   onBack,
+  onBook,
+  openEditor = null,
 }: {
   item: InkorgItem
   /** The receipt the invoice came with as one purchase (its pairing): shown as its second document. */
@@ -146,6 +156,10 @@ export function FocusStage({
   ownerAccount?: string | null
   /** Back to the list, the item untouched: an answer that writes nothing. */
   onBack?: () => void
+  /** One click: the page holds the booking a moment (Ångra), then sends it. */
+  onBook?: (booking: OneClickBooking) => void
+  /** Bumped when a one-click booking came back refused for its date: the editor opens, prefilled. */
+  openEditor?: number | null
 }) {
   const t = useTranslations('inkorg')
   const tWork = useTranslations('inbox_workspace')
@@ -164,8 +178,18 @@ export function FocusStage({
   // Until the detail lands, the match the list read carried: the question does not change under the person.
   const decision = focusDecision(item, { bankMatch: detail ? (detail.bank_match ?? null) : (item.bank_match ?? null), startable, companion })
   const suggestion = useSuggestion(item.id, item.matched_transaction_id, decision.question === 'book_purchase')
+  // What one click books, read after the detail (whose read checks the bank first), and again for each answer.
+  const [answers, setAnswers] = useState<{ itemId: string; category: number; seller: SellerRegion | null }>({ itemId: item.id, category: 0, seller: null })
+  const answered = answers.itemId === item.id ? answers : { itemId: item.id, category: 0, seller: null }
+  const bookingPlan = useBookingPlan(
+    item.id,
+    !detailLoading && FIRST_DECISION.has(decision.question),
+    `${item.id}:${revision}:${answered.category}:${detail?.bank_match?.transaction_id ?? ''}`,
+    answered.seller ? { seller_country: answered.seller } : {},
+  )
+  const plan = bookingPlan?.plan ?? null
   const headline = itemHeadline(item)
-  const account = bookedOnAccount(suggestion?.lines)
+  const account = plan?.costAccount ?? bookedOnAccount(suggestion?.lines)
 
   // The list says "Ser redan betald ut" for what the detail read found.
   const bankMatch = detailLoading ? undefined : (detail?.bank_match ?? null)
@@ -193,6 +217,9 @@ export function FocusStage({
         // "Varje gång" needs a matched supplier card; the headline is its name as read.
         supplierName={detail.matched_supplier_id && item.extracted_data.supplier?.name?.trim() ? headline.name : null}
         label={account ? null : undefined}
+        // One click waits for what was bought: the chip asks for it.
+        prompt={plan?.ask === 'category'}
+        onChange={() => setAnswers({ ...answered, category: answered.category + 1 })}
       />
     ) : null
 
@@ -200,6 +227,16 @@ export function FocusStage({
   // proposal names one, and what it bought, with Ändra.
   const bookingLine = detailLoading ? (
     <Skeleton className="h-5 w-56 rounded-sm" />
+  ) : plan?.ask === 'seller_country' ? (
+    // Nothing on the document says where the seller is: one row of chips, in place of the category's.
+    <div role="group" aria-label={t('seller_country_question')} className="flex flex-wrap items-center gap-2 text-[13px]">
+      <span className="text-muted-foreground">{t('seller_country_question')}</span>
+      {SELLER_REGIONS.map((region) => (
+        <Button key={region} type="button" variant="outline" size="sm" onClick={() => setAnswers({ ...answered, seller: region })}>
+          {t(`seller_country_${region}`)}
+        </Button>
+      ))}
+    </div>
   ) : account || category ? (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px]">
       {account && (
@@ -293,6 +330,10 @@ export function FocusStage({
             ownerAccount={ownerAccount}
             matchedSupplierId={detail?.matched_supplier_id ?? null}
             onBack={onBack}
+            bookingPlan={bookingPlan}
+            answers={answered.seller ? { seller_country: answered.seller } : {}}
+            onBook={onBook}
+            openEditor={openEditor}
           />
 
           <div className="border-t border-border">
@@ -303,7 +344,11 @@ export function FocusStage({
               onToggle={(booking) => onFinePrint((current) => ({ ...current, booking }))}
             >
               <div className="space-y-3 pb-4">
-                {suggestion && suggestion.lines.length > 0 && <ProposalLines lines={suggestion.lines} />}
+                {plan && plan.lines.length > 0 ? (
+                  <ProposalLines lines={plan.lines} />
+                ) : (
+                  suggestion && suggestion.lines.length > 0 && <ProposalLines lines={suggestion.lines} />
+                )}
                 {whyEntryId && <BookingWhy journalEntryId={whyEntryId} variant="inline" />}
                 {/* Where it came from, read off its arrivals; the rail's own chrome is flattened here. */}
                 <div className="[&>div]:border-b-0 [&>div]:px-0 [&>div]:py-0">
@@ -388,8 +433,8 @@ function CompanionReceipt({ receipt, showing, onToggle }: { receipt: InkorgItem;
   )
 }
 
-/** The proposed kontering, read-only: what "Granska och bokför" opens with. */
-function ProposalLines({ lines }: { lines: SuggestedBooking['lines'] }) {
+/** The proposed kontering, read-only: what one click books, or what "Granska och bokför" opens with. */
+function ProposalLines({ lines }: { lines: ReadonlyArray<Pick<SuggestedBooking['lines'][number], 'account_number' | 'description' | 'debit_amount' | 'credit_amount'>> }) {
   const t = useTranslations('inkorg')
   return (
     <table className="w-full border-collapse text-[12.5px]">

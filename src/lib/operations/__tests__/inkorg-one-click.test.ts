@@ -1,0 +1,483 @@
+import { describe, expect, it } from 'vitest'
+import type { InvoiceExtractionResult } from '@/types'
+import { costAccountFor, planOneClick, purchaseEntryDate, type OneClickInput, type OneClickLine, type OneClickPlan } from '../inkorg-one-click'
+
+type Extraction = InvoiceExtractionResult
+
+function doc(overrides: {
+  supplier?: Partial<Extraction['supplier']>
+  invoice?: Partial<Extraction['invoice']>
+  totals?: Partial<Extraction['totals']>
+  lineItems?: Extraction['lineItems']
+  vatBreakdown?: Extraction['vatBreakdown']
+  documentKind?: Extraction['documentKind']
+} = {}): Extraction {
+  return {
+    supplier: { name: null, orgNumber: null, vatNumber: null, address: null, bankgiro: null, plusgiro: null, iban: null, bic: null, ...overrides.supplier },
+    invoice: { invoiceNumber: null, invoiceDate: null, dueDate: null, paymentReference: null, currency: 'SEK', ...overrides.invoice },
+    lineItems: overrides.lineItems ?? [],
+    totals: { subtotal: null, vatAmount: null, total: null, ...overrides.totals },
+    vatBreakdown: overrides.vatBreakdown ?? [],
+    confidence: 0.9,
+    documentKind: overrides.documentKind ?? null,
+  } as Extraction
+}
+
+const BANK = { transactionId: 'tx-1', date: '2026-10-14', amountSek: -150, settlementAccount: '1930', source: 'proposal' as const }
+
+function input(overrides: Partial<OneClickInput> = {}): OneClickInput {
+  return {
+    kind: 'receipt',
+    reading: doc(),
+    paidByReceipt: false,
+    receiptDate: null,
+    bank: BANK,
+    company: { vatRegistered: true, cashMethod: false, supplierInvoices: true },
+    category: 'expense.software.saas',
+    supplier: null,
+    counterpartyAccount: null,
+    sellerRegionAnswer: null,
+    invoiceRate: null,
+    ...overrides,
+  }
+}
+
+function balanced(lines: OneClickLine[]): boolean {
+  const debit = lines.reduce((sum, l) => sum + l.debit_amount, 0)
+  const credit = lines.reduce((sum, l) => sum + l.credit_amount, 0)
+  return Math.abs(debit - credit) < 0.005 && debit > 0
+}
+
+function pairs(plan: OneClickPlan): Array<[string, number, number]> {
+  return plan.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])
+}
+
+/** Wispr Flow, 2026-10-20: a US SaaS invoice and its receipt in one mail, paid by card ••3667, 150 kr, no VAT. */
+const WISPR = doc({
+  documentKind: 'supplier_invoice',
+  supplier: { name: 'Wispr Flow', address: '2261 Market Street #4512, San Francisco, CA 94114' },
+  invoice: { invoiceNumber: 'WF-1043', invoiceDate: '2026-10-13', currency: 'SEK' },
+  totals: { subtotal: 150, vatAmount: 0, total: 150 },
+})
+
+describe('planOneClick: the Wispr case', () => {
+  const plan = planOneClick(input({ kind: 'supplier_invoice', reading: WISPR, paidByReceipt: true, receiptDate: '2026-10-13' }))
+
+  it('is one verifikat against the bank row, with nothing to ask', () => {
+    expect(plan.form).toBe('direct')
+    expect(plan.ask).toBeNull()
+    expect(plan.reason).toBe('paid_by_receipt')
+    expect(plan.transactionId).toBe('tx-1')
+  })
+
+  it('books the SaaS on 5420 with reverse charge from outside the EU at 25 %', () => {
+    expect(plan.vat).toEqual({ kind: 'reverse_charge', rcKind: 'non_eu_services', rate: 0.25 })
+    expect(plan.seller).toEqual({ country: 'US', region: 'non_eu' })
+    expect(pairs(plan)).toEqual([
+      ['5420', 150, 0],
+      ['1930', 0, 150],
+      ['2645', 37.5, 0],
+      ['2614', 0, 37.5],
+      ['4531', 150, 0],
+      ['4598', 0, 150],
+    ])
+    expect(balanced(plan.lines)).toBe(true)
+  })
+
+  it('is dated the purchase date, the invoice date the day before the bank', () => {
+    expect(plan.entryDate).toBe('2026-10-13')
+  })
+
+  it('books against the card account when the card settles there', () => {
+    const card = planOneClick(input({ kind: 'supplier_invoice', reading: WISPR, paidByReceipt: true, bank: { ...BANK, settlementAccount: '2890' } }))
+    expect(card.lines.find((l) => l.credit_amount === 150 && l.account_number !== '4598')?.account_number).toBe('2890')
+    expect(card.lines.some((l) => l.account_number === '1930')).toBe(false)
+  })
+
+  it('names no supplier to create on a direct booking, and the matched one when there is one', () => {
+    expect(plan.supplier).toBeNull()
+    const matched = planOneClick(input({
+      kind: 'supplier_invoice',
+      reading: WISPR,
+      paidByReceipt: true,
+      supplier: { id: 'sup-1', supplierType: 'non_eu_business', defaultExpenseAccount: null, paymentTermsDays: 30 },
+    }))
+    expect(matched.supplier).toEqual({ id: 'sup-1' })
+  })
+})
+
+describe('planOneClick: VAT by where the seller is', () => {
+  it('an EU SaaS with an Irish VAT number is reverse charge in ruta 21 (4535)', () => {
+    const plan = planOneClick(input({
+      reading: doc({ supplier: { name: 'Notion Labs', vatNumber: 'IE3668997OH' }, invoice: { currency: 'EUR' }, totals: { total: 10, vatAmount: 0 } }),
+      bank: { ...BANK, amountSek: -115.4 },
+    }))
+    expect(plan.form).toBe('direct')
+    expect(plan.vat).toEqual({ kind: 'reverse_charge', rcKind: 'eu_services', rate: 0.25 })
+    expect(pairs(plan)).toEqual([
+      ['5420', 115.4, 0],
+      ['1930', 0, 115.4],
+      ['2645', 28.85, 0],
+      ['2614', 0, 28.85],
+      ['4535', 115.4, 0],
+      ['4598', 0, 115.4],
+    ])
+  })
+
+  it('a Swedish receipt at 25 % books the document\'s input VAT', () => {
+    const plan = planOneClick(input({
+      category: 'expense.office.supplies',
+      reading: doc({ supplier: { name: 'Clas Ohlson', orgNumber: '556035-8672' }, totals: { subtotal: 100, vatAmount: 25, total: 125 } }),
+      bank: { ...BANK, amountSek: -125 },
+    }))
+    expect(plan.ask).toBeNull()
+    expect(plan.vat).toEqual({ kind: 'input', amount: 25, rates: [0.25] })
+    expect(pairs(plan)).toEqual([
+      ['6110', 100, 0],
+      ['2641', 25, 0],
+      ['1930', 0, 125],
+    ])
+  })
+
+  it('a Swedish receipt at 12 % books 12 % input VAT', () => {
+    const plan = planOneClick(input({
+      category: 'expense.personnel.refreshments',
+      reading: doc({
+        supplier: { name: 'ICA Nära', address: 'Storgatan 1, 123 45 Stockholm' },
+        totals: { subtotal: 100, vatAmount: 12, total: 112 },
+        lineItems: [{ description: 'Kaffe', quantity: 1, unitPrice: 100, lineTotal: 100, vatRate: 12, accountSuggestion: null }],
+      }),
+      bank: { ...BANK, amountSek: -112 },
+    }))
+    expect(plan.vat).toEqual({ kind: 'input', amount: 12, rates: [0.12] })
+    expect(pairs(plan)).toEqual([
+      ['7690', 100, 0],
+      ['2641', 12, 0],
+      ['1930', 0, 112],
+    ])
+  })
+
+  it('a breakdown at two rates books the sum of both on input VAT', () => {
+    const plan = planOneClick(input({
+      category: 'expense.personnel.refreshments',
+      reading: doc({
+        supplier: { name: 'ICA', orgNumber: '5560219090' },
+        totals: { subtotal: 200, vatAmount: 37, total: 237 },
+        vatBreakdown: [{ rate: 25, base: 100, amount: 25 }, { rate: 12, base: 100, amount: 12 }],
+      }),
+      bank: { ...BANK, amountSek: -237 },
+    }))
+    expect(plan.vat).toEqual({ kind: 'input', amount: 37, rates: [0.25, 0.12] })
+    expect(balanced(plan.lines)).toBe(true)
+  })
+
+  it('a Swedish document with no VAT books no VAT line', () => {
+    const plan = planOneClick(input({ category: 'expense.bank_fees.fees', reading: doc({ supplier: { name: 'Banken' }, totals: { total: 150 } }) }))
+    expect(plan.vat).toEqual({ kind: 'none' })
+    expect(pairs(plan)).toEqual([['6570', 150, 0], ['1930', 0, 150]])
+  })
+
+  it('opens the editor for VAT above 25 % of the net, and for mixed rates without a breakdown', () => {
+    const tooMuch = planOneClick(input({ reading: doc({ supplier: { orgNumber: '5560358672' }, totals: { subtotal: 100, vatAmount: 40, total: 140 } }), bank: { ...BANK, amountSek: -140 } }))
+    expect([tooMuch.ask, tooMuch.reason]).toEqual(['editor', 'vat_exceeds_rate'])
+    const mixed = planOneClick(input({
+      reading: doc({
+        supplier: { orgNumber: '5560358672' },
+        totals: { subtotal: 200, vatAmount: 37, total: 237 },
+        lineItems: [
+          { description: 'a', quantity: 1, unitPrice: 100, lineTotal: 100, vatRate: 25, accountSuggestion: null },
+          { description: 'b', quantity: 1, unitPrice: 100, lineTotal: 100, vatRate: 12, accountSuggestion: null },
+        ],
+      }),
+      bank: { ...BANK, amountSek: -237 },
+    }))
+    expect([mixed.ask, mixed.reason]).toEqual(['editor', 'mixed_rates'])
+  })
+
+  it('opens the editor, prefilled with the cost and the bank, for a hotel abroad', () => {
+    const plan = planOneClick(input({
+      category: 'expense.travel.hotel',
+      reading: doc({ supplier: { name: 'Hotel Adlon', vatNumber: 'DE123456789' }, invoice: { currency: 'EUR' }, totals: { total: 200 } }),
+      bank: { ...BANK, amountSek: -2300 },
+    }))
+    expect([plan.ask, plan.reason]).toEqual(['editor', 'exception_abroad'])
+    expect(pairs(plan)).toEqual([['5831', 2300, 0], ['1930', 0, 2300]])
+  })
+
+  it('opens the editor for goods bought abroad', () => {
+    const plan = planOneClick(input({
+      category: 'expense.equipment.hardware',
+      reading: doc({ supplier: { name: 'Apple', address: 'One Apple Park Way, Cupertino, CA 95014, United States' }, invoice: { currency: 'USD' }, totals: { total: 999 } }),
+      bank: { ...BANK, amountSek: -10500 },
+    }))
+    expect([plan.ask, plan.reason]).toEqual(['editor', 'goods_abroad'])
+  })
+
+  it('opens the editor when a foreign seller charged VAT', () => {
+    const plan = planOneClick(input({
+      reading: doc({ supplier: { vatNumber: 'DE123456789' }, invoice: { currency: 'EUR' }, totals: { subtotal: 10, vatAmount: 1.9, total: 11.9 } }),
+      bank: { ...BANK, amountSek: -137 },
+    }))
+    expect([plan.ask, plan.reason]).toEqual(['editor', 'foreign_vat'])
+  })
+
+  it('opens the editor for a company that is not VAT-registered buying a service abroad', () => {
+    const plan = planOneClick(input({
+      kind: 'supplier_invoice',
+      reading: WISPR,
+      paidByReceipt: true,
+      company: { vatRegistered: false, cashMethod: false, supplierInvoices: true },
+    }))
+    expect([plan.ask, plan.reason]).toEqual(['editor', 'not_vat_registered_abroad'])
+  })
+
+  it('books a Swedish seller\'s VAT on the cost for a company that is not VAT-registered', () => {
+    const plan = planOneClick(input({
+      category: 'expense.office.supplies',
+      company: { vatRegistered: false, cashMethod: false, supplierInvoices: true },
+      reading: doc({ supplier: { orgNumber: '556035-8672' }, totals: { subtotal: 100, vatAmount: 25, total: 125 } }),
+      bank: { ...BANK, amountSek: -125 },
+    }))
+    expect(plan.vat).toEqual({ kind: 'cost', amount: 25 })
+    expect(pairs(plan)).toEqual([['6110', 125, 0], ['1930', 0, 125]])
+  })
+})
+
+describe('planOneClick: where the seller is, when nothing says', () => {
+  const unknown = doc({ supplier: { name: 'Acme', address: '12 Harbour Road, Unit 4' }, totals: { total: 150 } })
+
+  it('asks, for a document with no VAT that looks foreign', () => {
+    const plan = planOneClick(input({ reading: unknown }))
+    expect([plan.ask, plan.reason]).toEqual(['seller_country', 'seller_country_unknown'])
+  })
+
+  it('books with the person\'s answer', () => {
+    const plan = planOneClick(input({ reading: unknown, sellerRegionAnswer: 'eu' }))
+    expect(plan.ask).toBeNull()
+    expect(plan.vat).toEqual({ kind: 'reverse_charge', rcKind: 'eu_services', rate: 0.25 })
+    expect(plan.seller).toEqual({ country: null, region: 'eu' })
+  })
+
+  it('asks for a foreign currency too', () => {
+    const plan = planOneClick(input({ reading: doc({ supplier: { name: 'Acme' }, invoice: { currency: 'USD' }, totals: { total: 15 } }) }))
+    expect(plan.ask).toBe('seller_country')
+  })
+
+  it('takes a Swedish-looking document without a country as Swedish', () => {
+    const plan = planOneClick(input({ category: 'expense.office.supplies', reading: doc({ supplier: { name: 'Kontorsvaruhuset' }, totals: { subtotal: 120, vatAmount: 30, total: 150 } }) }))
+    expect(plan.ask).toBeNull()
+    expect(plan.seller.region).toBe('se')
+    expect(plan.vat).toEqual({ kind: 'input', amount: 30, rates: [0.25] })
+  })
+})
+
+describe('planOneClick: the category and the account', () => {
+  it('asks for a category when there is none, with nothing proposed', () => {
+    const plan = planOneClick(input({ category: null }))
+    expect([plan.ask, plan.reason]).toEqual(['category', 'no_category'])
+    expect(plan.lines).toEqual([])
+    expect(plan.form).toBe('direct')
+  })
+
+  it('takes the counterparty\'s booked account when it belongs to the category', () => {
+    expect(costAccountFor('expense.software.saas', '6540', '5420')).toBe('6540')
+  })
+
+  it('then the supplier\'s default account when it does', () => {
+    expect(costAccountFor('expense.software.saas', '6990', '6540')).toBe('6540')
+  })
+
+  it('then the category\'s usual account', () => {
+    expect(costAccountFor('expense.software.saas', '6990', '4010')).toBe('5420')
+    expect(costAccountFor('expense.software.saas', null, null)).toBe('5420')
+  })
+
+  it('reads a company sub-account as its main account', () => {
+    expect(costAccountFor('expense.software.saas', '5421', null)).toBe('5421')
+  })
+})
+
+describe('planOneClick: the form', () => {
+  const invoice = doc({
+    documentKind: 'supplier_invoice',
+    supplier: { name: 'Konsult AB', orgNumber: '556677-8899', address: 'Kungsgatan 1, 111 22 Stockholm', bankgiro: '5050-1055' },
+    invoice: { invoiceNumber: 'F-1001', invoiceDate: '2026-09-01', dueDate: '2026-09-30', paymentReference: '1234567897' },
+    totals: { subtotal: 1000, vatAmount: 250, total: 1250 },
+  })
+  const consulting = { category: 'expense.professional_services.consulting' as const, kind: 'supplier_invoice' as const, reading: invoice }
+
+  it('registers and settles an invoice paid later than a week after its date, the package on', () => {
+    const plan = planOneClick(input({ ...consulting, bank: { ...BANK, date: '2026-09-28', amountSek: -1250 } }))
+    expect(plan.form).toBe('register_and_settle')
+    expect(plan.reason).toBe('paid_later')
+    expect(plan.entryDate).toBe('2026-09-01')
+    expect(plan.paymentDate).toBe('2026-09-28')
+    expect(plan.transactionId).toBe('tx-1')
+    expect(plan.invoice).toEqual({
+      supplier_invoice_number: 'F-1001',
+      invoice_date: '2026-09-01',
+      due_date: '2026-09-30',
+      currency: 'SEK',
+      reverse_charge: false,
+      payment_reference: '1234567897',
+      items: [{ description: 'Konsult AB', amount: 1000, account_number: '6550', vat_rate: 0.25 }],
+    })
+    expect(pairs(plan)).toEqual([['6550', 1000, 0], ['2641', 250, 0], ['2440', 0, 1250]])
+    expect(plan.supplier).toEqual({
+      create: {
+        name: 'Konsult AB',
+        supplier_type: 'swedish_business',
+        org_number: '556677-8899',
+        address_line1: 'Kungsgatan 1, 111 22 Stockholm',
+        country: 'SE',
+        bankgiro: '5050-1055',
+      },
+    })
+  })
+
+  it('books it like a receipt when Leverantörsfakturor is off', () => {
+    const plan = planOneClick(input({ ...consulting, bank: { ...BANK, date: '2026-09-28', amountSek: -1250 }, company: { vatRegistered: true, cashMethod: false, supplierInvoices: false } }))
+    expect(plan.form).toBe('direct')
+    expect(plan.reason).toBe('paid_package_off')
+    expect(pairs(plan)).toEqual([['6550', 1000, 0], ['2641', 250, 0], ['1930', 0, 1250]])
+    // Within 31 days before the bank date: the invoice's own date.
+    expect(plan.entryDate).toBe('2026-09-01')
+  })
+
+  it('books an invoice paid within a week of its date directly', () => {
+    const plan = planOneClick(input({ ...consulting, bank: { ...BANK, date: '2026-09-06', amountSek: -1250 } }))
+    expect([plan.form, plan.reason]).toEqual(['direct', 'paid_at_purchase'])
+  })
+
+  it('registers an unpaid invoice, with its due date and number from the reading', () => {
+    const plan = planOneClick(input({ ...consulting, bank: null }))
+    expect(plan.form).toBe('register')
+    expect(plan.ask).toBeNull()
+    expect(plan.transactionId).toBeNull()
+    expect(plan.entryDate).toBe('2026-09-01')
+    expect(plan.invoice?.due_date).toBe('2026-09-30')
+    expect(balanced(plan.lines)).toBe(true)
+  })
+
+  it('names the matched supplier on a register path', () => {
+    const plan = planOneClick(input({ ...consulting, bank: null, supplier: { id: 'sup-9', supplierType: 'swedish_business', defaultExpenseAccount: '6550', paymentTermsDays: 30 } }))
+    expect(plan.supplier).toEqual({ id: 'sup-9' })
+  })
+
+  it('opens the form when the matched supplier card is typed for another country than the document', () => {
+    const plan = planOneClick(input({ ...consulting, bank: null, supplier: { id: 'sup-9', supplierType: 'eu_business', defaultExpenseAccount: null, paymentTermsDays: 30 } }))
+    expect([plan.form, plan.ask, plan.reason]).toEqual(['register', 'editor', 'supplier_type_mismatch'])
+  })
+
+  it('opens the form for an unpaid invoice without its due date or its number', () => {
+    const noDue = planOneClick(input({ ...consulting, bank: null, reading: { ...invoice, invoice: { ...invoice.invoice, dueDate: null } } }))
+    expect([noDue.form, noDue.ask, noDue.reason]).toEqual(['register', 'editor', 'missing_due_date'])
+    const noNumber = planOneClick(input({ ...consulting, bank: null, reading: { ...invoice, invoice: { ...invoice.invoice, invoiceNumber: null } } }))
+    expect([noNumber.ask, noNumber.reason]).toEqual(['editor', 'missing_invoice_number'])
+    // Its account still reaches the form.
+    expect(noNumber.costAccount).toBe('6550')
+  })
+
+  it('defaults a paid invoice\'s missing due date from the supplier\'s terms', () => {
+    const plan = planOneClick(input({ ...consulting, reading: { ...invoice, invoice: { ...invoice.invoice, dueDate: null } }, bank: { ...BANK, date: '2026-09-28', amountSek: -1250 } }))
+    expect(plan.invoice?.due_date).toBe('2026-10-01')
+  })
+
+  it('leaves an unpaid invoice under kontantmetoden or with the package off to its own answers', () => {
+    expect(planOneClick(input({ ...consulting, bank: null, company: { vatRegistered: true, cashMethod: true, supplierInvoices: true } })).reason).toBe('cash_method_unpaid')
+    expect(planOneClick(input({ ...consulting, bank: null, company: { vatRegistered: true, cashMethod: false, supplierInvoices: false } })).reason).toBe('package_off_unpaid')
+  })
+
+  it('has no one-click answer for a receipt without a bank row, or a credit note', () => {
+    expect(planOneClick(input({ bank: null })).form).toBeNull()
+    expect(planOneClick(input({ kind: 'credit_note' })).reason).toBe('credit_note')
+  })
+
+  it('books an item already linked to its bank row directly', () => {
+    const plan = planOneClick(input({ ...consulting, bank: { ...BANK, date: '2026-09-28', amountSek: -1250, source: 'matched' } }))
+    expect([plan.form, plan.reason]).toEqual(['direct', 'linked'])
+  })
+
+  it('refuses money in, and a bank row without kronor', () => {
+    expect(planOneClick(input({ bank: { ...BANK, amountSek: 150 } })).reason).toBe('not_money_out')
+    expect(planOneClick(input({ bank: { ...BANK, amountSek: null } })).reason).toBe('no_kronor_amount')
+  })
+
+  it('opens the editor when the document\'s total is not what the bank paid', () => {
+    const plan = planOneClick(input({ category: 'expense.office.supplies', reading: doc({ supplier: { orgNumber: '5560358672' }, totals: { subtotal: 100, vatAmount: 25, total: 125 } }), bank: { ...BANK, amountSek: -200 } }))
+    expect([plan.ask, plan.reason]).toEqual(['editor', 'amount_mismatch'])
+  })
+
+  it('registers a foreign invoice at the invoice date\'s rate', () => {
+    const plan = planOneClick(input({
+      kind: 'supplier_invoice',
+      category: 'expense.software.saas',
+      bank: null,
+      invoiceRate: 11.5,
+      reading: doc({
+        documentKind: 'supplier_invoice',
+        supplier: { name: 'Atlassian', vatNumber: 'IE9822351I' },
+        invoice: { invoiceNumber: 'AT-1', invoiceDate: '2026-10-01', dueDate: '2026-10-31', currency: 'EUR' },
+        totals: { total: 100, vatAmount: 0 },
+      }),
+    }))
+    expect(plan.form).toBe('register')
+    expect(plan.invoice).toMatchObject({ currency: 'EUR', exchange_rate: 11.5, reverse_charge: true, vat_treatment: 'reverse_charge', reverse_charge_kind: 'eu_services' })
+    expect(plan.invoice?.items).toEqual([{ description: 'Atlassian', amount: 100, account_number: '5420', vat_rate: 0, reverse_charge_rate: 0.25 }])
+    expect(pairs(plan)).toEqual([
+      ['5420', 1150, 0],
+      ['2440', 0, 1150],
+      ['2645', 287.5, 0],
+      ['2614', 0, 287.5],
+      ['4535', 1150, 0],
+      ['4598', 0, 1150],
+    ])
+    expect((plan.supplier as { create: { supplier_type: string } }).create.supplier_type).toBe('eu_business')
+  })
+
+  it('opens the form for a foreign invoice whose rate could not be read', () => {
+    const plan = planOneClick(input({
+      kind: 'supplier_invoice',
+      bank: null,
+      reading: doc({ documentKind: 'supplier_invoice', supplier: { name: 'Atlassian', vatNumber: 'IE9822351I' }, invoice: { invoiceNumber: 'AT-1', invoiceDate: '2026-10-01', dueDate: '2026-10-31', currency: 'EUR' }, totals: { total: 100 } }),
+    }))
+    expect([plan.ask, plan.reason]).toEqual(['editor', 'fx_rate_missing'])
+  })
+})
+
+describe('purchaseEntryDate (R4)', () => {
+  it('takes the document\'s date within 31 days before and 3 days after the bank date', () => {
+    expect(purchaseEntryDate('2026-09-14', '2026-10-14', false)).toBe('2026-09-14')
+    expect(purchaseEntryDate('2026-10-17', '2026-10-14', false)).toBe('2026-10-17')
+  })
+
+  it('takes the bank date outside that window', () => {
+    expect(purchaseEntryDate('2026-09-12', '2026-10-14', false)).toBe('2026-10-14')
+    expect(purchaseEntryDate('2026-10-18', '2026-10-14', false)).toBe('2026-10-14')
+    expect(purchaseEntryDate(null, '2026-10-14', false)).toBe('2026-10-14')
+  })
+
+  it('always takes the bank date under kontantmetoden', () => {
+    expect(purchaseEntryDate('2026-10-13', '2026-10-14', true)).toBe('2026-10-14')
+    const plan = planOneClick(input({ kind: 'supplier_invoice', reading: WISPR, paidByReceipt: true, company: { vatRegistered: true, cashMethod: true, supplierInvoices: true } }))
+    expect(plan.entryDate).toBe('2026-10-14')
+  })
+
+  it('books a kontantmetoden register-and-settle on the bank date, against the bank', () => {
+    const plan = planOneClick(input({
+      kind: 'supplier_invoice',
+      category: 'expense.professional_services.consulting',
+      company: { vatRegistered: true, cashMethod: true, supplierInvoices: true },
+      bank: { ...BANK, date: '2026-09-28', amountSek: -1250 },
+      reading: doc({
+        documentKind: 'supplier_invoice',
+        supplier: { name: 'Konsult AB', orgNumber: '5566778899' },
+        invoice: { invoiceNumber: 'F-1', invoiceDate: '2026-09-01', dueDate: '2026-09-30' },
+        totals: { subtotal: 1000, vatAmount: 250, total: 1250 },
+      }),
+    }))
+    expect(plan.form).toBe('register_and_settle')
+    expect(plan.entryDate).toBe('2026-09-28')
+    expect(pairs(plan)).toEqual([['6550', 1000, 0], ['2641', 250, 0], ['1930', 0, 1250]])
+  })
+})

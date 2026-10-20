@@ -18,7 +18,7 @@ import {
   computeInstallmentAmounts,
   countCalendarMonths,
 } from '@/lib/bookkeeping/accruals/compute'
-import { accrualHintKey, shouldShowK2AccrualHint } from '@/components/bookkeeping/accrual-k2-hint'
+import { accrualHintKey, accrualThresholdSek, shouldShowK2AccrualHint } from '@/components/bookkeeping/accrual-k2-hint'
 import {
   isAccruedCostAccount,
   periodEndsBeforeInvoiceMonth,
@@ -73,6 +73,7 @@ export default function AccrualPeriodControl({
   idPrefix,
   entityType,
   invoiceDate,
+  fiscalYearStart = null,
 }: {
   direction: AccrualDirection
   /** Net line amount (ex VAT), in `currency`: drives the preview and the K2 hint. */
@@ -102,6 +103,12 @@ export default function AccrualPeriodControl({
    * panel says so.
    */
   invoiceDate?: string | null
+  /**
+   * The start of the fiscal year the line is booked in: K2's limit is
+   * 7 000 kr from a year starting 2026 (BFNAR 2025:2), 5 000 kr before.
+   * Missing keeps 5 000 kr.
+   */
+  fiscalYearStart?: string | null
 }) {
   const t = useTranslations('accruals')
   const locale = useLocale()
@@ -140,11 +147,13 @@ export default function AccrualPeriodControl({
     }
   }
 
-  // The 5 000 kr vasentlighetsgrans (K1/K2) is measured in kronor, and it is
-  // a simplification the company may use, not an obligation. So when the line
-  // is in a foreign currency and no rate is available, show nothing at all
-  // rather than compare the raw foreign amount against a SEK threshold.
-  const showMaterialityHint = shouldShowK2AccrualHint({ amount, currency, exchangeRate })
+  // The vasentlighetsgrans (K1 5 000 kr, K2 5 000 or 7 000 kr by the fiscal
+  // year) is measured in kronor, and it is a simplification the company may
+  // use, not an obligation. So when the line is in a foreign currency and no
+  // rate is available, show nothing at all rather than compare the raw
+  // foreign amount against a SEK threshold.
+  const thresholdSek = accrualThresholdSek({ entityType, fiscalYearStart })
+  const showMaterialityHint = shouldShowK2AccrualHint({ amount, currency, exchangeRate, thresholdSek })
   const materialityHintKey = accrualHintKey(entityType)
 
   return (
@@ -222,7 +231,9 @@ export default function AccrualPeriodControl({
         </p>
       )}
       {showMaterialityHint && (
-        <p className="text-xs text-muted-foreground">{t(materialityHintKey)}</p>
+        <p className="text-xs text-muted-foreground">
+          {t(materialityHintKey, { amount: new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'sv-SE').format(thresholdSek) })}
+        </p>
       )}
     </div>
   )

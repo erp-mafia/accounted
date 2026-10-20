@@ -5,7 +5,11 @@
  *
  * K2 (BFNAR 2016:10) lets a smaller company skip accruing individual
  * recurring costs below 5 000 kr that do not fluctuate more than 20 % year
- * over year; personnel costs must always be accrued. It is a simplification
+ * over year; personnel costs must always be accrued. BFNAR 2025:2 raises the
+ * limit to 7 000 kr per post (2.4) for räkenskapsår beginning after
+ * 2025-12-31; K1 (BFNAR 2006:1, förenklat årsbokslut) keeps its 5 000 kr. The
+ * limit therefore follows the fiscal year the line is booked in
+ * (accrualThresholdSek). It is a simplification
  * the company MAY use, never an obligation, so the UI copy it drives is
  * advisory only. That is exactly why it must not fire on an amount we cannot
  * express in kronor: an advisory nudge based on the wrong unit is worse than
@@ -20,11 +24,28 @@
  * shows nothing, rather than guessing a branch.
  */
 
-/** BFNAR 2016:10: the K2 accrual simplification ceiling, in SEK. */
 import type { EntityType } from '@/types'
 import { simplifiedYearEndRegelverk } from '@/lib/company/entity-type'
 
+/** BFNAR 2016:10 before BFNAR 2025:2, and K1 (BFNAR 2006:1): the accrual simplification ceiling, in SEK. */
 export const K2_ACCRUAL_THRESHOLD_SEK = 5000
+
+/** K2 2.4 as amended by BFNAR 2025:2, for räkenskapsår beginning after 2025-12-31, in SEK. */
+export const K2_ACCRUAL_THRESHOLD_2026_SEK = 7000
+
+/** The first räkenskapsår start BFNAR 2025:2 applies to. */
+const BFNAR_2025_2_FROM = '2026-01-01'
+
+/**
+ * The accrual simplification ceiling for a line booked in the fiscal year
+ * starting `fiscalYearStart`: 7 000 kr under K2 from a year starting
+ * 2026-01-01 or later, else 5 000 kr. An unknown year keeps 5 000 kr, the
+ * lower of the two: advice under it holds under either.
+ */
+export function accrualThresholdSek(input: { entityType?: EntityType | null; fiscalYearStart?: string | null }): number {
+  if (accrualHintKey(input.entityType) === 'k1_hint') return K2_ACCRUAL_THRESHOLD_SEK
+  return input.fiscalYearStart && input.fiscalYearStart >= BFNAR_2025_2_FROM ? K2_ACCRUAL_THRESHOLD_2026_SEK : K2_ACCRUAL_THRESHOLD_SEK
+}
 
 export interface AccrualAmountInput {
   /** Net line amount, expressed in `currency`. */
@@ -66,15 +87,25 @@ export function resolveAccrualAmountSek({
 }
 
 /**
- * Whether to show the "below 5 000 kr need not be deferred" hint.
+ * Whether to show the "below 5 000 kr (7 000 kr) need not be deferred" hint.
  *
  * False whenever the SEK value is unknown: no hint beats a hint measured in
  * the wrong currency.
  */
-export function shouldShowK2AccrualHint(input: AccrualAmountInput): boolean {
+export function shouldShowK2AccrualHint(input: AccrualAmountInput & { thresholdSek?: number }): boolean {
   const amountSek = resolveAccrualAmountSek(input)
   if (amountSek === null) return false
-  return amountSek > 0 && amountSek < K2_ACCRUAL_THRESHOLD_SEK
+  return amountSek > 0 && amountSek < (input.thresholdSek ?? K2_ACCRUAL_THRESHOLD_SEK)
+}
+
+/**
+ * Whether a line's periodisering is worth opening on its own (the reading's
+ * service period): at or above the ceiling, or of a kronor value not yet
+ * known (a foreign line before its rate), which a person then judges.
+ */
+export function accrualWorthOpening(input: AccrualAmountInput & { thresholdSek: number }): boolean {
+  const amountSek = resolveAccrualAmountSek(input)
+  return amountSek === null || amountSek >= input.thresholdSek
 }
 
 /**

@@ -5303,6 +5303,18 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
     message_sv: 'Bankraden är inte längre förslaget för underlaget, till exempel för att den har bokförts sedan. Ladda om och välj bankraden själv.',
     message_en: 'The bank row is no longer the proposal for this document, for example because it was booked since. Reload and pick the bank row yourself.',
   },
+  // The Inkorg's one click (POST /api/inkorg/items/:id/book): the booking
+  // plan still asks something only a person can say (lib/operations/
+  // inkorg-one-click.ts). Nothing was written; details.ask says what.
+  INKORG_BOOKING_NEEDS_ANSWER: {
+    httpStatus: 422,
+    message_sv: 'Köpet kan inte bokföras med ett klick än. Välj vad som köptes eller var säljaren finns, eller bokför det i verifikatet.',
+    message_en: 'The purchase cannot be booked in one click yet. Choose what was bought or where the seller is, or book it in the voucher editor.',
+    remediation: {
+      description:
+        'details.ask names what is missing: category (send purchase_category), seller_country (send seller_country: se, eu or non_eu), or editor (the VAT, the amounts or the dates need a person: book it in the editor). Send the request again with the answer and the details.preview_token of the plan read with it.',
+    },
+  },
   // The Inkorg brings the receipt that came with an invoice onto the
   // invoice's booking. Refused when the two are not one purchase by the
   // pairing rule (lib/inkorg/pairs.ts): another arrival, other amounts, or a

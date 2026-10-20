@@ -1,0 +1,1 @@
+[2026-10-20] The one-click planner and its loader live in lib/operations, not lib/inkorg as proposed: they compose the inbox, supplier invoices, VAT and the ledger, which the module boundary ratchet forbids a foundation block to import; seller country lives in lib/vat beside the country names.

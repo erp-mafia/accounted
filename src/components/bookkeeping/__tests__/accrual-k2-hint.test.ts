@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   K2_ACCRUAL_THRESHOLD_SEK,
   accrualHintKey,
+  accrualThresholdSek,
+  accrualWorthOpening,
   resolveAccrualAmountSek,
   shouldShowK2AccrualHint,
 } from '@/components/bookkeeping/accrual-k2-hint'
@@ -117,5 +119,35 @@ describe('accrualHintKey', () => {
   it('keeps the K2 default when the entity type is unknown', () => {
     expect(accrualHintKey(null)).toBe('k2_hint')
     expect(accrualHintKey(undefined)).toBe('k2_hint')
+  })
+})
+
+describe('accrualThresholdSek', () => {
+  it('is 7 000 kr under K2 for a fiscal year starting 2026 or later (BFNAR 2025:2)', () => {
+    expect(accrualThresholdSek({ entityType: 'aktiebolag', fiscalYearStart: '2026-01-01' })).toBe(7000)
+    expect(accrualThresholdSek({ entityType: 'aktiebolag', fiscalYearStart: '2026-05-01' })).toBe(7000)
+  })
+
+  it('is 5 000 kr for a fiscal year starting before 2026, or an unknown one', () => {
+    expect(accrualThresholdSek({ entityType: 'aktiebolag', fiscalYearStart: '2025-07-01' })).toBe(5000)
+    expect(accrualThresholdSek({ entityType: 'aktiebolag', fiscalYearStart: null })).toBe(5000)
+  })
+
+  it('keeps K1\'s 5 000 kr for an enskild firma', () => {
+    expect(accrualThresholdSek({ entityType: 'enskild_firma', fiscalYearStart: '2026-01-01' })).toBe(5000)
+  })
+
+  it('moves the hint with it', () => {
+    expect(shouldShowK2AccrualHint({ amount: 6000, currency: 'SEK', thresholdSek: 7000 })).toBe(true)
+    expect(shouldShowK2AccrualHint({ amount: 6000, currency: 'SEK' })).toBe(false)
+  })
+})
+
+describe('accrualWorthOpening', () => {
+  it('opens a line at or above the ceiling, and one whose kronor are not known yet', () => {
+    expect(accrualWorthOpening({ amount: 7000, currency: 'SEK', thresholdSek: 7000 })).toBe(true)
+    expect(accrualWorthOpening({ amount: 6999, currency: 'SEK', thresholdSek: 7000 })).toBe(false)
+    expect(accrualWorthOpening({ amount: 100, currency: 'EUR', thresholdSek: 7000 })).toBe(true)
+    expect(accrualWorthOpening({ amount: 100, currency: 'EUR', exchangeRate: 11.5, thresholdSek: 7000 })).toBe(false)
   })
 })
