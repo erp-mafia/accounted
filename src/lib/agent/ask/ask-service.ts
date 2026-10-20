@@ -6,6 +6,7 @@ import { buildLedgerTools } from './ledger-tools'
 import { buildAssistantSnapshot } from './snapshot'
 import { buildUiGrounding } from './ui-map'
 import { FISCAL_YEAR_RULE } from '@/lib/agent/fiscal-years'
+import { replyLanguageRule } from '@/lib/agent/reply-language'
 import type { Locale } from '@/i18n/config'
 
 const log = createLogger('agent.ask')
@@ -88,13 +89,16 @@ const DEFAULT_MAX_STEPS = 5
 const MAX_QUESTION_CHARS = 4000
 const MAX_CONTEXT_CHARS = 24_000
 
-const BASE_RULES = `Du är en svensk bokföringsassistent i Accounted. Du hjälper användaren med bokföring enligt svensk redovisningssed (Bokföringslagen).
+// The answer's language follows the UI's locale, as the menu labels below do.
+function baseRules(locale: Locale | undefined): string {
+  return `Du är en svensk bokföringsassistent i Accounted. Du hjälper användaren med bokföring enligt svensk redovisningssed (Bokföringslagen).
 
 Regler:
-- Svara på svenska, kort och konkret.
+- ${replyLanguageRule(locale)} Svara kort och konkret.
 - Hitta ALDRIG på siffror, konton eller belopp. Ange bara tal du faktiskt har underlag för.
 - KontoNUMMER är strängar (t.ex. "1930"), aldrig tal att räkna på.
 - Föreslå aldrig att bokföra eller ändra något direkt; du beskriver och vägleder, användaren beslutar.`
+}
 
 // The model is given the real menu for this company ("Appens meny", built by
 // ui-map.ts from the sidebar's own config and gates) and the page the user is
@@ -116,8 +120,8 @@ ${FISCAL_YEAR_RULE}`
 const NO_TOOL_RULES = `
 - Svara utifrån den kontext du får. Om kontexten inte räcker för att svara: säg det och beskriv vad som saknas, gissa inte.`
 
-function systemPrompt(hasTools: boolean): string {
-  return BASE_RULES + UI_RULES + (hasTools ? TOOL_RULES : NO_TOOL_RULES)
+function systemPrompt(hasTools: boolean, locale: Locale | undefined): string {
+  return baseRules(locale) + UI_RULES + (hasTools ? TOOL_RULES : NO_TOOL_RULES)
 }
 
 /** Read the company's own basic profile for grounding. Company-scoped: never another tenant's data. */
@@ -174,7 +178,7 @@ export async function answerAssistantQuestion(req: AskRequest): Promise<AskResul
   const result = await getAiService().generateText({
     tier: req.tier ?? 'assistant',
     meter: { feature: 'assistant_ask', companyId: req.companyId },
-    system: systemPrompt(tools.length > 0),
+    system: systemPrompt(tools.length > 0, req.locale),
     prompt: promptParts.join('\n'),
     ...(req.history && req.history.length > 0 ? { history: req.history } : {}),
     maxTokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,

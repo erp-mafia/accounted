@@ -279,4 +279,28 @@ describe('POST /api/agent/invoke', () => {
     expect(args.userMessage).toBe('templated first turn')
     expect(args.userMessageHidden).toBe(true)
   })
+
+  it.each([
+    ['gnubok-locale=en', 'en'],
+    ['gnubok-locale=sv', 'sv'],
+    [undefined, 'sv'],
+  ])('hands the turn the locale the app renders in (cookie %s → %s)', async (cookie, expected) => {
+    enqueuePreamble()
+    enqueue({
+      data: { id: CONVERSATION_ID, user_id: 'user-1', company_id: 'company-1', intent_id: 'general.help' },
+    })
+    enqueueAcceptedTail()
+
+    const res = await POST(
+      createMockRequest('/api/agent/invoke', {
+        method: 'POST',
+        body: body({ conversation_id: CONVERSATION_ID }),
+        ...(cookie ? { headers: { cookie } } : {}),
+      }),
+    )
+    await res.text()
+
+    expect(runChatTurnMock).toHaveBeenCalledTimes(1)
+    expect((runChatTurnMock.mock.calls[0]![0] as { locale?: string }).locale).toBe(expected)
+  })
 })

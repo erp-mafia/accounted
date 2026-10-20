@@ -317,7 +317,7 @@ export const verifikationDraft = defineAgentIntent<
     lines.push('   • NY verifikation (inget utkast visas ovan): staga via gnubok_create_voucher när allt stämmer. Ligger underlaget under Underlag: skicka med inbox_item_id så kvittot kopplas till verifikationen automatiskt vid godkännande.')
     lines.push('   • BEFINTLIGT utkast (visas ovan): föreslå konton/moms och kontrollera balansen så att användaren kan färdigställa utkastet i formuläret. Staga INTE en ny verifikation för ett utkast som redan finns: det skapar en dubblett.')
     lines.push('')
-    lines.push('Svara på svenska, kort och konkret.')
+    lines.push('Svara kort och konkret.')
     return lines.join('\n')
   },
 })

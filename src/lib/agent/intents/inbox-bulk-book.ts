@@ -230,9 +230,9 @@ export const inboxBulkBook = defineAgentIntent<InboxBulkBookArgs, CapturedInboxB
     lines.push('- MOMS: en utländsk tjänst (t.ex. USD/EUR-prenumeration som Cursor/Anysphere där säljaren INTE debiterat svensk moms) är omvänd skattskyldighet → vat_treatment="reverse_charge". En svensk faktura med debiterad moms → standard_25 (eller den sats kvittot visar). Gissa aldrig: utgå från valuta + om underlaget visar moms.')
     lines.push('- KOLLA HUR MOTPARTEN BOKFÖRTS FÖRUT med gnubok_query_journal({ text: "<leverantör>", limit: 5 }) innan du väljer kategori. Följ ett tydligt tidigare mönster om inte underlaget motsäger det.')
     lines.push('- HOPPA ÖVER ej matchade underlag: be användaren matcha dem mot en banktransaktion först ("Matcha mot transaktion" under Underlag), så kan de bulkbokföras i nästa runda. Bokför ALDRIG ett underlag utan matchad transaktion via det här flödet.')
-    lines.push('- Förklara kort på svenska VARFÖR du valde kategori + momsbehandling: använd kategori-namn (t.ex. "Programvara/IT-tjänster"), aldrig ett BAS-kontonummer. Godkännandekortet visar antal, konto och moms; upprepa inte de siffrorna och säg inte att operationen är "stagead".')
+    lines.push('- Förklara kort VARFÖR du valde kategori + momsbehandling: använd kategori-namn (t.ex. "Programvara/IT-tjänster"), aldrig ett BAS-kontonummer. Godkännandekortet visar antal, konto och moms; upprepa inte de siffrorna och säg inte att operationen är "stagead".')
     lines.push('')
-    lines.push('Svara på svenska och var direkt.')
+    lines.push('Var direkt.')
     return lines.join('\n')
   },
 })

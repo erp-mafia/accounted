@@ -8,6 +8,9 @@ import {
   renderFiscalYearInventory,
   type FiscalYearInventoryRow,
 } from '@/lib/agent/fiscal-years'
+import { replyLanguageRule } from '@/lib/agent/reply-language'
+import { uiLabelGlossary } from '@/lib/agent/ask/ui-map'
+import type { Locale } from '@/i18n/config'
 
 // Builds the system prompt the chat loop sends to Anthropic.
 //
@@ -49,6 +52,8 @@ interface BuildArgs {
   // The company's räkenskapsår, newest first (lib/agent/fiscal-years.ts).
   // Optional so a caller that has nothing to say renders no section.
   fiscalYears?: FiscalYearInventoryRow[]
+  // The user's UI locale. The answer is written in it. Default 'sv'.
+  locale?: Locale
   supabase: SupabaseClient
 }
 
@@ -81,7 +86,7 @@ export function flattenMemoryContent(content: string): string {
 
 export async function buildSystemPrompt(args: BuildArgs): Promise<PromptBlocks> {
   const block1 = await buildAtomBlock(args)
-  const block2 = buildIdentityBlock(args)
+  const block2 = buildIdentityBlock(args, args.locale === 'en' ? await uiLabelGlossary() : [])
 
   // Anthropic rejects cache_control on empty text blocks (400 "cache_control
   // cannot be set for empty text blocks"). Skip Block 1 entirely when no atom
@@ -220,17 +225,28 @@ async function resolveBodies(
   return out
 }
 
-export function buildIdentityBlock(args: BuildArgs): string {
-  const { intent, companyName, firstName, profileSummary, rankedMemory, vatStatus, today, fiscalYears } = args
+export function buildIdentityBlock(args: BuildArgs, uiGlossary: string[] = []): string {
+  const { intent, companyName, firstName, profileSummary, rankedMemory, vatStatus, today, fiscalYears, locale } = args
 
   const lines: string[] = []
   lines.push('# Din roll')
   lines.push('')
   const owner = firstName ? `${firstName}s` : 'användarens'
   lines.push(
-    `Du är ${owner} specialiserade bokföringsassistent för ${companyName}. Du svarar alltid på svenska. Du är direkt, korrekt och kortfattad. Du föreslår; du beslutar inte. Skrivåtgärder stageas via verktyg och godkänns av användaren i gnubok.`,
+    `Du är ${owner} specialiserade bokföringsassistent för ${companyName}. ${replyLanguageRule(locale)} Du är direkt, korrekt och kortfattad. Du föreslår; du beslutar inte. Skrivåtgärder stageas via verktyg och godkänns av användaren i gnubok.`,
   )
   lines.push('')
+  if (uiGlossary.length > 0) {
+    // The instructions name pages and buttons in Swedish; the user's screen
+    // shows the English labels (ask/ui-map.ts uiLabelGlossary).
+    lines.push('# Appens namn på engelska')
+    lines.push('')
+    lines.push(
+      'Användaren ser appen på engelska. När du nämner en sida, ett menyval eller en knapp som instruktionerna kallar vid dess svenska namn: skriv det engelska namnet ur listan (svenska = engelska). Står namnet inte i listan, skriv vad det gör i stället för att gissa en engelsk etikett.',
+    )
+    for (const line of uiGlossary) lines.push(`- ${line}`)
+    lines.push('')
+  }
   if (firstName) {
     // Name disambiguation. The user sets their own tilltalsnamn in account
     // settings; that is who you are talking to. Owner/firmatecknare names that

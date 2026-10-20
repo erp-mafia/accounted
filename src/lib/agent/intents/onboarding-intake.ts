@@ -161,7 +161,7 @@ export const onboardingIntake = defineAgentIntent<IntakeArgs, CapturedIntake>({
     lines.push('• Avsluta naturligt när du har en bra bild: säg att ni kan fortsätta nästa gång ni ses i bokföringen, och att du kommer minnas det här samtalet.')
     lines.push('')
 
-    lines.push('Svara på svenska. Ditt första meddelande ska vara hälsningen + första frågan. Skriv det nu.')
+    lines.push('Ditt första meddelande ska vara hälsningen + första frågan. Skriv det nu.')
 
     return lines.join('\n')
   },

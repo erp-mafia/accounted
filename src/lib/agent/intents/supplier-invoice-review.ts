@@ -467,7 +467,7 @@ export const supplierInvoiceReview = defineAgentIntent<
     lines.push('5. Föreslå rätt BAS-konto för varje rad (eller för hela fakturan om bara en summarad finns). Följ leverantörens historik: gnubok_query_journal({ text: "<leverantörens namn>", source_type: "supplier_invoice", limit: 5 }): när du väljer konto.')
     lines.push('6. Om du är säker, staga attestering via gnubok_approve_supplier_invoice. Annars: peka på vad som ska klargöras innan attestering.')
     lines.push('')
-    lines.push('Svara på svenska, var direkt och konkret. Ditt första svar är det första användaren ser.')
+    lines.push('Var direkt och konkret. Ditt första svar är det första användaren ser.')
     return lines.join('\n')
   },
 })

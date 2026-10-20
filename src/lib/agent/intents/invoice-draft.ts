@@ -240,7 +240,7 @@ export const invoiceDraft = defineAgentIntent<InvoiceDraftArgs, CapturedInvoiceD
     lines.push('- Du SKAPAR INTE fakturan. Användaren gör det själv i formuläret. Du rådger.')
     lines.push('- Om kunden saknar VAT-nummer men är EU-näringsidkare, säg till: VIES-validering krävs för reverse charge.')
     lines.push('')
-    lines.push('Svara på svenska och var direkt: ditt första svar är det första användaren ser.')
+    lines.push('Var direkt: ditt första svar är det första användaren ser.')
     return lines.join('\n')
   },
 })

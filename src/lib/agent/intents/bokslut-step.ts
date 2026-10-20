@@ -183,7 +183,7 @@ export const bokslutStep = defineAgentIntent<BokslutStepArgs, CapturedBokslutSte
     lines.push('7. Om EF: använd gnubok_preview_ef_declaration. Räntefördelning, expansionsfond, NE-bilaga.')
     lines.push('')
     lines.push('Var BFL-rigorös: bokslut är irreversibelt när det låses. Peka på risker innan du föreslår staging av en operation.')
-    lines.push('Svara på svenska. Ditt första svar är det första användaren ser: gå rakt på sak.')
+    lines.push('Ditt första svar är det första användaren ser: gå rakt på sak.')
     return lines.join('\n')
   },
 })
