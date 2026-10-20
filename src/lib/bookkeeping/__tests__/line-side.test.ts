@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildStornoLines, creditNatural, debitNatural } from '../line-side'
+import { amountInCurrencyToStore, buildStornoLines, creditNatural, debitNatural } from '../line-side'
 
 describe('line-side: signed amount to one-sided line amounts', () => {
   it('debitNatural books a positive amount as debit', () => {
@@ -70,5 +70,56 @@ describe('buildStornoLines', () => {
   it('reads numeric strings and nulls', () => {
     const [storno] = buildStornoLines([{ debit_amount: '100.10', credit_amount: null }])
     expect(storno).toMatchObject({ debit_amount: 0, credit_amount: 100.1 })
+  })
+})
+
+describe('amountInCurrencyToStore (#3517)', () => {
+  // A revaluation leg on a USD cash account moves kronor and no dollars: it
+  // must stay readable as 0 USD, or the account's reconciliation reports
+  // gl_lines_missing_currency_amount for the whole period.
+  it('keeps 0 on a line labelled with a foreign currency', () => {
+    expect(amountInCurrencyToStore('USD', 0)).toBe(0)
+    expect(amountInCurrencyToStore('EUR', '0')).toBe(0)
+    expect(amountInCurrencyToStore('usd', 0)).toBe(0)
+    expect(Object.is(amountInCurrencyToStore('USD', -0), 0)).toBe(true)
+  })
+
+  it('keeps null for 0 on a SEK or unlabelled line, as before', () => {
+    expect(amountInCurrencyToStore('SEK', 0)).toBeNull()
+    expect(amountInCurrencyToStore(' sek ', 0)).toBeNull()
+    expect(amountInCurrencyToStore(undefined, 0)).toBeNull()
+    expect(amountInCurrencyToStore(null, 0)).toBeNull()
+    expect(amountInCurrencyToStore('', 0)).toBeNull()
+  })
+
+  it('keeps null for missing, empty and non-numeric input', () => {
+    for (const currency of ['USD', 'SEK', undefined]) {
+      expect(amountInCurrencyToStore(currency, null)).toBeNull()
+      expect(amountInCurrencyToStore(currency, undefined)).toBeNull()
+      expect(amountInCurrencyToStore(currency, '')).toBeNull()
+      expect(amountInCurrencyToStore(currency, 'abc')).toBeNull()
+      expect(amountInCurrencyToStore(currency, Number.NaN)).toBeNull()
+    }
+  })
+
+  it('passes every non-zero amount through unchanged, whatever the label', () => {
+    expect(amountInCurrencyToStore('USD', 1150.5)).toBe(1150.5)
+    expect(amountInCurrencyToStore('USD', '-12.25')).toBe(-12.25)
+    expect(amountInCurrencyToStore('SEK', 100)).toBe(100)
+    expect(amountInCurrencyToStore(undefined, 90.5)).toBe(90.5)
+  })
+})
+
+describe('buildStornoLines: amount_in_currency', () => {
+  it('mirrors a kept 0 as 0 (not -0, not null) and negates the rest', () => {
+    const stornos = buildStornoLines([
+      { debit_amount: 812.4, credit_amount: 0, currency: 'USD', amount_in_currency: 0 },
+      { debit_amount: 0, credit_amount: 812.4, currency: 'SEK', amount_in_currency: 0 },
+      { debit_amount: 1000, credit_amount: 0, currency: 'EUR', amount_in_currency: '90.50' },
+      { debit_amount: 0, credit_amount: 1000, currency: 'EUR', amount_in_currency: null },
+    ])
+    const amounts = stornos.map((s) => s.amount_in_currency)
+    expect(amounts).toEqual([0, null, -90.5, null])
+    expect(Object.is(amounts[0], 0)).toBe(true)
   })
 })

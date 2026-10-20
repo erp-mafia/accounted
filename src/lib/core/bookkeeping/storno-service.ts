@@ -7,7 +7,7 @@ import type {
 } from '@/types'
 import { validateBalance, cancelOrphanedEntry, commitStornoOrCorrectionDraft } from '@/lib/bookkeeping/engine'
 import { linkBusinessEventToDraft, type BusinessEventLink } from '@/lib/bookkeeping/business-event-link'
-import { buildStornoLines } from '@/lib/bookkeeping/line-side'
+import { amountInCurrencyToStore, buildStornoLines } from '@/lib/bookkeeping/line-side'
 import {
   dimensionsBagKey,
   normalizeLineDimensions,
@@ -487,6 +487,7 @@ export async function correctEntry(
     // Insert corrected lines
     const correctedLineInserts = correctedLines.map((line, index) => {
       const dimensions = normalizeLineDimensions(line)
+      const amountInCurrency = amountInCurrencyToStore(line.currency, line.amount_in_currency)
       return {
         journal_entry_id: correctedEntry.id,
         account_number: line.account_number,
@@ -494,9 +495,8 @@ export async function correctEntry(
         debit_amount: Math.round((line.debit_amount || 0) * 100) / 100,
         credit_amount: Math.round((line.credit_amount || 0) * 100) / 100,
         currency: line.currency || 'SEK',
-        amount_in_currency: line.amount_in_currency
-          ? Math.round(line.amount_in_currency * 100) / 100
-          : null,
+        amount_in_currency:
+          amountInCurrency === null ? null : Math.round(amountInCurrency * 100) / 100,
         exchange_rate: line.exchange_rate || null,
         line_description: line.line_description || null,
         tax_code: line.tax_code || null,

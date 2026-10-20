@@ -375,6 +375,166 @@ describe('reverseEntry: legacy negative-side lines reverse on their net', () => 
   })
 })
 
+// #3517: a revaluation leg on a foreign cash account is `USD, 0`. The engine
+// stored it as null (a falsy check), which made the line unconvertible and
+// every reconciliation of the account in USD gl_lines_missing_currency_amount.
+describe('createDraftEntry: amount_in_currency 0 on a foreign line is kept (#3517)', () => {
+  function captureLines() {
+    let inserted: Array<Record<string, unknown>> = []
+    const supabase = {
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === 'fiscal_periods') {
+          const b: Record<string, unknown> = {}
+          for (const m of ['select', 'eq']) b[m] = vi.fn().mockReturnValue(b)
+          b.single = vi.fn().mockResolvedValue({
+            data: { name: 'FY 2026', period_start: '2026-01-01', period_end: '2026-12-31' },
+            error: null,
+          })
+          return b
+        }
+        if (table === 'chart_of_accounts') {
+          const b: Record<string, unknown> = {}
+          for (const m of ['select', 'eq', 'in']) b[m] = vi.fn().mockReturnValue(b)
+          b.then = (resolve: (v: unknown) => void) =>
+            resolve({
+              data: ['1930', '1932', '3960', '7960'].map((n) => ({ account_number: n, id: `acc-${n}` })),
+              error: null,
+            })
+          return b
+        }
+        if (table === 'journal_entries') {
+          const b: Record<string, unknown> = {}
+          for (const m of ['insert', 'select', 'eq']) b[m] = vi.fn().mockReturnValue(b)
+          b.single = vi.fn().mockResolvedValue({ data: { id: 'entry-1', status: 'draft', lines: [] }, error: null })
+          return b
+        }
+        if (table === 'journal_entry_lines') {
+          return {
+            insert: vi.fn().mockImplementation(async (rows: Array<Record<string, unknown>>) => {
+              inserted = rows
+              return { error: null }
+            }),
+          }
+        }
+        return createMockChain()
+      }),
+    }
+    return { supabase, lines: () => inserted }
+  }
+
+  async function draft(lines: CreateJournalEntryLineInput[]) {
+    const { supabase, lines: inserted } = captureLines()
+    await createDraftEntry(supabase as never, 'company-1', 'user-1', {
+      fiscal_period_id: 'period-1',
+      entry_date: '2026-03-31',
+      description: 'Omvärdering USD-konto',
+      source_type: 'manual',
+      lines,
+    })
+    return Object.fromEntries(inserted().map((l) => [l.account_number, l]))
+  }
+
+  it('stores 0, not null, on a foreign-currency line', async () => {
+    const byAccount = await draft([
+      { account_number: '1932', debit_amount: 812.4, credit_amount: 0, currency: 'USD', amount_in_currency: 0 },
+      { account_number: '3960', debit_amount: 0, credit_amount: 812.4 },
+    ])
+    expect(byAccount['1932']).toMatchObject({ currency: 'USD', amount_in_currency: 0 })
+    expect(Object.is(byAccount['1932'].amount_in_currency, 0)).toBe(true)
+    expect(byAccount['3960']).toMatchObject({ currency: 'SEK', amount_in_currency: null })
+  })
+
+  it('still stores null for 0 on a SEK or unlabelled line', async () => {
+    const byAccount = await draft([
+      { account_number: '1930', debit_amount: 100, credit_amount: 0, currency: 'SEK', amount_in_currency: 0 },
+      { account_number: '7960', debit_amount: 0, credit_amount: 100, amount_in_currency: 0 },
+    ])
+    expect(byAccount['1930']).toMatchObject({ currency: 'SEK', amount_in_currency: null })
+    expect(byAccount['7960']).toMatchObject({ currency: 'SEK', amount_in_currency: null })
+  })
+
+  it('rounds a non-zero foreign amount to öre exactly as before', async () => {
+    const byAccount = await draft([
+      { account_number: '1932', debit_amount: 1150, credit_amount: 0, currency: 'USD', amount_in_currency: 99.999 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1150 },
+    ])
+    expect(byAccount['1932']).toMatchObject({ currency: 'USD', amount_in_currency: 100 })
+    expect(byAccount['1930']).toMatchObject({ amount_in_currency: null })
+  })
+})
+
+describe('reverseEntry: a kept 0 in amount_in_currency reverses to 0 (#3517)', () => {
+  it('the storno of a USD 0 line carries USD 0, not null', async () => {
+    const original = {
+      id: 'entry-1',
+      company_id: 'company-1',
+      status: 'posted',
+      fiscal_period_id: 'period-1',
+      voucher_series: 'A',
+      voucher_number: 42,
+      entry_date: '2026-03-31',
+      description: 'Omvärdering USD-konto',
+      source_type: 'manual',
+      source_id: null,
+      lines: [
+        { account_number: '1932', debit_amount: 812.4, credit_amount: 0, currency: 'USD', amount_in_currency: 0 },
+        { account_number: '3960', debit_amount: 0, credit_amount: 812.4, currency: 'SEK', amount_in_currency: null },
+      ],
+    }
+    const reversal = { id: 'reversal-1', reverses_id: 'entry-1' }
+    let jeCall = 0
+    const jeResults = [
+      { data: original, error: null },
+      { data: reversal, error: null },
+      { data: [{ id: 'entry-1' }], error: null },
+      { data: { ...reversal, lines: [] }, error: null },
+    ]
+    function jeBuilder() {
+      const b: Record<string, unknown> = {}
+      for (const m of ['select', 'eq', 'in', 'update', 'insert']) b[m] = vi.fn().mockReturnValue(b)
+      b.single = vi.fn().mockImplementation(async () => jeResults[jeCall++])
+      b.then = (resolve: (v: unknown) => void) => resolve(jeResults[jeCall++])
+      return b
+    }
+    let insertedLines: Array<Record<string, unknown>> = []
+    const supabase = {
+      rpc: vi.fn().mockResolvedValue({ data: 43, error: null }),
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === 'journal_entries') return jeBuilder()
+        if (table === 'chart_of_accounts') {
+          const b: Record<string, unknown> = {}
+          for (const m of ['select', 'eq', 'in']) b[m] = vi.fn().mockReturnValue(b)
+          b.then = (resolve: (v: unknown) => void) =>
+            resolve({
+              data: [
+                { id: 'acc-1932', account_number: '1932' },
+                { id: 'acc-3960', account_number: '3960' },
+              ],
+              error: null,
+            })
+          return b
+        }
+        if (table === 'journal_entry_lines') {
+          return {
+            insert: vi.fn().mockImplementation(async (rows: Array<Record<string, unknown>>) => {
+              insertedLines = rows
+              return { error: null }
+            }),
+          }
+        }
+        return createMockChain()
+      }),
+    }
+
+    await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+
+    const byAccount = Object.fromEntries(insertedLines.map((l) => [l.account_number, l]))
+    expect(byAccount['1932']).toMatchObject({ debit_amount: 0, credit_amount: 812.4, currency: 'USD', amount_in_currency: 0 })
+    expect(Object.is(byAccount['1932'].amount_in_currency, 0)).toBe(true)
+    expect(byAccount['3960']).toMatchObject({ debit_amount: 812.4, credit_amount: 0, amount_in_currency: null })
+  })
+})
+
 describe('getSwedishLocalDate', () => {
   it('returns a date string in YYYY-MM-DD format', () => {
     const date = getSwedishLocalDate()

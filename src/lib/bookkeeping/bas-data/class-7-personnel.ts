@@ -1152,7 +1152,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_group: '75',
     account_type: 'expense',
     normal_balance: 'debit',
-    description: 'Lagstadgade sociala avgifter (ca 31,42% av bruttolonen) till Skatteverket.',
+    description: 'Lagstadgade sociala avgifter (ca 31,42% av bruttolönen) till Skatteverket.',
     sru_code: '7514',
     k2_excluded: false,
   },

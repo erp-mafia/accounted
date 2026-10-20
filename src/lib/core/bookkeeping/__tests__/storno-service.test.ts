@@ -246,6 +246,41 @@ describe('correctEntry', () => {
     expect(reversalLines.every((l) => l.line_description.startsWith('Storno: '))).toBe(true)
   })
 
+  // #3517: a foreign line whose amount_in_currency is 0 (a revaluation leg on
+  // a USD cash account) keeps 0 on both new verifikat; null made it
+  // unconvertible in the account's reconciliation.
+  it('keeps amount_in_currency 0 on foreign lines of the storno and the rättelse', async () => {
+    setupResults()
+    results[0] = {
+      data: {
+        ...originalEntry,
+        lines: [
+          makeJournalEntryLine({ account_number: '1932', debit_amount: 812.4, credit_amount: 0, currency: 'USD', amount_in_currency: 0 }),
+          makeJournalEntryLine({ account_number: '3960', debit_amount: 0, credit_amount: 812.4, currency: 'SEK', amount_in_currency: null }),
+        ],
+      },
+      error: null,
+    }
+    results[1] = {
+      data: [{ id: 'acc-1932', account_number: '1932' }, { id: 'acc-3960', account_number: '3960' }],
+      error: null,
+    }
+    const revaluation = [
+      { account_number: '1932', debit_amount: 790.1, credit_amount: 0, currency: 'USD', amount_in_currency: 0 },
+      { account_number: '3960', debit_amount: 0, credit_amount: 790.1, currency: 'SEK', amount_in_currency: 0 },
+    ]
+    const supabase = makeClient()
+    await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', revaluation)
+
+    const [storno, corrected] = inserts
+      .filter((i) => i.table === 'journal_entry_lines')
+      .map((i) => i.payload as Array<{ account_number: string; currency: string; amount_in_currency: number | null }>)
+    const pick = (lines: typeof storno) => lines.map((l) => [l.account_number, l.currency, l.amount_in_currency])
+    expect(pick(storno)).toEqual([['1932', 'USD', 0], ['3960', 'SEK', null]])
+    expect(pick(corrected)).toEqual([['1932', 'USD', 0], ['3960', 'SEK', null]])
+    expect(Object.is(storno[0].amount_in_currency, 0)).toBe(true)
+  })
+
   it('links original ↔ reversal ↔ corrected via IDs', async () => {
     setupResults()
     const supabase = makeClient()

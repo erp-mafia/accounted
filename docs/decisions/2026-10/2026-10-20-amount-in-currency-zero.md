@@ -1,0 +1,1 @@
+[2026-10-20] The engine keeps amount_in_currency 0 only on a line labelled with a foreign currency; SEK and unlabelled lines still store null for 0 (#3517 asked for 0 everywhere): only foreign lines are read through that column, and null keeps every SEK line byte-identical.
