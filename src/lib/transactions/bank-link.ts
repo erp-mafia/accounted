@@ -20,6 +20,14 @@ import {
   type CashAccountSiblings,
 } from '@/lib/cash-accounts/service'
 import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
+import {
+  bankLegConsumedMessage,
+  bankLegRoom,
+  fitsBankLeg,
+  holdersOnAccount,
+  readBankLegHolders,
+} from '@/lib/transactions/voucher-bank-leg'
+import type { LedgerLineAmount } from '@/lib/bookkeeping/ledger-line-amount'
 import { createLogger } from '@/lib/logger'
 import { linkBasisColumnsFor, type LinkBasisInput } from '@/lib/links/stamp'
 
@@ -65,6 +73,13 @@ export type BankLinkRefusalCode =
    * of it on the account (or nothing is left at all).
    */
   | 'OVER_ALLOCATED'
+  /**
+   * The verifikat's bank leg on the account is already taken, in the row's
+   * direction, by other rows (pointers and bank_line slices): the row does
+   * not fit in what is left (lib/transactions/voucher-bank-leg.ts, GitHub
+   * #3507). N:1 rows that together stay within the leg still link.
+   */
+  | 'VOUCHER_BANK_LEG_CONSUMED'
   | 'WRITE_FAILED'
 
 /**
@@ -133,12 +148,18 @@ export type PreparedBankLink =
       existingJournalEntryId?: string
       /** The verifikat's status (ENTRY_NOT_POSTED, ENTRY_REVERSED). */
       entryStatus?: string
+      /** VOUCHER_BANK_LEG_CONSUMED: what the verifikat books in the row's direction, what other rows hold, what is left. */
+      bankLeg?: { booked: number | null; held: number; remaining: number | null }
     }
 
 function refusal(
   code: BankLinkRefusalCode,
   error: string,
-  extra: { existingJournalEntryId?: string; entryStatus?: string } = {},
+  extra: {
+    existingJournalEntryId?: string
+    entryStatus?: string
+    bankLeg?: { booked: number | null; held: number; remaining: number | null }
+  } = {},
 ): Extract<PreparedBankLink, { ok: false }> {
   return { ok: false, code, error, ...extra }
 }
@@ -152,8 +173,10 @@ const ALREADY_LINKED = 'Transaktionen är redan kopplad till en verifikation.'
  * being reconciled, or null for the row's own bank account (its cash
  * account's ledger, or for a row without one the company's account in the
  * row's currency, resolveSettlementAccount). `txColumns` is the caller's
- * column list on transactions; it must include journal_entry_id, is_ignored,
- * cash_account_id and currency.
+ * column list on transactions; it must include amount, journal_entry_id,
+ * is_ignored, cash_account_id and currency. `bankLegOverrun` is a signed
+ * amount the row may take beyond the verifikat's bank leg because the same
+ * act books it (the residual of bookResidualAndLink); never a default.
  */
 export async function prepareBankLink(
   supabase: SupabaseClient,
@@ -163,6 +186,7 @@ export async function prepareBankLink(
     journalEntryId: string
     accountNumber: string | null
     txColumns: string
+    bankLegOverrun?: number
   },
 ): Promise<PreparedBankLink> {
   const { transactionId, journalEntryId } = params
@@ -287,9 +311,11 @@ export async function prepareBankLink(
   // ledger of the same physical account, see above). The old "any 19xx line"
   // check let a 1930 transaction link to a voucher that only touched 1931: a
   // cross-account link that silently hides a real imbalance.
+  // currency + amount_in_currency: the room check below measures the line in
+  // the row's own currency (ledgerLineAmountIn).
   const { data: lines } = await supabase
     .from('journal_entry_lines')
-    .select('debit_amount, credit_amount, account_number')
+    .select('debit_amount, credit_amount, account_number, currency, amount_in_currency')
     .eq('journal_entry_id', journalEntryId)
     .in('account_number', allowedLineAccounts)
 
@@ -320,8 +346,10 @@ export async function prepareBankLink(
   // rows of one physical account) is judged on the best of them, never on
   // whichever line the query happened to return first: a live sibling wins,
   // else the first sibling the row may move to.
-  const typedLines = lines as Array<{ account_number: string }>
+  const typedLines = lines as Array<LedgerLineAmount & { account_number: string }>
   let repointCashAccountId: string | null = null
+  // The ledger the row settles on once linked: its own, or the sibling it moves to.
+  let settlingLedger = accountNumber
   if (!typedLines.some((line) => line.account_number === accountNumber)) {
     const siblingLedgers = [...new Set(typedLines.map((line) => line.account_number))]
     const candidates = siblingLedgers
@@ -342,15 +370,62 @@ export async function prepareBankLink(
       )
     }
     repointCashAccountId = destination.id
+    settlingLedger = destination.ledger_account
   }
 
-  // N:1 is intentionally allowed: several bank transactions may settle ONE
-  // verifikat (a salary run paid out in multiple transfers, a supplier invoice
-  // paid in instalments). The voucher's bank line is counted once in the
-  // period movement while each transaction sums on the bank side, so
-  // correctly-summing links net to zero and any mis-link surfaces as a
-  // non-zero difference on the status card. (A given transaction still can't
-  // be double-linked: the pointer and junction guards above block that.)
+  // N:1 is allowed: several bank transactions may settle ONE verifikat (a
+  // salary run paid out in several transfers, a supplier invoice paid in
+  // instalments), but only within what the verifikat books on the account.
+  // A row that does not fit in what other rows leave of the bank leg is a
+  // separate affärshändelse, not another part of this one: linking it showed
+  // it as booked while its sale and moms were never booked, and the only
+  // trace was an unexplained difference on the status card (GitHub #3507).
+  // The first row in a direction links whatever its size, as before (a lone
+  // öresavrundning difference stays on the status card). The room is the
+  // shared rule of every linking door (lib/transactions/voucher-bank-leg.ts).
+  // A given transaction still can't be double-linked: the pointer and
+  // junction guards above block that.
+  const held = await readBankLegHolders(supabase, companyId, [journalEntryId], [transactionId])
+  if (!held.ok) {
+    return refusal('WRITE_FAILED', 'Kunde inte läsa verifikationens befintliga kopplingar. Försök igen.')
+  }
+  const currency = (tx.currency as string | null) || 'SEK'
+  const holders = held.holders.get(journalEntryId) ?? []
+  // A row with no cash account (legacy) settles on the ledger resolved above;
+  // the rows bound to that ledger's cash account hold it as well.
+  let settlingCashAccountId = repointCashAccountId ?? cashAccountId
+  if (settlingCashAccountId === null && holders.some((holder) => holder.cashAccountId !== null)) {
+    const { data: ledgerAccount } = await supabase
+      .from('cash_accounts')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('ledger_account', settlingLedger)
+      .maybeSingle()
+    settlingCashAccountId = (ledgerAccount as { id?: string } | null)?.id ?? null
+  }
+  const room = bankLegRoom(
+    typedLines.filter((line) => line.account_number === settlingLedger),
+    holdersOnAccount(holders, { cashAccountId: settlingCashAccountId, currency }),
+    currency,
+  )
+  const amount = Number(tx.amount)
+  const verdict = fitsBankLeg(room, amount, params.bankLegOverrun ?? 0)
+  if (!verdict.fits) {
+    const voucherLabel =
+      entry.voucher_number != null ? `${entry.voucher_series ?? 'A'}-${entry.voucher_number}` : journalEntryId
+    log.warn('refused a link to a verifikat whose bank leg other rows already hold', {
+      companyId,
+      transactionId,
+      journalEntryId,
+      settlingLedger,
+      remaining: verdict.remaining,
+    })
+    return refusal(
+      'VOUCHER_BANK_LEG_CONSUMED',
+      bankLegConsumedMessage({ voucherLabel, accountNumber: settlingLedger, amount, verdict }),
+      { bankLeg: { booked: verdict.booked, held: verdict.held, remaining: verdict.remaining } },
+    )
+  }
 
   return {
     ok: true,

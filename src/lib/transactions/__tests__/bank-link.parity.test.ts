@@ -53,6 +53,8 @@ interface Case {
   row: Record<string, unknown>
   entry: Record<string, unknown> | null
   lines: unknown[]
+  /** bank_line slices other rows hold on the verifikat (GitHub #3507). */
+  slices?: unknown[]
   /** manualLink's code, and linkTransactionToJournalEntry's, for the same refusal; null when both link. */
   codes: [string, string] | null
 }
@@ -101,6 +103,21 @@ const CASES: Case[] = [
     lines: [bankLine],
     codes: ['TRANSACTION_ALREADY_LINKED', 'LINK_TX_TX_ALREADY_LINKED'],
   },
+  {
+    name: 'a verifikat whose bank leg another row already holds in full (GitHub #3507)',
+    row: freeRow,
+    entry: postedEntry,
+    lines: [bankLine],
+    slices: [
+      {
+        transaction_id: 'tx-other',
+        journal_entry_id: JE,
+        allocated_amount: -800,
+        transactions: { amount: -800, currency: 'SEK', cash_account_id: null },
+      },
+    ],
+    codes: ['VOUCHER_BANK_LEG_CONSUMED', 'VOUCHER_BANK_LEG_CONSUMED'],
+  },
 ]
 
 function mockFor(c: Case) {
@@ -111,6 +128,7 @@ function mockFor(c: Case) {
     // account in its currency, else 1930: none here, so 1930.
     cash_accounts: { data: [] },
     journal_entry_lines: { data: c.lines },
+    transaction_voucher_links: { data: c.slices ?? [] },
   })
 }
 

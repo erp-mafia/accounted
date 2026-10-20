@@ -5,6 +5,14 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { dbError } from '@/lib/errors/db-error'
 import { isUuid } from '@/lib/invariants/uuid'
 import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
+import {
+  bankLegConsumedMessage,
+  bankLegRoom,
+  fitsBankLeg,
+  holdersOnAccount,
+  readBankLegHolders,
+  type BankLegRoom,
+} from '@/lib/transactions/voucher-bank-leg'
 import { chunk } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -88,6 +96,12 @@ export type PairSkipCode =
   | 'ENTRY_NOT_OPEN'
   /** Ledger-only pair: a verifikat is already settled against another verifikat. */
   | 'ALREADY_SETTLED'
+  /**
+   * Bank: other rows already hold the verifikat's bank leg, in the row's
+   * direction, so the row does not fit in what is left (GitHub #3507). The
+   * row is its own affärshändelse: book it, or unlink the other row first.
+   */
+  | 'VOUCHER_BANK_LEG_CONSUMED'
   | 'UNKNOWN'
 
 export interface AppliedLink {
@@ -173,6 +187,9 @@ const BANK_SKIP_CODE: Record<BankLinkRefusalCode, PairSkipCode> = {
   BANK_ANCHOR_REFUSED: 'BANK_ANCHOR_REFUSED',
   // An amounts refusal: the verifikat has less left than the slice asks for.
   OVER_ALLOCATED: 'PAIR_NOT_CLOSED',
+  // Its own code, not PAIR_NOT_CLOSED: that one invites a residual booking,
+  // and the remedy here is a verifikat of the row's own (GitHub #3507).
+  VOUCHER_BANK_LEG_CONSUMED: 'VOUCHER_BANK_LEG_CONSUMED',
   WRITE_FAILED: 'UNKNOWN',
 }
 
@@ -243,7 +260,7 @@ async function readPairFacts(
       kind === 'bank'
         ? await supabase
             .from('transactions')
-            .select('id, journal_entry_id, is_ignored, transaction_voucher_links(role)')
+            .select('id, journal_entry_id, is_ignored, amount, transaction_voucher_links(role)')
             .eq('company_id', companyId)
             .in('id', part)
         : await supabase
@@ -256,6 +273,7 @@ async function readPairFacts(
       id: string
       journal_entry_id: string | null
       is_ignored: boolean | null
+      amount?: number | string | null
       belopp_skatteverket?: number | string | null
       status?: string | null
       transaction_voucher_links?: Array<{ role?: string | null }> | null
@@ -267,7 +285,7 @@ async function readPairFacts(
         bank_line: hasBankLineJunctionRow(row.transaction_voucher_links),
         ...(kind === 'skattekonto'
           ? { amount: Number(row.belopp_skatteverket), settled: row.status === 'booked' }
-          : {}),
+          : { amount: row.amount == null ? undefined : Number(row.amount) }),
       })
       // A bank row's pointer blocks a link only while its verifikat is
       // posted (manualLink, issue #988), so its status is read with the rest.
@@ -330,7 +348,7 @@ async function readPairFacts(
     rows.set(r.id, {
       is_ignored: r.is_ignored,
       linked,
-      ...(kind === 'skattekonto' ? { amount: r.amount, settled: r.settled } : {}),
+      ...(kind === 'skattekonto' ? { amount: r.amount, settled: r.settled } : { amount: r.amount }),
     })
   }
   return { entries, rows, linkedAmounts }
@@ -513,7 +531,16 @@ export async function matchPairs(
   userId: string,
   accountKey: string,
   input: MatchPairsInput,
-  options: { dryRun?: boolean } = {},
+  options: {
+    dryRun?: boolean
+    /**
+     * Bank N:1 only: a signed amount the rows may take beyond their
+     * verifikat's bank leg because the same act books it, the residual of
+     * bookResidualAndLink (residual.ts), which sends exactly one pair. Never
+     * a default and never from a request body.
+     */
+    bankLegOverrun?: number
+  } = {},
 ): Promise<MatchPairsResult | null> {
   const parsed = parseAccountKey(accountKey)
   if (!parsed || parsed.kind === 'manual') return null
@@ -562,17 +589,76 @@ export async function matchPairs(
 
   // Resolved once, lazily: only bank pairs need the ledger account.
   let ledgerAccount: string | null = null
+  let ledgerCurrency = 'SEK'
   const resolveLedgerAccount = async (): Promise<string> => {
     if (ledgerAccount) return ledgerAccount
     if (parsed.kind !== 'bank') return DEFAULT_SETTLEMENT_ACCOUNT
     const { data: account } = await supabase
       .from('cash_accounts')
-      .select('ledger_account')
+      .select('ledger_account, currency')
       .eq('company_id', companyId)
       .eq('id', parsed.cashAccountId)
-      .maybeSingle<{ ledger_account: string }>()
+      .maybeSingle<{ ledger_account: string; currency?: string | null }>()
     ledgerAccount = account?.ledger_account ?? DEFAULT_SETTLEMENT_ACCOUNT
+    ledgerCurrency = account?.currency || 'SEK'
     return ledgerAccount
+  }
+
+  // Dry run, bank N:1: what each verifikat's bank leg still has room for,
+  // read once per verifikat and taken down by the run's own rows as they are
+  // applied, so the preview refuses what the live link (manualLink) would:
+  // a staged pair is never refused only at approval (GitHub #3507). null: no
+  // line on the account to measure (the live link answers that one).
+  const bankLegs = new Map<string, BankLegRoom | null>()
+  const bankLegFor = async (journalEntryId: string): Promise<BankLegRoom | null> => {
+    if (bankLegs.has(journalEntryId)) return bankLegs.get(journalEntryId) ?? null
+    const ledger = await resolveLedgerAccount()
+    const { data: lines, error: linesError } = await supabase
+      .from('journal_entry_lines')
+      .select('debit_amount, credit_amount, currency, amount_in_currency')
+      .eq('journal_entry_id', journalEntryId)
+      .eq('account_number', ledger)
+    if (linesError) throw dbError(linesError, 'Kunde inte läsa verifikatets rader')
+    if (!Array.isArray(lines) || lines.length === 0) {
+      bankLegs.set(journalEntryId, null)
+      return null
+    }
+    const held = await readBankLegHolders(supabase, companyId, [journalEntryId])
+    if (!held.ok) throw new Error('Kunde inte läsa verifikatets befintliga kopplingar')
+    const cashAccountId = parsed.kind === 'bank' ? parsed.cashAccountId : null
+    const room = bankLegRoom(
+      lines,
+      holdersOnAccount(held.holders.get(journalEntryId) ?? [], { cashAccountId, currency: ledgerCurrency }),
+      ledgerCurrency,
+    )
+    bankLegs.set(journalEntryId, room)
+    return room
+  }
+  const bankLegSkip = async (
+    journalEntryId: string,
+    externalId: string,
+  ): Promise<{ code: PairSkipCode; message: string } | null> => {
+    const amount = facts?.rows.get(externalId)?.amount
+    if (typeof amount !== 'number' || !Number.isFinite(amount)) return null
+    const room = await bankLegFor(journalEntryId)
+    if (!room) return null
+    const verdict = fitsBankLeg(room, amount)
+    if (!verdict.fits) {
+      const entry = facts?.entries.get(journalEntryId)
+      return {
+        code: 'VOUCHER_BANK_LEG_CONSUMED',
+        message: bankLegConsumedMessage({
+          voucherLabel: entry ? formatVoucher(entry) : journalEntryId,
+          accountNumber: await resolveLedgerAccount(),
+          amount,
+          verdict,
+        }),
+      }
+    }
+    // The row is applied: a later row of the run finds it holding the leg.
+    if (amount > 0) room.heldIn = roundOre(room.heldIn + amount)
+    else room.heldOut = roundOre(room.heldOut + amount)
+    return null
   }
 
   for (const pair of pairs) {
@@ -744,9 +830,10 @@ export async function matchPairs(
         continue
       }
       // Bank rows link one by one (manualLink per transaction), so a bad row
-      // skips alone, reported the way the live run reports it.
+      // skips alone, reported the way the live run reports it, the room on
+      // the verifikat's bank leg included.
       for (const externalId of externalIds) {
-        const rowProblem = rowSkip(facts, 'bank', externalId)
+        const rowProblem = rowSkip(facts, 'bank', externalId) ?? (await bankLegSkip(journalEntryId, externalId))
         if (rowProblem) {
           skipped.push({ pair: { external_ids: [externalId], journal_entry_ids: [journalEntryId] }, ...rowProblem })
         } else {
@@ -799,6 +886,7 @@ export async function matchPairs(
           const r = await manualLink(supabase, companyId, externalId, journalEntryId, userId, account, {
             anchorUnderlag: namedPairs.has(pair),
             linkBasis: bankPairLinkBasis(namedPairs.has(pair), bankProposals.get(externalId)),
+            ...(options.bankLegOverrun ? { bankLegOverrun: options.bankLegOverrun } : {}),
           })
           if (!r.success) {
             skipped.push({

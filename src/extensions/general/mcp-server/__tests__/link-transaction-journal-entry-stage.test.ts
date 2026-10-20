@@ -84,7 +84,7 @@ describe('gnubok_link_transaction_to_journal_entry: staged from the operation', 
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: bankRow, error: null })
     enqueue({ data: postedEntry, error: null })
-    enqueueBankLinkLeg(enqueue)
+    enqueueBankLinkLeg(enqueue, 1250)
     enqueueStage(enqueue)
 
     const result = (await link.execute(
@@ -124,7 +124,7 @@ describe('gnubok_link_transaction_to_journal_entry: staged from the operation', 
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: bankRow, error: null })
     enqueue({ data: postedEntry, error: null })
-    enqueueBankLinkLeg(enqueue)
+    enqueueBankLinkLeg(enqueue, 1250)
     enqueue({ data: openInvoice, error: null })
     // invoice_settlement_side (#3440), then the voucher's lines on that side.
     enqueue({ data: { settlement_side: 'ar_credit', account_prefix: '151', entry_side: 'credit' }, error: null })
@@ -162,7 +162,7 @@ describe('gnubok_link_transaction_to_journal_entry: staged from the operation', 
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: bankRow, error: null })
     enqueue({ data: postedEntry, error: null })
-    enqueueBankLinkLeg(enqueue)
+    enqueueBankLinkLeg(enqueue, 1250)
     enqueue({ data: { ...openInvoice, credited_invoice_id: 'inv-original' }, error: null })
 
     await expect(link.execute(

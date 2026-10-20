@@ -158,7 +158,7 @@ describe('linkTransactionToJournalEntry: the invoice settlement side (#3440)', (
     const { lines, ...entry } = voucher
     enqueue({ data: tx, error: null })
     enqueue({ data: entry, error: null })
-    enqueueBankLinkLeg(enqueue)
+    enqueueBankLinkLeg(enqueue, 1250)
     enqueue({ data: invoice, error: null })
     enqueue({ data: side, error: null }) // invoice_settlement_side
     enqueue({ data: lines, error: null }) // the voucher's lines on that side
@@ -199,5 +199,74 @@ describe('linkTransactionToJournalEntry: the invoice settlement side (#3440)', (
       ],
     }, AR_CREDIT)
     expect(await outcome).toMatchObject({ ok: true, dryRun: true })
+  })
+})
+
+describe("linkTransactionToJournalEntry: the verifikat's bank leg must have room for the row (GitHub #3507)", () => {
+  // A second Swish payment of 2 800 against the verifikat whose 1930 line
+  // (2 800) a first payment already settles: the MCP link tool linked it and
+  // the row showed as booked while its sale was never booked.
+  const rowB = {
+    id: 'tx-b', date: '2026-10-01', amount: 2800, currency: 'SEK', exchange_rate: null,
+    cash_account_id: null, journal_entry_id: null, invoice_id: null, is_business: null, is_ignored: false,
+    potential_invoice_id: null, potential_supplier_invoice_id: null,
+  }
+  const voucher = { id: 'je-1', status: 'posted', voucher_series: 'A', voucher_number: 17, entry_date: '2026-10-05' }
+
+  function run(pointers: unknown[], options: { dryRun?: boolean } = {}) {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: rowB, error: null })
+    enqueue({ data: voucher, error: null })
+    enqueue({ data: [], error: null }) // cash_accounts in the row's currency: none, so 1930
+    enqueue({ data: [{ account_number: '1930', debit_amount: 2800, credit_amount: 0 }], error: null })
+    enqueue({ data: [], error: null }) // bank_line slices
+    enqueue({ data: pointers, error: null }) // pointers
+    enqueue({ data: [{ id: 'tx-b' }], error: null }) // the locked UPDATE, if it got that far
+    return {
+      findCalls,
+      outcome: linkTransactionToJournalEntry(supabase as never, 'user-1', 'company-1', {
+        transactionId: 'tx-b', journalEntryId: 'je-1',
+      }, options),
+    }
+  }
+
+  it.each([false, true])('refuses the second row with VOUCHER_BANK_LEG_CONSUMED and what is left (dry run: %s)', async (dryRun) => {
+    const { outcome, findCalls } = run(
+      [{ id: 'tx-a', journal_entry_id: 'je-1', amount: 2800, currency: 'SEK', cash_account_id: null }],
+      { dryRun },
+    )
+    expect(await outcome).toEqual({
+      ok: false,
+      code: 'VOUCHER_BANK_LEG_CONSUMED',
+      details: {
+        reason: expect.stringContaining('Verifikat A-17 bokför 2800 på 1930'),
+        booked: 2800,
+        held: 2800,
+        remaining: 0,
+      },
+    })
+    expect(findCalls('transactions', 'update')).toEqual([])
+  })
+
+  it('counts a row bound to the ledger a legacy row without a cash account settles on', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: rowB, error: null }) // cash_account_id null: settles on the resolved ledger
+    enqueue({ data: voucher, error: null })
+    enqueue({ data: [], error: null }) // cash_accounts in the row's currency: none, so 1930
+    enqueue({ data: [{ account_number: '1930', debit_amount: 2800, credit_amount: 0 }], error: null })
+    enqueue({ data: [], error: null }) // bank_line slices
+    enqueue({ data: [{ id: 'tx-a', journal_entry_id: 'je-1', amount: 2800, currency: 'SEK', cash_account_id: 'ca-1930' }], error: null })
+    enqueue({ data: { id: 'ca-1930' }, error: null }) // the cash account of 1930
+    const outcome = await linkTransactionToJournalEntry(supabase as never, 'user-1', 'company-1', {
+      transactionId: 'tx-b', journalEntryId: 'je-1',
+    })
+    expect(outcome).toMatchObject({ ok: false, code: 'VOUCHER_BANK_LEG_CONSUMED' })
+    expect(findCalls('cash_accounts', 'eq')).toContainEqual(['ledger_account', '1930'])
+    expect(findCalls('transactions', 'update')).toEqual([])
+  })
+
+  it('links the row when nobody else holds the bank leg', async () => {
+    const { outcome } = run([])
+    expect(await outcome).toMatchObject({ ok: true, result: { journalEntryId: 'je-1', voucherLabel: 'A-17' } })
   })
 })

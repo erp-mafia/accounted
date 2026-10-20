@@ -12,6 +12,7 @@ import {
   type BankLinkRefusalCode,
 } from '@/lib/transactions/bank-link'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
+import { holdersOnAccount, readBankLegHolders } from '@/lib/transactions/voucher-bank-leg'
 import {
   ledgerLineAmountIn,
   type LedgerLineAmount,
@@ -1588,17 +1589,25 @@ export async function manualLink(
      * the auto-link after an invoice is linked to its voucher.
      */
     linkBasis: LinkBasisInput
+    /**
+     * Signed amount the row may take beyond the verifikat's bank leg because
+     * the same act books it: the residual of bookResidualAndLink
+     * (lib/reconciliation/residual.ts). Never a default.
+     */
+    bankLegOverrun?: number
   },
 ): Promise<{ success: boolean; error?: string; code?: BankLinkRefusalCode }> {
   // Every check is the bank link core's (lib/transactions/bank-link.ts), the
   // same one linkTransactionToJournalEntry runs: pointer and junction guards,
   // ignored row, posted verifikat, the row's account, a line on it or on a
-  // sibling ledger the row moves to.
+  // sibling ledger the row moves to, and room left on the verifikat's bank
+  // leg for this row (GitHub #3507).
   const prepared = await prepareBankLink(supabase, companyId, {
     transactionId,
     journalEntryId,
     accountNumber,
     txColumns: '*',
+    ...(options.bankLegOverrun ? { bankLegOverrun: options.bankLegOverrun } : {}),
   })
   if (!prepared.ok) return refused(prepared.code, prepared.error)
 
@@ -1833,41 +1842,25 @@ export async function linkTransactionToVouchers(
     netByEntry.set(line.journal_entry_id, prev === null || amount === null ? null : roundOre((prev ?? 0) + amount))
   }
 
-  // What other bank rows on this cash account already hold of each verifikat
-  // through their bank_line slices (an earlier partial split, a bulk-booked
-  // samlingsverifikat). A verifikat can only give this row the rest: two
-  // full-size slices on one verifikat would count its line twice. Same cash
-  // account and currency as this row, so the slices are in the unit of `net`.
-  const heldRows: Array<{
-    journal_entry_id: string
-    allocated_amount: number | string
-    transactions?:
-      | { cash_account_id: string | null; currency: string | null }
-      | Array<{ cash_account_id: string | null; currency: string | null }>
-      | null
-  }> = []
-  for (const part of idParts) {
-    const { data, error: heldError } = await supabase
-      .from('transaction_voucher_links')
-      .select('journal_entry_id, allocated_amount, transactions(cash_account_id, currency)')
-      .eq('company_id', companyId)
-      .eq('role', 'bank_line')
-      .in('journal_entry_id', part)
-    if (heldError) {
-      return refused('WRITE_FAILED', 'Kunde inte läsa verifikatens befintliga kopplingar. Försök igen.')
-    }
-    heldRows.push(...((data ?? []) as typeof heldRows))
+  // What other bank rows on this cash account already hold of each verifikat:
+  // their bank_line slices (an earlier partial split, a bulk-booked
+  // samlingsverifikat) and, since GitHub #3507, their pointers (a row linked
+  // 1:1 holds its whole amount; the slices alone let a split take a share of
+  // a verifikat another row already settles in full). A verifikat can only
+  // give this row the rest: two full-size slices on one verifikat would count
+  // its line twice. The same rule as every other linking door
+  // (lib/transactions/voucher-bank-leg.ts): same cash account and currency as
+  // this row, so the amounts are in the unit of `net`.
+  const heldRead = await readBankLegHolders(supabase, companyId, journalEntryIds, [transactionId])
+  if (!heldRead.ok) {
+    return refused('WRITE_FAILED', 'Kunde inte läsa verifikatens befintliga kopplingar. Försök igen.')
   }
   const ownCashAccountId = typeof tx.cash_account_id === 'string' ? tx.cash_account_id : null
   const heldByEntry = new Map<string, number>()
-  for (const row of heldRows) {
-    const holder = Array.isArray(row.transactions) ? row.transactions[0] : row.transactions
-    if (!holder) continue
-    if ((holder.cash_account_id ?? null) !== ownCashAccountId || (holder.currency || 'SEK') !== currency) continue
-    heldByEntry.set(
-      row.journal_entry_id,
-      roundOre((heldByEntry.get(row.journal_entry_id) ?? 0) + Number(row.allocated_amount)),
-    )
+  for (const [entryId, holders] of heldRead.holders) {
+    const onAccount = holdersOnAccount(holders, { cashAccountId: ownCashAccountId, currency })
+    if (onAccount.length === 0) continue
+    heldByEntry.set(entryId, roundOre(onAccount.reduce((sum, holder) => sum + holder.amount, 0)))
   }
 
   const txAmount = roundOre(Number(tx.amount))
@@ -2170,15 +2163,13 @@ export async function autoReconcileTransactionForLinkedVoucher(
 ): Promise<{ linkedTransactionId: string } | null> {
   const windowDays = options.dateWindowDays ?? VOUCHER_LINK_DATE_WINDOW_DAYS
 
-  // 1. If a bank transaction already points at this voucher, the bank side is
-  //    settled: don't attach another one behind the user's back.
-  const { data: alreadyLinked } = await supabase
-    .from('transactions')
-    .select('id')
-    .eq('company_id', companyId)
-    .eq('journal_entry_id', journalEntryId)
-    .limit(1)
-  if (alreadyLinked && alreadyLinked.length > 0) return null
+  // 1. If a bank transaction already holds this voucher, by its pointer or by
+  //    a bank_line slice (a bulk-booked samlingsverifikat, a 1:N split), the
+  //    bank side is settled: don't attach another one behind the user's back.
+  //    The pointer alone missed the slices (GitHub #3507). A failed read
+  //    links nothing: this path is best-effort.
+  const held = await readBankLegHolders(supabase, companyId, [journalEntryId])
+  if (!held.ok || (held.holders.get(journalEntryId)?.length ?? 0) > 0) return null
 
   // 2. Load the voucher (must be posted) and its lines.
   const { data: entry } = await supabase

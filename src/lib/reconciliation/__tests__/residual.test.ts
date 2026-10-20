@@ -104,7 +104,16 @@ describe('bookResidualAndLink', () => {
       kind: 'bank_fee',
     })
     expect(result).toMatchObject({ dry_run: false, residual_journal_entry_id: RES, residual_amount: -10 })
-    expect(matchMock).toHaveBeenCalledWith(supabase, COMPANY, USER, KEY, { pairs: [{ external_ids: [T1], journal_entry_ids: [E1] }] }, { dryRun: false })
+    // The row (-1010) takes the 10 kr fee beyond the verifikat's -1000: the
+    // residual verifikat booked in the same act explains it (GitHub #3507).
+    expect(matchMock).toHaveBeenCalledWith(
+      supabase,
+      COMPANY,
+      USER,
+      KEY,
+      { pairs: [{ external_ids: [T1], journal_entry_ids: [E1] }] },
+      { dryRun: false, bankLegOverrun: -10 },
+    )
     expect(createEntryMock).toHaveBeenCalledWith(
       supabase,
       COMPANY,

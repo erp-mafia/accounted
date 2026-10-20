@@ -1029,6 +1029,7 @@ describe('manualLink', () => {
     enqueue({ data: { status: 'reversed' } }) // hasLiveJournalEntryLink: stale link
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } }) // target JE fetch
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] }) // line on 1930
+    enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     enqueue({ data: [{ id: 'tx-1' }] }) // UPDATE .eq(stale id) → 1 row overwritten
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
@@ -1087,6 +1088,7 @@ describe('manualLink', () => {
     // Line exists on the selected account
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
     // Update succeeds: .select('id') returns the updated row
+    enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     enqueue({ data: [{ id: 'tx-1' }] })
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
@@ -1101,6 +1103,7 @@ describe('manualLink', () => {
     enqueue({ data: makeTransaction({ id: 'tx-1', journal_entry_id: null }) })
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+    enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     enqueue({ data: [{ id: 'tx-1' }] })
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', {
@@ -1122,6 +1125,7 @@ describe('manualLink', () => {
     enqueue({ data: makeTransaction({ id: 'tx-1', journal_entry_id: null }) })
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+    enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     enqueue({ data: [{ id: 'tx-1' }] })
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
@@ -1135,6 +1139,7 @@ describe('manualLink', () => {
     enqueue({ data: makeTransaction({ id: 'tx-1', journal_entry_id: null }) })
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+    enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     // A concurrent linker won: the optimistic-lock UPDATE matched nothing.
     enqueue({ data: [] })
 
@@ -1173,6 +1178,7 @@ describe('manualLink', () => {
     enqueue({ data: tx })
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+    enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     enqueue({ data: [{ id: 'tx-1' }] })
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
@@ -1187,6 +1193,7 @@ describe('manualLink', () => {
     enqueue({ data: tx })
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+    enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     // The .is('journal_entry_id', null) optimistic-lock filter matched nothing:
     // another session linked the transaction between our read and this write.
     enqueue({ data: [] })
@@ -1205,6 +1212,7 @@ describe('manualLink', () => {
     enqueue({ data: tx })
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+    enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     enqueue({ data: null, error: { code: 'PT409', message: 'BANK_ANCHOR_SETTLEMENT_CHANGED' } })
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
@@ -1221,6 +1229,7 @@ describe('manualLink', () => {
     enqueue({ data: tx })
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+    enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     enqueue({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } })
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
@@ -1249,6 +1258,7 @@ describe('manualLink', () => {
     // Line exists on 1930
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
     // Update succeeds: .select('id') returns the updated row
+    enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     enqueue({ data: [{ id: 'tx-1' }] })
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
@@ -1284,6 +1294,7 @@ describe('manualLink', () => {
     enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
     // The voucher's bank leg sits on the sibling ledger, not on 1931.
     enqueue({ data: [{ debit_amount: 217.04, credit_amount: 0, account_number: '1940' }] })
+    enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     enqueue({ data: [{ id: 'tx-1' }] })
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1931', MANUAL)
@@ -1314,6 +1325,7 @@ describe('manualLink', () => {
     enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
     // Bank leg on 1931 itself: an ordinary same-ledger link.
     enqueue({ data: [{ debit_amount: 217.04, credit_amount: 0, account_number: '1931' }] })
+    enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     enqueue({ data: [{ id: 'tx-1' }] })
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1931', MANUAL)
@@ -1452,6 +1464,7 @@ describe('manualLink', () => {
         { debit_amount: 1000, credit_amount: 0, account_number: '1940' },
       ],
     })
+    enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     enqueue({ data: [{ id: 'tx-1' }] })
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
@@ -1481,6 +1494,7 @@ describe('manualLink', () => {
     })
     enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
     enqueue({ data: [{ debit_amount: 0, credit_amount: 1000, account_number: '1931' }] })
+    enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     enqueue({ data: [{ id: 'tx-1' }] })
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
@@ -1509,6 +1523,7 @@ describe('manualLink', () => {
     })
     // No bank_connection ids: the status lookup is skipped.
     enqueue({ data: [{ debit_amount: 217.04, credit_amount: 0, account_number: '1940' }] })
+    enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     enqueue({ data: [{ id: 'tx-1' }] })
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1931', MANUAL)
@@ -1546,24 +1561,266 @@ describe('manualLink', () => {
     expect(result.error).toBe('Verifikationen saknar rad på 1931 eller 1940')
   })
 
-  it('allows N:1, does not reject when the verifikat already has a linked transaction', async () => {
+  it('allows N:1 within the bank leg: a row that fits in what the linked rows leave links', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
-    // This transaction is itself unlinked; the TARGET entry already has another
-    // transaction pointing at it. manualLink no longer queries for / rejects
-    // that: several bank transactions may settle one verifikat (a salary run
-    // paid in multiple transfers). The only per-transaction guard is that THIS
-    // transaction isn't already linked (tx.journal_entry_id), still enforced.
-    const tx = makeTransaction({ id: 'tx-2', journal_entry_id: null })
+    // The TARGET entry already has another transaction pointing at it, for
+    // 600 of its 1000. Several bank transactions may settle one verifikat (a
+    // salary run paid in multiple transfers) as long as they fit in it
+    // (GitHub #3507); THIS transaction must not be linked itself either.
+    const tx = makeTransaction({ id: 'tx-2', journal_entry_id: null, amount: 400 })
 
     enqueue({ data: tx })
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
-    // Update succeeds: note there is NO existing-link lookup in the sequence.
+    enqueue({ data: [] }) // bank_line slices
+    enqueue({ data: [{ id: 'tx-1', journal_entry_id: 'je-1', amount: 600, currency: 'SEK', cash_account_id: null }] })
     enqueue({ data: [{ id: 'tx-2' }] })
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-2', 'je-1', 'user-1', '1930', MANUAL)
 
     expect(result.success).toBe(true)
+  })
+})
+
+// ============================================================
+// manualLink: room on the verifikat's bank leg (GitHub #3507)
+// ============================================================
+
+describe('manualLink: the verifikat must have room for the row on its bank leg (#3507)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+  })
+
+  const CASH = 'ca-1930'
+  const pointer = (id: string, amount: number, over: Record<string, unknown> = {}) => ({
+    id,
+    journal_entry_id: 'je-1',
+    amount,
+    currency: 'SEK',
+    cash_account_id: CASH,
+    ...over,
+  })
+
+  /**
+   * Queue a row bound to 1930 up to the room check: the row, the verifikat,
+   * the cash-account cross-check, the sibling scan, the verifikat's lines,
+   * then the two holder reads (bank_line slices, pointers).
+   */
+  function enqueueLink(
+    enqueue: (r: { data?: unknown; error?: unknown }) => void,
+    opts: { amount: number; currency?: 'SEK' | 'EUR'; lines: unknown[]; slices?: unknown[]; pointers?: unknown[] },
+  ) {
+    enqueue({
+      data: makeTransaction({
+        id: 'tx-b',
+        journal_entry_id: null,
+        cash_account_id: CASH,
+        amount: opts.amount,
+        currency: opts.currency ?? 'SEK',
+      }),
+    })
+    enqueue({ data: { id: 'je-1', status: 'posted', voucher_series: 'A', voucher_number: 17, entry_date: '2026-10-05' } })
+    enqueue({ data: { ledger_account: '1930' } })
+    enqueue({ data: [{ id: CASH, iban: null, ledger_account: '1930', currency: opts.currency ?? 'SEK', enabled: true, bank_connection_id: null }] })
+    enqueue({ data: opts.lines })
+    enqueue({ data: opts.slices ?? [] })
+    enqueue({ data: opts.pointers ?? [] })
+  }
+
+  const sale = [{ debit_amount: 2800, credit_amount: 0, account_number: '1930', currency: null, amount_in_currency: null }]
+
+  it('refuses a second payment of the same amount on a verifikat a first one already settles in full (the reported shape)', async () => {
+    const m = createQueuedMockSupabase()
+    enqueueLink(m.enqueue, { amount: 2800, lines: sale, pointers: [pointer('tx-a', 2800)] })
+
+    const result = await manualLink(m.supabase as never, 'company-1', 'tx-b', 'je-1', 'user-1', '1930', MANUAL)
+
+    expect(result).toMatchObject({ success: false, code: 'VOUCHER_BANK_LEG_CONSUMED' })
+    expect(result.error).toContain('Verifikat A-17 bokför 2800 på 1930')
+    expect(result.error).toContain('bokför den som ett eget verifikat')
+    expect(m.findCalls('transactions', 'update')).toEqual([])
+  })
+
+  it('counts a bank_line slice (a bulk-booked samlingsverifikat) like a pointer', async () => {
+    const m = createQueuedMockSupabase()
+    enqueueLink(m.enqueue, {
+      amount: 2800,
+      lines: sale,
+      slices: [{ transaction_id: 'tx-a', journal_entry_id: 'je-1', allocated_amount: 2800, transactions: { amount: 2800, currency: 'SEK', cash_account_id: CASH } }],
+    })
+
+    const result = await manualLink(m.supabase as never, 'company-1', 'tx-b', 'je-1', 'user-1', '1930', MANUAL)
+
+    expect(result.code).toBe('VOUCHER_BANK_LEG_CONSUMED')
+    expect(m.findCalls('transactions', 'update')).toEqual([])
+  })
+
+  it.each([
+    ['the first instalment', [], true],
+    ['the second instalment', [pointer('tx-1', -1400)], true],
+    ['a third instalment the verifikat no longer has room for', [pointer('tx-1', -1400), pointer('tx-2', -1400)], false],
+  ])('instalments: %s of 1 400 against one 2 800 payout', async (_name, pointers, links) => {
+    const m = createQueuedMockSupabase()
+    enqueueLink(m.enqueue, {
+      amount: -1400,
+      lines: [{ debit_amount: 0, credit_amount: 2800, account_number: '1930', currency: null, amount_in_currency: null }],
+      pointers,
+    })
+    m.enqueue({ data: [{ id: 'tx-b' }] }) // the locked UPDATE
+
+    const result = await manualLink(m.supabase as never, 'company-1', 'tx-b', 'je-1', 'user-1', '1930', MANUAL)
+
+    if (links) {
+      expect(result).toEqual({ success: true })
+    } else {
+      expect(result.code).toBe('VOUCHER_BANK_LEG_CONSUMED')
+      expect(m.findCalls('transactions', 'update')).toEqual([])
+    }
+  })
+
+  it('is sign-aware: a deposit never takes the room a payout leaves, nor the other way round', async () => {
+    // One verifikat moves 1930 both ways: in 2 800, out 500. The deposit side
+    // is taken; the payout side is free.
+    const both = [
+      { debit_amount: 2800, credit_amount: 0, account_number: '1930', currency: null, amount_in_currency: null },
+      { debit_amount: 0, credit_amount: 500, account_number: '1930', currency: null, amount_in_currency: null },
+    ]
+    const deposit = createQueuedMockSupabase()
+    enqueueLink(deposit.enqueue, { amount: 100, lines: both, pointers: [pointer('tx-a', 2800)] })
+    expect(
+      (await manualLink(deposit.supabase as never, 'company-1', 'tx-b', 'je-1', 'user-1', '1930', MANUAL)).code,
+    ).toBe('VOUCHER_BANK_LEG_CONSUMED')
+
+    const payout = createQueuedMockSupabase()
+    enqueueLink(payout.enqueue, { amount: -500, lines: both, pointers: [pointer('tx-a', 2800)] })
+    payout.enqueue({ data: [{ id: 'tx-b' }] })
+    expect(await manualLink(payout.supabase as never, 'company-1', 'tx-b', 'je-1', 'user-1', '1930', MANUAL)).toEqual({
+      success: true,
+    })
+  })
+
+  it('takes the rows of a verifikat that moves the account both ways in any order', async () => {
+    // Without per-direction room the 3 000 row, linked after the -200 one,
+    // would not fit in the 2 800 net.
+    const both = [
+      { debit_amount: 3000, credit_amount: 0, account_number: '1930', currency: null, amount_in_currency: null },
+      { debit_amount: 0, credit_amount: 200, account_number: '1930', currency: null, amount_in_currency: null },
+    ]
+    const m = createQueuedMockSupabase()
+    enqueueLink(m.enqueue, { amount: 3000, lines: both, pointers: [pointer('tx-a', -200)] })
+    m.enqueue({ data: [{ id: 'tx-b' }] })
+
+    expect(await manualLink(m.supabase as never, 'company-1', 'tx-b', 'je-1', 'user-1', '1930', MANUAL)).toEqual({
+      success: true,
+    })
+  })
+
+  it('does not count the other leg of an own-account transfer, held by a row on another cash account', async () => {
+    const m = createQueuedMockSupabase()
+    enqueueLink(m.enqueue, { amount: 2800, lines: sale, pointers: [pointer('tx-a', 2800, { cash_account_id: 'ca-1940' })] })
+    m.enqueue({ data: [{ id: 'tx-b' }] })
+
+    expect(await manualLink(m.supabase as never, 'company-1', 'tx-b', 'je-1', 'user-1', '1930', MANUAL)).toEqual({
+      success: true,
+    })
+  })
+
+  it('measures a foreign account in its own currency (amount_in_currency), never the SEK figure', async () => {
+    // 1 000 EUR booked at 11.50: the SEK column says 11 500. Another EUR row
+    // already holds the 1 000 EUR.
+    const eurLine = [{ debit_amount: 11500, credit_amount: 0, account_number: '1930', currency: 'EUR', amount_in_currency: 1000 }]
+    const taken = createQueuedMockSupabase()
+    enqueueLink(taken.enqueue, {
+      amount: 1000,
+      currency: 'EUR',
+      lines: eurLine,
+      pointers: [pointer('tx-a', 1000, { currency: 'EUR' })],
+    })
+    expect(
+      (await manualLink(taken.supabase as never, 'company-1', 'tx-b', 'je-1', 'user-1', '1930', MANUAL)).code,
+    ).toBe('VOUCHER_BANK_LEG_CONSUMED')
+
+    // Half of it held: the other 500 EUR still fits.
+    const half = createQueuedMockSupabase()
+    enqueueLink(half.enqueue, {
+      amount: 500,
+      currency: 'EUR',
+      lines: eurLine,
+      pointers: [pointer('tx-a', 500, { currency: 'EUR' })],
+    })
+    half.enqueue({ data: [{ id: 'tx-b' }] })
+    expect(await manualLink(half.supabase as never, 'company-1', 'tx-b', 'je-1', 'user-1', '1930', MANUAL)).toEqual({
+      success: true,
+    })
+  })
+
+  it('takes the first row of a verifikat it cannot measure in the row currency, and refuses a second one', async () => {
+    // An EUR line with no amount_in_currency (a SIE import): no room to compute.
+    const unmeasurable = [{ debit_amount: 11500, credit_amount: 0, account_number: '1930', currency: null, amount_in_currency: null }]
+    const first = createQueuedMockSupabase()
+    enqueueLink(first.enqueue, { amount: 1000, currency: 'EUR', lines: unmeasurable })
+    first.enqueue({ data: [{ id: 'tx-b' }] })
+    expect(await manualLink(first.supabase as never, 'company-1', 'tx-b', 'je-1', 'user-1', '1930', MANUAL)).toEqual({
+      success: true,
+    })
+
+    const second = createQueuedMockSupabase()
+    enqueueLink(second.enqueue, {
+      amount: 1000,
+      currency: 'EUR',
+      lines: unmeasurable,
+      pointers: [pointer('tx-a', 1000, { currency: 'EUR' })],
+    })
+    expect(
+      (await manualLink(second.supabase as never, 'company-1', 'tx-b', 'je-1', 'user-1', '1930', MANUAL)).code,
+    ).toBe('VOUCHER_BANK_LEG_CONSUMED')
+  })
+
+  it('lets a residual booked in the same act take the rows past the verifikat (bankLegOverrun)', async () => {
+    // Booked 2 000 in, 1 000 already held by an instalment; the second
+    // instalment arrived as 1 005: 5 kr interest booked right after.
+    const lines = [{ debit_amount: 2000, credit_amount: 0, account_number: '1930', currency: null, amount_in_currency: null }]
+    const without = createQueuedMockSupabase()
+    enqueueLink(without.enqueue, { amount: 1005, lines, pointers: [pointer('tx-a', 1000)] })
+    expect(
+      (await manualLink(without.supabase as never, 'company-1', 'tx-b', 'je-1', 'user-1', '1930', MANUAL)).code,
+    ).toBe('VOUCHER_BANK_LEG_CONSUMED')
+
+    const withResidual = createQueuedMockSupabase()
+    enqueueLink(withResidual.enqueue, { amount: 1005, lines, pointers: [pointer('tx-a', 1000)] })
+    withResidual.enqueue({ data: [{ id: 'tx-b' }] })
+    expect(
+      await manualLink(withResidual.supabase as never, 'company-1', 'tx-b', 'je-1', 'user-1', '1930', {
+        ...MANUAL,
+        bankLegOverrun: 5,
+      }),
+    ).toEqual({ success: true })
+  })
+
+  it('keeps the matcher\'s one-öre fuzzy band: a row 0.01 above the verifikat still links', async () => {
+    const m = createQueuedMockSupabase()
+    enqueueLink(m.enqueue, { amount: 2800.01, lines: sale })
+    m.enqueue({ data: [{ id: 'tx-b' }] })
+
+    expect(await manualLink(m.supabase as never, 'company-1', 'tx-b', 'je-1', 'user-1', '1930', MANUAL)).toEqual({
+      success: true,
+    })
+  })
+
+  it('does not link when the holders cannot be read', async () => {
+    const m = createQueuedMockSupabase()
+    m.enqueue({ data: makeTransaction({ id: 'tx-b', journal_entry_id: null, cash_account_id: CASH, amount: 2800 }) })
+    m.enqueue({ data: { id: 'je-1', status: 'posted', voucher_series: 'A', voucher_number: 17, entry_date: '2026-10-05' } })
+    m.enqueue({ data: { ledger_account: '1930' } })
+    m.enqueue({ data: [{ id: CASH, iban: null, ledger_account: '1930', currency: 'SEK', enabled: true, bank_connection_id: null }] })
+    m.enqueue({ data: sale })
+    m.enqueue({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }) // bank_line slices
+
+    const result = await manualLink(m.supabase as never, 'company-1', 'tx-b', 'je-1', 'user-1', '1930', MANUAL)
+
+    expect(result.code).toBe('WRITE_FAILED')
+    expect(m.findCalls('transactions', 'update')).toEqual([])
   })
 })
 
@@ -1603,7 +1860,7 @@ describe('linkTransactionToVouchers', () => {
    */
   function enqueueReads(
     enqueue: (r: { data?: unknown; error?: unknown }) => void,
-    opts: { tx?: Record<string, unknown>; entries?: unknown[]; lines?: unknown[]; held?: unknown[] } = {},
+    opts: { tx?: Record<string, unknown>; entries?: unknown[]; lines?: unknown[]; held?: unknown[]; pointers?: unknown[] } = {},
   ) {
     enqueue({ data: opts.tx ?? freeTx() })
     enqueue({ data: [] }) // invoice_payments
@@ -1611,6 +1868,7 @@ describe('linkTransactionToVouchers', () => {
     enqueue({ data: opts.entries ?? postedEntries })
     enqueue({ data: opts.lines ?? bankLines })
     enqueue({ data: opts.held ?? [] }) // transaction_voucher_links held by other rows
+    enqueue({ data: opts.pointers ?? [] }) // other rows whose pointer names a verifikat (GitHub #3507)
   }
 
   it('links one row to two verifikat: pointer stays NULL, one signed bank_line slice per verifikat, one matched event each', async () => {
@@ -1848,7 +2106,9 @@ describe('linkTransactionToVouchers', () => {
     enqueue({ data: lines.slice(0, ID_READ_CHUNK) })
     enqueue({ data: lines.slice(ID_READ_CHUNK) })
     enqueue({ data: [] }) // bank_line slices held by other rows, first slice
-    enqueue({ data: [] }) // and second slice
+    enqueue({ data: [] }) // pointers, first slice
+    enqueue({ data: [] }) // bank_line slices, second slice
+    enqueue({ data: [] }) // pointers, second slice
     enqueue({ data: [{ id: 'tx-1' }] }) // lock UPDATE
     enqueue({ data: null }) // junction insert
     enqueue({ data: null }) // payment_match_log
@@ -1915,6 +2175,7 @@ describe('linkTransactionToVouchers', () => {
     enqueue({ data: postedEntries })
     enqueue({ data: bankLines })
     enqueue({ data: [] }) // slices other rows hold on the verifikat
+    enqueue({ data: [] }) // pointers of other rows
     enqueue({ data: [{ id: 'tx-1' }] })
     enqueue({ data: null })
     enqueue({ data: null })
@@ -2195,6 +2456,29 @@ describe('linkTransactionToVouchers', () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueueReads(enqueue, {
       held: [{ journal_entry_id: E2, allocated_amount: -300, transactions: [{ cash_account_id: null, currency: 'SEK' }] }],
+    })
+
+    const result = await linkTransactionToVouchers(
+      supabase as never,
+      'company-1',
+      'tx-1',
+      [{ journal_entry_id: E1 }, { journal_entry_id: E2 }],
+      'user-1',
+      '1930',
+    )
+
+    expect(result).toEqual({
+      success: false,
+      error: 'Verifikat A-12 är redan helt kopplat på 1930 till andra transaktioner.',
+      code: 'OVER_ALLOCATED',
+    })
+    expect(findCalls('transactions', 'update')).toEqual([])
+  })
+
+  it('counts a row linked 1:1 by its pointer: a split takes no share of a verifikat that row settles in full (GitHub #3507)', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueueReads(enqueue, {
+      pointers: [{ id: 'tx-other', journal_entry_id: E2, amount: -300, currency: 'SEK', cash_account_id: null }],
     })
 
     const result = await linkTransactionToVouchers(

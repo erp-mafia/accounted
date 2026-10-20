@@ -84,6 +84,8 @@ describe('bank row and cash account in different currencies', () => {
     enqueue({ data: { ledger_account: '1930', currency: 'SEK' }, error: null }) // cash_accounts
     enqueue({ data: [], error: null }) // cash_accounts topology: no sibling ledgers
     enqueue({ data: [{ account_number: '1930', debit_amount: 0, credit_amount: 350000 }], error: null }) // the voucher's bank line
+    enqueue({ data: [], error: null }) // bank_line slices other rows hold on the verifikat
+    enqueue({ data: [], error: null }) // other rows whose pointer names it
     enqueue({ data: { bookkeeping_locked_through: null }, error: null }) // company_settings
     enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null }) // fiscal_periods
     enqueue({ data: { id: 'op-link-1' }, error: null }) // pending_operations insert

@@ -686,11 +686,21 @@ export function createMockRouteParams<T extends Record<string, string>>(
  * The bank link core's reads after the verifikat (lib/transactions/bank-link.ts),
  * for a queued-mock test of a link that goes on: the settlement account of a
  * row without a cash account (no enabled account in its currency answers
- * 1930), then the voucher's line on 1930.
+ * 1930), the voucher's line on 1930, then who else holds that bank leg
+ * (lib/transactions/voucher-bank-leg.ts: bank_line slices, pointers): nobody.
  */
-export function enqueueBankLinkLeg(enqueue: (result: { data?: unknown; error?: unknown }) => void): void {
+export function enqueueBankLinkLeg(
+  enqueue: (result: { data?: unknown; error?: unknown }) => void,
+  /** The voucher's bank line, signed like the row (+ debit, - credit): the row's own amount for a link that fits. */
+  bankLine = 1000,
+): void {
   enqueue({ data: [], error: null }) // cash_accounts in the row's currency
-  enqueue({ data: [{ account_number: '1930', debit_amount: 1000, credit_amount: 0 }], error: null }) // the voucher's bank line
+  enqueue({
+    data: [{ account_number: '1930', debit_amount: Math.max(bankLine, 0), credit_amount: Math.max(-bankLine, 0) }],
+    error: null,
+  }) // the voucher's bank line
+  enqueue({ data: [], error: null }) // bank_line slices other rows hold on the verifikat
+  enqueue({ data: [], error: null }) // other rows whose pointer names the verifikat
 }
 
 /**
