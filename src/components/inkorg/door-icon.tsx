@@ -66,6 +66,17 @@ const DOOR_VENDOR: Partial<Record<IntakeSourceId, VendorKey>> = {
   paypal: 'paypal',
 }
 
+/**
+ * The doors whose vendor Simple Icons has no mark for wear the vendor's own
+ * app icon, taken once from its own site (kivra.se, billo.life, 2026-10-20)
+ * and shipped in public/logos like the other partner logos. The monogram
+ * stays the fallback if the file fails to load.
+ */
+const DOOR_ICON_URL: Partial<Record<IntakeSourceId, string>> = {
+  kivra: '/logos/kivra.png',
+  billo: '/logos/billo.png',
+}
+
 const DOOR_GLYPH: Partial<Record<IntakeSourceId, LucideIcon>> = {
   intake_email: Mail,
 }
@@ -83,7 +94,9 @@ export function DoorMark({
   mailProvider?: MailProvider
 }) {
   const vendor = door === 'mailbox' && mailProvider === 'microsoft' ? 'microsoft' : DOOR_VENDOR[door]
-  if (vendor) return <BrandMark name={door} vendor={vendor} variant="mark" size={size} className={className} />
+  if (vendor) {
+    return <BrandMark name={door} vendor={vendor} variant="mark" size={size} className={className} logoUrl={DOOR_ICON_URL[door] ?? null} />
+  }
   const Icon = DOOR_GLYPH[door] ?? DOOR_ICON[door]
   const glyph = Math.round(size * 0.5)
   return (
