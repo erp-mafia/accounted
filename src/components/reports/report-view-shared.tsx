@@ -5,6 +5,7 @@
 // more views share lives here instead of in a common barrel.
 
 import React from 'react'
+import Link from 'next/link'
 import { AlertCircle, FileText } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -13,7 +14,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/ui/empty-state'
 import { AccountNumber } from '@/components/ui/account-number'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
-import { accountDrilldownClick } from '@/components/reports/drilldown-click'
+import { accountDrilldownClick, type AccountDrilldown } from '@/components/reports/drilldown-click'
 import { formatAmount } from '@/lib/utils'
 import type { DateRangeValue } from '@/components/common/ReportDateRange'
 import type { DimensionFilterValue } from '@/components/reports/DimensionFilter'
@@ -66,12 +67,12 @@ export function reportQuery(
 export function ReportSectionTable({
   sections,
   negate,
-  onNavigateToAccount,
+  drilldown,
   footer,
 }: {
   sections: { title: string; rows: { account_number: string; account_name: string; amount: number }[]; subtotal: number }[]
   negate?: boolean
-  onNavigateToAccount?: (account: string) => void
+  drilldown?: AccountDrilldown
   /** Report total, rendered as the table's tfoot (e.g. "Summa tillgångar"). */
   footer?: { label: string; amount: number; negate?: boolean }
 }) {
@@ -99,11 +100,13 @@ export function ReportSectionTable({
               {section.rows.map((row) => (
                 <tr
                   key={row.account_number}
-                  className={`border-b last:border-0 ${onNavigateToAccount ? 'cursor-pointer hover:bg-secondary/35 transition-colors' : ''}`}
-                  onClick={onNavigateToAccount ? accountDrilldownClick(onNavigateToAccount, row.account_number) : undefined}
+                  className={`border-b last:border-0 ${drilldown ? 'cursor-pointer hover:bg-secondary/35 transition-colors' : ''}`}
+                  onClick={drilldown ? accountDrilldownClick(drilldown, row.account_number) : undefined}
                 >
                   <td className="px-4 py-1.5 w-20"><AccountNumber number={row.account_number} name={row.account_name} /></td>
-                  <td className="px-4 py-1.5">{row.account_name}</td>
+                  <td className="px-4 py-1.5">
+                    {drilldown ? <Link href={drilldown.href(row.account_number)} className="block">{row.account_name}</Link> : row.account_name}
+                  </td>
                   <td className="px-4 py-1.5 text-right tabular-nums w-32 whitespace-nowrap">
                     {fmt(row.amount, negate)} kr
                   </td>

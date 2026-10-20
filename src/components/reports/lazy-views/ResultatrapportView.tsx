@@ -1,11 +1,12 @@
 'use client'
 
 import React from 'react'
+import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
 import { AccountNumber } from '@/components/ui/account-number'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
-import { accountDrilldownClick } from '@/components/reports/drilldown-click'
+import { accountDrilldownClick, type AccountDrilldown } from '@/components/reports/drilldown-click'
 import {
   ReportEmptyState,
   ReportErrorCard,
@@ -19,7 +20,7 @@ import type { DateRangeValue } from '@/components/common/ReportDateRange'
 import type { DimensionFilterValue } from '@/components/reports/DimensionFilter'
 import type { ResultatrapportReport } from '@/types'
 
-export default function ResultatrapportView({ periodId, dateRange, dimensionFilter = null, onNavigateToAccount }: { periodId: string; dateRange: DateRangeValue; dimensionFilter?: DimensionFilterValue | null; onNavigateToAccount: (account: string) => void }) {
+export default function ResultatrapportView({ periodId, dateRange, dimensionFilter = null, drilldown }: { periodId: string; dateRange: DateRangeValue; dimensionFilter?: DimensionFilterValue | null; drilldown: AccountDrilldown }) {
   const t = useTranslations('reports')
   const reportQs = reportQuery(periodId, dateRange, dimensionFilter)
   const { data, loading, error } = useReportData<ResultatrapportReport>(
@@ -99,12 +100,12 @@ export default function ResultatrapportView({ periodId, dateRange, dimensionFilt
                       <tr
                         key={row.account_number}
                         className="border-b last:border-0 cursor-pointer hover:bg-secondary/35 transition-colors"
-                        onClick={accountDrilldownClick(onNavigateToAccount, row.account_number)}
+                        onClick={accountDrilldownClick(drilldown, row.account_number)}
                       >
                         <td className="px-4 py-1.5">
                           <AccountNumber number={row.account_number} name={row.account_name} />
                         </td>
-                        <td className="px-4 py-1.5">{row.account_name}</td>
+                        <td className="px-4 py-1.5"><Link href={drilldown.href(row.account_number)} className="block">{row.account_name}</Link></td>
                         <td className="px-4 py-1.5 text-right tabular-nums">{formatAmount(row.current_period)}</td>
                         <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">
                           {hasPrior ? formatAmount(row.prior_period) : '-'}

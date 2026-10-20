@@ -1,4 +1,5 @@
 import { Suspense } from 'react'
+import type { Metadata } from 'next'
 import { redirect } from 'next/navigation'
 import { cookies, headers } from 'next/headers'
 import DashboardNav from '@/components/dashboard/DashboardNav'
@@ -37,6 +38,7 @@ import {
 import { getAiStatus } from '@/lib/ai'
 import { getDashboardNavFlags } from '@/lib/dashboard/nav-flags'
 import { getBranding } from '@/lib/branding/service'
+import { resolveRequestBrand } from '@/lib/branding/request-brand'
 import { resolveBrandByHost } from '@/lib/branding/resolve'
 import { resolveBrandDomainBounce } from '@/lib/auth/brand-signup-gate'
 import { INVITE_COOKIE_NAME } from '@/lib/auth/consume-invite-cookie'
@@ -74,6 +76,19 @@ const MAIN_PANEL_CLASS =
   'md:min-h-0 md:ml-[var(--nav-w)] md:mt-[10px] md:mr-[var(--agent-dock-w)] md:h-[calc(100vh-20px)] ' +
   'md:overflow-y-auto md:rounded-xl md:border md:border-border ' +
   'md:transition-[margin-left,margin-right] md:duration-300 md:ease-drawer'
+
+/**
+ * The browser tab names the active company (crm#1279): a byrå with several
+ * clients open in several windows tells them apart, and a report beside its
+ * huvudbok shows whose books both are. A page title of its own goes first.
+ */
+export async function generateMetadata(): Promise<Metadata> {
+  const [{ data: settings }, brand] = await Promise.all([getDashboardSettings(), resolveRequestBrand()])
+  const companyName = settings?.company_name?.trim()
+  if (!companyName) return {}
+  const appName = brand?.appName ?? getBranding().appName
+  return { title: { default: `${companyName} · ${appName}`, template: `%s · ${companyName}` } }
+}
 
 // Every branch renders inside AllMessagesProvider: the root layout hands
 // client components only the public and auth namespaces

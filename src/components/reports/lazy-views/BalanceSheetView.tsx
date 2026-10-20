@@ -14,8 +14,9 @@ import { useReportData } from '@/lib/hooks/use-report-data'
 import { formatAmount } from '@/lib/utils'
 import type { DateRangeValue } from '@/components/common/ReportDateRange'
 import type { BalanceSheetReport } from '@/types'
+import type { AccountDrilldown } from '@/components/reports/drilldown-click'
 
-export default function BalanceSheetView({ periodId, dateRange, onNavigateToAccount }: { periodId: string; dateRange: DateRangeValue; onNavigateToAccount: (account: string) => void }) {
+export default function BalanceSheetView({ periodId, dateRange, drilldown }: { periodId: string; dateRange: DateRangeValue; drilldown: AccountDrilldown }) {
   const reportQs = reportQuery(periodId, dateRange)
   const { data, loading, error } = useReportData<BalanceSheetReport>(
     `/api/reports/balance-sheet?${reportQs}`,
@@ -58,7 +59,7 @@ export default function BalanceSheetView({ periodId, dateRange, onNavigateToAcco
         <CardContent className="p-0">
           <ReportSectionTable
             sections={data.asset_sections}
-            onNavigateToAccount={onNavigateToAccount}
+            drilldown={drilldown}
             footer={{ label: 'Summa tillgångar', amount: data.total_assets }}
           />
         </CardContent>
@@ -72,7 +73,7 @@ export default function BalanceSheetView({ periodId, dateRange, onNavigateToAcco
         <CardContent className="p-0">
           <ReportSectionTable
             sections={data.equity_liability_sections}
-            onNavigateToAccount={onNavigateToAccount}
+            drilldown={drilldown}
             footer={{ label: 'Summa eget kapital och skulder', amount: data.total_equity_liabilities }}
           />
         </CardContent>

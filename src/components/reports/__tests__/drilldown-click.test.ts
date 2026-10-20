@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import ts from 'typescript'
 import type { MouseEvent } from 'react'
-import { accountDrilldownClick } from '../drilldown-click'
+import { accountDrilldownClick, type AccountDrilldown } from '../drilldown-click'
 
 /**
  * Selecting text in a report must not open the account (crm#1123).
@@ -14,8 +14,13 @@ import { accountDrilldownClick } from '../drilldown-click'
  * and the Saldobalans account cells, each with a handler of its own, still
  * drilled into the account.
  *
+ * crm#1279: a report beside its huvudbok while reconciling. Every drill-down
+ * row carries a real link to the account, which the handler leaves to the
+ * browser, and a ctrl-, cmd- or shift-click elsewhere on the row opens the
+ * account in a new tab instead of leaving the report.
+ *
  * The first block runs the shared handler; the second pins that every
- * drill-down in the report components goes through it. This repo runs Vitest
+ * drill-down in the report components goes through it and has its link. This repo runs Vitest
  * in the node environment and never renders components, so the pin reads the
  * source through the TypeScript AST.
  */
@@ -34,6 +39,7 @@ function stubSelection(
   selection: { text: string; touches?: Element[]; covers?: Element[] } | null,
 ) {
   vi.stubGlobal('window', {
+    open: vi.fn(),
     getSelection: () =>
       selection && {
         isCollapsed: selection.text === '',
@@ -49,12 +55,19 @@ function stubSelection(
 /**
  * Clicks the drill-down on `currentTarget`, the row or cell carrying the
  * handler. `target` is where the click landed: the row itself unless given.
+ * Returns the in-tab navigation; `window.open` records a new tab.
  */
-function clickOn(currentTarget: Element, target: Element = currentTarget) {
-  const navigate = vi.fn()
-  accountDrilldownClick(navigate, '1930')({ currentTarget, target } as unknown as MouseEvent)
-  return navigate
+function clickOn(
+  currentTarget: Element,
+  target: Element = currentTarget,
+  keys: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean } = {},
+) {
+  const drilldown: AccountDrilldown = { href: (account) => `/reports/huvudbok?account=${account}`, navigate: vi.fn() }
+  accountDrilldownClick(drilldown, '1930')({ currentTarget, target, ...keys } as unknown as MouseEvent)
+  return drilldown.navigate
 }
+
+const HREF = '/reports/huvudbok?account=1930'
 
 const row = { id: 'clicked row' } as unknown as Element
 const otherRow = { id: 'another row' } as unknown as Element
@@ -66,12 +79,12 @@ const tooltip = { id: 'account tooltip, portalled out of the row' } as unknown a
 describe('accountDrilldownClick', () => {
   it('opens the account on a plain click', () => {
     stubSelection({ text: '' })
-    expect(clickOn(row)).toHaveBeenCalledWith('1930')
+    expect(clickOn(row)).toHaveBeenCalledWith(HREF)
   })
 
   it('opens the account when the document has no selection', () => {
     stubSelection(null)
-    expect(clickOn(row)).toHaveBeenCalledWith('1930')
+    expect(clickOn(row)).toHaveBeenCalledWith(HREF)
   })
 
   it('stays on the report when the click ends a drag across text in the row', () => {
@@ -82,7 +95,7 @@ describe('accountDrilldownClick', () => {
 
   it('opens the account on a plain click on the account tooltip', () => {
     stubSelection({ text: '' })
-    expect(clickOn(row, tooltip)).toHaveBeenCalledWith('1930')
+    expect(clickOn(row, tooltip)).toHaveBeenCalledWith(HREF)
   })
 
   it('stays on the report when the click ends a drag across text in the account tooltip', () => {
@@ -92,12 +105,31 @@ describe('accountDrilldownClick', () => {
 
   it('opens the account when the selection is elsewhere on the page', () => {
     stubSelection({ text: 'Kassa', touches: [otherRow], covers: [otherRow] })
-    expect(clickOn(row)).toHaveBeenCalledWith('1930')
+    expect(clickOn(row)).toHaveBeenCalledWith(HREF)
   })
 
   it('treats a whitespace-only selection as a plain click', () => {
     stubSelection({ text: '\n\t ', touches: [row] })
-    expect(clickOn(row)).toHaveBeenCalledWith('1930')
+    expect(clickOn(row)).toHaveBeenCalledWith(HREF)
+  })
+
+  it('opens the account in a new tab on a ctrl-, cmd- or shift-click, and stays on the report', () => {
+    for (const keys of [{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }]) {
+      stubSelection({ text: '' })
+      expect(clickOn(row, row, keys)).not.toHaveBeenCalled()
+      expect(window.open).toHaveBeenCalledWith(HREF, '_blank', 'noopener')
+    }
+  })
+
+  it("leaves a click on the row's own link to the link, plain or modified", () => {
+    // The browser opens a modified click on a link in a new tab and Next's
+    // Link routes a plain one; the row must not navigate this tab as well.
+    const link = { closest: (selector: string) => (selector === 'a[href]' ? link : null) } as unknown as Element
+    for (const keys of [{}, { ctrlKey: true }]) {
+      stubSelection({ text: '' })
+      expect(clickOn(row, link, keys)).not.toHaveBeenCalled()
+      expect(window.open).not.toHaveBeenCalled()
+    }
   })
 })
 
@@ -115,7 +147,7 @@ const reportComponents = fs
     ),
   )
 
-/** Every onClick in the report components that reaches onNavigateToAccount, by enclosing component. */
+/** Every onClick in the report components that reaches the account drill-down, by enclosing component. */
 function drilldownClicks(): { file: string; component: string; handler: string }[] {
   const found: { file: string; component: string; handler: string }[] = []
   for (const source of reportComponents) {
@@ -124,7 +156,7 @@ function drilldownClicks(): { file: string; component: string; handler: string }
         ts.isJsxAttribute(node) && node.name.getText(source) === 'onClick'
           ? node.initializer?.getText(source)
           : undefined
-      if (handler?.includes('onNavigateToAccount')) {
+      if (handler?.includes('drilldown')) {
         let fn: ts.Node | undefined = node.parent
         while (fn && !ts.isFunctionDeclaration(fn)) fn = fn.parent
         found.push({
@@ -155,12 +187,32 @@ describe('report components drill into an account only through accountDrilldownC
     )
   })
 
-  it('never calls onNavigateToAccount straight from a click', () => {
+  it('never navigates straight from a click', () => {
     const unguarded = clicks.filter(
-      (c) =>
-        /\bonNavigateToAccount\(/.test(c.handler) ||
-        !c.handler.includes('accountDrilldownClick(onNavigateToAccount, '),
+      (c) => /\bdrilldown\.navigate\(/.test(c.handler) || !c.handler.includes('accountDrilldownClick(drilldown, '),
     )
     expect(unguarded).toEqual([])
+  })
+
+  it('gives every drill-down row a real link to the account', () => {
+    // A row without one cannot be opened in a new tab or window from the
+    // context menu (crm#1279).
+    const withLink = new Set<string>()
+    for (const source of reportComponents) {
+      const visit = (node: ts.Node) => {
+        if (
+          ts.isJsxAttribute(node) &&
+          node.name.getText(source) === 'href' &&
+          node.initializer?.getText(source).includes('drilldown.href(')
+        ) {
+          let fn: ts.Node | undefined = node.parent
+          while (fn && !ts.isFunctionDeclaration(fn)) fn = fn.parent
+          if (fn && ts.isFunctionDeclaration(fn) && fn.name) withLink.add(fn.name.text)
+        }
+        ts.forEachChild(node, visit)
+      }
+      visit(source)
+    }
+    expect([...new Set(clicks.map((c) => c.component))].filter((c) => !withLink.has(c))).toEqual([])
   })
 })

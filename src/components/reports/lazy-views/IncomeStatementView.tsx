@@ -17,6 +17,7 @@ import type { MonthlyDataPoint } from '@/components/reports/IncomeExpenseChart'
 import type { DateRangeValue } from '@/components/common/ReportDateRange'
 import type { DimensionFilterValue } from '@/components/reports/DimensionFilter'
 import type { IncomeStatementReport } from '@/types'
+import type { AccountDrilldown } from '@/components/reports/drilldown-click'
 
 // Recharts is ~180KB: defer the chart so the report tables (the regulated
 // content) render without waiting for the charting bundle.
@@ -25,7 +26,7 @@ const IncomeExpenseChart = dynamic(
   { ssr: false, loading: () => <Skeleton className="h-64 w-full" /> },
 )
 
-export default function IncomeStatementView({ periodId, dateRange, dimensionFilter = null, onNavigateToAccount }: { periodId: string; dateRange: DateRangeValue; dimensionFilter?: DimensionFilterValue | null; onNavigateToAccount: (account: string) => void }) {
+export default function IncomeStatementView({ periodId, dateRange, dimensionFilter = null, drilldown }: { periodId: string; dateRange: DateRangeValue; dimensionFilter?: DimensionFilterValue | null; drilldown: AccountDrilldown }) {
   const reportQs = reportQuery(periodId, dateRange, dimensionFilter)
   const { data, loading, error } = useReportData<IncomeStatementReport>(
     `/api/reports/income-statement?${reportQs}`,
@@ -81,7 +82,7 @@ export default function IncomeStatementView({ periodId, dateRange, dimensionFilt
         <CardContent className="p-0">
           <ReportSectionTable
             sections={data.revenue_sections}
-            onNavigateToAccount={onNavigateToAccount}
+            drilldown={drilldown}
             footer={{ label: 'Summa rörelseintäkter', amount: data.total_revenue }}
           />
         </CardContent>
@@ -96,7 +97,7 @@ export default function IncomeStatementView({ periodId, dateRange, dimensionFilt
           <ReportSectionTable
             sections={data.expense_sections}
             negate
-            onNavigateToAccount={onNavigateToAccount}
+            drilldown={drilldown}
             footer={{ label: 'Summa rörelsekostnader', amount: data.total_expenses, negate: true }}
           />
         </CardContent>
@@ -121,7 +122,7 @@ export default function IncomeStatementView({ periodId, dateRange, dimensionFilt
           <CardContent className="p-0">
             <ReportSectionTable
               sections={data.financial_sections}
-              onNavigateToAccount={onNavigateToAccount}
+              drilldown={drilldown}
               footer={{ label: 'Summa finansiella poster', amount: data.total_financial }}
             />
           </CardContent>

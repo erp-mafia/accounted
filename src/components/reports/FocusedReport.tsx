@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import dynamic from 'next/dynamic'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -16,7 +16,14 @@ import { DimensionFilter, type DimensionFilterValue } from '@/components/reports
 import { ReportPrintHeader } from '@/components/reports/ReportPrintHeader'
 import { Ink2FilingHelp } from '@/components/reports/Ink2FilingHelp'
 import { DATE_RANGE_SLUGS, DIMENSION_FILTER_SLUGS, getReport } from '@/lib/reports/catalog'
-import { huvudbokDrilldownHref, parseDrilldownParams } from '@/lib/reports/report-drilldown'
+import {
+  huvudbokDrilldownHref,
+  parseDrilldownParams,
+  periodForWindow,
+  withReportState,
+} from '@/lib/reports/report-drilldown'
+import { prepareFiscalPeriods } from '@/lib/reference-data/fiscal-scope'
+import type { AccountDrilldown } from '@/components/reports/drilldown-click'
 import type { FiscalPeriod } from '@/types'
 
 import { filesIncomeReturn, isEntityType, usesInk2 } from '@/lib/company/entity-type'
@@ -76,7 +83,8 @@ const LonejournalView = dynamic(() =>
  * optional date-range control, and the report body. Drilling into an account
  * navigates to /reports/huvudbok?account=… with the report's window and
  * dimension filter: drill state lives in the URL, and the huvudbok opens on
- * it.
+ * it. Each report also keeps its own window and filter in its URL, so back,
+ * reload and a second window open on what it showed.
  */
 function FocusedReportInner({
   slug,
@@ -92,15 +100,25 @@ function FocusedReportInner({
   const { company } = useCompany()
   const t = useTranslations('reports')
 
-  const [selectedPeriod, setSelectedPeriod] = useState('')
-  const [selectedPeriodBounds, setSelectedPeriodBounds] = useState<{ start: string; end: string } | null>(null)
-  const [dateRange, setDateRange] = useState<DateRangeValue>({})
   // A drill-down arrives with the clicked report's window and dimension
-  // filter in the URL (lib/reports/report-drilldown.ts). Read once: after
-  // that the page's own controls own the state.
-  const [drilldown] = useState(() => parseDrilldownParams(searchParams))
+  // filter in the URL (lib/reports/report-drilldown.ts), and a report reached
+  // by back, reload or a second window with its own. Read once: after that
+  // the page's own controls own the state, and the effect below writes it back.
+  const [fromUrl] = useState(() => parseDrilldownParams(searchParams))
+  // The year the URL's window lies in opens instead of the remembered one;
+  // FyPicker restores nothing over a value it is given.
+  const [urlPeriod] = useState(() =>
+    initialCompanyId === company?.id
+      ? periodForWindow(prepareFiscalPeriods(initialPeriods, true), fromUrl.range)
+      : null,
+  )
+  const [selectedPeriod, setSelectedPeriod] = useState(urlPeriod?.id ?? '')
+  const [selectedPeriodBounds, setSelectedPeriodBounds] = useState<{ start: string; end: string } | null>(
+    urlPeriod ? { start: urlPeriod.period_start, end: urlPeriod.period_end } : null,
+  )
+  const [dateRange, setDateRange] = useState<DateRangeValue>({})
   const [dimensionFilter, setDimensionFilter] = useState<DimensionFilterValue | null>(() =>
-    DIMENSION_FILTER_SLUGS.has(slug) ? drilldown.dimension : null,
+    DIMENSION_FILTER_SLUGS.has(slug) ? fromUrl.dimension : null,
   )
   const [isReady, setIsReady] = useState(false)
 
@@ -130,19 +148,43 @@ function FocusedReportInner({
   const filesInk2 = isEntityType(company?.entity_type) && usesInk2(company.entity_type)
   const filesInk3 = isEntityType(company?.entity_type) && filesIncomeReturn(company.entity_type) === 'INK3'
 
+  // What the figures cover. Written with both bounds even for the whole year,
+  // so a page opening on it does not fall back to its own remembered preset.
+  const windowFrom = isPeriodless ? undefined : (dateRange.fromDate ?? selectedPeriodBounds?.start)
+  const windowTo = isPeriodless ? undefined : (dateRange.toDate ?? selectedPeriodBounds?.end)
+  const dimNo = showDim ? dimensionFilter?.dimNo : undefined
+  const dimCode = showDim ? dimensionFilter?.code : undefined
+
+  // The report's window and filter live in its URL as well (crm#1279), so the
+  // browser's back button, a reload or a second window opens on exactly this
+  // report. replaceState, not a navigation: a filter change is not a step to
+  // go back through, and it needs no server round trip.
+  useEffect(() => {
+    if (!windowFrom || !windowTo) return
+    const params = new URLSearchParams(window.location.search)
+    const next = withReportState(params, {
+      fromDate: windowFrom,
+      toDate: windowTo,
+      dimension: dimNo && dimCode ? { dimNo, code: dimCode } : null,
+    })
+    if (next.toString() !== params.toString()) {
+      window.history.replaceState(null, '', `${window.location.pathname}?${next.toString()}`)
+    }
+  }, [windowFrom, windowTo, dimNo, dimCode])
+
   // Drilling from a report into the general ledger is a route change, so the
-  // account lands in the URL and the browser back button returns to the report.
-  // The window and the dimension filter ride along: they are what the clicked
-  // amount covers. The window is sent with both bounds even for the whole
-  // year, so the ledger does not fall back to its own remembered preset.
-  const navigateToAccount = (accountNumber: string) => {
-    router.push(
+  // account lands in the URL and the browser back button returns to the
+  // report. The window and the dimension filter ride along: they are what the
+  // clicked amount covers. The href also backs a real link on every row, so
+  // the account opens in a new tab or window the browser's way.
+  const accountDrilldown: AccountDrilldown = {
+    href: (accountNumber) =>
       huvudbokDrilldownHref(accountNumber, {
-        fromDate: dateRange.fromDate ?? selectedPeriodBounds?.start,
-        toDate: dateRange.toDate ?? selectedPeriodBounds?.end,
-        dimension: showDim ? dimensionFilter : null,
+        fromDate: windowFrom,
+        toDate: windowTo,
+        dimension: dimNo && dimCode ? { dimNo, code: dimCode } : null,
       }),
-    )
+    navigate: (href) => router.push(href),
   }
 
   return (
@@ -198,7 +240,7 @@ function FocusedReportInner({
               periodEnd={selectedPeriodBounds.end}
               value={dateRange}
               onChange={setDateRange}
-              initialValue={drilldown.range}
+              initialValue={fromUrl.range}
             />
           )}
           {showDim && <DimensionFilter value={dimensionFilter} onChange={setDimensionFilter} />}
@@ -219,7 +261,7 @@ function FocusedReportInner({
           isEnskildFirma={isEnskildFirma}
           filesInk2={filesInk2}
           filesInk3={filesInk3}
-          onNavigateToAccount={navigateToAccount}
+          drilldown={accountDrilldown}
         />
       ) : (
         <EmptyState
@@ -243,7 +285,7 @@ function FocusedView({
   isEnskildFirma,
   filesInk2,
   filesInk3,
-  onNavigateToAccount,
+  drilldown,
 }: {
   slug: string
   reportName: string
@@ -254,21 +296,21 @@ function FocusedView({
   isEnskildFirma: boolean
   filesInk2: boolean
   filesInk3: boolean
-  onNavigateToAccount: (account: string) => void
+  drilldown: AccountDrilldown
 }) {
   switch (slug) {
     case 'resultatrapport':
-      return <ResultatrapportView periodId={periodId} dateRange={dateRange} dimensionFilter={dimensionFilter} onNavigateToAccount={onNavigateToAccount} />
+      return <ResultatrapportView periodId={periodId} dateRange={dateRange} dimensionFilter={dimensionFilter} drilldown={drilldown} />
     case 'dimension-pnl':
       return <DimensionPnlView periodId={periodId} dateRange={dateRange} />
     case 'balansrapport':
-      return <BalansrapportView periodId={periodId} dateRange={dateRange} onNavigateToAccount={onNavigateToAccount} />
+      return <BalansrapportView periodId={periodId} dateRange={dateRange} drilldown={drilldown} />
     case 'trial-balance':
-      return <TrialBalanceView periodId={periodId} onNavigateToAccount={onNavigateToAccount} />
+      return <TrialBalanceView periodId={periodId} drilldown={drilldown} />
     case 'income-statement':
-      return <IncomeStatementView periodId={periodId} dateRange={dateRange} dimensionFilter={dimensionFilter} onNavigateToAccount={onNavigateToAccount} />
+      return <IncomeStatementView periodId={periodId} dateRange={dateRange} dimensionFilter={dimensionFilter} drilldown={drilldown} />
     case 'balance-sheet':
-      return <BalanceSheetView periodId={periodId} dateRange={dateRange} onNavigateToAccount={onNavigateToAccount} />
+      return <BalanceSheetView periodId={periodId} dateRange={dateRange} drilldown={drilldown} />
     case 'vat-declaration':
       return <VatDeclarationView pageTitle={reportName} />
     case 'periodisk-sammanstallning':
