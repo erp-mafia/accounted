@@ -146,3 +146,50 @@ export const PURCHASE_CATEGORY_VAT_NATURE: Readonly<Record<PurchaseCategoryCode,
 export function purchaseVatNature(code: PurchaseCategoryCode): PurchaseVatNature {
   return PURCHASE_CATEGORY_VAT_NATURE[code] ?? 'unknown'
 }
+
+/**
+ * The categories whose Swedish input VAT a click cannot settle, because the
+ * deduction turns on facts no document carries (ML 2023:200 13 kap.):
+ * representation and meals (24-25 §§: only a meal, at most the VAT on 300 kr
+ * per person and occasion, and how many were there is the person's to say),
+ * a hired car (21-22 §§: nothing, or half for a personbil used in the
+ * business, and only the person knows which car), and gifts and wellness,
+ * whose deduction depends on who received them.
+ */
+export const LIMITED_DEDUCTION_CATEGORIES: ReadonlySet<PurchaseCategoryCode> = new Set<PurchaseCategoryCode>([
+  'expense.representation.client',
+  'expense.representation.staff',
+  'expense.travel.meals',
+  'expense.travel.car_rental',
+  'expense.vehicle.leasing',
+  'expense.marketing.gifts',
+  'expense.personnel.gifts',
+  'expense.personnel.wellness',
+])
+
+export function deductionLimited(code: PurchaseCategoryCode): boolean {
+  return LIMITED_DEDUCTION_CATEGORIES.has(code)
+}
+
+/**
+ * Swedish purchases that may fall under omvänd betalningsskyldighet in the
+ * construction sector (ML 2023:200 16 kap. 13 §: a buyer that itself provides
+ * bygg- och anläggningstjänster pays the VAT): an invoice with no VAT on it
+ * may be exempt or may be the buyer's to self-assess, and only the person
+ * knows which.
+ */
+export const DOMESTIC_REVERSE_CHARGE_CATEGORIES: ReadonlySet<PurchaseCategoryCode> = new Set<PurchaseCategoryCode>([
+  'expense.goods.subcontracting',
+  'expense.premises.repairs',
+])
+
+/**
+ * Equipment: above half a prisbasbelopp it is an inventarie to capitalise and
+ * depreciate, not a cost (IL 18 kap. 4 §, inventarier av mindre värde).
+ */
+export const CAPITALISABLE_CATEGORIES: ReadonlySet<PurchaseCategoryCode> = new Set<PurchaseCategoryCode>([
+  'expense.equipment.hardware',
+  'expense.equipment.furniture',
+  'expense.equipment.tools',
+  'expense.equipment.machinery',
+])

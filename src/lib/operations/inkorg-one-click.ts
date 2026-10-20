@@ -36,7 +36,11 @@
  *
  *   VAT. A seller in Sweden: input VAT from the document, per rate (refused
  *   to the editor when it exceeds 25 % of the net or mixes rates without a
- *   breakdown); none when the document has none. A seller abroad, no VAT on
+ *   breakdown); none when the document has none. Representation, meals, a
+ *   hired car, gifts and wellness go to the editor: their deduction turns on
+ *   who was there and which car (ML 13 kap 21-25 §§), and so does
+ *   construction work with no VAT on it, which may be the buyer's to
+ *   self-assess (ML 16 kap 13 §). A seller abroad, no VAT on
  *   the document, buying a service: omvänd betalningsskyldighet on the
  *   kronor amount (ruta 21 from the EU, 22 from outside), 25 % unless said
  *   otherwise (ML 6 kap 33 §). Goods, the exceptions (ML 6 kap 38, 39, 46,
@@ -47,7 +51,8 @@
  *
  *   No periodisering: a one-click purchase is below K2's 7 000 kr per post
  *   (BFNAR 2025:2) or a person decides in the editor; accruals are
- *   bokslutstransaktioner (BFL 5 kap 3 §).
+ *   bokslutstransaktioner (BFL 5 kap 3 §). Equipment above half a
+ *   prisbasbelopp is an inventarie to capitalise (IL 18 kap 4 §): the editor.
  *
  *   Supplier. A register path names the matched supplier, else creates one
  *   from the reading (name, numbers, address, the country and type the VAT
@@ -68,7 +73,13 @@ import {
   type ReverseChargeKind,
 } from '@/lib/bookkeeping/vat-entries'
 import { isNotVatRegistered, type VatRegistration } from '@/lib/bookkeeping/vat-registration'
-import { purchaseVatNature } from '@/lib/vat/purchase-category-vat-nature'
+import { getCapitalizationThreshold } from '@/lib/bookkeeping/mapping-engine'
+import {
+  CAPITALISABLE_CATEGORIES,
+  DOMESTIC_REVERSE_CHARGE_CATEGORIES,
+  deductionLimited,
+  purchaseVatNature,
+} from '@/lib/vat/purchase-category-vat-nature'
 import {
   looksForeign,
   sellerCountry,
@@ -116,6 +127,9 @@ export type OneClickReason =
   | 'missing_due_date'
   | 'missing_supplier_name'
   | 'supplier_type_mismatch'
+  | 'limited_deduction'
+  | 'possible_asset'
+  | 'possible_domestic_reverse_charge'
   // No one-click answer for this item.
   | 'no_bank_row'
   | 'credit_note'
@@ -414,22 +428,45 @@ function situation(input: OneClickInput): Situation {
   return { form: null, reason: 'no_bank_row' }
 }
 
-type Vat = { ok: true; vat: OneClickVat; groups: DocumentVat['groups'] } | { ok: false; ask: OneClickAsk; reason: OneClickReason }
+type Vat =
+  | { ok: true; vat: OneClickVat; groups: DocumentVat['groups'] }
+  /** prefill: the VAT the editor opens with, when the document's own VAT is the person's starting point. */
+  | { ok: false; ask: OneClickAsk; reason: OneClickReason; prefill?: OneClickVat }
 
 /** R6: how the purchase's VAT is booked, or what to ask instead. */
 function vatOf(input: OneClickInput, reading: InvoiceExtractionResult, category: PurchaseCategoryCode, region: SellerRegion): Vat {
   const doc = documentVat(reading)
   if (region === 'se') {
-    if (doc.total === 0) return { ok: true, vat: { kind: 'none' }, groups: [] }
-    if (doc.mixedWithoutBreakdown) return { ok: false, ask: 'editor', reason: 'mixed_rates' }
-    const total = finite(reading.totals?.total)
-    const net = finite(reading.totals?.subtotal) ?? (total !== null ? roundOre(total - doc.total) : null)
-    if (net !== null && doc.total > roundOre(net * 0.25) + 0.01) return { ok: false, ask: 'editor', reason: 'vat_exceeds_rate' }
-    if (doc.unknownRate) return { ok: false, ask: 'editor', reason: 'vat_rate_unknown' }
-    if (!isKronorCurrency(reading.invoice?.currency)) return { ok: false, ask: 'editor', reason: 'foreign_currency_vat' }
-    if (isNotVatRegistered(input.company.vatRegistered)) return { ok: true, vat: { kind: 'cost', amount: doc.total }, groups: doc.groups }
-    return { ok: true, vat: { kind: 'input', amount: doc.total, rates: doc.groups.map((g) => g.rate) }, groups: doc.groups }
+    const booked = swedishVat(input, reading, doc)
+    // Representation, meals, a hired car, gifts: the deduction is the person's to work out,
+    // starting from the document's VAT.
+    if (deductionLimited(category)) {
+      return { ok: false, ask: 'editor', reason: 'limited_deduction', ...(booked.ok ? { prefill: booked.vat } : {}) }
+    }
+    // Construction work with no VAT on it may be the buyer's to self-assess (ML 16 kap 13 §).
+    if (booked.ok && booked.vat.kind === 'none' && DOMESTIC_REVERSE_CHARGE_CATEGORIES.has(category)) {
+      return { ok: false, ask: 'editor', reason: 'possible_domestic_reverse_charge' }
+    }
+    return booked
   }
+  return foreignVat(input, doc, category, region)
+}
+
+/** A Swedish seller's VAT as the document states it. */
+function swedishVat(input: OneClickInput, reading: InvoiceExtractionResult, doc: DocumentVat): Vat {
+  if (doc.total === 0) return { ok: true, vat: { kind: 'none' }, groups: [] }
+  if (doc.mixedWithoutBreakdown) return { ok: false, ask: 'editor', reason: 'mixed_rates' }
+  const total = finite(reading.totals?.total)
+  const net = finite(reading.totals?.subtotal) ?? (total !== null ? roundOre(total - doc.total) : null)
+  if (net !== null && doc.total > roundOre(net * 0.25) + 0.01) return { ok: false, ask: 'editor', reason: 'vat_exceeds_rate' }
+  if (doc.unknownRate) return { ok: false, ask: 'editor', reason: 'vat_rate_unknown' }
+  if (!isKronorCurrency(reading.invoice?.currency)) return { ok: false, ask: 'editor', reason: 'foreign_currency_vat' }
+  if (isNotVatRegistered(input.company.vatRegistered)) return { ok: true, vat: { kind: 'cost', amount: doc.total }, groups: doc.groups }
+  return { ok: true, vat: { kind: 'input', amount: doc.total, rates: doc.groups.map((g) => g.rate) }, groups: doc.groups }
+}
+
+/** A seller abroad: omvänd betalningsskyldighet for a service, else the editor. */
+function foreignVat(input: OneClickInput, doc: DocumentVat, category: PurchaseCategoryCode, region: SellerRegion): Vat {
   // Abroad: Swedish VAT is never deducted from a foreign seller's invoice.
   if (doc.total > 0) return { ok: false, ask: 'editor', reason: 'foreign_vat' }
   const nature = purchaseVatNature(category)
@@ -609,8 +646,24 @@ export function planOneClick(input: OneClickInput): OneClickPlan {
   plan.seller = { country: read.country, region }
 
   const vat = vatOf(input, reading, input.category, region)
-  if (!vat.ok) return ask(vat.ask, vat.reason)
+  if (!vat.ok) {
+    if (vat.prefill && gross !== null && bank) {
+      plan.vat = vat.prefill
+      plan.lines = paidLines(gross, vat.prefill, costAccount, bank.settlementAccount, description)
+    }
+    return ask(vat.ask, vat.reason)
+  }
   plan.vat = vat.vat
+
+  // Equipment above half a prisbasbelopp is an inventarie to capitalise, not a cost (IL 18 kap. 4 §).
+  // A register path in a foreign currency is judged once its kronor are known (the fx re-plan).
+  if (CAPITALISABLE_CATEGORIES.has(input.category)) {
+    const total = finite(reading.totals?.total)
+    const kronor =
+      gross ?? (total === null ? null : isKronorCurrency(reading.invoice?.currency) ? total : input.invoiceRate ? total * input.invoiceRate : null)
+    const year = Number((plan.entryDate ?? bank?.date ?? '').slice(0, 4))
+    if (kronor !== null && kronor > getCapitalizationThreshold(year)) return ask('editor', 'possible_asset')
+  }
 
   // A paid purchase whose document is in kronor must be what the bank paid (an öresavrundning aside).
   if (gross !== null && isKronorCurrency(reading.invoice?.currency)) {

@@ -481,3 +481,105 @@ describe('purchaseEntryDate (R4)', () => {
     expect(pairs(plan)).toEqual([['6550', 1000, 0], ['2641', 250, 0], ['1930', 0, 1250]])
   })
 })
+
+describe('planOneClick: deductions a click cannot settle', () => {
+  /** A restaurant receipt like Arcim's A407, 2026-10-20: 370 kr, 12 %. */
+  const LUNCH = doc({
+    supplier: { name: 'Restaurang Exempel AB', orgNumber: '5560000001', address: 'Storgatan 1, 111 22 Stockholm' },
+    invoice: { invoiceDate: '2026-10-13' },
+    totals: { subtotal: 330.35, vatAmount: 39.65, total: 370 },
+    vatBreakdown: [{ rate: 12, base: 330.35, amount: 39.65 }],
+  })
+
+  it('opens the editor for representation, prefilled with the receipt\'s VAT (ML 13 kap 25 §: 300 kr per person)', () => {
+    const plan = planOneClick(input({ category: 'expense.representation.staff', reading: LUNCH, bank: { ...BANK, amountSek: -370 } }))
+    expect(plan.ask).toBe('editor')
+    expect(plan.reason).toBe('limited_deduction')
+    expect(plan.vat).toEqual({ kind: 'input', amount: 39.65, rates: [0.12] })
+    expect(pairs(plan)).toEqual([
+      ['7631', 330.35, 0],
+      ['2641', 39.65, 0],
+      ['1930', 0, 370],
+    ])
+    expect(balanced(plan.lines)).toBe(true)
+  })
+
+  it.each([
+    'expense.representation.client',
+    'expense.travel.meals',
+    'expense.travel.car_rental',
+    'expense.vehicle.leasing',
+    'expense.marketing.gifts',
+    'expense.personnel.gifts',
+    'expense.personnel.wellness',
+  ] as const)('opens the editor for %s from a Swedish seller', (category) => {
+    const plan = planOneClick(input({ category, reading: LUNCH, bank: { ...BANK, amountSek: -370 } }))
+    expect(plan.ask).toBe('editor')
+    expect(plan.reason).toBe('limited_deduction')
+  })
+
+  it('refuses the one click on the book door too: a registration of a representation invoice opens the form', () => {
+    const plan = planOneClick(input({
+      kind: 'supplier_invoice',
+      bank: null,
+      category: 'expense.representation.client',
+      reading: doc({
+        documentKind: 'supplier_invoice',
+        supplier: { name: 'Restaurang Exempel AB', orgNumber: '5560000001' },
+        invoice: { invoiceNumber: 'R-1', invoiceDate: '2026-10-13', dueDate: '2026-11-12' },
+        totals: { subtotal: 1000, vatAmount: 120, total: 1120 },
+      }),
+    }))
+    expect(plan.form).toBe('register')
+    expect(plan.ask).toBe('editor')
+    expect(plan.reason).toBe('limited_deduction')
+  })
+
+  it('still books fuel, a running cost of the car, in one click (ML 13 kap 23 §)', () => {
+    const plan = planOneClick(input({
+      category: 'expense.vehicle.fuel',
+      reading: doc({ supplier: { name: 'Bensinstation AB', orgNumber: '5560000002' }, totals: { subtotal: 400, vatAmount: 100, total: 500 } }),
+      bank: { ...BANK, amountSek: -500 },
+    }))
+    expect(plan.ask).toBeNull()
+    expect(plan.vat).toEqual({ kind: 'input', amount: 100, rates: [0.25] })
+  })
+
+  const LAPTOP = (total: number) =>
+    doc({ supplier: { name: 'Datorbutiken AB', orgNumber: '5560000003' }, totals: { subtotal: total * 0.8, vatAmount: total * 0.2, total } })
+
+  it('opens the editor for equipment above half a prisbasbelopp, an inventarie to capitalise (IL 18 kap 4 §)', () => {
+    const plan = planOneClick(input({ category: 'expense.equipment.hardware', reading: LAPTOP(37_500), bank: { ...BANK, amountSek: -37_500 } }))
+    expect(plan.ask).toBe('editor')
+    expect(plan.reason).toBe('possible_asset')
+  })
+
+  it('books equipment below the limit as a cost in one click', () => {
+    const plan = planOneClick(input({ category: 'expense.equipment.hardware', reading: LAPTOP(12_500), bank: { ...BANK, amountSek: -12_500 } }))
+    expect(plan.ask).toBeNull()
+    expect(plan.form).toBe('direct')
+  })
+})
+
+describe('planOneClick: construction work with no VAT on it', () => {
+  const SUBCONTRACTOR = doc({
+    supplier: { name: 'Snickeri Exempel AB', orgNumber: '5560000004' },
+    totals: { subtotal: 8000, vatAmount: 0, total: 8000 },
+  })
+
+  it('opens the editor: the buyer may be the one to pay the VAT (ML 16 kap 13 §)', () => {
+    const plan = planOneClick(input({ category: 'expense.goods.subcontracting', reading: SUBCONTRACTOR, bank: { ...BANK, amountSek: -8000 } }))
+    expect(plan.ask).toBe('editor')
+    expect(plan.reason).toBe('possible_domestic_reverse_charge')
+  })
+
+  it('books the same work with Swedish VAT on it in one click', () => {
+    const plan = planOneClick(input({
+      category: 'expense.premises.repairs',
+      reading: doc({ supplier: { name: 'Snickeri Exempel AB', orgNumber: '5560000004' }, totals: { subtotal: 8000, vatAmount: 2000, total: 10_000 } }),
+      bank: { ...BANK, amountSek: -10_000 },
+    }))
+    expect(plan.ask).toBeNull()
+    expect(plan.vat).toEqual({ kind: 'input', amount: 2000, rates: [0.25] })
+  })
+})
