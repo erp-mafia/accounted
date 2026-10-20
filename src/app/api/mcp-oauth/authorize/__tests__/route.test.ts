@@ -1622,3 +1622,159 @@ describe('RFC 9207 iss parameter on authorization responses', () => {
     )
   })
 })
+
+describe('login and MFA redirects behind a reverse proxy', () => {
+  const authorizeParams = {
+    response_type: 'code',
+    redirect_uri: 'https://claude.ai/api/mcp/auth_callback',
+    code_challenge: 'abc',
+    code_challenge_method: 'S256',
+    scope: 'mcp',
+    state: 'xyz',
+  }
+
+  // What a standalone Next.js server behind Nginx/Traefik sees: its own bind
+  // address in request.url, the public host only in the Host header.
+  function proxiedRequest(init?: RequestInit): Request {
+    const url = new URL(buildAuthorizeUrl(authorizeParams))
+    url.protocol = 'http:'
+    url.host = '0.0.0.0:3000'
+    return new Request(url.toString(), {
+      ...init,
+      headers: { host: 'app.test.example', 'x-forwarded-proto': 'https' },
+    })
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-key'
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.test.example')
+    vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
+    mocks.resolveRedirectUri.mockResolvedValue(CLAUDE)
+    mocks.getActiveCompanyId.mockResolvedValue('company-1')
+    mocks.getBranding.mockReturnValue({ appName: 'gnubok' })
+    // clearAllMocks keeps implementations, so the brand registry from the
+    // iss tests above would otherwise answer here: start from an empty one.
+    mocks.resolveBrandResultByHost.mockResolvedValue({ brand: null, lookupFailed: false })
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('GET sends an anonymous visitor to /login on the public host, not the bind address', async () => {
+    mocks.createClient.mockResolvedValue(buildSupabase(null))
+
+    const response = await GET(proxiedRequest())
+
+    const location = new URL(response.headers.get('location')!)
+    expect(location.origin).toBe('https://app.test.example')
+    expect(location.pathname).toBe('/login')
+    const next = new URL(location.searchParams.get('next')!, location.origin)
+    expect(next.pathname).toBe('/api/mcp-oauth/authorize')
+    expect(next.searchParams.get('state')).toBe('xyz')
+  })
+
+  it('POST sends an anonymous visitor to /login on the public host', async () => {
+    mocks.createClient.mockResolvedValue(buildSupabase(null))
+
+    const response = await POST(proxiedRequest({ method: 'POST', body: consentForm('mcp') }))
+
+    const location = new URL(response.headers.get('location')!)
+    expect(location.origin).toBe('https://app.test.example')
+    expect(location.pathname).toBe('/login')
+  })
+
+  it('GET steps an AAL1 session up to /mfa/verify on the public host', async () => {
+    mocks.createClient.mockResolvedValue(
+      buildSupabase({ id: 'user-1' }, 'Test AB', { currentLevel: 'aal1', nextLevel: 'aal2' }),
+    )
+
+    const response = await GET(proxiedRequest())
+
+    const location = new URL(response.headers.get('location')!)
+    expect(location.origin).toBe('https://app.test.example')
+    expect(location.pathname).toBe('/mfa/verify')
+  })
+
+  it('an unrecognised Host header falls back to the canonical origin', async () => {
+    mocks.createClient.mockResolvedValue(buildSupabase(null))
+    const url = new URL(buildAuthorizeUrl(authorizeParams))
+    url.host = '0.0.0.0:3000'
+
+    const response = await GET(new Request(url.toString(), { headers: { host: 'evil.example' } }))
+
+    expect(new URL(response.headers.get('location')!).origin).toBe('https://app.test.example')
+  })
+
+  // The Host header is attacker-controlled: whatever it names, the login and
+  // step-up redirects may only land on a host this deployment serves.
+  function spoofedRequest(headers: Record<string, string>, init?: RequestInit): Request {
+    const url = new URL(buildAuthorizeUrl(authorizeParams))
+    url.protocol = 'http:'
+    url.host = '0.0.0.0:3000'
+    return new Request(url.toString(), { ...init, headers })
+  }
+
+  it('a spoofed Host never becomes the login or step-up origin (GET, POST, MFA)', async () => {
+    mocks.createClient.mockResolvedValue(buildSupabase(null))
+    const login = await GET(spoofedRequest({ host: 'evil.example' }))
+    expect(new URL(login.headers.get('location')!).origin).toBe('https://app.test.example')
+
+    const posted = await POST(
+      spoofedRequest({ host: 'evil.example' }, { method: 'POST', body: consentForm('mcp') }),
+    )
+    expect(new URL(posted.headers.get('location')!).origin).toBe('https://app.test.example')
+
+    mocks.createClient.mockResolvedValue(
+      buildSupabase({ id: 'user-1' }, 'Test AB', { currentLevel: 'aal1', nextLevel: 'aal2' }),
+    )
+    const stepUp = await GET(spoofedRequest({ host: 'evil.example' }))
+    const location = new URL(stepUp.headers.get('location')!)
+    expect(location.origin).toBe('https://app.test.example')
+    expect(location.pathname).toBe('/mfa/verify')
+  })
+
+  it('a look-alike of a trusted host falls back to the canonical origin', async () => {
+    mocks.createClient.mockResolvedValue(buildSupabase(null))
+    for (const host of ['localhost.evil.example', 'app.test.example.evil.example', 'app.gnubok.se.evil.example']) {
+      const response = await GET(spoofedRequest({ host }))
+      expect(new URL(response.headers.get('location')!).origin).toBe('https://app.test.example')
+    }
+  })
+
+  it('ignores a spoofed X-Forwarded-Host: only the Host header is classified', async () => {
+    mocks.createClient.mockResolvedValue(buildSupabase(null))
+
+    const response = await GET(
+      spoofedRequest({ host: 'app.test.example', 'x-forwarded-host': 'evil.example' }),
+    )
+
+    expect(new URL(response.headers.get('location')!).origin).toBe('https://app.test.example')
+    expect(mocks.resolveBrandResultByHost).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the canonical origin when the brand registry cannot be read', async () => {
+    mocks.createClient.mockResolvedValue(buildSupabase(null))
+    mocks.resolveBrandResultByHost.mockResolvedValue({ brand: null, lookupFailed: true })
+
+    const response = await GET(spoofedRequest({ host: 'unknown.example' }))
+
+    expect(new URL(response.headers.get('location')!).origin).toBe('https://app.test.example')
+  })
+
+  it('keeps a registered byrå domain, upgraded to https', async () => {
+    mocks.createClient.mockResolvedValue(buildSupabase(null))
+    mocks.resolveBrandResultByHost.mockImplementation(async (host: unknown) => ({
+      brand: host === 'byra.test.example' ? { domain: 'byra.test.example' } : null,
+      lookupFailed: false,
+    }))
+
+    const response = await GET(spoofedRequest({ host: 'byra.test.example' }))
+
+    const location = new URL(response.headers.get('location')!)
+    expect(location.origin).toBe('https://byra.test.example')
+    expect(location.pathname).toBe('/login')
+  })
+})
