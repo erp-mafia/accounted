@@ -221,6 +221,15 @@ export async function resolvePeriodDates(
 export const VAT_SETTLEMENT_NET_ACCOUNTS = ['2650', '1650']
 
 /**
+ * BAS 26xx, the moms accounts: what the SQL's tax-account shape reads as VAT
+ * (vat_account_pattern '26%' in get_vat_declaration_totals). A momsredovisning
+ * clears these; 2650 among them is the net it settles to.
+ */
+export function isMomsAccount(account: string): boolean {
+  return account.startsWith('26')
+}
+
+/**
  * How a verifikat kept out of the rutor was recognised as a momsredovisning,
  * as the MCP VAT report labels it:
  *   - `tagged`: source_type 'vat_settlement';

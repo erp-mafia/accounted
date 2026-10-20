@@ -2497,7 +2497,7 @@ Example response `200`:
 **The proposed momsredovisning verifikat for a VAT period: clear 26xx to 2650 or 1650.**
 `scope:reports:read · risk:low · idempotent`
 
-Builds the settlement entry for a momsperiod from the same ledger totals as the momsdeklaration: every output VAT account (261x-263x, reverse charge and import included) debited and every input VAT account (264x) credited by its period balance at exact öre, the net to 2650 (att betala, credit) or 1650 (att återfå, debit) at the whole-krona amount the declaration is filed with (ruta 49), and the öre gap on 3740. Dated the period's last day, or the first open day after it when that day is closed or locked (entry_date_reason says why). existing_entries lists settlements already booked or drafted in the period (tagged vat_settlement or recognised by shape); booking_status sums them up. fingerprint identifies these exact lines. Read-only.
+Builds the settlement entry for a momsperiod from the same ledger totals as the momsdeklaration: every output VAT account (261x-263x, reverse charge and import included) debited and every input VAT account (264x) credited by its period balance at exact öre, the net to 2650 (att betala, credit) or 1650 (att återfå, debit) at the whole-krona amount the declaration is filed with (ruta 49), and the öre gap on 3740. Dated the period's last day, or the first open day after it when that day is closed or locked (entry_date_reason says why). existing_entries lists the settlements already booked or drafted for the period: dated inside it (tagged vat_settlement or recognised by shape) unless it clears exactly the previous period's balances instead, or dated after it and clearing exactly this period's balances (late_settlement set); booking_status sums them up. fingerprint identifies these exact lines. Read-only.
 
 **Use when:** Before booking the VAT for a period (POST /vat/settlement), to review what will be posted.
 **Do not use for:** The declaration rutor themselves (GET /reports/vat-declaration) or paying the VAT (the skattekonto payment is booked separately).
@@ -2528,7 +2528,7 @@ Response `200`:
     filed_net: number,
     rounding_amount: number,
     is_empty: boolean,
-    existing_entries: { journal_entry_id: string, status: string, entry_date: string, source_type: string | null, voucher_series: string | null, voucher_number: number | null }[],
+    existing_entries: { journal_entry_id: string, status: string, entry_date: string, source_type: string | null, voucher_series: string | null, voucher_number: number | null, late_settlement?: { cleared: number, net: number, via: "net_account" | "tax_account" } }[],
     booking_status: "booked" | "draft" | "none",
     fingerprint: string
   },
@@ -2961,7 +2961,7 @@ Example response `200`:
 **Book the momsredovisning verifikat for a VAT period, exactly as the proposal gives it.**
 `scope:bookkeeping:write · risk:high · idempotent · dry-run`
 
-Posts the settlement proposal of GET /reports/vat-declaration/settlement-proposal as a verifikat (source_type vat_settlement) through the bookkeeping engine: 26xx cleared, the net on 2650 or 1650 at the filed whole-krona amount, the öre gap on 3740, dated the proposal's entry_date (the period's last day, or the first open day after it). The lines are the server's, never the caller's. Refused when a settlement is already posted in the period, when there is nothing to clear, when expected_fingerprint no longer matches, or when the date is locked. The declaration projection excludes vat_settlement entries, so the momsdeklaration does not change. Idempotent. Dry-runnable: the dry run previews the verifikat and writes nothing.
+Posts the settlement proposal of GET /reports/vat-declaration/settlement-proposal as a verifikat (source_type vat_settlement) through the bookkeeping engine: 26xx cleared, the net on 2650 or 1650 at the filed whole-krona amount, the öre gap on 3740, dated the proposal's entry_date (the period's last day, or the first open day after it). The lines are the server's, never the caller's. Refused when a settlement is already posted for the period (also one dated after it that clears exactly its balances), when there is nothing to clear, when expected_fingerprint no longer matches, or when the date is locked. The declaration projection excludes vat_settlement entries, so the momsdeklaration does not change. Idempotent. Dry-runnable: the dry run previews the verifikat and writes nothing.
 
 **Use when:** The VAT period is reviewed (and usually filed) and the 26xx accounts should be cleared to the skattekonto liability.
 **Do not use for:** Filing the momsdeklaration with Skatteverket (the eSKD file or the Skatteverket connection), booking the payment to the skattekonto, or custom settlement lines (post an ordinary verifikat with POST /journal-entries).

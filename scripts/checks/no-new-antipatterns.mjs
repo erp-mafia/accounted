@@ -531,6 +531,9 @@ const LEDGER_SCAN_SANCTIONED = new Set([
   'lib/reports/continuity-check.ts',
   'lib/reports/rc-basis-gaps.ts',
   'lib/reports/vat-settlement.ts',
+  // Sums named momsredovisning verifikat and opening-balance vouchers, one by
+  // one, to tie each to the period it settles; no closing verifikat is read.
+  'lib/reports/vat-settlement-match.ts',
   'lib/reports/vat-declaration.ts',
   'lib/reports/periodisk-sammanstallning.ts',
   'lib/reports/avgifter-basis.ts',

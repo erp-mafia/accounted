@@ -16,6 +16,7 @@ vi.mock('@/lib/supabase/server', () => ({
 }))
 
 import { tools, isStagingTool, STAGE_BRIDGE_TARGETS } from '../server'
+import { toToolError } from '../tool-result'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/scope-catalog'
 import {
   registerPaymentInitiationProvider,
@@ -147,6 +148,36 @@ describe('bank payment tools', () => {
     expect(recording.rpcs).toEqual([])
     const preview = result.preview as Record<string, unknown>
     expect(preview.lines).toEqual([expect.objectContaining({ supplier_invoice_id: INVOICE_ID, amount: 737.5 })])
+  })
+
+  it("prepare stages from an account at a bank outside the tables by its connection's BIC, and names why an account cannot pay (crm#1314)", async () => {
+    const invoice = {
+      id: INVOICE_ID, supplier_id: 'sup-1', status: 'approved', approved_at: '2026-08-01T10:00:00Z', due_date: '2099-08-20', remaining_amount: 113,
+      currency: 'SEK', is_credit_note: false, payment_reference: null, supplier_invoice_number: 'F-1',
+      payee_bankgiro: null, payee_plusgiro: null, payee_clearing: null, payee_account: null,
+    }
+    const rows = (bic: string | null) => ({
+      company_settings: { org_number: '5566778899', is_sandbox: false },
+      // 971: a Swedish IBAN at a bank outside the clearing and bank-name tables.
+      cash_accounts: { id: ACCOUNT_ID, iban: 'SE5497100000012345678901', currency: 'SEK', name: 'Företagskonto', enabled: true, bank_connection: { bank_name: 'Lunar', bic } },
+      supplier_invoices: [invoice],
+      suppliers: [{ id: 'sup-1', name: 'Leverantör AB', bankgiro: '5050-1055', plusgiro: null, bank_account: null, clearing_number: null, account_number: null }],
+      supplier_payment_batch_items: [],
+      payment_orders: [],
+      pending_operations: { id: 'pending-1', status: 'pending', operation_type: 'prepare_payment_orders', created_at: '2026-10-10T09:00:00Z' },
+    })
+    const args = { supplier_invoice_ids: [INVOICE_ID], cash_account_id: ACCOUNT_ID }
+
+    const payable = recordingClient(rows('LUNADK2B'))
+    const staged = (await tool('gnubok_prepare_payments').execute(args, COMPANY_ID, USER_ID, payable.client, { type: 'api_key', id: 'key-1' })) as Record<string, unknown>
+    expect(staged.staged).toBe(true)
+
+    const unnamed = recordingClient(rows(null))
+    const refusal = await tool('gnubok_prepare_payments')
+      .execute(args, COMPANY_ID, USER_ID, unnamed.client, { type: 'api_key', id: 'key-1' })
+      .then(() => null, (error: unknown) => error)
+    expect(toToolError(refusal).error).toMatchObject({ code: 'PAYMENT_ORDERS_ACCOUNT_NOT_PAYABLE', details: { reason: 'bank_unknown' } })
+    expect(unnamed.recording.mutations).toEqual([])
   })
 
   it('prepare stages a payment in to the skattekonto from a filed AGI, with what it pays in the preview', async () => {

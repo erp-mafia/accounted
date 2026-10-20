@@ -50,6 +50,9 @@ import type { Logger } from '@/lib/logger'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type { BookingTemplateLibraryLine, Transaction } from '@/types'
 import { applyTemplate, libraryLinesForCompanySkattekonto } from '@/lib/bookkeeping/template-library'
+import { bankNetAccountTest } from '@/lib/bookkeeping/bank-leg'
+import { isGeneratedVatAccount } from '@/lib/bookkeeping/vat-entries'
+import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import type { SqlBusinessEventLink } from '@/lib/bookkeeping/business-event-link'
 import { bulkBookedBankLineBusinessEvent } from '@/lib/bookkeeping/sql-posting-business-events'
 import { linkBasisColumns } from '@/lib/links/stamp'
@@ -229,6 +232,14 @@ export async function bulkBookTransactions(
     const invalid = accountNumbers.filter((n) => !validSet.has(n))
     if (invalid.length > 0) return { ok: false, code: 'BULK_BOOK_INVALID_ACCOUNT', details: { invalid_accounts: invalid } }
 
+    let isBusinessLine: (account: string) => boolean = () => false
+    if (body.default_dimensions) {
+      try {
+        isBusinessLine = await manualBusinessLineTest(supabase, companyId, txTyped, opLog)
+      } catch (err) {
+        return { ok: false, code: 'UNKNOWN_ERROR', error: err }
+      }
+    }
     newEntryPayload = {
       description: body.entry_description,
       lines: body.manual_lines.map((l, i) => ({
@@ -238,8 +249,12 @@ export async function bulkBookTransactions(
         currency: l.currency,
         line_description: l.line_description,
         sort_order: i,
-        // Dimensions PR7: per-line bag wins over the header default.
-        dimensions: mergeDimensionBags(body.default_dimensions, l.dimensions),
+        // Dimensions PR7: per-line bag wins over the header default, which
+        // tags the business lines only (crm#1313).
+        dimensions: mergeDimensionBags(
+          isBusinessLine(l.account_number) ? body.default_dimensions : undefined,
+          l.dimensions,
+        ),
       })),
     }
   } else if (body.template_id && body.mode && body.entry_description) {
@@ -274,11 +289,19 @@ export async function bulkBookTransactions(
     const totalAbs = roundOre(txTyped.reduce((s, t) => s + Math.abs(t.amount), 0))
     const lines: ComputedLine[] = []
     let sortOrder = 0
+    // applyTemplate answers one form line per template line, in order. The
+    // header default tags the template's business lines only: its
+    // settlement (bank) and moms lines stay untagged (crm#1313).
+    const applied = (amount: number) =>
+      applyTemplate(templateLines, amount).map((formLine, i) => ({
+        formLine,
+        dimensions: templateLines[i]?.type === 'business' ? body.default_dimensions : undefined,
+      }))
 
     if (body.mode === 'sum_per_account') {
       // One application at the summed amount: one line per template line.
       // Per-row detail stays recoverable via transaction_voucher_links.
-      for (const formLine of applyTemplate(templateLines, totalAbs)) {
+      for (const { formLine, dimensions } of applied(totalAbs)) {
         const debit = parseFloat(formLine.debit_amount || '0') || 0
         const credit = parseFloat(formLine.credit_amount || '0') || 0
         if (debit === 0 && credit === 0) continue
@@ -289,14 +312,14 @@ export async function bulkBookTransactions(
           currency,
           line_description: formLine.line_description || undefined,
           sort_order: sortOrder++,
-          dimensions: body.default_dimensions,
+          dimensions,
         })
       }
     } else {
       // one_line_per_tx: the template per row, each line tagged with a short
       // row reference (BFL 5 kap 7 § motpart identification).
       for (const tx of txTyped) {
-        for (const formLine of applyTemplate(templateLines, Math.abs(tx.amount))) {
+        for (const { formLine, dimensions } of applied(Math.abs(tx.amount))) {
           const debit = parseFloat(formLine.debit_amount || '0') || 0
           const credit = parseFloat(formLine.credit_amount || '0') || 0
           if (debit === 0 && credit === 0) continue
@@ -310,7 +333,7 @@ export async function bulkBookTransactions(
               ? `${formLine.line_description ?? ''}: ${txTag}`.trim()
               : formLine.line_description || undefined,
             sort_order: sortOrder++,
-            dimensions: body.default_dimensions,
+            dimensions,
           })
         }
       }
@@ -572,6 +595,35 @@ function manualLinesRefusal(lines: NonNullable<BulkBookInput['manual_lines']>): 
     }
   }
   return null
+}
+
+/**
+ * Which manual lines the header default_dimensions tag: the business lines,
+ * that is every line except the bank side and the moms lines. The rule
+ * categorize books by (buildTransactionEntryLines in
+ * lib/bookkeeping/transaction-entries.ts) and the template path above
+ * (its settlement and vat lines): a project or cost centre belongs to the
+ * cost or revenue, never to the settlement of the bank rows or to the moms
+ * on them (crm#1313). The bank side is the one bulk_book_transactions
+ * measures its bank net on (bankNetAccountTest over the rows' settlement
+ * ledgers), so a Stripe balance on 1686 is recognised as well as 1930. A
+ * line's own bag is the caller's explicit choice and is never filtered.
+ * The moms lines are told apart the way a proposal's are
+ * (isGeneratedVatAccount). Throws on a failed cash account lookup (nothing
+ * is written yet).
+ */
+async function manualBusinessLineTest(
+  supabase: SupabaseClient,
+  companyId: string,
+  txs: SelectedTx[],
+  log: Logger,
+): Promise<(account: string) => boolean> {
+  const cashAccountIds = Array.from(new Set(txs.map((t) => t.cash_account_id ?? null)))
+  const ledgers = await Promise.all(
+    cashAccountIds.map((id) => resolveSettlementAccount(supabase, companyId, id, log)),
+  )
+  const isBankSide = bankNetAccountTest(ledgers)
+  return (account) => !isBankSide(account) && !isGeneratedVatAccount(account)
 }
 
 /**

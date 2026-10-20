@@ -4171,7 +4171,8 @@
     "registration_first_refused": "The invoice is not booked yet and is booked before the payment is recorded, but it could not be booked:",
     "cancel": "Cancel",
     "confirming": "Confirming...",
-    "confirm_match": "Confirm match"
+    "confirm_match": "Confirm match",
+    "split_across_invoices": "Does the row pay more invoices? Split it across several"
   },
   "tx_rot_rut_match": {
     "title": "Confirm ROT/RUT payout",
@@ -4236,7 +4237,15 @@
     "exact_match": "Exact match",
     "no_search_results": "No invoice matches \"{term}\"",
     "capped_hint": "Showing the {limit} most recent. Search by number or name to find older ones.",
-    "capped_search_hint": "Showing the {limit} most recent matches. Type more to narrow it down."
+    "capped_search_hint": "Showing the {limit} most recent matches. Type more to narrow it down.",
+    "invoice_pick_aria": "Select {number} for one combined payment",
+    "invoices_picked_sum": "{count, plural, one {# invoice selected} other {# invoices selected}} · {amount}",
+    "invoices_picked_exact": "Matches the bank row",
+    "invoices_picked_ore_rounding": "{amount} off the bank row: booked as öre rounding",
+    "invoices_picked_partial": "{amount} more than the bank row: {number} is paid in part",
+    "invoices_picked_over": "{amount} more than the bank row: untick an invoice",
+    "invoices_picked_short": "{amount} of the bank row has no invoice: select more invoices",
+    "invoices_match_picked": "Match {count, plural, one {selected} other {# selected}}"
   },
   "tx_bulk_book": {
     "title": "Book {count} transactions from {date}",
@@ -4273,7 +4282,7 @@
     "manual_remove_line": "Remove line",
     "manual_description_placeholder": "Description (optional)",
     "docs_inherit_hint": "{count, plural, one {# supporting document will follow (7-year retention per BFL 7 kap)} other {# supporting documents will follow (7-year retention per BFL 7 kap)}}",
-    "dimensions_hint": "The dimensions are applied to the voucher's lines.",
+    "dimensions_hint": "The dimensions are applied to the voucher's lines, except the bank and VAT lines.",
     "mixed_currency_description": "The selection contains transactions in more than one currency.",
     "mixed_currency_totals_label": "Total per currency",
     "mixed_currency_blocked": "A combined verifikat must be reported in a single currency (BFL 4 kap 6 §). The amounts cannot be summed together, so this selection cannot be booked. Select transactions one currency at a time.",

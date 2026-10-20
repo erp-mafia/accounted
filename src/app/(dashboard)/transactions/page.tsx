@@ -3016,6 +3016,43 @@ export default function TransactionsPage() {
     setMatchDialogOpen(true)
   }
 
+  // Several invoices ticked in either picker (PH 192): close it and open the
+  // batch allocation with them, where the samlingsverifikat is confirmed.
+  function handleSelectSeveralFromPicker(allocations: BatchAllocationPrefill[]) {
+    const tx = invoicePickerTransaction ?? supplierInvoicePickerTransaction
+    if (!tx || allocations.length === 0) return
+    setInvoicePickerOpen(false)
+    setInvoicePickerTransaction(null)
+    setSupplierInvoicePickerOpen(false)
+    setSupplierInvoicePickerTransaction(null)
+    openSplitMatchDialog(tx, allocations)
+  }
+
+  // The row pays more than the one invoice in the match dialog: carry that
+  // invoice into the batch allocation, where the other ones are added.
+  function handleSplitFromMatchDialog() {
+    const tx = selectedTransaction
+    if (!tx) return
+    const prefill: BatchAllocationPrefill[] = []
+    if (tx.amount > 0 && tx.potential_invoice) {
+      const invoice = tx.potential_invoice
+      prefill.push({
+        kind: 'customer_invoice',
+        invoice_id: invoice.id,
+        amount: roundOre(Number(invoice.remaining_amount ?? invoice.total)),
+      })
+    } else if (tx.amount < 0 && tx.potential_supplier_invoice) {
+      const invoice = tx.potential_supplier_invoice
+      prefill.push({
+        kind: 'supplier_invoice',
+        supplier_invoice_id: invoice.id,
+        amount: roundOre(Number(invoice.remaining_amount ?? invoice.total)),
+      })
+    }
+    setMatchDialogOpen(false)
+    openSplitMatchDialog(tx, prefill)
+  }
+
   function openInvoiceMatchPicker(transaction: TransactionWithInvoice) {
     if (transaction.amount >= 0) {
       setInvoicePickerTransaction(transaction)
@@ -4303,6 +4340,22 @@ export default function TransactionsPage() {
                 Matcha med faktura
               </button>
             )}
+            {/* The outgoing twin (PH 192): the supplier picker, where one
+                payment for several supplier invoices is ticked. */}
+            {templatePickerTransaction && templatePickerTransaction.amount < 0 && (
+              <button
+                type="button"
+                className={QUIET_LINK_CLASS}
+                onClick={() => {
+                  const tx = templatePickerTransaction
+                  setTemplatePickerOpen(false)
+                  setSupplierInvoicePickerTransaction(tx)
+                  setSupplierInvoicePickerOpen(true)
+                }}
+              >
+                {t('dialog_pick_supplier_invoice')}
+              </button>
+            )}
             {templatePickerTransaction && (
               <button
                 type="button"
@@ -4744,6 +4797,7 @@ export default function TransactionsPage() {
           isConfirming={isConfirmingMatch}
           onConfirm={handleConfirmInvoiceMatch}
           onLinkToExisting={handleLinkToExistingVoucher}
+          onSplitAcrossInvoices={handleSplitFromMatchDialog}
         />
       )}
 
@@ -4919,6 +4973,7 @@ export default function TransactionsPage() {
               <InvoicePicker
                 transaction={invoicePickerTransaction}
                 onSelect={handleSelectInvoiceFromPicker}
+                onSelectSeveral={handleSelectSeveralFromPicker}
                 onSelectRotRutPayout={handleSelectRotRutPayoutFromPicker}
               />
             </>
@@ -4949,6 +5004,7 @@ export default function TransactionsPage() {
                 kind="supplier"
                 transaction={supplierInvoicePickerTransaction}
                 onSelect={handleSelectSupplierInvoiceFromPicker}
+                onSelectSeveral={handleSelectSeveralFromPicker}
               />
             </>
           )}

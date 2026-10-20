@@ -179,6 +179,52 @@ describe('POST /api/v1/companies/:companyId/dimensions/retag', () => {
     expect(rpcCalls[1].args[0]).toMatchObject({ p_line_id: LINE_2, p_dimensions: { '6': 'P001' } })
   })
 
+  // crm#1313: an agent could tag a line but never take a tag off it.
+  it('an empty code removes that dimension and keeps the others (merge)', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      journal_entry_lines: {
+        data: [{ id: LINE_1, journal_entry_id: 'entry-1', account_number: '1930', dimensions: { '1': 'KS01', '6': 'P001' } }],
+        error: null,
+      },
+      journal_entries: { data: [{ id: 'entry-1' }], error: null },
+      account_dimension_rules: { data: [], error: null },
+      rpc: { data: { changed: true }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await retag(post({ line_ids: [LINE_1], dimensions: { '6': '' }, reason: REASON }), params)
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toMatchObject({ retagged: 1, failed_count: 0, mode: 'merge' })
+    expect(client.calls.find((c) => c.table === 'rpc' && !isIdempotencyClaim(c))?.args[0]).toMatchObject({
+      p_line_id: LINE_1,
+      p_dimensions: { '1': 'KS01' },
+    })
+  })
+
+  it('refuses to take off a dimension the line\'s account requires, without calling the RPC', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      journal_entry_lines: {
+        data: [{ id: LINE_1, journal_entry_id: 'entry-1', account_number: '4010', dimensions: { '6': 'P001' } }],
+        error: null,
+      },
+      journal_entries: { data: [{ id: 'entry-1' }], error: null },
+      account_dimension_rules: {
+        data: [{ account_number: '4010', rule_type: 'required', dimensions: { sie_dim_no: 6, name: 'Projekt' }, dimension_values: null }],
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await retag(post({ line_ids: [LINE_1], dimensions: { '6': '' }, reason: REASON }), params)
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('DIMENSION_RETAG_FAILED')
+    expect(body.error.details.failed).toEqual([
+      { line_id: LINE_1, error: 'Konto 4010 kräver Projekt: dimensionen kan inte tas bort från raden.' },
+    ])
+    expect(client.calls.some((c) => c.table === 'rpc' && !isIdempotencyClaim(c))).toBe(false)
+  })
+
   it('replace sends exactly the given bag and reads no line first', async () => {
     const client = makeClient({ company_members: MEMBER, rpc: { data: { changed: true }, error: null } })
     mockServiceClient.mockReturnValue(client)
@@ -226,6 +272,7 @@ describe('POST /api/v1/companies/:companyId/dimensions/retag', () => {
       mode: 'merge',
       lines: [{ line_id: LINE_1, dimensions_before: { '1': 'KS01' }, dimensions_after: { '1': 'KS01', '6': 'P001' } }],
       missing_line_ids: [LINE_FOREIGN],
+      refused_lines: [],
       unchanged_lines: 0,
     })
     expect(routeRpcCalls(client.rpc)).toEqual([])

@@ -444,7 +444,9 @@ export async function explainUnexplained(
       reconciles: breakdown.reconciles,
       note: breakdown.note ?? null,
       items: { list: paged.items, total: paged.total, offset, next_offset: paged.next_offset },
-      next_action: run.status === 'unexplained' ? nextActionFor(check, run.subject) : null,
+      // The explanation knows what the difference is made of; the definition
+      // only the usual cause (crm#1310).
+      next_action: run.status === 'unexplained' ? (breakdown.next_action ?? nextActionFor(check, run.subject)) : null,
     },
   }
 }

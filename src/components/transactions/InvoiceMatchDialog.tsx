@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { PaymentPreviewLinesCard, usePaymentPreviewEditor } from '@/components/bookkeeping/PaymentPreviewLinesCard'
 import { RegistrationFirstCard, type RegistrationEntryPreview } from '@/components/supplier-invoices/RegistrationFirstCard'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { isInvoiceBookingRateMissing, previewedFxGainSek } from './invoice-match-fx'
 import {
@@ -99,6 +100,12 @@ interface InvoiceMatchDialogProps {
   isConfirming: boolean
   onConfirm: (opts?: ConfirmOpts) => void
   onLinkToExisting?: (journalEntryId: string) => void
+  /**
+   * The row pays a krona or more above what the invoice owes: offer to carry
+   * the invoice into the batch allocation, for a payment of several invoices
+   * (PH 192), instead of only the fee or overpayment this match books.
+   */
+  onSplitAcrossInvoices?: () => void
 }
 
 /** An exchange rate keeps its decimals: it must not be rounded to the öre. */
@@ -127,6 +134,7 @@ export default function InvoiceMatchDialog({
   isConfirming,
   onConfirm,
   onLinkToExisting,
+  onSplitAcrossInvoices,
 }: InvoiceMatchDialogProps) {
   const t = useTranslations('tx_invoice_match')
   const uiLocale = useLocale() === 'en' ? ('en' as const) : ('sv' as const)
@@ -529,6 +537,16 @@ export default function InvoiceMatchDialog({
                           })}
                         </p>
                         <p className="text-muted-foreground">{t('customer_overpayment_description')}</p>
+                        {onSplitAcrossInvoices && (
+                          <button
+                            type="button"
+                            className={cn(QUIET_LINK_CLASS, 'block text-left')}
+                            onClick={onSplitAcrossInvoices}
+                            disabled={isConfirming}
+                          >
+                            {t('split_across_invoices')}
+                          </button>
+                        )}
                       </div>
                     </div>
                     <div
@@ -598,6 +616,20 @@ export default function InvoiceMatchDialog({
               // the invoice in full, so this is not a difference to resolve.
               const bankFeeSek = isSupplierInvoice ? (preview?.bank_fee_sek ?? 0) : 0
 
+              // The same excess is just as often a second invoice paid in the
+              // same transfer: offer the batch beside the fee or overpayment.
+              const splitLink =
+                onSplitAcrossInvoices && sameCurrency && txAbs - invRemaining >= 1 ? (
+                  <button
+                    type="button"
+                    className={cn(QUIET_LINK_CLASS, 'mt-1 block text-left')}
+                    onClick={onSplitAcrossInvoices}
+                    disabled={isConfirming}
+                  >
+                    {t('split_across_invoices')}
+                  </button>
+                ) : null
+
               if (amountsMatch) {
                 return (
                   <div className="flex items-center gap-2 p-3 rounded-lg bg-success/10 text-success">
@@ -624,11 +656,14 @@ export default function InvoiceMatchDialog({
                 return (
                   <div className="flex items-start gap-2 p-3 rounded-lg bg-success/10 text-success">
                     <CheckCircle2 className="h-4 w-4 flex-shrink-0 mt-0.5" />
-                    <p className="text-sm font-medium">
-                      {t('bank_fee_note', {
-                        amount: formatCurrency(diff, transaction.currency),
-                      })}
-                    </p>
+                    <div>
+                      <p className="text-sm font-medium">
+                        {t('bank_fee_note', {
+                          amount: formatCurrency(diff, transaction.currency),
+                        })}
+                      </p>
+                      {splitLink}
+                    </div>
                   </div>
                 )
               }
@@ -654,6 +689,7 @@ export default function InvoiceMatchDialog({
                         t('different_currencies')
                       )}
                     </p>
+                    {splitLink}
                   </div>
                 </div>
               )

@@ -1,0 +1,1 @@
+[2026-10-19] A supplier's dominant account in ledger context counts the kontering only (26xx, 244x, 19xx and 3740 rows left out; 12xx/17xx kept): the moms rows on supplier_invoice_items are legal by design, so the reader is fixed, not the rows (crm#1310).

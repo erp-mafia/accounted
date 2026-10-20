@@ -43,6 +43,12 @@ export interface FakeLedgerData {
   kpiOverrides?: Record<string, string[]>
   /** Any other table the caller reads (the v1 door's company_members). */
   extraTables?: Record<string, Row[]>
+  /**
+   * Entries get_vat_declaration_totals classifies as a momsredovisning by
+   * shape. The classification is the SQL's (pg-tested in
+   * tests/pg/vat-skattekonto-counter-entries.pg.test.ts); a fixture states it.
+   */
+  vatShapedEntryIds?: string[]
 }
 
 export interface FakeFailures {
@@ -185,6 +191,7 @@ export function createFakeLedger(data: FakeLedgerData, failures: FakeFailures = 
     }),
   )
   const entryById = new Map(entries.map((e) => [e.id, e]))
+  const shapedIds = new Set(data.vatShapedEntryIds ?? [])
 
   const tables: Record<string, Row[]> = {
     fiscal_periods: data.fiscalPeriods.map((p) => ({ company_id: companyId, ...p })),
@@ -287,7 +294,16 @@ export function createFakeLedger(data: FakeLedgerData, failures: FakeFailures = 
       const totals = sum(rows, ({ line }) => line.account_number as string)
       return {
         totals: [...totals].map(([account_number, t]) => ({ account_number, debit: t.debit, credit: t.credit })),
-        settlement_shaped_entries: [],
+        settlement_shaped_entries: entries
+          .filter((e) => shapedIds.has(e.id) && LEDGER_STATUSES.has(e.status) && inRange(e, args))
+          .map((e) => ({
+            id: e.id,
+            status: e.status,
+            entry_date: e.entry_date,
+            source_type: e.source_type,
+            voucher_series: e.voucher_series,
+            voucher_number: e.voucher_number,
+          })),
         source_type_counts: {},
       }
     },
@@ -310,13 +326,14 @@ export function createFakeLedger(data: FakeLedgerData, failures: FakeFailures = 
     },
   }
 
-  /** The lines a momsdeklaration reads: the range, momsredovisningar left out (tagged ones; the fixtures have no shaped ones). */
+  function inRange(entry: { entry_date: string }, args: Record<string, unknown>) {
+    return entry.entry_date >= (args.p_start as string) && entry.entry_date <= (args.p_end as string)
+  }
+
+  /** The lines a momsdeklaration reads: the range, momsredovisningar left out (tagged ones, and those the fixture names shaped). */
   function vatLines(args: Record<string, unknown>) {
     return ledgerLines().filter(
-      ({ entry }) =>
-        entry.entry_date >= (args.p_start as string) &&
-        entry.entry_date <= (args.p_end as string) &&
-        entry.source_type !== 'vat_settlement',
+      ({ entry }) => inRange(entry, args) && entry.source_type !== 'vat_settlement' && !shapedIds.has(entry.id),
     )
   }
 

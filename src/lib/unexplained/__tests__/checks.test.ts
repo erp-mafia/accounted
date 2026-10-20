@@ -7,7 +7,7 @@
  * the coverage test at the bottom.
  */
 import { describe, expect, it } from 'vitest'
-import { createFakeLedger } from '@/lib/measures/__tests__/fake-ledger'
+import { createFakeLedger, type FakeEntry } from '@/lib/measures/__tests__/fake-ledger'
 import { generateARReconciliation } from '@/lib/reports/ar-reconciliation'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { generateReconciliation as generateSupplierReconciliation } from '@/lib/reports/supplier-reconciliation'
@@ -16,6 +16,7 @@ import { getSkattekontoReconciliationStatus } from '@/lib/reconciliation/skattek
 import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
 import { explainUnexplained, getUnexplainedCheck, listUnexplained, REGISTERED_CHECK_IDS } from '../registry'
 import { overdueCutoff, bookingDeadline } from '../checks/unbooked-bank'
+import { lateSettlementLookupEnd } from '@/lib/reports/vat-settlement-match'
 import type { CheckId, CheckStatus } from '../types'
 import {
   CA_1930,
@@ -227,6 +228,8 @@ describe('bank_balance_vs_bank equals the bank balance minus the balance sheet r
     ])
     expect(e.items.list[0].handle).toMatch(/^txn_[0-9a-f]{32}$/)
     expect(e).toMatchObject({ residual: 0, reconciles: true })
+    // Booking the listed rows closes it: the definition's own step.
+    expect(e.next_action).toMatchObject({ tool: 'gnubok_list_uncategorized_transactions', arguments: { cash_account_id: CA_1930 } })
   })
 
   it('leaves a residual when the difference is not an unbooked row', async () => {
@@ -234,6 +237,22 @@ describe('bank_balance_vs_bank equals the bank balance minus the balance sheet r
     const e = await explain(l, 'bank_balance_vs_bank', { cash_account_id: CA_1930 })
     expect(e).toMatchObject({ difference: -350, residual: -350, reconciles: false })
     expect(e.note).toContain(`bank:${CA_1930}`)
+    expect(e.note).toContain('bank.opening_difference')
+  })
+
+  it('points a residual at the account reconciliation, not at the uncategorized list (crm#1310)', async () => {
+    // No unbooked row at all: the whole difference is elsewhere (an opening
+    // balance that differs from the bank, a verifikat with no bank row).
+    const l = ledger({ bankBalance: { amount: 55000, at: '2026-06-30T10:00:00.000Z' } })
+    const e = await explain(l, 'bank_balance_vs_bank', { cash_account_id: CA_1930 })
+    expect(e.items.total).toBe(0)
+    // Exactly the reconciliation tool's arguments: it takes no cash_account_id.
+    expect(e.next_action).toEqual({
+      message_sv: expect.stringContaining('bank.opening_difference'),
+      tool: 'gnubok_get_reconciliation_status',
+      arguments: { account_key: `bank:${CA_1930}` },
+      screen: '/reconciliation',
+    })
   })
 
   it('cannot check an account the bank reported no balance for, nor a payment-provider account', async () => {
@@ -294,20 +313,93 @@ describe('vat_declared_not_settled reads the momsredovisning proposal of each de
 })
 
 describe('vat_declared_not_settled: a momsredovisning dated after the period', () => {
-  it('stays unexplained but names the verifikat, so nobody books the period twice', async () => {
-    const LATE = 'e0000000-0000-4000-8000-000000000601'
-    const late = {
-      id: LATE, entry_date: '2026-08-12', voucher_number: 60, description: 'Momsomföring Q2', source_type: 'manual', fiscal_period_id: FP,
-      lines: [{ account_number: '2611', debit: 1250 }, { account_number: '2641', credit: 100 }, { account_number: '2650', credit: 1150 }],
+  const LATE = 'e0000000-0000-4000-8000-000000000601'
+  const Q3_SALE = 'e0000000-0000-4000-8000-000000000602'
+  // Q2 2026 holds 2611 1 250 (credit) and 2641 100 (debit): ruta 49 1 150.
+  const q2Settlement = (overrides: Partial<FakeEntry> = {}): FakeEntry => ({
+    id: LATE, entry_date: '2026-08-12', voucher_number: 60, description: 'Momsomföring Q2', source_type: 'manual', fiscal_period_id: FP,
+    lines: [{ account_number: '2611', debit: 1250 }, { account_number: '2641', credit: 100 }, { account_number: '2650', credit: 1150 }],
+    ...overrides,
+  })
+  const q2Of = (data: Awaited<ReturnType<typeof check>>) =>
+    data.results.find((r) => r.subject.kind === 'vat_period' && r.subject.period === 2 && r.subject.label.startsWith('Kvartal'))!
+
+  it('settles the period when it clears exactly its balances against 2650, dated on the filing day', async () => {
+    const l = ledger({ extraEntries: [q2Settlement()], vatShapedEntryIds: [LATE] })
+    const q2 = q2Of(await check(l, 'vat_declared_not_settled'))
+    expect(q2).toMatchObject({ status: 'ok', difference: 0 })
+    expect(q2.summary_sv).toContain('till redovisningskontot med verifikat A60 (2026-08-12), daterat efter perioden')
+    expect(q2.facts).toMatchObject({ settlement_journal_entry_handle: expect.stringMatching(/^je_[0-9a-f]{32}$/), settlement_dated_after_period: true })
+    const e = await explain(l, 'vat_declared_not_settled', { period_type: 'quarterly', year: 2026, period: 2 })
+    expect(e).toMatchObject({ residual: 0, reconciles: true })
+    expect(e.note).toContain('dated after the period')
+  })
+
+  it('crm#1316: settles the period when the VAT is cleared straight against the skattekonto long after the period, by the due date', async () => {
+    // 107 days after the period: past the 90 days the check once looked, within 60 days of the due date (2026-08-17).
+    const direct = q2Settlement({
+      entry_date: '2026-10-15',
+      description: 'Moms Q2',
+      lines: [{ account_number: '2611', debit: 1250 }, { account_number: '2641', credit: 100 }, { account_number: '1630', credit: 1150 }],
+    })
+    const l = ledger({ extraEntries: [direct], vatShapedEntryIds: [LATE] })
+    const q2 = q2Of(await check(l, 'vat_declared_not_settled'))
+    expect(q2).toMatchObject({ status: 'ok', difference: 0 })
+    expect(q2.summary_sv).toContain('direkt mot skattekontot med verifikat A60 (2026-10-15)')
+    expect(q2.sides.map((side) => side.amount)).toEqual([1150, 1150])
+    const e = await explain(l, 'vat_declared_not_settled', { period_type: 'quarterly', year: 2026, period: 2 })
+    expect(e.note).toContain('straight to the skattekonto')
+  })
+
+  it('crm#1316: takes an earlier period\'s momsredovisning dated inside a later declared period whose balances it does not clear', async () => {
+    // Q3 is declared and lists the verifikat by shape (it is dated in Q3), but Q3 has no VAT to clear: it is Q2's.
+    const l = ledger({ declared: ['2026-Q1', '2026-Q2', '2026-Q3'], extraEntries: [q2Settlement()], vatShapedEntryIds: [LATE] })
+    const data = await check(l, 'vat_declared_not_settled')
+    expect(q2Of(data)).toMatchObject({ status: 'ok', difference: 0 })
+    expect(data.results.find((r) => r.subject.kind === 'vat_period' && r.subject.period === 3)).toMatchObject({ status: 'ok' })
+  })
+
+  it('never takes a later declared period\'s own momsredovisning, even when the amounts are the same', async () => {
+    // Q3 has the same VAT as Q2 and the verifikat dated in Q3 clears it: it is Q3's, so Q2 stays open.
+    const q3Sale: FakeEntry = {
+      id: Q3_SALE, entry_date: '2026-07-15', voucher_number: 61, description: 'Försäljning juli', source_type: 'manual', fiscal_period_id: FP,
+      lines: [{ account_number: '1930', debit: 1150 }, { account_number: '2641', debit: 100 }, { account_number: '2611', credit: 1250 }],
     }
-    const l = ledger({ extraEntries: [late] })
-    const q2 = (await check(l, 'vat_declared_not_settled')).results.find((r) => r.subject.kind === 'vat_period' && r.subject.period === 2)!
+    const l = ledger({ declared: ['2026-Q1', '2026-Q2', '2026-Q3'], extraEntries: [q3Sale, q2Settlement()], vatShapedEntryIds: [LATE] })
+    const data = await check(l, 'vat_declared_not_settled')
+    const q2 = q2Of(data)
+    expect(q2).toMatchObject({ status: 'unexplained', difference: 1150 })
+    expect(q2.facts).not.toHaveProperty('possible_late_settlement_handles')
+    expect(data.results.find((r) => r.subject.kind === 'vat_period' && r.subject.period === 3)).toMatchObject({ status: 'ok' })
+  })
+
+  it('stays unexplained but names a late verifikat that does not clear the period\'s balances, so nobody books the period twice', async () => {
+    const wider = q2Settlement({ lines: [{ account_number: '2611', debit: 2500 }, { account_number: '2650', credit: 2500 }] })
+    const l = ledger({ extraEntries: [wider], vatShapedEntryIds: [LATE] })
+    const q2 = q2Of(await check(l, 'vat_declared_not_settled'))
     expect(q2).toMatchObject({ status: 'unexplained', difference: 1150 })
     expect(q2.summary_sv).toContain('kontrollera om det är periodens momsredovisning')
     expect(q2.facts).toMatchObject({ possible_late_settlement_handles: [expect.stringMatching(/^je_[0-9a-f]{32}$/)] })
     const e = await explain(l, 'vat_declared_not_settled', { period_type: 'quarterly', year: 2026, period: 2 })
     expect(e.items.list.find((i) => i.part === 'possible_late_settlement')).toMatchObject({ journal_entry_id: LATE, amount: 0, date: '2026-08-12' })
     expect(e.note).toContain('book the period twice')
+  })
+
+  it('does not look past the window: a settlement dated after it leaves the period unexplained', async () => {
+    // The window ends 400 days after the period (2027-08-04): a verifikat after it is neither counted nor named.
+    const later = q2Settlement({ entry_date: '2027-08-05' })
+    const l = ledger({ extraEntries: [later], vatShapedEntryIds: [LATE] })
+    const q2 = q2Of(await check(l, 'vat_declared_not_settled'))
+    expect(q2).toMatchObject({ status: 'unexplained', difference: 1150 })
+    expect(q2.facts).not.toHaveProperty('possible_late_settlement_handles')
+  })
+
+  it('looks 400 days past the period, or to the first open day the proposal moved to when that is later', () => {
+    expect(lateSettlementLookupEnd('2026-06-30', '2026-06-30')).toBe('2027-08-04')
+    // The crm#1316 shape: helårsmoms due and debited eight months after the räkenskapsår.
+    expect(lateSettlementLookupEnd('2024-12-31', '2026-01-01')).toBe('2026-02-04')
+    // Two closed years ahead: the proposal books on the first open day after them.
+    expect(lateSettlementLookupEnd('2024-12-31', '2026-03-01')).toBe('2026-03-01')
   })
 })
 

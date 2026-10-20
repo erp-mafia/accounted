@@ -27,7 +27,7 @@ export interface PayableAccount {
 export async function readPaymentAccounts(client: SupabaseClient, companyId: string): Promise<PayableAccount[]> {
   const { data, error } = await client
     .from('cash_accounts')
-    .select('id, name, ledger_account, iban, currency, enabled, bank_connection:bank_connections(bank_name, affiliated_aspsp_id, psu_type)')
+    .select('id, name, ledger_account, iban, currency, enabled, bank_connection:bank_connections(bank_name, bic, affiliated_aspsp_id, psu_type)')
     .eq('company_id', companyId)
     .order('ledger_account', { ascending: true })
   if (error) throw error
@@ -38,7 +38,7 @@ export async function readPaymentAccounts(client: SupabaseClient, companyId: str
     iban: string | null
     currency: string
     enabled: boolean
-    bank_connection: { bank_name: string | null; affiliated_aspsp_id: string | null; psu_type: string | null } | null
+    bank_connection: { bank_name: string | null; bic: string | null; affiliated_aspsp_id: string | null; psu_type: string | null } | null
   }>).map((a) => {
     const debtor = resolveDebtor(a, a.bank_connection)
     return {

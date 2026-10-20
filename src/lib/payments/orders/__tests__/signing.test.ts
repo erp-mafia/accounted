@@ -1068,6 +1068,35 @@ describe('restartPaymentSigning', () => {
       expect(events()).toContainEqual(expect.objectContaining({ payment_order_id: 'o1', detail: expect.objectContaining({ code: 'BANK_CANCEL_NOT_CONFIRMED', reason: 'SIGNING_EXPIRED' }) }))
     })
 
+    it("reads the bank's refusal when the adapter throws it from another copy of the port, as in production (crm#1282)", async () => {
+      // lib/init builds the adapter in the instrumentation hook's copy of the
+      // port; this test's signing module holds another one.
+      vi.resetModules()
+      const instrumentation = await import('@/lib/payments/initiation/provider')
+      expect(instrumentation.PaymentProviderError).not.toBe(PaymentProviderError)
+      const provider = fakeProvider({
+        startSigning: vi.fn().mockRejectedValue(new instrumentation.PaymentProviderError('format', 'FORMAT_ERROR', false, 422)),
+        cancelPayment: vi.fn().mockResolvedValue({ outcome: 'too_late', providerStatus: 'RCVD', unsigned: true }),
+      })
+      registerPaymentInitiationProvider(provider)
+      db.setTable('payment_order_batches', [{ data: signedOnce }, { data: signedOnce }, { data: signedOnce }, { data: signedOnce }, { data: null }])
+      db.setTable('payment_orders', [
+        { data: [waitingOrder('o1', 1)] },
+        { data: [waitingOrder('o1', 1)] },
+        { data: [waitingOrder('o1', 1)] },
+        { data: [waitingOrder('o1', 1)] },
+        { data: { id: 'o1', status: 'submitted', outcome_unknown_at: null } },
+      ])
+      db.setTable('rpc:rebatch_payment_orders_for_signing', { data: { ok: true, same: true, batch: signedOnce, orders: [waitingOrder('o1', 1)] } })
+
+      const result = await restart()
+
+      // The bank's own code, not UNEXPECTED_ERROR, and the recreate was tried: the payment is cancelled first.
+      expect(result).toMatchObject({ ok: false, details: { provider_code: 'FORMAT_ERROR', http_status: 422, held_for_person: ['o1'], recreated: false } })
+      expect(provider.cancelPayment).toHaveBeenCalledWith(expect.anything(), 'pay-1', 'swedish-giro')
+      expect(log.warn).toHaveBeenCalledWith('payment signing did not start', expect.objectContaining({ code: 'FORMAT_ERROR' }))
+    })
+
     it('never recreates on a refusal of a first start, or on a refusal signing can never fix', async () => {
       // No earlier authorisation: a FORMAT_ERROR is the plain refusal it always was.
       const first = fakeProvider({ startSigning: vi.fn().mockRejectedValue(refused) })
@@ -1136,6 +1165,21 @@ describe('pollPaymentSigning', () => {
     await pollPaymentSigning(ctx, { batchId: 'batch-1', signer: SIGNER })
     expect(mock.storedBatchPsu).toHaveBeenCalledWith('batch-1')
     expect(provider.pollSigning).toHaveBeenLastCalledWith(expect.objectContaining({ signerPersonalNumber: KEPT_PSU, psuIpAddress: '203.0.113.10', psuUserAgent: 'UA' }), expect.anything(), 'auth-1', 'qr')
+  })
+
+  it("never answers a signing on the bank's own page with a link-less challenge, so the start's link stays on screen (crm#1282)", async () => {
+    // The provider repeats the approach on every poll of a redirect signing, without the link the start minted.
+    const provider = fakeProvider({
+      pollSigning: vi.fn().mockResolvedValue({ state: 'pending', challenge: { approach: 'redirect', autostartToken: null, qrData: null, qrImage: null, redirectUrl: null }, failureCode: null }),
+    })
+    registerPaymentInitiationProvider(provider)
+    db.setTable('payment_order_batches', { data: { ...signing, signing_method: 'redirect' } })
+    db.setTable('payment_orders', { data: inSigning })
+
+    const result = await pollPaymentSigning(ctx, { batchId: 'batch-1', signer: SIGNER })
+
+    expect(result).toMatchObject({ ok: true, data: { status: 'awaiting_signature', challenge: null, failure_code: null } })
+    expect(provider.pollSigning).toHaveBeenCalledWith(expect.anything(), { kind: 'basket', providerBasketId: 'basket-at-bank' }, 'auth-1', 'redirect')
   })
 
   it('gives anyone else where the signing stands, never the QR, and does not drive it', async () => {

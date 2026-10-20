@@ -12,17 +12,21 @@
  * The RPC itself re-enforces everything per line (open period, lock date,
  * active registry values, writer role): this schema is the shape gate.
  *
- * The dimensions bag delegates to DimensionsBagSchema: THE bag schema shared
- * with the API layer and the voucher staging path: so the retag write path
- * cannot drift from how dimensions are validated everywhere else. An empty
- * bag is rejected: this operation tags lines, it never bulk-clears them.
+ * The dimensions bag takes its keys and codes from the schemas behind
+ * DimensionsBagSchema: THE bag schema shared with the API layer and the
+ * voucher staging path: so the retag write path cannot drift from how
+ * dimensions are validated everywhere else. One addition: an empty code
+ * removes that dimension from the line ({"6": ""}, crm#1313), the way an
+ * empty override clears a key in mergeDimensionBags. An empty bag is
+ * rejected: a request names every dimension it sets or removes, so nothing
+ * is cleared that the request does not name.
  *
  * `mode` says how the bag meets each line's own (lib/dimensions/
  * retag-service.ts): merge sets the pairs and keeps the line's other
  * dimensions, replace makes the bag exactly this map.
  */
 import { z } from 'zod'
-import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
+import { DimensionCodeSchema, DimensionKeySchema } from '@/lib/bookkeeping/dimension-resolver'
 import { RETAG_MODES } from '@/lib/dimensions/retag-service'
 
 /**
@@ -40,15 +44,18 @@ export const RETAG_REQUEST_SHAPE = {
     .array(z.string().uuid('line_ids must contain journal_entry_lines UUIDs'))
     .min(1, 'line_ids must contain at least one line')
     .max(RETAG_MAX_LINES, `line_ids is capped at ${RETAG_MAX_LINES} lines per operation`),
-  // Non-empty by design: and deliberately STRICTER than the dashboard's
-  // routes (RetagLineDimensionsSchema / DimensionTaggingApplySchema in
-  // lib/api/schemas.ts), which allow {} so a human can untag phantom codes
-  // via the dialog/workbench. A machine bulk-clearing dimension history is
-  // not something the API offers (#867 review documented the divergence).
-  dimensions: DimensionsBagSchema.refine(
-    (bag) => Object.keys(bag).length > 0,
-    'dimensions must contain at least one {sie_dim_no: code} pair',
-  ),
+  // Non-empty by design: STRICTER than the dashboard's routes
+  // (RetagLineDimensionsSchema / DimensionTaggingApplySchema in
+  // lib/api/schemas.ts), which take {} for "no dimensions" (#867 review
+  // documented the divergence). A machine removes a dimension by naming it
+  // with an empty code; every change keeps its before/after row in
+  // dimension_retag_log, so nothing of the history is lost.
+  dimensions: z
+    .record(DimensionKeySchema, z.union([z.literal(''), DimensionCodeSchema]))
+    .refine(
+      (bag) => Object.keys(bag).length > 0,
+      'dimensions must contain at least one {sie_dim_no: code} pair; an empty code removes that dimension, e.g. {"6": ""}',
+    ),
   reason: z.preprocess(
     (v) => (typeof v === 'string' ? v.trim() : v),
     z

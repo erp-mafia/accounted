@@ -1096,6 +1096,18 @@ async function recreateAfterExpiredSigning(
   return sendAndSign(ctx, provider, party, { batch: claimed.batch, orders: claimed.orders }, method, ret)
 }
 
+/**
+ * What a poll has to show. The bank's own page is linked once, by the start,
+ * under a state of its own; a poll never carries that link, so a redirect
+ * challenge without one is no challenge: the screen keeps the link it has.
+ * Answered as it came, the first poll a second after the start replaced the
+ * link with nothing, and the person was left waiting for a bank they could
+ * not reach (crm#1282).
+ */
+function polledChallenge(challenge: SigningChallenge | null): SigningChallenge | null {
+  return challenge?.approach === 'redirect' && !challenge.redirectUrl ? null : challenge
+}
+
 export async function pollPaymentSigning(
   ctx: OperationContext,
   input: { batchId: string; signer: SignerInput },
@@ -1127,7 +1139,7 @@ export async function pollPaymentSigning(
   } catch (error) {
     return { ok: false, code: readFailure(error), details: { provider_code: errorCodeOf(error) } }
   }
-  if (progress.state === 'pending') return { ok: true, data: view(batch, orders, progress.challenge, null, progress.step) }
+  if (progress.state === 'pending') return { ok: true, data: view(batch, orders, polledChallenge(progress.challenge), null, progress.step) }
 
   if (progress.state === 'failed') {
     const code = progress.failureCode ?? 'SCA_FAILED'

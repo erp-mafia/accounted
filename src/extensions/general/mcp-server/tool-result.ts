@@ -33,8 +33,11 @@ export interface AgentToolError {
  * stage again (lib/operations/preview-token.ts). TRANSACTION_ALREADY_STAGED
  * names the open operations to approve or reject first
  * (lib/pending-operations/transaction-claims.ts).
+ * PAYMENT_ORDERS_ACCOUNT_NOT_PAYABLE names why the account cannot pay
+ * (details.reason: account_disabled, not_sek, iban_missing, bank_unknown),
+ * which the message alone cannot tell apart (crm#1314).
  */
-const CODES_WITH_DETAILS = new Set(['PREVIEW_STALE', 'TRANSACTION_ALREADY_STAGED'])
+const CODES_WITH_DETAILS = new Set(['PREVIEW_STALE', 'TRANSACTION_ALREADY_STAGED', 'PAYMENT_ORDERS_ACCOUNT_NOT_PAYABLE'])
 
 /**
  * Convert a thrown error into the structured tool-error envelope the agent

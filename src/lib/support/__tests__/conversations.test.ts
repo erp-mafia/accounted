@@ -4,13 +4,19 @@ import { displayStatus, listTickets, loadThread, otherTickets, pickActiveTicket,
 const getTicketsMock = vi.fn()
 const getMessagesMock = vi.fn()
 const sendMessageMock = vi.fn()
+// Like the SDK: getMessages(id) makes id the current ticket before it fetches,
+// and sendMessage continues whatever is current when it is called.
+let sdkCurrent: string | null = 'cur'
 vi.mock('posthog-js', () => ({
   default: {
     conversations: {
       isAvailable: () => true,
-      getCurrentTicketId: () => 'cur',
+      getCurrentTicketId: () => sdkCurrent,
       getTickets: (...a: unknown[]) => getTicketsMock(...a),
-      getMessages: (...a: unknown[]) => getMessagesMock(...a),
+      getMessages: (...a: unknown[]) => {
+        if (typeof a[0] === 'string') sdkCurrent = a[0]
+        return getMessagesMock(...a)
+      },
       sendMessage: (...a: unknown[]) => sendMessageMock(...a),
       markAsRead: vi.fn(),
     },
@@ -133,11 +139,58 @@ describe('SDK wrappers', () => {
     const thread = await loadThread('a')
     expect(thread?.messages.map((m) => m.id)).toEqual(['1', '3'])
   })
-  it('reply continues the current ticket, start opens a new one', async () => {
+  it('reply continues the ticket on screen, start opens a new one', async () => {
+    sdkCurrent = 'x'
     sendMessageMock.mockResolvedValue({ ticket_id: 'x' })
-    await replyInThread('hej')
+    expect(await replyInThread('x', 'hej')).toEqual({ ticketId: 'x' })
     expect(sendMessageMock).toHaveBeenLastCalledWith('hej')
+    expect(getMessagesMock).not.toHaveBeenCalled()
     await startThread('ny')
     expect(sendMessageMock).toHaveBeenLastCalledWith('ny', undefined, true)
+  })
+
+  describe('reply routing (crm#1311)', () => {
+    // Where the SDK points when sendMessage is called is where the server
+    // files the reply: the request carries the current ticket id.
+    let sentTo: Array<string | null>
+    beforeEach(() => {
+      sentTo = []
+      sendMessageMock.mockImplementation(async () => {
+        sentTo.push(sdkCurrent)
+        return { ticket_id: sdkCurrent ?? 'new-ticket' }
+      })
+      getMessagesMock.mockResolvedValue(null)
+    })
+
+    it('a background reload of the previous thread moved the SDK: the reply still lands in the ticket on screen', async () => {
+      sdkCurrent = 'previous'
+      expect(await replyInThread('on-screen', 'hej')).toEqual({ ticketId: 'on-screen' })
+      expect(getMessagesMock).toHaveBeenCalledWith('on-screen')
+      expect(sentTo).toEqual(['on-screen'])
+    })
+
+    it('an identity reset cleared the current ticket: the reply does not open a new ticket', async () => {
+      sdkCurrent = null
+      expect(await replyInThread('on-screen', 'hej')).toEqual({ ticketId: 'on-screen' })
+      expect(sentTo).toEqual(['on-screen'])
+    })
+
+    it('points the SDK even when the reload itself fails', async () => {
+      sdkCurrent = 'previous'
+      getMessagesMock.mockRejectedValue(new Error('Too many requests'))
+      expect(await replyInThread('on-screen', 'hej')).toEqual({ ticketId: 'on-screen' })
+      expect(sentTo).toEqual(['on-screen'])
+    })
+
+    it('sends nothing when the SDK cannot be pointed at the ticket on screen', async () => {
+      sdkCurrent = 'previous'
+      // Another load switches it away while ours is in flight.
+      getMessagesMock.mockImplementation(async () => {
+        sdkCurrent = 'other'
+        return null
+      })
+      expect(await replyInThread('on-screen', 'hej')).toBeNull()
+      expect(sendMessageMock).not.toHaveBeenCalled()
+    })
   })
 })

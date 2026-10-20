@@ -2868,9 +2868,10 @@ export const BulkBookSchema = z
       .min(2, 'A verifikat needs at least two lines')
       .max(200)
       .optional(),
-    // Dimensions PR7: header-level bag applied to every generated line in
-    // BOTH the template and manual paths (per-line bags win per key). The
-    // route merges before calling the RPC.
+    // Dimensions PR7: header-level bag for the business lines in BOTH the
+    // template and manual paths; the bank side and the moms lines stay
+    // untagged (crm#1313), and per-line bags win per key.
+    // lib/transactions/bulk-book.ts merges before calling the RPC.
     default_dimensions: DimensionsBagSchema.optional(),
     // Bypass the booking-time duplicate guard after the user reviewed the
     // flagged candidate (TRANSACTION_BOOK_POSSIBLE_DUPLICATE). Bulk-book has

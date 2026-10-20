@@ -272,6 +272,64 @@ describe('deriveTemplateLinesFromBooking', () => {
     expect(lines.find((l) => l.account === '2641')!.vat_rate).toBe(0.12)
     expect(lines.find((l) => l.account === '1930')!.type).toBe('settlement')
   })
+
+  // crm#1321: a card or Swish payout, 1930 D / 1580 K at the same amount. The
+  // equal-amount tie went to the credit leg and tagged the receivable
+  // "Betalning", which the bank dialog then rewrote to 1930.
+  it('tags the bank line settlement when both legs carry the total (crm#1321)', () => {
+    const lines = deriveTemplateLinesFromBooking([
+      { account_number: '1930', debit_amount: '495', credit_amount: '' },
+      { account_number: '1580', debit_amount: '', credit_amount: '495' },
+    ])
+    expect(lines.map((l) => [l.account, l.side, l.type])).toEqual([
+      ['1930', 'debit', 'settlement'],
+      ['1580', 'credit', 'business'],
+    ])
+    expect(lines.find((l) => l.account === '1580')!.ratio).toBe(1)
+  })
+
+  it('tags the bank line settlement on a debit-side revenue booking as well', () => {
+    const lines = deriveTemplateLinesFromBooking([
+      { account_number: '3004', debit_amount: '', credit_amount: '1200' },
+      { account_number: '1930', debit_amount: '1200', credit_amount: '' },
+    ])
+    expect(lines.find((l) => l.account === '1930')!.type).toBe('settlement')
+    expect(lines.find((l) => l.account === '3004')!.type).toBe('business')
+  })
+
+  it('keeps the amount rule between two bank lines (a transfer): the credit leg', () => {
+    const lines = deriveTemplateLinesFromBooking([
+      { account_number: '1940', debit_amount: '5000', credit_amount: '' },
+      { account_number: '1930', debit_amount: '', credit_amount: '5000' },
+    ])
+    expect(lines.find((l) => l.account === '1930')!.type).toBe('settlement')
+    expect(lines.find((l) => l.account === '1940')!.type).toBe('business')
+  })
+
+  it('never tags a bank line that carries only part of the total: the mall must stay balanced', () => {
+    // Paid partly from the bank and partly by the owner. The settlement leg
+    // takes the whole total, so it has to be the line that carries it.
+    const source = [
+      { account_number: '5410', debit_amount: '1000', credit_amount: '' },
+      { account_number: '1930', debit_amount: '', credit_amount: '600' },
+      { account_number: '2893', debit_amount: '', credit_amount: '400' },
+    ]
+    const lines = deriveTemplateLinesFromBooking(source)
+    expect(lines.find((l) => l.account === '5410')!.type).toBe('settlement')
+    const applied = applyTemplate(lines, 1000)
+    const debit = applied.reduce((s, l) => s + (parseFloat(l.debit_amount) || 0), 0)
+    const credit = applied.reduce((s, l) => s + (parseFloat(l.credit_amount) || 0), 0)
+    expect(debit).toBeCloseTo(credit, 2)
+    expect(applied.find((l) => l.account_number === '1930')!.credit_amount).toBe('600.00')
+  })
+
+  it('keeps the amount rule when no bank line is booked (owner paid)', () => {
+    const lines = deriveTemplateLinesFromBooking([
+      { account_number: '2893', debit_amount: '', credit_amount: '481.80' },
+      { account_number: '5420', debit_amount: '481.80', credit_amount: '' },
+    ])
+    expect(lines.find((l) => l.account === '2893')!.type).toBe('settlement')
+  })
 })
 
 describe('templateShareLines', () => {

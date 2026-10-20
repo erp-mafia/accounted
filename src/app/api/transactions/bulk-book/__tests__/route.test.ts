@@ -834,3 +834,148 @@ describe('POST /api/transactions/bulk-book: dimension policy', () => {
     )
   })
 })
+
+// crm#1313: the header default_dimensions tag the business lines only. The
+// bank side and the moms lines stay untagged, as categorize books them; a
+// line's own bag is the caller's explicit choice and is kept as given.
+describe('POST /api/transactions/bulk-book: default_dimensions on business lines only', () => {
+  const mockUser = { id: 'user-1', email: 'test@test.se' }
+  const emptyParams = { params: Promise.resolve({}) }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    vi.mocked(detectBookingDuplicate).mockResolvedValue(null)
+  })
+
+  function postedLines(): Array<{ account_number: string; dimensions?: Record<string, string> }> {
+    const call = mockSupabase.rpc.mock.calls.find((c) => c[0] === 'bulk_book_transactions')
+    expect(call).toBeDefined()
+    return (call![1] as { p_new_entry: { lines: Array<{ account_number: string; dimensions?: Record<string, string> }> } })
+      .p_new_entry.lines
+  }
+
+  function enqueueCommit() {
+    enqueue({ data: [], error: null }) // account_dimension_rules
+    enqueue({ data: { dimensions_enabled: false }, error: null }) // registry toggle: free text
+    enqueue({
+      data: { ok: true, mode: 'create_new', journal_entry_id: JE, voucher_series: 'A', voucher_number: 16, linked_tx_count: 1, tx_sum: 125 },
+      error: null,
+    })
+    enqueue({ data: [], error: null }) // event re-fetch
+  }
+
+  it('template path: the settlement and vat lines stay untagged', async () => {
+    enqueue({
+      data: [
+        { id: TX1, amount: 100, currency: 'SEK', description: 'Swish 1', date: '2026-06-05' },
+        { id: TX2, amount: 200, currency: 'SEK', description: 'Swish 2', date: '2026-06-05' },
+      ],
+      error: null,
+    })
+    enqueue({
+      data: {
+        id: TPL,
+        name: 'Försäljning 25%',
+        lines: [
+          { account: '1930', label: 'Bank', side: 'debit', type: 'settlement' },
+          { account: '3001', label: 'Försäljning', side: 'credit', type: 'business', ratio: 0.8 },
+          { account: '2611', label: 'Utg moms 25%', side: 'credit', type: 'vat', vat_rate: 0.25 },
+        ],
+        is_active: true,
+        is_system: false,
+        company_id: 'company-1',
+      },
+      error: null,
+    })
+    vi.mocked(applyTemplate).mockImplementation((_lines, total) => [
+      { account_number: '1930', debit_amount: String(total), credit_amount: '', line_description: 'Bank' },
+      { account_number: '3001', debit_amount: '', credit_amount: String(total * 0.8), line_description: 'Försäljning' },
+      { account_number: '2611', debit_amount: '', credit_amount: String(total * 0.2), line_description: 'Utg moms 25%' },
+    ])
+    enqueueCommit()
+
+    const response = await POST(
+      createMockRequest('/api/transactions/bulk-book', {
+        method: 'POST',
+        body: {
+          tx_ids: [TX1, TX2],
+          template_id: TPL,
+          mode: 'one_line_per_tx',
+          entry_description: 'Samlingsverifikation 2026-06-05',
+          default_dimensions: { '6': 'P001' },
+        },
+      }),
+      emptyParams,
+    )
+
+    expect(response.status).toBe(200)
+    const lines = postedLines()
+    expect(lines).toHaveLength(6)
+    for (const line of lines) {
+      if (line.account_number === '3001') expect(line.dimensions).toEqual({ '6': 'P001' })
+      else expect(line.dimensions).toBeUndefined()
+    }
+  })
+
+  it('manual path: the bank line and the moms line stay untagged', async () => {
+    enqueue({ data: [{ id: TX1, amount: 125, currency: 'SEK', description: 'Swish', date: '2026-06-05', cash_account_id: null }], error: null })
+    enqueue({ data: [{ account_number: '1930' }, { account_number: '3001' }, { account_number: '2611' }], error: null })
+    enqueue({ data: [], error: null }) // cash_accounts: no enabled SEK account, so the row settles on 1930
+    enqueueCommit()
+
+    const response = await POST(
+      createMockRequest('/api/transactions/bulk-book', {
+        method: 'POST',
+        body: {
+          tx_ids: [TX1],
+          entry_description: 'Samlingsverifikation',
+          default_dimensions: { '6': 'P001' },
+          manual_lines: [
+            { account_number: '1930', debit_amount: 125, credit_amount: 0, currency: 'SEK' },
+            { account_number: '3001', debit_amount: 0, credit_amount: 100, currency: 'SEK', dimensions: { '1': 'KS01' } },
+            { account_number: '2611', debit_amount: 0, credit_amount: 25, currency: 'SEK' },
+          ],
+        },
+      }),
+      emptyParams,
+    )
+
+    expect(response.status).toBe(200)
+    expect(postedLines().map((l) => [l.account_number, l.dimensions])).toEqual([
+      ['1930', undefined],
+      ['3001', { '1': 'KS01', '6': 'P001' }],
+      ['2611', undefined],
+    ])
+  })
+
+  it('manual path: a row settling on a ledger outside 19xx (Stripe on 1686) keeps that bank line untagged, and a line\'s own bag is kept', async () => {
+    enqueue({ data: [{ id: TX1, amount: 125, currency: 'SEK', description: 'Stripe', date: '2026-06-05', cash_account_id: 'ca-stripe' }], error: null })
+    enqueue({ data: [{ account_number: '1686' }, { account_number: '3004' }, { account_number: '1930' }], error: null })
+    enqueue({ data: { ledger_account: '1686', currency: 'SEK' }, error: null }) // the row's cash account
+    enqueueCommit()
+
+    const response = await POST(
+      createMockRequest('/api/transactions/bulk-book', {
+        method: 'POST',
+        body: {
+          tx_ids: [TX1],
+          entry_description: 'Stripe',
+          default_dimensions: { '6': 'P001' },
+          manual_lines: [
+            { account_number: '1686', debit_amount: 125, credit_amount: 0, currency: 'SEK', dimensions: { '1': 'KS01' } },
+            { account_number: '3004', debit_amount: 0, credit_amount: 125, currency: 'SEK' },
+          ],
+        },
+      }),
+      emptyParams,
+    )
+
+    expect(response.status).toBe(200)
+    expect(postedLines().map((l) => [l.account_number, l.dimensions])).toEqual([
+      ['1686', { '1': 'KS01' }],
+      ['3004', { '6': 'P001' }],
+    ])
+  })
+})

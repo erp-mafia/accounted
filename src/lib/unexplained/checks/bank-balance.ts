@@ -28,7 +28,7 @@ import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { applyUnbookedFilter } from '@/lib/transactions/unbooked'
 import { cannotCheck, companyFacts, kronor, noFiscalPeriod, sourceFailed, statusFor, sumOre } from '../shared'
-import type { CheckBreakdown, CheckContext, CheckDefinition, CheckItem, CheckRun, CheckSide, CheckSource, CheckSubject } from '../types'
+import type { CheckBreakdown, CheckContext, CheckDefinition, CheckItem, CheckNextAction, CheckRun, CheckSide, CheckSource, CheckSubject } from '../types'
 
 const TOLERANCE = 0.005
 
@@ -243,9 +243,20 @@ async function explain(ctx: CheckContext, run: CheckRun<BankSource>): Promise<Ch
   if (rows.length >= MAX_UNBOOKED_ROWS) notes.push(`Only the first ${MAX_UNBOOKED_ROWS} unbooked transactions were read.`)
   if (!reconciles) {
     notes.push(
-      `Unbooked bank transactions explain ${explained} of ${run.difference}. The residual is usually a verifikat on ${source.account} with no bank transaction behind it (booked twice, or on the wrong account), a verifikat dated that day for a payment the bank had not booked when it reported the balance, an opening balance that differs from the bank's balance that day, or bank transactions the feed has not delivered: gnubok_get_reconciliation_status with account_key bank:${source.cashAccountId} lists both sides.`,
+      `Unbooked bank transactions explain ${explained} of ${run.difference}. The residual is usually a verifikat on ${source.account} with no bank transaction behind it (booked twice, or on the wrong account), a verifikat dated that day for a payment the bank had not booked when it reported the balance, an opening balance that differs from the bank's balance when its history starts (bank.opening_difference there), or bank transactions the feed has not delivered: gnubok_get_reconciliation_status with account_key bank:${source.cashAccountId} lists both sides.`,
     )
   }
+  // Booking the unbooked rows cannot close a residual, so the step is the
+  // account's reconciliation, not the uncategorized list (crm#1310).
+  const nextAction: CheckNextAction | undefined = reconciles
+    ? undefined
+    : {
+        message_sv:
+          'Banktransaktionerna utan verifikat förklarar inte hela differensen. Gå igenom avstämningen för kontot: den visar båda sidorna, och bank.opening_difference visar om resten redan finns i ingående balansen eller i verifikat före bankens historik.',
+        tool: 'gnubok_get_reconciliation_status',
+        arguments: { account_key: `bank:${source.cashAccountId}` },
+        screen: '/reconciliation',
+      }
   return {
     parts: [
       {
@@ -260,6 +271,7 @@ async function explain(ctx: CheckContext, run: CheckRun<BankSource>): Promise<Ch
     residual,
     reconciles,
     ...(notes.length > 0 ? { note: notes.join(' ') } : {}),
+    ...(nextAction ? { next_action: nextAction } : {}),
   }
 }
 

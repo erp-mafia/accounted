@@ -291,7 +291,7 @@ DELETE /companies/{companyId}/dimensions/{id} : Delete a custom dimension nobody
 POST /companies/{companyId}/dimensions/{id}/values : Create a dimension value (kostnadsställe/projekt code) [scope:bookkeeping:write risk:low idempotent dry-run reversible]
 PATCH /companies/{companyId}/dimensions/{id}/values/{valueId} : Update a dimension value (rename, archive, set start/end date) [scope:bookkeeping:write risk:low idempotent dry-run reversible]
 DELETE /companies/{companyId}/dimensions/{id}/values/{valueId} : Delete an unreferenced dimension value [scope:bookkeeping:write risk:medium idempotent]
-POST /companies/{companyId}/dimensions/retag : Change the dimension tags (kostnadsställe, projekt) on posted journal lines [scope:bookkeeping:write risk:medium idempotent dry-run reversible]
+POST /companies/{companyId}/dimensions/retag : Change or remove the dimension tags (kostnadsställe, projekt) on posted journal lines [scope:bookkeeping:write risk:medium idempotent dry-run reversible]
 GET /companies/{companyId}/dimensions/retag-log : Read the history of dimension tag changes on posted lines, newest first [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/dimensions/rules : List the account dimension rules (required, default or fixed dimension per account) [scope:reports:read risk:low idempotent]
 POST /companies/{companyId}/dimensions/rules : Require, pre-fill or pin a dimension value on an account [scope:bookkeeping:write risk:low idempotent dry-run reversible]

@@ -124,6 +124,7 @@ describe('commitPendingOperation: retag_line_dimensions, execution', () => {
   it('happy path: one RPC call per line, aggregates changed/unchanged', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [], error: null }) // account_dimension_rules: a replace may remove a dimension, none is required
     enqueue({ data: { changed: true, log_id: 'log-1' }, error: null }) // line 1 rpc
     enqueue({ data: { changed: false, log_id: null }, error: null }) // line 2 rpc (already tagged)
     enqueue({ data: null, error: null }) // finalize update
@@ -166,6 +167,7 @@ describe('commitPendingOperation: retag_line_dimensions, execution', () => {
     // every matched line": the executor must not start merging it.
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [], error: null }) // account_dimension_rules: a replace may remove a dimension, none is required
     enqueue({ data: { changed: true, log_id: 'log-1' }, error: null }) // line 1 rpc
     enqueue({ data: null, error: null }) // finalize update
 
@@ -220,6 +222,31 @@ describe('commitPendingOperation: retag_line_dimensions, execution', () => {
     expect(rpc.mock.calls[1][1]).toMatchObject({ p_line_id: uuidAt(2), p_dimensions: { '6': 'P01' } })
   })
 
+  it('an empty code removes that dimension at approval and keeps the line\'s others (crm#1313)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [], error: null }) // account_dimension_rules: none required
+    enqueue({
+      data: [{ id: uuidAt(1), journal_entry_id: 'entry-1', account_number: '1930', dimensions: { '1': 'KS01', '6': 'P01' } }],
+      error: null,
+    }) // journal_entry_lines by id
+    enqueue({ data: [{ id: 'entry-1' }], error: null }) // the company's entries among them
+    enqueue({ data: { changed: true, log_id: 'log-1' }, error: null }) // line 1 rpc
+    enqueue({ data: null, error: null }) // finalize update
+
+    const op = makePendingOp({
+      params: { line_ids: [uuidAt(1)], dimensions: { '6': '' }, mode: 'merge', reason: 'Projekt hör inte till bankraden' },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ retagged: 1, failed_count: 0, mode: 'merge' })
+    expect((supabase.rpc as ReturnType<typeof vi.fn>).mock.calls[0][1]).toMatchObject({
+      p_line_id: uuidAt(1),
+      p_dimensions: { '1': 'KS01' },
+    })
+  })
+
   it('rejects a mode that is neither merge nor replace at the commit boundary', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
@@ -238,6 +265,7 @@ describe('commitPendingOperation: retag_line_dimensions, execution', () => {
   it('partial failure: continues past a failing line and reports it', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [], error: null }) // account_dimension_rules: a replace may remove a dimension, none is required
     enqueue({ data: { changed: true, log_id: 'log-1' }, error: null }) // line 1 ok
     enqueue({ data: null, error: { message: 'Perioden är låst: använd rättelseverifikat (storno).' } }) // line 2 fails
     enqueue({ data: { changed: true, log_id: 'log-3' }, error: null }) // line 3 ok
@@ -263,6 +291,7 @@ describe('commitPendingOperation: retag_line_dimensions, execution', () => {
   it('caps the echoed failures at 20 but counts them all', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [], error: null }) // account_dimension_rules: a replace may remove a dimension, none is required
     enqueue({ data: { changed: true, log_id: 'log-1' }, error: null }) // line 1 ok
     for (let i = 0; i < 22; i++) {
       enqueue({ data: null, error: { message: `fel ${i}` } })
@@ -286,6 +315,7 @@ describe('commitPendingOperation: retag_line_dimensions, execution', () => {
   it('fails the operation when EVERY line fails', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [], error: null }) // account_dimension_rules: a replace may remove a dimension, none is required
     enqueue({ data: null, error: { message: 'Verifikationsraden hittades inte.' } })
     enqueue({ data: null, error: { message: 'Verifikationsraden hittades inte.' } })
     enqueue({ data: null, error: null }) // dispatcher reject update
