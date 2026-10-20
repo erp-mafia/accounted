@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
@@ -11,6 +11,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { stageSkvManualPrefill } from '@/lib/skatteverket/manual-verifikat-prefill'
+import { readSkattekontoTwinProbe } from '@/lib/skatteverket/skattekonto-twin-probe'
 import type { SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 import { SkattekontoLinkProposalsDialog } from './SkattekontoLinkProposalsDialog'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
@@ -23,17 +24,8 @@ import type {
   SkattekontoTransactionWithSuggestion,
 } from '@/types/skatteverket'
 
-/** The twin fields of a match-candidates candidate (it carries more). */
-function toLedgerTwin(c: SkattekontoLedgerTwin): SkattekontoLedgerTwin {
-  return {
-    journal_entry_id: c.journal_entry_id,
-    voucher_series: c.voucher_series,
-    voucher_number: c.voucher_number,
-    entry_date: c.entry_date,
-    description: c.description,
-    status: c.status,
-  }
-}
+/** How long the on-open twin probe may hold the confirm before it counts as failed. */
+const TWIN_PROBE_TIMEOUT_MS = 8000
 
 /**
  * Inline booking for one skattekonto row: confirm-and-post without leaving
@@ -76,6 +68,12 @@ function toLedgerTwin(c: SkattekontoLedgerTwin): SkattekontoLedgerTwin {
  * accounts. There is nothing to link (no skattekonto line), so the primary
  * action ignores the row, and "Bokför ändå" books it with the same per-row
  * override.
+ *
+ * The dialog also asks that search as soon as it opens, so a row whose event
+ * is already in the ledger opens on the twin answer instead of on a
+ * confident "1630 mot 1930" proposal with an immutable-verifikat warning.
+ * The server refusal stays the guard; the probe only stops the dialog from
+ * offering a booking it would refuse.
  */
 export default function SkattekontoBookDialog({
   row,
@@ -137,8 +135,53 @@ export default function SkattekontoBookDialog({
   // "Bokför ändå" asks why first: the reason is the override, and the
   // verifikat carries it. Shown once the user chose to book anyway.
   const [anywayReason, setAnywayReason] = useState<{ rowId: string; text: string } | null>(null)
+  // The row id the on-open twin probe is running for.
+  const [probingRowId, setProbingRowId] = useState<string | null>(null)
+
+  const rowId = row?.id ?? null
+  // Which action "Bokför ändå" repeats for a twin found on open: the one the
+  // dialog's primary button would have taken.
+  const openMode: 'book' | 'draft' | 'manual' =
+    row?.booking_suggestion != null ? 'book' : row?.booking_suggestion === null ? 'manual' : 'draft'
+
+  useEffect(() => {
+    if (!open || !rowId) return
+    let cancelled = false
+    // A hung probe must not hold the confirm forever: past the timeout it
+    // counts as failed, which leaves the ordinary dialog.
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), TWIN_PROBE_TIMEOUT_MS)
+    setProbingRowId(rowId)
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${rowId}/match-candidates`,
+          { signal: controller.signal },
+        )
+        const answer = readSkattekontoTwinProbe(res.ok ? await res.json() : null)
+        if (cancelled || !answer) return
+        // A summarised verifikat that already holds the row is the same
+        // answer as a twin: the server would refuse with LEDGER_COVER_EXISTS.
+        if (answer.kind === 'twin') setTwinRefusal({ rowId, twins: answer.twins, mode: openMode })
+        else setCoverRefusal({ rowId, cover: answer.cover, mode: openMode })
+      } catch {
+        // A failed or timed-out probe leaves the ordinary dialog; the server still refuses a twin.
+      } finally {
+        clearTimeout(timer)
+        if (!cancelled) setProbingRowId(null)
+      }
+    })()
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+      controller.abort()
+      // Closing mid-probe must not leave the row marked as probing.
+      setProbingRowId((current) => (current === rowId ? null : current))
+    }
+  }, [open, rowId, openMode])
 
   if (!row) return null
+  const isProbing = probingRowId === row.id
   const twinState = twinRefusal?.rowId === row.id ? twinRefusal : null
   const coverState = coverRefusal?.rowId === row.id ? coverRefusal : null
   const directState = directRefusal?.rowId === row.id ? directRefusal : null
@@ -622,19 +665,15 @@ export default function SkattekontoBookDialog({
         const res = await fetch(
           `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${row.id}/match-candidates`,
         )
-        const json = res.ok ? await res.json() : null
-        const candidates: SkattekontoLedgerTwin[] = Array.isArray(json?.data?.candidates)
-          ? json.data.candidates
-          : []
-        if (candidates.length > 0) {
-          setTwinRefusal({ rowId: row.id, twins: candidates.map(toLedgerTwin), mode: 'manual' })
+        const answer = readSkattekontoTwinProbe(res.ok ? await res.json() : null)
+        if (answer?.kind === 'twin') {
+          setTwinRefusal({ rowId: row.id, twins: answer.twins, mode: 'manual' })
           return
         }
         // No verifikat carries the row exactly, but a summarised one may
         // already hold it: the same answer as the booking guard gives.
-        const cover = json?.data?.ledger_cover as SkattekontoLedgerCoverInfo | undefined
-        if (cover) {
-          setCoverRefusal({ rowId: row.id, cover, mode: 'manual' })
+        if (answer?.kind === 'cover') {
+          setCoverRefusal({ rowId: row.id, cover: answer.cover, mode: 'manual' })
           return
         }
       } catch {
@@ -659,6 +698,9 @@ export default function SkattekontoBookDialog({
       onOpenChange={handleOpenChange}
       title={t('title')}
       isSubmitting={isBooking || isOpeningDraft}
+      // Held until the on-open twin probe has answered: a click before then
+      // would only reach the server refusal the probe is about to show.
+      confirmDisabled={isProbing}
       confirmLabel={
         canBookDirectly
           ? t('confirm_book')
@@ -685,7 +727,7 @@ export default function SkattekontoBookDialog({
           <Button
             variant="ghost"
             onClick={() => void handleOpenDraft(null)}
-            disabled={isBooking}
+            disabled={isBooking || isProbing}
             loading={isOpeningDraft}
             className="w-full sm:w-auto text-muted-foreground"
           >
@@ -695,7 +737,7 @@ export default function SkattekontoBookDialog({
           <Button
             variant="ghost"
             onClick={() => void handleManualCreate(false)}
-            disabled={isBooking || isOpeningDraft}
+            disabled={isBooking || isOpeningDraft || isProbing}
             loading={isOpeningDraft}
             className="w-full sm:w-auto text-muted-foreground"
           >
