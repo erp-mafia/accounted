@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { Loader2, Search } from 'lucide-react'
 import { cn, formatDate } from '@/lib/utils'
@@ -12,6 +12,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { performCompanySwitch } from '@/lib/company/switch-client'
 import { filterClientRows, type ClientBankSwitch, type ClientOverviewRow } from '@/lib/clients/aggregate'
+import { CLIENT_NUMBER_MAX_LENGTH } from '@/lib/clients/client-number'
 
 /** The bank connection switch campaign as the page passes it: on with its deadline, or null. */
 export interface BankSwitchCampaignView {
@@ -23,6 +24,8 @@ interface ClientsTableProps {
   clients: ClientOverviewRow[]
   /** Null while the campaign is off: no column, no nudges. */
   bankSwitchCampaign?: BankSwitchCampaignView | null
+  /** The byrå's owners and admins edit the customer number in place; members only read it. */
+  canEditClientNumber?: boolean
 }
 
 type NudgeTarget = { kind: 'one'; row: ClientOverviewRow } | { kind: 'all'; count: number }
@@ -45,17 +48,31 @@ type NudgeTarget = { kind: 'one'; row: ClientOverviewRow } | { kind: 'all'; coun
  * has not switched, to connect the bank: a mail to the client's own owners
  * and admins (POST /api/clients/bank-switch/remind), since the switch is
  * signed with the client's BankID, not the byrå's.
+ *
+ * The first column is the byrå's own customer number for each client
+ * (crm#1279): owners and admins click it to set, change or clear it in place
+ * (PUT /api/clients/:companyId/client-number), so a byrå fills its whole
+ * list without entering any client; the filter matches it too. The column
+ * hides for a plain member while no client has a number.
  */
-export default function ClientsTable({ clients, bankSwitchCampaign = null }: ClientsTableProps) {
+export default function ClientsTable({ clients, bankSwitchCampaign = null, canEditClientNumber = false }: ClientsTableProps) {
   const t = useTranslations('clients')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [query, setQuery] = useState('')
   const [pendingId, setPendingId] = useState<string | null>(null)
   const [nudge, setNudge] = useState<NudgeTarget | null>(null)
+  // Numbers saved on this page, over the server-rendered rows.
+  const [savedNumbers, setSavedNumbers] = useState<Record<string, string | null>>({})
 
-  const rows = useMemo(() => filterClientRows(clients, query), [clients, query])
+  const withNumbers = useMemo(
+    () => clients.map((c) => (c.companyId in savedNumbers ? { ...c, clientNumber: savedNumbers[c.companyId] } : c)),
+    [clients, savedNumbers],
+  )
+  const rows = useMemo(() => filterClientRows(withNumbers, query), [withNumbers, query])
+  const showClientNumber = canEditClientNumber || withNumbers.some((c) => c.clientNumber)
   const showBankSwitch = bankSwitchCampaign !== null
+  const columnCount = 6 + (showClientNumber ? 1 : 0) + (showBankSwitch ? 1 : 0)
   const notSwitched = useMemo(
     () => clients.filter((c) => c.bankSwitch?.state === 'pending' || c.bankSwitch?.state === 'stopped'),
     [clients],
@@ -89,6 +106,26 @@ export default function ClientsTable({ clients, bankSwitchCampaign = null }: Cli
     }
   }
 
+  async function saveClientNumber(row: ClientOverviewRow, value: string | null): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/clients/${row.companyId}/client-number`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_number: value }),
+      })
+      const body = (await res.json().catch(() => ({}))) as { data?: { client_number: string | null }; error?: unknown }
+      if (!res.ok || body.error) {
+        toast({ title: t('client_number_save_failed'), description: getErrorMessage(body, { locale, statusCode: res.status }), variant: 'destructive' })
+        return false
+      }
+      setSavedNumbers((prev) => ({ ...prev, [row.companyId]: body.data?.client_number ?? null }))
+      return true
+    } catch (error) {
+      toast({ title: t('client_number_save_failed'), description: getErrorMessage(error, { locale }), variant: 'destructive' })
+      return false
+    }
+  }
+
   if (clients.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">{t('empty')}</p>
@@ -119,6 +156,7 @@ export default function ClientsTable({ clients, bankSwitchCampaign = null }: Cli
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>
+              {showClientNumber && <th className={TH_CLASS}>{t('col_client_number')}</th>}
               <th className={TH_CLASS}>{t('col_company')}</th>
               <th className={cn(TH_CLASS, 'text-right')}>{t('col_unbooked')}</th>
               <th className={cn(TH_CLASS, 'text-right')}>{t('col_inbox')}</th>
@@ -133,7 +171,7 @@ export default function ClientsTable({ clients, bankSwitchCampaign = null }: Cli
           <tbody className="stagger-enter">
             {rows.length === 0 && (
               <tr>
-                <td className={cn(TD_CLASS, 'text-muted-foreground')} colSpan={showBankSwitch ? 7 : 6}>
+                <td className={cn(TD_CLASS, 'text-muted-foreground')} colSpan={columnCount}>
                   {t('no_matches')}
                 </td>
               </tr>
@@ -147,6 +185,20 @@ export default function ClientsTable({ clients, bankSwitchCampaign = null }: Cli
                   pendingId && pendingId !== row.companyId && 'opacity-50',
                 )}
               >
+                {showClientNumber && (
+                  <td
+                    className={cn(TD_CLASS, 'whitespace-nowrap')}
+                    // The cell edits the number; a near miss must not enter the client.
+                    onClick={canEditClientNumber ? (e) => e.stopPropagation() : undefined}
+                  >
+                    <ClientNumberCell
+                      value={row.clientNumber}
+                      canEdit={canEditClientNumber}
+                      editLabel={t('client_number_edit_aria', { client: row.name })}
+                      onSave={(value) => saveClientNumber(row, value)}
+                    />
+                  </td>
+                )}
                 <td className={TD_CLASS}>
                   <button
                     type="button"
@@ -266,6 +318,93 @@ export default function ClientsTable({ clients, bankSwitchCampaign = null }: Cli
         }}
       />
     </div>
+  )
+}
+
+interface ClientNumberCellProps {
+  value: string | null
+  canEdit: boolean
+  editLabel: string
+  /** Resolves true once saved; false keeps the field open (the caller toasts why). */
+  onSave: (value: string | null) => Promise<boolean>
+}
+
+/**
+ * The byrå's customer number: muted "-" when unset. For owners and admins
+ * the value is a button that turns into a field in place; Enter or leaving
+ * the field saves, Escape restores. An unchanged value saves nothing.
+ */
+function ClientNumberCell({ value, canEdit, editLabel, onSave }: ClientNumberCellProps) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [saving, setSaving] = useState(false)
+  // Enter commits and closes the field; the blur that may follow must not commit again.
+  const settled = useRef(false)
+
+  const display = value ? (
+    <span className="tabular-nums text-foreground">{value}</span>
+  ) : (
+    <span className="text-muted-foreground">-</span>
+  )
+  if (!canEdit) return display
+
+  const open = () => {
+    settled.current = false
+    setDraft(value ?? '')
+    setEditing(true)
+  }
+
+  const commit = async () => {
+    if (settled.current) return
+    const next = draft.trim()
+    if (next === (value ?? '')) {
+      settled.current = true
+      setEditing(false)
+      return
+    }
+    settled.current = true
+    setSaving(true)
+    const ok = await onSave(next || null)
+    setSaving(false)
+    if (ok) setEditing(false)
+    else settled.current = false
+  }
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={open}
+        aria-label={editLabel}
+        title={editLabel}
+        className="-mx-1 rounded-sm px-1 text-left transition-colors duration-150 hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      >
+        {display}
+      </button>
+    )
+  }
+
+  return (
+    <input
+      autoFocus
+      value={draft}
+      maxLength={CLIENT_NUMBER_MAX_LENGTH}
+      disabled={saving}
+      aria-label={editLabel}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => void commit()}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          void commit()
+        } else if (e.key === 'Escape') {
+          e.preventDefault()
+          settled.current = true
+          setEditing(false)
+        }
+      }}
+      className="-my-1 h-7 w-24 rounded-lg border border-input bg-card px-2 text-[13px] tabular-nums transition-colors duration-150 focus-visible:border-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/20 disabled:opacity-50"
+    />
   )
 }
 

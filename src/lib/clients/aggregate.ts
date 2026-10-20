@@ -63,6 +63,8 @@ export interface ClientOverviewRow {
   companyId: string
   name: string
   orgNumber: string | null
+  /** The byrå's own customer number for the client (companies.byra_client_number); null when unset. */
+  clientNumber: string | null
   /** Canonical "att bokföra" count (lib/worklist book_transaction predicate). */
   unbookedCount: number
   /** Unconsumed inbox documents (lib/worklist inbox_document predicate). */
@@ -199,13 +201,14 @@ export function sortClientRows(rows: ClientOverviewRow[]): ClientOverviewRow[] {
   })
 }
 
-/** Case-insensitive free-text filter on name and org number. */
+/** Case-insensitive free-text filter on name, the byrå's customer number and org number. */
 export function filterClientRows(rows: ClientOverviewRow[], query: string): ClientOverviewRow[] {
   const q = query.trim().toLowerCase()
   if (!q) return rows
   const qDigits = q.replace(/[^0-9]/g, '')
   return rows.filter((row) => {
     if (row.name.toLowerCase().includes(q)) return true
+    if (row.clientNumber?.toLowerCase().includes(q)) return true
     const org = row.orgNumber ?? ''
     if (org.toLowerCase().includes(q)) return true
     // "5560-1257" should match "5560125790": compare digits to digits.
