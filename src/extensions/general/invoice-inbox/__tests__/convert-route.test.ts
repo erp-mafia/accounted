@@ -1,4 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The pair guard (lib/operations/inbox-pair-guard.ts, tested there): here only that the door asks and obeys.
+const refuseWhenPairBookedMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/operations/inbox-pair-guard', () => ({
+  refuseWhenPairBooked: (...args: unknown[]) => refuseWhenPairBookedMock(...args),
+}))
+
 import { invoiceInboxExtension } from '@/extensions/general/invoice-inbox'
 import {
   createQueuedMockSupabase,
@@ -112,6 +119,24 @@ describe('POST /items/:id/convert', () => {
     const res = await route.handler(request, ctx)
     const { status } = await parseJsonResponse(res)
     expect(status).toBe(409)
+  })
+
+  it('refuses to register an invoice whose receipt is booked already, naming that verifikat, before anything is written', async () => {
+    refuseWhenPairBookedMock.mockResolvedValueOnce({
+      ok: false,
+      code: 'INBOX_ITEM_PAIR_ALREADY_BOOKED',
+      details: { inbox_item_id: 'item-1', sibling_item_id: 'item-receipt', sibling_kind: 'receipt', journal_entry_id: 'je-66', voucher: 'A66', supplier_invoice_id: null },
+      messageSv: 'Kvittot från samma köp är redan bokfört på verifikat A66. Lägg till det här underlaget där i stället, så bokförs köpet inte två gånger.',
+      messageEn: 'The receipt from the same purchase is booked already on voucher A66. Add this document there instead, so the purchase is not booked twice.',
+    })
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ status: 'received' }) })
+    const request = createMockRequest('/items/item-1/convert', { method: 'POST', body: VALID_CONVERT_BODY, searchParams: { _id: 'item-1' } })
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(await route.handler(request, buildCtx(supabase)))
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('INBOX_ITEM_PAIR_ALREADY_BOOKED')
+    expect(body.error.message).toContain('A66')
+    expect(findCalls('supplier_invoices', 'insert')).toEqual([])
   })
 
   it('refuses a credit note with 409 INBOX_ITEM_IS_CREDIT_NOTE and the invoice it credits (issue #2980)', async () => {

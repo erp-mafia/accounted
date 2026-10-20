@@ -5,6 +5,7 @@ import {
   normaliseInvoiceNumber,
   normaliseSupplierName,
   pairInboxItems,
+  pairWithBookedHalves,
   purchaseAgreement,
   purchaseFacts,
   type PairableItem,
@@ -240,6 +241,31 @@ describe('pairInboxItems', () => {
   it('reads each item once, however often it is listed', () => {
     expect(pairInboxItems([invoice(), invoice(), receipt()]).size).toBe(2)
   })
+
+  it('keeps the receipt with an invoice registered and still unpaid: the payment it proves is not booked yet', () => {
+    const registered = invoice({ created_supplier_invoice_id: 'si-1' })
+    const pairs = pairInboxItems([registered, receipt()], { awaitingPayment: new Set(['invoice']) })
+    expect(pairs.get('invoice')).toEqual({ role: 'invoice', receipt_item_id: 'receipt', basis: 'invoice_number' })
+    expect(pairs.get('receipt')).toEqual({ role: 'receipt', invoice_item_id: 'invoice', basis: 'invoice_number' })
+  })
+
+  it('lets go of the receipt once the invoice is paid, so a receipt that did not follow stands on its own', () => {
+    // Paid: the caller no longer names it as awaiting payment.
+    expect(pairInboxItems([invoice({ created_supplier_invoice_id: 'si-1' }), receipt()], { awaitingPayment: new Set() }).size).toBe(0)
+  })
+
+  it('an unpaid registration counts for an invoice only, never for a receipt, a verifikat or Arkiv', () => {
+    // A receipt registered as a supplier invoice is not a purchase waiting for its receipt.
+    const registeredReceipt = receipt({ created_supplier_invoice_id: 'si-2' })
+    expect(pairInboxItems([invoice(), registeredReceipt], { awaitingPayment: new Set(['receipt']) }).size).toBe(0)
+    // Booked on a verifikat as well, or moved to Arkiv: not waiting for anything.
+    const booked = invoice({ created_supplier_invoice_id: 'si-1', created_journal_entry_id: 'je-1' })
+    expect(pairInboxItems([booked, receipt()], { awaitingPayment: new Set(['invoice']) }).size).toBe(0)
+    const archived = invoice({ created_supplier_invoice_id: 'si-1', routed_to_arkiv_at: '2026-10-04T00:00:00Z' })
+    expect(pairInboxItems([archived, receipt()], { awaitingPayment: new Set(['invoice']) }).size).toBe(0)
+    // The receipt still has to be open.
+    expect(pairInboxItems([invoice({ created_supplier_invoice_id: 'si-1' }), receipt({ created_journal_entry_id: 'je-pay' })], { awaitingPayment: new Set(['invoice']) }).size).toBe(0)
+  })
 })
 
 describe('mayPair', () => {
@@ -247,5 +273,58 @@ describe('mayPair', () => {
     expect(mayPair(invoice())).toBe(true)
     expect(mayPair(receipt({ created_journal_entry_id: 'je-1' }))).toBe(false)
     expect(mayPair(withReading(invoice(), { documentKind: 'other', totals: { total: 83 } }))).toBe(false)
+  })
+
+  it('is also an invoice registered and still unpaid, when the caller says so', () => {
+    const registered = invoice({ created_supplier_invoice_id: 'si-1' })
+    expect(mayPair(registered)).toBe(false)
+    expect(mayPair(registered, new Set(['invoice']))).toBe(true)
+  })
+})
+
+describe('pairWithBookedHalves: an open half whose other half is booked already', () => {
+  it('the invoice open, its receipt booked: the invoice is the booking\'s companion', () => {
+    const pairs = pairWithBookedHalves([invoice(), receipt({ created_journal_entry_id: 'je-1' })])
+    expect(pairs.get('invoice')).toEqual({ role: 'booked_companion', booked_item_id: 'receipt', booked_kind: 'receipt', basis: 'invoice_number' })
+    expect(pairs.has('receipt')).toBe(false)
+  })
+
+  it('the receipt open, its invoice registered and paid: the receipt is the booking\'s companion', () => {
+    const paid = invoice({ created_supplier_invoice_id: 'si-1' })
+    expect(pairWithBookedHalves([paid, receipt()], { paidSupplierInvoices: new Set(['invoice']) }).get('receipt')).toEqual({
+      role: 'booked_companion',
+      booked_item_id: 'invoice',
+      booked_kind: 'invoice',
+      basis: 'invoice_number',
+    })
+    // Registered and not paid (nor named paid): not a booked half, the unpaid pair rule applies instead.
+    expect(pairWithBookedHalves([paid, receipt()]).size).toBe(0)
+  })
+
+  it('a half booked through its matched bank row, its underlag on the verifikat, is booked too', () => {
+    const onRow = receipt({ matched_transaction_id: 'tx-1', matched_transaction_journal_entry_id: 'je-1', underlag_status: 'anchored' })
+    expect(pairWithBookedHalves([invoice(), onRow]).get('invoice')).toMatchObject({ booked_item_id: 'receipt' })
+  })
+
+  it('never pairs different amounts, another mail, or two halves both open', () => {
+    expect(pairWithBookedHalves([invoice(), withReading(receipt({ created_journal_entry_id: 'je-1' }), { documentKind: 'receipt', supplier: { name: 'X Corp.' }, invoice: { invoiceNumber: 'J0LVRPBD-0003', invoiceDate: '2026-10-03', currency: 'SEK' }, totals: { total: 90 } })]).size).toBe(0)
+    expect(pairWithBookedHalves([invoice(), receipt({ created_journal_entry_id: 'je-1', resend_email_id: 'other-mail' })]).size).toBe(0)
+    expect(pairWithBookedHalves([invoice(), receipt()]).size).toBe(0)
+  })
+
+  it('one to one: an open half that fits a booked half and another document pairs with neither', () => {
+    const booked = receipt({ created_journal_entry_id: 'je-1' })
+    const secondOpen = { ...receipt(), id: 'receipt-2' }
+    expect(pairWithBookedHalves([invoice(), booked, secondOpen]).size).toBe(0)
+    // Two open invoices that both fit one booked receipt: neither.
+    const secondInvoice = { ...invoice(), id: 'invoice-2' }
+    expect(pairWithBookedHalves([invoice(), secondInvoice, booked]).size).toBe(0)
+  })
+
+  it('leaves an open half already in a pair of two open halves, and one matched to a bank row of its own, alone', () => {
+    expect(pairWithBookedHalves([invoice(), receipt({ created_journal_entry_id: 'je-1' })], { paired: new Set(['invoice']) }).size).toBe(0)
+    expect(pairWithBookedHalves([invoice({ matched_transaction_id: 'tx-own' }), receipt({ created_journal_entry_id: 'je-1' })]).size).toBe(0)
+    // An Arkiv document is neither half.
+    expect(pairWithBookedHalves([invoice(), receipt({ created_journal_entry_id: 'je-1', routed_to_arkiv_at: '2026-10-04T00:00:00Z' })]).size).toBe(0)
   })
 })

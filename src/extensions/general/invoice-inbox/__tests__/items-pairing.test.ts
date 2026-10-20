@@ -48,14 +48,21 @@ const invoice = (overrides: Record<string, unknown> = {}) =>
 const receipt = (overrides: Record<string, unknown> = {}) =>
   makeInvoiceInboxItem({ id: 'receipt', source: 'email', resend_email_id: 'mail-x', document_id: 'doc-r', extracted_data: RECEIPT_READ as never, ...overrides })
 
-function list(rows: unknown[], arrivals: TableMockResolver | { data: unknown; error?: unknown } = { data: [] }) {
+function list(
+  rows: unknown[],
+  arrivals: TableMockResolver | { data: unknown; error?: unknown } = { data: [] },
+  supplierInvoices: Array<{ id: string; status: string; payment_journal_entry_id?: string | null }> = [],
+  journalEntries: Array<{ id: string; voucher_series: string; voucher_number: number; fiscal_period?: unknown }> = [],
+) {
   return createTableMockSupabase({
     invoice_inbox_items: (calls) => (calls.some((c) => c.method === 'range') ? { data: rows } : { data: [] }),
     arrival_outputs: arrivals,
+    supplier_invoices: { data: supplierInvoices },
+    journal_entries: { data: journalEntries },
   })
 }
 
-type Row = { id: string; pairing: unknown }
+type Row = { id: string; pairing: Record<string, unknown> | null }
 
 beforeEach(() => vi.clearAllMocks())
 
@@ -91,6 +98,69 @@ describe('GET /items: invoice and receipt pairs', () => {
   it('does not pair a receipt from another mail, nor a booked invoice', async () => {
     expect((await read(list([invoice(), receipt({ resend_email_id: 'other' })]).supabase)).invoice.pairing).toBeNull()
     expect((await read(list([invoice({ created_supplier_invoice_id: 'si-1' }), receipt()]).supabase)).receipt.pairing).toBeNull()
+  })
+
+  it('keeps the receipt with its invoice registered and still unpaid, off the queue, until the payment is booked', async () => {
+    const { supabase, findCalls } = list([invoice({ created_supplier_invoice_id: 'si-1' }), receipt()], { data: [] }, [{ id: 'si-1', status: 'registered' }])
+    const byId = await read(supabase)
+    expect(byId.invoice.pairing).toEqual({ role: 'invoice', receipt_item_id: 'receipt', basis: 'invoice_number' })
+    expect(byId.receipt.pairing).toEqual({ role: 'receipt', invoice_item_id: 'invoice', basis: 'invoice_number' })
+    // Only the registered invoices' supplier invoices, in this company.
+    expect(findCalls('supplier_invoices', 'in')).toContainEqual(['id', ['si-1']])
+    expect(findCalls('supplier_invoices', 'eq')).toContainEqual(['company_id', 'company-1'])
+  })
+
+  it('reads no supplier invoice when no open receipt could pair', async () => {
+    const { supabase, findCalls } = list([invoice({ created_supplier_invoice_id: 'si-1' })], { data: [] }, [{ id: 'si-1', status: 'registered' }])
+    await read(supabase)
+    expect(findCalls('supplier_invoices', 'select')).toEqual([])
+  })
+})
+
+describe('GET /items: an open half whose other half is booked already', () => {
+  const ENTRY = { id: 'je-12', voucher_series: 'A', voucher_number: 12, fiscal_period: { is_closed: false, locked_at: null } }
+
+  it('the invoice still open, its receipt booked: the invoice is the booking\'s companion, with its verifikat', async () => {
+    const { supabase } = list([invoice(), receipt({ created_journal_entry_id: 'je-12' })], { data: [] }, [], [ENTRY])
+    const byId = await read(supabase)
+    expect(byId.invoice.pairing).toEqual({
+      role: 'booked_companion',
+      booked_item_id: 'receipt',
+      booked_kind: 'receipt',
+      basis: 'invoice_number',
+      journal_entry_id: 'je-12',
+      voucher: 'A12',
+      locked: false,
+    })
+    // The booked half itself carries nothing.
+    expect(byId.receipt.pairing).toBeNull()
+  })
+
+  it('the receipt still open, its invoice registered and paid: the receipt rides on the payment\'s verifikat', async () => {
+    const { supabase } = list(
+      [invoice({ created_supplier_invoice_id: 'si-1' }), receipt()],
+      { data: [] },
+      [{ id: 'si-1', status: 'paid', payment_journal_entry_id: 'je-12' }],
+      [ENTRY],
+    )
+    const byId = await read(supabase)
+    expect(byId.receipt.pairing).toMatchObject({ role: 'booked_companion', booked_item_id: 'invoice', booked_kind: 'invoice', voucher: 'A12', locked: false })
+  })
+
+  it('says so when the booked half\'s verifikat sits in a locked period', async () => {
+    const locked = { ...ENTRY, fiscal_period: { is_closed: false, locked_at: '2026-10-10T00:00:00Z' } }
+    const { supabase } = list([invoice(), receipt({ created_journal_entry_id: 'je-12' })], { data: [] }, [], [locked])
+    const byId = await read(supabase)
+    expect(byId.invoice.pairing).toMatchObject({ role: 'booked_companion', journal_entry_id: 'je-12', locked: true })
+  })
+
+  it('pairs nothing when the amounts differ, the booked half came in another mail, or it is registered and credited', async () => {
+    const differ = await read(list([invoice(), receipt({ created_journal_entry_id: 'je-12', extracted_data: { ...RECEIPT_READ, totals: { total: 90 } } as never })], { data: [] }, [], [ENTRY]).supabase)
+    expect(differ.invoice.pairing).toBeNull()
+    const elsewhere = await read(list([invoice(), receipt({ created_journal_entry_id: 'je-12', resend_email_id: 'other' })], { data: [] }, [], [ENTRY]).supabase)
+    expect(elsewhere.invoice.pairing).toBeNull()
+    const credited = await read(list([invoice({ created_supplier_invoice_id: 'si-1' }), receipt()], { data: [] }, [{ id: 'si-1', status: 'credited' }]).supabase)
+    expect(credited.receipt.pairing).toBeNull()
   })
 
   it('answers the list without pairs when the arrivals cannot be read', async () => {

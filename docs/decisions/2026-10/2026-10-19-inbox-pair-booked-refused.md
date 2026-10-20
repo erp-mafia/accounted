@@ -1,0 +1,1 @@
+[2026-10-19] An inbox item whose pair sibling (same arrival, same pairing rule) is already booked, or a receipt whose invoice is registered, is refused by every door that books it (INBOX_ITEM_PAIR_ALREADY_BOOKED, naming the verifikat), with no override: SofClo booked one Anthropic purchase twice as utlägg.

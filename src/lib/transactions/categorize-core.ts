@@ -75,6 +75,7 @@ import { assertTransactionBookable } from '@/lib/transactions/is-booked'
 import { OPEN_INVOICES } from '@/lib/composition/open-invoices'
 import { invoiceMatchSide } from '@/lib/transactions/invoice-match-side'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
+import { refuseWhenPairBooked } from '@/lib/operations/inbox-pair-guard'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { createLogger, type Logger } from '@/lib/logger'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -1336,6 +1337,13 @@ export async function bulkBookMatchedInboxItems(
     }
     if (!item.matched_transaction_id) {
       skipped.push({ item_id: itemId, reason: 'not_matched' })
+      continue
+    }
+    // The other half of this purchase (the invoice or the receipt it came with) is booked already:
+    // booking this one's row too would book the purchase twice. The detail names that verifikat.
+    const pairBooked = await refuseWhenPairBooked(supabase, companyId, itemId)
+    if (pairBooked) {
+      skipped.push({ item_id: itemId, reason: 'pair_already_booked', detail: pairBooked.messageSv })
       continue
     }
 

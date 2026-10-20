@@ -49,6 +49,7 @@ import { cn, formatCurrency } from '@/lib/utils'
 import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 import { roundOre, formatAmountInput } from '@/lib/money'
 import { buildVoucherSeriesOptions, formatVoucher, resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
+import { bookedEntryOf } from '@/lib/bookkeeping/booking-answer'
 import { resolveFxLineSlot } from '@/lib/bookkeeping/fx-line-slot'
 import { resolveVoucherEnter, type VoucherEnterAction } from '@/lib/bookkeeping/voucher-enter-key'
 import {
@@ -1155,7 +1156,8 @@ export default function JournalEntryForm({
         ...(extraBody ?? {}),
       }),
     })
-    return (await throwOnStructuredError(res)) as { data?: { id?: string; voucher_series?: string; voucher_number?: number }; journal_entry_id?: string }
+    // Each door answers its own shape (lib/bookkeeping/booking-answer.ts).
+    return bookedEntryOf(await throwOnStructuredError(res))
   }, [bookedLines, rate, entryCurrency, computedForeignAmount, t, submitUrl, editEntryId, selectedPeriod, entryDate, description, effectiveSourceType, sourceId, voucherSeries, seriesResolved, notes, extraBody])
 
   const { runSubmit, dialog: activationDialog, confirm: confirmActivation, cancel: cancelActivation } =
@@ -1203,10 +1205,10 @@ export default function JournalEntryForm({
     setIsSubmitting(true)
     saveAsDraftRef.current = false
     try {
-      const result = await runSubmit()
+      const booked = await runSubmit()
 
-      const journalEntryId = result.data?.id ?? result.journal_entry_id
-      const voucher = formatVoucher(result.data ?? {})
+      const journalEntryId = booked.id ?? undefined
+      const voucher = formatVoucher(booked)
       const linkFailures = await linkUploadedDocuments(journalEntryId)
 
       if (linkFailures.length > 0) {
@@ -1307,9 +1309,9 @@ export default function JournalEntryForm({
     setIsSavingDraft(true)
     saveAsDraftRef.current = true
     try {
-      const result = await runSubmit()
+      const booked = await runSubmit()
 
-      const journalEntryId = result.data?.id ?? result.journal_entry_id
+      const journalEntryId = booked.id ?? undefined
       const linkFailures = await linkUploadedDocuments(journalEntryId)
 
       if (linkFailures.length > 0) {

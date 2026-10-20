@@ -23,15 +23,22 @@
  *   trolig the amount agrees (to the öre, the matcher's amount-and-date
  *          pass; or within the receipt matcher's converted tolerance when the
  *          row is in another currency), inside the window, and the row names
- *          the counterparty or its alias.
+ *          the counterparty or its alias; or, in place of the name, the card
+ *          (below).
  * The card the document (or the receipt it came with) says paid it weighs in
- * on the two lower levels, never on its own (./card-token.ts):
+ * on the two lower levels (./card-token.ts):
  *   - the row names that card, and trolig holds to the öre in one currency:
  *     stark (the amount, the name, the window and the card all agree);
+ *   - the row names that card and the amount agrees to the öre in one
+ *     currency inside the window, but no name agrees: trolig, never higher.
+ *     A card statement prints the brand the card network knows, not the
+ *     seller on the document ("X CORP. PAID FEATURES K3667" for an invoice
+ *     from X Internet Unlimited Company), so the card stands in for the
+ *     name; without the name it never reaches stark;
  *   - the row names another card: another payment, never proposed below
  *     exakt.
- * A card never makes a proposal the rules above would not: it identifies
- * the payer's card, not the payee, so the name still has to agree.
+ * A card never helps a converted amount (another currency, the tolerance)
+ * or a row it does not name: it identifies the payer's card, not the payee.
  * Among rows at the best level the one nearest the issue-to-due span wins; a
  * tie the date cannot break proposes nothing, since a proposal is a claim
  * about one row. Two rows the OCR names (a payment made twice) give the
@@ -159,7 +166,13 @@ function scoreRow(facts: BankMatchFacts, row: ProposableBankRow, rules: BankMatc
   if (card === 'contradicts') return null
   const plain = rules.matchSupplierInvoice(transaction, [asRegisteredInvoice(facts, amountSek, false)])
   if (plain?.matchMethod === 'amount_bankgiro') return { row, level: 'stark', basis: 'rule_counterparty', distance }
-  if (!nameAgrees(facts, row)) return null
+  if (!nameAgrees(facts, row)) {
+    // The card in place of the name: the row names the card the document says
+    // paid it, the same amount to the öre in one currency, inside the window.
+    // Trolig at most: the card names the payer, the name would name the payee.
+    if (card === 'agrees' && sameAmount(facts, row)) return { row, level: 'trolig', basis: 'rule_amount_date', distance }
+    return null
+  }
   if (plain?.matchMethod === 'amount_date') {
     // The card the document says paid it is the row's: amount, name, window and card agree.
     const level = card === 'agrees' && sameAmount(facts, row) ? 'stark' : 'trolig'

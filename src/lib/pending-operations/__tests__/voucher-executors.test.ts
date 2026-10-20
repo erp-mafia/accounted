@@ -4,6 +4,13 @@
  * public `commitPendingOperation` dispatcher.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The pair guard (lib/operations/inbox-pair-guard.ts, tested there): here only that the door asks and obeys.
+const refuseWhenPairBookedMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/operations/inbox-pair-guard', () => ({
+  refuseWhenPairBooked: (...args: unknown[]) => refuseWhenPairBookedMock(...args),
+}))
+
 import { eventBus } from '@/lib/events/bus'
 import { createQueuedMockSupabase, makeJournalEntry } from '@/tests/helpers'
 import type { PendingOperation } from '@/types'
@@ -39,6 +46,12 @@ vi.mock('@/lib/core/documents/document-service', async () => {
     linkToJournalEntry: vi.fn(),
   }
 })
+
+// The receipt that follows an inbox invoice (lib/operations/inbox-companion.ts, tested there).
+const followPairedReceipt = vi.fn()
+vi.mock('@/lib/operations/inbox-companion', () => ({
+  followPairedReceipt: (...args: unknown[]) => followPairedReceipt(...args),
+}))
 
 import { commitPendingOperation } from '../commit'
 import { getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
@@ -673,6 +686,40 @@ describe('commitPendingOperation: create_voucher', () => {
       // Booked from the document inside an approval of a staged operation.
       expect.objectContaining({ link_basis: 'agent_proposed_user_approved' }),
     )
+    // The receipt the invoice came with follows it onto the voucher.
+    expect(followPairedReceipt).toHaveBeenCalledWith(expect.objectContaining({ companyId: 'company-1', userId: 'user-1' }), 'inbox-1')
+  })
+
+  it('inbox-direct: refuses an item whose other half is booked already, naming that verifikat, before posting', async () => {
+    refuseWhenPairBookedMock.mockResolvedValueOnce({
+      ok: false,
+      code: 'INBOX_ITEM_PAIR_ALREADY_BOOKED',
+      details: { inbox_item_id: 'inbox-1', sibling_item_id: 'item-receipt', sibling_kind: 'receipt', journal_entry_id: 'je-66', voucher: 'A66', supplier_invoice_id: null },
+      messageSv: 'Kvittot från samma köp är redan bokfört på verifikat A66. Lägg till det här underlaget där i stället, så bokförs köpet inte två gånger.',
+      messageEn: 'The receipt from the same purchase is booked already on voucher A66. Add this document there instead, so the purchase is not booked twice.',
+    })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: UNBOOKED_ITEM, error: null }) // inbox item read before posting
+    enqueue({ data: null, error: null }) // dispatcher's failure update
+
+    const op = makePendingOp({
+      params: {
+        entry_date: '2026-05-12',
+        description: 'Anthropic',
+        fiscal_period_id: 'fp-1',
+        inbox_item_id: 'inbox-1',
+        document_id: 'doc-1',
+        lines: [
+          { account_number: '5410', debit_amount: 250, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 250 },
+        ],
+      },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+    expect(result.status).not.toBe('committed')
+    expect(JSON.stringify(result)).toContain('INBOX_ITEM_PAIR_ALREADY_BOOKED')
+    expect(createJournalEntry).not.toHaveBeenCalled()
   })
 
   it('inbox-direct without document_id: links the inbox row but does not attempt document attach', async () => {

@@ -1,4 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The pair guard (lib/operations/inbox-pair-guard.ts, tested there): here only that the door asks and obeys.
+const refuseWhenPairBookedMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/operations/inbox-pair-guard', () => ({
+  refuseWhenPairBooked: (...args: unknown[]) => refuseWhenPairBookedMock(...args),
+}))
+
 import { invoiceInboxExtension } from '@/extensions/general/invoice-inbox'
 import {
   createQueuedMockSupabase,
@@ -46,6 +53,13 @@ vi.mock('@/lib/core/documents/document-service', () => ({
 
 vi.mock('@/lib/bookkeeping/cancel-orphaned-entry', () => ({
   reverseOrphanedJournalEntry: (...args: unknown[]) => reverseOrphanedJournalEntryMock(...args),
+}))
+
+// The receipt that came with the invoice follows it server-side (lib/operations/inbox-companion.ts,
+// tested there); here only that the door asks, after its own writes, and only when it booked.
+const followPairedReceiptMock = vi.fn()
+vi.mock('@/lib/operations/inbox-companion', () => ({
+  followPairedReceipt: (...args: unknown[]) => followPairedReceiptMock(...args),
 }))
 
 function findRoute(method: string, path: string) {
@@ -96,6 +110,8 @@ describe('POST /items/:id/book-direct', () => {
     linkToJournalEntryMock.mockReset()
     reverseOrphanedJournalEntryMock.mockReset()
     reverseOrphanedJournalEntryMock.mockResolvedValue(undefined)
+    followPairedReceiptMock.mockReset()
+    followPairedReceiptMock.mockResolvedValue({ status: 'no_receipt' })
     createJournalEntryMock.mockResolvedValue({
       id: 'je-1',
       voucher_series: 'A',
@@ -170,6 +186,27 @@ describe('POST /items/:id/book-direct', () => {
     expect(status).toBe(409)
   })
 
+  it('refuses an item whose other half is booked already, naming that verifikat, before anything is posted', async () => {
+    refuseWhenPairBookedMock.mockResolvedValueOnce({
+      ok: false,
+      code: 'INBOX_ITEM_PAIR_ALREADY_BOOKED',
+      details: { inbox_item_id: 'item-1', sibling_item_id: 'item-receipt', sibling_kind: 'receipt', journal_entry_id: 'je-66', voucher: 'A66', supplier_invoice_id: null },
+      messageSv: 'Kvittot från samma köp är redan bokfört på verifikat A66. Lägg till det här underlaget där i stället, så bokförs köpet inte två gånger.',
+      messageEn: 'The receipt from the same purchase is booked already on voucher A66. Add this document there instead, so the purchase is not booked twice.',
+    })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ id: 'item-1', document_id: 'doc-1' }) })
+    const request = createMockRequest('/items/item-1/book-direct', { method: 'POST', body: VALID_BODY, searchParams: { _id: 'item-1' } })
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string; details: Record<string, unknown> } }>(await route.handler(request, buildCtx(supabase)))
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('INBOX_ITEM_PAIR_ALREADY_BOOKED')
+    expect(body.error.message).toContain('A66')
+    expect(body.error.details).toMatchObject({ sibling_item_id: 'item-receipt', journal_entry_id: 'je-66' })
+    expect(refuseWhenPairBookedMock).toHaveBeenCalledWith(supabase, 'company-1', 'item-1')
+    expect(createJournalEntryMock).not.toHaveBeenCalled()
+    expect(linkToJournalEntryMock).not.toHaveBeenCalled()
+  })
+
   it('books a standalone entry and links the document', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     // 1. fetch inbox item
@@ -208,6 +245,22 @@ describe('POST /items/:id/book-direct', () => {
       'je-1',
       { link_basis: 'user_created', link_evidence: null },
     )
+    // The receipt it came with follows it, on the server, in the company, as the person.
+    expect(followPairedReceiptMock).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: 'company-1', userId: 'user-1' }),
+      'item-1',
+    )
+  })
+
+  it('answers the booking even when the receipt cannot follow', async () => {
+    followPairedReceiptMock.mockResolvedValue({ status: 'failed', code: 'UNKNOWN_ERROR' })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ document_id: 'doc-1' }) })
+    enqueue({ data: CLAIMED })
+    const request = createMockRequest('/items/item-1/book-direct', { method: 'POST', body: VALID_BODY, searchParams: { _id: 'item-1' } })
+    const { status, body } = await parseJsonResponse(await route.handler(request, buildCtx(supabase)))
+    expect(status).toBe(200)
+    expect(body).toMatchObject({ data: { journal_entry: { id: 'je-1' } } })
   })
 
   it('records the underlag decision with the total and VAT it booked, and no bank line', async () => {
@@ -505,6 +558,8 @@ describe('POST /items/:id/book-direct', () => {
     expect(linkToJournalEntryMock).not.toHaveBeenCalled()
     expect(vi.mocked(recordInboxDecision)).not.toHaveBeenCalled()
     expect(findCalls('invoice_inbox_items', 'update')).toHaveLength(1)
+    // The loser's verifikat is reversed: no receipt follows it.
+    expect(followPairedReceiptMock).not.toHaveBeenCalled()
   })
 
   it('releases its own claim and reverses the verifikat when the claim write errors', async () => {

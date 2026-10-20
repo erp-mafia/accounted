@@ -13,6 +13,13 @@
  * 2440 with the net: reskontra above 2440 and an invoice that never settles.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The pair guard (lib/operations/inbox-pair-guard.ts, tested there): here only that the door asks and obeys.
+const refuseWhenPairBookedMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/operations/inbox-pair-guard', () => ({
+  refuseWhenPairBooked: (...args: unknown[]) => refuseWhenPairBookedMock(...args),
+}))
+
 import { createLogger } from '@/lib/logger'
 import {
   createQueuedMockSupabase,

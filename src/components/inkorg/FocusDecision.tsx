@@ -33,6 +33,7 @@ import type { InvoiceExtractionResult } from '@/types'
 import type { DocumentMeta } from './FocusDocumentPreview'
 import type { PayInBankTarget } from './PayInBankDialog'
 import { PayFromDocumentDialog } from './PayFromDocumentDialog'
+import { followCompanion } from './follow-companion'
 
 const ITEM_URL = (id: string) => `/api/extensions/ext/invoice-inbox/items/${id}`
 
@@ -249,6 +250,32 @@ export function FocusDecision({
     onBack?.()
   }
 
+  /**
+   * The other half of this purchase is booked already: add this one to that
+   * verifikat as one more underlag (POST /api/inkorg/items/:id/companion,
+   * which takes the invoice and the receipt in either order of booking).
+   * Never a booking of its own.
+   */
+  async function attachToBooking() {
+    if (item.pairing?.role !== 'booked_companion') return
+    const pairing = item.pairing
+    const [invoiceId, receiptId] = pairing.booked_kind === 'invoice' ? [pairing.booked_item_id, item.id] : [item.id, pairing.booked_item_id]
+    setBusy('attach_to_booking')
+    try {
+      const answer = await followCompanion(invoiceId, receiptId, locale === 'en' ? 'en' : 'sv')
+      if (answer.status === 'completed' || answer.status === 'already_done') {
+        toast({ title: pairing.voucher ? t('attached_to_booking', { voucher: pairing.voucher }) : t('attached_to_booking_no_voucher') })
+        await onDone({ leaves: true })
+      } else if (answer.status === 'waiting') {
+        toast({ title: t('attach_to_booking_failed'), description: t(`companion_waiting_${answer.reason}`), variant: 'destructive' })
+      } else {
+        toast({ title: t('attach_to_booking_failed'), description: (answer.status === 'failed' && answer.message) || undefined, variant: 'destructive' })
+      }
+    } finally {
+      setBusy(null)
+    }
+  }
+
   async function dropItem() {
     await confirm(
       { title: t('drop_confirm_title'), description: t('drop_confirm_body'), confirmLabel: t('drop_confirm_label'), variant: 'destructive' },
@@ -355,6 +382,22 @@ export function FocusDecision({
             <Link href={`/bookkeeping/${item.created_journal_entry_id}`}>{t('action_open_entry')}</Link>
           </Button>
         ) : null
+      case 'attach_to_booking': {
+        const voucher = item.pairing?.role === 'booked_companion' ? (item.pairing.voucher ?? null) : null
+        return (
+          <Button key={action} variant={variant} className={width} disabled={busy !== null} loading={busy === 'attach_to_booking'} onClick={() => void attachToBooking()}>
+            {voucher ? t('action_attach_to_booking', { voucher }) : t('action_attach_to_booking_no_voucher')}
+          </Button>
+        )
+      }
+      case 'open_booked_entry': {
+        const entryId = item.pairing?.role === 'booked_companion' ? (item.pairing.journal_entry_id ?? null) : null
+        return entryId ? (
+          <Button key={action} asChild variant={variant} className={width}>
+            <Link href={`/bookkeeping/${entryId}`}>{t('action_open_entry')}</Link>
+          </Button>
+        ) : null
+      }
       case 'open_matched_entry':
         return item.matched_transaction_journal_entry_id ? (
           <Button key={action} asChild variant={variant} className={width}>
@@ -614,6 +657,11 @@ function Evidence({ evidence, suggestion }: { evidence: DecisionEvidence | null;
         return t('ev_unreadable')
       case 'booked':
         return t('ev_booked')
+      case 'booked_with': {
+        const doc = evidence.bookedKind
+        if (!evidence.voucher) return t('ev_booked_with_no_voucher', { doc })
+        return evidence.locked ? t('ev_booked_with_locked', { doc, voucher: evidence.voucher }) : t('ev_booked_with', { doc, voucher: evidence.voucher })
+      }
     }
   })()
 
@@ -655,7 +703,7 @@ function BankMatchEvidence({ evidence, item }: { evidence: Extract<DecisionEvide
         </span>
       </div>
       <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-muted-foreground">
-        <span>{t(`reason_${evidence.basis}`, { doc })}</span>
+        <span>{t(evidence.cardAgrees ? 'reason_rule_amount_date_card' : `reason_${evidence.basis}`, { doc })}</span>
         <span className="inline-flex items-center rounded-full border border-border px-2 py-0.5 text-[11px] leading-none tracking-[0.02em] text-foreground">
           {t(`level_${evidence.level}`)}
         </span>

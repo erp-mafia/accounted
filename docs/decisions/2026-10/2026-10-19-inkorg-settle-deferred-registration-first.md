@@ -1,0 +1,1 @@
+[2026-10-19] Inkorg register-and-settle settles a deferring company's invoice too: bookSupplierBankMatch books the registration first since the registration-first fix, so the early refusal (2026-10-16 settle-skips-deferred-booking) left a paid invoice unpaid for nothing.

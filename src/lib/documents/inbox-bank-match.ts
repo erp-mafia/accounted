@@ -69,10 +69,10 @@ export const BankMatchSchema = z
     counterparty: z.string().nullable().describe('What the bank row says about the other party.'),
     basis: z
       .enum(BANK_MATCH_BASES)
-      .describe('What paired them: rule_ocr_reference (the OCR), rule_counterparty (the payee\'s bankgiro or plusgiro), rule_amount_date (amount and date, with the name).'),
+      .describe('What paired them: rule_ocr_reference (the OCR), rule_counterparty (the payee\'s bankgiro or plusgiro), rule_amount_date (amount and date, with the name or the card that paid it).'),
     evidence_level: z
       .enum(BANK_MATCH_EVIDENCE_LEVELS)
-      .describe('exakt: OCR and amount agree. stark: amount and the payee\'s giro agree in the payment window. trolig: amount, the payment window and the name agree. Never a score.'),
+      .describe('exakt: OCR and amount agree. stark: amount and the payee\'s giro agree in the payment window (or amount, window, name and the card that paid it). trolig: amount, the payment window and the name agree, or the name is missing and the bank row names the card the document was paid with. Never a score.'),
   })
   .describe('A proposal, never a booking: the item looks already paid by this bank row.')
 

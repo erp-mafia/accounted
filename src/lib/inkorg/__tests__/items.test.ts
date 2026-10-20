@@ -64,6 +64,13 @@ describe('needsYou and stillInInbox', () => {
     expect(stillInInbox(makeItem({ status: 'processing' }))).toBe(true)
     expect(stillInInbox(makeItem({ created_supplier_invoice_id: 'si-1' }))).toBe(false)
   })
+
+  it('a half whose other half is booked waits for nobody, and is still listed in its door until it is added', () => {
+    const half = makeItem({ pairing: { role: 'booked_companion', booked_item_id: 'b', booked_kind: 'receipt', basis: 'invoice_number', voucher: 'A41' } })
+    expect(needsYou(half)).toBe(false)
+    expect(needCount([half, makeItem({ id: 'other' })])).toBe(1)
+    expect(stillInInbox(half)).toBe(true)
+  })
 })
 
 describe('doorOf', () => {

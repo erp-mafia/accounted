@@ -275,6 +275,37 @@ describe('refreshInboxItemBankMatch', () => {
       expect(findCalls('invoice_inbox_items', 'eq')).not.toContainEqual(['resend_email_id', 'mail-x'])
     })
 
+    it('the real seller name the bank text does not carry: the receipt\'s card alone makes it trolig', async () => {
+      // As the production mail reads: "X Internet Unlimited Company" on both documents, "X CORP." on the bank row.
+      const realName = { name: 'X Internet Unlimited Company' }
+      const invoiceRead = { ...X_INVOICE_READ, supplier: realName }
+      const receiptRead = { ...X_RECEIPT_READ, supplier: realName }
+      loadDocumentReading.mockResolvedValue(reading({
+        document_type: 'supplier_invoice',
+        seller_name: 'X Internet Unlimited Company',
+        amount_due_for_payment: 83,
+        invoice_currency_code: 'SEK',
+        invoice_issue_date: '2026-10-03',
+        payment_due_date: '2026-10-03',
+      }))
+      const realInvoice = { ...xInvoice, extracted_data: invoiceRead }
+      const realReceipt = { ...xReceipt, extracted_data: receiptRead }
+      const paired = createTableMockSupabase({
+        invoice_inbox_items: mail(realInvoice, [realInvoice, realReceipt]),
+        transactions: [{ data: [xRow] }, { data: [] }],
+      })
+      expect(await refreshInboxItemBankMatch(paired.supabase as never, COMPANY, 'item-1', RULES, { today: '2026-10-19' })).toEqual({
+        status: 'updated',
+        decision: { transactionId: 'tx-x', basis: 'rule_amount_date', evidenceLevel: 'trolig' },
+      })
+      // Without the receipt there is no card, and the name does not agree: nothing.
+      const alone = createTableMockSupabase({
+        invoice_inbox_items: mail(realInvoice, [realInvoice]),
+        transactions: [{ data: [xRow] }, { data: [] }],
+      })
+      expect(await refreshInboxItemBankMatch(alone.supabase as never, COMPANY, 'item-1', RULES, { today: '2026-10-19' })).toMatchObject({ decision: null })
+    })
+
     it('a sibling read that fails leaves the card out, never the check', async () => {
       const failing: TableMockResolver = (calls) => {
         if (calls.some((c) => c.method === 'update')) return { data: null }

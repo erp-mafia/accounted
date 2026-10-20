@@ -14,6 +14,12 @@
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
+// The pair guard (lib/operations/inbox-pair-guard.ts, tested there): here only that the door asks and obeys.
+const refuseWhenPairBookedMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/operations/inbox-pair-guard', () => ({
+  refuseWhenPairBooked: (...args: unknown[]) => refuseWhenPairBookedMock(...args),
+}))
+
 beforeAll(() => {
   if (process.env.NODE_ENV !== 'test') throw new Error('NODE_ENV=test required')
   process.env.NEXT_PUBLIC_SUPABASE_URL ||= 'http://localhost:54321'
@@ -413,6 +419,30 @@ describe('POST /api/v1/companies/:companyId/expense-claims', () => {
     expect(res.status).toBe(404)
     expect((await res.json()).error.code).toBe('EMPLOYEE_NOT_FOUND')
     expect(wrote(client)).toBe(false)
+  })
+
+  it('409 INBOX_ITEM_PAIR_ALREADY_BOOKED for an underlag whose other half of the purchase is booked, writing nothing', async () => {
+    const ITEM_ID = '6f1c2a40-0000-4000-8000-00000000ab01'
+    refuseWhenPairBookedMock.mockResolvedValueOnce({
+      ok: false,
+      code: 'INBOX_ITEM_PAIR_ALREADY_BOOKED',
+      details: { inbox_item_id: ITEM_ID, sibling_item_id: 'receipt', sibling_kind: 'receipt', journal_entry_id: 'je-66', voucher: 'A66', supplier_invoice_id: null },
+      messageSv: 'Kvittot från samma köp är redan bokfört på verifikat A66. Lägg till det här underlaget där i stället, så bokförs köpet inte två gånger.',
+      messageEn: 'x',
+    })
+    const client = makeClient({
+      company_members: MEMBER,
+      fiscal_periods: OPEN_YEAR,
+      invoice_inbox_items: { data: { created_journal_entry_id: null, created_supplier_invoice_id: null }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ ...validClaim, inbox_item_id: ITEM_ID })
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('INBOX_ITEM_PAIR_ALREADY_BOOKED')
+    expect(JSON.stringify(body)).toContain('A66')
+    expect(wrote(client)).toBe(false)
+    expect(createJournalEntryMock).not.toHaveBeenCalled()
   })
 
   it('404 EXPENSE_CLAIM_DOCUMENT_NOT_FOUND for a receipt of another company, writing nothing', async () => {

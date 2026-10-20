@@ -103,6 +103,16 @@ export function isCompanionReceipt(item: Pick<InkorgItem, 'pairing'>): boolean {
   return item.pairing?.role === 'receipt'
 }
 
+/**
+ * An open half whose other half is booked already (./pairs.ts
+ * pairWithBookedHalves): the same purchase, so no decision about paying or
+ * booking waits; it only asks to be added to that booking as one more
+ * underlag.
+ */
+export function isBookedCompanion(item: Pick<InkorgItem, 'pairing'>): boolean {
+  return item.pairing?.role === 'booked_companion'
+}
+
 /** The receipt an invoice's row carries, when the list has it. */
 export function companionOf(item: InkorgItem, items: readonly InkorgItem[]): InkorgItem | null {
   if (item.pairing?.role !== 'invoice') return null
@@ -110,9 +120,13 @@ export function companionOf(item: InkorgItem, items: readonly InkorgItem[]): Ink
   return items.find((other) => other.id === receiptId) ?? null
 }
 
-/** Waiting for a person's decision: the Behöver dig view. A reading in flight waits for nobody. */
+/**
+ * Waiting for a person's decision: the Behöver dig view. A reading in flight
+ * waits for nobody, and neither does a half of a purchase already booked
+ * (it is listed in its door, with the booking it belongs on).
+ */
 export function needsYou(item: InkorgItem): boolean {
-  if (routedAway(item) || isCompanionReceipt(item)) return false
+  if (routedAway(item) || isCompanionReceipt(item) || isBookedCompanion(item)) return false
   const stage = itemStage(item)
   return stage === 'needs_action' || stage === 'linked' || stage === 'error'
 }

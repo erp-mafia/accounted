@@ -230,7 +230,9 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
         setFollowing((current) => new Set(current).add(receiptId))
         const answer = await followCompanion(id, receiptId, locale === 'en' ? 'en' : 'sv')
         if (answer.status === 'waiting') {
-          toast({ title: t('companion_waiting_title'), description: t(`companion_waiting_${answer.reason}`) })
+          // Unpaid: the receipt is not left in the inbox, it waits with the invoice for the payment.
+          const title = answer.reason === 'invoice_unpaid' ? t('companion_waiting_unpaid_title') : t('companion_waiting_title')
+          toast({ title, description: t(`companion_waiting_${answer.reason}`) })
         } else if (answer.status === 'failed') {
           toast({ title: t('companion_failed_title'), description: answer.message || undefined, variant: 'destructive' })
         }

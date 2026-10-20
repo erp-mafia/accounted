@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { LEGACY_INBOX_HREF } from '@/lib/inkorg/flag'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { formatCurrency, formatDate } from '@/lib/utils'
@@ -513,7 +514,8 @@ export default function AttGoraSection({
                     )}
                     {showInboxDocuments && (
                       <WorklistRow
-                        href="/e/general/invoice-inbox"
+                        // The company's inbox: the new Inkorg in the rollout, else the workspace under Inköp.
+                        href={worklist.inboxHref ?? LEGACY_INBOX_HREF}
                         action={aiAction('inbox_document', counts.inbox_document)}
                         icon={Inbox}
                         label={t('row_inbox_documents')}

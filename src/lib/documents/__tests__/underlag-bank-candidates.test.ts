@@ -136,3 +136,32 @@ describe('rankBankRowsForUnderlag', () => {
     expect(ranked.confidence).toBeCloseTo(full.confidence * FALLBACK_CONFIDENCE_FACTOR, 2)
   })
 })
+
+describe('rankBankRowsForUnderlag: the money goes the way the document says', () => {
+  const rows = [
+    row({ id: 'out', amount: -430, description: 'TAXI STOCKHOLM K3667' }),
+    row({ id: 'in', amount: 15000, description: 'Inbetalning kund 1043' }),
+  ]
+
+  it('never offers a purchase receipt or invoice an incoming payment', () => {
+    for (const documentKind of ['receipt', 'supplier_invoice']) {
+      const facts = underlagPaymentFacts(extracted({ documentKind, totals: { total: 430 }, supplier: { name: 'Taxi Stockholm' } }))
+      expect(facts.direction).toBe('out')
+      expect(rankBankRowsForUnderlag(rows, facts, null, today).map((r) => r.row.id)).toEqual(['out'])
+    }
+  })
+
+  it('offers a credit note, or a refund below zero, only money coming in', () => {
+    const credit = underlagPaymentFacts(extracted({ documentKind: 'credit_note', totals: { total: -500 } }))
+    expect(rankBankRowsForUnderlag(rows, credit, null, today).map((r) => r.row.id)).toEqual(['in'])
+    const refund = underlagPaymentFacts(extracted({ documentKind: 'receipt', totals: { total: -430 } }))
+    expect(refund.direction).toBe('in')
+    expect(rankBankRowsForUnderlag(rows, refund, null, today).map((r) => r.row.id)).toEqual(['in'])
+  })
+
+  it('a document that says neither keeps rows of both signs', () => {
+    const unknown = underlagPaymentFacts(extracted({ totals: { total: 430 } }))
+    expect(unknown.direction).toBeNull()
+    expect(rankBankRowsForUnderlag(rows, unknown, null, today)).toHaveLength(2)
+  })
+})

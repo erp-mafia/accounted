@@ -16,6 +16,13 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+// The pair guard (lib/operations/inbox-pair-guard.ts, tested there): here only that the door asks and obeys.
+const refuseWhenPairBookedMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/operations/inbox-pair-guard', () => ({
+  refuseWhenPairBooked: (...args: unknown[]) => refuseWhenPairBookedMock(...args),
+}))
+
+
 const mockCreateJE = vi.fn()
 const mockDetectDup = vi.fn()
 const mockMapping = vi.fn()
@@ -257,6 +264,24 @@ describe('bulkBookMatchedInboxItems: skip classification (never errors)', () => 
     const { booked, skipped } = await bulkBookMatchedInboxItems(supabase, 'u1', 'c1', { ...base, item_ids: ['i1'] })
     expect(booked).toEqual([])
     expect(skipped).toEqual([{ item_id: 'i1', reason: 'not_matched' }])
+    expect(mockCreateJE).not.toHaveBeenCalled()
+  })
+
+  it('skips an item whose other half of the purchase is booked already, naming that verifikat', async () => {
+    refuseWhenPairBookedMock.mockResolvedValueOnce({
+      ok: false,
+      code: 'INBOX_ITEM_PAIR_ALREADY_BOOKED',
+      details: {},
+      messageSv: 'Kvittot från samma köp är redan bokfört på verifikat A66. Lägg till det här underlaget där i stället, så bokförs köpet inte två gånger.',
+      messageEn: 'x',
+    })
+    const supabase = queuedSupabase([
+      { data: { id: 'i1', matched_transaction_id: 'tx-1', created_journal_entry_id: null, created_supplier_invoice_id: null } },
+    ])
+    const { booked, skipped } = await bulkBookMatchedInboxItems(supabase, 'u1', 'c1', { ...base, item_ids: ['i1'] })
+    expect(booked).toEqual([])
+    expect(skipped).toEqual([{ item_id: 'i1', reason: 'pair_already_booked', detail: expect.stringContaining('A66') }])
+    expect(refuseWhenPairBookedMock).toHaveBeenCalledWith(supabase, 'c1', 'i1')
     expect(mockCreateJE).not.toHaveBeenCalled()
   })
 })

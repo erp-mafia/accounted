@@ -4,7 +4,7 @@ import { notifySessionExpired } from '@/lib/auth/session-timeout-shared'
 /** What POST /api/inkorg/items/:id/companion answers, as far as the page reads it. */
 export type CompanionAnswer =
   | { status: 'completed' | 'already_done' }
-  | { status: 'waiting'; reason: 'invoice_not_booked' | 'invoice_unpaid' | 'several_payments' | 'receipt_not_linked' }
+  | { status: 'waiting'; reason: 'invoice_not_booked' | 'invoice_unpaid' | 'several_payments' | 'receipt_not_linked' | 'entry_locked' }
   | { status: 'failed'; message: string }
 
 /**

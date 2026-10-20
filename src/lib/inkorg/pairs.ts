@@ -14,7 +14,12 @@
  *     before arrivals existed, the inbound mail's id, resend_email_id, or the
  *     hunted message's id);
  *   - one invoice and one receipt, both still in the inbox (read, not
- *     booked, not registered, not routed to Arkiv);
+ *     booked, not registered, not routed to Arkiv). One exception: an
+ *     invoice registered as a supplier invoice that is not paid yet
+ *     (PairOptions.awaitingPayment) is still the purchase its receipt
+ *     belongs to, since the payment the receipt proves is not in the books:
+ *     the receipt stays its companion until that payment is booked and the
+ *     receipt follows onto it (lib/operations/inbox-companion.ts);
  *   - the same amount: both totals read, equal to the öre, in one currency;
  *   - the same document: the invoice number, when both carry one (two
  *     different numbers are two purchases), else the same supplier and the
@@ -38,10 +43,33 @@ import { itemStage, type StageFields } from './items'
 /** What made the two one purchase. */
 export type PairBasis = 'invoice_number' | 'supplier_amount_date'
 
-/** The pair as a list row carries it (GET /items `pairing`). */
-export type InboxPairing =
+/** An invoice and its receipt, both still in the inbox (or the invoice registered and unpaid). */
+export type PurchasePair =
   | { role: 'invoice'; receipt_item_id: string; basis: PairBasis }
   | { role: 'receipt'; invoice_item_id: string; basis: PairBasis }
+
+/**
+ * An open half whose other half is booked already (pairWithBookedHalves):
+ * it belongs on that booking as one more underlag, never a booking of its
+ * own. The list adds where that booking is (its verifikat, the voucher label
+ * and whether its period is locked).
+ */
+export interface BookedCompanion {
+  role: 'booked_companion'
+  /** The booked half: the invoice or the receipt this one came with. */
+  booked_item_id: string
+  booked_kind: 'invoice' | 'receipt'
+  basis: PairBasis
+  /** The verifikat the booked half is on, when the list could read it. */
+  journal_entry_id?: string | null
+  /** Its voucher label (A12), when read. */
+  voucher?: string | null
+  /** Its period is closed or locked: no document can be added there. */
+  locked?: boolean
+}
+
+/** The pair as a list row carries it (GET /items `pairing`). */
+export type InboxPairing = PurchasePair | BookedCompanion
 
 /** The item columns the pairing reads: a wire row, or the table row a server door reads. */
 export type PairableItem = StageFields & {
@@ -162,6 +190,23 @@ function openForPairing(item: PairableItem): boolean {
   return stage === 'needs_action' || stage === 'linked'
 }
 
+const NONE: ReadonlySet<string> = new Set()
+
+/**
+ * An invoice registered as a supplier invoice that is still unpaid (the
+ * caller read that, PairOptions.awaitingPayment): it pairs as an invoice,
+ * never as a receipt, and only while nothing booked it on a verifikat.
+ */
+function awaitingPaymentInvoice(item: PairableItem, awaitingPayment: ReadonlySet<string>): boolean {
+  return (
+    awaitingPayment.has(item.id) &&
+    !!item.created_supplier_invoice_id &&
+    !item.created_journal_entry_id &&
+    !item.routed_to_arkiv_at &&
+    pairKind(item) === 'supplier_invoice'
+  )
+}
+
 export interface PairOptions {
   /** The arrivals behind each item, by item id (arrival_outputs, kind inbox_item). */
   arrivalIds?: ReadonlyMap<string, readonly string[]>
@@ -170,6 +215,13 @@ export interface PairOptions {
    * booking just landed, when its receipt is completed with it.
    */
   assumeOpen?: ReadonlySet<string>
+  /**
+   * Invoices registered as a supplier invoice that can still take a payment,
+   * by item id (./pairs-read.ts readAwaitingPayment): each still pairs with
+   * the receipt it came with. Once paid it is not here any more, and a
+   * receipt that did not follow the payment stands on its own for a person.
+   */
+  awaitingPayment?: ReadonlySet<string>
 }
 
 /** Items grouped by delivery: two items sharing any key are in one group. */
@@ -203,14 +255,17 @@ function deliveryGroups(items: readonly PairableItem[], arrivalIds: ReadonlyMap<
  * names its receipt and each receipt its invoice. Items in no pair are
  * absent.
  */
-export function pairInboxItems(items: readonly PairableItem[], options: PairOptions = {}): Map<string, InboxPairing> {
-  const out = new Map<string, InboxPairing>()
-  const assumeOpen = options.assumeOpen ?? new Set<string>()
+export function pairInboxItems(items: readonly PairableItem[], options: PairOptions = {}): Map<string, PurchasePair> {
+  const out = new Map<string, PurchasePair>()
+  const assumeOpen = options.assumeOpen ?? NONE
+  const awaitingPayment = options.awaitingPayment ?? NONE
   const seen = new Set<string>()
   const unique = items.filter((item) => (seen.has(item.id) ? false : (seen.add(item.id), true)))
 
   for (const group of deliveryGroups(unique, options.arrivalIds ?? new Map())) {
-    const open = group.filter((item) => assumeOpen.has(item.id) || openForPairing(item))
+    const open = group.filter(
+      (item) => assumeOpen.has(item.id) || openForPairing(item) || awaitingPaymentInvoice(item, awaitingPayment),
+    )
     const read = open.flatMap((item) => {
       const facts = purchaseFacts(item)
       return facts ? [{ item, facts }] : []
@@ -241,7 +296,105 @@ export function pairInboxItems(items: readonly PairableItem[], options: PairOpti
   return out
 }
 
-/** The items a pairing has to look at: an invoice or a receipt still open, the only ones a pair is made of. */
-export function mayPair(item: PairableItem): boolean {
-  return openForPairing(item) && purchaseFacts(item) !== null
+/**
+ * The items a pairing has to look at: an invoice or a receipt still open,
+ * or an invoice registered and still unpaid, the only ones a pair is made of.
+ */
+export function mayPair(item: PairableItem, awaitingPayment: ReadonlySet<string> = NONE): boolean {
+  return (openForPairing(item) || awaitingPaymentInvoice(item, awaitingPayment)) && purchaseFacts(item) !== null
+}
+
+export interface BookedHalfOptions {
+  /** The arrivals behind each item, by item id (arrival_outputs, kind inbox_item). */
+  arrivalIds?: ReadonlyMap<string, readonly string[]>
+  /** Items already in a pair of two open halves (pairInboxItems): never paired again here. */
+  paired?: ReadonlySet<string>
+  /** Invoices registered as a supplier invoice that is paid, by item id: booked halves. */
+  paidSupplierInvoices?: ReadonlySet<string>
+}
+
+/**
+ * Booked: on a verifikat (its own, or its matched bank row's with this
+ * underlag on it), or registered as a supplier invoice that is paid. Not
+ * routed to Arkiv.
+ */
+function bookedHalf(item: PairableItem, paidSupplierInvoices: ReadonlySet<string>): boolean {
+  if (item.routed_to_arkiv_at) return false
+  if (item.created_journal_entry_id) return true
+  if (item.created_supplier_invoice_id) return paidSupplierInvoices.has(item.id)
+  return itemStage(item) === 'booked'
+}
+
+/** The invoice and receipt of the two, and on what they agree; null when they do not. */
+function agreementOf(a: { item: PairableItem; facts: PurchaseFacts }, b: { item: PairableItem; facts: PurchaseFacts }): PairBasis | null {
+  if (a.facts.kind === b.facts.kind) return null
+  const [invoice, receipt] = a.facts.kind === 'supplier_invoice' ? [a, b] : [b, a]
+  const basis = purchaseAgreement(invoice.facts, receipt.facts)
+  if (!basis) return null
+  const x = a.item.matched_transaction_id ?? null
+  const y = b.item.matched_transaction_id ?? null
+  return x && y && x !== y ? null : basis
+}
+
+/**
+ * An open half whose other half was booked already, by the same rule as a
+ * pair of two open halves (one arrival, the amount to the öre in one
+ * currency, the invoice number or else the supplier and the date): the
+ * invoice still open while its receipt was booked, or the receipt still open
+ * while its invoice was booked or registered and paid. It is the same
+ * purchase, so it is never booked or paid again: it belongs on the other
+ * half's verifikat as one more underlag.
+ *
+ * One to one, conservatively: the open half agrees with exactly one other
+ * document of the arrival (open or booked), that one booked, and the booked
+ * half agrees with exactly one document of the other kind, this one. Open
+ * halves already in a pair of two open ones are left to that pair. By open
+ * item id; the booked halves are absent.
+ */
+export function pairWithBookedHalves(items: readonly PairableItem[], options: BookedHalfOptions = {}): Map<string, BookedCompanion> {
+  const out = new Map<string, BookedCompanion>()
+  const paired = options.paired ?? NONE
+  const paid = options.paidSupplierInvoices ?? NONE
+  const seen = new Set<string>()
+  const unique = items.filter((item) => (seen.has(item.id) ? false : (seen.add(item.id), true)))
+  const withFacts = (list: PairableItem[]) =>
+    list.flatMap((item) => {
+      const facts = purchaseFacts(item)
+      return facts ? [{ item, facts }] : []
+    })
+
+  for (const group of deliveryGroups(unique, options.arrivalIds ?? new Map())) {
+    const open = withFacts(group.filter((item) => openForPairing(item) && !paired.has(item.id)))
+    const booked = withFacts(group.filter((item) => bookedHalf(item, paid)))
+    if (open.length === 0 || booked.length === 0) continue
+    const everyone = [...open, ...booked]
+    const agreementsWith = (one: (typeof everyone)[number]) =>
+      everyone.flatMap((other) => {
+        if (other.item.id === one.item.id) return []
+        const basis = agreementOf(one, other)
+        return basis ? [{ other, basis }] : []
+      })
+
+    for (const half of open) {
+      const agreements = agreementsWith(half)
+      if (agreements.length !== 1) continue
+      const [{ other, basis }] = agreements
+      if (!booked.includes(other)) continue
+      if (agreementsWith(other).length !== 1) continue
+      // An open half matched to a bank row of its own waits on that row, not on the other half's booking.
+      if (half.item.matched_transaction_id && half.item.matched_transaction_id !== (other.item.matched_transaction_id ?? null)) continue
+      out.set(half.item.id, {
+        role: 'booked_companion',
+        booked_item_id: other.item.id,
+        booked_kind: other.facts.kind === 'supplier_invoice' ? 'invoice' : 'receipt',
+        basis,
+      })
+    }
+  }
+  return out
+}
+
+/** An open item whose other half is booked already (pairWithBookedHalves): it rides on that booking. */
+export function mayBeBookedHalf(item: PairableItem, paidSupplierInvoices: ReadonlySet<string> = NONE): boolean {
+  return bookedHalf(item, paidSupplierInvoices) && purchaseFacts(item) !== null
 }

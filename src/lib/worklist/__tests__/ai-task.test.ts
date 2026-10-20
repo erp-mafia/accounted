@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { AI_TASK_HREF, AI_TASK_LABEL_KEY, AI_TASK_ORDER, listAiTasks } from '../ai-task'
+import { AI_TASK_HREF, AI_TASK_LABEL_KEY, AI_TASK_ORDER, aiTaskHref, listAiTasks } from '../ai-task'
 import { WORKLIST_CATEGORIES, type WorklistCategory } from '../types'
 
 function counts(overrides: Partial<Record<WorklistCategory, number>> = {}): Record<WorklistCategory, number> {
@@ -41,5 +41,13 @@ describe('listAiTasks', () => {
       expect(AI_TASK_HREF[cat]).toMatch(/^\//)
       expect(AI_TASK_LABEL_KEY[cat]).toMatch(/^row_/)
     }
+  })
+})
+
+describe('aiTaskHref', () => {
+  it('opens the company\'s own inbox for the inbox row, the fixed page for the rest', () => {
+    expect(aiTaskHref('inbox_document', '/inkorg')).toBe('/inkorg')
+    expect(aiTaskHref('inbox_document', null)).toBe('/e/general/invoice-inbox')
+    expect(aiTaskHref('book_transaction', '/inkorg')).toBe('/transactions')
   })
 })

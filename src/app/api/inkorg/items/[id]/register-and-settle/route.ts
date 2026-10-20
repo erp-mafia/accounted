@@ -7,7 +7,6 @@ import { sessionFailureResponse } from '@/lib/operations/session'
 import { convertInboxItemToSupplierInvoice } from '@/lib/operations/inbox-convert'
 import { bankMatchLinkEvidence, readInboxBankMatch, type BankMatchItemRow } from '@/lib/documents/inbox-bank-match'
 import { bookSupplierBankMatch, type SupplierBankMatchTransactionRow } from '@/lib/invoices/book-supplier-bank-match'
-import { invoiceBookingMoment } from '@/lib/bookkeeping/booking-mode'
 import type { SupplierInvoice } from '@/types'
 
 /**
@@ -26,15 +25,20 @@ import type { SupplierInvoice } from '@/types'
  *      payment row and the bank row's link. Under faktureringsmetoden that
  *      clears 2440 against the bank account; under kontantmetoden the invoice
  *      has no registration verifikat and this one verifikat books cost and
- *      moms against the bank account, with no 2440 leg.
+ *      moms against the bank account, with no 2440 leg. A company that books
+ *      supplier invoices in a separate Bokför step (defer_invoice_booking)
+ *      gets the registration verifikat booked first by the same call
+ *      (lib/supplier-invoices/registration-first.ts), then the payment
+ *      clears the 2440 it credits: the cost is booked once, on the
+ *      registration.
  *
  * Refused before anything is written: an item already converted, a proposal
  * that no longer stands (the row booked or claimed since) or names another
  * row, and a row that is not money out.
  *
  * Partial failure: when the registration went through and the settlement
- * did not (a locked payment month, an amount the plan refuses, a company
- * that books supplier invoices in a separate Bokför step), the invoice stays
+ * did not (a locked payment month, an amount the plan refuses, a
+ * registration the Bokför step refuses), the invoice stays
  * registered and unpaid, and the answer says so: 200 with settled false and
  * the settlement's error envelope, so the person can link the payment from
  * the invoice later. A registered invoice is never removed again to undo it.
@@ -123,19 +127,12 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       })
     }
 
-    const [{ data: invoiceRow, error: invoiceError }, { data: settings }] = await Promise.all([
-      supabase
-        .from('supplier_invoices')
-        .select('*, supplier:suppliers(*), items:supplier_invoice_items(*)')
-        .eq('id', supplierInvoiceId)
-        .eq('company_id', companyId)
-        .maybeSingle(),
-      supabase
-        .from('company_settings')
-        .select('accounting_method, defer_invoice_booking')
-        .eq('company_id', companyId)
-        .maybeSingle(),
-    ])
+    const { data: invoiceRow, error: invoiceError } = await supabase
+      .from('supplier_invoices')
+      .select('*, supplier:suppliers(*), items:supplier_invoice_items(*)')
+      .eq('id', supplierInvoiceId)
+      .eq('company_id', companyId)
+      .maybeSingle()
     if (invoiceError || !invoiceRow) {
       return unsettled(
         invoiceError
@@ -145,12 +142,8 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     }
     const invoice = invoiceRow as SupplierInvoice
 
-    // Booked in a separate Bokför step: settling now would clear 2440 for a
-    // debt never booked, and Bokför refuses a paid invoice.
-    if (!invoice.registration_journal_entry_id && invoiceBookingMoment(settings) === 'manual') {
-      return unsettled(errorResponseFromCode('INBOX_SETTLE_INVOICE_NOT_BOOKED', settleLog, { requestId }))
-    }
-
+    // A deferring company's unbooked invoice is booked by the settlement
+    // itself, registration first (bookSupplierBankMatch): no refusal here.
     const settled = await bookSupplierBankMatch(supabase, {
       transaction,
       invoice,
@@ -176,6 +169,8 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     return NextResponse.json({
       data: {
         ...registration,
+        // The registration verifikat the settlement booked first, in a deferring company.
+        registration_journal_entry_id: registration.registration_journal_entry_id ?? settled.registrationJournalEntryId ?? null,
         settled: true,
         invoice_status: settled.plan.newStatus,
         payment_journal_entry_id: settled.journalEntryId,

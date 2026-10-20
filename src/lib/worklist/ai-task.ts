@@ -51,6 +51,15 @@ export const AI_TASK_HREF: Record<AiTaskCategory, string> = {
   reconciliation_due: '/reconciliation',
 }
 
+/**
+ * The page a row opens for this company: the inbox row follows the
+ * company's inbox (WorklistCounts.inboxHref: the new Inkorg in the rollout),
+ * the rest are fixed.
+ */
+export function aiTaskHref(category: AiTaskCategory, inboxHref?: string | null): string {
+  return category === 'inbox_document' && inboxHref ? inboxHref : AI_TASK_HREF[category]
+}
+
 /** The row label key in the `dashboard` namespace, shared with Hem's rows. */
 export const AI_TASK_LABEL_KEY = {
   book_transaction: 'row_book_transactions',

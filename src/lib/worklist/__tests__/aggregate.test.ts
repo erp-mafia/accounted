@@ -89,6 +89,19 @@ describe('getWorklistCounts', () => {
     })
   })
 
+  it('says where the company\'s inbox lives: the new Inkorg in the rollout, else the workspace', async () => {
+    const saved = process.env.INKORG_V2_COMPANY_IDS
+    try {
+      process.env.INKORG_V2_COMPANY_IDS = 'company-1'
+      expect((await getWorklistCounts(supabase, 'company-1')).inboxHref).toBe('/inkorg')
+      delete process.env.INKORG_V2_COMPANY_IDS
+      expect((await getWorklistCounts(supabase, 'company-1')).inboxHref).toBe('/e/general/invoice-inbox')
+    } finally {
+      if (saved === undefined) delete process.env.INKORG_V2_COMPANY_IDS
+      else process.env.INKORG_V2_COMPANY_IDS = saved
+    }
+  })
+
   it('counts the open suggestions into the total, and takes the count from a caller-supplied list', async () => {
     const { listOpenSuggestions } = await import('@/lib/suggestions/list')
     vi.mocked(listOpenSuggestions).mockResolvedValueOnce([{ suggestion_id: 's1' }, { suggestion_id: 's2' }] as never[])
