@@ -51,7 +51,7 @@ export default async function ClientsPage() {
           </div>
         }
       />
-      <ClientsTable clients={overview.clients} bankSwitchCampaign={bankSwitchCampaign} />
+      <ClientsTable clients={overview.clients} bankSwitchCampaign={bankSwitchCampaign} canEditClientNumber={canCreate} />
     </div>
   )
 }

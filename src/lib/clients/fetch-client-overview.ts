@@ -8,7 +8,8 @@
  *
  *   1. byrå team membership (teams.kind = 'byra')
  *   2. client companies (companies.team_id = byrå team)
- *   3. display names/org numbers (company_settings)
+ *   3. display names/org numbers (company_settings) and the byrå's own
+ *      customer numbers (companies.byra_client_number)
  *   4. unbooked transactions (canonical lib/worklist book_transaction predicate)
  *   5. unconsumed inbox documents (lib/worklist inbox_document predicate,
  *      including the document_attachments backstop)
@@ -24,6 +25,7 @@
 import { chunk as chunked } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { createLogger } from '@/lib/logger'
 import { switchCampaign, switchStatesForCompanies } from '@/lib/bank-feed/switch-campaign'
 import {
   clientBankSwitchFrom,
@@ -66,6 +68,8 @@ export interface OverviewRowsOptions {
 
 /** Max ids per PostgREST .in() filter (mirrors lib/worklist IN_CLAUSE_CHUNK). */
 const IN_CLAUSE_CHUNK = 150
+
+const log = createLogger('clients/fetch-client-overview')
 
 interface ByraMembershipRow {
   team_id: string
@@ -171,6 +175,26 @@ export async function fetchOverviewRowsForCompanies(
     settingsRows.push(...(data ?? []))
   }
   const settingsByCompany = new Map(settingsRows.map((s) => [s.company_id, s]))
+
+  // The byrå's own customer number per client (crm#1279). Read here rather
+  // than from the caller's company list so the cockpit and the portfolio
+  // doors (v1, MCP client_overview) carry it alike. Best-effort, like the
+  // bank switch column: a failed read leaves the numbers empty rather than
+  // failing the whole overview.
+  const clientNumberByCompany = new Map<string, string>()
+  for (const chunk of idChunks) {
+    const { data, error } = await supabase
+      .from('companies')
+      .select('id, byra_client_number')
+      .in('id', chunk)
+    if (error) {
+      log.warn('client number lookup failed', { error: error.message })
+      break
+    }
+    for (const row of (data ?? []) as Array<{ id: string; byra_client_number: string | null }>) {
+      if (row.byra_client_number) clientNumberByCompany.set(row.id, row.byra_client_number)
+    }
+  }
 
   // 4. Unbooked transactions: the canonical predicate (is_business IS NULL
   // AND is_ignored = false; see lib/worklist/types.ts book_transaction).
@@ -288,6 +312,7 @@ export async function fetchOverviewRowsForCompanies(
       companyId: company.id,
       name: settings?.company_name || company.name,
       orgNumber: company.org_number ?? settings?.org_number ?? null,
+      clientNumber: clientNumberByCompany.get(company.id) ?? null,
       unbookedCount: unbookedByCompany.get(company.id) ?? 0,
       inboxCount: inboxByCompany.get(company.id) ?? 0,
       nextDeadline: nextDeadlineByCompany.get(company.id) ?? null,

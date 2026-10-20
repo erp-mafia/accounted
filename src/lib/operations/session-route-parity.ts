@@ -133,6 +133,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/company/:id/delete': uiOnly('destructive owner-only company archive'),
   'POST /api/company/:id/migration-reset': uiOnly('destructive owner-only migration reset'),
   'PATCH /api/byra/brand': gap('P3', 'byrå brand profile'),
+  'PUT /api/clients/:companyId/client-number': gap('P3', "the byrå's own customer number for a client; read on GET /api/v1/portfolio/overview and gnubok_client_overview (client_number), not writable there yet"),
   'POST /api/byra/brand/logo': gap('P3', 'byrå brand logo'),
   'DELETE /api/byra/brand/logo': gap('P3', 'byrå brand logo'),
 
@@ -819,4 +820,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 138
+export const GAP_CEILING = 139

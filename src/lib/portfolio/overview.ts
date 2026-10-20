@@ -185,6 +185,7 @@ export function portfolioRowToWire(row: PortfolioCompanyRow) {
     company_id: row.companyId,
     name: row.name,
     org_number: row.orgNumber,
+    client_number: row.clientNumber,
     entity_type: row.entityType,
     role: row.role,
     team_id: row.teamId,

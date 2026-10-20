@@ -22,6 +22,7 @@ function makeRow(overrides: Partial<ClientOverviewRow> = {}): ClientOverviewRow 
     companyId: 'c-1',
     name: 'Alpha AB',
     orgNumber: null,
+    clientNumber: null,
     unbookedCount: 0,
     inboxCount: 0,
     nextDeadline: null,
@@ -189,7 +190,7 @@ describe('sortClientRows', () => {
 
 describe('filterClientRows', () => {
   const rows = [
-    makeRow({ companyId: 'a', name: 'Alfa Bygg AB', orgNumber: '556012-5790' }),
+    makeRow({ companyId: 'a', name: 'Alfa Bygg AB', orgNumber: '556012-5790', clientNumber: 'K-1042' }),
     makeRow({ companyId: 'b', name: 'Beta Konsult AB', orgNumber: '5591234567' }),
   ]
 
@@ -204,6 +205,11 @@ describe('filterClientRows', () => {
   it('matches org numbers ignoring separators', () => {
     expect(filterClientRows(rows, '5560125790').map((r) => r.companyId)).toEqual(['a'])
     expect(filterClientRows(rows, '559123').map((r) => r.companyId)).toEqual(['b'])
+  })
+
+  it("matches the byrå's own customer number case-insensitively", () => {
+    expect(filterClientRows(rows, 'k-1042').map((r) => r.companyId)).toEqual(['a'])
+    expect(filterClientRows(rows, '1042').map((r) => r.companyId)).toEqual(['a'])
   })
 
   it('returns nothing on a miss', () => {

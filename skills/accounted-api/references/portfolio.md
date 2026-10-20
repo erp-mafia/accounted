@@ -43,7 +43,7 @@ Response `200`:
     team: { id: string, handle?: string, name: string } | null,
     scope: { truncated: boolean, remaining_company_ids: string[], unresolved: string[], dormant: string[] },
     summary: { companies: number, matched: number, unbooked_total: number, inbox_total: number, overdue: number, action_needed: number },
-    companies: { company_id: string, name: string, org_number: string | null, entity_type: string | null, role: "owner" | "admin" | "member" | "viewer", team_id: string | null, unbooked_count: number, inbox_count: number, next_deadline: { title: string, due_date: string, tax_deadline_type: string | null, urgency: "overdue" | "action_needed" | "upcoming" } | null, last_booked_date: string | null, deadlines: { title: string, due_date: string, tax_deadline_type: string | null, urgency: "overdue" | "action_needed" | "upcoming" }[] }[]
+    companies: { company_id: string, name: string, org_number: string | null, client_number: string | null, entity_type: string | null, role: "owner" | "admin" | "member" | "viewer", team_id: string | null, unbooked_count: number, inbox_count: number, next_deadline: { title: string, due_date: string, tax_deadline_type: string | null, urgency: "overdue" | "action_needed" | "upcoming" } | null, last_booked_date: string | null, deadlines: { title: string, due_date: string, tax_deadline_type: string | null, urgency: "overdue" | "action_needed" | "upcoming" }[] }[]
   },
   meta: {
     request_id: string,
@@ -84,6 +84,7 @@ Example response `200`:
         "company_id": "8fd5b1f4-0000-4000-8000-000000000001",
         "name": "Acme AB",
         "org_number": "556677-8899",
+        "client_number": "K-1042",
         "entity_type": "aktiebolag",
         "role": "member",
         "team_id": "2a7a9e8c-4c2e-4a68-9a1a-4f0f6f3f2a10",
@@ -115,6 +116,7 @@ Example response `200`:
         "company_id": "8fd5b1f4-0000-4000-8000-000000000002",
         "name": "Beta Konsult",
         "org_number": null,
+        "client_number": null,
         "entity_type": "enskild_firma",
         "role": "member",
         "team_id": "2a7a9e8c-4c2e-4a68-9a1a-4f0f6f3f2a10",
