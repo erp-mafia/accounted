@@ -30,6 +30,10 @@ const mockCommit = vi.fn()
 vi.mock('@/lib/pending-operations/commit', () => ({
   commitPendingOperation: (...args: unknown[]) => mockCommit(...args),
 }))
+const mockRecordAppApproval = vi.fn()
+vi.mock('@/lib/pending-operations/record-app-approval', () => ({
+  recordAppApproval: (...args: unknown[]) => mockRecordAppApproval(...args),
+}))
 
 import { POST } from '../route'
 
@@ -220,6 +224,7 @@ describe('POST /api/pending-operations/bulk-commit', () => {
       rejected: 0,
     })
     expect(mockCommit).not.toHaveBeenCalled()
+    expect(mockRecordAppApproval).not.toHaveBeenCalled()
   })
 
   it('commits pending operations and aggregates summary on the happy path', async () => {
@@ -272,6 +277,16 @@ describe('POST /api/pending-operations/bulk-commit', () => {
         actor: { type: 'user', label: 'test@test.se' },
       }
     )
+    // Each approved item leaves the same approval record as the MCP and API
+    // doors, so the approval channel is never unknown.
+    expect(mockRecordAppApproval).toHaveBeenCalledTimes(2)
+    expect(mockRecordAppApproval).toHaveBeenCalledWith({
+      companyId: 'company-1',
+      userId: 'user-1',
+      operation: expect.objectContaining({ id: VALID_ID_2 }),
+      commitMethod: 'bulk_accept',
+      outcome: 'committed',
+    })
   })
 
   it('routes auto_rejected results into the rejected bucket', async () => {
