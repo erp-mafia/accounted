@@ -155,11 +155,27 @@ describe('updateArticle', () => {
       articles: { data: { id: ARTICLE_ID, name: 'Takarbete', article_number: 'A-0001' } },
     })
     const outcome = await updateArticle(ctx(supabase), ARTICLE_ID, UpdateArticleSchema.parse({ active: false }), { dryRun: true })
-    expect(outcome).toEqual({
+    expect(outcome).toMatchObject({
       ok: true,
       dryRun: true,
       preview: { article_id: ARTICLE_ID, id: ARTICLE_ID, name: 'Takarbete', article_number: 'A-0001', changes: { active: false } },
     })
     expect(findCalls('articles', 'update')).toEqual([])
+  })
+
+  // crm#1300: the approval card shows what each field held, so the approver
+  // need not open the article to judge a price change.
+  it('dry run: answers the article as it is beside the changes, every field an update can set', async () => {
+    const stored = {
+      id: ARTICLE_ID, name: 'Takarbete', name_en: null, type: 'tjanst', unit: 'tim', price_excl_vat: 1180, vat_rate: 25,
+      currency: 'EUR', revenue_account: '3041', cost_price: null, ean: null, housework_type: 'BYGG', notes: null,
+      article_number: '920', active: true,
+    }
+    const { supabase } = createTableMockSupabase({ articles: { data: stored } })
+    const outcome = await updateArticle(ctx(supabase), ARTICLE_ID, UpdateArticleSchema.parse({ price_excl_vat: 1220 }), { dryRun: true })
+    if (!outcome.ok || !outcome.dryRun) throw new Error('expected a dry run')
+    const { id: _id, ...current } = stored
+    expect(outcome.preview.current).toEqual(current)
+    expect(outcome.preview.changes).toEqual({ price_excl_vat: 1220 })
   })
 })
