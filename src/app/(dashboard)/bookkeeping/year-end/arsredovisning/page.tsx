@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -21,7 +21,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { FileDown, Plus, ExternalLink, Save, CheckCircle2, Trash2 } from 'lucide-react'
+import { FileDown, Plus, ExternalLink, Save, CheckCircle2, Trash2, Upload } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
 import { FyPicker } from '@/components/common/FyPicker'
@@ -42,6 +42,13 @@ import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import type { ArsredovisningData } from '@/lib/bokslut/arsredovisning/types'
 import type { SignatureRequest } from '@/lib/bokslut/arsredovisning/signature-service'
 import type { AnnualReportVersionSummary } from '@/lib/bokslut/arsredovisning/compliance-types'
+import {
+  documentEvidenceReference,
+  evidenceDocumentId,
+  orderEvidenceCandidates,
+} from '@/lib/bokslut/arsredovisning/signature-evidence'
+import type { ArkivDocumentRow } from '@/app/api/arkiv/documents/route'
+import { DOCUMENT_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { parseAmountInput } from '@/lib/money'
@@ -49,6 +56,9 @@ import { useBranding } from '@/lib/branding/brand-context'
 
 const SIGNATURE_EVIDENCE_REFERENCE_PATTERN =
   /^(archive|document|receipt):[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/
+
+/** An archive document as the signed-copy picker shows it. */
+type EvidenceDocument = Pick<ArkivDocumentRow, 'document_id' | 'title' | 'document_date' | 'created_at' | 'doc_type'>
 
 const TEXT_LINK_CLASS =
   'text-foreground underline underline-offset-4 decoration-muted-foreground/40 hover:decoration-foreground'
@@ -161,6 +171,13 @@ export default function ArsredovisningPage() {
   >('paper_original')
   const [signatureEvidence, setSignatureEvidence] = useState('')
   const [signatureDate, setSignatureDate] = useState(() => todayIsoStockholm())
+  // The signed copy is picked from (or uploaded into) the archive: the
+  // evidence reference used to be typed by hand, and nobody could know an
+  // archive id to type (PH 186). null until the list is loaded.
+  const [evidenceDocuments, setEvidenceDocuments] = useState<EvidenceDocument[] | null>(null)
+  const [uploadingEvidence, setUploadingEvidence] = useState(false)
+  const evidenceFileInput = useRef<HTMLInputElement>(null)
+  const hasLockedVersion = versions.some((version) => version.status === 'ready_for_signature')
 
   // The compliance check as the studio last loaded it (null while loading)
   // and a counter that makes the studio reload it after a signer change:
@@ -178,6 +195,24 @@ export default function ArsredovisningPage() {
       return nextVersions.find((version) => version.status === 'ready_for_signature')?.id ?? ''
     })
   }, [])
+
+  // The archive is the company's, not the year's: load it once, when there is
+  // a locked version to sign.
+  useEffect(() => {
+    if (!hasLockedVersion || evidenceDocuments !== null) return
+    let cancelled = false
+    fetch('/api/arkiv/documents?limit=100')
+      .then((response) => (response.ok ? response.json() : { data: [] }))
+      .then((body: { data?: EvidenceDocument[] }) => {
+        if (!cancelled) setEvidenceDocuments(orderEvidenceCandidates(body.data ?? []))
+      })
+      .catch(() => {
+        if (!cancelled) setEvidenceDocuments([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [hasLockedVersion, evidenceDocuments])
 
   useEffect(() => {
     if (!periodId) return
@@ -507,6 +542,48 @@ export default function ArsredovisningPage() {
     toast,
   ])
 
+  // Upload the signed copy into the archive (kept seven years, BFL 7 kap.)
+  // and point the evidence at it.
+  const handleUploadEvidence = useCallback(
+    async (file: File) => {
+      setUploadingEvidence(true)
+      try {
+        const form = new FormData()
+        form.append('file', file)
+        form.append('upload_source', 'file_upload')
+        form.append('dedupe_by_content', 'true')
+        const response = await fetch('/api/documents', { method: 'POST', body: form })
+        const body = await response.json().catch(() => null)
+        const documentId: string | undefined = body?.data?.id
+        if (!response.ok || !documentId) {
+          throw new Error(getUserErrorMessage(body?.error) ?? '')
+        }
+        const uploaded: EvidenceDocument = {
+          document_id: documentId,
+          title: file.name,
+          document_date: null,
+          created_at: new Date().toISOString(),
+          doc_type: null,
+        }
+        setEvidenceDocuments((current) => [
+          uploaded,
+          ...(current ?? []).filter((document) => document.document_id !== documentId),
+        ])
+        setSignatureEvidence(documentEvidenceReference(documentId))
+      } catch (err) {
+        toast({
+          title: tSteps('signature_document_upload_error'),
+          description: err instanceof Error ? getUserErrorMessage(err) : undefined,
+          variant: 'destructive',
+        })
+      } finally {
+        setUploadingEvidence(false)
+        if (evidenceFileInput.current) evidenceFileInput.current.value = ''
+      }
+    },
+    [tSteps, toast],
+  )
+
   const handleMarkSigned = useCallback(
     async (signatureId: string) => {
       if (!periodId) return
@@ -517,8 +594,7 @@ export default function ArsredovisningPage() {
       ) {
         toast({
           title: 'Underskriftsbevis saknas',
-          description:
-            'Välj en låst version och ange datum samt en strukturerad referens, till exempel archive:AR-2026-001.',
+          description: tSteps('signature_evidence_hint'),
           variant: 'destructive',
         })
         return
@@ -569,6 +645,7 @@ export default function ArsredovisningPage() {
       signatureDate,
       signatureEvidence,
       signingMethod,
+      tSteps,
       toast,
     ],
   )
@@ -729,10 +806,17 @@ export default function ArsredovisningPage() {
   const pendingSignatureCount = signatures.filter(
     (sig) => sig.status !== 'signed' && sig.status !== 'declined',
   ).length
+  // The archive document the evidence points at, when it is one the picker lists.
+  const pickedEvidenceDocumentId = (() => {
+    const documentId = evidenceDocumentId(signatureEvidence)
+    return documentId && evidenceDocuments?.some((document) => document.document_id === documentId)
+      ? documentId
+      : null
+  })()
   const signReadinessHint = !selectedSignatureVersionId
     ? 'Välj en låst version ovan, sedan går det att markera underskrifter.'
     : !SIGNATURE_EVIDENCE_REFERENCE_PATTERN.test(signatureEvidence.trim())
-      ? 'Ange en bevisreferens (t.ex. archive:AR-2026-001) så aktiveras Markera som signerad.'
+      ? tSteps('signature_evidence_hint')
       : !signatureDate
         ? 'Ange underskriftsdatum så aktiveras Markera som signerad.'
         : null
@@ -1464,11 +1548,62 @@ export default function ArsredovisningPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="signature-evidence">Bevisreferens</Label>
+              <Label htmlFor="signature-document">{tSteps('signature_document_label')}</Label>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Select
+                  value={pickedEvidenceDocumentId ?? ''}
+                  onValueChange={(documentId) => setSignatureEvidence(documentEvidenceReference(documentId))}
+                  disabled={!evidenceDocuments || evidenceDocuments.length === 0}
+                >
+                  <SelectTrigger id="signature-document" className="min-w-0 flex-1">
+                    <SelectValue
+                      placeholder={
+                        evidenceDocuments && evidenceDocuments.length === 0
+                          ? tSteps('signature_document_empty')
+                          : tSteps('signature_document_placeholder')
+                      }
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(evidenceDocuments ?? []).map((document) => (
+                      <SelectItem key={document.document_id} value={document.document_id}>
+                        {document.title} ({document.document_date ?? document.created_at.slice(0, 10)})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <input
+                  ref={evidenceFileInput}
+                  type="file"
+                  accept={DOCUMENT_UPLOAD_ACCEPT}
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0]
+                    if (file) void handleUploadEvidence(file)
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="shrink-0"
+                  onClick={() => evidenceFileInput.current?.click()}
+                  disabled={!hasLockedVersion}
+                  loading={uploadingEvidence}
+                >
+                  {!uploadingEvidence && <Upload className="mr-2 h-4 w-4" />}
+                  {uploadingEvidence
+                    ? tSteps('signature_document_uploading')
+                    : tSteps('signature_document_upload')}
+                </Button>
+              </div>
+              <p className="text-xs leading-5 text-muted-foreground">{tSteps('signature_document_help')}</p>
+              <Label htmlFor="signature-evidence" className="text-xs text-muted-foreground">
+                {tSteps('signature_reference_label')}
+              </Label>
+              {/* A picked document shows in the picker; this field is for a reference of one's own. */}
               <Input
                 id="signature-evidence"
-               
-                value={signatureEvidence}
+                value={pickedEvidenceDocumentId ? '' : signatureEvidence}
                 onChange={(event) => setSignatureEvidence(event.target.value)}
                 placeholder="archive:AR-2026-001"
                 maxLength={128}
