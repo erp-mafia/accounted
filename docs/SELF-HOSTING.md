@@ -197,6 +197,59 @@ There is no admin account: any email address can sign up (unless you turn public
 
 To bring in more users, invite them from **Settings > Company > Members** (company-scoped) or **Settings > Team** (consultant teams). Invitations work without a mail provider: the accept link is returned to the inviter right after the invite is created (shown under the pending list with a copy button), so it can be shared over any channel. Configuring Resend only adds automatic delivery. The link is shown once and cannot be re-sent for company invites: revoke the invitation and invite again to get a fresh link.
 
+## Provisioning Customers From Your Own Backend
+
+If one instance serves several unrelated customers, your backend can set up each customer and manage its key over the v1 API, with nobody signing in per customer. Each customer gets a company and a **service account**: a non-human principal whose keys reach only that company.
+
+**Once:** sign in as the operator, open **Settings > API & MCP** and create a live key (not a test key) that reaches all companies, with the scopes `companies:write`, `service_accounts:manage` and every scope your customers' keys will need (a service-account key can only hold scopes that the key minting it holds). This operator key also reaches every company you create later, so keep it in your backend's secret store.
+
+**Per customer** (`$OPERATOR_KEY` is the operator key, `$BASE` your instance URL). Bookkeeping duty starts when a company exists, so do not create companies to try the flow out.
+
+```bash
+# 1. Create the company; the operator user becomes its owner. Keep one
+#    Idempotency-Key per customer: a retry with it returns the same company
+#    instead of creating a second one.
+curl -sS -X POST "$BASE/api/v1/companies" \
+  -H "Authorization: Bearer $OPERATOR_KEY" -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $CUSTOMER_REF" \
+  -d '{"name":"Kund AB","entity_type":"aktiebolag","org_number":"5566778899",
+       "vat_registered":true,"moms_period":"quarterly","f_skatt":true}'
+# data.id is COMPANY_ID
+
+# 2. Create the customer's service account. Its sponsor, the person who answers
+#    for it, defaults to the operator user.
+curl -sS -X POST "$BASE/api/v1/companies/$COMPANY_ID/service-accounts" \
+  -H "Authorization: Bearer $OPERATOR_KEY" -H "Content-Type: application/json" \
+  -d '{"name":"Kund AB integration"}'
+# data.id is ACCOUNT_ID
+
+# 3. Mint the account's key. data.key is the secret, returned once: store it now.
+#    Not idempotent: a retry mints a second key, so after a failure list the
+#    account's keys (GET .../service-accounts/$ACCOUNT_ID) and revoke extras.
+curl -sS -X POST "$BASE/api/v1/companies/$COMPANY_ID/service-accounts/$ACCOUNT_ID/keys" \
+  -H "Authorization: Bearer $OPERATOR_KEY" -H "Content-Type: application/json" \
+  -d '{"scopes":["bookkeeping:write","invoices:read","invoices:write"]}'
+# data.key is the customer's key, data.id is KEY_ID
+```
+
+**Rotate:** mint a new key (step 3), switch the customer's integration to it, then revoke the old one. An account can hold five live keys, so both work during the switch:
+
+```bash
+curl -sS -X POST "$BASE/api/v1/companies/$COMPANY_ID/service-accounts/$ACCOUNT_ID/keys/$KEY_ID/revoke" \
+  -H "Authorization: Bearer $OPERATOR_KEY"
+```
+
+**Offboard:** `POST /api/v1/companies/{companyId}/service-accounts/{id}/revoke` revokes the account and every key it has. The company and its books stay: accounting records are kept for seven years and are never deleted.
+
+Good to know:
+
+- Everything a service-account key writes is recorded under the account's name, acting for its sponsor. If the sponsor stops being an owner or admin of the company, or the company is archived, the account's keys answer `403 SERVICE_ACCOUNT_SUSPENDED`. By default the operator user sponsors every account, so removing that user's role suspends every customer; pass `sponsor_user_id` in step 2 to make another owner or admin the sponsor.
+- A service-account key can never create service accounts or mint keys, so a leaked customer key cannot widen its own access.
+- Limits: 25 live service accounts per company, five live keys per account.
+- `GET /api/v1/api-key` shows what the calling key may do: its scopes, its companies and, for a service-account key, the account.
+- A service account is not a login. If a customer also needs to sign in, invite them as a member (see above).
+- Every request and response shape is in the OpenAPI document at `$BASE/api/v1/openapi.json`.
+
 ## Scheduled Jobs
 
 The cron sidecar runs the schedule in [`docker/crontab.self-hosted`](../docker/crontab.self-hosted). That file is generated from the `crons` array in `vercel.json` (the single source of truth, shared with the hosted service) by `npm run crontabs:generate`, and a test fails CI if it drifts, so this guide does not repeat the table: open the file for the exact jobs and times. They fall into these groups:
