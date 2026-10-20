@@ -36,10 +36,24 @@ import { useInkorgData } from './use-inkorg-data'
 import { useMissingContext } from './use-missing-context'
 import { useExpectations } from './use-expectations'
 import { ViewHeading } from './row-parts'
+import { BOOK_URL, type OneClickBooking } from './use-booking-plan'
 import type { BankMatch } from '@/lib/documents/inbox-bank-match'
+import type { InkorgBooked } from '@/lib/operations/inkorg-book'
+import { ToastAction } from '@/components/ui/toast'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { notifySessionExpired } from '@/lib/auth/session-timeout-shared'
 
 /** How long "Klart" stays on a finished item when it did not leave the queue after all. */
 const DONE_MARK_MS = 600
+
+/** How long a one-click booking waits in the browser for Ångra before it is sent. */
+const BOOK_UNDO_MS = 5000
+
+/**
+ * A one-click booking refused for its date: the item comes back with its editor open (the date is
+ * never moved), as it does when the books now say the editor is needed.
+ */
+const PERIOD_REFUSALS: ReadonlySet<string> = new Set(['PERIOD_LOCKED', 'TARGET_PERIOD_LOCKED', 'NO_OPEN_PERIOD_FOR_DATE', 'TARGET_PERIOD_CLOSED'])
 
 /** A dialog, menu, listbox or alert is open over the page: its keys are its own. */
 function overlayOpen(): boolean {
@@ -126,7 +140,14 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
   // Receipts on their way onto their invoice's booking: out of every queue meanwhile, so a
   // read that lands before they arrive never opens one as the next item.
   const [following, setFollowing] = useState<ReadonlySet<string>>(() => new Set())
-  const queue = useMemo(() => queueFor(items, view).filter((item) => !following.has(item.id)), [items, view, following])
+  // One-click bookings held for Ångra, or on their way: out of every queue until they are booked or come back.
+  const [booking, setBooking] = useState<ReadonlySet<string>>(() => new Set())
+  // A one-click booking refused for its date: that item opens its editor, prefilled.
+  const [editorRequest, setEditorRequest] = useState<{ itemId: string; nonce: number } | null>(null)
+  const queue = useMemo(
+    () => queueFor(items, view).filter((item) => !following.has(item.id) && !booking.has(item.id)),
+    [items, view, following, booking],
+  )
   // Saknar underlag works through bank purchases, not items: its own queue, newest first,
   // what needs a person before what is on its way (the order the view lists them in).
   const purchaseIds = useMemo(() => purchases.map((p) => p.id), [purchases])
@@ -159,7 +180,8 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
     [items],
   )
   const doorName = useDoorName(mailProvider)
-  const need = itemsState === 'ready' ? needCount(items) : null
+  // A one-click booking on its way needs nobody any more.
+  const need = itemsState === 'ready' ? needCount(booking.size ? items.filter((item) => !booking.has(item.id)) : items) : null
 
   // When the queue changes under the focus view (an action finished, a
   // realtime refetch landed), the focused item stays while it is there;
@@ -251,6 +273,117 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
     },
     [refresh, locale, toast, t],
   )
+
+  // One click: the item leaves at once and the next one opens; the booking waits
+  // BOOK_UNDO_MS in the browser for Ångra, then goes (fetch keepalive, so a closed
+  // tab still sends it), and on the way out of the page whatever still waits is sent.
+  const heldBookings = useRef(new Map<string, { body: OneClickBooking; timer: number }>())
+  const release = useCallback((id: string) => {
+    setBooking((current) => {
+      if (!current.has(id)) return current
+      const next = new Set(current)
+      next.delete(id)
+      return next
+    })
+  }, [])
+
+  const sendBooking = useCallback(
+    async (id: string) => {
+      const held = heldBookings.current.get(id)
+      if (!held) return
+      heldBookings.current.delete(id)
+      window.clearTimeout(held.timer)
+      const errorLocale = locale === 'en' ? 'en' : 'sv'
+      try {
+        const res = await fetch(BOOK_URL(id), {
+          method: 'POST',
+          keepalive: true,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(held.body),
+        })
+        const json = (await res.json().catch(() => null)) as { data?: InkorgBooked; error?: { code?: string; details?: { ask?: string } } } | null
+        if (!res.ok || !json?.data) {
+          notifySessionExpired(res)
+          toast({ title: t('booking_failed'), description: getErrorMessage(json, { statusCode: res.status, locale: errorLocale }), variant: 'destructive' })
+          // Back in the queue, in focus; a date the books refuse opens its editor.
+          release(id)
+          setMotionState({ direction: -1, completed: false })
+          setFocusId(id)
+          const code = json?.error?.code ?? ''
+          if (PERIOD_REFUSALS.has(code) || (code === 'INKORG_BOOKING_NEEDS_ANSWER' && json?.error?.details?.ask === 'editor')) {
+            setEditorRequest({ itemId: id, nonce: Date.now() })
+          }
+          setRevision((r) => r + 1)
+          return
+        }
+        const booked = json.data
+        if (booked.settled === false) {
+          toast({ title: t('booking_registered_not_settled'), description: getErrorMessage({ error: booked.settlement_error }, { locale: errorLocale }), variant: 'destructive' })
+        } else {
+          const key = booked.voucher ? (booked.supplier_created ? 'booking_done_new_supplier' : 'booking_done') : booked.supplier_created ? 'booking_done_no_voucher_new_supplier' : 'booking_done_no_voucher'
+          toast({ title: t(key, { voucher: booked.voucher ?? '' }) })
+        }
+        await refresh()
+        release(id)
+      } catch {
+        toast({ title: t('booking_failed'), variant: 'destructive' })
+        release(id)
+      }
+    },
+    [locale, refresh, release, t, toast],
+  )
+  // The held booking's timer and the page's exit read the newest sendBooking (a new refresh).
+  const sendBookingRef = useRef(sendBooking)
+  useEffect(() => {
+    sendBookingRef.current = sendBooking
+  }, [sendBooking])
+
+  const bookInOneClick = useCallback(
+    (item: InkorgItem, body: OneClickBooking) => {
+      const id = item.id
+      if (heldBookings.current.has(id)) return
+      const timer = window.setTimeout(() => void sendBookingRef.current(id), BOOK_UNDO_MS)
+      heldBookings.current.set(id, { body, timer })
+      setBooking((current) => new Set(current).add(id))
+      toast({
+        title: t('booking_pending'),
+        duration: BOOK_UNDO_MS,
+        action: (
+          <ToastAction
+            altText={t('undo')}
+            onClick={() => {
+              const held = heldBookings.current.get(id)
+              if (!held) return
+              window.clearTimeout(held.timer)
+              heldBookings.current.delete(id)
+              // Nothing was sent: the item is back, in focus, from the left.
+              release(id)
+              setMotionState({ direction: -1, completed: false })
+              setFocusId(id)
+              scrollContentTop()
+            }}
+          >
+            {t('undo')}
+          </ToastAction>
+        ),
+      })
+    },
+    [release, t, toast],
+  )
+
+  // Leaving the page (a closed tab, another page) sends what still waits for Ångra,
+  // through the ref, so a new sendBooking never flushes them early.
+  useEffect(() => {
+    const held = heldBookings.current
+    const flush = () => {
+      for (const id of [...held.keys()]) void sendBookingRef.current(id)
+    }
+    window.addEventListener('pagehide', flush)
+    return () => {
+      window.removeEventListener('pagehide', flush)
+      flush()
+    }
+  }, [])
 
   // A purchase got its underlag: "Klart" while it leaves, then the list is read
   // again and the next one opens by itself (the queue effect above).
@@ -413,6 +546,8 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
                     startable={startable}
                     ownerAccount={ownerAccount}
                     onBack={back}
+                    onBook={(body) => bookInOneClick(item, body)}
+                    openEditor={editorRequest?.itemId === item.id ? editorRequest.nonce : null}
                   />
                 ) : null
               }}

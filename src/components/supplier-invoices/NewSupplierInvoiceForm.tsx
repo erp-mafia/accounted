@@ -56,6 +56,8 @@ import { plantedRowTouched, snapshotPlantedRow } from '@/lib/supplier-invoices/p
 import { VatRateCell, RcRateSelect, AmountCell } from '@/components/supplier-invoices/supplier-invoice-cells'
 import { useSupplierInvoiceData } from '@/components/supplier-invoices/use-supplier-invoice-data'
 import { useInboxPrefill, type InboxItemData } from '@/components/supplier-invoices/use-inbox-prefill'
+import { accrualThresholdSek } from '@/components/bookkeeping/accrual-k2-hint'
+import { regionOfCountry, sellerCountry, supplierTypeForRegion } from '@/lib/vat/seller-country'
 import { useSupplierInvoiceSubmit } from '@/components/supplier-invoices/use-supplier-invoice-submit'
 import { PayerChoiceSelect } from '@/components/expenses/PayerChoiceSelect'
 import { ExpenseClaimantFields } from '@/components/expenses/ExpenseClaimantFields'
@@ -79,6 +81,8 @@ interface NewSupplierForm {
   iban: string
   bic: string
   default_expense_account: string
+  /** The country the reading names (lib/vat/seller-country.ts); sent while the type agrees with it. */
+  country: string
 }
 
 function RequiredMark() {
@@ -96,6 +100,7 @@ const EMPTY_NEW_SUPPLIER: NewSupplierForm = {
   iban: '',
   bic: '',
   default_expense_account: '',
+  country: '',
 }
 
 // Dense in-table inputs: leaf tier inside the Kontering table surface.
@@ -163,6 +168,12 @@ export interface NewSupplierInvoiceFormProps {
   onCreated?: (invoiceId?: string) => void
   /** Called by the Avbryt button instead of navigating (dialog mode). */
   onCancel?: () => void
+  /**
+   * With an inbox item: the cost account of what was bought (the Inkorg's
+   * booking plan), put on every line the reading gives instead of leaving
+   * the account empty.
+   */
+  prefillAccount?: string | null
 }
 
 export default function NewSupplierInvoiceForm({
@@ -171,6 +182,7 @@ export default function NewSupplierInvoiceForm({
   bare = false,
   onCreated,
   onCancel,
+  prefillAccount = null,
 }: NewSupplierInvoiceFormProps = {}) {
   const router = useRouter()
   const { canWrite } = useCanWrite()
@@ -216,6 +228,10 @@ export default function NewSupplierInvoiceForm({
     periods,
     periodsLoaded,
   } = useSupplierInvoiceData()
+
+  /** The start of the fiscal year a date is booked in, when the periods are known. */
+  const fiscalYearStartOf = (date: string | null | undefined): string | null =>
+    (date ? periods.find((p) => date >= p.period_start && date <= p.period_end)?.period_start : null) ?? null
 
   const [defaultDims, setDefaultDims] = useState<Record<string, string>>({})
   const [showNewSupplier, setShowNewSupplier] = useState(false)
@@ -438,6 +454,8 @@ export default function NewSupplierInvoiceForm({
     toast,
     t,
     onFieldPrefilled: handleFieldPrefilled,
+    prefillAccount,
+    accrualThresholdFor: (invoiceDate) => accrualThresholdSek({ entityType, fiscalYearStart: fiscalYearStartOf(invoiceDate) }),
   })
 
   // Returns true when the field currently matches whatever the AI wrote
@@ -609,7 +627,8 @@ export default function NewSupplierInvoiceForm({
     if (supplier.default_currency && watch('currency') === 'SEK') {
       setValue('currency', supplier.default_currency)
     }
-    if (supplier.supplier_type === 'eu_business') {
+    // A foreign supplier's service is omvänd betalningsskyldighet, from the EU or outside it.
+    if (supplier.supplier_type === 'eu_business' || supplier.supplier_type === 'non_eu_business') {
       setValue('reverse_charge', true)
     }
     // Goods or services is a word about this purchase, never carried over
@@ -1086,6 +1105,8 @@ export default function NewSupplierInvoiceForm({
         currency={watchedCurrency}
         exchangeRate={parseFloat(watchedExchangeRate)}
         invoiceDate={watchedInvoiceDate}
+        // K2's limit follows the fiscal year: 7 000 kr from a year starting 2026.
+        fiscalYearStart={fiscalYearStartOf(watchedInvoiceDate)}
         idPrefix={idPrefix}
         value={accrualValue}
         onChange={(next) => {
@@ -1155,9 +1176,12 @@ export default function NewSupplierInvoiceForm({
     !watchedSupplierId
 
   function openSupplierDialogPrefilled() {
+    // Where the seller is, read as the Inkorg's one click reads it: Sweden unless the document names elsewhere.
+    const seller = sellerCountry(extractedData?.supplier)
     setNewSupplier({
       name: extractedData?.supplier?.name || '',
-      supplier_type: 'swedish_business',
+      supplier_type: seller.region ? supplierTypeForRegion(seller.region) : 'swedish_business',
+      country: seller.country ?? '',
       org_number: extractedData?.supplier?.orgNumber || '',
       vat_number: extractedData?.supplier?.vatNumber || '',
       address_line1: extractedData?.supplier?.address || '',
@@ -1195,6 +1219,10 @@ export default function NewSupplierInvoiceForm({
     if (newSupplier.iban) payload.iban = newSupplier.iban
     if (newSupplier.bic) payload.bic = newSupplier.bic
     if (newSupplier.default_expense_account) payload.default_expense_account = newSupplier.default_expense_account
+    // The country the reading named, while the type still agrees with it.
+    if (newSupplier.country && supplierTypeForRegion(regionOfCountry(newSupplier.country)) === newSupplier.supplier_type) {
+      payload.country = newSupplier.country
+    }
 
     const res = await fetch('/api/suppliers', {
       method: 'POST',

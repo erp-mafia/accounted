@@ -416,6 +416,10 @@ const RECEIPTS_AND_DOCUMENTS: PackageDoors = {
     'POST /api/extensions/ext/invoice-inbox/upload/create',
     // The receipt that came with an invoice lands on the invoice's booking: it starts nothing new.
     'POST /api/inkorg/items/:id/companion',
+    // The one click books the item as book-direct does, and registers a
+    // supplier invoice only while Leverantörsfakturor is on (its plan reads
+    // the switch): it starts nothing a switched-off package would refuse.
+    'POST /api/inkorg/items/:id/book',
     'DELETE /api/extensions/ext/mail/connections',
     'POST /api/extensions/ext/whatsapp-inbox/link/default-company',
     'POST /api/extensions/ext/whatsapp-inbox/link/revoke',

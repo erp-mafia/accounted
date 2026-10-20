@@ -7,6 +7,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { suggestExpenseBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
+import { accrualWorthOpening, K2_ACCRUAL_THRESHOLD_SEK } from '@/components/bookkeeping/accrual-k2-hint'
 import {
   vatRateFromAi,
   type SupplierInvoiceFormData,
@@ -33,6 +34,18 @@ interface UseInboxPrefillParams {
   t: ReturnType<typeof useTranslations>
   /** Called for each scalar form field the extraction filled (settle tint hosts). */
   onFieldPrefilled?: (field: string) => void
+  /**
+   * The cost account every read line starts on (the Inkorg's booking plan:
+   * the account of what was bought). Without it a line's account stays
+   * empty for the person or the supplier default.
+   */
+  prefillAccount?: string | null
+  /**
+   * K2's accrual limit for the fiscal year an invoice date is booked in
+   * (7 000 kr from a year starting 2026, 5 000 kr before): a line below it
+   * does not open its periodisering on its own.
+   */
+  accrualThresholdFor?: (invoiceDate: string | null) => number
 }
 
 /**
@@ -55,6 +68,8 @@ export function useInboxPrefill({
   toast,
   t,
   onFieldPrefilled,
+  prefillAccount = null,
+  accrualThresholdFor,
 }: UseInboxPrefillParams) {
   const [extractedData, setExtractedData] = useState<InvoiceExtractionResult | null>(null)
   const [originalExtracted, setOriginalExtracted] = useState<InvoiceExtractionResult | null>(null)
@@ -75,6 +90,11 @@ export function useInboxPrefill({
   useEffect(() => {
     suppliersRef.current = suppliers
   }, [suppliers])
+  // Read the same way: the limit depends on the fiscal periods, which load on their own.
+  const accrualThresholdRef = useRef(accrualThresholdFor)
+  useEffect(() => {
+    accrualThresholdRef.current = accrualThresholdFor
+  }, [accrualThresholdFor])
 
   const applyInboxItem = useCallback(
     (item: InboxItemData): boolean => {
@@ -119,8 +139,10 @@ export function useInboxPrefill({
       // Line items: keep the single empty default if AI returned nothing,
       // otherwise replace it with the extracted lines. When the document
       // states a service window of 2+ calendar months (insurance period,
-      // license term), pre-fill periodisering on every positive line: the
-      // user sees the panel and can remove it before booking.
+      // license term), pre-fill periodisering on every positive line at or
+      // above K2's limit for its fiscal year (below it a post need not be
+      // accrued, K2 2.4 as amended by BFNAR 2025:2): the user sees the panel
+      // and can remove it before booking.
       if (extracted.lineItems && extracted.lineItems.length > 0) {
         // AI-extracted values are untrusted input: only accept strict
         // ISO-8601 dates before they reach form state (and later the API).
@@ -138,17 +160,20 @@ export function useInboxPrefill({
             prefillAccrual = false
           }
         }
+        const thresholdSek = accrualThresholdRef.current?.(extracted.invoice?.invoiceDate ?? null) ?? K2_ACCRUAL_THRESHOLD_SEK
         replace(
           extracted.lineItems.map((li) => {
             const amount = typeof li.lineTotal === 'number' ? li.lineTotal : 0
-            const withAccrual = prefillAccrual && amount > 0
+            const withAccrual =
+              prefillAccrual && amount > 0 && accrualWorthOpening({ amount, currency: extracted.invoice?.currency, thresholdSek })
             return {
               description: li.description || '',
               amount,
               // Extraction never suggests accounts (forcibly nulled at parse
               // time) and a silent default misbooks: leave empty so the user
-              // (or the supplier default) makes the call.
-              account_number: '',
+              // (or the supplier default) makes the call, unless the Inkorg's
+              // plan names the account of what was bought.
+              account_number: prefillAccount ?? '',
               // Deliberately unconditional: for icke momsregistrerade the
               // zeroing effect grosses the net amount up by this rate
               // before forcing it to 0, so the rate must arrive intact.
@@ -158,7 +183,7 @@ export function useInboxPrefill({
               // No account yet → generic 1790, or 2990 when the stated period
               // lies wholly before the invoice month (upplupen kostnad).
               accrual_balance_account: withAccrual
-                ? suggestExpenseBalanceAccount('', spe, extracted.invoice?.invoiceDate)
+                ? suggestExpenseBalanceAccount(prefillAccount ?? '', spe, extracted.invoice?.invoiceDate)
                 : undefined,
             }
           }),
@@ -174,7 +199,7 @@ export function useInboxPrefill({
       setApplyCount((c) => c + 1)
       return true
     },
-    [setValue, replace, reset, getValues, onFieldPrefilled],
+    [setValue, replace, reset, getValues, onFieldPrefilled, prefillAccount],
   )
 
   // One-shot: load inbox item and prefill form. Runs after suppliers are

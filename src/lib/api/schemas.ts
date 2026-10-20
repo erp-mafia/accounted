@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import { ENTITY_TYPES } from '@/lib/company/entity-type'
+import { PURCHASE_CATEGORY_CODES } from '@/lib/categories/purchase-categories'
 import { MILEAGE_COUNTER_ACCOUNTS } from '@/lib/mileage/counter-accounts'
 import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
 import {
@@ -3052,6 +3053,27 @@ export const RegisterAndSettleInboxItemSchema = z.object({
 }).refine((body) => body.invoice.paid_with_private_funds !== true, {
   message: 'A privately paid invoice is an utlägg, not a payment from the bank row',
   path: ['invoice', 'paid_with_private_funds'],
+})
+
+// The Inkorg's one click: what a person answered on the page, as request
+// parameters (never stored): what was bought, and where the seller is when
+// the document names no country (lib/operations/inkorg-one-click.ts).
+const OneClickAnswerFields = {
+  purchase_category: z.enum(PURCHASE_CATEGORY_CODES).optional(),
+  seller_country: z.enum(['se', 'eu', 'non_eu']).optional(),
+}
+
+/** GET /api/inkorg/items/:id/booking-plan */
+export const InboxItemBookingPlanQuerySchema = z.object(OneClickAnswerFields)
+
+/**
+ * POST /api/inkorg/items/:id/book: the plan's preview token, the answers it
+ * was planned with, and the bank row the page showed.
+ */
+export const BookInboxItemOneClickSchema = z.object({
+  preview_token: z.string().regex(/^pv1\.[A-Za-z0-9_-]{43}$/, 'Not a preview token: send back the preview_token the booking plan answered.'),
+  ...OneClickAnswerFields,
+  transaction_id: uuid.optional(),
 })
 
 /** POST /api/inkorg/items/:id/companion: the receipt that came with the invoice :id as one purchase. */

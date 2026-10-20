@@ -54,6 +54,7 @@ export function PurchaseCategoryChip({
   onChange,
   label,
   alternatives = null,
+  prompt = false,
 }: {
   itemId: string
   value: InboxPurchaseCategory | null | undefined
@@ -75,6 +76,8 @@ export function PurchaseCategoryChip({
    * where the read has none: the dialog then offers the proposal alone.
    */
   alternatives?: readonly PurchaseCategoryAlternative[] | null
+  /** Nothing chosen and the page waits for it: "Välj kategori" opens the dialog in place of "Ingen kategori". */
+  prompt?: boolean
 }) {
   const t = useTranslations('purchase_category_picker')
   const tc = useTranslations('purchaseCategories')
@@ -155,6 +158,10 @@ export function PurchaseCategoryChip({
           <span className="truncate">{isPurchaseCategoryCode(current.code) ? tc(purchaseCategoryNameKey(current.code)) : current.code}</span>
           <span className="shrink-0 text-[11px] text-muted-foreground">{t(LEVEL_KEY[current.level])}</span>
         </span>
+      ) : prompt && !locked ? (
+        <Button type="button" variant="link" className="h-auto p-0 text-xs" onClick={openDialog}>
+          {t('pick')}
+        </Button>
       ) : (
         <span className="text-muted-foreground">{t('none')}</span>
       )}
@@ -163,7 +170,7 @@ export function PurchaseCategoryChip({
           {supplierName ? t('from_instruction', { supplier: supplierName }) : t('from_instruction_plain')}
         </span>
       )}
-      {!locked && (
+      {!locked && (current || !prompt) && (
         <Button
           type="button"
           variant="link"

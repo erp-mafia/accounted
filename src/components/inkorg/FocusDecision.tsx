@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
@@ -34,6 +34,7 @@ import type { DocumentMeta } from './FocusDocumentPreview'
 import type { PayInBankTarget } from './PayInBankDialog'
 import { PayFromDocumentDialog } from './PayFromDocumentDialog'
 import { followCompanion } from './follow-companion'
+import type { BookingPlan, OneClickAnswers, OneClickBooking } from './use-booking-plan'
 
 const ITEM_URL = (id: string) => `/api/extensions/ext/invoice-inbox/items/${id}`
 
@@ -41,6 +42,18 @@ const ITEM_URL = (id: string) => `/api/extensions/ext/invoice-inbox/items/${id}`
 const ANPASSA_PACKAGE: Record<'turn_on_supplier_invoices' | 'turn_on_expenses', PackageId> = {
   turn_on_supplier_invoices: 'supplier-invoices-and-payments',
   turn_on_expenses: 'expenses',
+}
+
+/**
+ * The answers one click can give, and the plan forms each books: a paid
+ * purchase as one verifikat (or, paid later, registered and settled), an
+ * item linked to its row, and an unpaid invoice registered.
+ */
+const ONE_CLICK_FORMS: Partial<Record<DecisionAction, ReadonlyArray<NonNullable<BookingPlan['plan']['form']>>>> = {
+  register_and_settle: ['direct', 'register_and_settle'],
+  accept_bank_match: ['direct'],
+  book: ['direct'],
+  register_invoice: ['register'],
 }
 
 /** What POST /items/:id/suggest-booking answers, as far as the focus view reads it. */
@@ -112,6 +125,10 @@ export function FocusDecision({
   ownerAccount = null,
   matchedSupplierId = null,
   onBack,
+  bookingPlan = null,
+  answers = {},
+  onBook,
+  openEditor = null,
 }: {
   item: InkorgItem
   decision: Decision
@@ -126,6 +143,14 @@ export function FocusDecision({
   matchedSupplierId?: string | null
   /** Back to the list with the item untouched. */
   onBack?: () => void
+  /** What one click books (GET /api/inkorg/items/:id/booking-plan), or what it asks first. */
+  bookingPlan?: BookingPlan | null
+  /** What the person answered on the page, sent with the booking. */
+  answers?: OneClickAnswers
+  /** One click: hands the booking to the page, which holds it a moment (Ångra) and sends it. */
+  onBook?: (booking: OneClickBooking) => void
+  /** Bumped when a one-click booking was refused for its date: the editor opens, prefilled. */
+  openEditor?: number | null
 }) {
   const t = useTranslations('inkorg')
   const tWork = useTranslations('inbox_workspace')
@@ -135,8 +160,11 @@ export function FocusDecision({
   const paidLooking = decision.question === 'already_paid'
   const { dialogProps, confirm } = useDestructiveConfirm()
   // invoice: register it; settle: register it and settle it against the bank row; pay: register it to pay in the bank;
-  // pay_doc: pay from the document, nothing registered; owner: book it as paid with the owner's own money.
-  const [open, setOpen] = useState<null | 'invoice' | 'settle' | 'pay' | 'pay_doc' | 'match' | 'book' | 'owner' | 'editor'>(null)
+  // pay_doc: pay from the document, nothing registered; owner: book it as paid with the owner's own money;
+  // plan_editor: the one verifikat one click would book, opened in the editor with the plan's lines.
+  const [open, setOpen] = useState<null | 'invoice' | 'settle' | 'pay' | 'pay_doc' | 'match' | 'book' | 'owner' | 'editor' | 'plan_editor'>(null)
+  const plan = bookingPlan?.plan ?? null
+  const planLines = plan?.lines.length ? plan.lines : null
   const { settings: companySettings } = useCompanySettings()
   const ownerCostAccount = useSupplierCostAccount(
     item.extracted_data?.supplier?.name?.trim() || null,
@@ -290,6 +318,46 @@ export function FocusDecision({
     )
   }
 
+  /** The bank row the decision shows; a plan that names another is not booked by this answer. */
+  const evidenceRow = decision.evidence?.kind === 'bank_match' ? decision.evidence.transactionId : null
+
+  /** Whether `action` books in one click: the plan's form is one this answer books, and nothing is asked. */
+  function oneClick(action: DecisionAction): boolean {
+    if (!plan || !bookingPlan || !onBook || plan.ask !== null || !plan.form) return false
+    if (!(ONE_CLICK_FORMS[action] ?? []).includes(plan.form)) return false
+    return !evidenceRow || plan.transactionId === evidenceRow
+  }
+
+  /** The primary answer waits while the plan asks the person what was bought, or where the seller is. */
+  function waitsForAnswer(action: DecisionAction, index: number): boolean {
+    return index === 0 && !!plan?.form && (plan.ask === 'category' || plan.ask === 'seller_country') && !!ONE_CLICK_FORMS[action]
+  }
+
+  function book() {
+    if (!bookingPlan || !onBook) return
+    onBook({ preview_token: bookingPlan.preview_token, ...answers, ...(bookingPlan.plan.transactionId ? { transaction_id: bookingPlan.plan.transactionId } : {}) })
+  }
+
+  /** The editor one click would have spared: the plan's verifikat, or the invoice form, prefilled. */
+  function openPlanEditor() {
+    if (decision.actions.includes('book')) setOpen('book')
+    else if (plan?.form === 'direct' && planLines) setOpen('plan_editor')
+    else if (decision.actions.includes('register_and_settle')) setOpen('settle')
+    else if (decision.actions.includes('register_invoice')) setOpen('invoice')
+    else if (decision.editorEscape) setOpen('editor')
+  }
+
+  // A one-click booking refused for its date (a locked period): the editor opens, the date never
+  // moved, once the plan it is prefilled from is read again.
+  const openedFor = useRef<number | null>(null)
+  useEffect(() => {
+    if (!openEditor || !bookingPlan || openedFor.current === openEditor) return
+    openedFor.current = openEditor
+    openPlanEditor()
+    // The bump and the plan open it, once per bump.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openEditor, bookingPlan])
+
   // The first answer is the primary pill, the second the secondary one beside it, the third a quiet text button.
   const variantAt = (index: number) => (index === 0 ? 'default' : index === 1 ? 'secondary' : 'ghost')
   // Two pills side by side from a tablet up, the quiet third under them; on a phone all
@@ -298,10 +366,11 @@ export function FocusDecision({
 
   function renderAction(action: DecisionAction, index: number) {
     const variant = variantAt(index)
+    const waits = waitsForAnswer(action, index)
     switch (action) {
       case 'register_invoice':
         return (
-          <Button key={action} variant={variant} className={width} onClick={() => setOpen('invoice')}>
+          <Button key={action} variant={variant} className={width} disabled={waits} onClick={() => (oneClick(action) ? book() : setOpen('invoice'))}>
             {paidLooking
               ? t('action_not_paid')
               : decision.question === 'invoice_paid'
@@ -311,7 +380,13 @@ export function FocusDecision({
         )
       case 'register_and_settle':
         return (
-          <Button key={action} variant={variant} className={width} onClick={() => setOpen('settle')}>
+          <Button
+            key={action}
+            variant={variant}
+            className={width}
+            disabled={waits}
+            onClick={() => (oneClick(action) ? book() : plan?.ask === 'editor' && plan.form === 'direct' && planLines ? setOpen('plan_editor') : setOpen('settle'))}
+          >
             {t('action_register_and_settle')}
           </Button>
         )
@@ -323,8 +398,16 @@ export function FocusDecision({
         )
       case 'accept_bank_match':
         return (
-          <Button key={action} variant={variant} className={width} disabled={busy !== null} loading={busy === 'accept_bank_match'} onClick={() => void acceptBankMatch()}>
-            {t('action_accept_bank_match')}
+          <Button
+            key={action}
+            variant={variant}
+            className={width}
+            disabled={busy !== null || waits}
+            loading={busy === 'accept_bank_match'}
+            onClick={() => (oneClick(action) ? book() : void acceptBankMatch())}
+          >
+            {/* Booked with it in the same click, it says so. */}
+            {oneClick(action) ? t('action_register_and_settle') : t('action_accept_bank_match')}
           </Button>
         )
       case 'match_purchase':
@@ -354,8 +437,8 @@ export function FocusDecision({
         )
       case 'book':
         return (
-          <Button key={action} variant={variant} className={width} onClick={() => setOpen('book')}>
-            {suggestion?.lines.length ? tWork('review_and_book') : tWork('book_manually')}
+          <Button key={action} variant={variant} className={width} disabled={waits} onClick={() => (oneClick(action) ? book() : setOpen('book'))}>
+            {oneClick(action) ? t('action_book') : suggestion?.lines.length || planLines ? tWork('review_and_book') : tWork('book_manually')}
           </Button>
         )
       case 'unmatch':
@@ -518,6 +601,8 @@ export function FocusDecision({
         inboxItemId={item.id}
         // Settled on registration against the bank row it looks paid by (POST /api/inkorg/items/:id/register-and-settle).
         settleWith={open === 'settle' ? settleWith : null}
+        // The account of what was bought, as one click would book it, on every line the reading gives.
+        prefillAccount={plan?.costAccount ?? null}
         onCreated={async (invoiceId) => {
           const mode = open
           setOpen(null)
@@ -562,10 +647,30 @@ export function FocusDecision({
           fileName={null}
           transactionId={item.matched_transaction_id}
           // The bank's date is the business event for a matched purchase; then the document's own date.
-          entryDate={suggestion?.entry_date ?? data?.invoice?.invoiceDate ?? todayIsoStockholm()}
+          entryDate={plan?.entryDate ?? suggestion?.entry_date ?? data?.invoice?.invoiceDate ?? todayIsoStockholm()}
           description={data?.supplier?.name ?? item.email_subject ?? t('document_label')}
-          lines={suggestion?.lines.length ? suggestion.lines : (suggestion?.fallback_lines ?? [])}
+          // The plan's lines when it has them (its VAT included), else the bank row's proposal.
+          lines={planLines ?? (suggestion?.lines.length ? suggestion.lines : (suggestion?.fallback_lines ?? []))}
           matchedTransaction={suggestion?.transaction ?? null}
+          onBooked={() => {
+            setOpen(null)
+            void onDone({ leaves: true })
+          }}
+        />
+      )}
+      {planLines && plan?.form === 'direct' && !decision.actions.includes('book') && (
+        <EditKonteringDialog
+          open={open === 'plan_editor'}
+          onOpenChange={(next) => setOpen(next ? 'plan_editor' : null)}
+          itemId={item.id}
+          documentId={item.document_id}
+          documentMime={documentMeta?.mime ?? null}
+          documentUrl={null}
+          fileName={null}
+          transactionId={plan.transactionId}
+          entryDate={plan.entryDate ?? data?.invoice?.invoiceDate ?? todayIsoStockholm()}
+          description={data?.supplier?.name ?? item.email_subject ?? t('document_label')}
+          lines={planLines}
           onBooked={() => {
             setOpen(null)
             void onDone({ leaves: true })
