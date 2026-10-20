@@ -90,7 +90,7 @@ function MailboxRow({
   const t = useTranslations('inkorg')
   return (
     <li className="flex items-center gap-4 border-b border-border py-3">
-      <DoorMark door={door} size={28} className={muted ? 'opacity-50 grayscale' : undefined} />
+      <DoorMark door={door} size={28} className={muted ? 'opacity-60' : undefined} />
       <div className={muted ? 'min-w-0 flex-1 text-muted-foreground' : 'min-w-0 flex-1'}>
         <p className="text-[13px] font-medium">{t(`mailbox_${door}_name`)}</p>
         <div className="text-[12.5px] text-muted-foreground">{detail ?? t(`mailbox_${door}_body`)}</div>
