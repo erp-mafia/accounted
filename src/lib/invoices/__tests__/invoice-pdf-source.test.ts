@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  findArchivedInvoiceDelivery,
   invoiceDocumentCaveat,
   invoicePaymentConfirmationUrl,
   invoiceRerenderUrl,
@@ -277,5 +278,46 @@ describe('paymentConfirmationPdfSource', () => {
 
   it('encodes the invoice id in the confirmation url', () => {
     expect(invoicePaymentConfirmationUrl('a/b')).toBe('/api/invoices/a%2Fb/pdf?variant=paid')
+  })
+})
+
+describe('findArchivedInvoiceDelivery', () => {
+  it('returns the newest completed email delivery with its archived file', () => {
+    const archived = findArchivedInvoiceDelivery([
+      emailDelivery({ id: 'pending', status: 'pending', sent_at: null }),
+      emailDelivery({ id: 'newest-sent' }),
+      emailDelivery({ id: 'older-sent', document_attachment_id: 'older-doc' }),
+    ])
+
+    expect(archived).toMatchObject({ id: 'newest-sent', document_attachment_id: DOCUMENT_ID })
+  })
+
+  it('returns null when the newest completed delivery was marked sent by hand', () => {
+    expect(
+      findArchivedInvoiceDelivery([
+        emailDelivery({ id: 'manual', status: 'marked_sent', document_attachment_id: null }),
+        emailDelivery({ id: 'older-sent' }),
+      ]),
+    ).toBeNull()
+  })
+
+  it('returns null without a completed delivery or when the file is gone', () => {
+    expect(findArchivedInvoiceDelivery([])).toBeNull()
+    expect(
+      findArchivedInvoiceDelivery([emailDelivery({ status: 'failed', document_attachment_id: null })]),
+    ).toBeNull()
+    expect(findArchivedInvoiceDelivery([emailDelivery({ document_attachment_id: null })])).toBeNull()
+  })
+
+  it('agrees with the download on which file is archived', () => {
+    const deliveries = [emailDelivery({ id: 'newest-sent' })]
+    const source = resolveInvoicePdfSource({
+      invoiceId: INVOICE_ID,
+      invoiceStatus: 'sent',
+      deliveriesLoaded: true,
+      deliveries,
+    })
+
+    expect(source).toMatchObject({ kind: 'archived', deliveryId: findArchivedInvoiceDelivery(deliveries)?.id })
   })
 })

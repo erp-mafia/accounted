@@ -409,6 +409,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   ),
   'POST /api/invoices/:id/refresh-exchange-rate': gap('P3'),
   'POST /api/invoices/:id/send-payment-confirmation': gap('P3', 'email a betalningsbekräftelse'),
+  'POST /api/invoices/:id/resend': gap('P3', 'email an already emailed invoice again as a copy (crm#1339)'),
   'POST /api/invoices/self-billed': gap('P3', 'register a received självfaktura'),
   'POST /api/invoices/preview-pdf': uiOnly(PREVIEW),
   'POST /api/invoices/preview-email': uiOnly(PREVIEW),
@@ -820,4 +821,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 139
+export const GAP_CEILING = 140

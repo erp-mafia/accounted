@@ -2466,6 +2466,27 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
         'Register the payment first (POST /api/invoices/{id}/mark-paid) so the invoice reaches status paid; credit notes and proformas never qualify.',
     },
   },
+  // POST /api/invoices/[id]/resend (crm#1339): emails the archived invoice
+  // again as a copy, so only an unpaid, issued faktura or kreditfaktura.
+  INVOICE_RESEND_NOT_ELIGIBLE: {
+    httpStatus: 409,
+    message_sv:
+      'Bara en skickad eller förfallen faktura som inte är betald kan skickas igen. Till en betald faktura finns en betalningsbekräftelse.',
+    message_en:
+      'Only a sent or overdue invoice that is not paid can be sent again. A paid invoice has a payment confirmation instead.',
+  },
+  INVOICE_RESEND_NO_ARCHIVED_COPY: {
+    httpStatus: 409,
+    message_sv:
+      'Fakturan har inte mejlats härifrån, så det finns ingen sparad kopia att skicka igen. Ladda ner PDF:en och skicka den själv.',
+    message_en:
+      'The invoice was not emailed from here, so there is no saved copy to send again. Download the PDF and send it yourself.',
+  },
+  INVOICE_RESEND_ARCHIVE_UNAVAILABLE: {
+    httpStatus: 503,
+    message_sv: 'Den sparade kopian av fakturan kunde inte läsas. Ingen e-post skickades. Försök igen om en stund.',
+    message_en: 'The saved copy of the invoice could not be read. No email was sent. Try again shortly.',
+  },
   INVOICE_PAID_LINES_UNBALANCED: {
     httpStatus: 400,
     message_sv: 'Verifikationsraderna är inte balanserade (debet ≠ kredit).',

@@ -968,3 +968,67 @@ describe('payment rows are the PDF payment box rows (lib/invoices/payment-rows)'
     expect(text.match(/Betala online/g)).toHaveLength(1)
   })
 })
+
+describe('resend copy (crm#1339)', () => {
+  const svCustomer = makeCustomer({ name: 'Erik Andersson', customer_type: 'individual', email: 'erik@example.se', language: 'sv' })
+  const enCustomer = makeCustomer({ name: 'Jane Doe', customer_type: 'individual', email: 'jane@example.com', language: 'en' })
+  const copyOf = { sentAt: '2026-06-01T08:00:00.000Z' }
+
+  it('marks the Swedish subject as a copy', () => {
+    expect(generateInvoiceEmailSubject({ invoice, customer: svCustomer, company, copyOf })).toBe(
+      'Kopia: Faktura 1042 från Acme AB',
+    )
+  })
+
+  it('says in both variants when the original went out', () => {
+    const data = { invoice, customer: svCustomer, company, copyOf }
+    const notice = 'Det här är en kopia av faktura 1042 som skickades 2026-06-01.'
+    expect(generateInvoiceEmailHtml(data)).toContain(notice)
+    expect(generateInvoiceEmailText(data)).toContain(notice)
+  })
+
+  it('dates the original by the Swedish calendar day, not UTC', () => {
+    const html = generateInvoiceEmailHtml({
+      invoice,
+      customer: svCustomer,
+      company,
+      copyOf: { sentAt: '2026-05-31T22:30:00.000Z' },
+    })
+    expect(html).toContain('som skickades 2026-06-01.')
+  })
+
+  it('leaves the date out when the original has none', () => {
+    const html = generateInvoiceEmailHtml({ invoice, customer: svCustomer, company, copyOf: { sentAt: null } })
+    expect(html).toContain('Det här är en kopia av faktura 1042.')
+  })
+
+  it('uses English for an English customer', () => {
+    const data = { invoice, customer: enCustomer, company, copyOf }
+    expect(generateInvoiceEmailSubject(data)).toBe('Copy: Invoice 1042 from Acme AB')
+    expect(generateInvoiceEmailText(data)).toContain('This is a copy of invoice 1042, sent on 2026-06-01.')
+  })
+
+  it('prefixes the company\'s own subject text', () => {
+    const customCompany = makeCompanySettings({
+      company_name: 'Acme AB',
+      invoice_email_texts: { sv: { subject: 'Er faktura {fakturanummer}' } },
+    })
+    expect(
+      generateInvoiceEmailSubject({ invoice, customer: svCustomer, company: customCompany, copyOf }),
+    ).toBe('Kopia: Er faktura 1042')
+  })
+
+  it('names a credit note as a kreditfaktura', () => {
+    const creditInvoice = makeInvoice({ invoice_number: '1043', total: -5000, credited_invoice_id: 'inv-orig' })
+    const data = { invoice: creditInvoice, customer: svCustomer, company, copyOf }
+    expect(generateInvoiceEmailSubject(data)).toBe('Kopia: Kreditfaktura 1043 från Acme AB')
+    expect(generateInvoiceEmailHtml(data)).toContain('Det här är en kopia av kreditfaktura 1043 som skickades 2026-06-01.')
+  })
+
+  it('adds nothing to an ordinary send', () => {
+    const data = { invoice, customer: svCustomer, company }
+    expect(generateInvoiceEmailSubject(data)).toBe('Faktura 1042 från Acme AB')
+    expect(generateInvoiceEmailHtml(data)).not.toContain('kopia')
+    expect(generateInvoiceEmailText(data)).not.toContain('kopia')
+  })
+})
