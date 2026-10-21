@@ -10,6 +10,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { addMonthsIso } from '@/lib/dates/iso'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { readCompanyPortals } from '@/lib/receipt-hunt/company-portals-read'
 import {
   HISTORY_MONTHS,
   documentEvidence,
@@ -143,16 +144,21 @@ export async function readDocumentEvidence(
  * Every regular counterparty with how its documents usually arrive. The
  * documents are read only for the patterns found, and only for their latest
  * occurrences, so the second read stays small whatever the history holds.
+ * The company's own portals are read once, beside the history, and decide
+ * with the directory which counterparties have a portal.
  */
 export async function loadExpectations(
   supabase: SupabaseClient,
   companyId: string,
   today: string,
 ): Promise<PatternExpectation[]> {
-  const history = await readExpectationHistory(supabase, companyId, today)
-  const patterns = findPatterns(history, today)
+  const [history, companyPortals] = await Promise.all([
+    readExpectationHistory(supabase, companyId, today),
+    readCompanyPortals(supabase, companyId),
+  ])
+  const patterns = findPatterns(history, today, companyPortals)
   if (patterns.length === 0) return []
   const ids = evidenceDocumentIds(patterns)
   const { documents, items } = ids.length > 0 ? await readDocumentEvidence(supabase, companyId, ids) : { documents: [], items: [] }
-  return expectationsFrom(patterns, documentEvidence(documents, items))
+  return expectationsFrom(patterns, documentEvidence(documents, items), companyPortals)
 }

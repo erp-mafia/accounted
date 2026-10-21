@@ -164,6 +164,21 @@ describe('resolveAgentWorklist', () => {
     expect(si.portal).toBeNull()
   })
 
+  it("points at the company's own portal for a supplier it added, and says so in the next step", async () => {
+    const tables = fixture()
+    tables.company_portals = [
+      { id: 'p-kg', counterparty_key: 'kontorsgiganten', vendor_name: 'Kontorsgiganten', url: 'https://mina.kontorsgiganten.se/fakturor' },
+    ]
+    const supabase = mockSupabase(tables, { ok: true, total_count: 3, verifikat: VERIFIKAT })
+    const { items } = await resolveAgentWorklist(supabase, 'co-1')
+
+    const si = items.find((i) => i.journal_entry_id === 'je-si')!
+    expect(si.portal).toEqual({ vendor: 'Kontorsgiganten', url: 'https://mina.kontorsgiganten.se/fakturor', note: null })
+    expect(si.next_step).toBe('Logga in på Kontorsgiganten och ladda ner fakturan: https://mina.kontorsgiganten.se/fakturor')
+    // The directory still answers for the rest.
+    expect(items.find((i) => i.transaction_id === 'tx-1')!.portal).toMatchObject({ vendor: 'Google Workspace' })
+  })
+
   it('flags rows that never have a mailed receipt', async () => {
     mockFetchCandidateTransactions.mockResolvedValue([
       { ...UNBOOKED, id: 'tx-tax', description: 'Skatteverket', amount: -5000, currency: 'SEK', amount_sek: -5000 },

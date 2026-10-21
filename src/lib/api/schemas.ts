@@ -3090,6 +3090,28 @@ export const FollowInboxCompanionSchema = z.object({
   receipt_item_id: uuid,
 })
 
+/**
+ * The link to a company portal as pasted: the server applies the URL rule
+ * (normalizePortalUrl in lib/receipt-hunt/company-portals.ts) and refuses
+ * with INKORG_PORTAL_URL_INVALID, so the person reads why in Swedish.
+ */
+const portalUrlInput = z.string().trim().min(1).max(4096)
+
+/**
+ * POST /api/inkorg/portals: the purchase whose supplier keeps its invoices
+ * in a portal, and the link. The supplier is read off the purchase on the
+ * server, never sent.
+ */
+export const CreateCompanyPortalSchema = z.object({
+  transaction_id: uuid,
+  url: portalUrlInput,
+})
+
+/** PATCH /api/inkorg/portals/:id: a new link for the portal; which supplier it is stays. */
+export const UpdateCompanyPortalSchema = z.object({
+  url: portalUrlInput,
+})
+
 
 // ============================================================
 // Settings schemas

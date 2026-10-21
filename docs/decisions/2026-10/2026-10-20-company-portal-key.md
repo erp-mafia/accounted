@@ -1,0 +1,1 @@
+[2026-10-20] A company portal is keyed by normalizeForMatch of the bank row (bankKeyOf, lookupPortal's fold) and matched as whole words, not by normalizeCounterpartyName: it folds AUTOGIRO, card tokens and legal forms, so every Telia row, autogiro included, is one supplier.

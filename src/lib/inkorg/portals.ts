@@ -3,10 +3,12 @@
  * without underlag whose invoices wait behind a login, one row each.
  *
  * Read off the purchases GET /api/extensions/ext/invoice-inbox/purchases
- * already answers: each row carries `portal` when the portal directory
- * (lib/receipt-hunt/portal-directory.ts) knows where that supplier keeps its
- * invoices. Nothing is stored and nothing else is read, so a supplier added
- * to the directory shows up here for every company at once.
+ * already answers: each row carries `portal` when the company added a portal
+ * for that supplier, or the portal directory
+ * (lib/receipt-hunt/portal-directory.ts) knows where it keeps its invoices.
+ * Nothing else is read, so a supplier added to the directory shows up here
+ * for every company at once, and one a company added shows up for every one
+ * of its purchases from that supplier.
  *
  * Pure: no client, no I/O, no React.
  */
@@ -26,6 +28,8 @@ export interface PortalRow {
   vendor: string
   /** The page a person lands on to fetch the invoice. */
   url: string
+  /** The supplier's stored icon (lib/vendor-logos), off the first of its purchases that has one. */
+  logoUrl: string | null
   /** Its purchases without underlag. */
   missing: number
   /** Of those, the ones that need a person now. */
@@ -39,7 +43,7 @@ export interface PortalRow {
  * reorders rows that did not change.
  */
 export function portalRows(
-  purchases: readonly Pick<MissingPurchase, 'id' | 'portal'>[],
+  purchases: readonly Pick<MissingPurchase, 'id' | 'portal' | 'logo_url'>[],
   onTheWay: { has: (id: string) => boolean },
 ): PortalRow[] {
   const rows = new Map<string, PortalRow>()
@@ -47,7 +51,15 @@ export function portalRows(
     const portal = purchase.portal
     const vendor = portal?.vendor.trim()
     if (!portal || !vendor) continue
-    const row = rows.get(vendor) ?? { vendor, url: portal.url, missing: 0, needsYou: 0, status: 'on_the_way' as PortalStatus }
+    const row = rows.get(vendor) ?? {
+      vendor,
+      url: portal.url,
+      logoUrl: null,
+      missing: 0,
+      needsYou: 0,
+      status: 'on_the_way' as PortalStatus,
+    }
+    row.logoUrl ??= purchase.logo_url ?? null
     row.missing += 1
     if (!onTheWay.has(purchase.id)) {
       row.needsYou += 1

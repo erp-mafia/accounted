@@ -26,7 +26,7 @@ import { addDaysIso, addMonthsIso, daysBetweenIso, todayIsoStockholm } from '@/l
 import { normalizeForMatch } from '@/lib/documents/core-receipt-matcher'
 import { intakeSourceForInboxItem, intakeSourceFromUploadSource, type IntakeSourceId } from '@/lib/intake/sources'
 import { roundOre } from '@/lib/money'
-import { lookupPortal } from '@/lib/receipt-hunt/portal-directory'
+import { resolvePortal, type CompanyPortal } from '@/lib/receipt-hunt/company-portals'
 import { canHaveEmailReceipt } from '@/lib/receipt-hunt/select'
 
 // ---------------------------------------------------------------------------
@@ -400,10 +400,15 @@ function toPattern(series: Series, today: string): Pattern | null {
  *     bank rows that paid them name the supplier's bank text;
  *   - the bank rows no supplier invoice settled, grouped by bank text. Only
  *     counterparties that have had an underlag before, or whose portal is
- *     known: a monthly transfer, loan or bank fee has no document to expect.
- *     Salary and tax are left out the same way the receipt hunt leaves them.
+ *     known (the company's own, else the directory's): a monthly transfer,
+ *     loan or bank fee has no document to expect. Salary and tax are left
+ *     out the same way the receipt hunt leaves them.
  */
-export function findPatterns(history: ExpectationHistory, today: string): Pattern[] {
+export function findPatterns(
+  history: ExpectationHistory,
+  today: string,
+  companyPortals: readonly CompanyPortal[] = [],
+): Pattern[] {
   const transactions = new Map(history.transactions.map((t) => [t.id, t]))
   const supplierNames = new Map(history.suppliers.map((s) => [s.id, s.name]))
 
@@ -466,7 +471,7 @@ export function findPatterns(history: ExpectationHistory, today: string): Patter
 
   const patterns: Pattern[] = []
   for (const entry of series.values()) {
-    if (entry.kind === 'bank' && !entry.occurrences.some((o) => o.documentId) && !lookupPortal(entry.name)) continue
+    if (entry.kind === 'bank' && !entry.occurrences.some((o) => o.documentId) && !resolvePortal(companyPortals, entry.name)) continue
     const pattern = toPattern(entry, today)
     if (pattern) patterns.push(pattern)
   }
@@ -552,14 +557,15 @@ export interface PatternExpectation extends Pattern {
 
 /**
  * The door the latest documents came through, when one carries most of them
- * (at least two, and three in five); the supplier's portal when the portal
- * directory knows it and the documents were uploaded by hand or not seen.
- * For a door that delivers by itself, how long after the bank row they
- * arrive: the median of the measured delays plus two days.
+ * (at least two, and three in five); the supplier's portal when the company
+ * or the portal directory knows it and the documents were uploaded by hand
+ * or not seen. For a door that delivers by itself, how long after the bank
+ * row they arrive: the median of the measured delays plus two days.
  */
 export function expectationsFrom(
   patterns: readonly Pattern[],
   evidence: ReadonlyMap<string, DocumentEvidence>,
+  companyPortals: readonly CompanyPortal[] = [],
 ): PatternExpectation[] {
   return patterns.map((pattern) => {
     const known: { door: IntakeSourceId; lag: number | null }[] = []
@@ -584,7 +590,7 @@ export function expectationsFrom(
     const door: IntakeSourceId | null =
       usual && usualCount >= DOOR_MIN_DOCUMENTS && usualCount / latest.length >= DOOR_MIN_SHARE ? usual : null
 
-    const portalEntry = lookupPortal(pattern.name)
+    const portalEntry = resolvePortal(companyPortals, pattern.name)
     const portal = portalEntry ? { vendor: portalEntry.vendor, url: portalEntry.url } : null
     const expectedDoor: ExpectedDoor | null = portal && (door === null || door === 'upload') ? 'portal' : door
 

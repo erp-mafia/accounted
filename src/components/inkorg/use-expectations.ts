@@ -28,11 +28,14 @@ async function readExpectations(): Promise<ExpectationsResponse | null> {
  * read once the purchases are in, and again when a purchase the last read did
  * not know turns up (a bank sync, another tab): only a new purchase can be on
  * its way, and one that got its underlag simply leaves the list. A failed read
- * leaves every purchase under Behöver dig and the fold out.
+ * leaves every purchase under Behöver dig and the fold out. A new `revision`
+ * reads them again whatever the purchases are: a portal the company added
+ * changes which suppliers have one.
  */
-export function useExpectations(enabled: boolean, purchaseIds: readonly string[]): InkorgExpectations {
+export function useExpectations(enabled: boolean, purchaseIds: readonly string[], revision = 0): InkorgExpectations {
   const [data, setData] = useState<ExpectationsResponse | null>(null)
   const known = useRef<Set<string> | null>(null)
+  const readAt = useRef(revision)
   const inFlight = useRef(false)
   // Bumped when a read lands, so a purchase that turned up while it ran is looked at too.
   const [landed, setLanded] = useState(0)
@@ -40,17 +43,19 @@ export function useExpectations(enabled: boolean, purchaseIds: readonly string[]
   useEffect(() => {
     if (!enabled || inFlight.current) return
     const seen = known.current
-    if (seen && purchaseIds.every((id) => seen.has(id))) return
+    if (seen && readAt.current === revision && purchaseIds.every((id) => seen.has(id))) return
     inFlight.current = true
     const asked = new Set(purchaseIds)
+    const askedAt = revision
     void readExpectations().then((next) => {
       inFlight.current = false
       known.current = asked
+      readAt.current = askedAt
       // A failed re-read keeps what is on screen.
       if (next) setData(next)
       setLanded((n) => n + 1)
     })
-  }, [enabled, purchaseIds, landed])
+  }, [enabled, purchaseIds, landed, revision])
 
   const onTheWay = useMemo(
     () => new Map((data?.on_the_way ?? []).map((p) => [p.transaction_id, p] as const)),

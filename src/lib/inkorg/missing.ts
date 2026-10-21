@@ -12,8 +12,9 @@
  *     a purchase's file (uploadForPurchase). Ångra is POST
  *     /items/:id/unmatch-transaction, which takes the document off the
  *     purchase again and leaves the file in the inbox;
- *   - open_portal: the supplier's billing page from the portal directory
- *     (lib/receipt-hunt/portal-directory.ts), which the endpoint resolves;
+ *   - open_portal: the supplier's billing page, the company's own portal
+ *     for it or the portal directory's (lib/receipt-hunt/company-portals.ts),
+ *     which the endpoint resolves;
  *   - fetch_with_ai: Kvittojakten in the customer's own AI, the receipt-hunt
  *     hand-off (GET /api/receipt-hunt/agent-handoff names the AI clients);
  *   - connect_ai: no AI is connected, so the same place connects Claude.
@@ -37,7 +38,12 @@ export interface MissingPurchase {
   amount: number
   currency: string | null
   amount_sek: number | null
-  portal: { vendor: string; url: string; note: string | null } | null
+  /**
+   * Where the invoice waits behind a login: the company's own portal for the
+   * supplier (id set: the company added it and may change it), else the
+   * portal directory's (id null).
+   */
+  portal: { vendor: string; url: string; note: string | null; id?: string | null } | null
   /** The vendor's own icon from our logos bucket (lib/vendor-logos), when one is stored. */
   logo_url?: string | null
 }
@@ -159,7 +165,7 @@ export interface RouteContext {
 /**
  * Where a purchase's underlag will come from, where the app already knows:
  *   - portal: the supplier keeps its invoices behind a login, and the
- *     portal directory knows the page;
+ *     company or the portal directory knows the page;
  *   - photo: a card purchase with no known route, so the receipt is likely
  *     paper: photograph it (and send it in WhatsApp when a number is linked);
  *   - intake: anything else that can arrive by mail, to the intake address;
@@ -167,7 +173,7 @@ export interface RouteContext {
  *     mail, and a company without an address has nowhere to mail it).
  */
 export type UnderlagRoute =
-  | { kind: 'portal'; vendor: string; url: string; note: string | null }
+  | { kind: 'portal'; vendor: string; url: string; note: string | null; id?: string | null }
   | { kind: 'photo'; whatsapp: boolean }
   | { kind: 'intake'; address: string }
   | { kind: 'unknown' }
@@ -234,6 +240,19 @@ export function missingDecision(
     route,
     actions: actions.filter((a): a is MissingAction => a !== null).slice(0, MAX_MISSING_ACTIONS),
   }
+}
+
+/**
+ * Whether the focus view offers "Fakturan finns i en portal": a purchase
+ * with no portal yet, from someone who could keep an invoice behind a
+ * login. Salary, tax and the like have no invoice, and a purchase that names
+ * nobody has no supplier to save it for. The server holds the same rule
+ * (lib/inkorg/portal-service.ts) and has the last word.
+ */
+export function canAddPortal(purchase: Pick<MissingPurchase, 'merchant_name' | 'description' | 'portal'>): boolean {
+  if (purchase.portal) return false
+  const descriptor = purchaseName(purchase)
+  return descriptor !== null && canHaveEmailReceipt(descriptor)
 }
 
 // ---------------------------------------------------------------------------

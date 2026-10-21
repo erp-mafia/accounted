@@ -768,6 +768,12 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
     [`POST ${V}/inbox-items/:id/match-transaction`, 'gnubok_link_document_to_voucher'],
     'the receipt that came with an invoice lands on the invoice\'s booking: matched to its booked bank row, or its document linked to the verifikat',
   ),
+  // The company's own supplier portals: where a supplier keeps its invoices
+  // behind a login. Kvittojakten's worklist reads them (portal, next_step);
+  // no machine door adds or changes one yet.
+  'POST /api/inkorg/portals': gap('P3', 'add a supplier portal from a purchase (read back through gnubok_receipt_hunt_worklist portal)'),
+  'PATCH /api/inkorg/portals/:id': gap('P3'),
+  'DELETE /api/inkorg/portals/:id': gap('P3'),
   'POST /api/extensions/ext/invoice-inbox/items/:id/book-direct': covered(['gnubok_bulk_book_inbox_items'], 'batch of one; items without a matched bank row have no API'),
   'POST /api/extensions/ext/invoice-inbox/items/:id/suggest-booking': covered(['gnubok_suggest_categories']),
   'POST /api/extensions/ext/invoice-inbox/items/bulk-book': covered(['gnubok_bulk_book_inbox_items']),
@@ -825,4 +831,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 140
+export const GAP_CEILING = 143

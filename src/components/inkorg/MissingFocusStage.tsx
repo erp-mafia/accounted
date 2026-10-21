@@ -5,7 +5,9 @@ import { useLocale, useTranslations } from 'next-intl'
 import { Check, ExternalLink, Upload } from 'lucide-react'
 import { Button, type ButtonProps } from '@/components/ui/button'
 import { INBOX_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import {
+  canAddPortal,
   dragCarriesFiles,
   purchaseDisplay,
   type AiHandoff,
@@ -18,6 +20,7 @@ import { cn, formatCurrency } from '@/lib/utils'
 import { shortDate } from '@/lib/inkorg/dates'
 import { BrandMark } from '@/components/parties/BrandMark'
 import { FetchWithAiButton } from './FetchWithAiButton'
+import { PortalLinkForm } from './PortalLinkForm'
 
 /**
  * One purchase without underlag in focus, laid out like a document in
@@ -26,6 +29,11 @@ import { FetchWithAiButton } from './FetchWithAiButton'
  * who was paid, the one question, the line that says where the underlag
  * will come from, and at most three answers. The whole stage takes a
  * dropped file. On a phone the question comes first.
+ *
+ * Under the answers of a purchase with no portal, one quiet link says the
+ * invoice is in a portal: it opens the one field for the link in place, and
+ * saving it makes the portal the purchase's first answer, and the answer of
+ * every other purchase from the same supplier.
  */
 export function MissingFocusStage({
   purchase,
@@ -34,6 +42,7 @@ export function MissingFocusStage({
   busy,
   finishing,
   onFiles,
+  onAddPortal,
 }: {
   purchase: MissingPurchase
   decision: MissingDecision
@@ -43,11 +52,15 @@ export function MissingFocusStage({
   /** It just got its underlag: "Klart" sits over it while it leaves. */
   finishing: boolean
   onFiles: (files: File[]) => void
+  /** Saves the purchase's supplier as a portal at this link; resolves true when it was saved. */
+  onAddPortal?: (url: string) => Promise<boolean>
 }) {
   const t = useTranslations('inkorg')
   const locale = useLocale()
   const inputRef = useRef<HTMLInputElement | null>(null)
   const [dragging, setDragging] = useState(false)
+  const [addingPortal, setAddingPortal] = useState(false)
+  const portalOffered = !!onAddPortal && decision.route.kind !== 'portal' && canAddPortal(purchase)
   const { name, vendor, bankText } = purchaseDisplay(purchase)
   const date = shortDate(purchase.date, locale)
   const meta = [date, bankText].filter(Boolean).join(' · ')
@@ -180,6 +193,24 @@ export function MissingFocusStage({
                 )}
               </div>
             )}
+            {portalOffered &&
+              onAddPortal &&
+              (addingPortal ? (
+                <PortalLinkForm
+                  onSave={async (url) => {
+                    const saved = await onAddPortal(url)
+                    if (saved) setAddingPortal(false)
+                    return saved
+                  }}
+                  onCancel={() => setAddingPortal(false)}
+                />
+              ) : (
+                <div className="flex">
+                  <button type="button" onClick={() => setAddingPortal(true)} className={QUIET_LINK_CLASS}>
+                    {t('portal_add')}
+                  </button>
+                </div>
+              ))}
           </section>
         </div>
       </div>
