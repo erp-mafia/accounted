@@ -83,6 +83,14 @@ vi.mock('@/lib/processing-history/append', () => ({
   appendProcessingHistory: mockAppendProcessingHistory,
 }))
 
+// The befarad kundförlust reserve release after a payment: mocked so it takes
+// no slot in the queued Supabase mock; its own behaviour is pinned by
+// lib/customer-loss/__tests__/services.test.ts.
+const { mockReleaseReserve } = vi.hoisted(() => ({ mockReleaseReserve: vi.fn() }))
+vi.mock('@/lib/customer-loss/doubtful', () => ({
+  releaseDoubtfulReserveAfterChange: mockReleaseReserve,
+}))
+
 import { commitPendingOperation } from '../commit'
 
 const TX_ID = '11111111-1111-4111-8111-111111111111'
@@ -565,6 +573,13 @@ describe('commitPendingOperation: match_batch_allocate events', () => {
       paymentDate: '2026-05-21',
       userId: 'user-1',
       companyId: 'company-1',
+    })
+    // A befarad kundförlust reserve the payment made unnecessary comes back,
+    // dated at the bank transaction.
+    expect(mockReleaseReserve).toHaveBeenCalledWith(supabase, 'company-1', 'user-1', {
+      invoiceId: INV_ID,
+      entryDate: '2026-05-21',
+      trigger: 'payment',
     })
   })
 })

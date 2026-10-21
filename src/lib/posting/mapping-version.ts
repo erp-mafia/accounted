@@ -46,7 +46,8 @@ import { currentAppVersion } from '@/lib/reports/app-version'
  * lines (the 1510 clearing with its kursdifferens, 3740 öresavrundning and
  * 2420 advance, and the kontantmetoden payment verifikat that books the sale
  * at payment: buildInvoicePaymentLines in lib/bookkeeping/invoice-entries.ts,
- * buildInvoiceCashLines in lib/bookkeeping/invoice-lines.ts and
+ * buildInvoiceCashLines and its pro-rata installment buildInvoiceCashPartialLines
+ * in lib/bookkeeping/invoice-lines.ts and
  * buildInvoiceMatchClearingLines in lib/bookkeeping/invoice-payment-lines.ts;
  * a person's own rows name no rule), the ROT/RUT verifikat (Skatteverket's
  * payout against 1513 with its 3740 öre, the refused share back to 1510 and
@@ -109,6 +110,14 @@ export const MAPPING_SOURCES = {
   // (44xx/45xx and 4598) a reverse-charge verifikat lacks per momssats, added
   // to its lines by correction.
   vatRcBasisFix: 'se.vat-rc-basis-fix',
+  // A collections provider's payout verifikat (lib/collections/
+  // settlement-posting.ts planSettlementVoucher): the bank leg, the
+  // clearing account and the fee, interest and reminder fee lines.
+  collectionsSettlement: 'se.collections-settlement-lines',
+  // A kundförlust decision's verifikat (lib/customer-loss): the befarad
+  // reserve and its release, the konstaterad write-off with its moms per
+  // rate, and a recovery.
+  customerLoss: 'se.customer-loss-lines',
 } as const
 
 export type MappingSource = keyof typeof MAPPING_SOURCES

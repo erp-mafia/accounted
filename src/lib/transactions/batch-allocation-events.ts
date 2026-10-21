@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { releaseDoubtfulReserveAfterChange } from '@/lib/customer-loss/doubtful'
 import { eventBus } from '@/lib/events/bus'
 import {
   emitInvoicePaidIfSettled,
@@ -91,6 +92,13 @@ export async function emitBatchAllocationEvents(
             companyId,
           })
         }
+        // A befarad kundförlust reserve the payment made unnecessary comes
+        // back (Dr 1519 / Cr 6352), as on every other payment path. Never throws.
+        await releaseDoubtfulReserveAfterChange(supabase, companyId, userId, {
+          invoiceId: alloc.invoice_id,
+          entryDate: tx.date,
+          trigger: 'payment',
+        })
       } else if (alloc.kind === 'supplier_invoice' && alloc.supplier_invoice_id) {
         const { data: supplierInvoice } = await supabase
           .from('supplier_invoices')

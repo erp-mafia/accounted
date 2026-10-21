@@ -28,6 +28,7 @@
  * resolved preview before commit. Skip the flag here; document it.
  */
 import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
+import { releaseDoubtfulReserveAfterChange } from '@/lib/customer-loss/doubtful'
 import { z } from 'zod'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { ok } from '@/lib/api/v1/response'
@@ -954,6 +955,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       paymentDate: transaction.date,
       userId: ctx.userId,
       companyId: ctx.companyId!,
+    })
+    // A befarad kundförlust reserve the payment made unnecessary comes back
+    // (Dr 1519 / Cr 6352), as on every payment path. Never throws.
+    await releaseDoubtfulReserveAfterChange(ctx.supabase, ctx.companyId!, ctx.userId, {
+      invoiceId: invoice.id,
+      entryDate: transaction.date,
+      trigger: 'payment',
     })
 
     return ok(

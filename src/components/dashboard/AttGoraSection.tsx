@@ -11,7 +11,7 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { useFormat } from '@/lib/hooks/use-format'
 import { switchDeepLink } from '@/lib/bank-feed/switch-link'
-import { useCapability } from '@/contexts/CompanyContext'
+import { useCapability, useCompany } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { visibleWorklistTotal } from '@/lib/worklist/visible-total'
 import type { AiTaskCategory } from '@/lib/worklist/ai-task'
@@ -27,7 +27,10 @@ import { SuggestionCards } from './SuggestionCards'
 import { GrantPostings } from './GrantPostings'
 import type { GrantReview } from '@/lib/grants/types'
 import type { OpenSuggestion } from '@/lib/suggestions/types'
-import { BATCH_REVIEW_HREF } from '@/lib/collections/batch-dialog'
+import { BATCH_REVIEW_HREF, batchRowKey } from '@/lib/collections/batch-dialog'
+import { HandoverBatchDialog } from '@/components/collections/HandoverBatchDialog'
+import { usePendingCollectionsRun } from '@/components/collections/collections-run-client'
+import { capitalizeFirst } from '@/components/collections/collections-client'
 import {
   ArrowLeftRight,
   BookOpen,
@@ -47,6 +50,7 @@ import {
   Stamp,
   FileQuestion,
   Gavel,
+  Banknote,
 } from 'lucide-react'
 import type {
   BankSwitchDue,
@@ -193,9 +197,14 @@ interface WorklistRowProps {
   badge?: React.ReactNode
   /** The row's own control (the "Gör i Claude" pill); sits above the stretched link. */
   action?: React.ReactNode
+  /**
+   * Open the row's work in place (a dialog) instead of following the link;
+   * the link stays for a new tab and as the fallback.
+   */
+  onSelect?: () => void
 }
 
-function WorklistRow({ href, icon: Icon, label, detail, hint, count, badge, action }: WorklistRowProps) {
+function WorklistRow({ href, icon: Icon, label, detail, hint, count, badge, action, onSelect }: WorklistRowProps) {
   // The label is the link, stretched over the row with a pseudo-element, so
   // the pill can be a real button beside it instead of a button inside an
   // anchor. The pill sits above the stretched area (relative z-10).
@@ -206,7 +215,20 @@ function WorklistRow({ href, icon: Icon, label, detail, hint, count, badge, acti
       </span>
       <div className="min-w-0 flex-1">
         <p className="truncate text-[13px]">
-          <Link href={href} title={hint} className="after:absolute after:inset-0 focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-ring">
+          <Link
+            href={href}
+            title={hint}
+            onClick={
+              onSelect
+                ? (e) => {
+                    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return
+                    e.preventDefault()
+                    onSelect()
+                  }
+                : undefined
+            }
+            className="after:absolute after:inset-0 focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-ring"
+          >
             {label}
           </Link>
         </p>
@@ -259,6 +281,7 @@ export default function AttGoraSection({
   showKopplingar = false,
 }: AttGoraSectionProps) {
   const t = useTranslations('dashboard')
+  const tCollections = useTranslations('collections')
   const tAttest = useTranslations('att_gora_attest')
   const router = useRouter()
   const { formatDateLong } = useFormat()
@@ -268,6 +291,11 @@ export default function AttGoraSection({
   const hasAi = useCapability(CAPABILITY.ai)
 
   const [counts, setCounts] = useState(worklist.counts)
+  // The daily collections run: a collections row that opens its review
+  // dialog in place, named for the step it proposes, never an agent proposal.
+  const { company } = useCompany()
+  const collectionsRun = usePendingCollectionsRun(company?.id, counts.collection_batch_ready > 0)
+  const [collectionsRunOpen, setCollectionsRunOpen] = useState(false)
   const [total, setTotal] = useState(worklist.total)
   // The grouped overdue row's facts, refreshed with the counts so its
   // count, amount and date never disagree.
@@ -349,6 +377,8 @@ export default function AttGoraSection({
     counts.peppol_delivery_failed > 0 ||
     counts.collection_decision > 0 ||
     counts.collection_attention > 0 ||
+    counts.collection_settlements_to_book > 0 ||
+    counts.collected_payments_to_book > 0 ||
     counts.collection_batch_ready > 0
   // The switch rows: urgent ones (inside 14 days, or past the deadline) lead
   // the list under their own band; the rest wait in Bevaka with the other
@@ -762,13 +792,33 @@ export default function AttGoraSection({
                         count={counts.collection_attention}
                       />
                     )}
+                    {counts.collection_settlements_to_book > 0 && (
+                      <WorklistRow
+                        href="/invoices/settlements"
+                        icon={Banknote}
+                        label={t('row_collection_settlements_to_book')}
+                        hint={t('row_collection_settlements_to_book_detail')}
+                        count={counts.collection_settlements_to_book}
+                      />
+                    )}
+                    {counts.collected_payments_to_book > 0 && (
+                      <WorklistRow
+                        href="/invoices/settlements"
+                        icon={Banknote}
+                        label={t('row_collected_payments_to_book')}
+                        hint={t('row_collected_payments_to_book_detail')}
+                        count={counts.collected_payments_to_book}
+                      />
+                    )}
                     {counts.collection_batch_ready > 0 && (
                       <WorklistRow
                         href={BATCH_REVIEW_HREF}
+                        onSelect={collectionsRun.run ? () => setCollectionsRunOpen(true) : undefined}
                         icon={Gavel}
-                        label={t('row_collection_batch')}
+                        label={capitalizeFirst(
+                          tCollections(batchRowKey(collectionsRun.run?.items ?? []), { count: counts.collection_batch_ready }),
+                        )}
                         hint={t('row_collection_batch_cta')}
-                        count={counts.collection_batch_ready}
                       />
                     )}
                   </div>
@@ -891,6 +941,18 @@ export default function AttGoraSection({
           hasBank={hasActiveBankConnection}
           hasSkatteverket={hasSkatteverketConnection}
           skvOmbudEnabled={skvOmbudEnabled}
+        />
+      )}
+      {collectionsRun.run && collectionsRunOpen && (
+        <HandoverBatchDialog
+          key={collectionsRun.run.id}
+          operationId={collectionsRun.run.id}
+          open={collectionsRunOpen}
+          onOpenChange={setCollectionsRunOpen}
+          onCommitted={() => {
+            void collectionsRun.reload()
+            void refetchCounts()
+          }}
         />
       )}
       {allocating && (

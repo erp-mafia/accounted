@@ -322,7 +322,17 @@ export type CustomerType =
   | 'non_eu_business'   // Non-EU company
 
 // Invoice status
-export type InvoiceStatus = 'draft' | 'sent' | 'paid' | 'partially_paid' | 'overdue' | 'cancelled' | 'credited'
+// 'written_off': a konstaterad kundförlust removed the claim from 1510
+// (lib/customer-loss). Entered and left only through record_invoice_write_off.
+export type InvoiceStatus =
+  | 'draft'
+  | 'sent'
+  | 'paid'
+  | 'partially_paid'
+  | 'overdue'
+  | 'cancelled'
+  | 'credited'
+  | 'written_off'
 
 // Invoice document type
 export type InvoiceDocumentType = 'invoice' | 'proforma' | 'delivery_note' | 'quote'
@@ -2139,6 +2149,14 @@ export type JournalEntrySourceType =
   // One point-of-sale business day booked as its daily takings voucher
   // (gemensam verifikation, BFL 5 kap 6 §). lib/pos-sales/book-day.ts.
   | 'pos_daily_sales'
+  // A collections provider's payout: the payout account against the clearing
+  // account the collected payments were booked to, plus the provider's
+  // deductions. lib/collections/settlements.ts.
+  | 'collection_settlement'
+  // Kundförlust: befarad reserve (6352/1519) and its release, konstaterad
+  // write-off (6351 + 26xx / 1510) and a recovery (3950 + 26xx).
+  // lib/customer-loss.
+  | 'customer_loss'
   // A migrated invoice's household deduction moved from 1510 onto 1513
   // (debit 1513 / credit 1510), the claim on Skatteverket an invoice issued
   // here books on day one. lib/invoices/migrated-deduction-apply.ts.

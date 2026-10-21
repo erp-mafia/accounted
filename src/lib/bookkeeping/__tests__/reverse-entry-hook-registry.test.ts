@@ -144,7 +144,7 @@ describe('reverseEntry: a missing required hook refuses the storno', () => {
 })
 
 describe('reverseEntry: running the registered hooks', () => {
-  it('hands each hook the client, the company and the original as read', async () => {
+  it('hands each hook the client, the company, the actor and the original as read', async () => {
     const original = originalOf('manual')
     const client = clientFor(original)
     const seen: unknown[] = []
@@ -157,7 +157,16 @@ describe('reverseEntry: running the registered hooks', () => {
     })
     await reverseEntry(client as never, 'company-1', 'user-1', 'entry-1')
     expect(seen).toHaveLength(2)
-    for (const ctx of seen) expect(ctx).toEqual({ supabase: client, companyId: 'company-1', entry: original })
+    expect(seen[0]).toEqual({ supabase: client, companyId: 'company-1', userId: 'user-1', entry: original })
+    // afterReversal also gets the storno it follows.
+    expect(seen[1]).toEqual({
+      supabase: client,
+      companyId: 'company-1',
+      userId: 'user-1',
+      entry: original,
+      // The mocked insert answers no entry_date.
+      storno: { id: 'reversal-1', entry_date: undefined },
+    })
     expect((seen[0] as { entry: unknown }).entry).toBe(original)
   })
 

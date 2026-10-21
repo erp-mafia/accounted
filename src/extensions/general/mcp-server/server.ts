@@ -8738,8 +8738,8 @@ export const tools: McpTool[] = [
       properties: {
         status: {
           type: 'string',
-          enum: ['draft', 'sent', 'paid', 'partially_paid', 'overdue', 'cancelled', 'credited'],
-          description: 'overdue = past due_date with remaining_amount > 0, partially_paid included',
+          enum: ['draft', 'sent', 'paid', 'partially_paid', 'overdue', 'cancelled', 'credited', 'written_off'],
+          description: 'overdue: past due_date, remaining_amount > 0, partially_paid included',
         },
         document_type: {
           type: 'string',

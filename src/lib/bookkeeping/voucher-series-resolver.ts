@@ -154,6 +154,7 @@ export const STANDARD_VOUCHER_SERIES_MAP: Readonly<Record<JournalEntrySourceType
   invoice_cash_payment: 'C',
   rot_rut_payout: 'C',
   rot_rut_reclaim: 'C',
+  collection_settlement: 'C',
   rot_rut_reclassification: 'C',
   supplier_invoice_registered: 'D',
   supplier_credit_note: 'D',
@@ -177,6 +178,9 @@ export const STANDARD_VOUCHER_SERIES_MAP: Readonly<Record<JournalEntrySourceType
   stripe_payout: 'A',
   expense_claim: 'A',
   expense_payout: 'A',
+  // Kundförlust adjusts kundfordringar already booked in B and C; it is
+  // neither a kundfaktura nor an inbetalning, so the general series.
+  customer_loss: 'A',
 }
 
 /**

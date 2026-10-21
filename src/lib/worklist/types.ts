@@ -213,7 +213,10 @@ export const WORKLIST_CATEGORIES = [
    * the company's decision ("N inkassoärenden väntar på ditt beslut"): the
    * next step to approve, a dispute, the customer's "already paid", legal
    * action.
-   * Pending:  collection_cases open with stage 'awaiting_decision'.
+   * Pending:  collection_cases open with stage 'awaiting_decision', less
+   *           those the pending daily batch proposes (an approve_step item
+   *           still in it counts in collection_batch_ready, so an invoice is
+   *           counted once; lib/collections/batch.ts collectionWorkCounts).
    * Done:     the stage leaves 'awaiting_decision' (the company decided, or
    *           the provider moved on), read by the sync or the invoice page.
    */
@@ -236,11 +239,34 @@ export const WORKLIST_CATEGORIES = [
    */
   'collection_attention',
   /**
+   * Payouts from the collections provider to book ("Utbetalningar från
+   * inkasso att bokföra"): booking waits for a click until the company turns
+   * on automatic booking, and a payout the ledger could not book on its own
+   * waits for a person (a line it cannot place, VAT it does not deduct on
+   * its own, a possible duplicate of a payout booked by hand, a reversed
+   * payout voucher). The Avräkningar page counts the same statuses.
+   * Pending:  collection_settlements with status 'received' or 'needs_mapping'.
+   * Done:     the payout is booked, or a person marks it handled elsewhere
+   *           (status booked or ignored), in Avräkningar.
+   */
+  'collection_settlements_to_book',
+  /**
+   * Payments a debtor made to the collections provider, to book ("Inbetalningar
+   * via inkasso att bokföra"): not booked yet (booking waits for a click until
+   * the company turns on automatic booking), or refused by the books (a
+   * locked period, an invoice already paid, another currency).
+   * Pending:  collection_collected_payments with status 'pending' or 'needs_review'.
+   * Done:     the payment is booked in Avräkningar (status booked).
+   */
+  'collected_payments_to_book',
+  /**
    * The day's collections batch waiting for an administrator ("N förfallna
    * fakturor att skicka vidare via {provider}"): the items of the one pending
    * collections_daily_batch operation the ladder cron staged. Counted here,
    * not under pending_operations.
-   * Pending:  a collections_daily_batch operation with status 'pending'.
+   * Pending:  a collections_daily_batch operation with status 'pending':
+   *           its items less those an administrator took out, the decisions
+   *           it proposes included.
    * Done:     an administrator approved or rejected it, or the cron rejected
    *           it after 72 hours.
    */

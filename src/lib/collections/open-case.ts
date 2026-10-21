@@ -17,6 +17,7 @@ import { CONNECTOR_PROTOCOL_ERROR_CODE } from '@/lib/connect/instance/connector-
 import { seedForwardsAtRegistration } from './forwarding'
 import { isCollectionsError, type CollectionsError } from './errors'
 import { bankCheckSnapshot, type BankCheckResult } from './bank-check'
+import { resolveStartStep, startStepRefusalCode, startStepsFor } from './start-step'
 import type { Eligibility } from './eligibility'
 import { debtorCountryCode, normalizeOrgNumberDigits } from './eligibility'
 import {
@@ -378,10 +379,11 @@ export async function openCollectionCase(deps: CollectionsServiceDeps, input: Op
   if (problem) return problem
   const priorPayments = priorPaymentsFor(ctx)
   if (!priorPayments) return refusal('COLLECTION_PAYMENT_HISTORY_UNSUPPORTED')
-  const startStep = input.startStep ?? connection.default_start_step
   const features = provider?.features
-  if (features && !features.startSteps.includes(startStep)) {
-    return refusal('COLLECTION_START_STEP_UNAVAILABLE', { start_step: startStep })
+  const steps = startStepsFor(features?.startSteps ?? ['reminder', 'collection'], ctx.eligibility.reminderFeeAgreed)
+  const startStep = input.startStep ?? resolveStartStep(connection.default_start_step, steps) ?? connection.default_start_step
+  if (!steps.includes(startStep)) {
+    return refusal(startStepRefusalCode(startStep, ctx.eligibility.reminderFeeAgreed), { start_step: startStep })
   }
   if (input.dryRun) return { ok: true, dryRun: true, preview: previewOf(ctx, startStep, connection) }
 

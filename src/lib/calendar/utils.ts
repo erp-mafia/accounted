@@ -117,7 +117,7 @@ export function createPaymentCalendarDay(date: string, invoices: Invoice[]): Pay
   const dayInvoices = invoices.filter(inv => inv.due_date === date)
   const overdueCount = dayInvoices.filter(isInvoiceOverdue).length
   const totalExpected = dayInvoices
-    .filter(inv => inv.status !== 'paid' && inv.status !== 'cancelled' && inv.status !== 'credited')
+    .filter(inv => inv.status !== 'paid' && inv.status !== 'cancelled' && inv.status !== 'credited' && inv.status !== 'written_off')
     .reduce((sum, inv) => sum + (invoiceSekAmount(inv) ?? 0), 0)
 
   return {
@@ -156,7 +156,7 @@ export function calculatePeriodSummary(invoices: Invoice[]): PeriodSummary {
     if (invoice.status === 'paid') {
       totalPaid += amount ?? 0
       paidCount++
-    } else if (invoice.status !== 'cancelled' && invoice.status !== 'credited') {
+    } else if (invoice.status !== 'cancelled' && invoice.status !== 'credited' && invoice.status !== 'written_off') {
       totalExpected += amount ?? 0
       pendingCount++
 

@@ -7,7 +7,7 @@
     ]
   },
   "naiveOreRound": {
-    "count": 588
+    "count": 503
   },
   "handRolledInvariants": {
     "count": 103
@@ -25,14 +25,10 @@
     ]
   },
   "dialogOverflowRisk": {
-    "count": 6,
+    "count": 2,
     "files": [
-      "app/(dashboard)/supplier-invoices/[id]/page.tsx",
       "components/bookkeeping/JournalEntryForm.tsx",
-      "components/invoices/PaymentBookingDialog.tsx",
-      "components/invoices/SendInvoiceDialog.tsx",
-      "components/salary/NewEmployeeDialog.tsx",
-      "components/transactions/InvoiceMatchDialog.tsx"
+      "components/salary/NewEmployeeDialog.tsx"
     ]
   },
   "rawReferenceFetch": {
@@ -247,7 +243,7 @@
     ]
   },
   "basAccountLiteral": {
-    "count": 1480,
+    "count": 1502,
     "files": {
       "app/(dashboard)/assets/[id]/dispose/page.tsx": 1,
       "app/(dashboard)/bookkeeping/year-end/periodisering/page.tsx": 11,
@@ -255,12 +251,13 @@
       "app/api/bank/open-payments/connections/[id]/select/route.ts": 1,
       "app/api/bookkeeping/fiscal-periods/[id]/accruals/route.ts": 12,
       "app/api/import/bank-file/execute/route.ts": 1,
+      "app/api/invoices/[id]/customer-loss/route.ts": 1,
       "app/api/koppla/[token]/connections/[id]/select/route.ts": 1,
       "app/api/reports/vat-declaration/rc-basis-gaps/fix/route.ts": 7,
       "app/api/sandbox/seed/ledger-history.ts": 46,
-      "app/api/sandbox/seed/pending-operations.ts": 10,
+      "app/api/sandbox/seed/pending-operations.ts": 8,
       "app/api/sandbox/seed/representation.ts": 1,
-      "app/api/sandbox/seed/route.ts": 17,
+      "app/api/sandbox/seed/route.ts": 16,
       "app/api/sandbox/seed/salary-vouchers.ts": 1,
       "app/api/sandbox/seed/salary.ts": 1,
       "app/api/v1/companies/[companyId]/accounts/route.ts": 5,
@@ -283,6 +280,7 @@
       "components/bank-feed/account-selection.ts": 1,
       "components/bookkeeping/AccrualPeriodControl.tsx": 11,
       "components/bookkeeping/year-end/AccrualsStep.tsx": 7,
+      "components/customer-loss/RecoveredLossDialog.tsx": 2,
       "components/dimensions/BulkTagWorkbench.tsx": 2,
       "components/extensions/general/BookDirectlyDialog.tsx": 5,
       "components/extensions/general/RegisterExpenseDialog.tsx": 2,
@@ -349,7 +347,7 @@
       "lib/bookkeeping/form-accounts.ts": 3,
       "lib/bookkeeping/invoice-accounts.ts": 17,
       "lib/bookkeeping/invoice-entries.ts": 5,
-      "lib/bookkeeping/invoice-lines.ts": 4,
+      "lib/bookkeeping/invoice-lines.ts": 6,
       "lib/bookkeeping/invoice-payment-lines.ts": 2,
       "lib/bookkeeping/mapping-engine.ts": 8,
       "lib/bookkeeping/ore-rounding.ts": 2,
@@ -377,13 +375,17 @@
       "lib/cash-accounts/resolve-account.ts": 2,
       "lib/cash-accounts/selection-refusal.ts": 1,
       "lib/cash-accounts/service.ts": 3,
-      "lib/collections/activation-form.ts": 1,
+      "lib/collections/activation-form.ts": 4,
+      "lib/collections/settlement-posting.ts": 10,
+      "lib/collections/settlements-ui.ts": 2,
+      "lib/collections/settlements.ts": 1,
       "lib/core/bookkeeping/journal-entry-corrections.ts": 3,
-      "lib/core/bookkeeping/kontantmetod-cutoff.ts": 7,
       "lib/core/bookkeeping/prior-result-guard.ts": 2,
       "lib/core/bookkeeping/result-appropriation-repair.ts": 2,
       "lib/core/bookkeeping/result-appropriation-service.ts": 2,
       "lib/core/bookkeeping/year-end-service.ts": 3,
+      "lib/customer-loss/amounts.ts": 9,
+      "lib/customer-loss/state.ts": 1,
       "lib/docs/content/cli.ts": 3,
       "lib/docs/content/cookbook/ingest-bank-transactions.ts": 6,
       "lib/docs/content/cookbook/onboard-payroll-customer.ts": 3,
@@ -406,6 +408,7 @@
       "lib/import/sie-preview-mappings.ts": 1,
       "lib/import/theater-model.ts": 2,
       "lib/invoices/apply-invoice-payment.ts": 1,
+      "lib/invoices/invoice-match-suggestion.ts": 2,
       "lib/invoices/invoice-payee.ts": 3,
       "lib/invoices/issuance-custom-lines.ts": 1,
       "lib/invoices/link-migrated-registration-vouchers.ts": 1,
@@ -420,6 +423,8 @@
       "lib/operations/arsredovisning.ts": 1,
       "lib/operations/bank-feed.ts": 1,
       "lib/operations/cash-accounts.ts": 2,
+      "lib/operations/collections-booking.ts": 3,
+      "lib/operations/customer-loss.ts": 1,
       "lib/operations/dimension-rules.ts": 3,
       "lib/operations/expense-claims.ts": 6,
       "lib/operations/filing-reports.ts": 22,
@@ -448,7 +453,6 @@
       "lib/reports/kpi-definitions.ts": 8,
       "lib/reports/kpi.ts": 5,
       "lib/reports/monthly-breakdown.ts": 1,
-      "lib/reports/periodisk-sammanstallning.ts": 3,
       "lib/reports/rc-basis-gaps.ts": 12,
       "lib/reports/sign-reclassification.ts": 6,
       "lib/reports/statement-reconciliation.ts": 3,
@@ -467,7 +471,6 @@
       "lib/tax/deadline-config.ts": 1,
       "lib/transactions/category-suggestions.ts": 16,
       "lib/transactions/invoice-match-side.ts": 4,
-      "lib/invoices/invoice-match-suggestion.ts": 2,
       "lib/transactions/underlag-read.ts": 1,
       "lib/vat/account-vat-box.ts": 2,
       "lib/vat/account-vat-treatment.ts": 1,
@@ -476,7 +479,7 @@
     }
   },
   "sekLiteral": {
-    "count": 256,
+    "count": 259,
     "files": {
       "app/(dashboard)/bookkeeping/[id]/page.tsx": 2,
       "app/(dashboard)/deadlines/page.tsx": 1,
@@ -502,7 +505,6 @@
       "components/bookkeeping/JournalEntryForm.tsx": 4,
       "components/bookkeeping/JournalEntryList.tsx": 1,
       "components/bookkeeping/StrikeLinesDialog.tsx": 1,
-      "components/dashboard/AttGoraSection.tsx": 1,
       "components/extensions/general/BookDirectlyDialog.tsx": 6,
       "components/extensions/general/RegisterExpenseDialog.tsx": 1,
       "components/import/register-import-config.tsx": 1,
@@ -517,7 +519,6 @@
       "components/pending-operations/OperationPreview.tsx": 1,
       "components/reconciliation/AccountOverview.tsx": 1,
       "components/reconciliation/ManualMatchMode.tsx": 1,
-      "components/reconciliation/ReconciliationTable.tsx": 1,
       "components/settings/InvoicePaymentAccountsSettings.tsx": 5,
       "components/supplier-invoices/NewSupplierInvoiceForm.tsx": 6,
       "components/supplier-invoices/SupplierPaymentDialog.tsx": 1,
@@ -549,6 +550,7 @@
       "lib/bokslut/accruals/auto-detect.ts": 1,
       "lib/bokslut/arsredovisning/eligibility.ts": 1,
       "lib/bookkeeping/book-direct-prefill.ts": 3,
+      "lib/bookkeeping/booking-mode.ts": 1,
       "lib/bookkeeping/category-mapping.ts": 1,
       "lib/bookkeeping/invoice-lines.ts": 4,
       "lib/bookkeeping/invoice-payment-lines.ts": 2,
@@ -567,8 +569,11 @@
       "lib/cash-accounts/invoice-payee.ts": 1,
       "lib/cash-accounts/invoice-payment-accounts.ts": 3,
       "lib/cash-accounts/primary.ts": 1,
+      "lib/collections/collected-payments.ts": 1,
+      "lib/collections/settlement-posting.ts": 1,
       "lib/core/bookkeeping/journal-entry-corrections.ts": 1,
       "lib/core/bookkeeping/kontantmetod-cutoff.ts": 1,
+      "lib/customer-loss/eligibility.ts": 2,
       "lib/documents/underlag-bank-candidates.ts": 3,
       "lib/expenses/expense-claim-actions.ts": 2,
       "lib/expenses/expense-claim-vat.ts": 1,

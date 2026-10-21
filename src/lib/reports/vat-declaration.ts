@@ -7,9 +7,13 @@ import type {
 } from '@/types'
 import { ORE_ROUNDING_ACCOUNT } from '@/lib/money'
 import { VAT_ACCOUNT_TABLE } from '@/lib/vat/moms-box-mapping'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { VatCheckAccountTotals } from './vat-declaration-checks'
 import { rcBasisTotalsByRate } from './vat-filing-gate'
 import { fetchDynamicVatAccounts, type DynamicVatAccounts } from './vat-revenue-accounts'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('reports/vat-declaration')
 
 /**
  * Calculate VAT declaration (Momsdeklaration) for a given period.
@@ -615,6 +619,158 @@ const NON_TURNOVER_REVENUE_ACCOUNTS: ReadonlySet<string> = new Set([
 ])
 
 /**
+ * 3950 Återvunna, tidigare avskrivna kundfordringar. A recovery booked by
+ * lib/customer-loss reaches ruta 05 through the customer-loss rule below (its
+ * recorded base), so only that part of the account's balance is left out of
+ * the REVENUE_ACCOUNT_WITHOUT_RUTA warning; 3950 booked any other way (by
+ * hand, say) is warned about as before.
+ */
+const CUSTOMER_LOSS_RECOVERY_ACCOUNT = '3950'
+
+/**
+ * The kundförlust rule for rutorna 05 to 08 (build spec 4.2 G and H, ML 8 kap
+ * 16 § and 7 kap 43 §).
+ *
+ * A konstaterad kundförlust reduces the beskattningsunderlag as well as the
+ * output VAT, and a recovery reports both again. The voucher moves the VAT
+ * on 26xx (rutorna 10 to 12) but books the net on 6351 and 3950, which no
+ * class-3 sum sees. So the declaration reads the per-account bases the
+ * decision recorded (invoice_write_offs.vat_by_rate[].base, checked against
+ * the voucher by record_invoice_write_off), dated by the voucher: a
+ * konstaterad row lowers the base, a recovery raises it, and the annulment a
+ * storno leaves undoes either in the storno's period. Each base goes back to
+ * the ruta its sale was declared in, read off the output VAT account: hyra
+ * under frivillig skattskyldighet (2613/2623/2633) to ruta 08, vinstmarginal
+ * (2616/2626/2636) to ruta 07, uttag (2612/2622/2632) to ruta 06, every
+ * other sale to ruta 05. Rows without a VAT share (export, reverse charge,
+ * exempt, or a never-booked kontantmetod invoice) carry no base and move
+ * nothing.
+ */
+export interface CustomerLossVatAdjustment {
+  ruta05: number
+  ruta06: number
+  ruta07: number
+  ruta08: number
+  /** The ruta 05 part per rate (the declaration's base25/12/6 breakdown). */
+  base25: number
+  base12: number
+  base6: number
+  /**
+   * The net the recoveries put on 3950 in the period, less what the
+   * annulment of a recovery took back: the part of 3950 this rule declares.
+   */
+  recoveredNet: number
+}
+
+/** The ruta of the sale behind an output VAT account (ruta 05 unless listed). */
+const CUSTOMER_LOSS_BASE_RUTA: Readonly<Record<string, 'ruta06' | 'ruta07' | 'ruta08'>> = {
+  '2612': 'ruta06', '2622': 'ruta06', '2632': 'ruta06',
+  '2616': 'ruta07', '2626': 'ruta07', '2636': 'ruta07',
+  '2613': 'ruta08', '2623': 'ruta08', '2633': 'ruta08',
+}
+
+interface CustomerLossVatRow {
+  kind: string
+  vat_by_rate: Array<{ account?: string; rate: number; vat?: number; base: number }> | null
+  /** On 3950 for a recovery (and copied onto its annulment). */
+  net_amount?: number | string | null
+  /** For an annulment: the kind of the decision it annuls. */
+  reversed_kind?: string | null
+}
+
+export function customerLossVatAdjustment(rows: CustomerLossVatRow[]): CustomerLossVatAdjustment {
+  const out: CustomerLossVatAdjustment = { ruta05: 0, ruta06: 0, ruta07: 0, ruta08: 0, base25: 0, base12: 0, base6: 0, recoveredNet: 0 }
+  for (const row of rows) {
+    const effective = row.kind === 'annulled' ? row.reversed_kind : row.kind
+    const sign =
+      effective === 'confirmed' ? -1 : effective === 'recovered' ? 1 : 0
+    if (sign === 0) continue
+    const direction = row.kind === 'annulled' ? -sign : sign
+    if (effective === 'recovered') out.recoveredNet = round(out.recoveredNet + direction * (Number(row.net_amount) || 0))
+    for (const share of row.vat_by_rate ?? []) {
+      const base = Number(share.base) || 0
+      if (base === 0) continue
+      const ruta = (share.account && CUSTOMER_LOSS_BASE_RUTA[share.account]) || 'ruta05'
+      out[ruta] = round(out[ruta] + direction * base)
+      if (ruta !== 'ruta05') continue
+      const bucket = share.rate === 25 ? 'base25' : share.rate === 12 ? 'base12' : share.rate === 6 ? 'base6' : null
+      if (bucket) out[bucket] = round(out[bucket] + direction * base)
+    }
+  }
+  return out
+}
+
+/** Adds a kundförlust adjustment to rutor projected from the ledger (05 to 08; 10 to 12 already moved with 26xx). */
+export function applyCustomerLossVatAdjustment<T extends { ruta05: number; ruta06: number; ruta07: number; ruta08: number }>(
+  rutor: T,
+  adjustment: CustomerLossVatAdjustment,
+): T {
+  rutor.ruta05 = round(rutor.ruta05 + adjustment.ruta05)
+  rutor.ruta06 = round(rutor.ruta06 + adjustment.ruta06)
+  rutor.ruta07 = round(rutor.ruta07 + adjustment.ruta07)
+  rutor.ruta08 = round(rutor.ruta08 + adjustment.ruta08)
+  return rutor
+}
+
+/**
+ * PostgREST's "table not in the schema cache" and Postgres' undefined_table:
+ * a deployment that serves before the invoice_write_offs migration applied.
+ */
+function isMissingTable(error: { code?: string } | null | undefined): boolean {
+  return error?.code === 'PGRST205' || error?.code === '42P01'
+}
+
+/**
+ * The kundförlust decisions dated in the period, with what each annulment
+ * annuls. Read on every declaration whatever CUSTOMER_LOSS_ENABLED says: a
+ * filed figure includes every decision that exists. A database without the
+ * table yet (the deployment ran ahead of its migration) holds no decisions:
+ * no rows, with a warning; any other failure throws.
+ */
+export async function fetchCustomerLossVatAdjustment(
+  supabase: SupabaseClient,
+  companyId: string,
+  start: string,
+  end: string,
+): Promise<CustomerLossVatAdjustment> {
+  let tableMissing = false
+  // Paged: a filed figure must never rest on PostgREST's silent row cap.
+  const rows = await fetchAllRows<CustomerLossVatRow & { id: string; reverses_id: string | null }>(async ({ from, to }) => {
+    const page = await supabase
+      .from('invoice_write_offs')
+      .select('id, kind, vat_by_rate, net_amount, reverses_id')
+      .eq('company_id', companyId)
+      .in('kind', ['confirmed', 'recovered', 'annulled'])
+      .gte('entry_date', start)
+      .lte('entry_date', end)
+      .order('id', { ascending: true })
+      .range(from, to)
+    if (isMissingTable(page.error)) {
+      tableMissing = true
+      return { data: [], error: null }
+    }
+    return page
+  })
+  if (tableMissing) {
+    log.warn('invoice_write_offs is missing: the momsdeklaration counts no kundförlust decisions until its migration is applied', { companyId })
+  }
+  const reversedIds = [...new Set(rows.filter((r) => r.kind === 'annulled' && r.reverses_id).map((r) => r.reverses_id as string))]
+  const reversedKind = new Map<string, string>()
+  for (let i = 0; i < reversedIds.length; i += 200) {
+    const { data: reversed, error: reversedError } = await supabase
+      .from('invoice_write_offs')
+      .select('id, kind')
+      .eq('company_id', companyId)
+      .in('id', reversedIds.slice(i, i + 200))
+    if (reversedError) throw new Error(`invoice_write_offs lookup failed: ${reversedError.message}`)
+    for (const r of (reversed ?? []) as Array<{ id: string; kind: string }>) reversedKind.set(r.id, r.kind)
+  }
+  return customerLossVatAdjustment(
+    rows.map((r) => ({ ...r, reversed_kind: r.reverses_id ? reversedKind.get(r.reverses_id) ?? null : null })),
+  )
+}
+
+/**
  * The class 3 accounts with a balance in the period that this declaration puts
  * in no ruta (#3387): no momskod, no momssats (configured or inferred) and not
  * in ACCOUNT_RUTA. Feeds the REVENUE_ACCOUNT_WITHOUT_RUTA warning.
@@ -637,13 +793,16 @@ const NON_TURNOVER_REVENUE_ACCOUNTS: ReadonlySet<string> = new Set([
 export function revenueAccountsWithoutRuta(
   totals: VatCheckAccountTotals,
   dynamicVatAccounts: Partial<Pick<DynamicVatAccounts, 'unconfiguredRevenueAccounts'>>,
+  /** The period's kundförlust adjustment: its recoveries on 3950 are declared through ruta 05 already. */
+  customerLoss?: Pick<CustomerLossVatAdjustment, 'recoveredNet'> | null,
 ): VatRevenueAccountWithoutRuta[] {
   const result: VatRevenueAccountWithoutRuta[] = []
   for (const [account, name] of dynamicVatAccounts.unconfiguredRevenueAccounts ?? []) {
     if (ACCOUNT_RUTA[account] || NON_TURNOVER_REVENUE_ACCOUNTS.has(account)) continue
     const t = totals.get(account)
     if (!t) continue
-    const amount = round(t.credit - t.debit)
+    const declaredElsewhere = account === CUSTOMER_LOSS_RECOVERY_ACCOUNT ? (customerLoss?.recoveredNet ?? 0) : 0
+    const amount = round(t.credit - t.debit - declaredElsewhere)
     if (amount === 0) continue
     result.push({ account_number: account, account_name: name, amount })
   }
@@ -700,6 +859,11 @@ export async function computeVatDeclaration(
   const { totals, sourceTypeCounts, settlementShapedEntries, dynamicVatAccounts, rutor } =
     await loadVatDeclarationLedger(supabase, companyId, start, end)
 
+  // Kundförlust: rutorna 05 to 08 follow the output VAT a write-off or a
+  // recovery moved (see customerLossVatAdjustment).
+  const customerLoss = await fetchCustomerLossVatAdjustment(supabase, companyId, start, end)
+  applyCustomerLossVatAdjustment(rutor, customerLoss)
+
   // Compute per-rate base amounts from individual revenue accounts. The
   // company's own accounts carry their rate on the konto itself, so they land
   // in the same three buckets: without that, a 3013 company would show a
@@ -728,6 +892,9 @@ export async function computeVatDeclaration(
     if (!bucket) continue
     revenueByRate[bucket] = round(revenueByRate[bucket] + (t.credit - t.debit))
   }
+  revenueByRate.base25 = round(revenueByRate.base25 + customerLoss.base25)
+  revenueByRate.base12 = round(revenueByRate.base12 + customerLoss.base12)
+  revenueByRate.base6 = round(revenueByRate.base6 + customerLoss.base6)
   // Accounts the static map ALREADY sums into ruta 05 (3000, the 30xx
   // gruppkonto) but whose rate only exists as the konto's "Standard moms".
   // Rate-only on purpose: their balance is in ruta 05 either way, so adding
@@ -765,7 +932,7 @@ export async function computeVatDeclaration(
     rcBasisByRate: rcBasisTotalsByRate(totals, dynamicVatAccounts),
     // Class 3 balances that reach no ruta, for REVENUE_ACCOUNT_WITHOUT_RUTA:
     // see VatDeclaration.revenueAccountsWithoutRuta.
-    revenueAccountsWithoutRuta: revenueAccountsWithoutRuta(totals, dynamicVatAccounts),
+    revenueAccountsWithoutRuta: revenueAccountsWithoutRuta(totals, dynamicVatAccounts, customerLoss),
     invoiceCount,
     transactionCount,
     breakdown: {

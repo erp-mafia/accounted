@@ -27,6 +27,9 @@ const QUIET = {
   cases: NO_CASE_WORK,
   nightly: { sweep: { cases: 0, hits: 0, paused: 0, notPaused: 0, failed: 0 }, reconcile: NO_RECONCILE },
   reconcile: NO_RECONCILE,
+  // Nothing collected and no payout: the collected-payment and settlement work makes no call.
+  collected: { booked: 0, needsReview: 0, skipped: 0, failed: 0, deferred: 0 },
+  settlements: { imported: 0, booked: 0, needsMapping: 0, acknowledged: 0, bankLinked: 0, failed: 0, deferred: 0 },
 }
 
 import { GET } from '../route'

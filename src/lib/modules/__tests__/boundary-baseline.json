@@ -3,7 +3,7 @@
   "kernelToBlock": {
     "ledger -> agent": 1,
     "ledger -> bank-feed": 1,
-    "ledger -> collections": 1,
+    "ledger -> collections": 2,
     "ledger -> deadlines": 4,
     "ledger -> import": 7,
     "ledger -> inbox": 2,
@@ -26,7 +26,7 @@
     "payments -> invoicing": 1,
     "supplier-invoices -> invoicing": 2,
     "transactions -> collections": 1,
-    "transactions -> invoicing": 18,
+    "transactions -> invoicing": 20,
     "transactions -> skatteverket": 7,
     "transactions -> supplier-invoices": 1
   },
@@ -84,6 +84,8 @@
       "lib/composition/reconciliation-signoffs.ts -> lib/reconciliation/schemas",
       "lib/composition/reconciliation-signoffs.ts -> lib/reconciliation/signoff-store",
       "lib/composition/reversal-hooks.ts -> lib/bookkeeping/payment-sync",
+      "lib/composition/reversal-hooks.ts -> lib/collections/settlement-reversal",
+      "lib/composition/reversal-hooks.ts -> lib/customer-loss/reversal",
       "lib/composition/reversal-hooks.ts -> lib/invoices/migrated-deduction-reversal",
       "lib/composition/reversal-hooks.ts -> lib/invoices/rot-rut-reclaim-reversal",
       "lib/composition/unbooked-bank-lines.ts -> lib/transactions/unbooked"

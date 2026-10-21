@@ -305,9 +305,11 @@ describe('dimension rule policy per source type', () => {
     'vat_settlement',
     'rot_rut_payout',
     'rot_rut_reclaim',
+    'customer_loss',
     'rot_rut_reclassification',
     'expense_payout',
     'stripe_payout',
+    'collection_settlement',
   ]
 
   it('classifies every source type of the enum into exactly one bucket', () => {

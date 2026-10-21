@@ -4,8 +4,14 @@
  * bookkeeping engine reaches those writers, so a client page that imports a
  * pure helper from a module beside the engine (creditNoteNeedsJournalEntry,
  * computeRefusedShares) pulls next/server into the browser bundle and the
- * page answers 500. Pure helpers live in client-safe modules instead; this
- * walks every 'use client' file's runtime imports to pin it.
+ * page answers 500. The engine also reaches settlement-reversal.ts, which
+ * opens a service client (@/lib/supabase/server, next/headers) after a
+ * payout voucher is reversed, and the settlement booking modules write
+ * vouchers, archive underlag and render PDFs: all server-only, as are the
+ * customer loss writers the engine and the payment writers reach. Pure helpers
+ * live in client-safe modules instead (settlements-ui.ts for the
+ * settlements view); this walks every 'use client' file's runtime imports
+ * to pin it.
  */
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { builtinModules } from 'node:module'
@@ -23,7 +29,23 @@ const SERVER_SPECIFIERS = new Set([
   ...builtinModules.flatMap((name) => [name, `node:${name}`]),
 ])
 /** Server modules no client file may reach at all. */
-const SERVER_MODULES = ['src/lib/bookkeeping/engine.ts', 'src/lib/collections/forward-hook.ts']
+const SERVER_MODULES = [
+  'src/lib/bookkeeping/engine.ts',
+  'src/lib/collections/forward-hook.ts',
+  // Settlement booking: the reversal hook, the bookings and the payment record PDF.
+  'src/lib/collections/settlement-reversal.ts',
+  'src/lib/collections/settlements.ts',
+  'src/lib/collections/collected-payments.ts',
+  'src/lib/collections/rebook.ts',
+  'src/lib/collections/payment-record.tsx',
+  // Customer loss: the voucher writer, the konstaterad decision (archives its
+  // underlag) and the engine's reversal hook.
+  'src/lib/customer-loss/record.ts',
+  'src/lib/customer-loss/confirmed.ts',
+  'src/lib/customer-loss/reversal.ts',
+]
+/** Directories whose modules may import no server specifier when a client reaches them. */
+const SERVER_SPECIFIER_DIRS = ['src/lib/collections/', 'src/lib/customer-loss/']
 
 function sourceFiles(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
@@ -106,8 +128,8 @@ function forbiddenChains(): string[] {
       for (const specifier of runtimeImports(file)) {
         const target = resolveSpecifier(file, specifier)
         const rel = target ? relative(ROOT, target) : null
-        const viaCollections = relative(ROOT, file).startsWith('src/lib/collections/')
-        if ((viaCollections && SERVER_SPECIFIERS.has(specifier)) || (rel && SERVER_MODULES.includes(rel))) {
+        const viaGuardedDir = SERVER_SPECIFIER_DIRS.some((dir) => relative(ROOT, file).startsWith(dir))
+        if ((viaGuardedDir && SERVER_SPECIFIERS.has(specifier)) || (rel && SERVER_MODULES.includes(rel))) {
           found = { file, target: rel ?? specifier }
           break
         }
@@ -127,7 +149,7 @@ function forbiddenChains(): string[] {
 }
 
 describe('client components and server-only code', () => {
-  it('no client file reaches the bookkeeping engine, the forward drain or a server import in collections', () => {
+  it('no client file reaches the bookkeeping engine, the forward drain or a server import in collections or customer loss', () => {
     expect(forbiddenChains()).toEqual([])
     // It walks the import graph of every client file; under a busy CI runner
     // that takes well over vitest's 5 s default.
@@ -138,5 +160,31 @@ describe('client components and server-only code', () => {
     expect(runtimeImports(join(SRC, 'lib/invoices/issue-credit-note.ts'))).toContain('@/lib/bookkeeping/invoice-entries')
     expect(runtimeImports(join(SRC, 'lib/bookkeeping/payment-sync.ts'))).toContain('@/lib/collections/forward-hook')
     expect(runtimeImports(join(SRC, 'lib/collections/forward-hook.ts'))).toContain('next/server')
+    // The payout reversal hook the engine reaches through its hook list opens a service client by dynamic import.
+    expect(runtimeImports(join(SRC, 'lib/bookkeeping/engine.ts'))).toContain('@/lib/composition/reversal-hooks')
+    expect(runtimeImports(join(SRC, 'lib/composition/reversal-hooks.ts'))).toContain('@/lib/collections/settlement-reversal')
+    expect(runtimeImports(join(SRC, 'lib/collections/settlement-reversal.ts'))).toContain('@/lib/supabase/server')
+  })
+
+  it('keeps customer loss writers behind the engine boundary', () => {
+    expect(runtimeImports(join(SRC, 'lib/composition/reversal-hooks.ts'))).toContain('@/lib/customer-loss/reversal')
+    expect(runtimeImports(join(SRC, 'lib/customer-loss/record.ts'))).toContain('@/lib/bookkeeping/engine')
+    // The payment writers release a befarad reserve, so they are server code too.
+    expect(runtimeImports(join(SRC, 'lib/invoices/settle-invoice-payment.ts'))).toContain('@/lib/customer-loss/doubtful')
+    // The invoice page's customer loss components read the view as types only.
+    for (const name of ['CustomerLossDialog.tsx', 'CustomerLossNote.tsx', 'RecoveredLossDialog.tsx', 'use-customer-loss.ts']) {
+      const imports = runtimeImports(join(SRC, 'components/customer-loss', name))
+      expect(imports.filter((spec) => spec.startsWith('@/lib/customer-loss/') && spec !== '@/lib/customer-loss/text'), name).toEqual([])
+    }
+  })
+
+  it('keeps the settlements view on its client-safe module', () => {
+    const page = join(SRC, 'app/(dashboard)/invoices/settlements/page.tsx')
+    const sheet = join(SRC, 'components/collections/SettlementDetailSheet.tsx')
+    for (const file of [page, sheet]) {
+      expect(isClient(file)).toBe(true)
+      expect(runtimeImports(file)).toContain('@/lib/collections/settlements-ui')
+    }
+    for (const file of SERVER_MODULES) expect(existsSync(join(ROOT, file)), file).toBe(true)
   })
 })

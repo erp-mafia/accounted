@@ -9,6 +9,7 @@ import { caseRefusalResponse, webCaseServiceDeps } from '@/lib/collections/case-
 import { loadLiveConnection } from '@/lib/collections/connection'
 import { readCollectionsEnv } from '@/lib/collections/flags'
 import { withdrawFeeInfo } from '@/lib/collections/stages'
+import { resolveStartStep, startStepsFor } from '@/lib/collections/start-step'
 import { loadCaseEscalationCheck, loadInvoiceCase, loadInvoiceReadiness } from '@/lib/collections/invoice-collection'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { createServiceClient } from '@/lib/supabase/server'
@@ -35,10 +36,14 @@ const OpenBodySchema = z.object({
   dismissed_transaction_ids: z.array(z.uuid()).max(200).optional(),
 })
 
-async function invoiceVisible(ctx: { supabase: import('@supabase/supabase-js').SupabaseClient; companyId: string }, id: string): Promise<boolean> {
-  const { data, error } = await ctx.supabase.from('invoices').select('id').eq('company_id', ctx.companyId).eq('id', id).maybeSingle()
+/** The company's invoice (its date, for the reminder fee rule), or null when it has no such invoice. */
+async function visibleInvoice(
+  ctx: { supabase: import('@supabase/supabase-js').SupabaseClient; companyId: string },
+  id: string,
+): Promise<{ invoice_date: string | null } | null> {
+  const { data, error } = await ctx.supabase.from('invoices').select('id, invoice_date').eq('company_id', ctx.companyId).eq('id', id).maybeSingle()
   if (error) throw new Error(`invoice lookup failed: ${error.message}`)
-  return data !== null
+  return data
 }
 
 /**
@@ -58,7 +63,8 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     const query = validateQuery(request, QuerySchema, { log: ctx.log, operation: 'invoice.collection.get' })
     if (!query.success) return query.response
     const invoiceId = parsed.data.id
-    if (!(await invoiceVisible(ctx, invoiceId))) return errorResponseFromCode('INVOICE_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
+    const invoice = await visibleInvoice(ctx, invoiceId)
+    if (!invoice) return errorResponseFromCode('INVOICE_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
 
     const env = readCollectionsEnv()
     const availability = await getCollectionsAvailability(ctx.supabase, ctx.companyId, { env })
@@ -95,6 +101,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
             sandbox: availability.sandbox,
             obligations: availability.obligations,
             displayName: availability.displayName,
+            markUrl: availability.markUrl,
             portalUrl: availability.provider?.portalUrl ?? null,
             feeSummarySv: availability.provider?.feeSummarySv ?? null,
             withdrawFreeDays: availability.provider?.features.withdrawFreeDays ?? null,
@@ -103,6 +110,21 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
                   state: availability.connection.state,
                   ladderMode: availability.connection.ladderMode,
                   ladderDaysAfterDue: connectionRow?.ladder_days_after_due ?? null,
+                  // The overdue banner's button names the step that goes out first: the
+                  // company's default as this invoice can take it (no reminder without an
+                  // agreed reminder fee, start-step.ts), so the label does not change once
+                  // the dialog's checks load.
+                  defaultStartStep: connectionRow
+                    ? (resolveStartStep(
+                        connectionRow.default_start_step,
+                        startStepsFor(
+                          availability.provider?.features.startSteps ?? ['reminder', 'collection'],
+                          !!connectionRow.reminder_fee_terms_since &&
+                            !!invoice.invoice_date &&
+                            invoice.invoice_date >= connectionRow.reminder_fee_terms_since,
+                        ),
+                      ) ?? connectionRow.default_start_step)
+                    : null,
                 }
               : null,
           },
@@ -134,7 +156,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     if (!parsed.success) return errorResponseFromCode('VALIDATION_ERROR', ctx.log, { requestId: ctx.requestId })
     const body = await validateBody(request, OpenBodySchema, { log: ctx.log, operation: 'invoice.collection.open' })
     if (!body.success) return body.response
-    if (!(await invoiceVisible(ctx, parsed.data.id))) return errorResponseFromCode('INVOICE_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
+    if (!(await visibleInvoice(ctx, parsed.data.id))) return errorResponseFromCode('INVOICE_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
 
     const deps = await webCaseServiceDeps(ctx, readCollectionsEnv())
     const outcome = await handOverInvoice(deps, {

@@ -105,6 +105,14 @@ describe('invoiceRowStatus: the status line the list and the customer card share
   })
 
   it('a status this build does not know has no label key, so the caller shows it raw', () => {
-    expect(invoiceRowStatus(row({ status: 'written_off' }), TODAY)).toEqual({ kind: 'unknown', labelKey: null, chip: null })
+    expect(invoiceRowStatus(row({ status: 'some_future_status' }), TODAY)).toEqual({ kind: 'unknown', labelKey: null, chip: null })
+  })
+
+  it('reads a konstaterad kundförlust as written off, past its due date or not', () => {
+    expect(invoiceRowStatus(row({ status: 'written_off', due_date: '2026-09-01' }), TODAY)).toEqual({
+      kind: 'written_off',
+      labelKey: 'status_written_off',
+      chip: 'destructive',
+    })
   })
 })

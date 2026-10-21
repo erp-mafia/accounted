@@ -450,6 +450,8 @@ export const JournalEntrySourceTypeSchema = z.enum([
   'expense_payout',
   'rot_rut_reclaim',
   'pos_daily_sales',
+  'collection_settlement',
+  'customer_loss',
   'rot_rut_reclassification',
 ])
 

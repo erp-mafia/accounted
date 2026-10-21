@@ -360,6 +360,11 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_get_collection_case: 'invoices:read',
   gnubok_send_invoice_to_collection: 'invoices:write',
   gnubok_collection_case_action: 'invoices:write',
+  gnubok_list_collection_settlements: 'invoices:read',
+  gnubok_book_collected_payment: 'invoices:write',
+  gnubok_book_collection_settlement: 'bookkeeping:write',
+  // Kundförlust (served while CUSTOMER_LOSS_ENABLED is set).
+  gnubok_record_customer_loss: 'invoices:write',
   gnubok_delete_supplier_invoice: 'suppliers:write',
   gnubok_uncredit_supplier_invoice: 'suppliers:write',
   gnubok_update_supplier_invoice_item_account: 'suppliers:write',

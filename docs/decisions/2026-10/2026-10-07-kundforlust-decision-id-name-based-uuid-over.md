@@ -1,0 +1,1 @@
+[2026-10-07] The kundförlust decision id is a name-based UUID over the invoice, the kind and the count of earlier rows of that kind, used as the voucher's source_id under a partial unique index: two concurrent clicks collide at the draft insert before a voucher number is taken, without a separate lock table.

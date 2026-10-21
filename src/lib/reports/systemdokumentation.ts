@@ -23,10 +23,15 @@ import { getBranding } from '@/lib/branding/service'
 import { flagEnabled, isSelfHosted } from '@/lib/env/public-flags'
 import { STANDARD_VOUCHER_SERIES_MAP, resolveDefaultSeriesForSource, voucherSeriesLabel, type VoucherSeriesMap } from '@/lib/bookkeeping/voucher-series-resolver'
 import { cashAccountSeriesOverride } from '@/lib/bookkeeping/cash-account-voucher-series'
+import { CASH_PARTIAL_FIRST_DESCRIPTION } from '@/lib/bookkeeping/invoice-lines'
+import { readCollectionsEnv } from '@/lib/collections/flags'
+import { customerLossEnabled } from '@/lib/env/customer-loss-switch'
+import { cashPartialPaymentsEnabled } from '@/lib/env/cash-partial-payments-switch'
 import { API_KEY_SCOPES } from '@/lib/auth/scope-catalog'
 import {
   ARCHIVE_RULES,
   BEHANDLINGSHISTORIK_RULES,
+  CASH_PARTIAL_PAYMENT_RULE,
   CORRECTION_AND_LOCK_RULES,
   INVOICE_NUMBER_RULES,
   KONTANTMETOD_CUTOFF_RULES,
@@ -116,6 +121,25 @@ export interface SystemdokumentationCollections {
   auto_book_settlements: boolean
 }
 
+/**
+ * Booking rules that wait behind an installation switch, and whether the
+ * company's books hold vouchers only those rules write. The document
+ * describes such a rule, and lists the series of its source type, while its
+ * switch is on or once its vouchers exist: a series that was used stays
+ * described after the switch is turned off.
+ */
+export interface SystemdokumentationSwitchedRules {
+  /** CASH_PARTIAL_PAYMENTS_ENABLED, COLLECTIONS_ENABLED, CUSTOMER_LOSS_ENABLED. */
+  switches: { cashPartialPayments: boolean; collections: boolean; customerLoss: boolean }
+  /** Pro-rata part payment vouchers, collections payout vouchers, kundförlust vouchers. */
+  vouchers: { cashPartialPayments: boolean; collectionSettlement: boolean; customerLoss: boolean }
+}
+
+const NO_SWITCHED_RULES: SystemdokumentationSwitchedRules = {
+  switches: { cashPartialPayments: false, collections: false, customerLoss: false },
+  vouchers: { cashPartialPayments: false, collectionSettlement: false, customerLoss: false },
+}
+
 /** Everything the pure builder needs; the loader fills it from the database. */
 export interface SystemdokumentationFacts {
   company: { name: string | null; org_number: string | null; accounting_framework: AccountingFramework | null }
@@ -130,6 +154,8 @@ export interface SystemdokumentationFacts {
   connections: SystemdokumentationConnections
   /** Reminders and debt collection through a provider; absent or null when the company has no live connection. */
   collections?: SystemdokumentationCollections | null
+  /** Rules behind an installation switch; absent: every switch off and none of their vouchers. */
+  switchedRules?: SystemdokumentationSwitchedRules
   /** user id -> display label (e-mail or name). */
   labels: Map<string, string>
   env: {
@@ -167,6 +193,7 @@ export const SOURCE_TYPE_LABELS_SV: Readonly<Record<JournalEntrySourceType, stri
   invoice_cash_payment: 'Kundbetalning (kontantmetoden)',
   rot_rut_payout: 'ROT/RUT-utbetalning från Skatteverket',
   rot_rut_reclaim: 'ROT/RUT-återkrav',
+  customer_loss: 'Kundförlust (befarad, konstaterad, återvunnen)',
   rot_rut_reclassification: 'Omföring av ROT/RUT-avdrag på migrerad faktura',
   supplier_invoice_registered: 'Leverantörsfaktura',
   supplier_credit_note: 'Kreditfaktura från leverantör',
@@ -178,6 +205,7 @@ export const SOURCE_TYPE_LABELS_SV: Readonly<Record<JournalEntrySourceType, stri
   webshop_order: 'Webbutiksorder',
   pos_daily_sales: 'Dagskassa från kassasystem',
   stripe_payout: 'Stripe-utbetalning',
+  collection_settlement: 'Utbetalning från inkassobolaget',
   expense_claim: 'Utlägg',
   expense_payout: 'Utbetalning av utlägg',
   vat_settlement: 'Momsredovisning',
@@ -238,7 +266,16 @@ export function buildSystemdokumentation(facts: SystemdokumentationFacts): Syste
     { key: 'dimensioner', label: 'Dimensioner', description: facts.dimensions.length ? `Konteringsrader märks med ${facts.dimensions.map((d) => d.name).join(', ')}; påverkar inte huvudbokföringens saldon` : 'Kostnadsställen och projekt på konteringsrader; påverkar inte huvudbokföringens saldon', kontering: 'Ingen egen kontering', active: s?.dimensions_enabled === true },
   ]
 
-  const sourceTypes = Object.keys(STANDARD_VOUCHER_SERIES_MAP) as JournalEntrySourceType[]
+  const switched = facts.switchedRules ?? NO_SWITCHED_RULES
+  // The source types only a switched rule writes: listed while it can write
+  // them or once it has.
+  const switchedSourceTypes: Partial<Record<JournalEntrySourceType, boolean>> = {
+    collection_settlement: switched.switches.collections || switched.vouchers.collectionSettlement,
+    customer_loss: switched.switches.customerLoss || switched.vouchers.customerLoss,
+  }
+  const sourceTypes = (Object.keys(STANDARD_VOUCHER_SERIES_MAP) as JournalEntrySourceType[]).filter(
+    (sourceType) => switchedSourceTypes[sourceType] !== false,
+  )
   const perSourceType = sourceTypes.map((source_type) => {
     const series = resolveDefaultSeriesForSource((s?.default_voucher_series_per_source_type ?? null) as VoucherSeriesMap | null, source_type)
     return { source_type, label: SOURCE_TYPE_LABELS_SV[source_type], series, series_label: seriesLabel(series, labels) }
@@ -278,6 +315,9 @@ export function buildSystemdokumentation(facts: SystemdokumentationFacts): Syste
   ]
   const collections = facts.collections ?? null
   if (collections) behandlingsregler.push({ rubrik: 'Påminnelser och inkasso', text: collectionsRuleText(collections) })
+  if ((switched.switches.cashPartialPayments && s?.accounting_method === 'cash') || switched.vouchers.cashPartialPayments) {
+    behandlingsregler.push({ rubrik: 'Delbetalningar, kontantmetoden', text: CASH_PARTIAL_PAYMENT_RULE })
+  }
   if (s?.auto_lock_period_days != null) {
     behandlingsregler.push({ rubrik: 'Automatisk låsning', text: `Låsdatumet flyttas fram automatiskt ${s.auto_lock_period_days} dagar efter varje momsperiods slut.` })
   }
@@ -400,6 +440,11 @@ export function collectionsRuleText(c: SystemdokumentationCollections): string {
       ? `Avtalad dröjsmålsränta ${Number(c.late_interest_percent).toLocaleString('sv-SE')} procent för företagskunder på fakturor från och med ${c.late_interest_agreed_since}; annars räntelagens ränta.`
       : 'Dröjsmålsränta enligt räntelagen.',
     `Inbetalningar som inkassobolaget tar emot bokförs på konto ${c.clearing_account} och utbetalningar från inkassobolaget på konto ${c.payout_account}, ${c.auto_book_collected_payments || c.auto_book_settlements ? 'delvis automatiskt' : 'efter att en användare har godkänt varje bokföring'}.`,
+    'Varje inbetalning som inkassobolaget tagit emot får ett betalningsunderlag som Accounted upprättar ur inkassobolagets uppgifter (faktura, ärende, belopp, betalningsdag, inkassobolagets referens och när och av vem den bokfördes); underlaget arkiveras innan verifikationen bokförs, och avräkningen från inkassobolaget bifogas samma verifikation som kopia när utbetalningen bokförs.',
+    'En inbetalning som inkassobolaget tagit emot kan inte makuleras med en vanlig storno, eftersom fakturan då skulle stå som betald mot en öppen fordran. Den rättas genom att bokföras om under Avräkningar: verifikationen stornas, betalningen tas bort från fakturan och bokförs på nytt med ett nytt betalningsunderlag som anger vilken verifikation det ersätter, och den stornerade verifikationen sparas med sitt underlag. Makuleras en utbetalning från inkassobolaget går den tillbaka till en användare för att bokföras på nytt.',
+    `En inbetalning som inkassobolaget tagit emot på en faktura som är bokförd som konstaterad kundförlust bokförs i stället som återvunnen kundförlust (konto 3950 och den utgående momsen redovisas på nytt) mot konto ${c.clearing_account}, alltid efter att en användare har godkänt den, med betalningsunderlaget som underlag; fakturan förblir en kundförlust, och bokföringen rättas på samma sätt under Avräkningar.`,
+    'Bankraden för en bokförd utbetalning kopplas till utbetalningens verifikation när den hittas (samma belopp, inom tre dagar, på det bankkonto utbetalningen bokförs mot, inkassobolagets referens i texten), och radens förslag om betalning av en öppen faktura tas bort.',
+    'En utbetalning som verkar redan bokförd för hand bokförs inte förrän en användare har bekräftat att den inte är en dubblett, eller markerat den som hanterad på annat sätt med en motivering; båda besluten loggas med användaren.',
     'Ändringar av reglerna registreras i behandlingshistoriken.',
   ]
   return parts.join(' ')
@@ -484,6 +529,36 @@ export async function loadSystemdokumentationFacts(
       .limit(1),
   )
 
+  // Vouchers only a switched rule writes (drafts are no vouchers). Required:
+  // leaving a used series out would be a wrong document, not a degraded one.
+  const [settlementVouchers, customerLossVouchers, cashPartialVouchers] = await Promise.all([
+    required<{ id: string }>('verifikationer', supabase.from('journal_entries').select('id').eq('company_id', companyId).eq('source_type', 'collection_settlement').neq('status', 'draft').limit(1)),
+    required<{ id: string }>('verifikationer', supabase.from('journal_entries').select('id').eq('company_id', companyId).eq('source_type', 'customer_loss').neq('status', 'draft').limit(1)),
+    required<{ id: string }>(
+      'verifikationer',
+      supabase
+        .from('journal_entries')
+        .select('id')
+        .eq('company_id', companyId)
+        .eq('source_type', 'invoice_cash_payment')
+        .like('description', `${CASH_PARTIAL_FIRST_DESCRIPTION}%`)
+        .neq('status', 'draft')
+        .limit(1),
+    ),
+  ])
+  const switchedRules: SystemdokumentationSwitchedRules = {
+    switches: {
+      cashPartialPayments: cashPartialPaymentsEnabled(),
+      collections: readCollectionsEnv().enabled,
+      customerLoss: customerLossEnabled(),
+    },
+    vouchers: {
+      cashPartialPayments: cashPartialVouchers.length > 0,
+      collectionSettlement: settlementVouchers.length > 0,
+      customerLoss: customerLossVouchers.length > 0,
+    },
+  }
+
   const memberIds = members.map((m) => m.user_id)
   let apiKeys: SystemdokumentationApiKeyRow[] = []
   if (options.serviceClient && memberIds.length > 0) {
@@ -528,6 +603,7 @@ export async function loadSystemdokumentationFacts(
       cloud_backup: cloudBackup.length > 0,
     },
     collections: collectionsRows[0] ?? null,
+    switchedRules,
     labels,
     env: {
       appName: branding.appName,

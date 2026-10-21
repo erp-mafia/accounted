@@ -26,7 +26,15 @@ function emptyClient(): unknown {
 }
 vi.mock('@/lib/supabase/server', () => ({ createServiceClient: () => emptyClient() }))
 
-const COLLECTION_IDS = ['collections.candidates.list', 'collections.cases.get', 'collections.cases.open', 'collections.cases.action']
+const COLLECTION_IDS = [
+  'collections.candidates.list',
+  'collections.cases.get',
+  'collections.cases.open',
+  'collections.cases.action',
+  'collections.settlements.list',
+  'collections.payments.book',
+  'collections.settlements.book',
+]
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -47,6 +55,8 @@ describe('collections operations in the registry', { timeout: 180_000 }, () => {
     for (const id of COLLECTION_IDS) expect(registry.ALL_OPERATIONS.some((o) => o.id === id)).toBe(true)
     expect(registry.operationForPendingType('open_collection_case')?.id).toBe('collections.cases.open')
     expect(registry.operationForPendingType('collection_case_action')?.id).toBe('collections.cases.action')
+    expect(registry.operationForPendingType('book_collected_payment')?.id).toBe('collections.payments.book')
+    expect(registry.operationForPendingType('book_collection_settlement')?.id).toBe('collections.settlements.book')
   })
 
   it('are served once collections is switched on', async () => {
@@ -62,6 +72,9 @@ describe('collections operations in the registry', { timeout: 180_000 }, () => {
       'gnubok_get_collection_case',
       'gnubok_send_invoice_to_collection',
       'gnubok_collection_case_action',
+      'gnubok_list_collection_settlements',
+      'gnubok_book_collected_payment',
+      'gnubok_book_collection_settlement',
     ])
   })
 })

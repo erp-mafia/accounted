@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { eventBus } from '@/lib/events'
 import { openCollectionCase, priorPaymentsFor, retrySubmittedCase, submissionStaysOpen } from '../open-case'
 import { handOverInvoice } from '../case-actions'
+import { caseView, normalizeCaseRow } from '../case'
 import { encodeFakeCaseRef } from '../adapters/fake'
 import { CollectionsError } from '../errors'
 import {
@@ -63,7 +64,7 @@ describe('openCollectionCase', () => {
     expect(request).toMatchObject({
       invoice: { ref: INVOICE_ID, number: '20261042', claimAmount: 1250, claimVatAmount: 250, claimRemaining: 1250, reference: 'Anna Andersson' },
       startStep: 'reminder',
-      reminderFeeAgreed: false,
+      reminderFeeAgreed: true,
       lateInterest: null,
       priorPayments: [],
       priorCredits: [],
@@ -88,6 +89,29 @@ describe('openCollectionCase', () => {
     expect(opened).toEqual([
       expect.objectContaining({ caseId: row.id, invoiceId: INVOICE_ID, origin: 'handover', companyId: COMPANY_ID, userId: ADMIN_ID }),
     ])
+  })
+
+  it('puts the handover on the trail, newest first, once the provider registered the claim', async () => {
+    const world = await createCaseWorld()
+    const outcome = await openCollectionCase(world.deps(), HANDOVER)
+    if (!outcome.ok || outcome.dryRun) throw new Error(`expected a case, got ${JSON.stringify(outcome)}`)
+    const row = normalizeCaseRow(world.db.rows('collection_cases')[0]!)
+    const older = {
+      id: 'event-1',
+      case_id: row.id,
+      occurred_at: '2026-08-31T00:00:00+00:00',
+      kind: 'stage',
+      stage_from: null,
+      stage_to: 'invoice_sent',
+      direction: 'inbound',
+      label: 'Fakturan är försenad',
+      amount: null,
+      actor_user_id: null,
+      provider_event_ref: 'provider-1',
+    }
+    const events = caseView(row, [older as never]).events
+    expect(events.map((e) => e.labelKey ?? e.label)).toEqual(['event_action_handover_reminder', 'Fakturan är försenad'])
+    expect(events[0]).toMatchObject({ occurredAt: row.opened_at, amount: 1250 })
   })
 
   it('checks everything again but sends nothing on a dry run', async () => {
@@ -204,6 +228,22 @@ describe('openCollectionCase', () => {
       code: 'COLLECTION_NOT_ELIGIBLE',
       details: { blocks: [{ code: 'elig_not_overdue' }] },
     })
+  })
+
+  it('starts at the inkassokrav when no reminder fee is agreed, and refuses a reminder asked for by name', async () => {
+    const world = await createCaseWorld()
+    world.db.rows('collection_connections')[0]!.reminder_fee_terms_since = null
+    expect(await openCollectionCase(world.deps(), { ...HANDOVER, startStep: 'reminder' })).toMatchObject({
+      ok: false,
+      code: 'COLLECTION_REMINDER_FEE_NOT_AGREED',
+      details: { start_step: 'reminder' },
+    })
+    expect(world.db.rows('collection_cases')).toHaveLength(0)
+    expect(world.openRequests).toHaveLength(0)
+
+    const outcome = await openCollectionCase(world.deps(), HANDOVER)
+    if (!outcome.ok || outcome.dryRun) throw new Error(`expected a case, got ${JSON.stringify(outcome)}`)
+    expect(world.openRequests[0]).toMatchObject({ startStep: 'collection', reminderFeeAgreed: false })
   })
 
   it('refuses a customer marked "Skicka aldrig till inkasso" before anything is reserved or sent', async () => {

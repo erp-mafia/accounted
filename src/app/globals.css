@@ -939,6 +939,27 @@ input[type="number"] {
 .page-header-action > * {
   width: auto;
 }
+/* A detail page whose actions outgrow a phone's bar (the invoice page):
+   below md the title row and the actions wrap onto rows of their own, the
+   buttons wrapping inside theirs, instead of the title sliding under the
+   buttons and the overflow menu pushing the page sideways. A header that
+   fits stays one 48px bar; from md up nothing here applies. */
+@media (max-width: 767.98px) {
+  .page-header.page-header-wrap {
+    flex-wrap: wrap;
+    row-gap: 0.5rem;
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
+  }
+  .page-header-wrap > .page-header-lead {
+    flex: 1 1 auto;
+  }
+  .page-header-wrap > .page-header-action {
+    flex-shrink: 1;
+    min-width: 0;
+    max-width: 100%;
+  }
+}
 
 /* Print (crm#1203). A dashboard page prints as a document: the panel's
    content on plain paper at the full page width, without the chrome around

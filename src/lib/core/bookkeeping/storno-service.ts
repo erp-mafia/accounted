@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { CustomerLossVoucherLockedError } from '@/lib/core/bookkeeping/customer-loss-voucher-lock'
 import { eventBus } from '@/lib/events'
 import type {
   CreateJournalEntryLineInput,
@@ -247,6 +248,11 @@ export async function correctEntry(
 
   if (original.status !== 'posted') {
     throw new CannotCorrectNonPostedError(original.status)
+  }
+  // A kundförlust voucher's amounts and date are its decision's
+  // (invoice_write_offs): storno the whole voucher instead.
+  if (original.source_type === 'customer_loss') {
+    throw new CustomerLossVoucherLockedError()
   }
 
   // A kontantmetod year-end carry (#3440) is never corrected in place: it is
@@ -674,6 +680,11 @@ export async function recordateEntry(
   }
   if (original.status !== 'posted') {
     throw new CannotCorrectNonPostedError(original.status)
+  }
+  // A kundförlust voucher's amounts and date are its decision's
+  // (invoice_write_offs): storno the whole voucher instead.
+  if (original.source_type === 'customer_loss') {
+    throw new CustomerLossVoucherLockedError()
   }
   if (newDate === original.entry_date) {
     throw new MeaninglessCorrectionError('no_date_change')

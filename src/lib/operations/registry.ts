@@ -239,6 +239,8 @@ import { BANK_FEED_OPERATIONS } from './bank-feed'
 import { PAYMENT_SIGNING_LINK_OPERATIONS } from './payment-signing-links'
 import { SUPPLIER_INVOICE_ATTEST_OPERATIONS } from './supplier-invoice-attest'
 import { readCollectionsEnv } from '@/lib/collections/flags'
+import { CUSTOMER_LOSS_OPERATION_LIST } from './customer-loss'
+import { customerLossEnabled } from '@/lib/env/customer-loss-switch'
 import type { AnyOperation } from './types'
 
 const CORE_OPERATIONS: readonly AnyOperation[] = [
@@ -472,7 +474,11 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
  * them all, and the staged-operation commit path finds each by its pending
  * type, so an operation staged while its feature was on still commits.
  */
-export const ALL_OPERATIONS: readonly AnyOperation[] = [...CORE_OPERATIONS, ...COLLECTIONS_OPERATION_LIST]
+export const ALL_OPERATIONS: readonly AnyOperation[] = [
+  ...CORE_OPERATIONS,
+  ...COLLECTIONS_OPERATION_LIST,
+  ...CUSTOMER_LOSS_OPERATION_LIST,
+]
 
 /**
  * The operations the machine doors serve (MCP tools, the search index):
@@ -480,7 +486,12 @@ export const ALL_OPERATIONS: readonly AnyOperation[] = [...CORE_OPERATIONS, ...C
  * module load, so nothing about them is discoverable while the feature is
  * dark. Each run() still checks the start gates per company (flags.ts).
  */
-export const OPERATIONS: readonly AnyOperation[] = readCollectionsEnv().enabled ? ALL_OPERATIONS : CORE_OPERATIONS
+export const OPERATIONS: readonly AnyOperation[] = [
+  ...CORE_OPERATIONS,
+  ...(readCollectionsEnv().enabled ? COLLECTIONS_OPERATION_LIST : []),
+  // Kundförlust likewise only while CUSTOMER_LOSS_ENABLED is set.
+  ...(customerLossEnabled() ? CUSTOMER_LOSS_OPERATION_LIST : []),
+]
 
 const byPendingType = new Map<string, AnyOperation>()
 for (const op of ALL_OPERATIONS) {

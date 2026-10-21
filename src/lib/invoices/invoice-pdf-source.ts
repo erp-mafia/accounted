@@ -50,6 +50,7 @@ const POSSIBLY_DELIVERED_STATUSES = [
   'partially_paid',
   'overdue',
   'credited',
+  'written_off',
 ] as const
 
 export interface InvoicePdfDelivery {

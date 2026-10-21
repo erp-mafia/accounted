@@ -67,10 +67,17 @@ describe('gatherDailyBatch', () => {
         remaining_amount: 1250,
         start_step: 'reminder',
         decision_kind: null,
-        reminder_fee_agreed: false,
+        reminder_fee_agreed: true,
         bank_check: 'pass',
       },
     ])
+  })
+
+  it('proposes the inkassokrav instead of a reminder when no reminder fee is agreed', async () => {
+    const world = await ladderWorld()
+    world.db.rows('collection_connections')[0]!.reminder_fee_terms_since = null
+    const batch = await gather(world)
+    expect(batch.items).toEqual([expect.objectContaining({ kind: 'open', start_step: 'collection', reminder_fee_agreed: false })])
   })
 
   it('leaves out an invoice not yet past the ladder days, without listing it', async () => {

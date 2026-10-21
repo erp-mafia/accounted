@@ -33,6 +33,7 @@ import { createLogger } from '@/lib/logger'
 import { autoReconcileTransactionForLinkedVoucher } from '@/lib/reconciliation/bank-reconciliation'
 import { clearSettledInvoiceSuggestions } from './clear-settled-invoice-suggestions'
 import { anchorCustomerInvoiceDocument } from '@/lib/core/documents/customer-invoice-underlag'
+import { releaseDoubtfulReserveAfterChange } from '@/lib/customer-loss/doubtful'
 import { documentCurrency, ledgerLineSideAmountIn } from '@/lib/bookkeeping/ledger-line-amount'
 import type { SqlBusinessEventLink } from '@/lib/bookkeeping/business-event-link'
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
@@ -567,6 +568,14 @@ export async function linkInvoiceToVoucher(
   // verifikat), so without this the user re-uploads a file Accounted already
   // holds. Idempotent and never throws: the link has already committed.
   await anchorCustomerInvoiceDocument(supabase, companyId, params.invoiceId)
+
+  // A befarad kundförlust reserve the payment made unnecessary comes back
+  // (Dr 1519 / Cr 6352), as on every other payment path. Never throws.
+  await releaseDoubtfulReserveAfterChange(supabase, companyId, userId, {
+    invoiceId: params.invoiceId,
+    entryDate: rpc.payment_date,
+    trigger: 'payment',
+  })
 
   // Close the loop on the bank feed: the invoice→voucher link above only
   // advanced the invoice, so the bank transaction that paid it kept sitting in

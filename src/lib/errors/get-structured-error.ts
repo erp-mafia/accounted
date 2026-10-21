@@ -38,6 +38,7 @@ import {
   CannotCorrectNonPostedError,
   CannotReverseNonPostedError,
   CannotReverseStornoError,
+  CannotReverseCollectedPaymentError,
   CorrectionChainTooDeepError,
   DimensionValidationError,
   EntryAlreadyReversedError,
@@ -654,6 +655,7 @@ export function extractBookkeepingDetails(err: unknown): { code: string; details
   if (err instanceof CannotReverseStornoError) {
     return { code: err.code, details: { sourceType: err.sourceType } }
   }
+  if (err instanceof CannotReverseCollectedPaymentError) return { code: err.code }
   if (err instanceof CannotCorrectNonPostedError) {
     return { code: err.code, details: { currentStatus: err.currentStatus } }
   }

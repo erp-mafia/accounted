@@ -320,6 +320,41 @@ describe('syncInvoiceStatusFromPaymentEntry', () => {
     })
   })
 
+  // The collections rebook removes the payment the provider collected itself,
+  // inside the window block_delete_collected_payment opens for it: the sync
+  // reopens the invoice and leaves that row (deleting it would only be refused).
+  it('reopens the invoice but leaves a collected payment row when the collections rebook asks', async () => {
+    const { supabase, updatePayload, wasDeleted } = createRecordingSupabase([
+      { data: [{ id: 'ip-1', amount: 1000, transaction_id: null, source: 'collections' }] }, // invoice_payments rows
+      { data: [] }, // transactions on the entry
+      { data: { paid_amount: 1000, total: 1000, due_date: '2099-12-31' } }, // invoices select
+      { data: null }, // invoices update
+    ])
+
+    await syncInvoiceStatusFromPaymentEntry(
+      supabase,
+      'co-1',
+      entry({ source_type: 'invoice_paid', source_id: 'invoice-1' }),
+      undefined,
+      { leaveCollectedPaymentRows: true },
+    )
+
+    expect(updatePayload('invoices')).toMatchObject({ status: 'sent', paid_amount: 0, remaining_amount: 1000 })
+    expect(wasDeleted('invoice_payments')).toBe(false)
+  })
+
+  it('deletes a collected payment row without the rebook option (the guard then refuses it)', async () => {
+    const { supabase, wasDeleted } = createRecordingSupabase([
+      { data: [{ id: 'ip-1', amount: 1000, transaction_id: null, source: 'collections' }] },
+      { data: [] },
+      { data: { paid_amount: 1000, total: 1000, due_date: '2099-12-31' } },
+      { data: null },
+      { data: null },
+    ])
+    await syncInvoiceStatusFromPaymentEntry(supabase, 'co-1', entry({ source_type: 'invoice_paid', source_id: 'invoice-1' }))
+    expect(wasDeleted('invoice_payments')).toBe(true)
+  })
+
   // The bank line that paid the (now reversed) voucher must be detached so it
   // returns to the inbox and is re-matchable: both the rows whose pointer names
   // the entry and the transaction id on the payment row, in one update by id.
@@ -584,6 +619,23 @@ describe('loadPaymentEntryLinks', () => {
       ]),
     )
     expect(calls[1].table).toBe('transactions')
+    expect(calls[0].ops).toContainEqual({ method: 'select', args: ['id, amount, transaction_id, source'] })
+  })
+
+  it('reads no source column from supplier_invoice_payments, which has none', async () => {
+    const { supabase, calls } = createRecordingSupabase([
+      { data: [{ id: 'sip-1', amount: 100, transaction_id: null }] },
+      { data: [] },
+    ])
+    const links = await loadPaymentEntryLinks(supabase, 'co-1', {
+      id: 'entry-1',
+      source_type: 'supplier_invoice_paid',
+      source_id: 'supplier-invoice-1',
+    } as Pick<JournalEntry, 'id' | 'source_type' | 'source_id'>)
+
+    expect(links?.paymentRows).toEqual([{ id: 'sip-1', amount: 100, transaction_id: null }])
+    expect(calls[0].table).toBe('supplier_invoice_payments')
+    expect(calls[0].ops).toContainEqual({ method: 'select', args: ['id, amount, transaction_id'] })
   })
 })
 

@@ -18,7 +18,15 @@ import { RowStatus, type RowStatusDescriptor } from '@/components/ui/row-status'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Skeleton } from '@/components/ui/skeleton'
 import { DataListEmpty } from '@/components/ui/data-list'
-import { TH_CLASS, TD_CLASS, CHECKBOX_REVEAL_CLASS, SortableTh, SHOW_MORE_STEP, ShowMoreFooter } from '@/components/ui/dry-table'
+import {
+  TH_CLASS,
+  TD_CLASS,
+  QUIET_LINK_CLASS,
+  CHECKBOX_REVEAL_CLASS,
+  SortableTh,
+  SHOW_MORE_STEP,
+  ShowMoreFooter,
+} from '@/components/ui/dry-table'
 import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ContextPicker } from '@/components/common/ContextPicker'
@@ -41,6 +49,8 @@ import {
   matchesQuoteListTab,
   parseInvoiceListTab,
   parseQuoteListTab,
+  segmentViewActive,
+  statusPickerTabs,
   type AnyListTab,
   type InvoiceListTab,
   type QuoteListTab,
@@ -48,7 +58,15 @@ import {
 import { isInvoiceTypeEnabled, visibleInvoiceListTabs } from '@/lib/invoices/invoice-type-toggles'
 import type { CollectionsStage } from '@accounted/connect-contract'
 import { CHIP_LABEL_KEYS, CHIP_VARIANTS, collectionChipKind } from '@/lib/collections/stages'
-import { capitalizeFirst, providerWords } from '@/components/collections/collections-client'
+import {
+  capitalizeFirst,
+  collectionsEntryShown,
+  providerWords,
+  useCollectionsAvailability,
+} from '@/components/collections/collections-client'
+import { BulkHandoverDialog } from '@/components/collections/BulkHandoverDialog'
+import { bulkSendable } from '@/lib/collections/bulk-handover'
+import { SegmentedControl } from '@/components/ui/segmented-control'
 import { useInvoiceListVariant } from '@/lib/invoices/list-variant'
 import {
   fetchInvoiceRegisterCoverage,
@@ -155,6 +173,7 @@ const TAB_LABEL_KEYS: Record<ListTab, string> = {
   credit: 'tab_credit',
   cancelled: 'tab_cancelled',
   collections: 'tab_collections',
+  written_off: 'tab_written_off',
   // Quote views (/quotes): the decision states share the row chip labels.
   open: 'quote_status_open',
   accepted: 'quote_status_accepted',
@@ -230,6 +249,13 @@ export default function InvoicesPage() {
     all: new Set(),
     failed: new Set(),
   }))
+  // Collections in play for the company (offered, or something open): the
+  // list then shows Förfallna and Hos inkasso as visible views and an
+  // administrator can send from Förfallna. Nothing changes while collections
+  // is hidden.
+  const collectionsAvailability = useCollectionsAvailability()
+  const collectionsShown = !isQuotesList && collectionsEntryShown(collectionsAvailability)
+  const collectionsToday = collectionsShown ? todayIsoStockholm() : undefined
   const matchesTab = (invoice: Invoice, tab: ListTab): boolean =>
     isQuotesList
       ? matchesQuoteListTab(invoice, tab as QuoteListTab)
@@ -632,9 +658,17 @@ export default function InvoicesPage() {
   // verifikat (worklist-canonical predicate: journal_entry_id IS NULL).
   const bulkMode: 'issue' | 'deferred' | null =
     accountingMethod !== 'accrual' ? null : deferInvoiceBooking ? 'deferred' : 'issue'
-  const showSelection = canWrite && bulkMode !== null && !isQuotesList
+  // Förfallna, collections ready: the checkboxes pick invoices to send to
+  // the provider ("Skicka till inkasso (N)") instead of bulk Bokför.
+  const collectionsBulk =
+    collectionsShown && collectionsAvailability?.start === 'ready' && canWrite && activeTab === 'overdue' && !!collectionsToday
+  const showSelection = canWrite && !isQuotesList && (bulkMode !== null || collectionsBulk)
+  const [showBulkHandover, setShowBulkHandover] = useState(false)
 
   const isBulkSelectable = (invoice: Invoice): boolean => {
+    if (collectionsBulk && collectionsToday) {
+      return bulkSendable(invoice, { today: collectionsToday, openCaseIds: new Set(collectionCases.keys()) })
+    }
     if (!bulkMode) return false
     const docType = (invoice as Invoice & { document_type?: string }).document_type || 'invoice'
     if (docType !== 'invoice' || invoice.credited_invoice_id) return false
@@ -656,6 +690,13 @@ export default function InvoicesPage() {
     },
   )
   const { selectedIds, toggle: toggleSelect } = selection
+  // A selection made for one action never carries over to the other
+  // (adjust-state-during-render: the mode flips with the view or the read).
+  const [selectionForCollections, setSelectionForCollections] = useState(collectionsBulk)
+  if (selectionForCollections !== collectionsBulk) {
+    setSelectionForCollections(collectionsBulk)
+    selection.clear()
+  }
 
   const selectedInvoices = invoices.filter((inv) => selectedIds.has(inv.id))
   const selectedDraftCount = selectedInvoices.filter((inv) => inv.status === 'draft').length
@@ -858,15 +899,21 @@ export default function InvoicesPage() {
           onChange={(id) => updateTab(id as ListTab)}
           ariaLabel={t('status_picker_aria')}
           triggerLabel={
-            tabCounts[activeTab] > 0
-              ? `${t(TAB_LABEL_KEYS[activeTab])} · ${tabCounts[activeTab]}`
-              : t(TAB_LABEL_KEYS[activeTab])
+            // Förfallna and Hos inkasso have one door each: the segmented control beside the picker.
+            segmentViewActive(activeTab, collectionsShown)
+              ? t('status_picker_label')
+              : tabCounts[activeTab] > 0
+                ? `${t(TAB_LABEL_KEYS[activeTab])} · ${tabCounts[activeTab]}`
+                : t(TAB_LABEL_KEYS[activeTab])
           }
           items={(isQuotesList
             ? listTabs
-            : visibleInvoiceListTabs(INVOICE_LIST_TABS, companySettings, activeTab as InvoiceListTab).filter(
+            : statusPickerTabs(visibleInvoiceListTabs(INVOICE_LIST_TABS, companySettings, activeTab as InvoiceListTab), collectionsShown).filter(
                 // "Hos inkasso" only once something is there (or it is the view in use).
                 (tab) => tab !== 'collections' || inCollectionIds.size > 0 || collectionAttention.all.size > 0 || activeTab === 'collections',
+              ).filter(
+                // "Kundförlust" likewise only once an invoice is written off.
+                (tab) => tab !== 'written_off' || tabCounts.written_off > 0 || activeTab === 'written_off',
               )
           ).map((tab) => ({
             id: tab,
@@ -890,6 +937,20 @@ export default function InvoicesPage() {
               annotation:
                 filter !== 'all' && rotRutCounts[filter] > 0 ? String(rotRutCounts[filter]) : undefined,
             }))}
+          />
+        )}
+        {/* Förfallna and Hos inkasso as visible views while collections is
+            in play (the status picker then leaves them out, so each has one
+            door). Pressing the active one again goes back to Alla. */}
+        {collectionsShown && (
+          <SegmentedControl<'overdue' | 'collections'>
+            aria-label={tCollections('views_aria')}
+            value={activeTab as 'overdue' | 'collections'}
+            onChange={(next) => updateTab(next === activeTab ? 'all' : next)}
+            options={[
+              { value: 'overdue', label: t(TAB_LABEL_KEYS.overdue), count: tabCounts.overdue },
+              { value: 'collections', label: t(TAB_LABEL_KEYS.collections), count: tabCounts.collections },
+            ]}
           />
         )}
         <ToolbarSearch
@@ -954,12 +1015,34 @@ export default function InvoicesPage() {
         selectAllLabel={t('bulk_select_all', { count: selectableInvoices.length })}
         clearLabel={t('bulk_clear')}
       >
-        <Button size="sm" onClick={() => setShowBulkBookConfirm(true)}>
-          {bulkMode === 'issue'
-            ? t('bulk_book_and_send_action', { count: selectedIds.size })
-            : t('bulk_book_action', { count: selectedIds.size })}
-        </Button>
+        {collectionsBulk ? (
+          <Button size="sm" onClick={() => setShowBulkHandover(true)}>
+            {tCollections('bulk_send', { count: selectedIds.size })}
+          </Button>
+        ) : (
+          <Button size="sm" onClick={() => setShowBulkBookConfirm(true)}>
+            {bulkMode === 'issue'
+              ? t('bulk_book_and_send_action', { count: selectedIds.size })
+              : t('bulk_book_action', { count: selectedIds.size })}
+          </Button>
+        )}
       </BulkSelectionBar>
+
+      {activeTab === 'collections' && !isQuotesList && (
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-1 text-[12.5px] text-muted-foreground">
+          <span>
+            {capitalizeFirst(
+              tCollections(
+                'collections_view_heading',
+                providerWords(collectionsAvailability?.displayName ?? null, locale === 'en' ? 'en' : 'sv'),
+              ),
+            )}
+          </span>
+          <Link href="/invoices/settlements" className={QUIET_LINK_CLASS}>
+            {tCollections('settlements_link')}
+          </Link>
+        </div>
+      )}
 
       {isLoading ? (
         <div className="space-y-3">
@@ -1238,6 +1321,26 @@ export default function InvoicesPage() {
           )}
         </div>
       </ConfirmationDialog>
+
+      {/* "Skicka till inkasso (N)": each ticked invoice with its bank check
+          and first step; the ones that need a person are held with why. */}
+      {collectionsBulk && collectionsAvailability && showBulkHandover && (
+        <BulkHandoverDialog
+          open={showBulkHandover}
+          onOpenChange={setShowBulkHandover}
+          invoices={selectedInvoices.map((inv) => ({
+            id: inv.id,
+            invoiceNumber: inv.invoice_number,
+            customerName: (inv.customer as { name: string } | null)?.name ?? null,
+          }))}
+          displayName={collectionsAvailability.displayName}
+          sandbox={collectionsAvailability.sandbox}
+          onDone={() => {
+            selection.clear()
+            void fetchInvoices()
+          }}
+        />
+      )}
     </div>
   )
 }

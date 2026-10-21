@@ -5,7 +5,7 @@ import { isInvoiceOverdue } from './overdue'
  * Row tone for the customer invoice list (#2215): the list must read without
  * the status column. Four tones, three of which the eye separates at a glance:
  *
- * - settled: the row is done (paid, cancelled, credited) and recedes
+ * - settled: the row is done (paid, cancelled, credited, written off) and recedes
  * - open: a customer invoice waiting for money (sent, partially paid)
  * - overdue: an open customer invoice past its due date
  * - none: everything else (drafts, quotes, proformas, delivery notes, unpaid
@@ -24,7 +24,7 @@ export type InvoiceRowToneInput = Pick<Invoice, 'status' | 'credited_invoice_id'
   remaining_amount?: number | null
 }
 
-const SETTLED_STATUSES: ReadonlySet<Invoice['status']> = new Set(['paid', 'cancelled', 'credited'])
+const SETTLED_STATUSES: ReadonlySet<Invoice['status']> = new Set(['paid', 'cancelled', 'credited', 'written_off'])
 
 export function invoiceRowTone(invoice: InvoiceRowToneInput, today?: string): InvoiceRowTone {
   if (SETTLED_STATUSES.has(invoice.status)) return 'settled'

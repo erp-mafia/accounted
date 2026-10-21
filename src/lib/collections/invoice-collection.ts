@@ -20,6 +20,7 @@ import { retrySubmittedCase } from './open-case'
 import type { CollectionsAdapter, CollectionsRoute } from './port'
 import { loadHandoverContext, type HandoverContext } from './readiness'
 import { adapterForConnection, callContext, loadConnectionById } from './service-deps'
+import { resolveStartStep, startStepsFor } from './start-step'
 import { escalationRefusal, loadEscalationCheck } from './case-actions'
 import { BANK_CHECKED_ACTIONS } from './stages'
 import { missingAddressFields } from './eligibility'
@@ -192,6 +193,7 @@ export function readinessView(
         : customer?.personalNumber.status === 'invalid'
           ? 'invalid'
           : 'missing'
+  const startSteps = startStepsFor(features?.startSteps ?? ['reminder', 'collection'], eligibility.reminderFeeAgreed)
   return {
     eligible: blocks.length === 0,
     blocks,
@@ -212,8 +214,8 @@ export function readinessView(
     responseAttestation: eligibility.responseAttestation,
     reminderFee: { agreed: eligibility.reminderFeeAgreed, since: eligibility.reminderFeeSince },
     bankCheck: bankCheckView(ctx.bankCheck),
-    startSteps: (features?.startSteps ?? ['reminder', 'collection']) as Array<'reminder' | 'collection'>,
-    defaultStartStep: connection.default_start_step,
+    startSteps,
+    defaultStartStep: resolveStartStep(connection.default_start_step, startSteps) ?? connection.default_start_step,
     minimumAmount: connection.minimum_amount,
     watching,
     withdrawFreeDays: features?.withdrawFreeDays ?? null,

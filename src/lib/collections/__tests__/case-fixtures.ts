@@ -154,6 +154,9 @@ export async function createCaseWorld(options: { invoice?: Record<string, unknow
     consented_by: ADMIN_ID,
     consented_at: '2026-10-01T08:00:00Z',
     ladder_mode: 'off',
+    // The company's terms state a reminder fee, so a handover may start with
+    // a reminder (start-step.ts); the no-fee path sets this back to null.
+    reminder_fee_terms_since: '2026-01-01',
   })
   if (error) throw new Error(error.message)
 

@@ -209,6 +209,10 @@ export const COLLECTIONS_ERROR_MESSAGES: Readonly<Record<string, { sv: string; e
     sv: '{provider} kan inte börja med det steget.',
     en: '{provider} cannot start with that step.',
   },
+  COLLECTION_REMINDER_FEE_NOT_AGREED: {
+    sv: 'En påminnelse från {provider} kostar kunden en påminnelseavgift, och den får bara tas ut om den var avtalad när fakturan ställdes ut. Börja med inkassokrav, eller ange i inkassoinställningarna från vilket datum avgiften står i dina villkor.',
+    en: 'A reminder from {provider} costs the customer a reminder fee, which may only be charged if it was agreed when the invoice was issued. Start with a collection notice, or set in the collection settings the date your terms have included the fee.',
+  },
   COLLECTION_PAYMENT_HISTORY_UNSUPPORTED: {
     sv: 'Fakturans betalningar kan inte rapporteras till {provider}. Kontrollera betalningarna på fakturan.',
     en: 'The invoice\'s payments cannot be reported to {provider}. Check the payments on the invoice.',
@@ -238,8 +242,8 @@ export const COLLECTIONS_ERROR_MESSAGES: Readonly<Record<string, { sv: string; e
     en: '{provider} may charge a fee for the withdrawal under its terms. Confirm this before the case is withdrawn.',
   },
   COLLECTION_PAUSE_UNTIL_INVALID: {
-    sv: 'Välj ett datum efter i dag och högst ett år fram.',
-    en: 'Choose a date after today and at most a year ahead.',
+    sv: 'Välj ett datum efter i dag och högst 14 dagar fram, eller pausa utan datum.',
+    en: 'Choose a date after today and at most 14 days ahead, or pause without a date.',
   },
   COLLECTION_PAYMENT_NOT_REPORTED: {
     sv: 'En betalning på fakturan är inte rapporterad till {provider} än. Försök igen när den är rapporterad.',

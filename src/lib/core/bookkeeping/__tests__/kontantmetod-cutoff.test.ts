@@ -797,6 +797,29 @@ describe('collectKontantmetodCutoff', () => {
     expect(result.payables[0]).toMatchObject({ outstanding: 9200, vat: 1840 })
   })
 
+  // A konstaterad kundförlust gives the invoice the status written_off from
+  // the day of the decision. Written off after period end, the claim was
+  // still open at period end and is a fordran; written off by then, it is not.
+  it('counts an invoice written off after period end, and not one written off by then', async () => {
+    const invoice = (id: string, number: string, total: number) => ({
+      id, invoice_number: number, invoice_date: '2026-09-01', status: 'written_off',
+      total, vat_amount: total / 5, vat_treatment: 'standard_25', document_type: 'invoice',
+      currency: 'SEK', paid_amount: 0,
+    })
+    const result = await collectKontantmetodCutoff(makeDateFilteringSupabase({
+      invoices: [invoice('inv-later', '101', 12500), invoice('inv-before', '102', 6250)],
+      invoice_write_offs: [
+        { id: 'w-later', invoice_id: 'inv-later', kind: 'confirmed', reverses_id: null, entry_date: '2027-02-01' },
+        { id: 'w-before', invoice_id: 'inv-before', kind: 'confirmed', reverses_id: null, entry_date: '2026-11-15' },
+      ],
+      invoice_payments: [],
+      supplier_invoices: [],
+      supplier_invoice_payments: [],
+    }) as never, 'co-1', '2026-01-01', '2026-12-31')
+    expect(result.receivables).toHaveLength(1)
+    expect(result.receivables[0]).toMatchObject({ outstanding: 12500, vat: 2500 })
+  })
+
   // Issue #2019: a manual "Markera som betald" payment carries no bank
   // transaction. The cut-off keys on payment DATE alone, so such a row must
   // retire the fordran exactly like a bank-matched one.

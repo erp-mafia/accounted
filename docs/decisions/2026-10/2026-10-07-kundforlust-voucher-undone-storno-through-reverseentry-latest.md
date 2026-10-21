@@ -1,0 +1,1 @@
+[2026-10-07] A kundförlust voucher is undone only by a storno through reverseEntry, latest decision first; correctEntry, redating and the inline rättelse RPCs refuse it (CUSTOMER_LOSS_VOUCHER_LOCKED), because the decision row names the voucher's amounts and date and the momsdeklaration reads them.

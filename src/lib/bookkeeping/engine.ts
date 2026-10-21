@@ -12,6 +12,7 @@ import {
   CannotEditNonDraftError,
   CannotReverseNonPostedError,
   CannotReverseStornoError,
+  CannotReverseCollectedPaymentError,
   CorrectionChainTooDeepError,
   CutoffCarryReversalDateError,
   EntryAlreadyReversedError,
@@ -43,7 +44,8 @@ import {
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { amountInCurrencyToStore, buildStornoLines } from '@/lib/bookkeeping/line-side'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
-import { selectReversalHooks, type ReversalHookContext } from '@/lib/bookkeeping/reversal-hooks'
+import { isPaymentSourceType } from '@/lib/bookkeeping/payment-sync'
+import { selectReversalHooks, type ReversalHookAfterContext, type ReversalHookContext } from '@/lib/bookkeeping/reversal-hooks'
 import { REVERSAL_HOOKS } from '@/lib/composition/reversal-hooks'
 import { defaultCommitMethod, getActor } from '@/lib/bookkeeping/actor-context'
 import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
@@ -1953,6 +1955,25 @@ export async function cancelOrphanedEntry(
 
 
 /**
+ * True when the collections rebook holds the collected payment booked on
+ * this voucher: booked, not yet paid out by a booked payout, and under a
+ * live booking lease (lib/collections/rebook.ts claims it before the storno).
+ */
+async function holdsCollectionsRebook(supabase: SupabaseClient, companyId: string, entryId: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('collection_collected_payments')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('journal_entry_id', entryId)
+    .eq('status', 'booked')
+    .is('settlement_id', null)
+    .gt('booking_lease_until', new Date().toISOString())
+    .limit(1)
+  if (error) throw new BookkeepingDatabaseError('load_collections_rebook', error.message, error.code)
+  return (data ?? []).length > 0
+}
+
+/**
  * Create a reversal entry for an existing journal entry
  * Sets reversed_by_id/reverses_id links for compliance tracking
  *
@@ -1973,6 +1994,14 @@ export async function reverseEntry(
      * CorrectionChainTooDeepError unless set (see storno-service correctEntry).
      */
     allowDeepChain?: boolean
+    /**
+     * The collections rebook only (lib/collections/rebook.ts): lets the
+     * storno of a collected-payment voucher through while the rebook holds
+     * that payment's booking lease, and leaves its collections payment row
+     * for collections_rebook_release. Every other caller leaves it unset, so
+     * the generic storno of such a voucher stays refused.
+     */
+    collectionsRebook?: boolean
     /**
      * Posting port: the business event the storno answers, linked right
      * after the reversal's draft header and before its voucher number is
@@ -2009,6 +2038,56 @@ export async function reverseEntry(
   // backstop against a direct API call.
   if (original.source_type === 'storno') {
     throw new CannotReverseStornoError(original.source_type)
+  }
+
+  // A payment the collections provider collected (invoice_payments.source
+  // 'collections', step C in lib/collections/collected-payments.ts) is
+  // corrected only through the collections rebook, which reopens and
+  // re-settles the invoice in one service call. A generic storno would
+  // reverse the voucher while block_delete_collected_payment keeps the
+  // payment row: the invoice would stay paid against a reopened receivable,
+  // and the provider's payout would still clear the reversed capital.
+  // Checked before any voucher number is drawn.
+  let collectionsRebook = false
+  if (isPaymentSourceType(original.source_type)) {
+    const { data: collected, error: collectedError } = await supabase
+      .from('invoice_payments')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('journal_entry_id', entryId)
+      .eq('source', 'collections')
+      .limit(1)
+    if (collectedError) {
+      throw new BookkeepingDatabaseError('load_collected_payment_rows', collectedError.message, collectedError.code)
+    }
+    if ((collected ?? []).length > 0) {
+      collectionsRebook = options?.collectionsRebook === true && (await holdsCollectionsRebook(supabase, companyId, entryId))
+      if (!collectionsRebook) throw new CannotReverseCollectedPaymentError()
+    }
+  }
+
+  // A kundförlust voucher is undone latest decision first (a recovery before
+  // the write-off it recovers), so the decision rows never disagree with the
+  // ledger: its reversal hook refuses the rest before anything is posted.
+  if (original.source_type === 'customer_loss') {
+    // A recovery booked from a payment the collections provider collected
+    // (a written-off invoice, lib/collections/collected-payments.ts) is
+    // corrected through the collections rebook only, like a C voucher: a
+    // generic storno would leave the payment booked on a reversed voucher,
+    // and a booked payout may already have cleared its capital.
+    const { data: collected, error: collectedError } = await supabase
+      .from('collection_collected_payments')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('journal_entry_id', entryId)
+      .limit(1)
+    if (collectedError) {
+      throw new BookkeepingDatabaseError('load_collected_payment_rows', collectedError.message, collectedError.code)
+    }
+    if ((collected ?? []).length > 0) {
+      collectionsRebook = options?.collectionsRebook === true && (await holdsCollectionsRebook(supabase, companyId, entryId))
+      if (!collectionsRebook) throw new CannotReverseCollectedPaymentError()
+    }
   }
 
   // A kontantmetod year-end carry (#3440) is stornoed only on its own date,
@@ -2050,7 +2129,14 @@ export async function reverseEntry(
   // migrated invoice's deduction reclassification while a begäran holds the
   // invoice).
   const reversalHooks = selectReversalHooks(REVERSAL_HOOKS, original.source_type)
-  const reversalHookContext: ReversalHookContext = { supabase, companyId, entry: original as JournalEntry }
+  const reversalHookContext: ReversalHookContext = {
+    supabase,
+    companyId,
+    userId,
+    entry: original as JournalEntry,
+    // The rebook removes the collections payment row itself, inside its window.
+    ...(collectionsRebook ? { leaveCollectedPaymentRows: true } : {}),
+  }
   for (const hook of reversalHooks) {
     if (hook.beforeReversal) await hook.beforeReversal(reversalHookContext)
   }
@@ -2417,11 +2503,16 @@ export async function reverseEntry(
   }
 
   // The business-state mirrors selected above (the invoice behind a payment
-  // voucher, a ROT/RUT begäran, a migrated invoice's deduction), in list
-  // order, one at a time. Not caught: an unexpected throw propagates, the
+  // voucher, a ROT/RUT begäran, a migrated invoice's deduction, a collections
+  // payout, a kundförlust decision), in list order, one at a time, each with
+  // the storno it follows. Not caught: an unexpected throw propagates, the
   // storno stands and the emits below are skipped.
+  const reversalHookAfterContext: ReversalHookAfterContext = {
+    ...reversalHookContext,
+    storno: { id: reversalEntry.id, entry_date: reversalEntry.entry_date },
+  }
   for (const hook of reversalHooks) {
-    if (hook.afterReversal) await hook.afterReversal(reversalHookContext)
+    if (hook.afterReversal) await hook.afterReversal(reversalHookAfterContext)
   }
 
   // Fetch complete reversal entry with lines

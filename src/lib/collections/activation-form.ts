@@ -1,6 +1,8 @@
 import { z } from 'zod'
+import { isAccountNumber } from '@/lib/invariants/account-number'
 import { normalizeOrgNumber } from '@/lib/invariants/org-number'
 import { isSaneDateString } from '@/lib/invariants/iso-date'
+import { formatBankgiroNumber, formatPlusgiroNumber } from '@/lib/bankgiro/luhn'
 
 /**
  * The activation form for collections (settings page, build spec 3.2), shared
@@ -31,6 +33,11 @@ export type ActivationErrorKey =
   | 'date_in_future'
   | 'too_long'
   | 'answer_required'
+  | 'invalid_clearing_account'
+  | 'invalid_payout_account'
+  | 'same_account'
+  | 'account_not_in_chart'
+  | 'clearing_account_in_use'
 
 // ---------------------------------------------------------------------------
 // Rules
@@ -139,6 +146,22 @@ export function payoutOptions(accounts: readonly PayoutSourceAccount[]): PayoutO
     }
   }
   return options
+}
+
+/**
+ * A payout number as the rest of the app shows it: a bankgiro or plusgiro
+ * with its hyphen (5555-1238, 4567-4), a bank account as clearing-account.
+ * The option keeps the bare digits it is sent with.
+ */
+export function payoutNumberText(option: Pick<PayoutOption, 'kind' | 'number'>): string {
+  if (option.kind === 'bankgiro') return formatBankgiroNumber(option.number)
+  if (option.kind === 'plusgiro') return formatPlusgiroNumber(option.number)
+  return option.number
+}
+
+/** A know-your-customer question's "Beskriv" box shows only after the answer Ja. */
+export function kycDescriptionShown(answer: boolean | null): boolean {
+  return answer === true
 }
 
 export function findPayoutOption(
@@ -351,6 +374,12 @@ export const SettingsPatchSchema = z
     reminderFeeTermsSince: z.string().max(10).nullable().optional(),
     lateInterest: LateInterestSchema.nullable().optional(),
     distributionEnabled: z.boolean().optional(),
+    /** Where the money the provider received for the company waits until the payout (default 1689). */
+    clearingAccount: z.string().trim().max(4).optional(),
+    /** The bank account the provider's payouts arrive on (19xx). */
+    payoutAccount: z.string().trim().max(4).optional(),
+    autoBookCollectedPayments: z.boolean().optional(),
+    autoBookSettlements: z.boolean().optional(),
     /** The daily batch ('staged') or none ('off'). */
     ladderMode: z.enum(LADDER_MODES).optional(),
     /** How many days after the due date an invoice joins the daily batch. */
@@ -358,3 +387,69 @@ export const SettingsPatchSchema = z
   })
   .refine((patch) => Object.values(patch).some((v) => v !== undefined), { message: 'required' })
 export type SettingsPatch = z.infer<typeof SettingsPatchSchema>
+
+/**
+ * The booking accounts of a connection (BAS class 1): the clearing account
+ * is a receivable on the provider (1000 to 1899, default 1689 "övriga
+ * kortfristiga fordringar"), the payout account a cash or bank account
+ * (19xx, where the payout's bank row lands), and the two are different.
+ * Whether the chart holds them is checked by the service.
+ */
+export function validateBookingAccounts(accounts: { clearingAccount: string; payoutAccount: string }): Record<string, ActivationErrorKey> {
+  const errors: Record<string, ActivationErrorKey> = {}
+  const { clearingAccount, payoutAccount } = accounts
+  if (!isAccountNumber(clearingAccount) || !clearingAccount.startsWith('1') || clearingAccount.startsWith('19')) {
+    errors.clearingAccount = 'invalid_clearing_account'
+  }
+  if (!isAccountNumber(payoutAccount) || !payoutAccount.startsWith('19')) errors.payoutAccount = 'invalid_payout_account'
+  if (!errors.clearingAccount && !errors.payoutAccount && clearingAccount === payoutAccount) errors.payoutAccount = 'same_account'
+  return errors
+}
+
+// ---------------------------------------------------------------------------
+// One-screen activation
+// ---------------------------------------------------------------------------
+
+/** The lowest amount a new connection hands over, in kronor (editable under Regler). */
+export const DEFAULT_MINIMUM_AMOUNT = 100
+
+/**
+ * The rules a new connection starts with, so activation asks only what the
+ * law and the provider require (terms and personal data, the company, know
+ * your customer): approval before an inkassokrav and before Kronofogden
+ * (locked on in v1, not part of the request), a reminder as the first step,
+ * a minimum of 100 kr, no reminder fee date or agreed interest (left empty
+ * when unsure, as the rules' own help says), and the morning proposals on
+ * where the installation offers them. Every one is editable under Regler
+ * once the connection is active.
+ */
+export function defaultActivationRules(ladderOffered: boolean): RulesStepInput {
+  return {
+    minimumAmount: DEFAULT_MINIMUM_AMOUNT,
+    defaultStartStep: 'reminder',
+    reminderFeeTermsSince: null,
+    lateInterest: null,
+    ladderMode: ladderOffered ? 'staged' : 'off',
+  }
+}
+
+/**
+ * The requests "Skicka ansökan" sends, in order. Consent comes first while
+ * the connection does not exist yet, so nothing about the company leaves the
+ * app before an owner or admin has agreed to the provider's terms and the
+ * data sharing; the application follows in the same click.
+ */
+export function activationRequests(connected: boolean): Array<'consent' | 'onboarding'> {
+  return connected ? ['onboarding'] : ['consent', 'onboarding']
+}
+
+/** Whether "Skicka ansökan" may be pressed: both consents given (or given before), and somewhere for payouts to land. */
+export function activationCanSubmit(input: {
+  connected: boolean
+  acceptTerms: boolean
+  acceptDataSharing: boolean
+  payoutOptions: number
+}): boolean {
+  if (input.payoutOptions === 0) return false
+  return input.connected || (input.acceptTerms && input.acceptDataSharing)
+}

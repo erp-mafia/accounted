@@ -25,10 +25,18 @@ export interface InvoiceCollectionAvailability {
   sandbox: boolean
   obligations: boolean
   displayName: string | null
+  /** The provider's square mark (lib/collections/provider-mark.ts); null shows the initials chip. */
+  markUrl: string | null
   portalUrl: string | null
   feeSummarySv: string | null
   withdrawFreeDays: number | null
-  connection: { state: string; ladderMode: 'off' | 'staged' | null; ladderDaysAfterDue: number | null } | null
+  connection: {
+    state: string
+    ladderMode: 'off' | 'staged' | null
+    ladderDaysAfterDue: number | null
+    /** The company's configured first step (the overdue banner's button label). */
+    defaultStartStep: 'reminder' | 'collection' | null
+  } | null
 }
 
 export interface InvoiceCollectionData {

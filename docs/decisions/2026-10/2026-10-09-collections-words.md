@@ -1,0 +1,1 @@
+[2026-10-09] Collections words: inkasso, påminnelse, inkassokrav, ärende and avräkning (the provider's payout with its specification: the Avräkningar section, its detail and the Att göra row); owner words replace "kapital" (Obetalt, Betalt av kunden) and "Läge" (Steg).

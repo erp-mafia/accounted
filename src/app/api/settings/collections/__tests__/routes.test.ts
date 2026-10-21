@@ -338,6 +338,36 @@ describe('PATCH /api/settings/collections', () => {
     expect((await call(PATCH, 'PATCH', { distributionEnabled: false })).status).toBe(200)
   })
 
+  it('changes the booking accounts and the automatic booking for an admin, behind no start gate', async () => {
+    switchOn()
+    await activate()
+    vi.stubEnv('COLLECTIONS_ENABLED', '')
+    const res = await call(PATCH, 'PATCH', { clearingAccount: '1680', payoutAccount: '1940', autoBookCollectedPayments: true, autoBookSettlements: true })
+    expect(res.status).toBe(200)
+    expect((await json<ConnectionBody>(res)).data.connection).toMatchObject({
+      settings: { clearingAccount: '1680', payoutAccount: '1940', autoBookCollectedPayments: true, autoBookSettlements: true },
+    })
+    expect(db.rows('collection_connections')[0]).toMatchObject({ clearing_account: '1680', payout_account: '1940', user_id: ADMIN_ID })
+  })
+
+  it('answers field errors for booking accounts that do not fit, and 403 for a member who is not an admin', async () => {
+    switchOn()
+    await activate()
+    const res = await call(PATCH, 'PATCH', { clearingAccount: '1930', payoutAccount: '1689' })
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { errors: { field: string; message: string }[] }
+    expect(body.errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ field: 'clearingAccount', message: 'invalid_clearing_account' }),
+        expect.objectContaining({ field: 'payoutAccount', message: 'invalid_payout_account' }),
+      ]),
+    )
+    db.rpcs.set('user_is_company_admin', () => false)
+    // A new connection books nothing on its own; a member who is not an admin cannot turn it on.
+    expect((await call(PATCH, 'PATCH', { autoBookSettlements: true })).status).toBe(403)
+    expect(db.rows('collection_connections')[0]).toMatchObject({ clearing_account: '1689', auto_book_settlements: false })
+  })
+
   it('chooses the daily batch and its days only behind the ladder flag; turning it off is never gated', async () => {
     switchOn()
     await activate()

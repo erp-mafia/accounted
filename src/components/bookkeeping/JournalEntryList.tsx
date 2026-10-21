@@ -2,6 +2,7 @@
 
 import { Fragment, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import Link from 'next/link'
+import { settlementsToastAction } from '@/components/collections/settlements-toast-action'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import {
@@ -182,6 +183,7 @@ export default function JournalEntryList({
   const { canWrite } = useCanWrite()
   const company = useCompanyOptional()?.company ?? null
   const t = useTranslations('journal_list')
+  const tSettlements = useTranslations('settlements')
   // Loads the BAS chart chunk after mount and re-renders once names and
   // descriptions for non-hardcoded accounts are available.
   useBasReference()
@@ -803,7 +805,12 @@ export default function JournalEntryList({
         setReverseEntryTarget(null)
         await fetchEntries()
       } else {
-        toast({ title: t('toast_reverse_failed'), description: getErrorMessage(result, { context: 'journal_entry' }), variant: 'destructive' })
+        toast({
+          title: t('toast_reverse_failed'),
+          description: getErrorMessage(result, { context: 'journal_entry' }),
+          variant: 'destructive',
+          action: settlementsToastAction(result, tSettlements('open_settlements')),
+        })
       }
     } catch {
       toast({ title: t('toast_reverse_failed'), variant: 'destructive' })

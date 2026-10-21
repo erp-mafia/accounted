@@ -20,6 +20,8 @@ import {
   assertMigratedDeductionReversible,
   syncMigratedDeductionAfterReversal,
 } from '@/lib/invoices/migrated-deduction-reversal'
+import { releaseSettlementAfterReversal } from '@/lib/collections/settlement-reversal'
+import { assertCustomerLossReversible, syncCustomerLossAfterReversal } from '@/lib/customer-loss/reversal'
 
 export const REVERSAL_HOOKS: readonly ReversalHook[] = Object.freeze<ReversalHook[]>([
   // A reversed payment voucher puts the linked invoice or supplier invoice
@@ -30,8 +32,12 @@ export const REVERSAL_HOOKS: readonly ReversalHook[] = Object.freeze<ReversalHoo
     id: 'invoice-payment-status',
     module: 'ledger',
     sourceTypes: PAYMENT_SOURCE_TYPES,
-    afterReversal: ({ supabase, companyId, entry }) =>
-      syncInvoiceStatusFromPaymentEntry(supabase, companyId, entry),
+    // The collections rebook's storno leaves the collected payment rows
+    // for the rebook to remove (ReversalHookContext.leaveCollectedPaymentRows).
+    afterReversal: ({ supabase, companyId, entry, leaveCollectedPaymentRows }) =>
+      leaveCollectedPaymentRows
+        ? syncInvoiceStatusFromPaymentEntry(supabase, companyId, entry, undefined, { leaveCollectedPaymentRows })
+        : syncInvoiceStatusFromPaymentEntry(supabase, companyId, entry),
   },
   // A reversed rot_rut_reclaim voucher hands the refused share back to
   // Skatteverket's side: the invoices it reopened close again and the
@@ -55,5 +61,33 @@ export const REVERSAL_HOOKS: readonly ReversalHook[] = Object.freeze<ReversalHoo
       assertMigratedDeductionReversible(supabase, companyId, entry),
     afterReversal: ({ supabase, companyId, entry }) =>
       syncMigratedDeductionAfterReversal(supabase, companyId, entry),
+  },
+  // A reversed collections payout voucher returns the payout to the
+  // settlements view to be booked again (lib/collections/settlement-reversal.ts).
+  {
+    id: 'collections-payout',
+    module: 'collections',
+    sourceTypes: ['collection_settlement'],
+    afterReversal: async ({ companyId, entry }) => {
+      await releaseSettlementAfterReversal(companyId, entry.id)
+    },
+  },
+  // A kundförlust voucher is undone latest decision first (a recovery before
+  // the write-off it recovers), refused before a voucher number is spent;
+  // once reversed, its decision is annulled: a written-off invoice gets its
+  // open status back and the momsdeklaration adds the ruta 05 base back in
+  // the storno's period (lib/customer-loss/reversal.ts). A recovery booked
+  // from a collected payment is refused earlier, in reverseEntry, unless the
+  // collections rebook holds it.
+  {
+    id: 'customer-loss',
+    module: 'invoicing',
+    sourceTypes: ['customer_loss'],
+    beforeReversal: ({ supabase, companyId, entry }) => assertCustomerLossReversible(supabase, companyId, entry.id),
+    afterReversal: ({ supabase, companyId, userId, entry, storno }) =>
+      syncCustomerLossAfterReversal(supabase, companyId, userId, entry.id, {
+        id: storno.id,
+        entry_date: storno.entry_date,
+      }),
   },
 ])

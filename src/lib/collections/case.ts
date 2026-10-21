@@ -13,6 +13,7 @@ import { stripPersonalNumbers, stripPersonalNumbersDeep } from './personal-numbe
 import type { BankCheckSnapshot } from './bank-check'
 import type { ForwardIssueView } from './forwarding'
 import type { PossiblePaymentView } from './bank-sweep'
+import { recordCollectedPayments } from './collected-payment-record'
 
 const log = createLogger('collections/case')
 
@@ -468,6 +469,13 @@ export async function applyCaseSnapshot(
   }
   await appendCaseEvents(db, updated, events)
   await acknowledgeReportedPayments(db, updated, snapshot, now)
+  // What the customer paid the provider itself, kept for its booking
+  // (collected-payments.ts). Best-effort: the next read records it again.
+  try {
+    await recordCollectedPayments(db, updated, snapshot)
+  } catch (err) {
+    log.warn('collected payments not recorded', { caseId: updated.id, error: err instanceof Error ? err.message : String(err) })
+  }
 
   // The person who acted, else (a change the sync read) the person who handed the invoice over.
   const eventUserId = options.userId ?? updated.opened_by
@@ -644,16 +652,46 @@ export function caseView(
     syncError: row.sync_error,
     forwardIssues: [...forwardIssues],
     forwardsInFlight: extras.forwardsInFlight ?? false,
-    events: events.map((e) => ({
-      id: e.id,
-      occurredAt: e.occurred_at,
-      kind: e.kind,
-      stageFrom: e.stage_from,
-      stageTo: e.stage_to,
-      direction: e.direction,
-      label: e.label,
-      labelKey: eventLabelKey(e),
-      amount: e.amount,
-    })),
+    events: withHandoverEvent(
+      row,
+      events.map((e) => ({
+        id: e.id,
+        occurredAt: e.occurred_at,
+        kind: e.kind,
+        stageFrom: e.stage_from,
+        stageTo: e.stage_to,
+        direction: e.direction,
+        label: e.label,
+        labelKey: eventLabelKey(e),
+        amount: e.amount,
+      })),
+    ),
   }
+}
+
+/**
+ * The handover itself on the trail, newest first like the rest: the case row
+ * records when the company sent the invoice and where it starts, no event row
+ * does (the provider's timeline begins at its own first step). Shown once the
+ * provider registered the claim. Pure.
+ */
+function withHandoverEvent(
+  row: Pick<CollectionCaseRow, 'id' | 'opened_at' | 'start_step' | 'submission_status' | 'claim_amount'>,
+  events: CollectionCaseView['events'],
+): CollectionCaseView['events'] {
+  if (!row.opened_at || row.submission_status !== 'registered') return events
+  const label = `handover_${row.start_step}`
+  const handover: CollectionCaseView['events'][number] = {
+    id: `handover:${row.id}`,
+    occurredAt: row.opened_at,
+    kind: 'user_action',
+    stageFrom: null,
+    stageTo: null,
+    direction: 'internal',
+    label,
+    labelKey: `event_action_${label}`,
+    amount: row.claim_amount,
+  }
+  const at = events.findIndex((e) => e.occurredAt < handover.occurredAt)
+  return at === -1 ? [...events, handover] : [...events.slice(0, at), handover, ...events.slice(at)]
 }

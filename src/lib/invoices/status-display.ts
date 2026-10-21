@@ -23,6 +23,8 @@ const INVOICE_STATUS_DISPLAY: Record<InvoiceStatus, StatusDisplay> = {
   overdue: { labelKey: 'status_overdue', chip: OVERDUE_CHIP },
   cancelled: { labelKey: 'status_cancelled', chip: 'secondary' },
   credited: { labelKey: 'status_credited', chip: 'secondary' },
+  // A konstaterad kundförlust (lib/customer-loss): the claim left 1510.
+  written_off: { labelKey: 'status_written_off', chip: 'destructive' },
 }
 
 /** Null for a status this build does not know, so the caller can show the raw value. */
@@ -50,6 +52,7 @@ export type InvoiceRowStatusKind =
   | 'cancelled'
   | 'credit_note'
   | 'credited'
+  | 'written_off'
   | 'quote'
   | 'unsent'
   | 'draft'
@@ -85,6 +88,8 @@ export function invoiceRowStatus(invoice: InvoiceRowStatusInput, today?: string)
     return { kind: 'credit_note', labelKey: 'badge_credit', chip: 'destructive' }
   }
   if (invoice.status === 'credited') return fromDisplay('credited', 'credited')
+  // A konstaterad kundförlust closes the claim: never in the payment flow.
+  if (invoice.status === 'written_off') return fromDisplay('written_off', 'written_off')
   // Offert: the decision (or derived expiry) is the status. Open and
   // accepted are the normal states; declined, expired and an open quote
   // that was never sent (crm#1202) deviate.

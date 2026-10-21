@@ -108,10 +108,10 @@ describe('runCaseAction', () => {
     const outcome = await runCaseAction(deps({ env: ENV_OFF, facts: world.facts({ capability: false }) }), {
       invoiceId: INVOICE_ID,
       action: 'pause',
-      until: '2026-11-01',
+      until: '2026-10-16',
     })
     expect(outcome).toMatchObject({ ok: true, case: { stage: 'paused' } })
-    expect(sent).toMatchObject([{ action: 'pause', until: '2026-11-01', step: null, message: null }])
+    expect(sent).toMatchObject([{ action: 'pause', until: '2026-10-16', step: null, message: null }])
     const trail = world.db.rows('collection_case_events').filter((e) => e.kind === 'user_action')
     expect(trail).toMatchObject([{ label: 'pause', actor_user_id: ADMIN_ID, company_id: COMPANY_ID }])
     expect(updates).toContainEqual({ type: 'updated', stage: 'paused', closeReason: null, userId: ADMIN_ID })
@@ -252,19 +252,19 @@ describe('runCaseAction', () => {
     expect(trail).toMatchObject([{ label: 'withdraw', raw: { withdraw_fee_may_apply: true, withdraw_fee_acknowledged: true } }])
   })
 
-  it('pauses until a date after today and at most a year ahead', async () => {
+  it('pauses until a date after today and at most 14 days ahead', async () => {
     const { deps, sent } = await worldWithCase(2)
-    for (const until of ['2026-10-06', '2026-10-01', '2027-10-07']) {
+    for (const until of ['2026-10-06', '2026-10-01', '2026-10-21']) {
       expect(await runCaseAction(deps(), { invoiceId: INVOICE_ID, action: 'pause', until })).toMatchObject({
         ok: false,
         code: 'COLLECTION_PAUSE_UNTIL_INVALID',
         status: 400,
-        details: { after: '2026-10-06', latest: '2027-10-06' },
+        details: { after: '2026-10-06', latest: '2026-10-20' },
       })
     }
     expect(sent).toEqual([])
-    expect(await runCaseAction(deps(), { invoiceId: INVOICE_ID, action: 'pause', until: '2027-10-06' })).toMatchObject({ ok: true })
-    expect(sent).toMatchObject([{ action: 'pause', until: '2027-10-06' }])
+    expect(await runCaseAction(deps(), { invoiceId: INVOICE_ID, action: 'pause', until: '2026-10-20' })).toMatchObject({ ok: true })
+    expect(sent).toMatchObject([{ action: 'pause', until: '2026-10-20' }])
   })
 
   it('never sends "the customer has paid": the payment is booked instead, or the claim contested', async () => {

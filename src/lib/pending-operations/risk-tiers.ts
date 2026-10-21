@@ -68,10 +68,15 @@ const RISK_TIERS = {
   // approvable only in the web UI (requiresWebApproval below).
   open_collection_case: 'high',
   collection_case_action: 'high',
+  // Collections bookings post vouchers (corrected only by the rebook or a
+  // storno of the payout voucher). Obligation work, approvable by an agent.
+  book_collected_payment: 'high',
+  book_collection_settlement: 'high',
   // Cron-staged (the daily collections batch): hands invoices over and
   // approves next steps against customers; an administrator approves it in
   // the web UI only.
   collections_daily_batch: 'high',
+  record_customer_loss: 'high',
   delete_supplier_invoice: 'medium',
   uncredit_supplier_invoice: 'high',
   update_supplier_invoice_item_account: 'high',

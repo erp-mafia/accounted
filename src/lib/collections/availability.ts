@@ -15,7 +15,9 @@ import {
   type CollectionsGateFacts,
   type CollectionsStartState,
 } from './flags'
+import { providerMarkUrl } from './provider-mark'
 import { chooseCollectionsRoute } from './registry'
+import { getConnectorConfig } from '@/lib/connect/instance/config'
 
 /**
  * GET /api/collections/availability: everything the UI needs to decide what
@@ -59,6 +61,11 @@ export interface CollectionsAvailability {
    * connection row, else null (the UI then says "inkassobolaget").
    */
   displayName: string | null
+  /**
+   * The provider's square mark (provider-mark.ts): null on the fake route, in
+   * a sandbox and without a connector, where the UI shows the initials chip.
+   */
+  markUrl: string | null
 }
 
 export interface BuildAvailabilityInput {
@@ -66,11 +73,18 @@ export interface BuildAvailabilityInput {
   facts: CollectionsGateFacts
   sandbox: boolean
   provider: CatalogueCapabilityEntry<CollectionsFeatures> | null
+  /** The connector's base URL (getConnectorConfig), for the provider's mark. */
+  connectBaseUrl?: string | null
 }
 
 export function buildCollectionsAvailability(input: BuildAvailabilityInput): CollectionsAvailability {
   const { env, facts, sandbox, provider } = input
   const connection = facts.connection
+  const route = connection?.route ?? 'connect'
+  const markUrl =
+    sandbox || route === 'fake'
+      ? null
+      : providerMarkUrl(input.connectBaseUrl ?? null, provider?.provider.ref ?? connection?.providerRef ?? null)
   return {
     enabled: env.enabled,
     pilot: isPilotCompany(env, facts.companyId),
@@ -100,6 +114,7 @@ export function buildCollectionsAvailability(input: BuildAvailabilityInput): Col
         }
       : null,
     displayName: provider?.provider.displayName ?? connection?.displayName ?? null,
+    markUrl,
   }
 }
 
@@ -142,5 +157,11 @@ export async function getCollectionsAvailability(
   const shown = collectionsStartState(facts, env) !== 'hidden' || hasCollectionObligations(facts.obligations) || facts.connection !== null
   const route = facts.connection?.route ?? chooseCollectionsRoute({ sandbox, fakeAdapterRequested: env.fakeAdapterRequested })
   const provider = shown ? await getCollectionsProvider(route, deps) : null
-  return buildCollectionsAvailability({ env, facts, sandbox, provider })
+  return buildCollectionsAvailability({
+    env,
+    facts,
+    sandbox,
+    provider,
+    connectBaseUrl: route === 'fake' ? null : (getConnectorConfig()?.baseUrl ?? null),
+  })
 }

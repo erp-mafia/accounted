@@ -26,6 +26,7 @@
  * 'linked_to_existing_voucher' for audit on success.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { releaseDoubtfulReserveAfterChange } from '@/lib/customer-loss/doubtful'
 import { eventBus } from '@/lib/events/bus'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
@@ -635,6 +636,13 @@ export async function linkTransactionToJournalEntry(
         companyId,
       })
     }
+    // A befarad kundförlust reserve the payment made unnecessary comes back
+    // (Dr 1519 / Cr 6352), as on every payment path. Never throws.
+    await releaseDoubtfulReserveAfterChange(supabase, companyId, userId, {
+      invoiceId,
+      entryDate: transaction.date as string,
+      trigger: 'payment',
+    })
   }
 
   const voucherLabel = formatVoucherLabel(

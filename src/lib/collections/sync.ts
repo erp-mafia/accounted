@@ -17,6 +17,8 @@ import { isCollectionsError } from './errors'
 import { readCollectionsEnv, type CollectionsEnv } from './flags'
 import { refreshCase } from './invoice-collection'
 import { retrySubmittedCase } from './open-case'
+import { autoBookCollectedPayments, type AutoBookCollectedSummary } from './collected-payments'
+import { runSettlementSync, type SettlementSyncSummary } from './settlements'
 import { getRegisteredCollectionsAdapter } from './registry'
 import type { CollectionsAdapter, CollectionsRoute } from './port'
 
@@ -54,6 +56,12 @@ const log = createLogger('collections/sync')
  * every open case (bank-sweep.ts) and the per-case reconcile against the
  * provider (reconcile.ts). On the other runs only the cases the reconcile
  * already flagged are compared again, so a fixed difference clears quickly.
+ *
+ * Last, the money the provider collected: collected payments are booked for
+ * the companies that turned automatic booking on (collected-payments.ts),
+ * payouts booked but not yet acknowledged are told to the provider, and once
+ * a night every connection's payouts are imported and, where the company
+ * turned it on, booked (settlements.ts).
  */
 
 /** Rows polled per run: far more than any realistic number of activations in review at once. */
@@ -108,6 +116,10 @@ export interface CollectionsSyncSummary {
   /** Null when the nightly part did not run this time. */
   nightly: { sweep: SweepSummary; reconcile: CaseReconcileSummary } | null
   reconcile: CaseReconcileSummary
+  /** Collected payments booked automatically (companies with auto_book_collected_payments). */
+  collected: AutoBookCollectedSummary
+  /** Payouts acknowledged every run; imported and booked automatically once a night. */
+  settlements: SettlementSyncSummary
 }
 
 /** The nightly part runs on the first run after this local hour... */
@@ -135,6 +147,13 @@ export function nightlyDue(lastDailyAt: string | null, now: Date): boolean {
 
 /** The slice of the run the forwards drain may use before the case work starts. */
 export const FORWARD_SYNC_BUDGET_MS = 60_000
+/**
+ * The slice of the run kept for the settlement work (collected payments and
+ * payouts, an obligation path): the case work, the sweep and the reconcile
+ * before it stop this much early, so a large nightly reconcile can never
+ * starve the payout import night after night.
+ */
+export const SETTLEMENT_SYNC_RESERVE_MS = 45_000
 
 export interface CollectionsSyncDeps {
   db: SupabaseClient
@@ -159,11 +178,12 @@ export async function runCollectionsSync(deps: CollectionsSyncDeps): Promise<Col
   const budget = deps.budgetMs ?? SYNC_RUN_BUDGET_MS
   const runStarted = clock()
   const left = () => Math.max(0, budget - (clock() - runStarted))
+  const beforeSettlements = () => Math.max(0, left() - SETTLEMENT_SYNC_RESERVE_MS)
   const forwardRows = await guarded('forward reconcile', errors, EMPTY_FORWARD_ROWS, () => reconcileForwardRows(deps.db))
   const forwards = await drainForwards(deps, now, errors)
   const sweepDeps = { db: deps.db, now, adapterFor: deps.adapterFor, log, clock: deps.clock }
   const upkeep = await guarded('sweep upkeep', errors, { retried: 0, paused: 0, resolved: 0 }, () => sweepUpkeep(sweepDeps))
-  const cases = await syncCases({ ...deps, budgetMs: left() }, now, errors)
+  const cases = await syncCases({ ...deps, budgetMs: beforeSettlements() }, now, errors)
 
   // Once a night: every open case against the bank and against the provider.
   const lastDailyAt = await readLastDailyAt(deps.db)
@@ -172,12 +192,12 @@ export async function runCollectionsSync(deps: CollectionsSyncDeps): Promise<Col
   if (nightlyDue(lastDailyAt, now())) {
     const sweep = await guarded('nightly sweep', errors, { ...EMPTY_SWEEP, complete: false }, async () => {
       const startedAt = clock()
-      const budgetMs = Math.floor(left() / 2)
+      const budgetMs = Math.floor(beforeSettlements() / 2)
       const result = await sweepCollectionPayments({ ...sweepDeps, budgetMs })
       return { ...result, complete: clock() - startedAt <= budgetMs }
     })
     reconcile = await guarded('daily reconcile', errors, { ...EMPTY_RECONCILE, complete: false }, () =>
-      reconcileCases({ ...sweepDeps, budgetMs: left() }, { only: 'all' }),
+      reconcileCases({ ...sweepDeps, budgetMs: beforeSettlements() }, { only: 'all' }),
     )
     const { complete, ...sweepSummary } = sweep
     nightly = { sweep: sweepSummary, reconcile }
@@ -187,20 +207,31 @@ export async function runCollectionsSync(deps: CollectionsSyncDeps): Promise<Col
     }
   } else {
     reconcile = await guarded('reconcile', errors, { ...EMPTY_RECONCILE }, () =>
-      reconcileCases({ ...sweepDeps, budgetMs: left() }, { only: 'mismatched' }),
+      reconcileCases({ ...sweepDeps, budgetMs: beforeSettlements() }, { only: 'mismatched' }),
     )
   }
+
+  const settlementDeps = { db: deps.db, now: deps.now, log, adapterFor: deps.adapterFor }
+  // The settlement work spends what is left of the run (at least the reserve, unless the run itself overran).
+  const collected = await guarded('collected payments', errors, { ...EMPTY_COLLECTED }, () =>
+    autoBookCollectedPayments(settlementDeps, { budgetMs: Math.floor(left() / 2), clock }),
+  )
+  const settlements = await guarded('settlements', errors, { ...EMPTY_SETTLEMENTS }, () =>
+    runSettlementSync(settlementDeps, { importAll: nightly !== null, budgetMs: left(), clock }),
+  )
 
   const { error: stateError } = await deps.db
     .from('collection_sync_state')
     .update({ last_run_at: now().toISOString(), last_error: errors[errors.length - 1] ?? null })
     .eq('id', 1)
   if (stateError) log.warn('collection_sync_state update failed', { error: stateError.message })
-  return { ...connections, forwardRows, forwards, sweepUpkeep: upkeep, cases, nightly, reconcile }
+  return { ...connections, forwardRows, forwards, sweepUpkeep: upkeep, cases, nightly, reconcile, collected, settlements }
 }
 
 const EMPTY_FORWARD_ROWS: ForwardReconcileSummary = { createdPayments: 0, createdCredits: 0, reverted: 0, skipped: 0 }
 const EMPTY_SWEEP: SweepSummary = { cases: 0, hits: 0, paused: 0, notPaused: 0, failed: 0 }
+const EMPTY_COLLECTED: AutoBookCollectedSummary = { booked: 0, needsReview: 0, skipped: 0, failed: 0, deferred: 0 }
+const EMPTY_SETTLEMENTS: SettlementSyncSummary = { imported: 0, booked: 0, needsMapping: 0, acknowledged: 0, bankLinked: 0, failed: 0, deferred: 0 }
 const EMPTY_RECONCILE: CaseReconcileSummary = { checked: 0, mismatched: 0, paused: 0, resent: 0, failed: 0, complete: true }
 
 /** Run one part of the sync; its failure is recorded and never stops the rest. */

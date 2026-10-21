@@ -15,6 +15,7 @@
  * private to this module: call `commitPendingOperation()` to invoke them.
  */
 import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
+import { releaseDoubtfulReserveAfterChange } from '@/lib/customer-loss/doubtful'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { commitArkivProposeFact } from '@/lib/arkiv/facts/propose'
 import { parseEntityType, resolveCompanyEntityType } from '@/lib/company/entity-type'
@@ -2664,6 +2665,13 @@ async function commitMarkInvoicePaid(
     settlementAccountNumber,
     paymentSource: 'manual',
   })
+  // A befarad kundförlust reserve the payment made unnecessary comes back
+  // (Dr 1519 / Cr 6352), as on every payment path. Never throws.
+  await releaseDoubtfulReserveAfterChange(supabase, companyId, userId, {
+    invoiceId,
+    entryDate: paymentDate,
+    trigger: 'payment',
+  })
 
   if (!settled.ok) {
     switch (settled.code) {
@@ -2759,7 +2767,7 @@ async function commitSendInvoice(
   }
   // partially_paid/credited imply the invoice was already issued too: the
   // status flip below would regress them to 'sent' (PR #666 review, ASVS V2.3).
-  if (['sent', 'paid', 'overdue', 'partially_paid', 'credited'].includes(invoice.status)) {
+  if (['sent', 'paid', 'overdue', 'partially_paid', 'credited', 'written_off'].includes(invoice.status)) {
     return { error: 'Invoice has already been sent', status: 409 }
   }
   // A cancelled invoice keeps its F-series number for ML 17 kap 24§ compliance
@@ -3671,6 +3679,13 @@ async function commitMatchTransactionInvoice(
     paymentDate: transaction.date,
     userId,
     companyId,
+  })
+  // A befarad kundförlust reserve the payment made unnecessary comes back
+  // (Dr 1519 / Cr 6352), as on every payment path. Never throws.
+  await releaseDoubtfulReserveAfterChange(supabase, companyId, userId, {
+    invoiceId: invoice.id,
+    entryDate: transaction.date,
+    trigger: 'payment',
   })
 
   return {

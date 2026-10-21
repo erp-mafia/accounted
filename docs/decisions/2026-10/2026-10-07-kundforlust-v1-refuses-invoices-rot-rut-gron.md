@@ -1,0 +1,1 @@
+[2026-10-07] Kundförlust v1 refuses invoices with a ROT, RUT or grön teknik share: the open VAT on the customer's share against Skatteverket's share is an accountant question, and booking it wrong is worse than booking it by hand.

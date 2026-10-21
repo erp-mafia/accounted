@@ -177,7 +177,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/settings/collections/cancel': uiOnly(COLLECTIONS_AGREEMENT),
   'POST /api/settings/collections/disconnect': uiOnly(COLLECTIONS_AGREEMENT),
   'POST /api/settings/collections/refresh': uiOnly('status refresh button; the sync cron polls the same status every ten minutes'),
-  'PATCH /api/settings/collections': gap('P3', 'the rules for handing invoices over to collection'),
+  'PATCH /api/settings/collections': gap('P3', 'the rules for handing invoices over to collection, and the booking accounts and automatic booking of what the provider collects'),
   'POST /api/extensions/:sector/:slug/data': uiOnly('internal extension key-value state'),
   'DELETE /api/extensions/:sector/:slug/data': uiOnly('internal extension key-value state'),
   'PATCH /api/rules/:id': gap('P3', 'edit a counterparty booking rule'),
@@ -391,6 +391,10 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/invoices/:id/convert-to-order': covered(['gnubok_convert_invoice'], 'target order'),
   'POST /api/invoices/:id/peppol': covered([`POST ${V}/invoices/:id/send-peppol`, 'gnubok_send_invoice_peppol'], 'staging alone has no door; send stages first'),
   'POST /api/invoices/:id/peppol/send': covered([`POST ${V}/invoices/:id/send-peppol`, 'gnubok_send_invoice_peppol']),
+  'POST /api/invoices/:id/customer-loss': covered(
+    ['gnubok_record_customer_loss'],
+    'served while CUSTOMER_LOSS_ENABLED is set',
+  ),
   'POST /api/invoices/:id/collection': covered(
     ['gnubok_send_invoice_to_collection'],
     'served while collections is switched on; attestations (no delivery record, an import, a customer answer, an unsynced bank) are a person\'s in the browser, and only a person approves the staged handover',
@@ -402,6 +406,19 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/invoices/:id/collection/forwards': gap(
     'P3',
     'retry a payment report the collections provider did not take, or mark a partly ignored one as handled',
+  ),
+  'POST /api/collections/settlements/:id/book': covered(
+    ['gnubok_book_collection_settlement'],
+    "served while collections is switched on; the staged booking pins the payout's lines and amount, and a possible duplicate stays a person's answer",
+  ),
+  'POST /api/collections/settlements/:id/duplicate': gap(
+    'P2',
+    'answer a payout held as a possible duplicate: book it, or mark it handled elsewhere with a reason',
+  ),
+  'POST /api/collections/payments/:id/book': covered(['gnubok_book_collected_payment'], 'served while collections is switched on'),
+  'POST /api/collections/payments/:id/rebook': gap(
+    'P2',
+    'storno and book again a payment the debtor made to the collections provider (the sanctioned correction)',
   ),
   'POST /api/invoices/:id/collection/possible-payments': gap(
     'P3',
@@ -831,4 +848,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 143
+export const GAP_CEILING = 145

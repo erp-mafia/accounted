@@ -1,0 +1,1 @@
+[2026-10-20] The collections payout, kundförlust and pro-rata installment doors post through the posting port (step 3 allows no bypass): a payout records sale.payout_settled as a PSP payout does, a kundförlust decision the new add-only kind sale.customer_loss. Booking output is unchanged.

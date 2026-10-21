@@ -19,6 +19,9 @@ const leaves = vi.hoisted(() => ({
   syncRotRutReclaimAfterReversal: vi.fn(async () => {}),
   assertMigratedDeductionReversible: vi.fn(async () => {}),
   syncMigratedDeductionAfterReversal: vi.fn(async () => {}),
+  releaseSettlementAfterReversal: vi.fn(async () => ({ released: true })),
+  assertCustomerLossReversible: vi.fn(async () => {}),
+  syncCustomerLossAfterReversal: vi.fn(async () => {}),
 }))
 
 vi.mock('@/lib/bookkeeping/payment-sync', async (importOriginal) => ({
@@ -32,9 +35,16 @@ vi.mock('@/lib/invoices/migrated-deduction-reversal', () => ({
   assertMigratedDeductionReversible: leaves.assertMigratedDeductionReversible,
   syncMigratedDeductionAfterReversal: leaves.syncMigratedDeductionAfterReversal,
 }))
+vi.mock('@/lib/collections/settlement-reversal', () => ({
+  releaseSettlementAfterReversal: leaves.releaseSettlementAfterReversal,
+}))
+vi.mock('@/lib/customer-loss/reversal', () => ({
+  assertCustomerLossReversible: leaves.assertCustomerLossReversible,
+  syncCustomerLossAfterReversal: leaves.syncCustomerLossAfterReversal,
+}))
 
 import { REVERSAL_HOOKS } from '../reversal-hooks'
-import { REVERSAL_MIRROR_REQUIRED, type ReversalHookContext } from '@/lib/bookkeeping/reversal-hooks'
+import { REVERSAL_MIRROR_REQUIRED, type ReversalHookAfterContext } from '@/lib/bookkeeping/reversal-hooks'
 import { PAYMENT_SOURCE_TYPES } from '@/lib/bookkeeping/payment-sync'
 import { moduleForLibPath } from '@/lib/modules/resolve'
 import { scanLibImports } from '@/lib/modules/__tests__/import-scan'
@@ -49,6 +59,8 @@ const HOOK_LEAVES: Record<string, string> = {
   'invoice-payment-status': 'bookkeeping/payment-sync',
   'rot-rut-reclaim': 'invoices/rot-rut-reclaim-reversal',
   'migrated-deduction': 'invoices/migrated-deduction-reversal',
+  'collections-payout': 'collections/settlement-reversal',
+  'customer-loss': 'customer-loss/reversal',
 }
 
 /**
@@ -142,13 +154,21 @@ describe('reversal hook list: ownership', () => {
 describe('reversal hook list: each hook wraps its function unchanged', () => {
   const supabase = { sentinel: 'client' }
   const entry = { id: 'entry-1', source_type: 'invoice_paid', source_id: 'invoice-1', lines: [] } as unknown as JournalEntry
-  const ctx = { supabase, companyId: 'company-1', entry } as unknown as ReversalHookContext
+  const storno = { id: 'storno-1', entry_date: '2026-10-20' }
+  const ctx = { supabase, companyId: 'company-1', userId: 'user-1', entry, storno } as unknown as ReversalHookAfterContext
   const hook = (id: string) => REVERSAL_HOOKS.find((h) => h.id === id)!
 
   it('invoice-payment-status: after only, syncInvoiceStatusFromPaymentEntry(supabase, companyId, entry)', async () => {
     expect(hook('invoice-payment-status').beforeReversal).toBeUndefined()
     await hook('invoice-payment-status').afterReversal!(ctx)
     expect(leaves.syncInvoiceStatusFromPaymentEntry).toHaveBeenCalledExactlyOnceWith(supabase, 'company-1', entry)
+  })
+
+  it('invoice-payment-status: the collections rebook storno leaves the collected payment rows to the rebook', async () => {
+    await hook('invoice-payment-status').afterReversal!({ ...ctx, leaveCollectedPaymentRows: true })
+    expect(leaves.syncInvoiceStatusFromPaymentEntry).toHaveBeenCalledExactlyOnceWith(supabase, 'company-1', entry, undefined, {
+      leaveCollectedPaymentRows: true,
+    })
   })
 
   it('rot-rut-reclaim: after only, syncRotRutReclaimAfterReversal(supabase, companyId, entry.id)', async () => {
@@ -163,6 +183,20 @@ describe('reversal hook list: each hook wraps its function unchanged', () => {
     expect(leaves.syncMigratedDeductionAfterReversal).not.toHaveBeenCalled()
     await hook('migrated-deduction').afterReversal!(ctx)
     expect(leaves.syncMigratedDeductionAfterReversal).toHaveBeenCalledExactlyOnceWith(supabase, 'company-1', entry)
+  })
+
+  it('collections-payout: after only, releaseSettlementAfterReversal(companyId, entry.id)', async () => {
+    expect(hook('collections-payout').beforeReversal).toBeUndefined()
+    await hook('collections-payout').afterReversal!(ctx)
+    expect(leaves.releaseSettlementAfterReversal).toHaveBeenCalledExactlyOnceWith('company-1', 'entry-1')
+  })
+
+  it('customer-loss: assertCustomerLossReversible before, syncCustomerLossAfterReversal with the actor and the storno after', async () => {
+    await hook('customer-loss').beforeReversal!(ctx)
+    expect(leaves.assertCustomerLossReversible).toHaveBeenCalledExactlyOnceWith(supabase, 'company-1', 'entry-1')
+    expect(leaves.syncCustomerLossAfterReversal).not.toHaveBeenCalled()
+    await hook('customer-loss').afterReversal!(ctx)
+    expect(leaves.syncCustomerLossAfterReversal).toHaveBeenCalledExactlyOnceWith(supabase, 'company-1', 'user-1', 'entry-1', storno)
   })
 
   it('passes a leaf refusal through untouched', async () => {

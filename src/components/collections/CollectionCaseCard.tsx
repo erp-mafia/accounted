@@ -3,8 +3,10 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import type { CollectionsStage } from '@accounted/connect-contract'
+import { Badge } from '@/components/ui/badge'
+import { BrandMark } from '@/components/parties/BrandMark'
 import { Button } from '@/components/ui/button'
-import { DefRow, DetailSection } from '@/components/ui/detail-section'
+import { DetailSection } from '@/components/ui/detail-section'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -13,9 +15,13 @@ import type { CollectionCaseView } from '@/lib/collections/case'
 import {
   actionDialogSpec,
   caseActionBody,
+  caseAmounts,
   caseCardButtons,
   caseNotes,
+  caseStageChip,
+  caseTimeline,
   escalationAllows,
+  eventShowsTime,
   escalationGate,
   messageLongEnough,
   pauseUntilProblem,
@@ -26,9 +32,9 @@ import { toggleDismissed } from '@/lib/collections/handover-dialog'
 import type { CaseEscalationCheckView } from '@/lib/collections/invoice-collection'
 import { CLOSE_REASON_KEYS, STAGE_LABEL_KEYS, caseKickerKey, pauseUntilWindow, type WithdrawFeeInfo } from '@/lib/collections/stages'
 import { todayIsoStockholm } from '@/lib/dates/iso'
-import { formatCurrency, formatDate, formatDateLong } from '@/lib/utils'
+import { formatDate, formatDateTime } from '@/lib/utils'
+import { formatKronor } from '@/lib/collections/amount-text'
 import { BankCheckResult } from './BankCheckResult'
-import { CollectionChip } from './CollectionChip'
 import {
   fetchCaseEscalation,
   postCaseAction,
@@ -39,11 +45,15 @@ import {
 } from './case-client'
 
 /**
- * The invoice's collection case (build spec 3.5): where it stands, what the
- * provider waits for, the amounts, the timeline, and the actions the
- * provider's last snapshot offers. Rendered whenever a case exists, whatever
- * the start gates say: an open case is never hidden. The decisions live in
- * lib/collections/case-card.ts; this renders them.
+ * The invoice's collection case (build spec 3.5), in owner words: who has
+ * it and its number, the stage as one chip, what is unpaid and what the
+ * customer must pay including fees, the next step and when, the actions the
+ * provider's last snapshot offers, and the latest event (all of them on
+ * request). An open case sits at the top of the invoice as a compact card
+ * (placement 'top'); a closed or refused one with the invoice's history.
+ * Rendered whenever a case exists, whatever the start gates say: an open
+ * case is never hidden. The decisions live in lib/collections/case-card.ts;
+ * this renders them.
  */
 
 interface Props {
@@ -60,8 +70,8 @@ interface Props {
   onRefresh: () => Promise<void> | void
   /** Open the handover dialog: a retry after a refused handover, or starting reminders on a delivered invoice. */
   onOpenHandover: () => void
-  /** Open the invoice's payment dialog: the customer says the invoice is paid. */
-  onRegisterPayment: () => void
+  /** 'top': the compact card under the invoice header (an open case); 'history': further down (closed or refused). */
+  placement?: 'top' | 'history'
 }
 
 export function CollectionCaseCard({
@@ -74,7 +84,7 @@ export function CollectionCaseCard({
   onChanged,
   onRefresh,
   onOpenHandover,
-  onRegisterPayment,
+  placement = 'history',
 }: Props) {
   const { t, tp, locale } = useCaseWords(availability.displayName)
   const { toast } = useToast()
@@ -90,6 +100,7 @@ export function CollectionCaseCard({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [showAllEvents, setShowAllEvents] = useState(false)
 
   const today = todayIsoStockholm()
   const pauseWindow = pauseUntilWindow(today)
@@ -184,31 +195,37 @@ export function CollectionCaseCard({
   const buttons = caseCardButtons(view, canWrite)
   const notes = caseNotes(view, invoiceStatus)
 
-  return (
-    <DetailSection
-      kicker={t(caseKickerKey(view.stage))}
-      aside={
-        <span className="flex items-center gap-3 text-[11px] text-muted-foreground">
+  const chip = caseStageChip(view)
+  const amounts = caseAmounts(view)
+  const timeline = caseTimeline(view.events, showAllEvents)
+
+  const content = (
+    <>
+      {/* One line: who has the case, its number, the stage as the card's one chip; the freshness on the right. */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-[13px]">
+        <span className="inline-flex items-center gap-2 font-medium">
+          {availability.displayName && (
+            <BrandMark name={availability.displayName} variant="mark" size={22} logoUrl={availability.markUrl} />
+          )}
+          {tp('card_title')}
+        </span>
+        {view.caseNumber && <span className="tabular-nums text-muted-foreground">{tp('card_case_number', { number: view.caseNumber })}</span>}
+        {chip && <Badge variant={chip.variant}>{stageLabel(view.stage)}</Badge>}
+        <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground sm:ml-auto">
           {view.lastSyncedAt && (
-            <span className="tabular-nums">{tp('card_last_synced', { time: formatDateLong(view.lastSyncedAt, locale) })}</span>
+            <span className="tabular-nums">{tp('card_last_synced', { time: formatDateTime(view.lastSyncedAt) })}</span>
           )}
           {view.isOpen && (
             <button type="button" onClick={() => void refresh()} disabled={refreshing} className="underline underline-offset-2">
               {tp('card_refresh')}
             </button>
           )}
+          {availability.portalUrl && view.submissionStatus === 'registered' && (
+            <a href={availability.portalUrl} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">
+              {tp('card_open_provider')}
+            </a>
+          )}
         </span>
-      }
-    >
-      <div className="flex flex-wrap items-center gap-3 pb-2 text-[13px]">
-        <span>{tp('card_title')}</span>
-        {view.caseNumber && <span className="tabular-nums text-muted-foreground">{tp('card_case_number', { number: view.caseNumber })}</span>}
-        {view.isOpen && view.submissionStatus === 'registered' && <CollectionChip stage={view.stage} displayName={availability.displayName} />}
-        {availability.portalUrl && view.submissionStatus === 'registered' && (
-          <a href={availability.portalUrl} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">
-            {tp('card_open_provider')}
-          </a>
-        )}
       </div>
 
       {(view.submissionStatus === 'submitted' || view.submissionStatus === 'preparing') && (
@@ -232,37 +249,37 @@ export function CollectionCaseCard({
 
       {view.submissionStatus === 'registered' && (
         <>
-          <DefRow label={tp('card_stage')}>
-            <span>{stageLabel(view.stage)}</span>
-            {view.isOpen && view.decisionKind && (
-              <span className="block text-[12.5px] text-muted-foreground">
-                {tp(`decision_${view.decisionKind}`, { label: view.providerStateLabel ?? '' })}
-              </span>
-            )}
-            {!view.isOpen && view.closeReason && (
-              <span className="block text-[12.5px] text-muted-foreground">
-                {tp('card_closed', { date: view.closedAt ? formatDate(view.closedAt) : '', reason: tp(CLOSE_REASON_KEYS[view.closeReason]) })}
-              </span>
-            )}
-          </DefRow>
-          {view.outstandingPrincipal !== null && view.isOpen && (
-            <DefRow label={tp('card_outstanding')}>
-              <span className="tabular-nums">{formatCurrency(view.outstandingPrincipal)}</span>
-            </DefRow>
+          {view.isOpen && view.decisionKind && (
+            <p className="py-1 text-[13px]">{tp(`decision_${view.decisionKind}`, { label: view.providerStateLabel ?? '' })}</p>
           )}
-          {view.isOpen && view.outstandingTotal !== null && view.outstandingTotal !== view.outstandingPrincipal && (
-            <DefRow label={tp('card_outstanding_total')}>
-              <span className="tabular-nums">{formatCurrency(view.outstandingTotal)}</span>
-            </DefRow>
+          {!view.isOpen && (
+            <p className="py-1 text-[13px] text-muted-foreground">
+              {view.closeReason
+                ? tp('card_closed', { date: view.closedAt ? formatDate(view.closedAt) : '', reason: tp(CLOSE_REASON_KEYS[view.closeReason]) })
+                : stageLabel(view.stage)}
+            </p>
+          )}
+          {(amounts.unpaid !== null || amounts.customerTotal !== null) && (
+            <p className="py-1 text-[13px]">
+              {amounts.unpaid !== null && (
+                <span className="tabular-nums">{tp('card_amounts_unpaid', { amount: formatKronor(amounts.unpaid) })}</span>
+              )}
+              {amounts.unpaid !== null && amounts.customerTotal !== null && <span className="text-muted-foreground"> · </span>}
+              {amounts.customerTotal !== null && (
+                <span className="tabular-nums text-muted-foreground">
+                  {tp('card_amounts_total', { amount: formatKronor(amounts.customerTotal) })}
+                </span>
+              )}
+            </p>
           )}
           {view.isOpen && (view.nextActionDate || view.nextActionLabel) && (
-            <DefRow label={tp('card_next_step')}>
-              <span>
-                {view.nextActionDate
-                  ? tp('card_next_step_value', { label: view.nextActionLabel ?? '', date: formatDate(view.nextActionDate) })
-                  : view.nextActionLabel}
-              </span>
-            </DefRow>
+            <p className="py-1 text-[12.5px] text-muted-foreground">
+              {view.nextActionDate && view.nextActionLabel
+                ? tp('card_next_dated', { label: view.nextActionLabel, date: formatDate(view.nextActionDate) })
+                : view.nextActionDate
+                  ? tp('card_next_date_only', { date: formatDate(view.nextActionDate) })
+                  : tp('card_next', { label: view.nextActionLabel ?? '' })}
+            </p>
           )}
           {view.isOpen && view.forwardsInFlight && (
             <p className="py-2 text-[12.5px] text-muted-foreground">{tp('card_forward_in_flight')}</p>
@@ -279,15 +296,15 @@ export function CollectionCaseCard({
           {view.outstandingMismatch && (
             <p className="py-2 text-[12.5px] text-attn">
               {tp(view.outstandingMismatch.provider > view.outstandingMismatch.expected ? 'card_mismatch_more' : 'card_mismatch_less', {
-                provider_amount: formatCurrency(view.outstandingMismatch.provider),
-                expected: formatCurrency(view.outstandingMismatch.expected),
+                provider_amount: formatKronor(view.outstandingMismatch.provider),
+                expected: formatKronor(view.outstandingMismatch.expected),
               })}
             </p>
           )}
           {view.possiblePayments.map((payment) => (
             <div key={payment.id} className="py-2 text-[12.5px]">
               <p className="text-attn">
-                {tp(`possible_payment_${payment.pauseState}`, { amount: formatCurrency(payment.amount), date: formatDate(payment.date) })}
+                {tp(`possible_payment_${payment.pauseState}`, { amount: formatKronor(payment.amount), date: formatDate(payment.date) })}
               </p>
               {canWrite && (
                 <div className="flex flex-wrap items-center gap-3 pt-1.5">
@@ -305,8 +322,8 @@ export function CollectionCaseCard({
             <div key={issue.id} className="py-2 text-[12.5px]">
               <p className={issue.issue === 'retrying' ? 'text-muted-foreground' : 'text-attn'}>
                 {tp(`forward_${issue.issue}_${issue.kind}${issue.issue === 'excess' ? '' : `_${issue.operation}`}`, {
-                  amount: formatCurrency(issue.amount),
-                  ignored: formatCurrency(issue.ignoredAmount ?? 0),
+                  amount: formatKronor(issue.amount),
+                  ignored: formatKronor(issue.ignoredAmount ?? 0),
                   date: formatDate(issue.paymentDate),
                 })}
               </p>
@@ -332,10 +349,7 @@ export function CollectionCaseCard({
                   key={button.action}
                   size="sm"
                   variant={button.primary ? 'default' : 'outline'}
-                  title={button.kind === 'payment' ? tp('already_paid_body') : undefined}
-                  onClick={() =>
-                    button.kind === 'handover' ? onOpenHandover() : button.kind === 'payment' ? onRegisterPayment() : openDialog(button.action)
-                  }
+                  onClick={() => (button.kind === 'handover' ? onOpenHandover() : openDialog(button.action))}
                 >
                   {tp(button.labelKey)}
                 </Button>
@@ -343,15 +357,30 @@ export function CollectionCaseCard({
             </div>
           )}
 
+          {/* Händelser, collapsed to the latest one until the person asks for all. */}
           <div className="pt-2">
-            <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{tp('card_timeline')}</p>
+            <div className="flex items-baseline justify-between gap-3">
+              <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{tp('card_timeline')}</p>
+              {(timeline.hidden > 0 || showAllEvents) && view.events.length > 1 && (
+                <button
+                  type="button"
+                  className="text-[12.5px] underline underline-offset-2"
+                  aria-expanded={showAllEvents}
+                  onClick={() => setShowAllEvents((v) => !v)}
+                >
+                  {showAllEvents ? tp('card_show_less') : tp('card_show_all', { count: view.events.length })}
+                </button>
+              )}
+            </div>
             {view.events.length === 0 ? (
               <p className="py-2 text-[13px] text-muted-foreground">{tp('card_no_events')}</p>
             ) : (
               <ul className="divide-y divide-border text-[13px]" data-ph-mask="">
-                {view.events.map((event) => (
+                {timeline.shown.map((event) => (
                   <li key={event.id} className="flex flex-wrap items-baseline gap-x-4 gap-y-1 py-2">
-                    <span className="tabular-nums text-muted-foreground">{formatDate(event.occurredAt)}</span>
+                    <span className="tabular-nums text-muted-foreground">
+                      {eventShowsTime(event) ? formatDateTime(event.occurredAt) : formatDate(event.occurredAt)}
+                    </span>
                     <span className="min-w-0 flex-1">
                       {event.kind === 'sync_error'
                         ? tp('event_sync_error', { error: errorText(event.label) })
@@ -359,7 +388,7 @@ export function CollectionCaseCard({
                           ? tp(event.labelKey)
                           : event.label}
                     </span>
-                    {event.amount !== null && <span className="tabular-nums">{formatCurrency(event.amount)}</span>}
+                    {event.amount !== null && <span className="tabular-nums">{formatKronor(event.amount)}</span>}
                   </li>
                 ))}
               </ul>
@@ -388,8 +417,8 @@ export function CollectionCaseCard({
                 {gate.state === 'not_reported' && (
                   <p className="text-attn text-[12.5px]">
                     {tp('escalation_not_reported', {
-                      remaining: formatCurrency(gate.remaining),
-                      outstanding: formatCurrency(gate.providerOutstanding),
+                      remaining: formatKronor(gate.remaining),
+                      outstanding: formatKronor(gate.providerOutstanding),
                     })}
                   </p>
                 )}
@@ -403,7 +432,6 @@ export function CollectionCaseCard({
                     onAttestedChange={setBankAttested}
                     onSynced={() => void loadEscalation()}
                     tp={tp}
-                    locale={locale}
                   />
                 )}
               </div>
@@ -443,6 +471,15 @@ export function CollectionCaseCard({
           </DialogContent>
         )}
       </Dialog>
-    </DetailSection>
+    </>
+  )
+
+  // Open: a compact card at the top of the invoice. Closed or refused: with the invoice's history further down.
+  return placement === 'top' ? (
+    <section aria-label={t(caseKickerKey(view.stage))} className="min-w-0 space-y-1 rounded-lg border border-border px-4 py-3">
+      {content}
+    </section>
+  ) : (
+    <DetailSection kicker={t(caseKickerKey(view.stage))}>{content}</DetailSection>
   )
 }

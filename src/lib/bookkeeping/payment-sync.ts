@@ -41,7 +41,7 @@ export function isCustomerPaymentSourceType(sourceType: string | null | undefine
  */
 export interface PaymentEntryLinks {
   /** This invoice's payment rows on the entry (one in practice; summed). */
-  paymentRows: Array<{ id: string; amount: number; transaction_id: string | null }>
+  paymentRows: Array<{ id: string; amount: number; transaction_id: string | null; source?: string | null }>
   /** Bank rows whose journal_entry_id pointer names the entry. */
   transactionIds: string[]
 }
@@ -67,12 +67,22 @@ export async function loadPaymentEntryLinks(
   // Scoped to THIS invoice: a batch voucher (match_batch_allocate) carries one
   // payment row per invoice under the same journal_entry_id, and this call only
   // restores the source invoice's status (PR #666 review, SOC 2 CC6.3).
-  const { data: paymentRows, error: paymentRowsError } = await supabase
-    .from(isSupplier ? 'supplier_invoice_payments' : 'invoice_payments')
-    .select('id, amount, transaction_id')
-    .eq('journal_entry_id', entry.id)
-    .eq(isSupplier ? 'supplier_invoice_id' : 'invoice_id', entry.source_id)
-    .eq('company_id', companyId)
+  // source (who collected the payment, e.g. 'collections') exists on
+  // invoice_payments only; asking supplier_invoice_payments for it is a
+  // PostgREST 42703 that would fail every supplier payment storno's mirror.
+  const { data: paymentRows, error: paymentRowsError } = isSupplier
+    ? await supabase
+        .from('supplier_invoice_payments')
+        .select('id, amount, transaction_id')
+        .eq('journal_entry_id', entry.id)
+        .eq('supplier_invoice_id', entry.source_id)
+        .eq('company_id', companyId)
+    : await supabase
+        .from('invoice_payments')
+        .select('id, amount, transaction_id, source')
+        .eq('journal_entry_id', entry.id)
+        .eq('invoice_id', entry.source_id)
+        .eq('company_id', companyId)
   // An unread link is not an absent one: treated as empty, the sync would
   // revert the whole paid_amount and strand the row once the entry is gone.
   if (paymentRowsError) throw paymentRowsError
@@ -107,7 +117,15 @@ export async function syncInvoiceStatusFromPaymentEntry(
   supabase: SupabaseClient,
   companyId: string,
   entry: Pick<JournalEntry, 'id' | 'source_type' | 'source_id'>,
-  links?: PaymentEntryLinks | null
+  links?: PaymentEntryLinks | null,
+  options: {
+    /**
+     * Leave the payment rows the collections provider collected (source
+     * 'collections'): the collections rebook removes them itself, inside the
+     * window block_delete_collected_payment opens for it.
+     */
+    leaveCollectedPaymentRows?: boolean
+  } = {},
 ): Promise<void> {
   if (!isPaymentSourceType(entry.source_type) || !entry.source_id) return
 
@@ -314,9 +332,12 @@ export async function syncInvoiceStatusFromPaymentEntry(
     // re-match of the same bank line doesn't trip the (transaction_id,
     // invoice_id) / (journal_entry_id, invoice_id) unique indexes on
     // invoice_payments. By id, for the same reason as the supplier branch.
-    await deletePaymentRows(supabase, companyId, 'invoice_payments', paymentRowIds, entryId)
+    const removedPaymentRowIds = options.leaveCollectedPaymentRows
+      ? resolved.paymentRows.filter((r) => r.source !== 'collections').map((r) => r.id)
+      : paymentRowIds
+    await deletePaymentRows(supabase, companyId, 'invoice_payments', removedPaymentRowIds, entryId)
     // A removed payment on an invoice under collection must be dropped at the provider too.
-    if (paymentRowIds.length > 0) scheduleCollectionForwardDrain(companyId)
+    if (removedPaymentRowIds.length > 0) scheduleCollectionForwardDrain(companyId)
 
     await releaseLinkedTransactions(supabase, companyId, entryId, releaseTransactionIds, 'invoice_id')
   }

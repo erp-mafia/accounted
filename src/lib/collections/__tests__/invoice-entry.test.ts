@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isOverdueUnpaid, remindersAside, showSendToCollection, type EntryCase } from '../invoice-entry'
+import { isOverdueUnpaid, readsOverdue, remindersAside, showSendToCollection, type EntryCase } from '../invoice-entry'
 
 const today = '2026-10-06'
 const overdue = { status: 'sent', due_date: '2026-09-30', remaining_amount: 1250 }
@@ -19,6 +19,25 @@ describe('isOverdueUnpaid', () => {
     expect(isOverdueUnpaid({ ...overdue, status: 'paid' }, today)).toBe(false)
     expect(isOverdueUnpaid({ ...overdue, status: 'draft' }, today)).toBe(false)
     expect(isOverdueUnpaid({ ...overdue, remaining_amount: 0 }, today)).toBe(false)
+  })
+})
+
+describe('readsOverdue (the list and the invoice header agree)', () => {
+  it('reads a sent invoice past its due date as overdue while collections is in play', () => {
+    expect(readsOverdue(overdue, today)).toBe(true)
+  })
+
+  it('keeps the reminders status alone while collections is not in play', () => {
+    expect(readsOverdue(overdue, undefined)).toBe(false)
+    expect(readsOverdue({ ...overdue, status: 'overdue' }, undefined)).toBe(true)
+  })
+
+  it('never reads a paid, partly paid, settled or undated invoice as overdue by date', () => {
+    expect(readsOverdue({ ...overdue, status: 'paid' }, today)).toBe(false)
+    expect(readsOverdue({ ...overdue, status: 'partially_paid' }, today)).toBe(false)
+    expect(readsOverdue({ ...overdue, remaining_amount: 0 }, today)).toBe(false)
+    expect(readsOverdue({ ...overdue, due_date: today }, today)).toBe(false)
+    expect(readsOverdue({ ...overdue, status: 'overdue', due_date: null }, today)).toBe(false)
   })
 })
 

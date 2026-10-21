@@ -23,7 +23,8 @@ import {
 } from '@/lib/collections/batch-dialog'
 import type { CollectionsAvailability } from '@/lib/collections/availability'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { formatKronor } from '@/lib/collections/amount-text'
+import { cn, formatDate } from '@/lib/utils'
 import { useCaseWords } from './case-client'
 import type { Locale } from './collections-client'
 
@@ -261,7 +262,7 @@ export function HandoverBatchDialog({ operationId, open, onOpenChange, onCommitt
                             <td className={cn(TD, 'tabular-nums')}>{item.invoice_number ?? ''}</td>
                             <td className={cn(TD, 'max-w-[12rem] truncate')}>{item.customer_name ?? ''}</td>
                             <td className={cn(TD, 'tabular-nums')}>{formatDate(item.due_date)}</td>
-                            <td className={cn(TD, 'text-right tabular-nums')}>{formatCurrency(item.remaining_amount)}</td>
+                            <td className={cn(TD, 'text-right tabular-nums')}>{formatKronor(item.remaining_amount)}</td>
                             <td className={TD}>{stepLabel(item)}</td>
                             {group.kind !== 'approve_step' && <td className={TD}>{feeLabel(item)}</td>}
                           </tr>
@@ -303,7 +304,7 @@ export function HandoverBatchDialog({ operationId, open, onOpenChange, onCommitt
             {view.status === 'pending' && (
               <div className="space-y-3">
                 <p className="text-[13px] tabular-nums">
-                  {tp('batch_total', { count: ticked.length, amount: formatCurrency(tickedTotal(items, unticked)) })}
+                  {tp('batch_total', { count: ticked.length, amount: formatKronor(tickedTotal(items, unticked)) })}
                 </p>
                 {ticked.length === 0 && items.length > 0 && (
                   <p className="text-attn text-[12.5px]">{tp('batch_none_ticked')}</p>
