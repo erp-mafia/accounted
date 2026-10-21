@@ -25,6 +25,7 @@ import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { getCountryName } from '@/lib/vat/country-codes'
 import type { WebshopOrder, WebshopStoreSettings } from '@/types'
 
 const OrderBookingDialog = dynamic(() => import('@/components/orders/OrderBookingDialog'), {
@@ -311,6 +312,7 @@ export default function OrdersPage() {
                 <th className={TH_CLASS}>{t('col_order')}</th>
                 {multiStore && <th className={TH_CLASS}>{t('col_store')}</th>}
                 <th className={TH_CLASS}>{t('col_customer')}</th>
+                <th className={TH_CLASS}>{t('col_country')}</th>
                 <th className={TH_CLASS}>{t('col_payment_method')}</th>
                 <th className={cn(TH_CLASS, 'text-right')}>{t('col_total')}</th>
                 <th className={TH_CLASS}>{t('col_status')}</th>
@@ -460,6 +462,7 @@ function OrderRow({
   onUnmark: () => void
   t: ReturnType<typeof useTranslations<'webshop_orders'>>
 }) {
+  const locale = useLocale() === 'en' ? 'en' : 'sv'
   // Radix' onCheckedChange carries no mouse event: the preceding click records
   // whether shift was held, for range selection.
   const shiftHeld = useRef(false)
@@ -542,6 +545,15 @@ function OrderRow({
         {order.customer_company || order.customer_name || (
           <span className="text-muted-foreground">{'–'}</span>
         )}
+      </td>
+      {/* ISO code in the cell, the country name in the native tooltip. For
+          Shopify this is where the goods go, which decides the VAT treatment
+          (crm#1032). */}
+      <td
+        className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}
+        title={order.customer_country ? getCountryName(order.customer_country, locale) : undefined}
+      >
+        {order.customer_country ?? ''}
       </td>
       <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
         {order.payment_method_title || order.payment_method || ''}

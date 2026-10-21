@@ -329,11 +329,21 @@ export async function upsertWebshopOrders(
         if (drifted && !existing.remote_changed_after_freeze) {
           update.remote_changed_after_freeze = true
         }
+        // A booked row gets its country filled in once, never changed or
+        // cleared: rows booked before the sync read a country (Shopify,
+        // crm#1032) get it on Hämta äldre ordrar, a known country stays the
+        // one the order was booked with, and a store that later withholds
+        // addresses cannot erase it. Not a financial field, so the freeze
+        // trigger allows the write.
+        const countryFilled =
+          existing.customer_country === null && incoming.customer_country !== null
+        if (countryFilled) update.customer_country = incoming.customer_country
         const changedSafe =
           existing.status !== incoming.status ||
           existing.refunded_total !== incoming.refunded_total ||
           existing.store_label !== incoming.store_label ||
           existing.connection_id !== incoming.connection_id ||
+          countryFilled ||
           update.remote_changed_after_freeze === true
         if (!changedSafe) {
           result.unchanged += 1

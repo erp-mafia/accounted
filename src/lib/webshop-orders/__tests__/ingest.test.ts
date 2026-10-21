@@ -272,6 +272,54 @@ describe('upsertWebshopOrders', () => {
     expect(update).not.toHaveProperty('line_items')
   })
 
+  it('fills in the country on a booked row that has none (crm#1032)', async () => {
+    mock.enqueueMany([
+      { data: [existingRow({ journal_entry_id: 'je-1', customer_country: null })] },
+      { data: [] },
+      { data: null }, // safe-field update
+    ])
+
+    const result = await upsertWebshopOrders(supabase(), COMPANY, USER, [
+      makeUpsert({ customer_country: 'DK' }),
+    ])
+
+    expect(result).toMatchObject({ updated: 1, unchanged: 0, frozenFlagged: 0 })
+    const update = mock.findCall('webshop_orders', 'update')![0] as Record<string, unknown>
+    expect(update.customer_country).toBe('DK')
+    expect(update).not.toHaveProperty('remote_changed_after_freeze')
+    expect(update).not.toHaveProperty('total')
+  })
+
+  it('never changes the country a booked row already has', async () => {
+    mock.enqueueMany([
+      { data: [existingRow({ journal_entry_id: 'je-1', customer_country: 'DK' })] },
+      { data: [] },
+    ])
+
+    const result = await upsertWebshopOrders(supabase(), COMPANY, USER, [
+      makeUpsert({ customer_country: 'DE' }),
+    ])
+
+    expect(result).toMatchObject({ updated: 0, unchanged: 1 })
+    expect(mock.findCall('webshop_orders', 'update')).toBeUndefined()
+  })
+
+  it('never clears the country of a booked row when the store withholds it', async () => {
+    mock.enqueueMany([
+      { data: [existingRow({ invoice_id: 'inv-1', customer_country: 'NO' })] },
+      { data: [] },
+      { data: null }, // safe-field update
+    ])
+
+    await upsertWebshopOrders(supabase(), COMPANY, USER, [
+      makeUpsert({ customer_country: null, status: 'completed' }),
+    ])
+
+    const update = mock.findCall('webshop_orders', 'update')![0] as Record<string, unknown>
+    expect(update.status).toBe('completed')
+    expect(update).not.toHaveProperty('customer_country')
+  })
+
   it('leaves total_sek null when the exchange rate cannot resolve', async () => {
     mock.enqueueMany([
       { data: [] },
