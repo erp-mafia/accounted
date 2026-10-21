@@ -706,6 +706,7 @@
     "type_disconnect_pos_connection": "Koppla från kassasystem",
     "type_update_pos_sales_settings": "Ändra konton för kassasystem",
     "type_book_pos_sales_day": "Bokför dagskassa",
+    "type_book_webshop_order": "Bokför webshoporder",
     "title": "Granskning",
     "subtitle": "Operationer som väntar på godkännande",
     "sort_oldest_first": "Äldst först",

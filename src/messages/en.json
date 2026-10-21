@@ -706,6 +706,7 @@
     "type_disconnect_pos_connection": "Disconnect point of sale",
     "type_update_pos_sales_settings": "Change point-of-sale accounts",
     "type_book_pos_sales_day": "Book daily takings",
+    "type_book_webshop_order": "Book webshop order",
     "title": "Review",
     "subtitle": "Operations waiting for approval",
     "sort_oldest_first": "Oldest first",

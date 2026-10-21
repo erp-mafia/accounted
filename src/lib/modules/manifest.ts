@@ -482,8 +482,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     layer: 'process',
     uses: [],
     libFolders: ['webshop-orders'],
-    operationPrefixes: [],
-    v1Segments: [],
+    operationPrefixes: ['webshop-orders'],
+    v1Segments: ['webshop-orders'],
     jurisdictions: SE,
   },
   {

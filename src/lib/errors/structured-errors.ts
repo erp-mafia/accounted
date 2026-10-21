@@ -8491,6 +8491,17 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
     message_en:
       'The journal entry is not posted. The order can only be linked to a posted entry.',
   },
+  WEBSHOP_ORDER_READ_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Ordrarna kunde inte läsas. Försök igen.',
+    message_en: 'The orders could not be read. Try again.',
+    retryable: true,
+  },
+  WEBSHOP_ORDER_BOOKING_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Ordern kunde inte bokföras. Inget verifikat skapades.',
+    message_en: 'The order could not be booked. No journal entry was created.',
+  },
 }
 
 // ─────────────────────────────────────────────────────────────────

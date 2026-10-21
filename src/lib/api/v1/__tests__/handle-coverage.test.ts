@@ -181,6 +181,7 @@ describe('path parameter typing', () => {
       'values/:valueId': 'dimension_value',
       'webhook-deliveries/:id': 'webhook_delivery',
       'webhooks/:id': 'webhook',
+      'webshop-orders/:orderId': null,
     })
   })
 })

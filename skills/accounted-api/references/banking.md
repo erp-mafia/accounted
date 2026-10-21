@@ -2,7 +2,7 @@
 
 # Banking endpoints
 
-Bank transactions (ingest, categorize, match against invoices), cash accounts with the bank-reported balance, PSD2 connection health (sync freshness, consent expiry), the Open Payments bank feed (reachable banks, connections, the switch from Enable Banking, the signatory link), bank reconciliation runs, file imports (SIE, bank statements), and the point-of-sale business days a connected POS system delivers, booked as daily takings vouchers.
+Bank transactions (ingest, categorize, match against invoices), cash accounts with the bank-reported balance, PSD2 connection health (sync freshness, consent expiry), the Open Payments bank feed (reachable banks, connections, the switch from Enable Banking, the signatory link), bank reconciliation runs, file imports (SIE, bank statements), the point-of-sale business days a connected POS system delivers, booked as daily takings vouchers, and the webshop orders the Shopify, WooCommerce and Zettle syncs deliver, booked one by one with your own lines.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -4680,6 +4680,364 @@ Example response `200`:
     "transaction_ids": [
       "5b1f6c1e-8a3d-4f0e-9a51-2f6d0c9b7e10"
     ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/webshop-orders`
+
+**The order and refund rows synced from the company's webshops, newest first.**
+`scope:transactions:read · risk:low · idempotent`
+
+Lists the rows the Shopify, WooCommerce and Zettle syncs store: one per paid order and one per refund (a negative row under its order), with amounts, the VAT split per rate, the country, the payment method and where each row stands (booking_status: to_book, booked, marked_booked, invoiced, in_transactions, unpaid). Filter by booked or unbooked, platform, row type, order date and country. Paginated with limit and offset; total is the full count. Read-only.
+
+**Use when:** To find the orders to book, or to see which orders a period holds per country.
+**Do not use for:** One order with its line items and suggested booking (GET /webshop-orders/{orderId}).
+
+**Pitfalls:**
+- customer_country is ISO 3166-1 alpha-2. Shopify stores the shipping (destination) country, WooCommerce the billing country, and it is null when the store withholds addresses or the order ships nowhere.
+- booked=unbooked also returns unpaid and invoiced rows: only booking_status to_book can be booked.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `booked` | query | `"booked" \| "unbooked"` | no | booked: booked here or marked as booked outside; unbooked: the rest. |
+| `platform` | query | `"woocommerce" \| "shopify" \| "zettle"` | no |  |
+| `row_type` | query | `"order" \| "refund"` | no |  |
+| `from` | query | `string` | no | First order date, inclusive. |
+| `to` | query | `string` | no | Last order date, inclusive. |
+| `country` | query | `string` | no | ISO 3166-1 alpha-2 country, e.g. DK. |
+| `limit` | query | `number` | no | Rows per page, default 50. |
+| `offset` | query | `number` | no |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    orders: { webshop_order_id: string, platform: "woocommerce" | "shopify" | "zettle", store_scope: string, store_label: string | null, row_type: "order" | "refund", parent_webshop_order_id: string | null, order_number: string, platform_status: string, is_paid: boolean, order_date: string, paid_date: string | null, currency: string, total: number, total_tax: number, total_sek: number | null, exchange_rate: number | null, vat_breakdown: { rate: number, net: number, tax: number }[], customer_country: string | null, customer_name: string | null, customer_company: string | null, payment_method: string | null, payment_method_title: string | null, refunded_total: number, booking_status: "booked" | "marked_booked" | "invoiced" | "in_transactions" | "unpaid" | "to_book", journal_entry_id: string | null, invoice_id: string | null, manually_booked_journal_entry_id: string | null, remote_changed_after_freeze: boolean }[],
+    total: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "orders": [
+      {
+        "webshop_order_id": "3f2a…",
+        "platform": "shopify",
+        "store_scope": "exempel.myshopify.com",
+        "store_label": "Exempelbutiken",
+        "row_type": "order",
+        "parent_webshop_order_id": null,
+        "order_number": "#1042",
+        "platform_status": "paid",
+        "is_paid": true,
+        "order_date": "2026-10-14",
+        "paid_date": "2026-10-14",
+        "currency": "SEK",
+        "total": 1250,
+        "total_tax": 250,
+        "total_sek": 1250,
+        "exchange_rate": 1,
+        "vat_breakdown": [
+          {
+            "rate": 25,
+            "net": 1000,
+            "tax": 250
+          }
+        ],
+        "customer_country": "DK",
+        "customer_name": null,
+        "customer_company": null,
+        "payment_method": "shopify_payments",
+        "payment_method_title": "shopify_payments",
+        "refunded_total": 0,
+        "booking_status": "to_book",
+        "journal_entry_id": null,
+        "invoice_id": null,
+        "manually_booked_journal_entry_id": null,
+        "remote_changed_after_freeze": false
+      }
+    ],
+    "total": 1
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/webshop-orders/{orderId}`
+
+**One webshop order row with its line items and the booking the Orders page would prefill.**
+`scope:transactions:read · risk:low · idempotent`
+
+Everything GET /webshop-orders returns for the row plus its line items and suggestion: the entry date (paid date, else order date), the open fiscal period covering it, the description, the payment account from the store's payment-method mapping (1686 when unmapped), and balanced lines with Swedish revenue and VAT accounts per rate. warnings lists what the suggestion cannot know, e.g. a country outside Sweden. Read-only.
+
+**Use when:** Before booking an order, to start from the dialog's lines and change the accounts that the country or VAT rate calls for.
+**Do not use for:** Listing orders (GET /webshop-orders) or booking (POST /webshop-orders/{orderId}/book).
+
+**Pitfalls:**
+- customer_country is ISO 3166-1 alpha-2. Shopify stores the shipping (destination) country, WooCommerce the billing country, and it is null when the store withholds addresses or the order ships nowhere.
+- The suggested lines always use Swedish accounts (3001-3004, 2611-2631): for an OSS, export or VOEC sale choose the accounts yourself. The account choice is the caller's.
+- suggestion.lines is null while a non-SEK order has no exchange rate; booking resolves the rate once more and refuses with WEBSHOP_ORDER_FX_UNRESOLVED if it still cannot.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `orderId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    webshop_order_id: string,
+    platform: "woocommerce" | "shopify" | "zettle",
+    store_scope: string,
+    store_label: string | null,
+    row_type: "order" | "refund",
+    parent_webshop_order_id: string | null,
+    order_number: string,
+    platform_status: string,
+    is_paid: boolean,
+    order_date: string,
+    paid_date: string | null,
+    currency: string,
+    total: number,
+    total_tax: number,
+    total_sek: number | null,
+    exchange_rate: number | null,
+    vat_breakdown: { rate: number, net: number, tax: number }[],
+    customer_country: string | null,
+    customer_name: string | null,
+    customer_company: string | null,
+    payment_method: string | null,
+    payment_method_title: string | null,
+    refunded_total: number,
+    booking_status: "booked" | "marked_booked" | "invoiced" | "in_transactions" | "unpaid" | "to_book",
+    journal_entry_id: string | null,
+    invoice_id: string | null,
+    manually_booked_journal_entry_id: string | null,
+    remote_changed_after_freeze: boolean,
+    line_items: { name: string, quantity: number, total: number, total_tax: number, vat_rate: number | null }[],
+    suggestion: { entry_date: string, fiscal_period_id: string | null, description: string, payment_account: string, payment_account_mapped: boolean, lines: { account_number: string, debit_amount: number, credit_amount: number, line_description?: string, currency?: string, amount_in_currency?: number, exchange_rate?: number }[] | null },
+    warnings: { code: string, message_sv: string, message_en: string }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "webshop_order_id": "3f2a…",
+    "platform": "shopify",
+    "store_scope": "exempel.myshopify.com",
+    "store_label": "Exempelbutiken",
+    "row_type": "order",
+    "parent_webshop_order_id": null,
+    "order_number": "#1042",
+    "platform_status": "paid",
+    "is_paid": true,
+    "order_date": "2026-10-14",
+    "paid_date": "2026-10-14",
+    "currency": "SEK",
+    "total": 1250,
+    "total_tax": 250,
+    "total_sek": 1250,
+    "exchange_rate": 1,
+    "vat_breakdown": [
+      {
+        "rate": 25,
+        "net": 1000,
+        "tax": 250
+      }
+    ],
+    "customer_country": "DK",
+    "customer_name": null,
+    "customer_company": null,
+    "payment_method": "shopify_payments",
+    "payment_method_title": "shopify_payments",
+    "refunded_total": 0,
+    "booking_status": "to_book",
+    "journal_entry_id": null,
+    "invoice_id": null,
+    "manually_booked_journal_entry_id": null,
+    "remote_changed_after_freeze": false,
+    "line_items": [
+      {
+        "name": "Skidglasögon",
+        "quantity": 1,
+        "total": 1000,
+        "total_tax": 250,
+        "vat_rate": 25
+      }
+    ],
+    "suggestion": {
+      "entry_date": "2026-10-14",
+      "fiscal_period_id": "a8f1…",
+      "description": "Order #1042 (shopify_payments)",
+      "payment_account": "1686",
+      "payment_account_mapped": false,
+      "lines": [
+        {
+          "account_number": "1686",
+          "debit_amount": 1250,
+          "credit_amount": 0,
+          "line_description": "Order #1042 (shopify_payments)"
+        },
+        {
+          "account_number": "3001",
+          "debit_amount": 0,
+          "credit_amount": 1000,
+          "line_description": "Order #1042 (shopify_payments)"
+        },
+        {
+          "account_number": "2611",
+          "debit_amount": 0,
+          "credit_amount": 250,
+          "line_description": "Order #1042 (shopify_payments)"
+        }
+      ]
+    },
+    "warnings": [
+      {
+        "code": "country_outside_sweden",
+        "message_sv": "Ordern har ett land utanför Sverige…",
+        "message_en": "The order has a country outside Sweden…"
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/webshop-orders/{orderId}/book`
+
+**Book one webshop order or refund with your own lines, linked to the order with its orderunderlag.**
+`scope:bookkeeping:write · risk:high · idempotent · dry-run`
+
+Posts one verifikat for the order row through the bookkeeping engine (source_type webshop_order, linked to the order) with the lines you send, exactly as the Orders page books it: the order stops showing as unbooked, and the orderunderlag (line items, VAT, country, payment method) is archived on the verifikat. entry_date defaults to the paid date (else the order date), fiscal_period_id to the open period covering it, description to the Orders page's. Refused when the order is booked, invoiced, marked as booked, unpaid or already in the transactions feed. Dry-runnable.
+
+**Use when:** An order has booking_status to_book and you know its accounts, e.g. OSS or VOEC accounts picked from its country and VAT rate.
+**Do not use for:** Orders that should become a customer invoice, booking a payout from the payment provider (book that against the clearing account from the bank row), or correcting a booked order (storno).
+
+**Pitfalls:**
+- Send the complete line set; sum debit = sum credit > 0. Start from suggestion.lines of GET /webshop-orders/{orderId} and change the accounts.
+- The account choice is yours: Accounted only checks balance, period, lock and that the accounts exist. Shopify's amounts and VAT are the source; the lines should add up to them.
+- customer_country is ISO 3166-1 alpha-2. Shopify stores the shipping (destination) country, WooCommerce the billing country, and it is null when the store withholds addresses or the order ships nowhere.
+- A posted verifikat is permanent: undo it with storno (POST /journal-entries/{id}/reverse), never by editing.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `orderId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
+
+Request body:
+```ts
+{
+  lines: { account_number: string, debit_amount?: number, credit_amount?: number, line_description?: string, currency?: string, amount_in_currency?: number, exchange_rate?: number, tax_code?: string, dimensions?: Record<string, string>, cost_center?: string, project?: string }[],
+  entry_date?: string,
+  fiscal_period_id?: string,
+  description?: string,
+  voucher_series?: string,
+  notes?: string
+}
+```
+
+Example request:
+```json
+{
+  "lines": [
+    {
+      "account_number": "1686",
+      "debit_amount": 1250,
+      "credit_amount": 0
+    },
+    {
+      "account_number": "3001",
+      "debit_amount": 0,
+      "credit_amount": 1000
+    },
+    {
+      "account_number": "2611",
+      "debit_amount": 0,
+      "credit_amount": 250
+    }
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    webshop_order_id: string,
+    journal_entry_id: string,
+    voucher_series: string | null,
+    voucher_number: number | null,
+    entry_date: string,
+    underlag_archived: boolean
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "webshop_order_id": "3f2a…",
+    "journal_entry_id": "9a0b…",
+    "voucher_series": "A",
+    "voucher_number": 214,
+    "entry_date": "2026-10-14",
+    "underlag_archived": true
   },
   "meta": {
     "request_id": "req_…",
