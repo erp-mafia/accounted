@@ -630,6 +630,7 @@ const POS_AND_WEBSHOP: PackageDoors = {
     'op:pos-sales.disconnect',
     'op:pos-sales.fetch',
     'op:pos-sales.update-settings',
+    'op:webshop-orders.book',
   ],
 }
 /** Every switchable package's doors. */

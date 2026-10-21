@@ -33,7 +33,9 @@ import type {
  *
  * Anything added to the single-order path (e.g. underlag anchoring) belongs
  * in these functions, never inline in one route, so single and bulk booking
- * can not drift apart.
+ * can not drift apart. bookWebshopOrder() chains the three for one order by
+ * id: the dashboard's single-order route and the webshop-orders.book
+ * operation (v1 and MCP, lib/webshop-orders/service.ts) both call it.
  */
 
 /** Guard failure: a structured-error code plus optional envelope details. */
@@ -138,12 +140,14 @@ export async function assertOrderBookable(
  * refusing (a sync-time Riksbanken hiccup should not strand the order).
  * Returns the order with total_sek/exchange_rate resolved, or null when the
  * rate still cannot be fetched (the route answers WEBSHOP_ORDER_FX_UNRESOLVED).
+ * `persist: false` (a dry run) resolves the rate without storing it.
  */
 export async function resolveOrderFx(
   supabase: SupabaseClient,
   companyId: string,
   order: WebshopOrder,
   log: Logger,
+  options: { persist?: boolean } = {},
 ): Promise<WebshopOrder | null> {
   if (order.currency.toUpperCase() === 'SEK' || order.total_sek !== null) {
     return order
@@ -156,6 +160,9 @@ export async function resolveOrderFx(
     )
     if (rate?.rate) {
       const totalSek = roundOre(order.total * rate.rate)
+      if (options.persist === false) {
+        return { ...order, total_sek: totalSek, exchange_rate: rate.rate }
+      }
       const { error: fxError } = await supabase
         .from('webshop_orders')
         .update({ total_sek: totalSek, exchange_rate: rate.rate })
@@ -367,4 +374,57 @@ export async function bookOrderThroughEngine(
     journalEntryId: journalEntry?.id ?? draft.id,
     underlagArchived: underlag.ok,
   }
+}
+
+/** One order row of the company, or null when it does not exist there. */
+export async function loadWebshopOrder(
+  supabase: SupabaseClient,
+  companyId: string,
+  orderId: string,
+): Promise<WebshopOrder | null> {
+  const { data, error } = await supabase
+    .from('webshop_orders')
+    .select('*')
+    .eq('id', orderId)
+    .eq('company_id', companyId)
+    .single<WebshopOrder>()
+  if (error || !data) return null
+  return data
+}
+
+export type BookWebshopOrderOutcome =
+  | (Extract<BookOrderEngineOutcome, { ok: true }> & { order: WebshopOrder })
+  | { ok: false; kind: 'not_found' }
+  | { ok: false; kind: 'not_bookable'; failure: OrderBookableFailure }
+  | { ok: false; kind: 'fx_unresolved'; currency: string }
+  | Exclude<BookOrderEngineOutcome, { ok: true }>
+
+/**
+ * Book one order row by id with the caller's lines: load, re-guard, resolve
+ * FX, then draft -> claim -> commit with the orderunderlag archived. The one
+ * write path for a single order, whoever asks (the dashboard dialog or an
+ * agent through the operation registry); each door only translates the
+ * outcome into its own envelope.
+ */
+export async function bookWebshopOrder(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  orderId: string,
+  input: BookOrderEngineInput,
+  log: Logger,
+): Promise<BookWebshopOrderOutcome> {
+  const order = await loadWebshopOrder(supabase, companyId, orderId)
+  if (!order) return { ok: false, kind: 'not_found' }
+
+  const guardFailure = await assertOrderBookable(supabase, companyId, order)
+  if (guardFailure) return { ok: false, kind: 'not_bookable', failure: guardFailure }
+
+  // Also keeps the in-memory row in sync (total_sek/exchange_rate): the
+  // underlag renders the SEK conversion facts from it after commit.
+  const resolvedOrder = await resolveOrderFx(supabase, companyId, order, log)
+  if (!resolvedOrder) return { ok: false, kind: 'fx_unresolved', currency: order.currency }
+
+  const outcome = await bookOrderThroughEngine(supabase, companyId, userId, resolvedOrder, input, log)
+  return outcome.ok ? { ...outcome, order: resolvedOrder } : outcome
 }

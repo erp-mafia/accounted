@@ -321,6 +321,10 @@ import '@/app/api/v1/companies/[companyId]/pos-sales/days/route'
 import '@/app/api/v1/companies/[companyId]/pos-sales/days/[dayId]/route'
 import '@/app/api/v1/companies/[companyId]/pos-sales/days/[dayId]/book/route'
 import '@/app/api/v1/companies/[companyId]/pos-sales/fetch/route'
+// Webshop orders (Shopify, WooCommerce, Zettle): lib/operations/webshop-orders.ts
+import '@/app/api/v1/companies/[companyId]/webshop-orders/route'
+import '@/app/api/v1/companies/[companyId]/webshop-orders/[orderId]/route'
+import '@/app/api/v1/companies/[companyId]/webshop-orders/[orderId]/book/route'
 // Operation registry, wave 2: booking, payment files, utlägg, payroll.
 import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/send-payslips/route'
 import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/revert/route'

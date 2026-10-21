@@ -112,13 +112,14 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'banking.md',
     title: 'Banking',
-    members: ['transactions', 'cash-accounts', 'bank-connections', 'bank-feed', 'reconciliation', 'imports', 'pos-sales'],
+    members: ['transactions', 'cash-accounts', 'bank-connections', 'bank-feed', 'reconciliation', 'imports', 'pos-sales', 'webshop-orders'],
     blurb:
       'Bank transactions (ingest, categorize, match against invoices), cash accounts with the ' +
       'bank-reported balance, PSD2 connection health (sync freshness, consent expiry), the Open ' +
       'Payments bank feed (reachable banks, connections, the switch from Enable Banking, the signatory link), ' +
-      'bank reconciliation runs, file imports (SIE, bank statements), and the point-of-sale ' +
-      'business days a connected POS system delivers, booked as daily takings vouchers.',
+      'bank reconciliation runs, file imports (SIE, bank statements), the point-of-sale ' +
+      'business days a connected POS system delivers, booked as daily takings vouchers, and the ' +
+      'webshop orders the Shopify, WooCommerce and Zettle syncs deliver, booked one by one with your own lines.',
   },
   {
     file: 'employees.md',

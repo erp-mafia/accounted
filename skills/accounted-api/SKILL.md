@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 353 endpoints.
+  pagination, scopes), and all 356 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -215,7 +215,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 353 operations. Paths are shown without
+API version `2026-05-12`, 356 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (22)
@@ -445,7 +445,7 @@ POST /companies/{companyId}/inbox-items/{id}/stamp : Mark an inbox item as consu
 POST /companies/{companyId}/inbox-items/{id}/unmatch-transaction : Release an inbox item's bank transaction match [scope:documents:write risk:low idempotent dry-run reversible]
 ```
 
-### Banking (59)
+### Banking (62)
 
 Full detail: [references/banking.md](references/banking.md)
 
@@ -509,6 +509,9 @@ POST /companies/{companyId}/transactions/{id}/uncategorize : Reverse the categor
 POST /companies/{companyId}/transactions/batch-categorize : Categorize up to 100 transactions in one call (partial-success) [scope:transactions:write risk:medium idempotent dry-run reversible]
 POST /companies/{companyId}/transactions/bulk-book : Book several SEK bank transactions as one samlingsverifikat, or link them to one posted verifikat [scope:transactions:write risk:high idempotent dry-run]
 POST /companies/{companyId}/transactions/ingest : Bulk-ingest transactions (up to 500 per call) [scope:transactions:write risk:medium idempotent dry-run]
+GET /companies/{companyId}/webshop-orders : The order and refund rows synced from the company's webshops, newest first [scope:transactions:read risk:low idempotent]
+GET /companies/{companyId}/webshop-orders/{orderId} : One webshop order row with its line items and the booking the Orders page would prefill [scope:transactions:read risk:low idempotent]
+POST /companies/{companyId}/webshop-orders/{orderId}/book : Book one webshop order or refund with your own lines, linked to the order with its orderunderlag [scope:bookkeeping:write risk:high idempotent dry-run]
 ```
 
 ### Employees (26)

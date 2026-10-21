@@ -511,7 +511,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'DELETE /api/mileage/trips/:id': gap('P3'),
   'POST /api/mileage/book': covered(['gnubok_book_mileage_period']),
   'POST /api/mileage/salary-push': gap('P3', 'push milersättning to a salary run'),
-  'POST /api/webshop-orders/:id/book': gap('P3', 'book a webshop order row'),
+  'POST /api/webshop-orders/:id/book': covered([`POST ${V}/webshop-orders/:orderId/book`, 'gnubok_book_webshop_order']),
   'POST /api/webshop-orders/:id/create-invoice': gap('P3'),
   'POST /api/webshop-orders/:id/mark-booked': gap('P3'),
   'DELETE /api/webshop-orders/:id/mark-booked': gap('P3'),
@@ -848,4 +848,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 145
+export const GAP_CEILING = 144

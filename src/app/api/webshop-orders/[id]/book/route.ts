@@ -5,12 +5,7 @@ import { validateBody } from '@/lib/api/validate'
 import { BookWebshopOrderSchema } from '@/lib/api/schemas'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import {
-  assertOrderBookable,
-  bookOrderThroughEngine,
-  resolveOrderFx,
-} from '@/lib/webshop-orders/book-order'
-import type { WebshopOrder } from '@/types'
+import { bookWebshopOrder } from '@/lib/webshop-orders/book-order'
 
 /**
  * Book one webshop order/refund row as a verifikat. The dialog sends the
@@ -20,9 +15,10 @@ import type { WebshopOrder } from '@/types'
  * enforced by the engine + DB triggers as usual.
  *
  * The flow itself (guards, FX retry, draft -> claim -> commit, orderunderlag
- * archiving) lives in lib/webshop-orders/book-order.ts, shared verbatim with
- * the bulk endpoint (POST /api/webshop-orders/bulk-book) so the two paths
- * cannot drift.
+ * archiving) is bookWebshopOrder() in lib/webshop-orders/book-order.ts,
+ * shared with the webshop-orders.book operation (v1 and MCP) and, step by
+ * step, with the bulk endpoint (POST /api/webshop-orders/bulk-book), so the
+ * paths cannot drift.
  */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'webshop_order.book',
@@ -34,66 +30,51 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     const { fiscal_period_id, entry_date, description, lines, voucher_series, notes } =
       validation.data
 
-    const { data: order, error: fetchError } = await supabase
-      .from('webshop_orders')
-      .select('*')
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .single<WebshopOrder>()
-
-    if (fetchError || !order) {
-      return errorResponseFromCode('WEBSHOP_ORDER_NOT_FOUND', log, { requestId })
-    }
-
-    const guardFailure = await assertOrderBookable(supabase, companyId, order)
-    if (guardFailure) {
-      return errorResponseFromCode(guardFailure.code, log, {
-        requestId,
-        ...(guardFailure.details ? { details: guardFailure.details } : {}),
-      })
-    }
-
-    // Also keeps the in-memory row in sync (total_sek/exchange_rate): the
-    // underlag renders the SEK conversion facts from it after commit.
-    const resolvedOrder = await resolveOrderFx(supabase, companyId, order, log)
-    if (!resolvedOrder) {
-      return errorResponseFromCode('WEBSHOP_ORDER_FX_UNRESOLVED', log, {
-        requestId,
-        details: { currency: order.currency },
-      })
-    }
-
-    const outcome = await bookOrderThroughEngine(
+    const outcome = await bookWebshopOrder(
       supabase,
       companyId,
       user.id,
-      resolvedOrder,
+      id,
       { fiscal_period_id, entry_date, description, lines, voucher_series, notes },
       log,
     )
 
     if (!outcome.ok) {
-      if (outcome.kind === 'claimed_elsewhere') {
-        return errorResponseFromCode('WEBSHOP_ORDER_ALREADY_BOOKED', log, { requestId })
+      switch (outcome.kind) {
+        case 'not_found':
+          return errorResponseFromCode('WEBSHOP_ORDER_NOT_FOUND', log, { requestId })
+        case 'not_bookable':
+          return errorResponseFromCode(outcome.failure.code, log, {
+            requestId,
+            ...(outcome.failure.details ? { details: outcome.failure.details } : {}),
+          })
+        case 'fx_unresolved':
+          return errorResponseFromCode('WEBSHOP_ORDER_FX_UNRESOLVED', log, {
+            requestId,
+            details: { currency: outcome.currency },
+          })
+        case 'claimed_elsewhere':
+          return errorResponseFromCode('WEBSHOP_ORDER_ALREADY_BOOKED', log, { requestId })
+        case 'claim_error':
+          return NextResponse.json(
+            { error: getErrorMessage(outcome.error, { context: 'transaction' }) },
+            { status: 500 },
+          )
+        case 'engine_error': {
+          const typed = bookkeepingErrorResponse(outcome.error)
+          if (typed) return typed
+          log.error(
+            outcome.stage === 'draft'
+              ? 'failed to draft journal entry for webshop order'
+              : 'failed to commit journal entry for webshop order',
+            outcome.error as Error,
+          )
+          return NextResponse.json(
+            { error: getErrorMessage(outcome.error, { context: 'transaction' }) },
+            { status: 400 },
+          )
+        }
       }
-      if (outcome.kind === 'claim_error') {
-        return NextResponse.json(
-          { error: getErrorMessage(outcome.error, { context: 'transaction' }) },
-          { status: 500 },
-        )
-      }
-      const typed = bookkeepingErrorResponse(outcome.error)
-      if (typed) return typed
-      log.error(
-        outcome.stage === 'draft'
-          ? 'failed to draft journal entry for webshop order'
-          : 'failed to commit journal entry for webshop order',
-        outcome.error as Error,
-      )
-      return NextResponse.json(
-        { error: getErrorMessage(outcome.error, { context: 'transaction' }) },
-        { status: 400 },
-      )
     }
 
     return NextResponse.json({

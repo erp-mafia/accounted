@@ -233,6 +233,7 @@ import {
   posSalesUpdateSettings,
   posSalesVenuesList,
 } from './pos-sales'
+import { webshopOrdersBook, webshopOrdersGet, webshopOrdersList } from './webshop-orders'
 import { COLLECTIONS_OPERATION_LIST } from './collections'
 import { PACKAGE_OPERATIONS } from './packages'
 import { BANK_FEED_OPERATIONS } from './bank-feed'
@@ -457,6 +458,10 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   posSalesDayGet,
   posSalesDayBook,
   posSalesFetch,
+  // webshop-orders (Shopify, WooCommerce, Zettle): read the synced rows, book one with the caller's lines
+  webshopOrdersList,
+  webshopOrdersGet,
+  webshopOrdersBook,
   // bank-feed (reading a bank with BankID through Open Payments): the reads and the signatory link bind v1 + MCP;
   // start, poll, restart, select and disconnect have no door (a person's BankID and a person's choice), and sync
   // is already served by POST /bank-connections/:connectionId/sync and gnubok_sync_bank for every aggregator.

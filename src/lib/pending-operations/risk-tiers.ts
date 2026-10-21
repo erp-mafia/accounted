@@ -62,6 +62,8 @@ const RISK_TIERS = {
   disconnect_pos_connection: 'medium',
   update_pos_sales_settings: 'medium',
   book_pos_sales_day: 'high',
+  // Webshop orders: booking posts the order's verifikat with the caller's lines.
+  book_webshop_order: 'high',
   // Collections: a customer's claim goes to, or a decision is sent to, the
   // company's collections provider, which writes to the customer. External
   // and not undone by a later call. Handing over and escalating are also

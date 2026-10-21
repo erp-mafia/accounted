@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `353`;
+exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `356`;
 
 exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-keys 1`] = `
 [
@@ -166,6 +166,8 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "GET /api/v1/companies/:companyId/webhooks",
   "GET /api/v1/companies/:companyId/webhooks/:id",
   "GET /api/v1/companies/:companyId/webhooks/:id/deliveries",
+  "GET /api/v1/companies/:companyId/webshop-orders",
+  "GET /api/v1/companies/:companyId/webshop-orders/:orderId",
   "GET /api/v1/health",
   "GET /api/v1/operations/:id",
   "GET /api/v1/portfolio/overview",
@@ -349,6 +351,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/webhooks/:id/rotate-secret",
   "POST /api/v1/companies/:companyId/webhooks/:id/test",
   "POST /api/v1/companies/:companyId/webhooks/:id/verify",
+  "POST /api/v1/companies/:companyId/webshop-orders/:orderId/book",
   "POST /api/v1/webhook-deliveries/:id/retry",
   "PUT /api/v1/companies/:companyId/cash-accounts/payee-defaults",
   "PUT /api/v1/companies/:companyId/employees/:id/absence",
@@ -378,6 +381,7 @@ exports[`v1 spec snapshot > matches the recorded module catalogue > endpoint-mod
   "supplier-invoices": 22,
   "transactions": 31,
   "vat": 1,
+  "webshop": 3,
   "year-end": 10,
 }
 `;
