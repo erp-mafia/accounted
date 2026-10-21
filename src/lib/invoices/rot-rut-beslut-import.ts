@@ -1,7 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { z } from 'zod'
-import type { RotRutBeslutFileSchema } from '@/lib/api/schemas'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
+import { beslutFileIsForCompany, type RotRutBeslutFile } from './rot-rut-beslut-file'
 
 /**
  * Import of Skatteverkets beslutsfil for rot/rut (the decision JSON the user
@@ -28,7 +27,7 @@ import { decryptPersonnummer } from '@/lib/salary/personnummer'
  * yet). The result carries a `next` hint pointing at the settle endpoint.
  */
 
-export type RotRutBeslutFile = z.infer<typeof RotRutBeslutFileSchema>
+export type { RotRutBeslutFile }
 
 export interface RotRutBeslutOutcome {
   namn: string
@@ -73,12 +72,6 @@ interface ItemRow {
   } | null
 }
 
-/** Normalize an org number to SKV's 12-digit form (16-prefixed). */
-function normalizeOrgNumber(raw: string): string {
-  const digits = raw.replace(/\D/g, '')
-  return digits.length === 10 ? `16${digits}` : digits
-}
-
 const SETTLE_HINT = 'POST /api/rot-rut/payout-requests/{request_id}/settle bokför utbetalningen när den landat på banken.'
 
 export async function importRotRutBeslutFile(
@@ -96,7 +89,7 @@ export async function importRotRutBeslutFile(
   if (settingsError) return { ok: false, code: 'ROT_RUT_FILE_CREATE_FAILED' }
 
   const orgNumber = (settings?.org_number as string | null) ?? null
-  if (!orgNumber || normalizeOrgNumber(orgNumber) !== normalizeOrgNumber(file.utforare)) {
+  if (!beslutFileIsForCompany(file, orgNumber)) {
     return { ok: false, code: 'ROT_RUT_BESLUT_WRONG_COMPANY' }
   }
 

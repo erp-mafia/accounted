@@ -1040,32 +1040,10 @@ export const RotRutLinkVoucherSchema = z.object({
   dry_run: z.boolean().optional(),
 })
 
-// The beslutsfil JSON downloaded from Skatteverkets rot/rut e-tjänst.
-export const RotRutBeslutFileSchema = z.object({
-  version: z.string(),
-  // Utförarens orgnr, 12 digits with 16-prefix in SKV's file.
-  utforare: z.string().regex(/^\d{10,12}$/),
-  beslut: z
-    .array(
-      z.object({
-        // NamnPaBegaran as submitted (1-16 chars); the primary match key
-        // against rot_rut_payout_requests.name.
-        namn: z.string().min(1),
-        referensnummer: z.string().regex(/^\d{11}(-\d+)?$/),
-        arenden: z
-          .array(
-            z.object({
-              personnummer: z.string().regex(/^\d{12}$/),
-              fakturanummer: z.string().max(20).optional(),
-              // Whole kronor; 0 = avslag for the ärende.
-              godkantBelopp: z.number().int().min(0),
-            }),
-          )
-          .min(1),
-      }),
-    )
-    .min(1),
-})
+// The beslutsfil JSON downloaded from Skatteverkets rot/rut e-tjänst. Defined
+// in lib/invoices/rot-rut-beslut-file, which the batch allocation dialog
+// reads in the browser without this module.
+export { RotRutBeslutFileSchema } from '@/lib/invoices/rot-rut-beslut-file'
 
 // ============================================================
 // Articles (artikelregister)

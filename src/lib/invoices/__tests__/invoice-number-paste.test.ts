@@ -2,12 +2,14 @@ import { describe, it, expect } from 'vitest'
 import { generateOcrReference } from '@/lib/bankgiro/luhn'
 import {
   MAX_PASTED_REFERENCES,
+  beslutFileToPaste,
   closedLookupNumbers,
   parseInvoicePaste,
   planInvoicePaste,
   resolvePastedReferences,
   type PasteInvoice,
 } from '../invoice-number-paste'
+import type { RotRutBeslutFile } from '../rot-rut-beslut-file'
 
 const texts = (text: string) => parseInvoicePaste(text).references.map((r) => r.text)
 
@@ -196,6 +198,8 @@ describe('planInvoicePaste', () => {
       same_invoice: 1,
       conflicting_amounts: 1,
       unreadable: 1,
+      refused: 0,
+      no_invoice_number: 0,
     })
   })
 
@@ -220,5 +224,98 @@ describe('planInvoicePaste', () => {
     expect(result.counts.not_found).toBe(2)
     // Generous for a loaded CI runner; the quadratic version took seconds.
     expect(elapsed).toBeLessThan(2000)
+  })
+})
+
+describe('beslutFileToPaste', () => {
+  const beslutFile = (beslut: RotRutBeslutFile['beslut']): RotRutBeslutFile => ({
+    version: '1',
+    utforare: '168780003656',
+    beslut,
+  })
+  const arende = (fakturanummer: string | undefined, godkantBelopp: number) => ({
+    personnummer: '191212121212',
+    ...(fakturanummer === undefined ? {} : { fakturanummer }),
+    godkantBelopp,
+  })
+
+  it('reads each ärende as its invoice number at the approved amount, across beslut, in file order', () => {
+    const parsed = beslutFileToPaste(
+      beslutFile([
+        { namn: 'RUT 1', referensnummer: '12345678901', arenden: [arende('1001', 1500), arende('1002', 2000)] },
+        { namn: 'RUT 2', referensnummer: '12345678902', arenden: [arende('1003', 750)] },
+      ]),
+    )
+    expect(parsed.references).toEqual([
+      { text: '1001', amount: 1500 },
+      { text: '1002', amount: 2000 },
+      { text: '1003', amount: 750 },
+    ])
+    expect(parsed.sourceSkips).toEqual([])
+  })
+
+  it('adds up the ROT and the RUT ärende of one invoice', () => {
+    const parsed = beslutFileToPaste(
+      beslutFile([
+        { namn: 'ROT', referensnummer: '12345678901', arenden: [arende('A-1001', 1500)] },
+        { namn: 'RUT', referensnummer: '12345678902', arenden: [arende('a-1001', 500)] },
+      ]),
+    )
+    expect(parsed.references).toEqual([{ text: 'A-1001', amount: 2000 }])
+  })
+
+  it('refuses an invoice approved 0 kr and lists an ärende without an invoice number with its amount', () => {
+    const parsed = beslutFileToPaste(
+      beslutFile([
+        {
+          namn: 'RUT 1',
+          referensnummer: '12345678901',
+          arenden: [arende('1001', 0), arende(undefined, 1200), arende('1002', 900)],
+        },
+      ]),
+    )
+    expect(parsed.references).toEqual([{ text: '1002', amount: 900 }])
+    expect(parsed.sourceSkips).toEqual([
+      { text: 'RUT 1', reason: 'no_invoice_number', amount: 1200 },
+      { text: '1001', reason: 'refused' },
+    ])
+  })
+
+  it('picks at the approved amount, refuses one above what the invoice owes, and lists what the beslut ruled out', () => {
+    const file = beslutFile([
+      {
+        namn: 'RUT 1',
+        referensnummer: '12345678901',
+        arenden: [
+          arende('1001', 1500),
+          arende('1002', 1000),
+          arende('1003', 1500),
+          arende('1004', 1600),
+          arende('1005', 0),
+          arende(undefined, 300),
+        ],
+      },
+    ])
+    const invoices = [
+      inv('full', '1001', { remaining: 1500 }),
+      inv('partly-approved', '1002', { remaining: 1500 }),
+      inv('ore', '1003', { remaining: 1499.5 }),
+      inv('above', '1004', { remaining: 1500 }),
+      inv('refused', '1005'),
+    ]
+    const result = planInvoicePaste(beslutFileToPaste(file), invoices, { kind: 'customer', currency: 'SEK' })
+    expect(result.picks.map((p) => [p.invoice.id, p.amount])).toEqual([
+      ['full', 1500],
+      ['partly-approved', 1000],
+      ['ore', 1500],
+    ])
+    expect(result.skipped).toEqual([
+      { text: '1004', reason: 'amount_above_remaining', invoiceNumber: '1004' },
+      { text: 'RUT 1', reason: 'no_invoice_number', amount: 300 },
+      { text: '1005', reason: 'refused' },
+    ])
+    expect(result.counts.refused).toBe(1)
+    expect(result.counts.no_invoice_number).toBe(1)
+    expect(result.pickedTotal).toBe(4000)
   })
 })

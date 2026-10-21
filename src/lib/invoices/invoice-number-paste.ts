@@ -5,7 +5,8 @@
  * paying a statement) comes with a list of the numbers it paid: a beslut, a
  * bank specification, a spreadsheet. Ticking hundreds of rows one by one is
  * not a workflow, so the batch allocation dialog (MatchAllocationDialog)
- * takes the list as pasted text and picks what it names.
+ * takes the list as pasted text, or as Skatteverket's beslutsfil
+ * (beslutFileToPaste), and picks what it names.
  *
  * Pure: the parse and the resolution live here and are unit tested; the
  * database reads that feed the resolution live in open-invoice-search.ts
@@ -13,11 +14,13 @@
  *
  * Nothing pasted is dropped. Every reference that is not picked comes back
  * with a reason (not found, already paid, not open, ambiguous, another
- * currency, amount above what the invoice owes, named twice, unreadable),
- * so the person can check it against the list they pasted from.
+ * currency, amount above what the invoice owes, named twice, unreadable,
+ * refused by Skatteverket, no invoice number in the beslut), so the person
+ * can check it against the list they pasted from.
  */
 import { ORE_ROUNDING_SETTLEMENT_MAX, parseSwedishAmount, roundOre, sumOre } from '@/lib/money'
 import { invoiceReferenceKeys } from './ocr-keys'
+import type { RotRutBeslutFile } from './rot-rut-beslut-file'
 
 /**
  * Most references one paste reads. Far above what one bank row may settle
@@ -45,6 +48,8 @@ export interface ParsedInvoicePaste {
   duplicates: number
   /** The paste held more than MAX_PASTED_REFERENCES; the rest was not read. */
   truncated: boolean
+  /** What the source itself rules out (a beslut's refused and unnumbered ärenden), listed as given. */
+  sourceSkips?: PasteSkip[]
 }
 
 const LINE_BREAK = /\r\n|\r|\n/
@@ -124,6 +129,42 @@ export function parseInvoicePaste(text: string): ParsedInvoicePaste {
     else references.push(reference)
   }
   return { references, unreadable, conflicting, duplicates, truncated }
+}
+
+/**
+ * Skatteverket's beslutsfil as the references a paste would carry: every
+ * invoice its ärenden name, at what Skatteverket approved for it. Only the
+ * invoice numbers and amounts are read; the buyers' personnummer stay in the
+ * file.
+ *
+ * One invoice can be named by two ärenden, its ROT and its RUT share filed
+ * as two begäran and decided in the same file, so the approved amounts add
+ * up. An invoice approved 0 kr in all is refused rather than picked: the
+ * buyer owes that share, not this payout. An ärende without an invoice
+ * number cannot be resolved here and comes back with its begäran and amount,
+ * to be picked by hand.
+ */
+export function beslutFileToPaste(file: RotRutBeslutFile): ParsedInvoicePaste {
+  const byKey = new Map<string, PastedReference>()
+  const sourceSkips: PasteSkip[] = []
+  for (const beslut of file.beslut) {
+    for (const arende of beslut.arenden) {
+      const number = arende.fakturanummer?.trim()
+      if (!number) {
+        sourceSkips.push({ text: beslut.namn, reason: 'no_invoice_number', amount: arende.godkantBelopp })
+        continue
+      }
+      const seen = byKey.get(pastedReferenceKey(number))
+      if (seen) seen.amount = (seen.amount ?? 0) + arende.godkantBelopp
+      else byKey.set(pastedReferenceKey(number), { text: number, amount: arende.godkantBelopp })
+    }
+  }
+  const references: PastedReference[] = []
+  for (const reference of byKey.values()) {
+    if (reference.amount === 0) sourceSkips.push({ text: reference.text, reason: 'refused' })
+    else references.push(reference)
+  }
+  return { references, unreadable: [], conflicting: [], duplicates: 0, truncated: false, sourceSkips }
 }
 
 export type PasteInvoiceKind = 'customer' | 'supplier'
@@ -286,6 +327,8 @@ export type PasteSkipReason =
   | 'same_invoice'
   | 'conflicting_amounts'
   | 'unreadable'
+  | 'refused'
+  | 'no_invoice_number'
 
 export interface PasteSkip {
   text: string
@@ -296,6 +339,8 @@ export interface PasteSkip {
   earlier?: string
   /** ambiguous: how many invoices the reference names. */
   count?: number
+  /** no_invoice_number: what Skatteverket approved for the ärende, in whole kronor. */
+  amount?: number
 }
 
 export interface PastePick<T> {
@@ -308,7 +353,7 @@ export interface PastePick<T> {
 export interface InvoicePasteResult<T> {
   picks: PastePick<T>[]
   pickedTotal: number
-  /** Every reference not picked, in paste order, then the unreadable cells. */
+  /** Every reference not picked, in paste order, then what the source ruled out, then the unreadable cells. */
   skipped: PasteSkip[]
   counts: Record<PasteSkipReason, number>
   /** Repeats the parse collapsed (same reference, same amount). */
@@ -367,6 +412,7 @@ export function planInvoicePaste<T extends PasteInvoice>(
       picks.push({ invoice, amount: reference.amount ?? remaining, text: reference.text })
     }
   })
+  skipped.push(...(parsed.sourceSkips ?? []))
   for (const text of parsed.conflicting) skipped.push({ text, reason: 'conflicting_amounts' })
   for (const text of parsed.unreadable) skipped.push({ text, reason: 'unreadable' })
 
@@ -380,6 +426,8 @@ export function planInvoicePaste<T extends PasteInvoice>(
     same_invoice: 0,
     conflicting_amounts: 0,
     unreadable: 0,
+    refused: 0,
+    no_invoice_number: 0,
   } satisfies Record<PasteSkipReason, number>
   for (const skip of skipped) counts[skip.reason] += 1
 
