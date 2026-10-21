@@ -10,6 +10,7 @@ import {
 } from '@/lib/salary/manual-payslip-lines'
 import { SalaryLineItemTypeSchema } from '@/lib/api/schemas'
 import { isCalculatedLineType } from '@/lib/salary/calculated-line-items'
+import { isBenefitItemType } from '@/lib/salary/benefit-payments'
 
 const body = (r: ReturnType<typeof buildManualPayslipLine>): ManualLineBody => {
   if (!r.ok) throw new Error(`expected ok, got ${r.reason}`)
@@ -67,6 +68,17 @@ describe('manual payslip line catalogue', () => {
     }
   })
 
+  it('kostförmån carries the flags of the benefit row the employee derives: taxed, avgift basis, not semestergrundande', () => {
+    expect(isBenefitItemType('benefit_meals')).toBe(true)
+    expect(MANUAL_PAYSLIP_LINE_SPECS.benefit_meals.flags).toEqual({
+      is_taxable: true,
+      is_avgift_basis: true,
+      is_vacation_basis: false,
+      is_gross_deduction: false,
+      is_net_deduction: false,
+    })
+  })
+
   it('deductions are flagged the way the recurring lines are', () => {
     expect(MANUAL_PAYSLIP_LINE_SPECS.gross_deduction_other.flags).toEqual({
       is_taxable: true,
@@ -102,6 +114,14 @@ describe('buildManualPayslipLine', () => {
     const b = body(buildManualPayslipLine({ item_type: 'traktamente_taxfree', quantity: 3, unit_price: 300 }))
     expect(b.amount).toBe(900)
     expect(b.is_taxable).toBe(false)
+  })
+
+  it('kostförmån: nine dinners at the 2026 schablon', () => {
+    const b = body(buildManualPayslipLine({ item_type: 'benefit_meals', quantity: 9, unit_price: 124 }))
+    expect(b.item_type).toBe('benefit_meals')
+    expect(b.description).toBe('Kostförmån')
+    expect(b.amount).toBe(1116)
+    expect(b.is_taxable).toBe(true)
   })
 
   it('quantity x unit price wins over a typed amount, and rounds to öre', () => {

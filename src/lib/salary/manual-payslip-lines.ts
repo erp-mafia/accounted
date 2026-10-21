@@ -18,6 +18,12 @@
  * Textrad is a row of words only (text-rows.ts): no amount, no quantity, no
  * flags. It explains the payslip and never reaches the pay.
  *
+ * Kostförmån is the one benefit offered here: meals that vary month to month
+ * (late dinners at the office) cannot sit on the employee as a fixed monthly
+ * value. The row is the same benefit_meals row the employee's standing
+ * benefit derives, so the engine taxes it without paying it out and the AGI
+ * reports it in FK015, both by type (benefit-payments.ts).
+ *
  * Utlägg are deliberately absent: an expense claim reaches the payslip
  * through "Lägg till utlägg" on the run page, linked to the claim
  * (expense-claim-lines.ts), so it is settled when the run is booked. A free
@@ -37,6 +43,7 @@ export type ManualPayslipLineType =
   | 'overtime'
   | 'other'
   | 'correction'
+  | 'benefit_meals'
   | 'gross_deduction_other'
   | 'net_deduction_advance'
   | 'net_deduction_other'
@@ -59,7 +66,7 @@ export interface ManualLineSpec {
   flags: ManualLineFlags
   sign: ManualLineSign
   /** What "Antal" counts, when the type is naturally quantity x price. */
-  unit?: 'mil' | 'dagar' | 'timmar'
+  unit?: 'mil' | 'dagar' | 'timmar' | 'maltider'
 }
 
 /** Kostnadsersättning at or under Skatteverket's schablon: net payout only. */
@@ -86,6 +93,14 @@ const WAGE: ManualLineFlags = {
   is_gross_deduction: false,
   is_net_deduction: false,
 }
+/** Same flags the benefit rows derived from employee_benefits carry (run-calculation.ts). */
+const BENEFIT: ManualLineFlags = {
+  is_taxable: true,
+  is_avgift_basis: true,
+  is_vacation_basis: false,
+  is_gross_deduction: false,
+  is_net_deduction: false,
+}
 /** Same flags the recurring bruttolöneavdrag carries (recurring-lines.ts). */
 const GROSS_DEDUCTION: ManualLineFlags = {
   is_taxable: true,
@@ -102,7 +117,7 @@ const NET_DEDUCTION: ManualLineFlags = {
   is_net_deduction: true,
 }
 
-/** In the order the dialog lists them: reimbursements, extra pay, deductions. */
+/** In the order the dialog lists them: reimbursements, extra pay, benefits, deductions. */
 export const MANUAL_PAYSLIP_LINE_SPECS: Record<ManualPayslipLineType, ManualLineSpec> = {
   mileage_taxfree: { label: 'Milersättning (skattefri)', flags: TAX_FREE, sign: 'addition', unit: 'mil' },
   mileage_taxable: { label: 'Milersättning (skattepliktig)', flags: TAXABLE_REIMBURSEMENT, sign: 'addition', unit: 'mil' },
@@ -113,6 +128,7 @@ export const MANUAL_PAYSLIP_LINE_SPECS: Record<ManualPayslipLineType, ManualLine
   overtime: { label: 'Övertid', flags: WAGE, sign: 'addition', unit: 'timmar' },
   other: { label: 'Övrigt', flags: WAGE, sign: 'addition' },
   correction: { label: 'Korrigering', flags: WAGE, sign: 'signed' },
+  benefit_meals: { label: 'Kostförmån', flags: BENEFIT, sign: 'addition', unit: 'maltider' },
   gross_deduction_other: { label: 'Bruttolöneavdrag', flags: GROSS_DEDUCTION, sign: 'deduction' },
   net_deduction_advance: { label: 'Avdrag förskott', flags: NET_DEDUCTION, sign: 'deduction' },
   net_deduction_other: { label: 'Nettolöneavdrag', flags: NET_DEDUCTION, sign: 'deduction' },
