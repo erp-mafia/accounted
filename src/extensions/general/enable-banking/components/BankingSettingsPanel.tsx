@@ -606,16 +606,18 @@ export default function BankingSettingsPanel() {
 
       // A bank that refused the requested window answered a narrower one:
       // say from which date the sync is complete instead of presenting a
-      // truncated history as a full one (#2202).
+      // truncated history as a full one (#2202). A bank that had not handed
+      // out every page is no finished sync either (PH 195).
       toast({
-        title: 'Synkronisering klar',
-        description:
-          data.history_narrowed && data.history_from
+        title: data.incomplete ? 'Synkroniseringen blev inte klar' : 'Synkronisering klar',
+        description: data.incomplete
+          ? `${data.imported} nya transaktioner importerade, men banken lämnade inte ut alla sidor. Försök igen senare, eller importera kontoutdraget som bankfil.`
+          : data.history_narrowed && data.history_from
             ? `${data.imported} nya transaktioner importerade. Banken lämnade bara ut historik från ${data.history_from}.`
             : `${data.imported} nya transaktioner importerade`,
       })
 
-      setShowCsvFallback(false)
+      setShowCsvFallback(data.incomplete === true)
       notifyBankSyncUpdated()
       fetchConnections()
     } catch (error) {

@@ -1,7 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
-import { createSchedulesForCustomerInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
+import {
+  ACCRUAL_RELEASE_FAILED_WARNING,
+  createSchedulesForCustomerInvoice,
+} from '@/lib/bookkeeping/accruals/from-invoices'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import type { Logger } from '@/lib/logger'
@@ -182,6 +185,9 @@ export async function bookInvoiceDeferred(opts: {
           'Fakturan bokfördes, men en eller flera periodiseringar kunde inte ' +
           'skapas. Kontrollera under Bokföring → Periodiseringar.',
       })
+    }
+    if ((accrual.releasesFailed ?? 0) > 0) {
+      warnings.push({ code: ACCRUAL_RELEASE_FAILED_WARNING.code, message: ACCRUAL_RELEASE_FAILED_WARNING.message_sv })
     }
   } catch (err) {
     log.error('accrual schedule creation failed on deferred booking', err as Error, { invoiceId: id })

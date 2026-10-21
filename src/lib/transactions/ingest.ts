@@ -867,9 +867,12 @@ const sameOre = (a: number | string | null | undefined, b: number | string | nul
  * what warrants re-running the suggestion passes. Pure.
  *
  * The rules: the reference when the bank now sends one that differs; the
- * counterparty (name, account, IBAN, organisationsnummer), the end-to-end id
- * and the merchant category only where the stored row has none (a person may
- * have corrected nothing here, but the bank's first word stands); the
+ * counterparty's name likewise when the stored name came from the same feed
+ * (a bank may name only the payment type before its daily enrichment,
+ * "UTLANDSBETALNING" or "KORT", and the payee after: PH 196), while a name
+ * another feed stored stands; the counterparty's account, IBAN and
+ * organisationsnummer, the end-to-end id and the merchant category only
+ * where the stored row has none (the bank's first word stands); the
  * instructed amount and currency of a foreign purchase, the balance after
  * and the enriched flag whenever the bank reports them; the bank's rate in
  * exchange_rate only on a SEK account (a foreign-currency account keeps the
@@ -904,7 +907,18 @@ export function enrichmentPatch(
       keysChanged = true
     }
   }
-  fillKey('merchant_name', text(raw.merchant_name))
+  // No person edits merchant_name (only the feeds write it), so the feed's
+  // later word replaces its own earlier one, as the reference does. A name
+  // another feed stored (an Enable Banking row the Open Payments re-read
+  // meets after a switch) is only filled where it is missing.
+  const merchantName = text(raw.merchant_name)
+  const sameFeed = Boolean(stored.import_source) && stored.import_source === raw.import_source
+  if (merchantName !== null && sameFeed && text(stored.merchant_name) !== merchantName) {
+    patch.merchant_name = merchantName
+    keysChanged = true
+  } else {
+    fillKey('merchant_name', merchantName)
+  }
   fillKey('counterparty_account', text(raw.counterparty_account))
   fillKey('counterparty_iban', text(raw.counterparty_iban))
   fillKey('counterparty_org_number', text(raw.counterparty_org_number))

@@ -137,8 +137,11 @@ export type CoreEvent =
       bankName: string | null
       provider: 'enable_banking' | 'accounted_connect' | 'open_payments'
       trigger: 'agent' | 'cron' | 'manual'
-      /** throttled: the bank's short throttle (Open Payments), a retry in a minute; rate_limited: the daily cap. */
-      errorClass: 'session_expired' | 'bank_unavailable' | 'rate_limited' | 'throttled' | 'connector' | 'unknown'
+      /**
+       * throttled: the bank's short throttle (Open Payments), a retry in a minute; rate_limited: the daily cap;
+       * consent_refused: a permanent consent failure code (Open Payments), the row needs a renewal like session_expired.
+       */
+      errorClass: 'session_expired' | 'consent_refused' | 'bank_unavailable' | 'rate_limited' | 'throttled' | 'connector' | 'unknown'
       status: string
       /** Redacted summary (class name + scrubbed phrase); never a raw provider body. */
       diagnostic: string

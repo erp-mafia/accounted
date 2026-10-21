@@ -309,7 +309,9 @@ describe('stripe POST /backfill', () => {
     expect(syncStripeBalanceTransactions).not.toHaveBeenCalled()
   })
 
-  it('moves the cursor to the chosen date and syncs from there', async () => {
+  it('moves the cursor to Swedish midnight of the chosen date and syncs from there', async () => {
+    // Rows are dated on the Swedish day (crm#1344): 1 January starts at
+    // 23:00Z on 31 December, or its first hour would fall outside the backfill.
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
     const service = serviceReturning({ data: [ACTIVE] })
@@ -326,19 +328,19 @@ describe('stripe POST /backfill', () => {
     )
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body.from).toBe('2026-01-01T00:00:00.000Z')
+    expect(body.from).toBe('2025-12-31T23:00:00.000Z')
     expect(body.transactions.imported).toBe(9)
     const updates = findCalls('stripe_connections', 'update')
     // The backfill clears the last sync error like every other feed's does.
     expect(updates[0][0]).toEqual({
-      last_balance_txn_synced_at: '2026-01-01T00:00:00.000Z',
+      last_balance_txn_synced_at: '2025-12-31T23:00:00.000Z',
       error_message: null,
     })
     // The sync must see the moved cursor, not the stored one, and run on the
     // service client like the manual sync.
     expect(vi.mocked(syncStripeBalanceTransactions).mock.calls[0][0]).toBe(service.supabase)
     expect(vi.mocked(syncStripeBalanceTransactions).mock.calls[0][1].last_balance_txn_synced_at).toBe(
-      '2026-01-01T00:00:00.000Z',
+      '2025-12-31T23:00:00.000Z',
     )
   })
 })

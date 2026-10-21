@@ -131,7 +131,6 @@ function revalidateUnderlag(transactionId: string): Promise<unknown> {
 /** Rows warmed per pass, taken from the top of the list only: a screenful, never the backlog. */
 const ASSISTANT_WARM_LIMIT = 8
 const ASSISTANT_WARM_WINDOW = 30
-import { fetchMigrationCoverageEnd } from '@/lib/transactions/migration-coverage'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { computeJeUnderlagStatus, type JeUnderlagStatus } from '@/lib/transactions/underlag-status'
 import { getInvoiceReferencesForJournalEntries } from '@/lib/core/bookkeeping/journal-entry-references'
@@ -845,30 +844,48 @@ export default function TransactionsPage() {
   // "Kör matchning igen" in the review surface.
   const [rerunningMatch, setRerunningMatch] = useState(false)
 
-  // End of the company's SIE-migration data coverage (latest imported
-  // voucher date, see lib/transactions/migration-coverage.ts). Drives the
-  // quiet "från perioden före din migrering" marker on inbox rows: date-based
-  // on purpose, it labels rows the imported bokföring should already cover,
-  // it never suggests a sync skip date (that was #917). Not fiscal_year_end:
-  // for a mid-year migration that is a future date and the marker fired on
-  // every new transaction until New Year.
-  const [sieCoverageEnd, setSieCoverageEnd] = useState<string | null>(null)
+  // Open rows that carry the quiet "från perioden före din migrering" marker:
+  // dated inside the imported bokföring's coverage AND explained by it (an
+  // unlinked voucher set of the same amount within a week, see
+  // GET /api/transactions/migration-coverage). Date alone marked rows the old
+  // system never booked as "most likely already imported" (crm#1239). It
+  // never suggests a sync skip date (that was #917).
+  //
+  // Asked again only when rows ARRIVE (first load, a sync, a company switch):
+  // a booked or ignored row just leaves the inbox and needs no new answer. A
+  // generation counter, not an effect cleanup, discards a stale answer, so a
+  // booking mid-request (the count drops) does not cancel the in-flight one.
+  const [preMigrationIds, setPreMigrationIds] = useState<ReadonlySet<string>>(() => new Set())
+  const pendingRowCount = useMemo(
+    () => transactions.reduce((n, t) => (t.is_business === null && !t.is_ignored ? n + 1 : n), 0),
+    [transactions],
+  )
+  const preMigrationAskedRef = useRef<{ companyId: string | null; count: number }>({ companyId: null, count: 0 })
+  const preMigrationGenerationRef = useRef(0)
   useEffect(() => {
-    if (!companyId) {
-      setSieCoverageEnd(null)
-      return
+    const asked = preMigrationAskedRef.current
+    const sameCompany = asked.companyId === companyId
+    preMigrationAskedRef.current = { companyId, count: pendingRowCount }
+    if (!sameCompany) {
+      preMigrationGenerationRef.current++
+      setPreMigrationIds(new Set())
     }
-    let cancelled = false
+    if (!companyId || pendingRowCount === 0 || (sameCompany && pendingRowCount <= asked.count)) return
+    const generation = ++preMigrationGenerationRef.current
     ;(async () => {
-      const coverageEnd = await fetchMigrationCoverageEnd(supabase, companyId)
-      if (!cancelled) {
-        setSieCoverageEnd(coverageEnd)
+      try {
+        const response = await fetch('/api/transactions/migration-coverage')
+        if (!response.ok) return
+        const payload = (await response.json()) as { data?: { explained_ids?: string[] } }
+        if (generation === preMigrationGenerationRef.current) {
+          setPreMigrationIds(new Set(payload.data?.explained_ids ?? []))
+        }
+      } catch {
+        // Advisory: without an answer no row carries the marker, the same as
+        // a row the ledger does not explain. The booking doors keep their guard.
       }
     })()
-    return () => {
-      cancelled = true
-    }
-  }, [companyId, supabase])
+  }, [companyId, pendingRowCount])
 
   // Computed lists. Exiting rows (just booked/ignored/deleted) stay IN this
   // list on purpose: they render for the 350ms exit window with the .row-exit
@@ -4687,7 +4704,7 @@ export default function TransactionsPage() {
                         onMoveCashAccount={openMoveAccountDialog}
                         cashAccounts={cashAccounts}
                         onToggleSelect={toggleBatchSelect}
-                        preMigrationCutoff={sieCoverageEnd}
+                        preMigration={preMigrationIds.has(item.data.id)}
                         columns={txColumns}
                         accountLabel={accountLabelFor(item.data)}
                         categoryLabel={categoryLabelFor(item.data)}

@@ -14,7 +14,13 @@ import type { InvoiceDocumentType } from '@/types'
  *       faktura is then finalized (POST /finalize numbers it and emits
  *       invoice.created), the same step the detail page requires before a
  *       send.
- *  2. Send.
+ *  2. Attach (email channel only, #79): the files picked in the confirm
+ *     before the document existed are already in the archive (uploaded
+ *     there as they were picked); POST /api/invoices/{id}/attachments links
+ *     them to the saved draft, the same route the invoice page's send
+ *     dialog links through. A refusal stops here, before anything is sent
+ *     or booked, and reports the saved draft like any later failure.
+ *  3. Send.
  *     - email:  POST /api/invoices/{id}/send, with this send's extra copies
  *               and its own subject and message when given.
  *     - manual: POST /api/invoices/{id}/mark-sent ("Jag skickar själv"; the
@@ -24,7 +30,7 @@ import type { InvoiceDocumentType } from '@/types'
  *     Kontantfaktura (paidAtIssue, crm#1281): POST /mark-sent with
  *     paid_at_issue whatever the channel, so the invoice is issued paid as
  *     one cash verifikat; then
- *  3. Receipt (email channel only): POST /send-payment-confirmation mails
+ *  4. Receipt (email channel only): POST /send-payment-confirmation mails
  *     the paid invoice (BETALD) as the customer's receipt. The invoice is
  *     issued and booked by then, so a failure here is reported, not undone:
  *     the detail page sends the receipt again.
@@ -64,9 +70,14 @@ export interface SendSequenceInput {
   email?: SendEmailOptions
   /** Kontantfaktura: issue it already paid to this 19xx account (crm#1281). */
   paidAtIssue?: { account_number: string } | null
+  /**
+   * Archived documents to email after the PDF (#79), linked to the saved
+   * draft before the send. Email channel only: nothing else carries them.
+   */
+  attachmentDocumentIds?: string[]
 }
 
-export type SendSequenceStage = 'persist' | 'finalize' | 'send'
+export type SendSequenceStage = 'persist' | 'finalize' | 'attach' | 'send'
 
 export type SendSequenceResult =
   | {
@@ -186,7 +197,21 @@ export async function persistAndSend(
 
   if (input.paidAtIssue) return issuePaid(fetchImpl, input, invoiceId, invoiceNumber, input.paidAtIssue)
 
-  // 2. Send.
+  // 2. Attach. Only what this email carries: a mark-sent or an e-faktura
+  // would fix the set without sending it to anyone.
+  const attachmentIds = input.channel === 'email' ? input.attachmentDocumentIds ?? [] : []
+  if (attachmentIds.length > 0) {
+    const attached = await step(
+      fetchImpl,
+      `/api/invoices/${encodeURIComponent(invoiceId)}/attachments`,
+      jsonInit('POST', { document_ids: attachmentIds }),
+    )
+    if (!attached.ok) {
+      return { ok: false, stage: 'attach', invoiceId, status: attached.status, error: attached.error }
+    }
+  }
+
+  // 3. Send.
   const route = SEND_ROUTES[input.channel]
   const body = input.channel === 'email' ? buildSendBody(input.email) : null
   const sent = await step(
@@ -206,7 +231,7 @@ export async function persistAndSend(
   }
 }
 
-/** Steps 2 and 3 of a kontantfaktura: issue it paid, then mail the receipt when the channel is email. */
+/** Steps 3 and 4 of a kontantfaktura: issue it paid, then mail the receipt when the channel is email. */
 async function issuePaid(
   fetchImpl: FetchLike,
   input: SendSequenceInput,

@@ -21,6 +21,12 @@ import { buildSandboxPendingOperations } from './pending-operations'
 import { buildSandboxArticles } from './articles'
 import { buildSandboxVatDeadline } from './vat-deadline'
 import {
+  buildSandboxRepresentationVoucher,
+  SANDBOX_REPRESENTATION_ACCOUNT,
+  SANDBOX_REPRESENTATION_LINE,
+  SANDBOX_REPRESENTATION_NOTES,
+} from './representation'
+import {
   buildSandboxLedgerHistory,
   SANDBOX_LEDGER_ACCOUNT_NUMBERS,
 } from './ledger-history'
@@ -433,8 +439,13 @@ export async function POST(request: Request) {
         ...SANDBOX_SALARY_ACCOUNT_NUMBERS,
         '1510',
         '1930',
+        '2440',
         '2611',
         '3001',
+        // The representation lunch (./representation): 6072 is not in the K1
+        // chart, and without it the demo would post to an account the company
+        // does not have.
+        SANDBOX_REPRESENTATION_ACCOUNT,
         // The 6 % article (a printed book) derives 3003/2631 at invoice-line
         // time; neither is in the K1 chart, so invoicing it would post to an
         // account the company does not have.
@@ -793,6 +804,10 @@ export async function POST(request: Request) {
     // Supplier invoice #1, Telia, paid 15 days ago (mobile + bredband, 25% VAT).
     const sevenDaysFromNow = new Date(today)
     sevenDaysFromNow.setDate(today.getDate() + 7)
+    // Supplier invoice #2, the representation lunch, gets its registration
+    // verifikat below, so like the invoice vouchers it must fall inside the
+    // demo's one fiscal period in early January.
+    const representationDate = toDateStr(fiveDaysAgo < yearStart ? yearStart : fiveDaysAgo)
 
     // Hardcode 1 and 2: get_next_arrival_number is MAX+1 against the same
     // table we're about to insert into, so calling it twice before the first
@@ -829,14 +844,16 @@ export async function POST(request: Request) {
           supplier_id: supplierMap['Demokafé AB'],
           arrival_number: 2,
           supplier_invoice_number: '88245',
-          invoice_date: toDateStr(fiveDaysAgo),
+          invoice_date: representationDate,
           due_date: toDateStr(sevenDaysFromNow),
-          received_date: toDateStr(fiveDaysAgo),
+          received_date: representationDate,
           status: 'registered',
           currency: 'SEK',
-          subtotal: 240,
-          vat_amount: 28.80,
-          total: 268.80,
+          subtotal: SANDBOX_REPRESENTATION_LINE.net,
+          vat_amount: SANDBOX_REPRESENTATION_LINE.vat,
+          total: SANDBOX_REPRESENTATION_LINE.total,
+          // Syfte and deltagare, written, not uploaded (crm#1342).
+          notes: SANDBOX_REPRESENTATION_NOTES,
           // Luhn-valid OCR so the betalfil preview demos the structured
           // reference path instead of the invoice-number fallback.
           payment_reference: '882456',
@@ -847,7 +864,7 @@ export async function POST(request: Request) {
           paid_amount: 0,
           // No trigger derives this; without it the unpaid demo invoice
           // shows "0 kr kvar att betala" and cannot join a betalfil.
-          remaining_amount: 268.80,
+          remaining_amount: SANDBOX_REPRESENTATION_LINE.total,
         },
       ])
       .select('id, supplier_invoice_number')
@@ -875,18 +892,44 @@ export async function POST(request: Request) {
           account_number: '6212',
         },
         {
+          // A customer lunch: 6072, not 5810 Biljetter (accounted#80).
           supplier_invoice_id: supInvoiceMap['88245'],
-          description: 'Kundmöte Demokafé (representation)',
+          description: SANDBOX_REPRESENTATION_LINE.description,
           quantity: 1,
-          unit_price: 240,
-          line_total: 240,
-          vat_rate: 0.12,
-          vat_amount: 28.80,
-          account_number: '5810',
+          unit_price: SANDBOX_REPRESENTATION_LINE.net,
+          line_total: SANDBOX_REPRESENTATION_LINE.net,
+          vat_rate: SANDBOX_REPRESENTATION_LINE.vatRatePercent / 100,
+          vat_amount: SANDBOX_REPRESENTATION_LINE.vat,
+          account_number: SANDBOX_REPRESENTATION_ACCOUNT,
         },
       ])
 
     if (supItemsError) throw supItemsError
+
+    // The representation invoice's registration verifikat. Under
+    // faktureringsmetoden a registered invoice is booked when it arrives;
+    // without it 2440 would stay below the leverantörsreskontra and the demo's
+    // one representation example would have no verifikat to show syfte and
+    // deltagare on.
+    const representationEntry = await postSeedEntry(
+      supabase,
+      companyId,
+      userId,
+      buildSandboxRepresentationVoucher({
+        fiscalPeriodId: fiscalPeriod.id,
+        entryDate: representationDate,
+        supplierInvoiceId: supInvoiceMap['88245'],
+        supplierInvoiceNumber: '88245',
+        arrivalNumber: 2,
+        supplierName: 'Demokafé AB',
+      }),
+    )
+    const { error: representationLinkError } = await supabase
+      .from('supplier_invoices')
+      .update({ registration_journal_entry_id: representationEntry.id })
+      .eq('id', supInvoiceMap['88245'])
+      .eq('company_id', companyId)
+    if (representationLinkError) throw representationLinkError
 
     // 14. Add one fully-depreciable asset (laptop) so /assets shows
     // something other than a Package empty state. Acquired 18 months ago,
@@ -951,17 +994,21 @@ export async function POST(request: Request) {
             currency: 'SEK',
             vatTreatment: 'reduced_12',
           },
-          totals: { subtotal: 240, vat: 28.80, total: 268.80 },
+          totals: {
+            subtotal: SANDBOX_REPRESENTATION_LINE.net,
+            vat: SANDBOX_REPRESENTATION_LINE.vat,
+            total: SANDBOX_REPRESENTATION_LINE.total,
+          },
           lineItems: [
             {
-              description: 'Kundmöte Demokafé (representation)',
+              description: SANDBOX_REPRESENTATION_LINE.description,
               quantity: 1,
               unit: 'st',
-              unit_price: 240,
-              line_total: 240,
-              account_number: '5810',
-              vat_rate: 12,
-              vat_amount: 28.80,
+              unit_price: SANDBOX_REPRESENTATION_LINE.net,
+              line_total: SANDBOX_REPRESENTATION_LINE.net,
+              account_number: SANDBOX_REPRESENTATION_ACCOUNT,
+              vat_rate: SANDBOX_REPRESENTATION_LINE.vatRatePercent,
+              vat_amount: SANDBOX_REPRESENTATION_LINE.vat,
             },
           ],
         },

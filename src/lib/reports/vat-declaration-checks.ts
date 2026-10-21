@@ -250,6 +250,44 @@ export function revenueAccountWithoutRutaFinding(
 }
 
 /**
+ * The import pair as Skatteverket's FK005/FK006 see it: one side filed, the
+ * other empty, whatever the sign. Reached only when the proportional rule for
+ * the same direction stays silent, which in practice means a negative side: a
+ * later-period credit or correction of an import that moved only one of its
+ * two halves (crm#1348). `amount` is ruta 50 for FK005 and the sum of rutor
+ * 60-62 for FK006.
+ */
+function importPairPresenceFinding(
+  code: 'IMPORT_BASE_WITHOUT_OUTPUT' | 'IMPORT_OUTPUT_WITHOUT_BASE',
+  amount: number,
+): VatDeclarationCheck {
+  const kr = Math.trunc(amount).toLocaleString('sv-SE')
+  const negative = amount < 0
+  const message =
+    code === 'IMPORT_BASE_WITHOUT_OUTPUT'
+      ? `Ruta 50 (beskattningsunderlag vid import) är ${kr} kr men rutorna 60-62 (utgående ` +
+        'moms på import) är tomma. Då tar Skatteverket inte emot deklarationen (kontroll ' +
+        'FK005): finns ett belopp i ruta 50 måste det finnas ett i någon av rutorna 60-62.' +
+        (negative
+          ? ' Ett negativt underlag uppstår när ett tidigare importköp krediteras eller ' +
+            'flyttas från 4545/4546/4547 till ett annat konto utan att importmomsen på ' +
+            '2615/2625/2635 och 2645 rättas i samma verifikation. Var importen rätt bokförd, ' +
+            'återför rättelsen med storno. Var köpet aldrig en import, rätta hela importen, ' +
+            'underlag och importmoms, i den period där den redovisades och lämna en rättad ' +
+            'momsdeklaration för den perioden.'
+          : ' Kontrollera att importmoms är bokförd på 2615/2625/2635 för varje import.')
+      : `Rutorna 60-62 (utgående moms på import) har belopp, sammanlagt ${kr} kr, men ruta 50 (beskattningsunderlag ` +
+        'vid import) är tom. Då tar Skatteverket inte emot deklarationen (kontroll FK006): ' +
+        'finns ett belopp i någon av rutorna 60-62 måste det finnas ett i ruta 50.' +
+        (negative
+          ? ' Negativ importmoms utan underlag uppstår när importmomsen på 2615/2625/2635 ' +
+            'krediteras eller rättas utan att underlaget på 4545/4546/4547 följer med. Rätta ' +
+            'underlag och importmoms i samma verifikation, i den period där importen redovisades.'
+          : ' Kontrollera att tullvärdesunderlaget är bokfört på 4545/4546/4547 för varje import.')
+  return { code, status: 'ERROR', message, rutor: ['ruta50', 'ruta60', 'ruta61', 'ruta62'] }
+}
+
+/**
  * The two BAS accounts that carry the deductible input half of an omvänd-
  * skattskyldighet purchase, per BAS 2026:
  *
@@ -527,8 +565,8 @@ export function runVatDeclarationChecks(
 
   findings.push(...kontantmetodCutoffFindings(context.kontantmetodCutoff))
 
-  // SKV §4.1.1.4 rules 5 and 6: import base and import output VAT require each
-  // other. Compared PROPORTIONALLY, not by presence, for the same reason the
+  // SKV FK005 and FK006: import base and import output VAT require each
+  // other. Compared PROPORTIONALLY, not by presence alone, for the same reason the
   // RC pair above is: a binary test clears as soon as ONE import voucher
   // carries both halves, so a period where the rest still miss their utgående
   // importmoms passes silently and the difference is undeclared moms.
@@ -547,6 +585,18 @@ export function runVatDeclarationChecks(
   // 0.5% with a 1 kr floor absorbs it without hiding a missing voucher.
   const importTolerance = Math.max(1, expectedImportBase * 0.005)
 
+  // The proportional comparisons only ever see a POSITIVE base or moms, but
+  // FK005/FK006 themselves test presence: "om belopp anges" is any amount the
+  // declaration files, negative included (Tjänstebeskrivning API
+  // Momsdeklaration, 4.1.1.5). A period whose only import line is negative,
+  // an earlier import moved off 4545/4546/4547 or credited without its
+  // importmoms, read as clean here and was refused at filing (crm#1348).
+  // Presence is read on whole kronor as filed (buildFiledAmounts drops the
+  // öre), so 0.80 kr is no amount here either.
+  const filesAmount = (amount: number) => Math.trunc(amount) !== 0
+  const importBaseFiled = filesAmount(rutor.ruta50)
+  const importOutputFiled = [rutor.ruta60, rutor.ruta61, rutor.ruta62].some(filesAmount)
+
   // Rule 5: import base larger than the output importmoms accounts for, i.e.
   // some imports were booked on 4545/4546/4547 without their 26x5 moms.
   if (rutor.ruta50 > eps && rutor.ruta50 > expectedImportBase + importTolerance) {
@@ -563,6 +613,8 @@ export function runVatDeclarationChecks(
         'är bokförd på 2615/2625/2635 för varje import.',
       rutor: ['ruta50', 'ruta60', 'ruta61', 'ruta62'],
     })
+  } else if (importBaseFiled && !importOutputFiled) {
+    findings.push(importPairPresenceFinding('IMPORT_BASE_WITHOUT_OUTPUT', rutor.ruta50))
   }
 
   // Rule 6: output importmoms larger than the reported base, i.e. the
@@ -582,6 +634,8 @@ export function runVatDeclarationChecks(
         '4545/4546/4547.',
       rutor: ['ruta50', 'ruta60', 'ruta61', 'ruta62'],
     })
+  } else if (importOutputFiled && !importBaseFiled) {
+    findings.push(importPairPresenceFinding('IMPORT_OUTPUT_WITHOUT_BASE', importOutput))
   }
 
   // SummaMoms drift: sanity check that our local ruta49 matches what the

@@ -1,7 +1,11 @@
 'use client'
 
-import { useRef, type ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
+import {
+  InvoiceAttachmentsSection,
+  type InvoiceAttachmentsTarget,
+} from '@/components/invoices/InvoiceAttachmentsSection'
 import {
   Dialog,
   DialogContent,
@@ -34,6 +38,12 @@ interface SendConfirmDialogProps {
   voucher: ConfirmVoucher | null
   /** The EU VAT notice and its acknowledgement checkbox, when the send needs one. */
   extra?: ReactNode
+  /**
+   * Bilagor (#79): where the files picked here go, when this send emails
+   * them (offersInvoiceAttachments); null or omitted shows none. The same
+   * section as the invoice page's send dialog, so both send steps offer it.
+   */
+  attachments?: InvoiceAttachmentsTarget | null
   confirmLabel: string
   confirmDisabled: boolean
   busy: boolean
@@ -52,6 +62,7 @@ export function SendConfirmDialog({
   rows,
   voucher,
   extra,
+  attachments = null,
   confirmLabel,
   confirmDisabled,
   busy,
@@ -60,6 +71,11 @@ export function SendConfirmDialog({
   const t = useTranslations('invoice_editor_shell')
   const tCommon = useTranslations('common')
   const confirmRef = useRef<HTMLButtonElement>(null)
+  // A file still uploading holds the send. The section reports false again
+  // when it mounts, so a busy flag left by a closed dialog never sticks.
+  const [attachmentsBusy, setAttachmentsBusy] = useState(false)
+  const holdForAttachments = attachments !== null && attachmentsBusy
+  const sendDisabled = confirmDisabled || holdForAttachments
 
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
@@ -80,7 +96,7 @@ export function SendConfirmDialog({
           if (event.key !== 'Enter' || target.tagName === 'BUTTON' || target.tagName === 'TEXTAREA') return
           if (target.getAttribute('role') === 'checkbox') return
           event.preventDefault()
-          if (!confirmDisabled && !busy) onConfirm()
+          if (!sendDisabled && !busy) onConfirm()
         }}
       >
         <DialogHeader>
@@ -96,6 +112,10 @@ export function SendConfirmDialog({
             </div>
           ))}
         </dl>
+
+        {attachments && (
+          <InvoiceAttachmentsSection target={attachments} disabled={busy} onBusyChange={setAttachmentsBusy} />
+        )}
 
         {voucher?.kind === 'lines' && (
           <div>
@@ -142,7 +162,7 @@ export function SendConfirmDialog({
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
             {tCommon('cancel')}
           </Button>
-          <Button ref={confirmRef} onClick={onConfirm} disabled={confirmDisabled} loading={busy}>
+          <Button ref={confirmRef} onClick={onConfirm} disabled={sendDisabled} loading={busy}>
             {confirmLabel}
           </Button>
         </DialogFooter>

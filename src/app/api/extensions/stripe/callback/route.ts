@@ -27,11 +27,12 @@ export function GET(request: Request) {
     async exchange(code) {
       const { stripeAccountId, livemode } = await exchangeCodeForAccount(code)
       const displayName = await fetchAccountDisplayName(stripeAccountId)
-      // Seed the balance-transaction cursor with the connection moment. Money
-      // that moved before the merchant connected is already in the books from
-      // the bank side, so a first sync that reached further back would only
-      // manufacture duplicates (#2631). Reaching further back is an explicit
-      // choice: POST /api/extensions/ext/stripe/backfill with a start date.
+      // Seed the balance-transaction cursor with the connection moment. The
+      // first sync adds only what was still on the Stripe balance then (money
+      // Stripe already paid out is booked from the bank side, #2631), or
+      // starts at the connection day when 1686 already carries the balance
+      // (crm#1344, planFetch in transaction-sync). Reaching further back is an
+      // explicit choice: POST /api/extensions/ext/stripe/backfill with a date.
       const connectedAt = new Date().toISOString()
       return {
         stripe_account_id: stripeAccountId,

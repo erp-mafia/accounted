@@ -42,6 +42,7 @@ import {
   manualLink,
   linkTransactionToVouchers,
   unlinkReconciliation,
+  isUnlinkableBankLink,
   getReconciliationStatus,
   scopeTransactionsToAccount,
   ledgerLineAmountIn,
@@ -2596,7 +2597,41 @@ describe('unlinkReconciliation', () => {
     const result = await unlinkReconciliation(supabase as never, 'company-1', 'tx-1', 'user-1')
 
     expect(result.success).toBe(false)
+    expect(result.code).toBe('LINK_IS_BOOKING')
     expect(result.error).toContain('Cannot unlink')
+  })
+
+  it('codes the other refusals so the doors answer them typed (PH 194)', async () => {
+    const missing = createQueueMockSupabase()
+    missing.enqueue({ data: null })
+    expect(await unlinkReconciliation(missing.supabase as never, 'company-1', 'tx-1', 'user-1')).toMatchObject({
+      success: false,
+      code: 'TRANSACTION_NOT_FOUND',
+    })
+
+    const readFailed = createQueueMockSupabase()
+    readFailed.enqueue({ error: { code: '57014', message: 'canceling statement due to statement timeout' } })
+    expect(await unlinkReconciliation(readFailed.supabase as never, 'company-1', 'tx-1', 'user-1')).toMatchObject({
+      success: false,
+      code: 'DB_ERROR',
+      cause: { code: '57014' },
+    })
+
+    const writeFailed = createQueueMockSupabase()
+    writeFailed.enqueue({ data: { id: 'tx-1', journal_entry_id: 'je-1', reconciliation_method: 'manual' } })
+    writeFailed.enqueue({ error: { code: '42501', message: 'permission denied' } })
+    expect(await unlinkReconciliation(writeFailed.supabase as never, 'company-1', 'tx-1', 'user-1')).toMatchObject({
+      success: false,
+      code: 'DB_ERROR',
+      cause: { code: '42501' },
+    })
+  })
+
+  it('isUnlinkableBankLink: a link records its method, a booking from the row has none', () => {
+    expect(isUnlinkableBankLink({ reconciliation_method: 'manual' })).toBe(true)
+    expect(isUnlinkableBankLink({ reconciliation_method: 'auto_exact' })).toBe(true)
+    expect(isUnlinkableBankLink({ reconciliation_method: null })).toBe(false)
+    expect(isUnlinkableBankLink({})).toBe(false)
   })
 
   it('succeeds when reconciliation_method is set', async () => {
@@ -2638,6 +2673,7 @@ describe('unlinkReconciliation', () => {
     const result = await unlinkReconciliation(supabase as never, 'company-1', 'tx-1', 'user-1')
 
     expect(result.success).toBe(false)
+    expect(result.code).toBe('NOT_LINKED')
     expect(result.error).toBe('Transaction is not linked to any journal entry')
   })
 

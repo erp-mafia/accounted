@@ -22,10 +22,20 @@
  * through "Lägg till utlägg" on the run page, linked to the claim
  * (expense-claim-lines.ts), so it is settled when the run is booked. A free
  * expense_reimbursement row would credit 2820 with no claim behind it.
+ *
+ * Semester records vacation days taken (crm#1331): quantity is the days off,
+ * which the vacation ledger counts (vacation-ledger.ts, converted to paid days
+ * at fewer than five workdays a week), and vacation_category says which days
+ * they are. It is not a calculated type: no absence register writes it, so
+ * the operator enters it here, as through the API. The days alone pay
+ * nothing: the calculation derives no semestertillägg, semesterlöneavdrag or
+ * semesterlön from them. What this payslip pays or deducts for the days goes
+ * on the line as quantity x à-pris or an amount, with its sign.
  */
 import { roundOre } from '@/lib/money'
 import type { SalaryLineItemType } from '@/types'
-import { TEXT_ROW_FLAGS, TEXT_ROW_MAX_LENGTH, isTextRow, normalizeTextRow } from '@/lib/salary/text-rows'
+import { TEXT_ROW_FLAGS, TEXT_ROW_MAX_LENGTH, VACATION_ITEM_TYPE, isTextRow, normalizeTextRow } from '@/lib/salary/text-rows'
+import type { VacationCategory } from '@/lib/salary/vacation-category'
 
 export type ManualPayslipLineType =
   | 'mileage_taxfree'
@@ -40,6 +50,7 @@ export type ManualPayslipLineType =
   | 'gross_deduction_other'
   | 'net_deduction_advance'
   | 'net_deduction_other'
+  | 'vacation'
   | 'text'
 
 export interface ManualLineFlags {
@@ -101,6 +112,20 @@ const NET_DEDUCTION: ManualLineFlags = {
   is_gross_deduction: false,
   is_net_deduction: true,
 }
+/**
+ * A vacation line's amount (a semestertillägg, a semesterlön, a
+ * semesterlöneavdrag) is gross pay: taxed and in the avgiftsunderlag, like
+ * the engine's absence rows it is summed with. Not semestergrundande:
+ * semesterlön earns no semesterlön (calculation-engine.ts
+ * vacationBasisAdditions).
+ */
+const VACATION: ManualLineFlags = {
+  is_taxable: true,
+  is_avgift_basis: true,
+  is_vacation_basis: false,
+  is_gross_deduction: false,
+  is_net_deduction: false,
+}
 
 /** In the order the dialog lists them: reimbursements, extra pay, deductions. */
 export const MANUAL_PAYSLIP_LINE_SPECS: Record<ManualPayslipLineType, ManualLineSpec> = {
@@ -116,6 +141,7 @@ export const MANUAL_PAYSLIP_LINE_SPECS: Record<ManualPayslipLineType, ManualLine
   gross_deduction_other: { label: 'Bruttolöneavdrag', flags: GROSS_DEDUCTION, sign: 'deduction' },
   net_deduction_advance: { label: 'Avdrag förskott', flags: NET_DEDUCTION, sign: 'deduction' },
   net_deduction_other: { label: 'Nettolöneavdrag', flags: NET_DEDUCTION, sign: 'deduction' },
+  vacation: { label: 'Semester', flags: VACATION, sign: 'signed', unit: 'dagar' },
   text: { label: 'Textrad', flags: TEXT_ROW_FLAGS, sign: 'none' },
 }
 
@@ -133,6 +159,8 @@ export interface ManualLineInput {
   unit_price?: number | null
   /** Ignored when quantity and unit_price are both given. */
   amount?: number | null
+  /** Vacation line only: which days are taken (vacation-category.ts). */
+  vacation_category?: VacationCategory | null
 }
 
 export interface ManualLineBody extends ManualLineFlags {
@@ -141,6 +169,7 @@ export interface ManualLineBody extends ManualLineFlags {
   quantity?: number
   unit_price?: number
   amount: number
+  vacation_category?: VacationCategory
 }
 
 /**
@@ -160,6 +189,7 @@ export type ManualLineBuild =
   | { ok: true; body: ManualLineBody }
   | { ok: false; reason: 'no_amount' }
   | { ok: false; reason: 'no_text' }
+  | { ok: false; reason: 'no_days' }
   | { ok: false; reason: 'above_tax_free_cap'; cap: number; unit: 'mil' | 'dagar' }
 
 /**
@@ -169,7 +199,8 @@ export type ManualLineBuild =
  * additions positive, a correction keeps the sign typed. Refuses a zero or
  * missing amount, and a tax-free reimbursement priced above its schablon.
  * A text row takes only its words (normalised, at most TEXT_ROW_MAX_LENGTH
- * characters); quantity, unit price and amount are ignored.
+ * characters); quantity, unit price and amount are ignored. A vacation line
+ * needs its days; its amount is optional (buildVacationLine).
  */
 export function buildManualPayslipLine(input: ManualLineInput, caps: ManualLineCaps = {}): ManualLineBuild {
   const spec = MANUAL_PAYSLIP_LINE_SPECS[input.item_type]
@@ -179,6 +210,7 @@ export function buildManualPayslipLine(input: ManualLineInput, caps: ManualLineC
     if (text === '' || text.length > TEXT_ROW_MAX_LENGTH) return { ok: false, reason: 'no_text' }
     return { ok: true, body: { item_type: input.item_type, description: text, amount: 0, ...TEXT_ROW_FLAGS } }
   }
+  if (input.item_type === VACATION_ITEM_TYPE) return buildVacationLine(input, spec)
   const quantity = finite(input.quantity)
   const unitPrice = finite(input.unit_price)
   const typed = finite(input.amount)
@@ -209,6 +241,31 @@ export function buildManualPayslipLine(input: ManualLineInput, caps: ManualLineC
   }
   if (quantity !== undefined) body.quantity = quantity
   if (unitPrice !== undefined) body.unit_price = unitPrice
+  return { ok: true, body }
+}
+
+/**
+ * A vacation line: the days taken in quantity (required, above 0) and,
+ * optionally, what this payslip pays or deducts for them as quantity x
+ * à-pris or an amount, kept with the sign typed (a semestertillägg is
+ * positive, a semesterlöneavdrag negative). The days alone are stored at
+ * 0 kr, the shape validatePayslipLineContent accepts from every door.
+ */
+function buildVacationLine(input: ManualLineInput, spec: ManualLineSpec): ManualLineBuild {
+  const quantity = finite(input.quantity)
+  if (quantity === undefined || quantity <= 0) return { ok: false, reason: 'no_days' }
+  const unitPrice = finite(input.unit_price)
+  const amount = roundOre(unitPrice !== undefined ? quantity * unitPrice : (finite(input.amount) ?? 0))
+  const body: ManualLineBody = {
+    item_type: VACATION_ITEM_TYPE,
+    description: (input.description ?? '').trim() || spec.label,
+    quantity,
+    // A typed -0,001 rounds to -0: store a plain 0.
+    amount: amount === 0 ? 0 : amount,
+    ...spec.flags,
+  }
+  if (unitPrice !== undefined) body.unit_price = unitPrice
+  if (input.vacation_category) body.vacation_category = input.vacation_category
   return { ok: true, body }
 }
 

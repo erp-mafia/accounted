@@ -83,6 +83,12 @@ export interface SyncResult {
   effectiveFromDate?: string
   /** True when the bank refused the requested window and the history was cut. */
   historyNarrowed: boolean
+  /**
+   * True when the read stopped at the page cap while the bank still had
+   * pages: the window was not read to its end, so the result is partial and a
+   * first import built on it is not complete (PH 195).
+   */
+  truncated?: boolean
 }
 
 /** The subset of a converted bank transaction that the ingest mapping below reads. */
@@ -306,6 +312,7 @@ export async function syncAccountTransactions(
   let totalFetched: number
   let effectiveFromDate: string | undefined
   let historyNarrowed = false
+  let truncated = false
   if (connector) {
     const remote = await fetchBookedViaConnector(connector, {
       sessionId: bankRoute.sessionId,
@@ -318,6 +325,7 @@ export async function syncAccountTransactions(
     })
     rawPages = remote.raw_pages
     totalFetched = remote.transactions.length + remote.skipped_pending
+    truncated = remote.truncated === true
     bookedEntries = remote.transactions.map((tx) => ({
       tx: {
         amount: tx.amount,
@@ -357,6 +365,7 @@ export async function syncAccountTransactions(
     totalFetched = fetched.transactions.length
     effectiveFromDate = fetched.effectiveDateFrom
     historyNarrowed = fetched.narrowed === true
+    truncated = fetched.truncated === true
     // Remember the widest window this bank has ANSWERED for the account, so a
     // later rejection of a window no wider than it is read as the bank being
     // unavailable rather than as a too-wide window (#2202). Never shrinks:
@@ -422,6 +431,7 @@ export async function syncAccountTransactions(
     returnedMinBookingDate: minBookingDate,
     returnedMaxBookingDate: maxBookingDate,
     strategy: syncOptions?.strategy,
+    ...(truncated ? { truncated: true } : {}),
   })
 
   const skippedPending = totalFetched - bookedEntries.length
@@ -629,6 +639,7 @@ export async function syncAccountTransactions(
     requestedFromDate: fromDate,
     effectiveFromDate,
     historyNarrowed,
+    ...(truncated ? { truncated: true } : {}),
   }
 }
 
@@ -683,6 +694,7 @@ async function syncOpenPaymentsAccountAsEnableBanking(
       requestedFromDate: fromDate,
       effectiveFromDate: result.effectiveFromDate,
       historyNarrowed: result.historyNarrowed,
+      ...(result.truncated ? { truncated: true } : {}),
     }
   } catch (error) {
     throw toEnableBankingSyncError(error, fromDate)

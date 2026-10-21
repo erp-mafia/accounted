@@ -181,6 +181,21 @@ export async function resolveBatchDebtor(
 }
 
 /**
+ * Whether the company attests supplier invoices at all (the attest gate:
+ * kontantmetoden has no attest step, crm#1141). Asked only when one of the
+ * rows lacks attest: for attested rows the answer changes nothing, since it
+ * decides only the unattested warning (batch-eligibility.ts).
+ */
+async function companyAttestsFor(
+  supabase: SupabaseClient,
+  companyId: string,
+  rows: ReadonlyArray<{ approved_at: string | null }>,
+): Promise<boolean> {
+  if (!rows.some((row) => !row.approved_at)) return true
+  return PAYMENT_ATTEST_GATE.attestsSupplierInvoices(supabase, companyId)
+}
+
+/**
  * invoice id -> id of the active (created) batch it already sits in.
  *
  * Fails CLOSED: a lookup error must abort the caller, because treating it as
@@ -283,7 +298,10 @@ export async function previewSupplierPaymentBatch(
   const rows = (invoices ?? []) as unknown as InvoiceRow[]
   const byId = new Map(rows.map((row) => [row.id, row]))
   const swedbankIso2 = paysThroughSwedbankIso2(debtorResolution)
-  const payeeHolds = await loadBatchPayeeHolds(supabase, companyId, rows)
+  const [payeeHolds, companyAttests] = await Promise.all([
+    loadBatchPayeeHolds(supabase, companyId, rows),
+    companyAttestsFor(supabase, companyId, rows),
+  ])
 
   const eligible: BatchPreviewLine[] = []
   const excluded: BatchPreview['excluded'] = []
@@ -302,6 +320,7 @@ export async function previewSupplierPaymentBatch(
       today,
       activeBatchIdByInvoice,
       attestBlocked,
+      companyAttests,
     })
     if (!evaluation.eligible) {
       excluded.push({ id, reason: evaluation.reason })
@@ -449,7 +468,10 @@ export async function planSupplierPaymentBatch(
   ])
   const rows = (invoices ?? []) as unknown as InvoiceRow[]
   const byId = new Map(rows.map((row) => [row.id, row]))
-  const payeeHolds = await loadBatchPayeeHolds(supabase, companyId, rows)
+  const [payeeHolds, companyAttests] = await Promise.all([
+    loadBatchPayeeHolds(supabase, companyId, rows),
+    companyAttestsFor(supabase, companyId, rows),
+  ])
 
   const ineligible: Array<{ id: string; reason: string }> = []
   const excessive: Array<{ id: string }> = []
@@ -474,6 +496,7 @@ export async function planSupplierPaymentBatch(
       today,
       activeBatchIdByInvoice,
       attestBlocked,
+      companyAttests,
     })
     if (!evaluation.eligible) {
       ineligible.push({ id: invoice.id, reason: evaluation.reason })

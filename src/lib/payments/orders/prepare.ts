@@ -190,8 +190,13 @@ export async function preparePaymentOrders(
     staleDrafts.set(o.supplier_invoice_id, [...(staleDrafts.get(o.supplier_invoice_id) ?? []), o.id])
   }
 
-  // The attest policy's exclusion: the same read the payment file makes.
-  const attestBlocked = await PAYMENT_ATTEST_GATE.blockedInvoiceIds(supabase, companyId, ids)
+  // The attest policy's exclusion, and whether the company attests at all
+  // (the unattested warning; kontantmetoden has none, crm#1141): the same
+  // reads the payment file makes, the second only when an invoice lacks attest.
+  const [attestBlocked, companyAttests] = await Promise.all([
+    PAYMENT_ATTEST_GATE.blockedInvoiceIds(supabase, companyId, ids),
+    invoices.some((invoice) => !invoice.approved_at) ? PAYMENT_ATTEST_GATE.attestsSupplierInvoices(supabase, companyId) : true,
+  ])
   const useStated = new Set(input.useStatedPayeeFor ?? [])
   const skipped: PreparePaymentOrdersResult['skipped'] = []
   const warnings: PreparedOrderWarning[] = []
@@ -220,7 +225,7 @@ export async function preparePaymentOrders(
     const evaluation = evaluateInvoiceForBatch(
       { ...invoice, remaining_amount: Number(invoice.remaining_amount), payee_hold: holdFor(payeeHolds, id) },
       supplier,
-      { today: input.today, attestBlocked },
+      { today: input.today, attestBlocked, companyAttests },
     )
     if (!evaluation.eligible) {
       skipped.push({ supplier_invoice_id: id, reason: evaluation.reason })

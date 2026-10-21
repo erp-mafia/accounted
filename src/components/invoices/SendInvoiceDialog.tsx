@@ -38,6 +38,7 @@ import { itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { explainVatTreatment, requiresSwedishVatAcknowledgement } from '@/lib/invoices/vat-rules'
 import { VatTreatmentNotice } from '@/components/invoices/VatTreatmentNotice'
 import { InvoiceAttachmentsSection } from '@/components/invoices/InvoiceAttachmentsSection'
+import { offersInvoiceAttachments } from '@/lib/invoices/invoice-attachment-limits'
 import { Landmark, Mail, Send } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
@@ -97,7 +98,8 @@ export default function SendInvoiceDialog({
   const [isSubmitting, setIsSubmitting] = useState(false)
   // A file still uploading to the invoice's attachments holds the send.
   const [attachmentsBusy, setAttachmentsBusy] = useState(false)
-  const showAttachments = mode === 'email' && invoice.status === 'draft' && !isSandbox && canEmail
+  // The same rule as the editor's confirm (#79).
+  const showAttachments = offersInvoiceAttachments({ channel: mode, status: invoice.status, isSandbox, canEmail })
   // Session-cached reference data (lib/reference-data), seeded by the
   // dashboard layout: settings, the period containing the invoice date and
   // the chart are known on the first paint, so opening the dialog costs no
@@ -739,7 +741,7 @@ export default function SendInvoiceDialog({
             )}
             {showAttachments && (
               <InvoiceAttachmentsSection
-                invoiceId={invoice.id}
+                target={{ kind: 'invoice', invoiceId: invoice.id }}
                 disabled={isSubmitting}
                 onBusyChange={setAttachmentsBusy}
               />

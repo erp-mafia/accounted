@@ -107,3 +107,35 @@ describe('invoice line schemas: a one-month period passes the row rules', () => 
     expect(result.success).toBe(false)
   })
 })
+
+// Upplupen intäkt (17xx, #62): the interim account on a customer line may be
+// 29xx (förutbetald) or 17xx (upplupen); anything else is refused.
+describe('CreateInvoiceItemSchema: periodisering account', () => {
+  const customerLine = (account: string) => ({
+    description: 'Konsultation september',
+    quantity: 1,
+    unit: 'st',
+    unit_price: 30000,
+    vat_rate: 25,
+    accrual_period_start: '2026-09-01',
+    accrual_period_end: '2026-09-30',
+    accrual_balance_account: account,
+  })
+
+  it('accepts 1790 and 1750 as an upplupen intäkt and 2970 as a förutbetald', () => {
+    expect(CreateInvoiceItemSchema.safeParse(customerLine('1790')).success).toBe(true)
+    expect(CreateInvoiceItemSchema.safeParse(customerLine('1750')).success).toBe(true)
+    expect(CreateInvoiceItemSchema.safeParse(customerLine('2970')).success).toBe(true)
+  })
+
+  it('refuses an account outside 17xx/29xx', () => {
+    for (const account of ['1510', '3001', '179', '17900']) {
+      const result = CreateInvoiceItemSchema.safeParse(customerLine(account))
+      expect(result.success).toBe(false)
+      expect(issueMessages(result)).toContainEqual({
+        path: 'accrual_balance_account',
+        message: expect.stringMatching(/17xx/),
+      })
+    }
+  })
+})

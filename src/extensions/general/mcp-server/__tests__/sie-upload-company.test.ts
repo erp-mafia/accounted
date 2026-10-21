@@ -171,6 +171,27 @@ describe('gnubok_sie_preflight reports where the file would land', () => {
     expect(result.instructions).toContain('same company_id')
   })
 
+  // #63: a provider export carries its whole chart; the agent offers the option.
+  it('offers only_used_accounts when the file defines accounts it never uses, and only then', async () => {
+    const withUnused = (await preflightTool.execute(
+      { filename: 'export.se', file_content: OWN_FILE.replace('#KONTO 3001', '#KONTO 2440 "Leverantörsskulder"\n#KONTO 3001') },
+      CURRENT,
+      'user-1',
+      routedSupabase(WORLD) as never,
+    )) as Row
+    expect(withUnused.verdict).toBe('ok')
+    expect(withUnused.instructions).toContain('1 of the 3 mapped accounts are BAS accounts with no balance and no voucher line')
+    expect(withUnused.instructions).toContain('only_used_accounts=true')
+
+    const allUsed = (await preflightTool.execute(
+      { filename: 'export.se', file_content: OWN_FILE },
+      CURRENT,
+      'user-1',
+      routedSupabase(WORLD) as never,
+    )) as Row
+    expect(allUsed.instructions).not.toContain('only_used_accounts')
+  })
+
   it('names the reachable company whose org number the file carries, and points the card there', async () => {
     const result = (await preflightTool.execute(
       { filename: 'export.se', file_content: SIBLING_FILE },

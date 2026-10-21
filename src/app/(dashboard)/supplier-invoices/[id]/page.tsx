@@ -54,6 +54,7 @@ import { supplierInvoiceDisplayFigures } from '@/lib/bookkeeping/supplier-invoic
 import {
   canApproveSupplierInvoice,
   canMarkSupplierInvoiceBankEntered,
+  canMarkSupplierInvoicePaid,
   companyAttestsSupplierInvoices,
   isUnsettledSupplierInvoiceStatus,
 } from '@/lib/supplier-invoices/lifecycle'
@@ -561,7 +562,10 @@ export default function SupplierInvoiceDetailPage() {
         return lifecycle?.reconciled_through ? formatDate(lifecycle.reconciled_through) : null
     }
   }
-  const canMarkPaid = ['approved', 'overdue', 'partially_paid'].includes(invoice.status)
+  // Markera som betald (and with it Befintlig verifikation): past attest, or
+  // registered where the company has no attest step (kontantmetoden), as
+  // Lägg i betalfil below already allowed (crm#1141).
+  const canMarkPaid = canMarkSupplierInvoicePaid(invoice, companySettings?.accounting_method)
   // After attest the next step is the betalfil to the bank, so that is the
   // header's one primary while the invoice is attested and in no open file.
   // Markera betald stays for the person who paid by hand, as a secondary.
@@ -579,7 +583,8 @@ export default function SupplierInvoiceDetailPage() {
   // "Inlagd i banken" (#2220) sits on the same rows as Markera som betald:
   // it is the step right before it. Viewers see the bock only when it is set.
   const showBankEntered =
-    canMarkSupplierInvoiceBankEntered(invoice) && (canWrite || !!invoice.bank_entered_at)
+    canMarkSupplierInvoiceBankEntered(invoice, companySettings?.accounting_method) &&
+    (canWrite || !!invoice.bank_entered_at)
   const canCredit = canMarkPaid && invoice.status !== 'partially_paid'
   const canUncredit = invoice.status === 'credited' && !invoice.is_credit_note
   // Delete is allowed while nothing would be orphaned: no booking, no

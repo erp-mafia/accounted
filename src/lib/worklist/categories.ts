@@ -27,6 +27,8 @@ import {
   MATCHABLE_INVOICE_STATUSES,
   MATCHABLE_SUPPLIER_INVOICE_STATUSES,
 } from '@/lib/bookkeeping/matchable-statuses'
+import { matchRowsToInvoiceCombinations, type CombinationInvoice } from '@/lib/transactions/invoice-combination'
+import { BANKGIRO_SPLIT_METHOD } from '@/lib/transactions/part-suggestions'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { filterOverdueInvoices, invoiceDaysOverdue } from '@/lib/invoices/overdue'
 import { COLLECTIONS_BATCH_TYPE } from '@/lib/collections/batch'
@@ -46,6 +48,7 @@ import { listSupplierPayeeAlerts } from '@/lib/payments/payee-alerts'
 import type {
   BankSwitchDue,
   ExpensePayoutDue,
+  InvoiceSetAllocation,
   OverdueInvoicesDue,
   PaymentsVerificationDue,
   SkattekontoPaymentDue,
@@ -941,7 +944,270 @@ export async function listSuggestedMatches(
       seen.add(m.transaction_id)
     }
   }
+  // One payment of several open invoices of one counterparty (PH 192): no
+  // hint column either, recomputed from the open invoices. A row that already
+  // has a suggestion keeps it, and an invoice a 1:1 hint is about to settle
+  // is offered to no set. Confirmed in the batch allocation (allocations).
+  const combinationMatches = await listInvoiceCombinationSuggestions(supabase, companyId, limit, {
+    transactionIds: new Set(matches.map((m) => m.transaction_id)),
+    invoiceIds: new Set(
+      matches.filter((m) => m.kind === 'invoice' || m.kind === 'supplier_invoice').map((m) => m.candidate_id),
+    ),
+  })
+  matches.push(...combinationMatches)
   return matches
+}
+
+/** Newest unbooked rows scanned for a payment of several invoices of one counterparty. */
+const INVOICE_COMBINATION_SCAN_LIMIT = 200
+
+/**
+ * Open invoices read per direction for the combination search. A read that
+ * comes back full may be missing the invoice that makes a second set fit, so
+ * that direction proposes nothing: a set is only offered when it is the one
+ * explanation. Fewer than 1 in 100 companies has this many open.
+ */
+const INVOICE_COMBINATION_POOL_LIMIT = 500
+
+interface CombinationPoolInvoice extends CombinationInvoice {
+  number: string | null
+  counterpartyName: string | null
+  status: string
+}
+
+/**
+ * Unbooked SEK rows that settle several open invoices of ONE counterparty to
+ * the öre: two supplier invoices paid with one internet-bank payment, or a
+ * customer paying two invoices in one transfer (PH 192). Read-time pairing
+ * over the open invoices, like the ROT/RUT set; the rule, and every refusal
+ * that keeps it precise, lives in lib/transactions/invoice-combination.ts.
+ * Two reads for a company without two open invoices of one counterparty
+ * (the common case), at most five. Soft-fails to [] like the rest of the
+ * worklist.
+ *
+ * `taken` leaves out the rows another suggestion already covers and the
+ * invoices a 1:1 hint is about to settle.
+ */
+export async function listInvoiceCombinationSuggestions(
+  supabase: SupabaseClient,
+  companyId: string,
+  limit = 20,
+  taken: { transactionIds?: ReadonlySet<string>; invoiceIds?: ReadonlySet<string> } = {},
+): Promise<SuggestedMatch[]> {
+  type InvoiceRow = {
+    id: string
+    customer_id: string | null
+    invoice_number: string | null
+    remaining_amount: number | string | null
+    currency: string | null
+    invoice_date: string | null
+    due_date: string | null
+    status: string
+    customer?: { name: string | null } | null
+  }
+  type SupplierInvoiceRow = {
+    id: string
+    supplier_id: string | null
+    supplier_invoice_number: string | null
+    arrival_number: number | null
+    remaining_amount: number | string | null
+    currency: string | null
+    invoice_date: string | null
+    due_date: string | null
+    status: string
+    supplier?: { name: string | null } | null
+  }
+  type TxRow = {
+    id: string
+    date: string
+    description: string | null
+    amount: number | string
+    currency: string | null
+    potential_match_method: string | null
+  }
+
+  try {
+    // The open invoices the batch allocation dialog offers
+    // (lib/invoices/open-invoice-search.ts): real invoices, the statuses the
+    // batch RPC takes, something still owed.
+    const [customerRes, supplierRes] = await Promise.all([
+      supabase
+        .from('invoices')
+        .select('id, customer_id, invoice_number, remaining_amount, currency, invoice_date, due_date, status, customer:customers(name)')
+        .eq('company_id', companyId)
+        .eq('document_type', 'invoice')
+        .is('credited_invoice_id', null)
+        .in('status', [...MATCHABLE_INVOICE_STATUSES])
+        .gt('remaining_amount', 0)
+        .limit(INVOICE_COMBINATION_POOL_LIMIT),
+      supabase
+        .from('supplier_invoices')
+        .select('id, supplier_id, supplier_invoice_number, arrival_number, remaining_amount, currency, invoice_date, due_date, status, supplier:suppliers(name)')
+        .eq('company_id', companyId)
+        .eq('is_credit_note', false)
+        .in('status', [...MATCHABLE_SUPPLIER_INVOICE_STATUSES])
+        .gt('remaining_amount', 0)
+        .limit(INVOICE_COMBINATION_POOL_LIMIT),
+    ])
+    const poolError = customerRes.error ?? supplierRes.error
+    if (poolError) {
+      log.error('worklist listInvoiceCombinationSuggestions pool failed', { companyId, reason: poolError.message })
+      return []
+    }
+    const claimed = taken.invoiceIds ?? new Set<string>()
+    const customerRows = (customerRes.data ?? []) as unknown as InvoiceRow[]
+    const supplierRows = (supplierRes.data ?? []) as unknown as SupplierInvoiceRow[]
+    const customer: CombinationPoolInvoice[] =
+      customerRows.length >= INVOICE_COMBINATION_POOL_LIMIT
+        ? []
+        : customerRows
+            .filter((r) => !claimed.has(r.id))
+            .map((r) => ({
+              id: r.id,
+              counterpartyId: r.customer_id,
+              remaining: Number(r.remaining_amount ?? 0),
+              currency: r.currency,
+              invoiceDate: r.invoice_date,
+              dueDate: r.due_date,
+              number: r.invoice_number,
+              counterpartyName: r.customer?.name ?? null,
+              status: r.status,
+            }))
+    const supplier: CombinationPoolInvoice[] =
+      supplierRows.length >= INVOICE_COMBINATION_POOL_LIMIT
+        ? []
+        : supplierRows
+            .filter((r) => !claimed.has(r.id))
+            .map((r) => ({
+              id: r.id,
+              counterpartyId: r.supplier_id,
+              remaining: Number(r.remaining_amount ?? 0),
+              currency: r.currency,
+              invoiceDate: r.invoice_date,
+              dueDate: r.due_date,
+              // The batch dialog's label for an invoice without the supplier's number.
+              number: r.supplier_invoice_number ?? (r.arrival_number != null ? `LF-${r.arrival_number}` : null),
+              counterpartyName: r.supplier?.name ?? null,
+              status: r.status,
+            }))
+
+    // Without two open invoices of one counterparty there is no set to find:
+    // skip the bank row read.
+    const pairable = (pool: CombinationPoolInvoice[]): boolean => {
+      const counterparties = new Set<string>()
+      for (const invoice of pool) {
+        if (!invoice.counterpartyId) continue
+        if (counterparties.has(invoice.counterpartyId)) return true
+        counterparties.add(invoice.counterpartyId)
+      }
+      return false
+    }
+    const receipts = pairable(customer)
+    const payments = pairable(supplier)
+    if (!receipts && !payments) return []
+
+    let txQuery = supabase
+      .from('transactions')
+      .select('id, date, description, amount, currency, potential_match_method')
+      .eq('company_id', companyId)
+      .is('is_business', null)
+      .eq('is_ignored', false)
+      .is('journal_entry_id', null)
+    if (!receipts) txQuery = txQuery.lt('amount', 0)
+    else if (!payments) txQuery = txQuery.gt('amount', 0)
+    const { data: txData, error: txError } = await txQuery
+      .order('date', { ascending: false })
+      .limit(INVOICE_COMBINATION_SCAN_LIMIT)
+    if (txError) {
+      log.error('worklist listInvoiceCombinationSuggestions failed', { companyId, reason: txError.message })
+      return []
+    }
+    const skipRows = taken.transactionIds ?? new Set<string>()
+    const txs = ((txData ?? []) as TxRow[]).filter(
+      // A Bankgirot split has its own prefilled allocation, part by part.
+      (tx) => !skipRows.has(tx.id) && tx.potential_match_method !== BANKGIRO_SPLIT_METHOD,
+    )
+    const paired = matchRowsToInvoiceCombinations(
+      txs.map((tx) => ({ id: tx.id, amount: Number(tx.amount), currency: tx.currency, date: tx.date })),
+      { customer, supplier },
+    )
+    if (paired.size === 0) return []
+
+    // The dialog's status-leak guard (loadOpenInvoicesForMatch): an invoice
+    // whose status still says unpaid but that already has a payment voucher
+    // is not offered. Read only for the invoices of a proposed set.
+    const fullyOpen = (receipt: boolean) =>
+      txs
+        .filter((tx) => paired.has(tx.id) && (Number(tx.amount) > 0) === receipt)
+        .flatMap((tx) => (paired.get(tx.id)?.invoices ?? []) as CombinationPoolInvoice[])
+        .filter((invoice) => invoice.status !== 'partially_paid')
+        .map((invoice) => invoice.id)
+    const customerIds = fullyOpen(true)
+    const supplierIds = fullyOpen(false)
+    const [paidCustomer, paidSupplier] = await Promise.all([
+      customerIds.length > 0
+        ? supabase
+            .from('invoice_payments')
+            .select('invoice_id')
+            .eq('company_id', companyId)
+            .in('invoice_id', customerIds)
+            .not('journal_entry_id', 'is', null)
+        : Promise.resolve({ data: [], error: null }),
+      supplierIds.length > 0
+        ? supabase
+            .from('supplier_invoice_payments')
+            .select('supplier_invoice_id')
+            .eq('company_id', companyId)
+            .in('supplier_invoice_id', supplierIds)
+            .not('journal_entry_id', 'is', null)
+        : Promise.resolve({ data: [], error: null }),
+    ])
+    const guardError = paidCustomer.error ?? paidSupplier.error
+    if (guardError) {
+      log.error('worklist listInvoiceCombinationSuggestions guard failed', { companyId, reason: guardError.message })
+      return []
+    }
+    const leaked = new Set<string>([
+      ...((paidCustomer.data ?? []) as { invoice_id: string }[]).map((r) => r.invoice_id),
+      ...((paidSupplier.data ?? []) as { supplier_invoice_id: string }[]).map((r) => r.supplier_invoice_id),
+    ])
+
+    const out: SuggestedMatch[] = []
+    for (const tx of txs) {
+      const match = paired.get(tx.id)
+      if (!match) continue
+      const invoices = match.invoices as CombinationPoolInvoice[]
+      if (invoices.some((invoice) => leaked.has(invoice.id))) continue
+      const receipt = Number(tx.amount) > 0
+      const allocations: InvoiceSetAllocation[] = invoices.map((invoice) =>
+        receipt
+          ? { kind: 'customer_invoice', invoice_id: invoice.id, amount: roundOre(invoice.remaining) }
+          : { kind: 'supplier_invoice', supplier_invoice_id: invoice.id, amount: roundOre(invoice.remaining) },
+      )
+      const numbers = invoices.map((invoice) => invoice.number).filter((n): n is string => !!n)
+      out.push({
+        transaction_id: tx.id,
+        transaction_date: tx.date,
+        transaction_description: tx.description ?? '',
+        transaction_amount: Number(tx.amount),
+        transaction_currency: tx.currency ?? 'SEK',
+        kind: receipt ? 'invoice' : 'supplier_invoice',
+        candidate_id: invoices[0].id,
+        candidate_number: numbers.length > 0 ? numbers.join(' + ') : null,
+        counterparty_name: invoices[0].counterpartyName,
+        candidate_total: match.total,
+        allocations,
+      })
+      if (out.length >= limit) break
+    }
+    return out
+  } catch (err) {
+    log.error('worklist listInvoiceCombinationSuggestions failed', {
+      companyId,
+      reason: err instanceof Error ? err.message : String(err),
+    })
+    return []
+  }
 }
 
 /** Newest unbooked income rows scanned for a bundled ROT/RUT payout. */

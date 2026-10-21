@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
   expenseBalanceAccountAfterEdit,
+  isAccruedBalanceAccount,
   isAccruedCostAccount,
+  isAccruedIncomeAccount,
   isValidBalanceAccount,
   periodEndsBeforeInvoiceMonth,
+  revenueBalanceAccountAfterEdit,
   suggestBalanceAccount,
   suggestExpenseBalanceAccount,
+  suggestRevenueBalanceAccount,
 } from '@/lib/bookkeeping/accruals/account-suggestions'
 
 describe('suggestBalanceAccount', () => {
@@ -35,7 +39,82 @@ describe('isValidBalanceAccount', () => {
     expect(isValidBalanceAccount('expense', '5010')).toBe(false)
     expect(isValidBalanceAccount('revenue', '2970')).toBe(true)
     expect(isValidBalanceAccount('revenue', '2990')).toBe(true)
-    expect(isValidBalanceAccount('revenue', '1790')).toBe(false)
+    // Upplupen intäkt (20261021002400): any 17xx on a revenue schedule.
+    expect(isValidBalanceAccount('revenue', '1790')).toBe(true)
+    expect(isValidBalanceAccount('revenue', '1750')).toBe(true)
+    expect(isValidBalanceAccount('revenue', '1510')).toBe(false)
+    expect(isValidBalanceAccount('revenue', '3001')).toBe(false)
+    expect(isValidBalanceAccount('revenue', '179')).toBe(false)
+  })
+})
+
+describe('upplupen intäkt (17xx)', () => {
+  it('recognises a 17xx account and nothing else', () => {
+    expect(isAccruedIncomeAccount('1790')).toBe(true)
+    expect(isAccruedIncomeAccount('1750')).toBe(true)
+    expect(isAccruedIncomeAccount('2970')).toBe(false)
+    expect(isAccruedIncomeAccount('179')).toBe(false)
+    expect(isAccruedIncomeAccount(null)).toBe(false)
+  })
+
+  it('reads upplupen per direction: 29xx on a cost, 17xx on revenue', () => {
+    expect(isAccruedBalanceAccount('expense', '2990')).toBe(true)
+    expect(isAccruedBalanceAccount('expense', '1790')).toBe(false)
+    expect(isAccruedBalanceAccount('revenue', '1790')).toBe(true)
+    expect(isAccruedBalanceAccount('revenue', '2970')).toBe(false)
+  })
+
+  it('suggests 1790 for a period wholly before the invoice month', () => {
+    expect(suggestRevenueBalanceAccount('2026-09-30', '2026-10-15')).toBe('1790')
+    expect(suggestRevenueBalanceAccount('2025-12-31', '2026-01-20')).toBe('1790')
+  })
+
+  it('keeps 2970 when the period reaches the invoice month or a date is missing', () => {
+    expect(suggestRevenueBalanceAccount('2026-10-31', '2026-10-15')).toBe('2970')
+    expect(suggestRevenueBalanceAccount('2026-12-31', '2026-10-15')).toBe('2970')
+    expect(suggestRevenueBalanceAccount('', '2026-10-15')).toBe('2970')
+    expect(suggestRevenueBalanceAccount('2026-09-30', null)).toBe('2970')
+  })
+})
+
+describe('revenueBalanceAccountAfterEdit', () => {
+  const invoiceDate = '2026-10-15'
+
+  it('moves 2970 to 1790 when the dates move wholly before the invoice month', () => {
+    expect(
+      revenueBalanceAccountAfterEdit(
+        { start: '2026-10-15', end: '', balanceAccount: '2970' },
+        { start: '2026-09-01', end: '2026-09-30', balanceAccount: '2970' },
+        invoiceDate,
+      ),
+    ).toBe('1790')
+  })
+
+  it('moves a 17xx account back to 2970 when the period reaches the invoice month', () => {
+    expect(
+      revenueBalanceAccountAfterEdit(
+        { start: '2026-09-01', end: '2026-09-30', balanceAccount: '1790' },
+        { start: '2026-09-01', end: '2026-12-31', balanceAccount: '1790' },
+        invoiceDate,
+      ),
+    ).toBe('2970')
+  })
+
+  it('keeps an account of the right kind, and always the one the user picked', () => {
+    expect(
+      revenueBalanceAccountAfterEdit(
+        { start: '2026-08-01', end: '2026-08-31', balanceAccount: '1780' },
+        { start: '2026-08-01', end: '2026-09-30', balanceAccount: '1780' },
+        invoiceDate,
+      ),
+    ).toBe('1780')
+    expect(
+      revenueBalanceAccountAfterEdit(
+        { start: '2026-09-01', end: '2026-09-30', balanceAccount: '1790' },
+        { start: '2026-09-01', end: '2026-09-30', balanceAccount: '2979' },
+        invoiceDate,
+      ),
+    ).toBe('2979')
   })
 })
 

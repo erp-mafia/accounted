@@ -12,7 +12,7 @@ import { buildInvoiceWriteData, type InvoiceWriteItemInput } from '@/lib/invoice
 
 const customer = makeCustomer({ customer_type: 'swedish_business', country: 'SE' })
 
-function line(period: { start: string; end: string }): InvoiceWriteItemInput {
+function line(period: { start: string; end: string }, account = '2970'): InvoiceWriteItemInput {
   return {
     description: 'Support november',
     quantity: 1,
@@ -21,7 +21,7 @@ function line(period: { start: string; end: string }): InvoiceWriteItemInput {
     vat_rate: 25,
     accrual_period_start: period.start,
     accrual_period_end: period.end,
-    accrual_balance_account: '2970',
+    accrual_balance_account: account,
   }
 }
 
@@ -72,5 +72,37 @@ describe('buildInvoiceWriteData: one-month periodisering', () => {
   it('judges the effective invoice date: an edit moving the date into the period month is refused', async () => {
     const result = await build([line({ start: '2026-11-01', end: '2026-11-30' })], '2026-11-03')
     expect(result).toMatchObject({ ok: false, code: 'INVOICE_CREATE_ACCRUAL_INVOICE_MONTH' })
+  })
+})
+
+// Upplupen intäkt (17xx, #62): revenue of months before the invoice month.
+describe('buildInvoiceWriteData: upplupen intäkt (17xx)', () => {
+  it('keeps August-September on 1790 on an October invoice', async () => {
+    const result = await build([line({ start: '2026-08-01', end: '2026-09-30' }, '1790')])
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.items[0]).toMatchObject({
+      accrual_period_start: '2026-08-01',
+      accrual_period_end: '2026-09-30',
+      accrual_balance_account: '1790',
+      line_total: 5000,
+    })
+  })
+
+  it('refuses a 17xx period that reaches the invoice month and names the row', async () => {
+    const result = await build([
+      line({ start: '2026-08-01', end: '2026-09-30' }, '1790'),
+      line({ start: '2026-09-01', end: '2026-12-31' }, '1790'),
+    ])
+    expect(result).toEqual({
+      ok: false,
+      code: 'INVOICE_ACCRUED_INCOME_PERIOD_INVALID',
+      details: { rows: [2], invoiceDate: '2026-10-15' },
+    })
+  })
+
+  it('keeps the same period on 29xx (a förutbetald intäkt from the invoice on)', async () => {
+    const result = await build([line({ start: '2026-09-01', end: '2026-12-31' })])
+    expect(result.ok).toBe(true)
   })
 })

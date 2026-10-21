@@ -40,11 +40,12 @@ vi.mock('@/lib/bank-sync/post-sync-sweep', () => ({ sweepAfterOverlappingSync: (
 import { createTableMockSupabase, type TableMockResult } from '@/tests/helpers'
 import { BankSyncResultObsoleteError } from '@/lib/bank-sync/persist-sync-result'
 import { SYNC_COOLDOWN_MS } from '@/lib/bank-sync/trigger-sync-contract'
-import { BankThrottledError, ConsentOverError, ProviderUnavailableError, RateLimitedError, type BankFeedConnect } from '../connect'
+import { BankFeedRefusedError, BankThrottledError, ConsentOverError, ProviderUnavailableError, RateLimitedError, type BankFeedConnect } from '../connect'
 import { RATE_LIMIT_COOLDOWN_MS, rateLimitHoldUntil } from '../lease'
 import {
   bankHistoryLimits,
   CONSENT_EXPIRED_MESSAGE,
+  consentRefusedMessage,
   EXTENDED_HISTORY_MARGIN_DAYS,
   UNATTENDED_MAX_LOOKBACK_DAYS,
   DEFAULT_BANK_HISTORY_LIMITS,
@@ -269,6 +270,21 @@ describe('runOpenPaymentsSync', () => {
     expect(mocks.sweep).not.toHaveBeenCalled()
   })
 
+  // PH 195: a first import the bank had not finished is not the first
+  // import: the rows that came are stored, and the next sync asks again.
+  it('leaves a first import owed when the service read stopped before the bank ran out of pages', async () => {
+    const { supabase } = stub({
+      bank_connections: [{ data: row({ initial_sync_completed_at: null, last_synced_at: null, consent_attempt: { selection: { extended_history_days: 760 } } }), error: null }],
+      company_members: [{ data: { role: 'owner' }, error: null }],
+      transactions: [{ data: null, error: null }],
+      sie_imports: [{ data: null, error: null }],
+    })
+    mocks.syncAccount.mockResolvedValue({ imported: 0, duplicates: 0, errors: 0, transactionIds: [], requestedFromDate: '2024-09-15', historyNarrowed: false, truncated: true })
+    const result = await run(supabase, { trigger: 'initial' })
+    expect(result).toMatchObject({ ok: true })
+    expect(mocks.persistResult).toHaveBeenCalledWith(supabase, expect.objectContaining({ connectionId: 'conn-1', initialSync: undefined }))
+  })
+
   it('links a first import over SIE-imported books to the existing verifikat (crm#1282)', async () => {
     const { supabase } = stub({
       bank_connections: [{ data: row({ initial_sync_completed_at: null, last_synced_at: null, consent_attempt: { selection: { extended_history_days: 760 } } }), error: null }],
@@ -405,6 +421,35 @@ describe('runOpenPaymentsSync', () => {
     expect(await run(supabase)).toMatchObject({ ok: false, code: 'BANK_SESSION_EXPIRED', status: 'expired' })
     expect(mocks.persistFailure).toHaveBeenCalledWith(supabase, expect.objectContaining({ status: 'expired', message: CONSENT_EXPIRED_MESSAGE }))
     expect(mocks.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'bank_connection.sync_failed', payload: expect.objectContaining({ provider: 'open_payments', errorClass: 'session_expired', status: 'expired', httpStatus: 410 }) }))
+  })
+
+  // crm#1355: the bank refused every unattended read with PSU_CREDENTIALS_INVALID
+  // and the row sat in 'error' ("try again in a while") while the cron asked
+  // again every six hours. A permanent code needs a renewal, once.
+  it('flips the row to expired with the code\'s own sentence when the bank refuses the consent for good, and does not hold the lease for another try', async () => {
+    mocks.syncAccount.mockRejectedValueOnce(new BankFeedRefusedError('refused', { code: 'CONNECTOR_AIS_REFUSED', status: 422, providerCode: 'PSU_CREDENTIALS_INVALID' }))
+    const { supabase } = stub({ bank_connections: [{ data: row({ status: 'error' }), error: null }], sie_imports: [{ data: null, error: null }] })
+    expect(await run(supabase, { trigger: 'cron', unattended: true })).toMatchObject({ ok: false, code: 'BANK_SESSION_EXPIRED', status: 'expired' })
+    const message = consentRefusedMessage('PSU_CREDENTIALS_INVALID')
+    expect(message).toBe('Det valda avtalet överensstämmer inte med företagets organisationsnummer. Kontrollera uppgifterna. Förnya kopplingen med BankID för att fortsätta synka.')
+    expect(mocks.persistFailure).toHaveBeenCalledWith(supabase, expect.objectContaining({ status: 'expired', message }))
+    expect(mocks.holdLease).not.toHaveBeenCalled()
+    expect(mocks.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'bank_connection.sync_failed', payload: expect.objectContaining({ errorClass: 'consent_refused', status: 'expired', ebCode: 'PSU_CREDENTIALS_INVALID' }) }))
+    expect(log.error).not.toHaveBeenCalled()
+  })
+
+  it('treats a lower-case permanent code the same, and leaves a refusal without a permanent code in error for the next run', async () => {
+    mocks.syncAccount.mockRejectedValueOnce(new BankFeedRefusedError('refused', { code: 'CONNECTOR_AIS_REFUSED', status: 422, providerCode: 'psu_rights_missing' }))
+    const rights = stub({ bank_connections: [{ data: row(), error: null }], company_members: [{ data: { role: 'owner' }, error: null }], sie_imports: [{ data: null, error: null }] })
+    expect(await run(rights.supabase)).toMatchObject({ ok: false, code: 'BANK_SESSION_EXPIRED', status: 'expired' })
+    expect(mocks.persistFailure).toHaveBeenCalledWith(rights.supabase, expect.objectContaining({ status: 'expired', message: consentRefusedMessage('PSU_RIGHTS_MISSING') }))
+
+    mocks.persistFailure.mockClear()
+    mocks.syncAccount.mockRejectedValueOnce(new BankFeedRefusedError('refused', { code: 'CONNECTOR_AIS_REFUSED', status: 422, providerCode: 'FORMAT_ERROR' }))
+    const format = stub({ bank_connections: [{ data: row(), error: null }], sie_imports: [{ data: null, error: null }] })
+    expect(await run(format.supabase, { trigger: 'cron', unattended: true })).toMatchObject({ ok: false, code: 'BANK_SYNC_FAILED', status: 'error' })
+    expect(mocks.persistFailure).toHaveBeenCalledWith(format.supabase, expect.objectContaining({ status: 'error', message: SYNC_FAILED_MESSAGE }))
+    expect(mocks.holdLease).toHaveBeenCalledWith(format.supabase, 'conn-1', NOW + 6 * 60 * 60 * 1000)
   })
 
   it('holds the lease for the Retry-After on a spent budget, else half a day, and leaves the row alone', async () => {

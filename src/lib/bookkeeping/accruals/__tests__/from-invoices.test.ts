@@ -238,7 +238,7 @@ describe('createSchedulesForCustomerInvoice', () => {
       'je-origin',
     )
 
-    expect(result).toEqual({ created: 1, failed: 0 })
+    expect(result).toEqual({ created: 1, failed: 0, releasesFailed: 0 })
     expect(mockCreateAccrualSchedule).toHaveBeenCalledWith(
       expect.anything(),
       COMPANY,
@@ -249,6 +249,91 @@ describe('createSchedulesForCustomerInvoice', () => {
       }),
       expect.anything(),
     )
+  })
+
+  // Upplupen intäkt (17xx, #62): September consulting on an October invoice.
+  // Every month lies before the invoice, so all of them post right after the
+  // revenue entry, and a month that fails comes back to the door.
+  it('creates a 17xx schedule floored at the invoice date and posts its months at once', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([{ data: [] }])
+
+    const invoice = makeInvoice({ id: 'inv-1', status: 'sent', invoice_date: '2026-10-15', invoice_number: '1043' })
+    const item = makeInvoiceItem({
+      description: 'Konsultation september',
+      line_total: 30000,
+      accrual_period_start: '2026-09-01',
+      accrual_period_end: '2026-09-30',
+      accrual_balance_account: '1790',
+    })
+
+    const result = await createSchedulesForCustomerInvoice(
+      supabase as unknown as SupabaseClient,
+      COMPANY,
+      USER,
+      invoice,
+      [item],
+      'je-origin',
+    )
+
+    expect(result).toEqual({ created: 1, failed: 0, releasesFailed: 0 })
+    expect(mockCreateAccrualSchedule).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY,
+      USER,
+      expect.objectContaining({
+        direction: 'revenue',
+        balanceAccount: '1790',
+        totalAmountSek: 30000,
+        periodStart: '2026-09-01',
+        periodEnd: '2026-09-30',
+      }),
+      { originJournalEntryId: 'je-origin', postingFloorDate: '2026-10-15', postCatchUp: false },
+    )
+    expect(mockPostDueInstallments).toHaveBeenCalledWith(expect.anything(), COMPANY, {
+      userId: USER,
+      scheduleId: 'sched-1',
+    })
+  })
+
+  it('counts months that could not post as failed releases', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([{ data: [] }])
+    mockPostDueInstallments.mockResolvedValueOnce({
+      posted: 1,
+      failed: 1,
+      skipped: 0,
+      errors: [{ installmentId: 'inst-1', message: 'locked' }],
+    })
+
+    const result = await createSchedulesForCustomerInvoice(
+      supabase as unknown as SupabaseClient,
+      COMPANY,
+      USER,
+      makeInvoice({ id: 'inv-1', status: 'sent', invoice_date: '2026-10-15' }),
+      [makeInvoiceItem({ accrual_period_start: '2026-08-01', accrual_period_end: '2026-09-30', accrual_balance_account: '1790' })],
+      'je-origin',
+    )
+
+    expect(result).toEqual({ created: 1, failed: 0, releasesFailed: 1 })
+  })
+
+  it('never defers a reverse-charge line, whatever its interim account', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([{ data: [] }])
+
+    const result = await createSchedulesForCustomerInvoice(
+      supabase as unknown as SupabaseClient,
+      COMPANY,
+      USER,
+      makeInvoice({ id: 'inv-1', status: 'sent', invoice_date: '2026-10-15', vat_treatment: 'reverse_charge' }),
+      [makeInvoiceItem({ vat_rate: 0, vat_amount: 0, accrual_period_start: '2026-09-01', accrual_period_end: '2026-09-30', accrual_balance_account: '1790' })],
+      'je-origin',
+    )
+
+    expect(result).toEqual({ created: 0, failed: 0, releasesFailed: 0 })
+    expect(mockCreateAccrualSchedule).not.toHaveBeenCalled()
+    expect(mockPostDueInstallments).not.toHaveBeenCalled()
   })
 
   it('collapses a multi-line description to one line of voucher text', async () => {

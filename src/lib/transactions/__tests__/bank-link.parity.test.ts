@@ -37,6 +37,7 @@ const freeRow = {
   merchant_name: null,
   cash_account_id: null,
   journal_entry_id: null,
+  reconciliation_method: null,
   invoice_id: null,
   is_business: null,
   is_ignored: false,
@@ -153,8 +154,11 @@ describe('bank link parity: manualLink and linkTransactionToJournalEntry', () =>
       expect(linked.ok).toBe(true)
       const [manualWrite] = reconciliation.findCalls('transactions', 'update')[0] as [Record<string, unknown>]
       const [linkWrite] = linkDoor.findCalls('transactions', 'update')[0] as [Record<string, unknown>]
-      expect(manualWrite).toMatchObject({ journal_entry_id: JE, is_business: true })
-      expect(linkWrite).toMatchObject({ journal_entry_id: JE, is_business: true })
+      // Both doors link a verifikat that already existed, so both record a
+      // reconciliation link: the duplicate dialog's door left the method NULL
+      // and its links could not be unlinked (PH 194).
+      expect(manualWrite).toMatchObject({ journal_entry_id: JE, is_business: true, reconciliation_method: 'manual' })
+      expect(linkWrite).toMatchObject({ journal_entry_id: JE, is_business: true, reconciliation_method: 'manual' })
       return
     }
 
@@ -210,6 +214,30 @@ describe('bank link parity: manualLink and linkTransactionToJournalEntry', () =>
     for (const door of [reconciliation, linkDoor]) {
       const [write] = door.findCalls('transactions', 'update')[0] as [Record<string, unknown>]
       expect(write).toMatchObject({ journal_entry_id: JE, cash_account_id: 'ca-live' })
+    }
+  })
+
+  it('both doors put a row back on the verifikat booked from it as its booking, not as an unlinkable link (PH 194)', async () => {
+    // A row whose pointer was lost, linked again to its own categorization
+    // verifikat: koppla-bort must keep refusing it (storno is the way out).
+    const ownBooking = { ...postedEntry, source_type: 'bank_transaction', source_id: TX }
+    const tables = () =>
+      createTableMockSupabase({
+        transactions: [{ data: freeRow }, { data: [{ id: TX }] }],
+        journal_entries: { data: ownBooking },
+        cash_accounts: { data: [] },
+        journal_entry_lines: { data: [bankLine] },
+        transaction_voucher_links: { data: [] },
+      })
+    const reconciliation = tables()
+    expect(await manualLink(reconciliation.supabase as never, COMPANY, TX, JE, USER, '1930', MANUAL)).toEqual({ success: true })
+    const linkDoor = tables()
+    expect(
+      (await linkTransactionToJournalEntry(linkDoor.supabase as never, USER, COMPANY, { transactionId: TX, journalEntryId: JE })).ok,
+    ).toBe(true)
+    for (const door of [reconciliation, linkDoor]) {
+      const [write] = door.findCalls('transactions', 'update')[0] as [Record<string, unknown>]
+      expect(write).toMatchObject({ journal_entry_id: JE, reconciliation_method: null })
     }
   })
 })

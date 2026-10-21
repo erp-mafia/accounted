@@ -386,7 +386,14 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
   const bankVerdicts = useMemo<Verdict[]>(() => {
     if (!findings?.bank.connected) return []
     const k = findings.bank
-    const out: Verdict[] = [{ tone: 'ok', text: t('v_bank_connected', { bank: k.bankName ?? t('answer_connected'), count: k.transactions }) }]
+    // A connection that has delivered nothing is no success to tick off: say
+    // so instead of "kopplad · 0 transaktioner hämtade" in the ok tone (PH 195).
+    const bank = k.bankName ?? t('answer_connected')
+    const out: Verdict[] = [
+      k.transactions > 0
+        ? { tone: 'ok', text: t('v_bank_connected', { bank, count: k.transactions }) }
+        : { tone: 'warn', text: t('v_bank_connected_empty', { bank }), href: '/import?mode=bank' },
+    ]
     if (k.sweep) {
       out.push({ tone: 'ok', text: t('v_bank_matched', { count: k.sweep.auto_linked }) })
       if (k.sweep.unmatched + k.sweep.suggested > 0) out.push({ tone: 'warn', text: t('v_bank_review', { count: k.sweep.unmatched + k.sweep.suggested }), href: '/transactions' })

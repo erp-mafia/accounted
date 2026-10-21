@@ -20,7 +20,11 @@ import { DoorMark } from './door-icon'
 
 type AddressState =
   | { status: 'loading' }
-  | { status: 'ready'; address: string }
+  /**
+   * carriesName: false once a rename left the address on the old name, null when unknown.
+   * previous: earlier addresses a rename kept; they still receive.
+   */
+  | { status: 'ready'; address: string; carriesName: boolean | null; previous: string[] }
   /** 404: no address provisioned yet, the one case where creating one retires nothing. */
   | { status: 'none' }
   /** Any other answer: we do not know whether an address exists, so nothing may create one. */
@@ -107,13 +111,26 @@ function IntakeAddressRow() {
   const [state, setState] = useState<AddressState>({ status: 'loading' })
   const [copy, setCopy] = useState<AddressCopyState>('idle')
   const [creating, setCreating] = useState(false)
+  const [renaming, setRenaming] = useState(false)
 
   const load = useCallback(async () => {
     try {
       const res = await fetch('/api/extensions/ext/invoice-inbox/inbox/address')
       if (res.ok) {
-        const json = (await res.json()) as { data?: { address?: string } }
-        setState(json.data?.address ? { status: 'ready', address: json.data.address } : { status: 'failed' })
+        const json = (await res.json()) as {
+          data?: { address?: string; carries_company_name?: boolean | null; previous?: string[] | null }
+        }
+        const data = json.data
+        setState(
+          data?.address
+            ? {
+                status: 'ready',
+                address: data.address,
+                carriesName: data.carries_company_name ?? null,
+                previous: data.previous ?? [],
+              }
+            : { status: 'failed' },
+        )
         return
       }
       setState(res.status === 404 ? { status: 'none' } : { status: 'failed' })
@@ -147,6 +164,29 @@ function IntakeAddressRow() {
     }
   }
 
+  async function onRename() {
+    if (renaming) return
+    setRenaming(true)
+    try {
+      // A new address with the company's current name; the old one keeps
+      // receiving (rename_company_inbox), so suppliers can switch at their own pace.
+      const res = await fetch('/api/extensions/ext/invoice-inbox/inbox/rotate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keep_previous: true }),
+      })
+      if (!res.ok) {
+        toast({ title: t('address_rename_failed'), description: await getResponseErrorMessage(res, undefined, locale === 'en' ? 'en' : 'sv'), variant: 'destructive' })
+        return
+      }
+      setCopy('idle')
+      toast({ title: t('address_renamed') })
+      await load()
+    } finally {
+      setRenaming(false)
+    }
+  }
+
   if (state.status === 'loading') {
     return (
       <MailboxRow door="intake_email" detail={<Skeleton className="mt-1 h-4 w-48 rounded-sm" />} />
@@ -173,6 +213,22 @@ function IntakeAddressRow() {
             {state.address}
           </code>
           {copy === 'failed' && <AttnLine>{t('address_copy_failed')}</AttnLine>}
+          {state.previous.length > 0 && (
+            <p className="mt-0.5 text-[12.5px]">
+              {t('address_previous')}{' '}
+              <code data-ph-mask="" className="break-all">
+                {state.previous.join(', ')}
+              </code>
+            </p>
+          )}
+          {state.carriesName === false && (
+            <AttnLine
+              className="mt-0.5"
+              action={{ label: renaming ? t('address_renaming') : t('address_rename'), onClick: () => void onRename() }}
+            >
+              {t('address_old_name')}
+            </AttnLine>
+          )}
         </>
       }
     >

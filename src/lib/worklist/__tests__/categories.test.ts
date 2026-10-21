@@ -723,14 +723,17 @@ describe('listSuggestedMatches', () => {
 
     // Both revalidation conditions, not just the id filter: findCall returns
     // only the FIRST .in() per table, which is the id one, so the status
-    // filter needs findCalls to be covered at all.
+    // filter needs findCalls to be covered at all. The third call is the
+    // open pool the several-invoice search reads, under the same statuses.
     expect(findCalls('invoices', 'in')).toEqual([
       ['id', ['inv-1']],
+      ['status', [...MATCHABLE_INVOICE_STATUSES]],
       ['status', [...MATCHABLE_INVOICE_STATUSES]],
     ])
     expect(findCall('invoices', 'gt')).toEqual(['remaining_amount', 0])
     expect(findCalls('supplier_invoices', 'in')).toEqual([
       ['id', ['sinv-1']],
+      ['status', [...MATCHABLE_SUPPLIER_INVOICE_STATUSES]],
       ['status', [...MATCHABLE_SUPPLIER_INVOICE_STATUSES]],
     ])
     expect(findCall('supplier_invoices', 'gt')).toEqual(['remaining_amount', 0])

@@ -6,10 +6,14 @@ import { ingestTransactions } from '@/lib/transactions/ingest'
 import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
 import { syncMappedAccounts } from '@/lib/import/account-sync'
 import {
+  connectionStartMs,
   isBeforeFirstAdvance,
   resolveWindowStartMs,
   type CursorWindowConnection,
 } from '@/lib/feed-sync/cursor-window'
+import { addDaysIso, stockholmWallTimeToUtc, todayIsoStockholm } from '@/lib/dates/iso'
+import { ISO_DATE_RE } from '@/lib/invariants'
+import { sumAccountBalance } from '@/lib/reconciliation/gl-balance'
 import { createLogger, type Logger } from '@/lib/logger'
 import type { RawTransaction, TransactionMethod } from '@/types'
 import { connectedAccountOptions, isRevokedConnectionError } from './connect'
@@ -39,12 +43,19 @@ const defaultLog = createLogger('stripe/transaction-sync')
  * with a 24h overlap. Safe because balance transactions
  * are immutable and carry stable txn_... ids: a re-seen transaction collides
  * on (company_id, external_id) and is skipped. The OAuth callback seeds the
- * cursor with the connection moment, so the first run starts there (money
- * that moved before the connection is already booked from the bank side);
- * older history is an explicit choice (POST /backfill moves the cursor
- * back). Every window is floored at the day after the company lock date:
- * rows behind the lock can never be booked and would only be permanent
- * inbox noise.
+ * cursor with the connection moment; older history is an explicit choice
+ * (POST /backfill moves the cursor back to the start of a Swedish day).
+ * Every window is floored at the day after the company lock date: rows
+ * behind the lock can never be booked and would only be permanent inbox
+ * noise.
+ *
+ * Feed start (crm#1344): neither the connection moment nor a backfill day
+ * may cut through the Stripe balance. Money Stripe paid out before the start
+ * is in the bank and already booked from there; money still on the balance
+ * is not, and the next payout carries it out against 1686. So the run from a
+ * start reads that balance into the feed (planFetch) unless 1686 already
+ * holds a balance in the ledger, in which case the books carry it and the
+ * feed starts at Swedish midnight of the start day.
  */
 
 /** BAS ledger account for the Stripe balance cash account. */
@@ -59,6 +70,21 @@ const CURSOR_OVERLAP_SECONDS = 24 * 60 * 60
 const INGEST_CHUNK_SIZE = 200
 /** Hard cap per run; the cursor resumes where a truncated run stopped. */
 const MAX_TXNS_PER_RUN = 10_000
+/**
+ * Longest time Stripe holds a charge before it can be paid out (a payout
+ * schedule's delay_days stays within 30). A charge still on the balance when
+ * the last payout before a feed start ran was created at most this long
+ * before that payout.
+ */
+const MAX_PAYOUT_DELAY_SECONDS = 31 * 86_400
+/**
+ * How far back a feed start reads when the account had no payout before it:
+ * then everything on it is still on the balance. Bounded so a dormant
+ * account cannot ask for an unbounded scan.
+ */
+const NO_PAYOUT_LOOKBACK_SECONDS = 90 * 86_400
+/** Payouts read to find the last one per currency before a feed start. */
+const PAYOUT_PAGE_SIZE = 100
 
 /**
  * ⚠️ STORED-KEY FORMATS. These are persisted to transactions.external_id and
@@ -93,8 +119,20 @@ export interface StripeTransactionSyncSummary {
 
 const round = (n: number) => Math.round(n * 100) / 100
 
+/**
+ * The Swedish calendar day of a Stripe timestamp. The verifikation carries
+ * the date of the affärshändelse (BFL 5 kap 7 §), which for a Swedish
+ * company is the Swedish day: a payment at 00:30 in Stockholm belongs to
+ * that day, not to the UTC day before it (which can be another month or
+ * fiscal year, and another daily samlingsverifikat).
+ */
 function isoDate(epochSeconds: number): string {
-  return new Date(epochSeconds * 1000).toISOString().split('T')[0]
+  return todayIsoStockholm(new Date(epochSeconds * 1000))
+}
+
+/** Midnight in Stockholm at the start of a Swedish calendar day (epoch ms). */
+function stockholmDayStartMs(isoDay: string): number {
+  return stockholmWallTimeToUtc(isoDay, '00:00').getTime()
 }
 
 /** Minimal shape shared by live Stripe objects and test fixtures. */
@@ -102,6 +140,8 @@ export type BalanceTxnLike = Pick<Stripe.BalanceTransaction, 'id' | 'type' | 'fe
   amount: number
   currency: string
   created: number
+  /** When the funds become payable; live objects always carry it. */
+  available_on?: number
   description?: string | null
   reporting_category?: string
   source?: Stripe.BalanceTransaction['source']
@@ -251,38 +291,142 @@ function cursorWindowOf(connection: StripeConnection): CursorWindowConnection {
   }
 }
 
+const toSeconds = (ms: number) => Math.max(0, Math.floor(ms / 1000))
+
 /**
- * Window start (epoch seconds) for the balance-transaction list call. The
- * cursor is the start date: cursor minus the 24h overlap, clamped so the
- * overlap never reaches behind the point this connection is responsible for
- * (the connection moment, or an explicit backfill cursor when that is
- * earlier); a null cursor falls back to the connection's own start, never to
- * a fixed number of days.
- *
- * Every window is then floored at the day AFTER the company lock date (rows
- * on/before it are unbookable by the enforce_company_lock_date trigger). The
- * floor used to apply to the first run only; now that the first run starts
- * at the connection moment like every other run starts at its cursor, an
- * explicit backfill is the one way to reach into locked history, and the
- * floor has to sit on the resolved window to catch it.
+ * Start (epoch ms) of the first Swedish day after the company lock date, or
+ * 0 when nothing is locked: rows on/before the lock date are unbookable by
+ * the enforce_company_lock_date trigger. Swedish midnight, because rows are
+ * dated on the Swedish day.
  */
-export async function resolveWindowStartSeconds(
-  supabase: SupabaseClient,
-  connection: StripeConnection,
-): Promise<number> {
-  let startMs = resolveWindowStartMs(cursorWindowOf(connection), CURSOR_OVERLAP_SECONDS * 1000)
+async function firstBookableMs(supabase: SupabaseClient, companyId: string): Promise<number> {
   const { data: settings } = await supabase
     .from('company_settings')
     .select('bookkeeping_locked_through')
-    .eq('company_id', connection.company_id)
+    .eq('company_id', companyId)
     .maybeSingle()
   const lockThrough = (settings as { bookkeeping_locked_through?: string | null } | null)
     ?.bookkeeping_locked_through
-  if (lockThrough) {
-    const firstBookableMs = Date.parse(`${lockThrough}T00:00:00Z`) + 86_400_000
-    if (Number.isFinite(firstBookableMs)) startMs = Math.max(startMs, firstBookableMs)
+  if (!lockThrough || !ISO_DATE_RE.test(lockThrough)) return 0
+  const ms = stockholmDayStartMs(addDaysIso(lockThrough, 1))
+  return Number.isFinite(ms) ? ms : 0
+}
+
+/** What one run lists from Stripe, and which listed transactions it keeps. */
+export interface FetchPlan {
+  /** created.gte for the list call (epoch seconds). */
+  gte: number
+  /** False for a listed transaction the feed must leave out. */
+  keep: (txn: BalanceTxnLike) => boolean
+}
+
+const keepAll = () => true
+
+/**
+ * The newest payout per currency created before `beforeSec`, as its
+ * `created` (epoch seconds). A payout takes everything payable when it is
+ * created off the balance, so funds that became payable after the last one
+ * were still on the balance at `beforeSec`. Failed and cancelled payouts
+ * count too: the money they return comes back as its own
+ * payout_failure/payout_cancel transaction after them.
+ */
+async function lastPayoutPerCurrency(
+  stripe: Pick<Stripe, 'payouts'>,
+  requestOptions: Stripe.RequestOptions,
+  beforeSec: number,
+): Promise<Map<string, number>> {
+  const page = await stripe.payouts.list(
+    { created: { lt: beforeSec }, limit: PAYOUT_PAGE_SIZE },
+    requestOptions,
+  )
+  const last = new Map<string, number>()
+  for (const payout of page.data) {
+    const currency = payout.currency.toLowerCase()
+    last.set(currency, Math.max(last.get(currency) ?? 0, payout.created))
   }
-  return Math.max(0, Math.floor(startMs / 1000))
+  return last
+}
+
+/**
+ * Where a run starts reading, and what it keeps (crm#1344).
+ *
+ * Once the cursor has passed the connection moment, a run reads from its
+ * cursor minus the 24h overlap and keeps everything.
+ *
+ * Until then the cursor is a feed start: the connection moment the OAuth
+ * callback seeded, or the day a backfill chose. A feed start must not cut
+ * through the Stripe balance. Money Stripe paid out before it is in the bank
+ * and booked from there; money still on the balance is not, and the next
+ * payout takes it out against 1686: left out of the feed, that payout never
+ * adds up and the sales in it are never booked. So the balance at the start
+ * has to reach the books exactly once:
+ * - 1686 already has a balance in the ledger before the start day (kept by
+ *   hand, imported, or an earlier connection): the books carry it, and the
+ *   feed starts at Swedish midnight of the start day, as the panel promises.
+ *   A failed ledger read takes this path too: it never reads more than the
+ *   feed did before.
+ * - 1686 is empty: the run also reads every transaction that was still on
+ *   the balance at the start, i.e. made payable after the last payout before
+ *   it, and never an earlier payout itself.
+ * external_id dedup keeps a rerun from the same start idempotent. Every
+ * window is floored at the day after the company lock date.
+ */
+export async function planFetch(
+  supabase: SupabaseClient,
+  connection: StripeConnection,
+  stripe: Pick<Stripe, 'payouts'>,
+  requestOptions: Stripe.RequestOptions,
+  log: Logger = defaultLog,
+): Promise<FetchPlan> {
+  const floorMs = await firstBookableMs(supabase, connection.company_id)
+  const window = cursorWindowOf(connection)
+  if (!isBeforeFirstAdvance(window)) {
+    const fromMs = resolveWindowStartMs(window, CURSOR_OVERLAP_SECONDS * 1000)
+    return { gte: toSeconds(Math.max(fromMs, floorMs)), keep: keepAll }
+  }
+
+  const cursorMs = window.cursor ? Date.parse(window.cursor) : Number.NaN
+  const startSec = Math.floor((Number.isFinite(cursorMs) ? cursorMs : connectionStartMs(window)) / 1000)
+  const startDay = isoDate(startSec)
+  const fromStartDay: FetchPlan = {
+    gte: toSeconds(Math.max(stockholmDayStartMs(startDay), floorMs)),
+    keep: keepAll,
+  }
+
+  const ledgerBalance = await sumAccountBalance(
+    supabase,
+    connection.company_id,
+    STRIPE_LEDGER_ACCOUNT,
+    { beforeDate: startDay },
+  )
+  if (ledgerBalance === null || ledgerBalance !== 0) return fromStartDay
+
+  let lastPayout: Map<string, number>
+  try {
+    lastPayout = await lastPayoutPerCurrency(stripe, requestOptions, startSec)
+  } catch (err) {
+    if (isRevokedConnectionError(err)) throw err
+    log.warn('payout list failed; the feed starts at the start day', {
+      connectionId: connection.id,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return fromStartDay
+  }
+
+  const swept = [...lastPayout.values()]
+  const listFromSec =
+    swept.length > 0
+      ? Math.min(...swept) - MAX_PAYOUT_DELAY_SECONDS
+      : startSec - NO_PAYOUT_LOOKBACK_SECONDS
+  return {
+    gte: toSeconds(Math.max(listFromSec * 1000, floorMs)),
+    keep: (txn) => {
+      if (txn.created >= startSec) return true
+      if (txn.type === 'payout') return false
+      const sweptAt = lastPayout.get(txn.currency.toLowerCase())
+      return sweptAt === undefined || (txn.available_on ?? txn.created) > sweptAt
+    },
+  }
 }
 
 /**
@@ -360,12 +504,13 @@ export async function syncStripeBalanceTransactions(
   // cursor, so "no cursor" no longer identifies the first run.
   const firstRun = isBeforeFirstAdvance(cursorWindowOf(connection))
   const runStartMs = Date.now()
-  const gte = await resolveWindowStartSeconds(supabase, connection)
 
-  let txns: BalanceTxnLike[]
+  let listed: BalanceTxnLike[]
+  let plan: FetchPlan
   try {
-    txns = await stripe.balanceTransactions
-      .list({ created: { gte }, limit: 100, expand: ['data.source'] }, requestOptions)
+    plan = await planFetch(supabase, connection, stripe, requestOptions, log)
+    listed = await stripe.balanceTransactions
+      .list({ created: { gte: plan.gte }, limit: 100, expand: ['data.source'] }, requestOptions)
       .autoPagingToArray({ limit: MAX_TXNS_PER_RUN })
   } catch (err) {
     if (isRevokedConnectionError(err)) {
@@ -376,9 +521,10 @@ export async function syncStripeBalanceTransactions(
     throw err
   }
 
+  const txns = listed.filter(plan.keep)
   summary.fetched = txns.length
   // Fewer than the cap: the list ran to the end of the window.
-  const windowExhausted = txns.length < MAX_TXNS_PER_RUN
+  const windowExhausted = listed.length < MAX_TXNS_PER_RUN
   if (txns.length === 0) {
     // A quiet account moves its cursor to the run start too, or it keeps the
     // front of the cron's oldest-cursor-first candidates. Not on the first
@@ -429,12 +575,10 @@ export async function syncStripeBalanceTransactions(
 
     // Persist the cursor after each chunk so a crash or deadline stop resumes
     // from the last fully-processed chunk (the 24h overlap absorbs the rest).
-    const maxCreated = chunk[chunk.length - 1].created
-    await supabase
-      .from('stripe_connections')
-      .update({ last_balance_txn_synced_at: new Date(maxCreated * 1000).toISOString() })
-      .eq('id', connection.id)
-    connection.last_balance_txn_synced_at = new Date(maxCreated * 1000).toISOString()
+    // Never back: a first run's chunks from before the connection moment
+    // leave the seeded cursor where it is, so a stopped first run reruns as
+    // a first run instead of reading as a backfill to that earlier date.
+    await advanceWatermark(supabase, connection, chunk[chunk.length - 1].created * 1000)
   }
 
   // Scanned-through watermark, as in the webshop order syncs: a window listed

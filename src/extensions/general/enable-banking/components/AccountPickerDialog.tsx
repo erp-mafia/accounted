@@ -48,6 +48,7 @@ import {
   type SyncProgressState,
 } from './BankSyncProgressDialog'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { classifyInitialSyncError } from '@/lib/bank-sync/initial-sync-error'
 
 interface AccountPickerDialogProps {
   open: boolean
@@ -561,7 +562,13 @@ export function AccountPickerDialog({
       } else if (isInitialSelection && data.initial_sync_error) {
         setProgressState({
           kind: 'failed',
-          error: { message: 'Vi sparade kontovalet men kunde inte hämta transaktioner just nu. Vi försöker igen vid nästa körning.' },
+          error: {
+            // A bank that had not handed out every page (PH 195) is said as
+            // such: the rows that came are kept and the import is asked again.
+            message: classifyInitialSyncError(data.initial_sync_error) === 'incomplete'
+              ? 'Vi sparade kontovalet, men banken lämnade inte ut hela historiken den här gången. Vi frågar banken igen automatiskt inom ett dygn. Vill du inte vänta kan du importera kontoutdraget som bankfil.'
+              : 'Vi sparade kontovalet men kunde inte hämta transaktioner just nu. Vi försöker igen vid nästa körning.',
+          },
         })
       } else {
         // Counted like "x av y valda" above and the details' "x av y konton

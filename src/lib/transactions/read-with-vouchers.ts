@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { dbError } from '@/lib/errors/db-error'
+import { TRANSACTION_DETAIL_COLUMNS } from '@/lib/transactions/detail-columns'
 
 /**
  * One bank transaction with everything that books it and every document
@@ -44,6 +45,10 @@ export interface TransactionDocument {
   pinned_to_transaction: boolean
 }
 
+/**
+ * The transaction's own fields: every column the v1 detail endpoint returns
+ * (TRANSACTION_DETAIL_COLUMNS), with id read as transaction_id.
+ */
 export interface TransactionWithVouchers {
   transaction_id: string
   date: string | null
@@ -54,17 +59,31 @@ export interface TransactionWithVouchers {
   reference: string | null
   merchant_name: string | null
   counterparty_account: string | null
+  /** The counterparty's IBAN as the bank sent it (a foreign payment's payee, the payer of an incoming transfer). */
+  counterparty_iban: string | null
   counterparty_org_number: string | null
+  instructed_amount: number | null
+  instructed_currency: string | null
+  balance_after: number | null
+  is_enriched: boolean | null
   is_business: boolean | null
   /** null when the column holds its default 'uncategorized': the verifikat below is the booking truth. */
   category: string | null
   is_ignored: boolean
+  /** The row's id at its source: a Stripe balance transaction (stripe_<account>_<txn>, _fee for its fee row), a bank feed or a file import. */
+  external_id: string | null
   import_source: string | null
+  reconciliation_method: string | null
   cash_account_id: string | null
   invoice_id: string | null
   supplier_invoice_id: string | null
+  potential_invoice_id: string | null
+  potential_match_method: string | null
   journal_entry_id: string | null
   document_id: string | null
+  receipt_id: string | null
+  created_at: string | null
+  updated_at: string | null
   /** True when a posted verifikat books the transaction: its pointer, a bank_line link or a payment. */
   booked: boolean
   verifikat: TransactionVerifikat[]
@@ -83,32 +102,20 @@ export async function readTransactionWithVouchers(
   companyId: string,
   transactionId: string,
 ): Promise<TransactionWithVouchers | null> {
+  // The v1 detail endpoint's column list, so the two doors cannot drift
+  // apart again (crm#1347: this read never had external_id).
   const { data, error } = await supabase
     .from('transactions')
-    .select('id, date, description, amount, currency, amount_sek, reference, merchant_name, counterparty_account, counterparty_org_number, is_business, category, is_ignored, import_source, cash_account_id, invoice_id, supplier_invoice_id, journal_entry_id, document_id')
+    .select(`${TRANSACTION_DETAIL_COLUMNS}, is_ignored`)
     .eq('company_id', companyId)
     .eq('id', transactionId)
     .maybeSingle()
   if (error) throw dbError(error)
   if (!data) return null
-  const tx = data as {
+  const tx = data as unknown as Record<string, unknown> & {
     id: string
-    date: string | null
-    description: string | null
-    amount: unknown
-    currency: string | null
-    amount_sek: unknown
-    reference: string | null
-    merchant_name: string | null
-    counterparty_account: string | null
-    counterparty_org_number: string | null
-    is_business: boolean | null
     category: string | null
     is_ignored: boolean | null
-    import_source: string | null
-    cash_account_id: string | null
-    invoice_id: string | null
-    supplier_invoice_id: string | null
     journal_entry_id: string | null
     document_id: string | null
   }
@@ -225,26 +232,18 @@ export async function readTransactionWithVouchers(
     })
   }
 
+  // Every selected column passes through; only the id is renamed and the
+  // numerics and the default category normalised.
+  const { id, amount, amount_sek, instructed_amount, balance_after, category, is_ignored, ...fields } = tx
   return {
-    transaction_id: tx.id,
-    date: tx.date,
-    description: tx.description,
-    amount: num(tx.amount),
-    currency: tx.currency,
-    amount_sek: num(tx.amount_sek),
-    reference: tx.reference,
-    merchant_name: tx.merchant_name,
-    counterparty_account: tx.counterparty_account,
-    counterparty_org_number: tx.counterparty_org_number,
-    is_business: tx.is_business,
-    category: tx.category === 'uncategorized' ? null : tx.category,
-    is_ignored: tx.is_ignored === true,
-    import_source: tx.import_source,
-    cash_account_id: tx.cash_account_id,
-    invoice_id: tx.invoice_id,
-    supplier_invoice_id: tx.supplier_invoice_id,
-    journal_entry_id: tx.journal_entry_id,
-    document_id: tx.document_id,
+    transaction_id: id,
+    ...(fields as Omit<TransactionWithVouchers, 'transaction_id' | 'amount' | 'amount_sek' | 'instructed_amount' | 'balance_after' | 'category' | 'is_ignored' | 'booked' | 'verifikat' | 'documents'>),
+    amount: num(amount),
+    amount_sek: num(amount_sek),
+    instructed_amount: num(instructed_amount),
+    balance_after: num(balance_after),
+    category: category === 'uncategorized' ? null : category,
+    is_ignored: is_ignored === true,
     // A residual or clearing link supplements a booking, it is not one (hasBankLineJunctionRow).
     booked: verifikat.some((v) => v.status === 'posted' && v.anchored_by.some((a) => a !== 'clearing' && a !== 'other')),
     verifikat,

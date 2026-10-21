@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createTableMockSupabase, type TableMockResolver } from '@/tests/helpers'
 import { tools } from '../server'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/scope-catalog'
+import { TRANSACTION_DETAIL_COLUMNS } from '@/lib/transactions/detail-columns'
 
 const companyId = '11111111-1111-4111-8111-111111111111'
 const userId = '22222222-2222-4222-8222-222222222222'
@@ -24,16 +25,28 @@ const TX_ROW = {
   reference: '1001',
   merchant_name: null,
   counterparty_account: null,
+  counterparty_iban: null,
   counterparty_org_number: null,
+  instructed_amount: null,
+  instructed_currency: null,
+  balance_after: '4875.00',
+  is_enriched: null,
   is_business: true,
   category: 'uncategorized',
   is_ignored: false,
+  external_id: 'eb_8f2c1a',
   import_source: 'bank_feed',
+  reconciliation_method: null,
   cash_account_id: null,
   invoice_id: null,
   supplier_invoice_id: null,
+  potential_invoice_id: null,
+  potential_match_method: null,
   journal_entry_id: jeId,
   document_id: pinnedDocId,
+  receipt_id: null,
+  created_at: '2026-10-03T08:00:00Z',
+  updated_at: '2026-10-03T09:00:00Z',
 }
 
 const ENTRY = (id: string, number: number) => ({
@@ -109,6 +122,40 @@ describe('gnubok_get_transaction', () => {
       expect(scoped.length, `${table} filtered by company_id`).toBeGreaterThan(0)
       expect(scoped.every((c) => c.args[1] === companyId)).toBe(true)
     }
+  })
+
+  it('returns every field the v1 detail endpoint returns, read through the same column list (crm#1347)', async () => {
+    const { client, calls } = db({
+      transactions: { data: { ...TX_ROW, import_source: 'stripe', external_id: 'stripe_acct_1_txn_1_fee' } },
+    })
+    const result = await call({ transaction_id: txId }, client)
+
+    const select = calls.find((c) => c.table === 'transactions' && c.method === 'select')
+    expect(select?.args[0]).toBe(`${TRANSACTION_DETAIL_COLUMNS}, is_ignored`)
+    const v1Fields = TRANSACTION_DETAIL_COLUMNS.split(',').map((c) => c.trim()).map((c) => (c === 'id' ? 'transaction_id' : c))
+    for (const field of v1Fields) expect(result, field).toHaveProperty(field)
+    expect(result).not.toHaveProperty('id')
+    expect(result).toMatchObject({ external_id: 'stripe_acct_1_txn_1_fee', import_source: 'stripe', balance_after: 4875 })
+    expect((tool.outputSchema as { properties: Record<string, unknown> }).properties.external_id).toEqual({ type: ['string', 'null'] })
+  })
+
+  it('names the counterparty by IBAN and the original currency when the bank sent them (PH 196)', async () => {
+    const { client, calls } = db({
+      transactions: {
+        data: { ...TX_ROW, description: 'UTLANDSBETALNING', merchant_name: 'UTLANDSBETALNING', counterparty_iban: 'NO9386011117947', instructed_amount: '-4800.00', instructed_currency: 'NOK' },
+      },
+    })
+    const result = await call({ transaction_id: txId }, client)
+
+    const select = calls.find((c) => c.table === 'transactions' && c.method === 'select')
+    expect(String(select?.args[0]).split(',').map((c) => c.trim())).toContain('counterparty_iban')
+    expect(result).toMatchObject({ counterparty_iban: 'NO9386011117947', instructed_amount: -4800, instructed_currency: 'NOK' })
+  })
+
+  it('answers null for a row the bank sent no IBAN or other currency for', async () => {
+    const { client } = db()
+    const result = await call({ transaction_id: txId }, client)
+    expect(result).toMatchObject({ counterparty_iban: null, instructed_amount: null, instructed_currency: null })
   })
 
   it('finds the verifikat of a bulk-booked row that has no pointer of its own', async () => {

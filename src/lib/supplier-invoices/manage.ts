@@ -52,8 +52,8 @@ import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { createServiceClient } from '@/lib/supabase/server'
 import { findSignedBankPayment, signedBankPaymentDetails } from '@/lib/payments/orders/signed-payment'
 import {
-  BANK_ENTERED_SUPPLIER_INVOICE_STATUSES,
   canMarkSupplierInvoiceBankEntered,
+  payableSupplierInvoiceStatuses,
 } from '@/lib/supplier-invoices/lifecycle'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
@@ -484,7 +484,21 @@ export async function setSupplierInvoiceBankEntered(
     .maybeSingle()
   if (!invoice) return NOT_FOUND
 
-  if (entered && !canMarkSupplierInvoiceBankEntered(invoice)) {
+  // Whether a registered invoice is payable depends on the company's attest
+  // step (kontantmetoden has none, crm#1141); every other status answers the
+  // same for every company, so the method is read only when it decides.
+  let accountingMethod: string | null = null
+  if (entered && invoice.status === 'registered') {
+    const { data: settings, error: settingsError } = await supabase
+      .from('company_settings')
+      .select('accounting_method')
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (settingsError) return failed(settingsError)
+    accountingMethod = (settings?.accounting_method as string | null | undefined) ?? null
+  }
+
+  if (entered && !canMarkSupplierInvoiceBankEntered(invoice, accountingMethod)) {
     return { ok: false, code: 'SI_BANK_ENTERED_NOT_PAYABLE', details: { currentStatus: invoice.status } }
   }
   // Typing the payment into the internet bank by hand beside a bank payment
@@ -525,7 +539,7 @@ export async function setSupplierInvoiceBankEntered(
   if (entered) {
     // Compare-and-set on the eligibility just read: a payment landing in
     // between becomes zero matched rows, not a mark on a paid invoice.
-    update = update.in('status', [...BANK_ENTERED_SUPPLIER_INVOICE_STATUSES]).eq('is_credit_note', false)
+    update = update.in('status', [...payableSupplierInvoiceStatuses(accountingMethod)]).eq('is_credit_note', false)
   }
   const { data, error } = await update.select('id, bank_entered_at').maybeSingle()
   if (error) {

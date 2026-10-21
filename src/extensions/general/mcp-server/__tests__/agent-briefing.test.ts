@@ -569,6 +569,36 @@ describe('inbox block (crm#1174)', () => {
   it('names the inbox address in the description, where an agent decides what to call', () => {
     expect(tool().description).toContain('inbox address')
   })
+
+  // crm#1334: the company was renamed, the address kept the old name, and the
+  // agent found no tool and no word on where to change it.
+  it('says where to get an address with the current name once a rename left the old one', async () => {
+    process.env.RESEND_INBOUND_DOMAIN = 'in.example.test'
+    const supabase = mockSupabase({
+      profile: null,
+      inboxLocalPart: 'gammalt-namn-ab-m4tz',
+      company: { name: 'Nytt Namn AB', org_number: null, entity_type: 'aktiebolag' },
+    })
+    const result = (await tool().execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      inbox: { address: string | null; earlier_name?: string }
+    }
+    expect(result.inbox.address).toBe('gammalt-namn-ab-m4tz@in.example.test')
+    expect(result.inbox.earlier_name).toContain('Lägg till brevlåda')
+    expect(result.inbox.earlier_name).toContain('keeps receiving')
+  })
+
+  it('says nothing more while the address carries the name', async () => {
+    process.env.RESEND_INBOUND_DOMAIN = 'in.example.test'
+    const supabase = mockSupabase({
+      profile: null,
+      inboxLocalPart: 'nytt-namn-ab-m4tz',
+      company: { name: 'Nytt Namn AB', org_number: null, entity_type: 'aktiebolag' },
+    })
+    const result = (await tool().execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      inbox: Record<string, unknown>
+    }
+    expect(Object.keys(result.inbox).sort()).toEqual(['address', 'note'])
+  })
 })
 
 // Capabilities digest (lib/modules/capabilities.ts): the modules this

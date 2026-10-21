@@ -522,8 +522,10 @@ const PEPPOL_ROWS: Record<string, Record<string, unknown>> = {
 
 const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   // amount is optional in the schema (a text row has none) but a money row
-  // needs one, so the synthesized arguments carry it (crm#1076).
-  gnubok_add_payslip_line: { args: { amount: 100 } },
+  // needs one, so the synthesized arguments carry it (crm#1076). The first
+  // type in the enum is Grundlön, which a payslip of unknown pay type refuses
+  // (crm#1331): a bonus is the ordinary one-off line.
+  gnubok_add_payslip_line: { args: { amount: 100, item_type: 'bonus' } },
   // Exactly one id: the outside row's (external_id), or, for verifikat
   // settled against each other, the settlement's (crm#1074). Neither is
   // required by the schema any more, so the synthesized arguments carry

@@ -35,6 +35,7 @@ import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import { toEntryPreview, type EntryPreview } from '@/lib/bookkeeping/entry-preview'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { ACCRUAL_RELEASE_FAILED_WARNING } from '@/lib/bookkeeping/accruals/from-invoices'
 import { buildInvoiceJournalEntryInput } from '@/lib/bookkeeping/invoice-entries'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -59,8 +60,14 @@ const WARNING_EN: Record<string, string> = {
     'The invoice was booked, but one or more accrual schedules (periodiseringar) could not be created. Check Bokföring > Periodiseringar.',
 }
 
+/** The English twin; the release warning's own text is read when it occurs. */
+function warningEn(code: string): string | undefined {
+  if (code === 'ACCRUAL_RELEASE_FAILED') return ACCRUAL_RELEASE_FAILED_WARNING.message_en
+  return WARNING_EN[code]
+}
+
 export function toOperationWarnings(warnings: Array<{ code: string; message: string }>): OperationWarning[] {
-  return warnings.map((w) => ({ code: w.code, message_sv: w.message, message_en: WARNING_EN[w.code] ?? w.message }))
+  return warnings.map((w) => ({ code: w.code, message_sv: w.message, message_en: warningEn(w.code) ?? w.message }))
 }
 
 /** A failure in the generator: a typed bookkeeping error passes through, anything else is fallbackCode. */

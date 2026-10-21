@@ -941,6 +941,32 @@ describe('commitPendingOperation: import_sie', () => {
     )
   })
 
+  // #63: only a literal true reaches the job; submitSIEJob drops the
+  // unused definitions' mappings.
+  it.each([[true, true], ['true', undefined], [undefined, undefined]])(
+    'passes only_used_accounts %j to submitSIEJob as onlyUsedAccounts %j',
+    async (param, expected) => {
+      vi.mocked(submitSIEJob).mockResolvedValueOnce({id:'imp-1',fiscal_period_id:'fp-1',job_state:'queued'} as never)
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+      enqueue({ data: null, error: null }) // dispatcher's update
+
+      const op = makePendingOp({
+        operation_type: 'import_sie',
+        params: {
+          file_content: '#FLAGGA 0\n',
+          filename: 'test.sie',
+          mappings: [],
+          ...(param === undefined ? {} : { only_used_accounts: param }),
+        },
+      })
+
+      await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+      expect(vi.mocked(submitSIEJob).mock.calls.at(-1)?.[5].onlyUsedAccounts).toBe(expected)
+    },
+  )
+
   it.each([
     [true, true],
     [undefined, false],

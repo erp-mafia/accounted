@@ -428,6 +428,113 @@ describe('customer invoice with periodisering', () => {
   })
 })
 
+// Upplupen intäkt (17xx, #62): August-September consulting invoiced in
+// October. The invoice credits 1790 instead of revenue (the months book
+// Dr 1790 / Cr 3001 on their own last days); moms stays on the invoice date.
+describe('customer invoice with an upplupen intäkt (17xx)', () => {
+  const invoice = (overrides: Partial<Invoice> = {}) =>
+    makeCustomerInvoice({
+      invoice_date: '2026-10-15',
+      subtotal: 20000,
+      vat_amount: 5000,
+      total: 25000,
+      items: [
+        makeCustomerItem({
+          description: 'Konsultation augusti-september',
+          unit_price: 20000,
+          line_total: 20000,
+          vat_amount: 5000,
+          accrual_period_start: '2026-08-01',
+          accrual_period_end: '2026-09-30',
+          accrual_balance_account: '1790',
+        }),
+      ],
+      ...overrides,
+    })
+
+  it('credits 1790 with the net and keeps 1510 and the moms on the invoice date', async () => {
+    await createInvoiceJournalEntry({} as never, 'company-1', 'user-1', invoice(), 'aktiebolag')
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.entry_date).toBe('2026-10-15')
+    expect(input.lines).toContainEqual(expect.objectContaining({ account_number: '1510', debit_amount: 25000 }))
+    expect(input.lines).toContainEqual(expect.objectContaining({ account_number: '1790', credit_amount: 20000 }))
+    expect(input.lines.some((l) => l.account_number === '3001')).toBe(false)
+    expect(input.lines).toContainEqual(expect.objectContaining({ account_number: '2611', credit_amount: 5000 }))
+    // Every month-end was checked before anything was posted.
+    expect(mockedCheckPeriodLock.mock.calls.map((call) => call[2])).toEqual(['2026-08-31', '2026-09-30'])
+  })
+
+  it('refuses the whole booking, posting nothing, when one of the months is locked', async () => {
+    mockedCheckPeriodLock.mockImplementation(async (_s, _c, date) =>
+      date === '2026-08-31'
+        ? { locked: true, reason: 'period_locked_at_set', fiscal_period_id: 'period-1' }
+        : { locked: false, fiscal_period_id: 'period-1' },
+    )
+    try {
+      await expect(
+        createInvoiceJournalEntry({} as never, 'company-1', 'user-1', invoice(), 'aktiebolag'),
+      ).rejects.toMatchObject({
+        code: 'INVOICE_ACCRUED_INCOME_PERIOD_LOCKED',
+        blocked: [{ date: '2026-08-31', reason: 'period_locked_at_set' }],
+      })
+      expect(mockedCreateEntry).not.toHaveBeenCalled()
+    } finally {
+      mockedCheckPeriodLock.mockResolvedValue({ locked: false, fiscal_period_id: 'period-1' })
+    }
+  })
+
+  it('refuses a 17xx period reaching the invoice month (the invoice date moved back after the draft)', async () => {
+    await expect(
+      createInvoiceJournalEntry({} as never, 'company-1', 'user-1', invoice({ invoice_date: '2026-09-20' }), 'aktiebolag'),
+    ).rejects.toMatchObject({ code: 'INVOICE_ACCRUED_INCOME_PERIOD_INVALID' })
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+  })
+
+  it('books user-edited lines as reviewed, without the month check', async () => {
+    await createInvoiceJournalEntry({} as never, 'company-1', 'user-1', invoice(), 'aktiebolag', undefined, {
+      customLines: [
+        { account_number: '1510', debit_amount: 25000, credit_amount: 0 },
+        { account_number: '3001', debit_amount: 0, credit_amount: 20000 },
+        { account_number: '2611', debit_amount: 0, credit_amount: 5000 },
+      ],
+    })
+    expect(mockedCheckPeriodLock).not.toHaveBeenCalled()
+    expect(mockedCreateEntry).toHaveBeenCalledTimes(1)
+  })
+
+  it('a credit note debits 1790 back with the original rows', async () => {
+    const creditNote = makeCustomerInvoice({
+      id: 'kr-2',
+      invoice_number: 'KR-F-101',
+      invoice_date: '2026-11-02',
+      subtotal: -20000,
+      vat_amount: -5000,
+      total: -25000,
+      credited_invoice_id: 'inv-1',
+      items: [
+        makeCustomerItem({
+          id: 'kr-item-2',
+          invoice_id: 'kr-2',
+          quantity: -1,
+          unit_price: 20000,
+          line_total: -20000,
+          vat_amount: -5000,
+          accrual_period_start: '2026-08-01',
+          accrual_period_end: '2026-09-30',
+          accrual_balance_account: '1790',
+        }),
+      ],
+    })
+
+    await createCreditNoteJournalEntry({} as never, 'company-1', 'user-1', creditNote, 'aktiebolag', 'Kund AB', 'A-43')
+
+    const lines = entryLines()
+    expect(lines).toContainEqual(expect.objectContaining({ account_number: '1790', debit_amount: 20000 }))
+    expect(lines).toContainEqual(expect.objectContaining({ account_number: '1510', credit_amount: 25000 }))
+  })
+})
+
 describe('customer credit note with periodisering', () => {
   it('debits the interim account via the copied accrual fields', async () => {
     const creditNote = makeCustomerInvoice({

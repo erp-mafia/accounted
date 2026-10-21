@@ -175,8 +175,61 @@ describe('POST /api/supplier-invoices/[id]/bank-entered', () => {
     expect(mockFindSignedBankPayment).not.toHaveBeenCalled()
   })
 
+  it('refuses a registered invoice still waiting for attest (faktureringsmetoden)', async () => {
+    enqueue({ data: makeSupplierInvoice({ id: 'si-1', status: 'registered' }) })
+    enqueue({ data: { accounting_method: 'accrual' } })
+
+    const response = await post({ entered: true })
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details: { currentStatus: string } }
+    }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_BANK_ENTERED_NOT_PAYABLE')
+    expect(body.error.details.currentStatus).toBe('registered')
+    expect(findCalls('company_settings', 'eq')).toContainEqual(['company_id', 'company-1'])
+    expect(findCall('supplier_invoices', 'update')).toBeUndefined()
+  })
+
+  // crm#1141: kontantmetoden has no attest step, so a registered invoice is
+  // payable as it stands and the mark right before Markera betald applies.
+  it('marks a registered invoice under kontantmetoden, with registered in the compare-and-set', async () => {
+    enqueue({ data: makeSupplierInvoice({ id: 'si-1', status: 'registered' }) })
+    enqueue({ data: { accounting_method: 'cash' } })
+    enqueue({ data: { id: 'si-1', bank_entered_at: '2026-10-20T10:00:00.000Z' } })
+
+    const response = await post({ entered: true })
+    const { status, body } = await parseJsonResponse<{
+      data: { id: string; bank_entered_at: string | null }
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data).toEqual({ id: 'si-1', bank_entered_at: '2026-10-20T10:00:00.000Z' })
+    expect(Object.keys(findCall('supplier_invoices', 'update')?.[0] as object)).toEqual(['bank_entered_at'])
+    expect(findCall('supplier_invoices', 'in')).toEqual([
+      'status',
+      ['registered', 'approved', 'overdue', 'partially_paid'],
+    ])
+  })
+
+  it('reads the accounting method only when the status depends on it', async () => {
+    enqueue({ data: makeSupplierInvoice({ id: 'si-1', status: 'overdue' }) })
+    enqueue({ data: { id: 'si-1', bank_entered_at: '2026-10-20T10:00:00.000Z' } })
+
+    expect((await post({ entered: true })).status).toBe(200)
+    expect(findCall('company_settings', 'select')).toBeUndefined()
+  })
+
+  it('fails closed when the accounting method cannot be read', async () => {
+    enqueue({ data: makeSupplierInvoice({ id: 'si-1', status: 'registered' }) })
+    enqueue({ data: null, error: { code: '42501', message: 'permission denied' } })
+
+    const response = await post({ entered: true })
+    expect(response.status).toBeGreaterThanOrEqual(400)
+    expect(findCall('supplier_invoices', 'update')).toBeUndefined()
+  })
+
   it.each([
-    ['registered', false],
     ['paid', false],
     ['credited', false],
     ['approved', true],

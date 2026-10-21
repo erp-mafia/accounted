@@ -3,6 +3,7 @@ import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-
 import { eventBus } from '@/lib/events'
 import { createLogger } from '@/lib/logger'
 import { degreeAdjustedMonthlySalary } from './work-schedule'
+import { runMonthlySalaryFor } from './base-salary-line'
 import {
   assertNoDeviationOverlap,
   resolveDeviationWindowForNewRun,
@@ -188,7 +189,7 @@ export async function createSalaryRunWithEmployees(
           employee_id: emp.id,
           company_id: companyId,
           employment_degree: emp.employment_degree,
-          monthly_salary: emp.monthly_salary || 0,
+          monthly_salary: runMonthlySalaryFor(emp),
           salary_type: emp.salary_type,
           tax_table_number: emp.tax_table_number,
           tax_column: emp.tax_column,

@@ -9,7 +9,7 @@ import { normalizeIban } from '@/lib/cash-accounts/service'
 import { isEntityType, legalFormProfile, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import { isValidBic, isValidIban } from '@/lib/payments/payment-details'
 import { resolveInvoicePaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
-import { computeLineAmounts, hasLineDiscount } from '@/lib/bookkeeping/invoice-line-amounts'
+import { computeLineAmounts, computeLineVat, hasLineDiscount } from '@/lib/bookkeeping/invoice-line-amounts'
 import { getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
 import { toSingleLine } from '@/lib/utils'
 import { equalOre, ORE_TOLERANCE, roundOre } from '@/lib/money'
@@ -465,7 +465,8 @@ function prepareInvoice(input: PeppolInvoiceInput):
         `The discount on invoice line ${index + 1} must be between 0 and 100 percent.`,
       ))
     }
-    if (!equalMoney(item.vat_amount, roundMoney(item.line_total * item.vat_rate / 100))) {
+    // The one per-line VAT rule the write path stores (computeLineVat).
+    if (!equalMoney(item.vat_amount, computeLineVat(item.line_total, item.vat_rate))) {
       issues.push(validationIssue(
         'LINE_VAT_MISMATCH', `${lineField}.vat_amount`,
         `Momsbeloppet på fakturarad ${index + 1} stämmer inte.`,

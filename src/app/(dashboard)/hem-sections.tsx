@@ -290,6 +290,7 @@ export async function HemPanesSection({
     bankConnectionsRes,
     postedEntries,
     attestsDue,
+    suggestedMatches,
   ] =
     await Promise.all([
       // Pending-work counts come from lib/worklist: the same source as the
@@ -319,6 +320,8 @@ export async function HemPanesSection({
       // up" in the Att göra empty state (hits the partial posted/reversed index).
       supabase.from('journal_entries').select('*', { count: 'exact', head: true }).eq('company_id', companyId).in('status', ['posted', 'reversed']),
       attestsDuePromise,
+      // The several-invoice payments among them get rows of their own.
+      suggestedMatchesPromise,
     ])
 
   // "Empty ledger" only matters while the setup checklist is still open; once
@@ -352,6 +355,7 @@ export async function HemPanesSection({
           bankSwitches={bankSwitches}
           paymentsVerification={paymentsVerification}
           supplierPayeeChanges={supplierPayeeChanges}
+          invoiceSets={suggestedMatches.filter((m) => (m.allocations?.length ?? 0) > 0)}
           suggestions={openSuggestions}
           grantReview={grantReview}
           expiringBankConnections={expiringBankConnections}

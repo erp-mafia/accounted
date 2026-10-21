@@ -11,10 +11,14 @@ import {
 import { isZeroRatedInvoiceTreatment } from '@/lib/bookkeeping/invoice-line-vat-treatment'
 import { isBalanceSheetAccount } from '@/lib/invoices/posting-account'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
-import { computeLineNet } from '@/lib/bookkeeping/invoice-line-amounts'
+import { computeLineNet, computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import { roundOre } from '@/lib/money'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
-import { DEFAULT_DEFERRED_REVENUE_ACCOUNT } from '@/lib/bookkeeping/accruals/account-suggestions'
+import {
+  DEFAULT_DEFERRED_REVENUE_ACCOUNT,
+  isAccruedIncomeAccount,
+  periodEndsBeforeInvoiceMonth,
+} from '@/lib/bookkeeping/accruals/account-suggestions'
 import { invoiceMonthOnlyAccrualRows } from '@/lib/bookkeeping/accruals/compute'
 import {
   computeInvoiceDeductionTotal,
@@ -362,6 +366,25 @@ export async function buildInvoiceWriteData(params: {
         details: { rows: invoiceMonthRows.map((index) => index + 1), invoiceDate: input.invoice_date },
       }
     }
+    // An upplupen intäkt (17xx, #62) is revenue of months before the invoice
+    // month. A period that reaches the invoice month is refused, not split:
+    // the user splits the line (the invoice month's own revenue is no
+    // accrual). Booking checks it again with the date the invoice then has
+    // (assertAccruedIncomeLinesBookable).
+    const accruedIncomeRows = items.flatMap((item, index) =>
+      item.accrual_period_end &&
+      isAccruedIncomeAccount(item.accrual_balance_account) &&
+      !periodEndsBeforeInvoiceMonth(item.accrual_period_end, input.invoice_date)
+        ? [index + 1]
+        : [],
+    )
+    if (accruedIncomeRows.length > 0) {
+      return {
+        ok: false,
+        code: 'INVOICE_ACCRUED_INCOME_PERIOD_INVALID',
+        details: { rows: accruedIncomeRows, invoiceDate: input.invoice_date },
+      }
+    }
   }
 
   // Free-text rows carry no amounts and are excluded from totals + VAT.
@@ -408,9 +431,9 @@ export async function buildInvoiceWriteData(params: {
         }
       }
       const lineTotal = computeLineNet(item.quantity, item.unit_price, item.discount_percent)
-      // Same per-line rounding as the item rows below (vat_amount), so the
+      // Same per-line rule as the item rows below (vat_amount), so the
       // header always equals the sum of its lines.
-      vatAmount = roundOre(vatAmount + Math.round(lineTotal * itemRate / 100 * 100) / 100)
+      vatAmount = roundOre(vatAmount + computeLineVat(lineTotal, itemRate))
     }
   }
   const total = documentType === 'delivery_note' ? 0 : roundOre(subtotal + vatAmount)
@@ -770,7 +793,7 @@ export async function buildInvoiceWriteData(params: {
     const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
     const discountPercent = item.discount_percent ?? 0
     const lineTotal = computeLineNet(item.quantity, item.unit_price, discountPercent)
-    const itemVat = documentType === 'delivery_note' ? 0 : Math.round(lineTotal * itemRate / 100 * 100) / 100
+    const itemVat = documentType === 'delivery_note' ? 0 : computeLineVat(lineTotal, itemRate)
     // ROT/RUT deduction is recomputed server-side so a tampered client can't
     // expand the 1513 receivable beyond the rules. Non-invoice document types
     // never carry deduction_type. The amounts come from the same
@@ -823,10 +846,10 @@ export async function buildInvoiceWriteData(params: {
         documentType === 'invoice' && deductionType
           ? (item.brf_org_number ?? input.deduction_brf_org_number?.trim() ?? null) || null
           : null,
-      // Periodisering (förutbetald intäkt): frozen onto the line. The schedule
-      // itself is created when the invoice is sent/booked. ROT/RUT lines never
-      // defer (schema-enforced); the guard above restricted this to real
-      // invoices under faktureringsmetoden.
+      // Periodisering (förutbetald intäkt 29xx, upplupen intäkt 17xx): frozen
+      // onto the line. The schedule itself is created when the invoice is
+      // sent/booked. ROT/RUT lines never defer (schema-enforced); the guard
+      // above restricted this to real invoices under faktureringsmetoden.
       accrual_period_start:
         documentType === 'invoice' && !deductionType
           ? (item.accrual_period_start ?? null)

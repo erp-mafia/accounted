@@ -326,11 +326,11 @@ describe('generateAGIXml: every IU carries a skattefält (kontroll S_183, crm#12
       grossSalary: 0,
       taxWithheld: 0,
       avgifterBasis: 0,
-      benefitMeals: 1200,
+      benefitOther: 1200,
     }
     const [iu] = iuBlocks(generateAGIXml(company, [benefitOnly], totals))
     expect(iu).not.toContain('faltkod="011"')
-    expect(iu).toContain('<gem:KostformanUlagAG faltkod="015">1200</gem:KostformanUlagAG>')
+    expect(iu).toContain('<gem:SkatteplOvrigaFormanerUlagAG faltkod="012">1200</gem:SkatteplOvrigaFormanerUlagAG>')
     expect(iu).toContain('<gem:AvdrPrelSkatt faltkod="001">0</gem:AvdrPrelSkatt>')
   })
 

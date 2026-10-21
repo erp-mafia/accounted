@@ -59,7 +59,7 @@ import { sortArticles } from '@/lib/articles/sort'
 import { articleLineName, documentLanguageOf, planArticleNameSwap, type DocumentLanguage } from '@/lib/articles/line-name'
 import ArticleCombobox from '@/components/invoices/ArticleCombobox'
 import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
-import { computeLineNet, hasLineDiscount } from '@/lib/bookkeeping/invoice-line-amounts'
+import { computeLineNet, computeLineVat, hasLineDiscount } from '@/lib/bookkeeping/invoice-line-amounts'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { ChevronDown, Loader2, X, Landmark, MoreVertical, CalendarClock, Tags, Package, Percent, Plus, Trash2 } from 'lucide-react'
 import {
@@ -107,7 +107,10 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import AccrualPeriodControl from '@/components/bookkeeping/AccrualPeriodControl'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
-import { DEFAULT_DEFERRED_REVENUE_ACCOUNT } from '@/lib/bookkeeping/accruals/account-suggestions'
+import {
+  DEFAULT_DEFERRED_REVENUE_ACCOUNT,
+  revenueBalanceAccountAfterEdit,
+} from '@/lib/bookkeeping/accruals/account-suggestions'
 import { countCalendarMonths, invoiceMonthOnlyAccrualRows } from '@/lib/bookkeeping/accruals/compute'
 import {
   cashAccountPayee,
@@ -130,6 +133,8 @@ import { EditorPreviewPane } from '@/components/invoices/editor/EditorPreviewPan
 import { EditorEmailPreview, type EmailTextOverride } from '@/components/invoices/editor/EditorEmailPreview'
 import { EditorStatusLine } from '@/components/invoices/editor/EditorStatusLine'
 import { SendConfirmDialog, type ConfirmVoucher } from '@/components/invoices/editor/SendConfirmDialog'
+import type { InvoiceAttachmentFile, InvoiceAttachmentsTarget } from '@/components/invoices/InvoiceAttachmentsSection'
+import { offersInvoiceAttachments } from '@/lib/invoices/invoice-attachment-limits'
 import { useInvoicePdfPreview } from '@/components/invoices/editor/use-editor-previews'
 import {
   emailPreviewBlock,
@@ -676,6 +681,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // or the stock texts) and its extra copies.
   const [emailOverride, setEmailOverride] = useState<EmailTextOverride | null>(null)
   const [extraCcText, setExtraCcText] = useState('')
+  // Bilagor picked in the confirm before the document exists (#79): already
+  // in the archive, linked by the send once the document is saved. Held
+  // here so closing and reopening the confirm keeps them.
+  const [stagedAttachments, setStagedAttachments] = useState<InvoiceAttachmentFile[]>([])
   // Bumped when something the PDF prints changed outside the form (a logo
   // upload, new bank details): re-renders the preview.
   const [previewRefreshKey, setPreviewRefreshKey] = useState(0)
@@ -1907,7 +1916,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   for (const item of watchItems) {
     const rate = vatRegistered ? (item.vat_rate ?? (vatRules?.rate || 25)) : 0
     const lineTotal = computeLineNet(item.quantity || 0, item.unit_price || 0, item.discount_percent)
-    const lineVat = Math.round(lineTotal * rate / 100 * 100) / 100
+    const lineVat = computeLineVat(lineTotal, rate)
     vatAmount += lineVat
     // Summering groups the priced lines; a text row has no rate of its own.
     if (item.line_type === 'text') continue
@@ -2520,6 +2529,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         documentType: pendingData.document_type,
         payload: buildInvoiceWritePayload(withQuoteValidity(pendingData), { oreRounding, defaultDims, vatStatement }),
         channel,
+        // A saved draft attaches its files at once (the confirm's section
+        // targets it); only a new document's files wait for the save.
+        attachmentDocumentIds:
+          channel === 'email' && !paidAtIssue && !isEditMode
+            ? stagedAttachments.map((file) => file.document_id)
+            : undefined,
         email:
           channel === 'email'
             ? {
@@ -3509,6 +3524,21 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       : isPaidConfirm
         ? tShell('action_issue_paid_confirm')
         : tShell(resolveSendLabel({ documentType: confirmDocType, channel: confirmChannel ?? channel, booksOnIssue }))
+  // Bilagor in the confirm (#79, crm#1315): the same rule and section as the
+  // invoice page's send dialog. A saved draft attaches each file at once; a
+  // new document holds them until the send saves it (send-sequence step 2).
+  const confirmAttachments: InvoiceAttachmentsTarget | null =
+    canWrite &&
+    offersInvoiceAttachments({
+      channel: confirmIntent?.kind === 'send' ? confirmIntent.channel : null,
+      status: isEditMode ? (initial?.status ?? null) : null,
+      isSandbox,
+      canEmail: hasEmailSend,
+    })
+      ? isEditMode && initial?.id
+        ? { kind: 'invoice', invoiceId: initial.id }
+        : { kind: 'staged', files: stagedAttachments, onChange: setStagedAttachments }
+      : null
   const confirmDisabled =
     !canWrite ||
     (isPaidConfirm && !isPaidAtIssueAccount(paidAccount)) ||
@@ -4584,8 +4614,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                               </div>
                             )}
 
-                            {/* Periodisering (förutbetald intäkt): activated via
-                                the row's ⋮ menu. */}
+                            {/* Periodisering (förutbetald intäkt 29xx, upplupen
+                                intäkt 17xx): activated via the row's ⋮ menu. */}
                             {accrualStripOpen && (
                               <div className="px-2 pb-3">
                                 <AccrualPeriodControl
@@ -4612,7 +4642,24 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                   onChange={(next) => {
                                     setValue(`items.${index}.accrual_period_start`, next.start, { shouldDirty: true })
                                     setValue(`items.${index}.accrual_period_end`, next.end, { shouldDirty: true })
-                                    setValue(`items.${index}.accrual_balance_account`, next.balanceAccount, { shouldDirty: true })
+                                    // A period wholly before the invoice month is an
+                                    // upplupen intäkt (17xx), otherwise a förutbetald
+                                    // (29xx): moving the dates across that line
+                                    // re-suggests the account, a picked account stands.
+                                    setValue(
+                                      `items.${index}.accrual_balance_account`,
+                                      revenueBalanceAccountAfterEdit(
+                                        {
+                                          start: item?.accrual_period_start ?? '',
+                                          end: item?.accrual_period_end ?? '',
+                                          balanceAccount:
+                                            item?.accrual_balance_account || DEFAULT_DEFERRED_REVENUE_ACCOUNT,
+                                        },
+                                        next,
+                                        watchInvoiceDate,
+                                      ),
+                                      { shouldDirty: true },
+                                    )
                                   }}
                                   onRemove={() => toggleAccrual(index)}
                                 />
@@ -5164,6 +5211,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         title={confirmTitle}
         rows={confirmRows}
         voucher={confirmVoucher}
+        attachments={confirmAttachments}
         extra={
           <>
             {isPaidConfirm && (

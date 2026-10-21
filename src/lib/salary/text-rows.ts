@@ -16,8 +16,8 @@
  *
  * The same validator closes the 0 kr loophole (crm#1076): a money row needs a
  * non-zero amount from every door, not only from the dialog, because a 0 kr
- * row printed "0,00" on the payslip. Vacation-day rows are the exception:
- * they carry days in quantity and may have no amount.
+ * row printed "0,00" on the payslip. Vacation rows have their own rule:
+ * they carry days in quantity and may have no amount (crm#1331).
  */
 
 export const TEXT_ROW_ITEM_TYPE = 'text'
@@ -107,21 +107,44 @@ export function validateTextRow(line: TextRowShape): LineContentIssue | null {
   return null
 }
 
+export const VACATION_ITEM_TYPE = 'vacation'
+
+export const VACATION_ROW_MESSAGE =
+  'En semesterrad behöver antal semesterdagar, ett belopp som inte är 0 kr, eller båda.'
+
 /**
  * The one content rule for a payslip row, run by the line commands for every
- * door: a text row carries words and no amount; any other row needs a
- * non-zero amount, except a vacation row that carries days.
+ * door. One rule per kind of row, each judged on its own fields: a text row
+ * carries words and no amount, a vacation row carries its days, an amount or
+ * both, and any other row needs a non-zero amount. The vacation rule used to
+ * be an exception checked after the generic amount rule, so a vacation row
+ * that left the amount out, as the docs allow, was refused before its days
+ * were read (crm#1331).
  */
 export function validatePayslipLineContent(
   line: TextRowShape & { item_type: string },
 ): LineContentIssue | null {
   if (isTextRow(line)) return validateTextRow(line)
-  if (line.amount === null || line.amount === undefined || !Number.isFinite(line.amount)) {
-    return { field: 'amount', message: ZERO_AMOUNT_MESSAGE }
-  }
-  if (line.amount !== 0) return null
-  if (line.item_type === 'vacation' && (line.quantity ?? 0) > 0) return null
-  return { field: 'amount', message: ZERO_AMOUNT_MESSAGE }
+  if (line.item_type === VACATION_ITEM_TYPE) return validateVacationRow(line)
+  return isNonZeroAmount(line.amount) ? null : { field: 'amount', message: ZERO_AMOUNT_MESSAGE }
+}
+
+/**
+ * A vacation row (item_type 'vacation') records the days taken in quantity,
+ * which the vacation ledger counts. Its amount is what this payslip pays or
+ * deducts for them (a semestertillägg, a semesterlöneavdrag): optional, and
+ * 0 when left out, as long as the row carries days. A row with neither days
+ * nor an amount says nothing and is refused.
+ */
+export function validateVacationRow(line: TextRowShape): LineContentIssue | null {
+  const hasAmount = line.amount !== null && line.amount !== undefined
+  if (hasAmount && !Number.isFinite(line.amount)) return { field: 'amount', message: VACATION_ROW_MESSAGE }
+  if ((line.quantity ?? 0) > 0 || isNonZeroAmount(line.amount)) return null
+  return { field: 'quantity', message: VACATION_ROW_MESSAGE }
+}
+
+function isNonZeroAmount(amount: number | null | undefined): boolean {
+  return typeof amount === 'number' && Number.isFinite(amount) && amount !== 0
 }
 
 export interface OrderedPayslipLine {

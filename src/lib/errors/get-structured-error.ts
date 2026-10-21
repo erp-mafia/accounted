@@ -30,6 +30,8 @@ import {
   AccountsNotInChartError,
   AccruedCostPeriodInvalidError,
   AccruedCostPeriodLockedError,
+  AccruedIncomePeriodInvalidError,
+  AccruedIncomePeriodLockedError,
   BookkeepingDatabaseError,
   CannotCancelNonDraftError,
   CannotEditNonDraftError,
@@ -710,13 +712,13 @@ export function extractBookkeepingDetails(err: unknown): { code: string; details
   if (err instanceof TargetPeriodLockedError) {
     return { code: err.code, details: { date: err.date, lockDate: err.lockDate } }
   }
-  if (err instanceof AccruedCostPeriodInvalidError) {
+  if (err instanceof AccruedCostPeriodInvalidError || err instanceof AccruedIncomePeriodInvalidError) {
     return {
       code: err.code,
       details: { periodStart: err.periodStart, periodEnd: err.periodEnd, invoiceDate: err.invoiceDate },
     }
   }
-  if (err instanceof AccruedCostPeriodLockedError) {
+  if (err instanceof AccruedCostPeriodLockedError || err instanceof AccruedIncomePeriodLockedError) {
     return { code: err.code, details: { blocked: err.blocked } }
   }
   if (err instanceof BookkeepingDatabaseError) {

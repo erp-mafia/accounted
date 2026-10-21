@@ -225,6 +225,27 @@ describe('GET /api/v1/companies/:companyId/transactions/:id', () => {
     expect(body.data.parts).toEqual([])
   })
 
+  it('names a foreign payment\'s payee by the IBAN the bank sent (PH 196)', async () => {
+    const { supabase, calls } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: {
+        data: { id: TX_ID, date: '2026-10-16', amount: -5000, currency: 'SEK', description: 'UTLANDSBETALNING', counterparty_account: null, counterparty_iban: 'NO9386011117947' },
+        error: null,
+      },
+      bank_transaction_parts: { data: [], error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+    const res = await getTransaction(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}`),
+      { params: Promise.resolve({ companyId: COMPANY_ID, id: TX_ID }) },
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data).toMatchObject({ counterparty_account: null, counterparty_iban: 'NO9386011117947' })
+    const select = calls.find((c) => c.table === 'transactions' && c.method === 'select')
+    expect(String(select?.args[0])).toContain('counterparty_iban')
+  })
+
   it('carries the Bankgirot split with the suggested invoice per part', async () => {
     const INV_1 = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd1'
     const INV_2 = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd2'

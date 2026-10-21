@@ -1045,7 +1045,7 @@ Accepts a SIE4 file (CP437 / Windows-1252 / UTF-8 auto-detected, up to 50 MB) as
 - A file whose #ORGNR is not the company's organisation number answers 409 SIE_IMPORT_ORG_NUMBER_MISMATCH with both numbers in details. Check with the user, then resend with options.confirmOrgNumberMismatch=true to import it anyway. A file without #ORGNR is not checked.
 - The operation can take 1-5 minutes for multi-year files. The HTTP response returns immediately with operation_id; poll /operations/{id} every ~2s for status.
 - Chunks are visible while importing. Filing and export are held until completion. Undo uses batch storno and retains accounting history.
-- options (a JSON string field) takes createFiscalPeriod, importOpeningBalances, importTransactions, updateAccountNames (each default true), voucherSeries (for vouchers the file gives no series; default B, as the dashboard), openingBalanceSeries (default: a series the file does not use), markImportedNoDocRequired (default false), onExistingPeriod, supersedesImportId and confirmOrgNumberMismatch; any other key is 400.
+- options (a JSON string field) takes createFiscalPeriod, importOpeningBalances, importTransactions, updateAccountNames (each default true), voucherSeries (for vouchers the file gives no series; default B, as the dashboard), openingBalanceSeries (default: a series the file does not use), markImportedNoDocRequired (default false), onlyUsedAccounts (default false; true leaves out the BAS accounts with no balance and no voucher line in the file, while the file's own non-BAS accounts are still created and the archived file keeps everything), onExistingPeriod, supersedesImportId and confirmOrgNumberMismatch; any other key is 400.
 - Account mappings are generated server-side from the file's #KONTO records (plus stored per-company overrides), by the same rules as the dashboard upload: a class 9 account carrying amounts is mapped to 2999 OBS-konto, also over a stored class 9 mapping. By default the file's account names are carried into the chart, renaming existing accounts whose names differ: pass options.updateAccountNames=false to keep BAS default names.
 
 | Parameter | In | Type | Required | Notes |
@@ -2698,6 +2698,7 @@ Clears the link on one outside row (bank transaction or skattekonto row). The ve
 **Pitfalls:**
 - linkId is the outside row id, not a separate link entity. The one exception: verifikat settled against each other (on a bank account a pair without external_ids; on the skattekonto the rest of a 1:N link) are undone with their settlement_id, which the items endpoint reports as settlement.settlement_id; the response then carries settlement_id and journal_entry_ids, and previous_journal_entry_id is null. Unlinking a skattekonto row that a 1:N link spread over several verifikat undoes its settlement too.
 - Unlinking a row whose verifikat was stornoed is the expected fix for a link_problem = entry_reversed item; the row then shows under unmatched_external again.
+- A bank row booked from itself (categorize, match-invoice, a direct booking) has no link to remove: its verifikat is its booking. Such a row lists no unmatch action, and DELETE answers 409 RECONCILIATION_UNLINK_IS_BOOKING; reverse the verifikat (POST /journal-entries/{id}/reverse) instead. A row with no link answers 409 RECONCILIATION_NOT_LINKED, an unknown id 404 NOT_FOUND.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -3335,6 +3336,7 @@ Response `200`:
     reference: string | null,
     merchant_name: string | null,
     counterparty_account: string | null,
+    counterparty_iban?: string | null,
     counterparty_org_number?: string | null,
     instructed_amount?: number | null,
     instructed_currency?: string | null,

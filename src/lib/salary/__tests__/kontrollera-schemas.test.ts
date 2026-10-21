@@ -50,3 +50,21 @@ describe('AGIKontrolleraIUSchema: växa-stöd fields (FK062/FK063)', () => {
     expect(parsed.error.issues[0].message).toContain('ömsesidigt uteslutande')
   })
 })
+
+describe('AGIKontrolleraIUSchema: kostförmån has no field of its own (#81)', () => {
+  // Skatteverket's schema and AGI API define no kostförmån property: kost is
+  // summed into skatteplOvrigaFormanerUlagAG (FK012) / EjUlagSA (FK132).
+  it('refuses kostformanUlagAG and kostformanEjUlagSA locally instead of forwarding them', () => {
+    for (const field of ['kostformanUlagAG', 'kostformanEjUlagSA']) {
+      const parsed = AGIKontrolleraIUSchema.safeParse({ ...IU, [field]: 1200 })
+      expect(parsed.success, field).toBe(false)
+      if (parsed.success) continue
+      expect(parsed.error.issues[0].code).toBe('unrecognized_keys')
+    }
+  })
+
+  it('accepts kost declared in FK012 and FK132', () => {
+    expect(AGIKontrolleraIUSchema.safeParse({ ...IU, skatteplOvrigaFormanerUlagAG: 1200 }).success).toBe(true)
+    expect(AGIKontrolleraIUSchema.safeParse({ ...IU, skatteplOvrigaFormanerEjUlagSA: 1200 }).success).toBe(true)
+  })
+})

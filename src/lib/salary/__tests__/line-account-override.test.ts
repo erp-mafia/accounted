@@ -13,7 +13,6 @@ describe('lineAccountOverride', () => {
       'vab',
       'parental_leave',
       'unpaid_leave',
-      'vacation',
       'overtime_50',
       'ob_night',
       'gross_deduction_pension',
@@ -27,7 +26,7 @@ describe('lineAccountOverride', () => {
   })
 
   it('limits pay rows to class 7 and lets net deductions name any account', () => {
-    for (const type of ['bonus', 'commission', 'overtime', 'other', 'correction', 'mileage_taxfree', 'traktamente_taxable']) {
+    for (const type of ['bonus', 'commission', 'overtime', 'other', 'correction', 'mileage_taxfree', 'traktamente_taxable', 'vacation']) {
       expect(lineAccountOverride(type), type).toBe('class_7')
     }
     for (const type of ['net_deduction_union', 'net_deduction_advance', 'net_deduction_benefit_payment', 'net_deduction_other']) {

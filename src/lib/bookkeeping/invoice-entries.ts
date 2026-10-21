@@ -5,6 +5,7 @@ import { fxDifferenceLine } from './ore-rounding'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { postingPort } from '@/lib/posting/port'
+import { assertAccruedIncomeLinesBookable } from './accruals/accrued-cost-guard'
 import {
   creditNoteBusinessEvent,
   invoicePaymentBusinessEvent,
@@ -109,10 +110,12 @@ export interface InvoiceJournalEntryOptions {
 
 /**
  * The verifikat createInvoiceJournalEntry would post, without posting it: the
- * fiscal period lookup is the only database read, and nothing is written. The
- * deferred "Bokför" dry run previews these lines. Returns null when no open
- * fiscal period covers invoice_date. Throws the same generator errors
- * (InvoiceFxRateMissingError) the committing path throws.
+ * fiscal period lookup (and, for an upplupen intäkt on 17xx, the lock state
+ * of its month-ends) are the only database reads, and nothing is written.
+ * The deferred "Bokför" dry run previews these lines. Returns null when no
+ * open fiscal period covers invoice_date. Throws the same generator errors
+ * (InvoiceFxRateMissingError, AccruedIncomePeriodInvalidError,
+ * AccruedIncomePeriodLockedError) the committing path throws.
  */
 export async function buildInvoiceJournalEntryInput(
   supabase: SupabaseClient,
@@ -143,6 +146,12 @@ export async function buildInvoiceJournalEntryInput(
       lines: options.customLines,
     }
   }
+
+  // An upplupen intäkt (17xx line, #62) books its months right after this
+  // entry: refuse here, before the 17xx credit exists, when one of those
+  // months cannot take its entry (every door that books a sale reaches this
+  // point). User-edited lines above book as reviewed and get no schedule.
+  await assertAccruedIncomeLinesBookable(supabase, companyId, invoice.invoice_date, invoice.items ?? [])
 
   const lines = buildInvoiceRegistrationLines(invoice, entityType, options?.numberOverride)
 

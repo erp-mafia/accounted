@@ -51,10 +51,14 @@ export const WORKLIST_CATEGORIES = [
   /**
    * Suggested transaction↔invoice matches awaiting one-click confirm.
    * Pending:  unbooked transactions (see book_transaction) carrying a
-   *           potential_invoice_id or potential_supplier_invoice_id hint.
+   *           potential_invoice_id or potential_supplier_invoice_id hint, or
+   *           settling several open invoices of one counterparty to the öre
+   *           (recomputed at read time, no hint column; the row carries
+   *           `allocations`).
    * Done:     the match is confirmed (booking clears is_business) or the
-   *           hint column is cleared. NOTE: a subset of book_transaction:
-   *           excluded from `total` to avoid double-counting.
+   *           hint column is cleared (for a set: an invoice of it is settled
+   *           elsewhere, so the set no longer adds up). NOTE: a subset of
+   *           book_transaction: excluded from `total` to avoid double-counting.
    */
   'suggested_match',
   /**
@@ -496,7 +500,25 @@ export interface SuggestedMatch {
   request_ids?: string[]
   /** expense_payout only: the registered claims this transfer pays. */
   claim_ids?: string[]
+  /**
+   * invoice / supplier_invoice only: the row settles SEVERAL open invoices of
+   * one counterparty (lib/transactions/invoice-combination.ts), one
+   * allocation each at what it still owes, summing to the row. Confirmed in
+   * the batch allocation (POST /api/transactions/{id}/match-batch), never
+   * one-click; candidate_id is then the first invoice and candidate_number
+   * joins their numbers. Absent for a single-invoice hint.
+   */
+  allocations?: InvoiceSetAllocation[]
 }
+
+/**
+ * One allocation of a several-invoice suggestion, in the shape the batch
+ * allocation dialog takes (lib/transactions/parts-read.ts
+ * BatchAllocationPrefill; repeated here so this file stays dependency-free).
+ */
+export type InvoiceSetAllocation =
+  | { kind: 'customer_invoice'; invoice_id: string; amount: number }
+  | { kind: 'supplier_invoice'; supplier_invoice_id: string; amount: number }
 
 /**
  * Journal-entry source types that require underlag (BFL 5 kap 7 §). Source

@@ -60,10 +60,10 @@ export const AGIKontrolleraIUSchema = z
     kontantErsattningUlagAG: AMOUNT.optional(),
     avdrPrelSkatt: AMOUNT.optional(),
 
-    // Benefit amounts (UlagAG variants)
+    // Benefit amounts (UlagAG variants). Kostförmån has no field of its
+    // own: it is summed into FK012 with the other benefits (#81).
     skatteplBilformanUlagAG: AMOUNT.optional(),       // FK013
     drivmVidBilformanUlagAG: AMOUNT.optional(),       // FK018
-    kostformanUlagAG: AMOUNT.optional(),              // FK015
     skatteplOvrigaFormanerUlagAG: AMOUNT.optional(),  // FK012
 
     // Housing benefit KRYSS flags
@@ -74,7 +74,6 @@ export const AGIKontrolleraIUSchema = z
     kontantErsattningEjUlagSA: AMOUNT.optional(),         // FK131
     skatteplBilformanEjUlagSA: AMOUNT.optional(),         // FK133
     drivmVidBilformanEjUlagSA: AMOUNT.optional(),         // FK134
-    kostformanEjUlagSA: AMOUNT.optional(),                // FK139
     skatteplOvrigaFormanerEjUlagSA: AMOUNT.optional(),    // FK132
     bostadsformanSmahusEjUlagSA: z.boolean().optional(),  // FK137
     bostadsformanEjSmahusEjUlagSA: z.boolean().optional(),// FK138

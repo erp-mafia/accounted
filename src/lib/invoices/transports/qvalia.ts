@@ -62,6 +62,7 @@
 import { timingSafeEqual } from 'node:crypto'
 import { sha256Hex } from '@/lib/invoices/peppol-delivery'
 import { verifySignatureHeader } from '@/lib/webhooks/signing'
+import { brandError, isBrandedInstance } from '@/lib/errors/brand'
 import {
   PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID,
   PEPPOL_BIS_BILLING_PROFILE_ID,
@@ -173,7 +174,13 @@ export type QvaliaErrorKind =
  * `shape` (an answer this adapter cannot read, code
  * PEPPOL_UPSTREAM_SHAPE_CODE) is permanent until the adapter learns the
  * shape, everything else is operational.
+ *
+ * Branded like its parent (lib/errors/brand.ts): lib/init registers this
+ * adapter, so the class a caller holds may be another copy than the one that
+ * threw.
  */
+const QVALIA_API_ERROR = 'accounted.peppol.qvaliaApiError'
+
 export class QvaliaApiError extends PeppolTransportError {
   readonly kind: QvaliaErrorKind
   readonly httpStatus: number | null
@@ -192,6 +199,11 @@ export class QvaliaApiError extends PeppolTransportError {
     this.name = 'QvaliaApiError'
     this.kind = kind
     this.httpStatus = options.httpStatus ?? null
+    brandError(this, QVALIA_API_ERROR)
+  }
+
+  static [Symbol.hasInstance](value: unknown): value is QvaliaApiError {
+    return isBrandedInstance(this, QvaliaApiError, QVALIA_API_ERROR, value)
   }
 }
 

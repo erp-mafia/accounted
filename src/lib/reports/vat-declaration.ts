@@ -267,6 +267,20 @@ export interface VatAccountTotals {
    * longer needs its own paginated entry scan.
    */
   sourceTypeCounts: Record<string, number>
+  /**
+   * The opening balances this period's declaration counts (crm#1333): an IB
+   * dated inside the period with nothing of the period before it in the
+   * books. The SQL decides; the momsredovisning matcher reads it
+   * (carriedIntoPeriod). Empty when the deployed function predates the key.
+   */
+  countedOpeningBalances: CountedOpeningBalance[]
+}
+
+/** An opening balance a period's declaration counts. */
+export interface CountedOpeningBalance {
+  id: string
+  status: string
+  entry_date: string
 }
 
 /** Wire shape of the get_vat_declaration_totals RPC jsonb payload. */
@@ -274,6 +288,7 @@ interface VatTotalsRpcPayload {
   totals: Array<{ account_number: string; debit: number; credit: number }>
   settlement_shaped_entries: VatSettlementShapedEntry[]
   source_type_counts: Record<string, number>
+  counted_opening_balances?: CountedOpeningBalance[]
 }
 
 /**
@@ -313,9 +328,19 @@ interface VatTotalsRpcPayload {
  *     verifikat in: 1630 D / 3980 K (a bidrag) and 5410 D / 2641 D / 1630 K
  *     still count.
  *
- * Opening-balance entries are exempt from both shape rules: 26xx balances
- * carried in by a migrating company are unsettled VAT that belongs in the
- * next declaration, even when the same entry carries a 2650/1650 balance.
+ * Opening balances (crm#1333). For a company that keeps books, VAT belongs
+ * to the period in which it is booked or should have been booked under god
+ * redovisningssed (ML 2023:200 7 kap. 14 § output, 31 § input; SFL 26 kap.
+ * 5 § 2 st., 10-11 §§). An IB dated on the period's first day carries only
+ * earlier periods, so it never counts. One dated inside the period counts
+ * only when the books hold no other verifikat of the period before it (a
+ * migration mid-period: the IB is the only carrier of those days' VAT); with
+ * them in the books (the year-end roll-forward into a räkenskapsår starting
+ * mid-period, an import that brought them) it would count them twice. A
+ * storno or rättelse follows the IB at the root of its reverses_id /
+ * correction_of_id chain, and a counted chain stays out of the shapes, so a
+ * corrected IB nets to nothing instead of its storno passing for a
+ * momsredovisning.
  *
  * The shapes cannot tell a settlement from a business verifikat that happens
  * to touch 2650 (a supplier invoice with input VAT booked against 2650, say).
@@ -368,6 +393,7 @@ export async function fetchVatAccountTotals(
     totals,
     settlementShapedEntries: payload.settlement_shaped_entries ?? [],
     sourceTypeCounts: payload.source_type_counts ?? {},
+    countedOpeningBalances: payload.counted_opening_balances ?? [],
   }
 }
 

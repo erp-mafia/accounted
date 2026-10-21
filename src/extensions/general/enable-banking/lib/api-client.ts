@@ -1268,6 +1268,14 @@ export interface TransactionsWithRaw {
   effectiveDateFrom: string | undefined
   /** True when the bank refused the requested window and a narrower one was used. */
   narrowed: boolean
+  /**
+   * True when paging stopped at MAX_PAGINATION_PAGES while the bank still
+   * handed out a continuation key: the bank had not finished, so the window is
+   * incomplete (PH 195). Enable Banking may answer page after page of empty
+   * transactions with a key (its documented contract: keep calling until no
+   * key comes back), so an empty result here says nothing about the account.
+   */
+  truncated: boolean
 }
 
 export async function getAllTransactionsWithRaw(
@@ -1392,11 +1400,11 @@ export async function getAllTransactionsWithRaw(
     continuationKey = data.continuation_key
     page++
 
+    if (!continuationKey) break
     if (page >= MAX_PAGINATION_PAGES) {
       console.warn(`[enable-banking] Pagination cap reached (${MAX_PAGINATION_PAGES} pages) for account ${accountUid}`)
       break
     }
-    if (!continuationKey) break
   }
 
   return {
@@ -1405,6 +1413,8 @@ export async function getAllTransactionsWithRaw(
     requestedDateFrom: dateFrom,
     effectiveDateFrom: activeDateFrom,
     narrowed: activeDateFrom !== dateFrom,
+    // The loop only ends with a key in hand at the cap.
+    truncated: Boolean(continuationKey),
   }
 }
 

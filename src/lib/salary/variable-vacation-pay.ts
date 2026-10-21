@@ -50,21 +50,22 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { SalaryLineItemType } from '@/types'
 import { VACATION_COMPENSATION_SOURCE } from './calculated-line-items'
+import { isBaseSalaryDisplayLine, lineTypesWithRole } from './line-item-roles'
 import { getVacationYearBounds, getVacationYearStart, type VacationYearBasis } from './vacation-year'
 
 /**
  * The engine's Step 2 addition types (calculation-engine.ts
- * ADDITION_ITEM_TYPES) without semesterersättning. Kept as its own list so
- * the engine can import this module without an import cycle; a unit test
- * pins the two lists together.
+ * ADDITION_ITEM_TYPES) without semesterersättning, read from the same role
+ * map (line-item-roles.ts) so the engine can import this module without an
+ * import cycle; a unit test pins the two lists together. Grundlön and Timlön
+ * are among them: lines given to sammaloneVariablePay must not include the
+ * payslip's own base-salary row (the display of Step 1), so a base-salary
+ * line that reaches it is pay on top, such as extra hours at timlön on a
+ * monthly payslip (crm#1331).
  */
-export const VARIABLE_PAY_ITEM_TYPES: readonly SalaryLineItemType[] = [
-  'overtime', 'overtime_50', 'overtime_100',
-  'ob_weekday_evening', 'ob_weekend', 'ob_night', 'ob_holiday',
-  'bonus', 'commission',
-  'traktamente_taxable', 'mileage_taxable',
-  'other', 'correction',
-]
+export const VARIABLE_PAY_ITEM_TYPES: readonly SalaryLineItemType[] = lineTypesWithRole('addition', 'base_salary').filter(
+  (type) => type !== 'semesterersattning',
+)
 
 /** The fields of a payslip line the definition reads (engine shape). */
 export interface VariablePayLineLike {
@@ -87,7 +88,11 @@ export function isVariablePayLine(line: VariablePayLineLike): boolean {
   )
 }
 
-/** The run's variable pay under sammalöneregeln (signed: a correction can be negative). */
+/**
+ * The run's variable pay under sammalöneregeln (signed: a correction can be
+ * negative). The lines must not include the payslip's own Grundlön/Timlön
+ * row (isBaseSalaryDisplayLine): it shows the fixed base, not variable pay.
+ */
 export function sammaloneVariablePay(lines: readonly VariablePayLineLike[]): number {
   return sumOre(lines.filter(isVariablePayLine).map((line) => line.amount))
 }
@@ -153,21 +158,28 @@ export interface VariablePayRun {
   payout: number
 }
 
-/** Build the per-run summary from a stored payslip. */
+/**
+ * Build the per-run summary from a stored payslip. salaryType is the pay type
+ * the payslip was calculated with (salary_run_employees.salary_type): its
+ * Grundlön/Timlön row is the display of the fixed base and never variable
+ * pay. Unknown, every base-salary row is left out.
+ */
 export function summarizePayslip(row: {
   salaryRunId: string
   paymentDate: string
   status: string
   calculationBreakdown: unknown
   lines: readonly StoredPayslipLine[]
+  salaryType?: string | null
 }): VariablePayRun {
   const sammaloneregeln = breakdownIsSammaloneregeln(row.calculationBreakdown)
+  const payLines = row.lines.filter((line) => !isBaseSalaryDisplayLine(line.item_type, [row.salaryType]))
   return {
     salaryRunId: row.salaryRunId,
     paymentDate: row.paymentDate,
     status: row.status,
     sammaloneregeln,
-    variablePay: sammaloneVariablePay(row.lines.map(toLineLike)),
+    variablePay: sammaloneVariablePay(payLines.map(toLineLike)),
     // The same provenance on a payslip calculated under vacation_rule
     // 'semesterersattning' is that rule's per-run payout, not this one.
     payout: sammaloneregeln
@@ -317,6 +329,7 @@ export function vacationYearLabel(yearStart: string, basis: VacationYearBasis): 
 
 interface HistoryRow {
   employee_id: string
+  salary_type: string | null
   calculation_breakdown: unknown
   line_items: StoredPayslipLine[] | null
   salary_run: { id: string; payment_date: string; status: string } | null
@@ -337,7 +350,7 @@ export async function loadVariablePayRuns(
     supabase
       .from('salary_run_employees')
       .select(
-        'employee_id, calculation_breakdown, line_items:salary_line_items(item_type, amount, is_taxable, is_vacation_basis, is_gross_deduction, is_net_deduction, calculation_source), salary_run:salary_runs!inner(id, payment_date, status)',
+        'employee_id, salary_type, calculation_breakdown, line_items:salary_line_items(item_type, amount, is_taxable, is_vacation_basis, is_gross_deduction, is_net_deduction, calculation_source), salary_run:salary_runs!inner(id, payment_date, status)',
       )
       .eq('company_id', args.companyId)
       .in('employee_id', args.employeeIds)
@@ -355,6 +368,7 @@ export async function loadVariablePayRuns(
       status: run.status,
       calculationBreakdown: row.calculation_breakdown,
       lines: row.line_items ?? [],
+      salaryType: row.salary_type,
     })
     const list = byEmployee.get(row.employee_id)
     if (list) list.push(summary)

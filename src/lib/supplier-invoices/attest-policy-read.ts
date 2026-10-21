@@ -6,6 +6,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { NO_ATTEST_POLICY, paymentWaitsForAttest, type AttestInvoiceFacts, type AttestPolicy } from './attest-policy'
+import { companyAttestsSupplierInvoices } from './lifecycle'
 
 export const POLICY_COLUMNS = 'company_id, enabled, threshold_amount, mode, attesters, preparer_may_attest, updated_by, updated_at'
 
@@ -69,4 +70,19 @@ export async function loadAttestBlockedInvoiceIds(
     if (paymentWaitsForAttest(policy, accountingMethod, { ...row, total: Number(row.total) })) blocked.add(row.id)
   }
   return blocked
+}
+
+/**
+ * True when the company has an attest step for supplier invoices at all
+ * (companyAttestsSupplierInvoices: kontantmetoden has none). The payment
+ * paths ask it before they warn that an invoice is not attested: under
+ * kontantmetoden no invoice is ever attested, so the warning sat on every
+ * line and told the person nothing (crm#1141). A failed read answers true,
+ * the warning as it always was: a warning never blocks a payment, so showing
+ * one too many is the safe side.
+ */
+export async function loadCompanyAttestsSupplierInvoices(supabase: SupabaseClient, companyId: string): Promise<boolean> {
+  const { data, error } = await supabase.from('company_settings').select('accounting_method').eq('company_id', companyId).maybeSingle()
+  if (error) return true
+  return companyAttestsSupplierInvoices((data as { accounting_method?: string | null } | null)?.accounting_method ?? null)
 }

@@ -511,6 +511,28 @@ describe('v1 payslip lines: text rows and 0 kr rows', () => {
       }
     })
 
+    it('creates a vacation line that carries only its days, as the docs say (crm#1331)', async () => {
+      const VACATION_LINE = { ...SAMPLE_LINE, item_type: 'vacation', description: 'Semester', quantity: 5, amount: 0 }
+      const { res, body, mock } = await create(
+        { ...owner, ...idem, ...draftRun, ...onRun, salary_line_items: { data: VACATION_LINE, error: null } },
+        { item_type: 'vacation', description: 'Semester', quantity: 5 },
+      )
+      expect(res.status).toBe(201)
+      expect(body.data).toMatchObject({ item_type: 'vacation', quantity: 5, amount: 0 })
+      expect(mock.findCall('salary_line_items', 'insert')?.[0]).toMatchObject({ item_type: 'vacation', quantity: 5, amount: 0 })
+    })
+
+    it('returns 400 VALIDATION_ERROR for a vacation line with neither days nor an amount', async () => {
+      const { res, body, mock } = await create(
+        { ...owner, ...idem, ...draftRun, ...onRun },
+        { item_type: 'vacation', description: 'Semester' },
+      )
+      expect(res.status).toBe(400)
+      expect(body.error.code).toBe('VALIDATION_ERROR')
+      expect(body.error.details.field).toBe('quantity')
+      expect(mock.tables()).not.toContain('salary_line_items')
+    })
+
     it('returns 404 SALARY_RUN_NOT_FOUND for an unknown run', async () => {
       const { res, body } = await create(
         { ...owner, ...idem, salary_runs: { data: null, error: null } },

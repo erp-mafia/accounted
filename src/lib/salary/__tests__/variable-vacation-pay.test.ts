@@ -54,7 +54,30 @@ describe('what counts as variable pay', () => {
     expect(isVariablePayLine({ ...ob, isTaxable: false })).toBe(false)
     expect(isVariablePayLine({ ...ob, itemType: 'semesterersattning' })).toBe(false)
     expect(isVariablePayLine({ ...ob, itemType: 'sick_day2_14', amount: -100, isGrossDeduction: true })).toBe(false)
-    expect(isVariablePayLine({ ...ob, itemType: 'monthly_salary' })).toBe(false)
+  })
+
+  it('leaves out the payslip\'s own Grundlön/Timlön row but counts extra hours at timlön (crm#1331)', () => {
+    const stored = (item_type: string, amount: number) => ({
+      item_type,
+      amount,
+      is_taxable: true,
+      is_vacation_basis: true,
+      is_gross_deduction: false,
+      is_net_deduction: false,
+    })
+    const base = {
+      salaryRunId: 'r',
+      paymentDate: '2026-01-25',
+      status: 'booked',
+      calculationBreakdown: SAMMALONE_BREAKDOWN,
+      lines: [stored('monthly_salary', 30000), stored('hourly_salary', 2000), stored('ob_night', 500)],
+    }
+    // Monthly pay: Grundlön shows the fixed base, the Timlön row is mertid.
+    expect(summarizePayslip({ ...base, salaryType: 'monthly' }).variablePay).toBe(2500)
+    // Hourly pay: Timlön is the display, a Grundlön row would be pay on top.
+    expect(summarizePayslip({ ...base, salaryType: 'hourly' }).variablePay).toBe(30500)
+    // Pay type unknown: neither base-salary row counts, the reading before crm#1331.
+    expect(summarizePayslip(base).variablePay).toBe(500)
   })
 
   it('counts a payout only on a payslip calculated under sammalöneregeln', () => {

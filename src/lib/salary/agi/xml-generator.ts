@@ -117,14 +117,6 @@ export interface AGIEmployeeData {
   benefitCar?: number         // FK013 SkatteplBilformanUlagAG (amount, BELOPP7)
   benefitFuel?: number        // FK018 DrivmVidBilformanUlagAG (amount, BELOPP7)
   /**
-   * FK015 KostformanUlagAG (amount, BELOPP10). Kostförmån has its own
-   * dedicated field in the AGI spec with a PBB-linked schablon value:
-   * Skatteverket cross-checks the reported amount against the schablon.
-   * Aggregating meals into FK012 (övriga förmåner) triggers automated
-   * discrepancy notices. Always emit FK015 separately when > 0.
-   */
-  benefitMeals?: number
-  /**
    * Housing benefit indicator. FK041 (smahus) and FK043 (ej_smahus) are
    * boolean KRYSS flags in the XSD: they just signal that this kind of
    * benefit was given. The AMOUNT must be folded into benefitOther
@@ -133,10 +125,13 @@ export interface AGIEmployeeData {
    */
   housingBenefit?: 'smahus' | 'ej_smahus'
   /**
-   * FK012 SkatteplOvrigaFormanerUlagAG (amount, BELOPP10). Catch-all for
-   * taxable benefits without their own dedicated FK code: bike, wellness,
-   * "other", AND the full krona-amount for housing (since FK041/FK043
-   * carry only the flag). Meals go in benefitMeals (FK015), NOT here.
+   * FK012 SkatteplOvrigaFormanerUlagAG (amount, BELOPP10). Every taxable
+   * benefit except bil (FK013) and drivmedel (FK018), summed: kost, bike,
+   * wellness, "other", AND the full krona-amount for housing (FK041/FK043
+   * carry only the flag). Kostförmån has no field of its own: Skatteverket's
+   * XML schema (arbetsgivardeklaration_component_1.1.xsd) and Bilaga
+   * Fältlista 1.1.18.1 define no KostformanUlagAG, so a file carrying one
+   * fails schema validation (#81).
    */
   benefitOther?: number
   /**
@@ -516,16 +511,6 @@ export function generateAGIXml(
       const code = exclSA ? '134' : '018'
       const elem = exclSA ? 'DrivmVidBilformanEjUlagSA' : 'DrivmVidBilformanUlagAG'
       lines.push(`        <gem:${elem} faltkod="${code}">${formatAmount(emp.benefitFuel)}</gem:${elem}>`)
-    }
-
-    // Kostförmån AMOUNT: FK015 (UlagAG) or FK139 (ej UlagSA). Has its own
-    // field because Skatteverket cross-checks the krona-belopp against the
-    // PBB-anchored schablon: folding it into FK012 triggers discrepancy
-    // notices. Always emit separately when > 0.
-    if (emp.benefitMeals && emp.benefitMeals > 0) {
-      const code = exclSA ? '139' : '015'
-      const elem = exclSA ? 'KostformanEjUlagSA' : 'KostformanUlagAG'
-      lines.push(`        <gem:${elem} faltkod="${code}">${formatAmount(emp.benefitMeals)}</gem:${elem}>`)
     }
 
     // Housing benefit FLAGS (KRYSS, no amount on this element). The

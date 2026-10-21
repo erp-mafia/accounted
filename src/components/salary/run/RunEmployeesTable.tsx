@@ -32,6 +32,31 @@ type SreWithEmployee = SalaryRunEmployee & {
     personnummer_masked: string
     default_dimensions?: Record<string, string>
     f_skatt_status?: string | null
+    // The employee's live pay fields: what a draft's calculation prices.
+    salary_type?: string | null
+    monthly_salary?: number | null
+    hourly_rate?: number | null
+    employment_degree?: number | null
+  }
+}
+
+/**
+ * How a row is paid, in the figures the next calculation uses. A draft
+ * prices the employee's live pay type, rate and degree, and the row's own
+ * monthly salary unless the pay type changed since the employee joined the
+ * run: then the employee's (lib/salary/run-calculation.ts, base-salary-line.ts).
+ * Past draft the row's own columns are the only figures there are.
+ */
+function payBasis(sre: SalaryRunEmployee, isDraft: boolean) {
+  const employee = (sre as SreWithEmployee).employee
+  const live = isDraft ? employee : undefined
+  const salaryType = live?.salary_type || sre.salary_type
+  const typeChanged = salaryType !== sre.salary_type
+  return {
+    salaryType,
+    monthlySalary: typeChanged ? (salaryType === 'monthly' ? live?.monthly_salary || 0 : 0) : sre.monthly_salary,
+    hourlyRate: live?.hourly_rate ?? null,
+    degree: Number(live?.employment_degree ?? sre.employment_degree),
   }
 }
 
@@ -82,6 +107,11 @@ export function RunEmployeesTable({
   // (isCalculated, lib/salary/calculation-state.ts) the row shows the salary
   // the next calculation starts from, never the stale gross.
   const showInputSalary = isDraft || !isCalculated
+  // An hourly-paid row has no monthly salary: hourly gross is timlön x
+  // hours, so its cell shows the timlön (crm#1337) and the column is plain
+  // "Lön" once the roster has one.
+  const anyHourlyInput =
+    showInputSalary && employees.some(sre => payBasis(sre, isDraft).salaryType === 'hourly')
 
   // Δ vs the latest booked run: hidden on the first-ever run and before
   // calculation (gross is 0 until then, the diff would be noise).
@@ -150,7 +180,9 @@ export function RunEmployeesTable({
                 {showDiff && previous && (
                   <th className={TH_CLASS}>{t('th_diff', { period: periodLabelOf(previous) })}</th>
                 )}
-                <th className={numericTh}>{showInputSalary ? t('th_monthly_salary') : t('th_gross')}</th>
+                <th className={numericTh}>
+                  {showInputSalary ? (anyHourlyInput ? t('th_pay') : t('th_monthly_salary')) : t('th_gross')}
+                </th>
                 {isCalculated && (
                   <>
                     <th className={numericTh}>{t('th_tax')}</th>
@@ -181,22 +213,24 @@ export function RunEmployeesTable({
                 const taxValue = figures.tax_withheld
                 const avgifterValue = figures.avgifter_amount
                 const netValue = figures.net_salary
-                const editableSalary = isDraft && canWrite && sre.salary_type === 'monthly'
-                const primaryNumber = showInputSalary ? sre.monthly_salary : sre.gross_salary
+                const basis = payBasis(sre, isDraft)
+                const hourlyInput = showInputSalary && basis.salaryType === 'hourly'
+                const editableSalary = isDraft && canWrite && basis.salaryType === 'monthly'
+                const primaryNumber = showInputSalary ? basis.monthlySalary : sre.gross_salary
                 // In a draft the number on the row is the full-time monthly salary
                 // the engine multiplies by the employee's sysselsättningsgrad. Below
                 // 100 % that product is not obvious from the input alone (a 10 %
                 // employee typed 45 310 to get a 4 531 kr gross), so spell it out
                 // as a muted suffix right after the number instead of only in
                 // Beräkningsdetaljer.
-                const degree = Number(sre.employment_degree)
+                const degree = basis.degree
                 const showDegreeHint =
-                  isDraft && sre.salary_type === 'monthly' && Number.isFinite(degree) && degree < 100
+                  isDraft && basis.salaryType === 'monthly' && Number.isFinite(degree) && degree < 100
                 const degreeHint = showDegreeHint ? (
                   <span className="text-[11px] text-muted-foreground tabular-nums whitespace-nowrap">
                     {t('degree_hint', {
                       degree: degree.toLocaleString('sv-SE'),
-                      amount: formatRunAmount(roundOre((sre.monthly_salary || 0) * (degree / 100))),
+                      amount: formatRunAmount(roundOre((basis.monthlySalary || 0) * (degree / 100))),
                     })}
                   </span>
                 ) : null
@@ -234,13 +268,19 @@ export function RunEmployeesTable({
                             type="number"
                             step="0.01"
                             min="0"
-                            defaultValue={sre.monthly_salary}
+                            defaultValue={basis.monthlySalary}
                             onClick={e => e.stopPropagation()}
-                            onBlur={e => onSalaryEdit(sre.employee_id, e.target.value, sre.monthly_salary)}
+                            onBlur={e => onSalaryEdit(sre.employee_id, e.target.value, basis.monthlySalary)}
                             disabled={actionLoading === `salary-${sre.employee_id}`}
                             aria-label={t('salary_input_aria', { name })}
                             className="-my-1 h-8 w-28 text-right tabular-nums"
                           />
+                        ) : hourlyInput ? (
+                          <span>
+                            {basis.hourlyRate != null
+                              ? t('hourly_rate_cell', { amount: formatRunAmount(basis.hourlyRate) })
+                              : t('hourly_pay_cell')}
+                          </span>
                         ) : (
                           <span>{formatRunAmount(primaryNumber)}</span>
                         )}

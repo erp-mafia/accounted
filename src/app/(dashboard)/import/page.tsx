@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import SIEJobProgress from '@/components/import/SIEJobProgress'
 import { ImportWizardRail } from '@/components/import/ImportWizardRail'
 import { uploadSIEFile } from '@/lib/import/sie-job-client'
@@ -39,7 +39,7 @@ import type { OpeningBalanceParseResult, OpeningBalanceExecuteResult, DetectedCo
 
 
 import type { ImportExecuteOptions } from '@/components/import/ImportReviewStep'
-import { applyMappingOverride, isValidBASRange } from '@/lib/import/account-mapper'
+import { applyMappingOverride, getMappingStats, isValidBASRange } from '@/lib/import/account-mapper'
 import { decodeFileContent } from '@/lib/import/shared/encoding'
 import type { BankFileParseResult, BankFileFormatId, BankFileDuplicateInfo, GenericCSVColumnMapping } from '@/lib/import/bank-file/types'
 import type { FileAccountMatch } from '@/lib/cash-accounts/file-account'
@@ -721,9 +721,34 @@ function SIEImportWizard({
   const [, setSieAccounts] = useState<{ number: string; name: string }[]>([])
   const [isCreatingAccounts, setIsCreatingAccounts] = useState(false)
 
+  // "Only the accounts the file uses" (#63): off by default, so the file's
+  // whole chart is created as before (#2605). On, the BAS definitions the
+  // file never uses leave the mapping step and the submitted mappings (the
+  // company's own accounts stay); the job drops them again at submit, and
+  // the archived file keeps them.
+  const [onlyUsedAccounts, setOnlyUsedAccounts] = useState(false)
+  const unusedSourceAccounts = useMemo(
+    () => new Set((preview?.unusedAccounts ?? []).map((account) => account.number)),
+    [preview?.unusedAccounts],
+  )
+  const leavesOutUnused = onlyUsedAccounts && unusedSourceAccounts.size > 0
+  const effectiveMappings = useMemo(
+    () => (leavesOutUnused ? mappings.filter((m) => !unusedSourceAccounts.has(m.sourceAccount)) : mappings),
+    [leavesOutUnused, mappings, unusedSourceAccounts],
+  )
+  const effectivePreview = useMemo(() => {
+    if (!preview || !leavesOutUnused) return preview
+    const stats = getMappingStats(effectiveMappings)
+    return {
+      ...preview,
+      chart: preview.chartUsedOnly ?? preview.chart,
+      mappingStatus: { total: stats.total, mapped: stats.mapped, unmapped: stats.unmapped, lowConfidence: stats.lowConfidence },
+    }
+  }, [preview, leavesOutUnused, effectiveMappings])
+
   // Skip the mapping step when all accounts are already mapped
-  const hasUnmapped = mappings.some((m) => !m.targetAccount)
-  const needsVatReview = mappings.some((m) =>
+  const hasUnmapped = effectiveMappings.some((m) => !m.targetAccount)
+  const needsVatReview = effectiveMappings.some((m) =>
     m.requiresVatTreatmentReview && !m.vatTreatmentReviewed
   )
   const showMappingStep = hasUnmapped || needsVatReview
@@ -978,7 +1003,7 @@ function SIEImportWizard({
   }, [])
 
   const confirmVatReview = useCallback(() => {
-    if (mappings.some((mapping) =>
+    if (effectiveMappings.some((mapping) =>
       mapping.requiresVatTreatmentReview && !mapping.vatTreatmentReviewed
     )) {
       setError('Granska momshanteringen för alla markerade konton innan du fortsätter.')
@@ -988,9 +1013,9 @@ function SIEImportWizard({
     setError(null)
     setValidationErrors([])
     setValidationWarnings([])
-  }, [mappings])
+  }, [effectiveMappings])
 
-  const missingAccounts = mappings
+  const missingAccounts = effectiveMappings
     .filter((m) => !m.targetAccount && isValidBASRange(m.sourceAccount))
     .map((m) => ({ number: m.sourceAccount, name: m.sourceName }))
 
@@ -1051,6 +1076,11 @@ function SIEImportWizard({
           chart: prev.chart
             ? { ...prev.chart, existing: prev.chart.existing + createdSet.size }
             : prev.chart,
+          // Accounts missing a target carry amounts, so they are used ones:
+          // the plan with the switch on moves them the same way.
+          chartUsedOnly: prev.chartUsedOnly
+            ? { ...prev.chartUsedOnly, existing: prev.chartUsedOnly.existing + createdSet.size }
+            : prev.chartUsedOnly,
         }
       })
     } catch (err) {
@@ -1071,9 +1101,10 @@ function SIEImportWizard({
       if (!storagePath) throw new Error('SIE-filen måste laddas upp igen.')
       formData.append('storagePath',storagePath)
       formData.append('filename',file.name)
-      formData.append('mappings', JSON.stringify(mappings))
+      formData.append('mappings', JSON.stringify(effectiveMappings))
       formData.append('options', JSON.stringify({...options,onExistingPeriod:replaceExisting ? 'replace' : 'block',
-        supersedesImportId:replaceExisting ? duplicateImportId : undefined}))
+        supersedesImportId:replaceExisting ? duplicateImportId : undefined,
+        ...(leavesOutUnused ? { onlyUsedAccounts: true } : {})}))
 
       const res = await fetch('/api/import/sie/execute', { method: 'POST', body: formData })
       const data = await res.json()
@@ -1097,7 +1128,7 @@ function SIEImportWizard({
     } finally {
       setIsLoading(false)
     }
-  }, [file, mappings, storagePath, replaceExisting, duplicateImportId, showJob, toast])
+  }, [file, effectiveMappings, leavesOutUnused, storagePath, replaceExisting, duplicateImportId, showJob, toast])
 
   const goToStep = (targetStep: ImportWizardStep) => { setStep(targetStep); setError(null); setValidationErrors([]); setValidationWarnings([]) }
   const goBack = () => { const i = sieSteps.indexOf(step); if (i > 0) setStep(sieSteps[i - 1]) }
@@ -1107,7 +1138,7 @@ function SIEImportWizard({
     setStep('upload'); setFile(null); setParsed(null); setMappings([])
     setPreview(null); setIssues([]); setImportResult(null); setError(null); setErrorType(undefined)
     setValidationErrors([]); setValidationWarnings([]); setDuplicateImportId(null)
-    setSieAccounts([]); setIsCreatingAccounts(false); setTheaterModel(null)
+    setSieAccounts([]); setIsCreatingAccounts(false); setTheaterModel(null); setOnlyUsedAccounts(false)
     sourceChartPick.current++; setSourceChart(null)
   }
 
@@ -1128,14 +1159,16 @@ function SIEImportWizard({
       <ImportWizardRail steps={sieSteps} current={step} label={(s) => SIE_STEP_LABELS[s]} onBack={onBack} />
 
       {step === 'upload' && <SIEUploadStep onFileSelect={handleFileSelect} isLoading={isLoading} error={error} errorType={errorType} validationErrors={validationErrors} validationWarnings={validationWarnings} duplicateImportId={duplicateImportId} onReplace={handleReplace} isReplacing={isReplacing} />}
-      {step === 'preview' && preview && (
-        <SIEPreviewStep preview={preview} issues={issues} missingAccounts={missingAccounts}
+      {step === 'preview' && effectivePreview && (
+        <SIEPreviewStep preview={effectivePreview} issues={issues} missingAccounts={missingAccounts}
+          onlyUsedAccounts={unusedSourceAccounts.size > 0 ? { on: onlyUsedAccounts, onChange: setOnlyUsedAccounts,
+            unused: unusedSourceAccounts.size, own: preview?.unusedOwnAccounts?.length ?? 0, total: mappings.length } : undefined}
           onCreateAccounts={handleCreateAccounts} isCreatingAccounts={isCreatingAccounts}
           onContinue={() => goToStep(showMappingStep ? 'mapping' : 'review')} onBack={goBack}
           onOpenManualOpeningBalances={onOpenManualOpeningBalances} />
       )}
       {step === 'mapping' && (
-        <AccountMappingStep mappings={mappings} basAccounts={basAccounts}
+        <AccountMappingStep mappings={effectiveMappings} basAccounts={basAccounts}
           onMappingChange={handleMappingChange} onVatTreatmentChange={handleVatTreatmentChange}
           onConfirmAllVatTreatments={handleConfirmAllVatTreatments}
           onSourceChartSelected={handleSourceChartSelected} sourceChart={sourceChart}
@@ -1145,8 +1178,8 @@ function SIEImportWizard({
         <input type="checkbox" checked={replaceExisting} onChange={event => setReplaceExisting(event.target.checked)}/>
         {jobT('replace')}
       </label>}
-      {step === 'review' && preview && (
-        <ImportReviewStep preview={preview} mappings={mappings}
+      {step === 'review' && effectivePreview && (
+        <ImportReviewStep preview={effectivePreview} mappings={effectiveMappings} onlyUsedAccounts={leavesOutUnused}
           onExecute={handleExecuteImport} onBack={goBack} isLoading={isLoading}
           theaterModel={theaterModel} error={error} />
       )}

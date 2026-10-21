@@ -4,6 +4,12 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { createServiceClient } from '@/lib/supabase/server'
 import { getStripe, priceIdForPlan } from '@/lib/stripe/client'
+import {
+  NOTHING_ON_FILE,
+  loadCompanyBillingIdentity,
+  syncStripeCustomerIdentity,
+  type SyncedBillingIdentity,
+} from '@/lib/stripe/customer-identity'
 import { guardSandbox, sandboxBlockedResponse } from '@/lib/sandbox/guard'
 import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 import { localeFromCookieHeader } from '@/i18n/config'
@@ -107,6 +113,7 @@ export const POST = withRouteContext('billing.checkout', async (request, ctx) =>
       : undefined
 
   let customerId = (existing as { stripe_customer_id: string | null } | null)?.stripe_customer_id ?? null
+  const justCreated = !customerId
   if (!customerId) {
     const customer = await stripe.customers.create({
       email: user.email ?? undefined,
@@ -116,6 +123,21 @@ export const POST = withRouteContext('billing.checkout', async (request, ctx) =>
     await service
       .from('company_subscriptions')
       .upsert({ company_id: companyId, stripe_customer_id: customerId }, { onConflict: 'company_id' })
+  }
+
+  // The user is logged in to a company we already know (PH 191): put its
+  // legal name, address, org number and VAT number on the Stripe customer so
+  // Checkout does not ask for them again and every invoice and receipt
+  // carries them. Best effort: on any failure Checkout opens as before and
+  // collects the details itself, so a prefill problem never blocks payment.
+  let synced: SyncedBillingIdentity = NOTHING_ON_FILE
+  try {
+    const identity = await loadCompanyBillingIdentity(supabase, companyId)
+    synced = await syncStripeCustomerIdentity(stripe, customerId, identity, { justCreated })
+  } catch (err) {
+    log.warn('billing.checkout: prefilling the Stripe customer failed, Checkout collects the details', {
+      error: err instanceof Error ? err.message : String(err),
+    })
   }
 
   // Return the user to the host they started on. Sessions are per domain, so
@@ -134,12 +156,21 @@ export const POST = withRouteContext('billing.checkout', async (request, ctx) =>
     // a valid VAT number. automatic_tax carries onto the created subscription, so
     // renewals (and the first charge after a deferred trial) stay taxed. The rate
     // can only compute with a customer address, and a compliant momsfaktura needs
-    // it too; customer_update persists the address + tax id onto the pre-created
-    // customer for future invoices.
+    // it too.
     automatic_tax: { enabled: true },
-    tax_id_collection: { enabled: true },
-    billing_address_collection: 'required',
-    customer_update: { name: 'auto', address: 'auto' },
+    // What the customer already holds is not asked again. With the company's
+    // address on file, Stripe Tax uses it and Checkout asks only for what the
+    // card needs ('auto'); 'never' keeps a partial card address from replacing
+    // it. With a tax ID on file Stripe hides tax ID collection anyway, so it is
+    // left off and the company name is kept rather than replaced by the
+    // cardholder's. Otherwise Checkout collects both, as before, and
+    // customer_update persists them onto the customer for future invoices.
+    ...(synced.taxIdOnFile ? {} : { tax_id_collection: { enabled: true } }),
+    billing_address_collection: synced.addressOnFile ? 'auto' : 'required',
+    customer_update: {
+      name: synced.taxIdOnFile && synced.nameOnFile ? 'never' : 'auto',
+      address: synced.addressOnFile ? 'never' : 'auto',
+    },
     client_reference_id: companyId,
     metadata: { company_id: companyId },
     subscription_data: {

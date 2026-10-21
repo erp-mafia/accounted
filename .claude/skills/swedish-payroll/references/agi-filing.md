@@ -24,14 +24,18 @@ Exceptions:
 | FK570 | Specifikationsnummer (unique per employee per period, must stay consistent for corrections) |
 | Ruta 011 | Kontant bruttolön (gross cash salary) |
 | Ruta 001 | Avdragen skatt (withheld preliminary tax) |
-| Ruta 012 | Övriga skattepliktiga förmåner (all benefits except bil and drivmedel, e.g. kost, bostad) |
+| Ruta 012 | Övriga skattepliktiga förmåner: the summed value of every taxable benefit except bilförmån and drivmedel vid bilförmån (kost, bostad, cykel, taxable friskvård, drivmedel without a car benefit, other), less the employee's payment by nettolöneavdrag |
 | Ruta 013 | Skattepliktig bilförmån (excluding drivmedel) |
 | Ruta 018 | Drivmedel vid bilförmån |
+| Ruta 048 | Förmån har justerats (checkbox): a Skatteverket decision adjusted the value of kost or bostad; the adjusted value goes in 012 |
 | Ruta 019 | Avdrag för utgifter i arbetet (part of gross pay that covers work expenses) |
 | Ruta 020 | Övriga kostnadsersättningar (other than bilersättning and traktamente) |
 | Rutor 041/043 | Bostadsförmån småhus / ej småhus (checkboxes; the value goes in 012) |
 | Ruta 131 | Kontant ersättning för arbete som inte är underlag för socialavgifter (e.g. employee covered by another country's social insurance, under 1,000 SEK per person per year) |
+| Rutor 132/133/134 | Benefits that are not underlag för socialavgifter: övriga förmåner (kost and bostad included), bilförmån, drivmedel; 137/138 are the bostad checkboxes |
 | FK821-FK827 | Absence reporting fields (from 2025) |
+
+Kostförmån has no field of its own. Skatteverket's XML schema (arbetsgivardeklaration_component_1.1.xsd) and Bilaga Fältlista (Teknisk beskrivning 1.1.18.1, unchanged in 1.1.18.2) define no kostförmån element: there is no fältkod 015 or 139, and a file carrying one fails schema validation. Kost goes in 012 (or 132) with the other benefits.
 
 ## XML schema and electronic submission
 

@@ -1,5 +1,5 @@
 import { roundOre, truncateToWholeKronor } from '@/lib/money'
-import { computeLineNet } from '@/lib/bookkeeping/invoice-line-amounts'
+import { computeLineNet, computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import type { ArticleType, DeductionType } from '@/types'
 
 export type { DeductionType } from '@/types'
@@ -470,12 +470,11 @@ export type ItemForDeduction = DeductionLineBase & (
  * total and the 1513 debit both come from this function, so they agree on
  * the 0). The base is the line total INCLUDING VAT (HUSFL 6-9 §§: 30% av
  * arbetskostnaden inklusive moms for ROT, 50% for RUT; 15 or 50 % of arbete
- * och material inklusive moms for grön teknik). The per-line VAT is
- * reproduced with the exact rounding the write path stores on
- * invoice_items.vat_amount (Math.round(lineTotal * rate / 100 * 100) / 100
- * in build-invoice-write.ts), so the deduction and the stored VAT can never
- * disagree by an öre. The result is always >= 0 and <= line total incl. VAT
- * (no over-deduction even if percentages are tweaked).
+ * och material inklusive moms for grön teknik). The per-line VAT is the
+ * one the write path stores on invoice_items.vat_amount (computeLineVat, the
+ * shared rule in invoice-line-amounts.ts), so the deduction and the stored
+ * VAT can never disagree by an öre. The result is always >= 0 and <= line
+ * total incl. VAT (no over-deduction even if percentages are tweaked).
  */
 export function computeDeduction(item: ItemForDeduction): number {
   if (!item.deduction_type) return 0
@@ -495,7 +494,7 @@ export function computeDeduction(item: ItemForDeduction): number {
 /** The stored invoice_items.vat_amount of a line with this net total. */
 function lineVatAmount(vatRate: number | null | undefined, lineTotal: number): number {
   const rate = vatRate ?? 0
-  return rate > 0 ? Math.round(lineTotal * rate / 100 * 100) / 100 : 0
+  return rate > 0 ? computeLineVat(lineTotal, rate) : 0
 }
 
 /**

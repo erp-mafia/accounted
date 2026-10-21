@@ -241,6 +241,7 @@ describe('optionsAfterPreview', () => {
     importAssets: true,
     voucherSeries: 'B',
     replaceImportedYears: [],
+    onlyUsedAccounts: false,
   }
 
   it('unticks the SIE import when the preview could not fetch the ledger, and ticks it again when a retry could', () => {

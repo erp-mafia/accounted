@@ -20,7 +20,7 @@ import {
 } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { buildInvoicePaymentRows, printsPayableRow } from '@/lib/invoices/payment-rows'
 import { computeLineDeductions } from '@/lib/bookkeeping/rot-rut-rules'
-import { computeLineNet } from '@/lib/bookkeeping/invoice-line-amounts'
+import { computeLineNet, computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import { buildCreditNoteItem } from '@/lib/invoices/build-credit-note-item'
 import {
   buildCreditNoteFields,
@@ -474,7 +474,7 @@ async function buildDraftPreview(params: {
       line_total: roundOre(lineNet),
       vat_rate: rate,
       // The write path's per-line VAT, from the unrounded net.
-      vat_amount: isDeliveryNote ? 0 : Math.round(lineNet * rate / 100 * 100) / 100,
+      vat_amount: isDeliveryNote ? 0 : computeLineVat(lineNet, rate),
       deduction_type: deductionType,
       deduction_amount: deductionAmount,
       labor_hours: deductionType ? (item.labor_hours ?? null) : null,

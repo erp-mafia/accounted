@@ -66,7 +66,7 @@ vi.mock('../skattekonto-split', () => ({
 }))
 
 import { SkattekontoLinkError } from '@/lib/skatteverket/skattekonto-link'
-import { matchPairs, setItemIgnored, unmatchLink } from '../actions'
+import { matchPairs, reconciliationRefusalCode, setItemIgnored, unmatchLink } from '../actions'
 
 const COMPANY = 'company-1'
 const USER = 'user-1'
@@ -1240,10 +1240,12 @@ describe('unmatchLink / setItemIgnored', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: null }) // transactions: no such row
     undoSettlementMock.mockResolvedValue(null)
-    unlinkReconciliationMock.mockResolvedValue({ success: false, error: 'Transaktionen kunde inte hittas.' })
-    await expect(unmatchLink(supabase as never, COMPANY, USER, `bank:${CASH}`, R1)).rejects.toThrow(
-      'Transaktionen kunde inte hittas.',
-    )
+    unlinkReconciliationMock.mockResolvedValue({ success: false, code: 'TRANSACTION_NOT_FOUND', error: 'Transaction not found' })
+    await expect(unmatchLink(supabase as never, COMPANY, USER, `bank:${CASH}`, R1)).rejects.toMatchObject({
+      name: 'SkattekontoLinkError',
+      code: 'TRANSACTION_NOT_FOUND',
+      message: 'Transaktionen hittades inte.',
+    })
     expect(unlinkReconciliationMock).toHaveBeenCalledWith(supabase, COMPANY, R1, USER)
 
     undoSettlementMock.mockClear()
@@ -1252,6 +1254,49 @@ describe('unmatchLink / setItemIgnored', () => {
     unlinkReconciliationMock.mockResolvedValue({ success: true })
     await unmatchLink(linked.supabase as never, COMPANY, USER, `bank:${CASH}`, R1)
     expect(undoSettlementMock).not.toHaveBeenCalled()
+  })
+
+  // PH 194: the bank engine's refusals were thrown as a bare Error, which
+  // every door answered 500 INTERNAL_ERROR.
+  it('a bank row whose verifikat is its booking is refused typed, with the storno way out, and nothing is emitted', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { journal_entry_id: E1 } })
+    unlinkReconciliationMock.mockResolvedValue({ success: false, code: 'LINK_IS_BOOKING', error: 'Cannot unlink' })
+    const err = await unmatchLink(supabase as never, COMPANY, USER, `bank:${CASH}`, R1).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(SkattekontoLinkError)
+    expect(err).toMatchObject({ code: 'LINK_IS_BOOKING' })
+    expect((err as Error).message).toMatch(/storno/)
+    expect(reconciliationRefusalCode(err as SkattekontoLinkError)).toBe('RECONCILIATION_UNLINK_IS_BOOKING')
+    expect(emitMock).not.toHaveBeenCalled()
+  })
+
+  it('a bank row with no link is NOT_LINKED, a failed write stays a database error with its SQLSTATE', async () => {
+    const notLinked = createQueuedMockSupabase()
+    notLinked.enqueue({ data: { journal_entry_id: null } })
+    unlinkReconciliationMock.mockResolvedValueOnce({ success: false, code: 'NOT_LINKED', error: 'not linked' })
+    const refused = await unmatchLink(notLinked.supabase as never, COMPANY, USER, `bank:${CASH}`, R1).catch((e: unknown) => e)
+    expect(refused).toMatchObject({ name: 'SkattekontoLinkError', code: 'NOT_LINKED' })
+    expect(reconciliationRefusalCode(refused as SkattekontoLinkError)).toBe('RECONCILIATION_NOT_LINKED')
+
+    const failed = createQueuedMockSupabase()
+    failed.enqueue({ data: { journal_entry_id: E1 } })
+    unlinkReconciliationMock.mockResolvedValueOnce({
+      success: false,
+      code: 'DB_ERROR',
+      error: 'Failed to unlink transaction',
+      cause: { code: '57014', message: 'canceling statement due to statement timeout' },
+    })
+    const dbFailure = await unmatchLink(failed.supabase as never, COMPANY, USER, `bank:${CASH}`, R1).catch((e: unknown) => e)
+    expect(dbFailure).not.toBeInstanceOf(SkattekontoLinkError)
+    expect(dbFailure).toMatchObject({ code: '57014' })
+  })
+
+  it('reconciliationRefusalCode maps the surface refusals to registered codes and leaves the rest unmapped', () => {
+    const code = (c: ConstructorParameters<typeof SkattekontoLinkError>[1]) =>
+      reconciliationRefusalCode(new SkattekontoLinkError('x', c))
+    expect(code('TRANSACTION_NOT_FOUND')).toBe('NOT_FOUND')
+    expect(code('ALREADY_BOOKED')).toBe('TX_IGNORE_ALREADY_BOOKED')
+    expect(code('LINK_RACE')).toBeNull()
   })
 
   it('ignores a skattekonto row via the core helper', async () => {

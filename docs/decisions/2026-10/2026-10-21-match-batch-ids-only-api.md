@@ -1,0 +1,1 @@
+[2026-10-21] match_batch_allocate keeps taking invoice ids only, no invoice_numbers input on the API or MCP tool (#75): an agent already resolves numbers through gnubok_list_invoices, the largest batch in prod is 19 invoices, and a by-number variant would grow the v1 schema and the MCP payload for one known payer.

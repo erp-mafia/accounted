@@ -125,6 +125,9 @@ export interface BankLinkEntry {
   voucher_series: string | null
   voucher_number: number | null
   entry_date: string
+  /** Where the verifikat came from: 'bank_transaction' + this row's id when it was booked from the row. */
+  source_type?: string | null
+  source_id?: string | null
 }
 
 export type PreparedBankLink =
@@ -237,7 +240,7 @@ export async function prepareBankLink(
 
   const { data: entry, error: entryError } = await supabase
     .from('journal_entries')
-    .select('id, status, voucher_series, voucher_number, entry_date')
+    .select('id, status, voucher_series, voucher_number, entry_date, source_type, source_id')
     .eq('id', journalEntryId)
     .eq('company_id', companyId)
     .single()
@@ -437,6 +440,11 @@ export async function prepareBankLink(
   }
 }
 
+/** The reconciliation_method writeBankLink records for a row on this verifikat. */
+export function bankLinkMethod(entry: BankLinkEntry, transactionId: string): 'manual' | null {
+  return entry.source_type === 'bank_transaction' && entry.source_id === transactionId ? null : 'manual'
+}
+
 export type BankLinkWrite =
   | { ok: true }
   /** Someone else changed the pointer between the read and the write. */
@@ -449,8 +457,16 @@ export type BankLinkWrite =
  * row, or the exact stale 'reversed'-entry id being detached. Locking on the
  * known value lets the stale-pointer overwrite through while a concurrent
  * re-link becomes a no-op (0 rows, `race`). `fields` are the door's own
- * columns (the reconciliation method, the invoice pointer and cleared hints);
- * `linkBasis` is why the door links the pair (src/lib/links/link-basis.ts).
+ * columns (the invoice pointer and cleared hints); `linkBasis` is why the
+ * door links the pair (src/lib/links/link-basis.ts).
+ *
+ * A row written here points at a verifikat that existed before the link, so
+ * it is a reconciliation link: reconciliation_method 'manual', the marker
+ * koppla-bort (isUnlinkableBankLink) and the match routes read to tell a link
+ * from a booking made from the row. The duplicate dialog's door once left it
+ * NULL, and its links then read as bookings that could not be unlinked (PH 194).
+ * The one exception is a row put back on the verifikat booked from it (its
+ * source is this row): that restores the booking, which records no method.
  */
 export async function writeBankLink(
   supabase: SupabaseClient,
@@ -470,6 +486,7 @@ export async function writeBankLink(
     .update({
       journal_entry_id: journalEntryId,
       is_business: true,
+      reconciliation_method: bankLinkMethod(prepared.entry, transactionId),
       ...(params.fields ?? {}),
       ...linkBasisColumnsFor(params.linkBasis),
       ...(prepared.repointCashAccountId ? { cash_account_id: prepared.repointCashAccountId } : {}),

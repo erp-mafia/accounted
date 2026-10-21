@@ -36,6 +36,7 @@ import { validateEmployeeBankAccount } from '@/lib/payments/bank-account'
 import { jamkningIssueFromDbError, validateJamkning, type JamkningFields } from '@/lib/salary/jamkning-rules'
 import { extraTaxIssueFromDbError, validateExtraTax } from '@/lib/salary/extra-tax'
 import { validateEmployeeUpdate, type EmployeeUpdateIssue } from '@/lib/salary/employee-update-rules'
+import { followEmployeeSalaryInDraftRuns } from '@/lib/salary/run-employees'
 
 export type EmployeeCommandResult<T> =
   | { ok: true; data: T }
@@ -415,6 +416,18 @@ export async function updateEmployee(
     const extraTaxIssue = extraTaxIssueFromDbError(error)
     if (extraTaxIssue) return issuesRefusal([extraTaxIssue])
     return { ok: false, code: 'INTERNAL_ERROR', details: { message: error.message }, cause: error }
+  }
+
+  // A corrected monthly salary reaches the draft runs that still start from
+  // the old one (crm#1337). The employee is saved whatever happens here: a
+  // run that could not follow keeps its figure, as before.
+  if ('monthly_salary' in updates || 'salary_type' in updates) {
+    await followEmployeeSalaryInDraftRuns(supabase, {
+      companyId: args.companyId,
+      employeeId: args.employeeId,
+      previous: stored,
+      current: merged,
+    })
   }
 
   const masked = maskRow(data as unknown as Record<string, unknown>)

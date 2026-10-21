@@ -25,6 +25,7 @@ import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import { invoiceDisplayNumber, isTextLikeLine } from '@/lib/invoices/display'
 import { getDisplayTotal, getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
 import { workTypeLabel } from '@/lib/bookkeeping/rot-rut-rules'
+import { computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import {
   continueInvoiceSeries,
@@ -2019,7 +2020,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     const vatByRate = new Map<number, number>()
     for (const item of invoice.items) {
       const rate = item.vat_rate ?? 0
-      const lineVat = Math.round(item.line_total * (rate / 100) * 100) / 100
+      // The stored line VAT is what the invoice states and booked (the PDF
+      // prints the same); a legacy row that carries none is recomputed with
+      // the rule the builder stores (crm#1343).
+      const lineVat = item.vat_amount || computeLineVat(item.line_total, rate)
       vatByRate.set(rate, (vatByRate.get(rate) || 0) + lineVat)
     }
     const entries = Array.from(vatByRate.entries())

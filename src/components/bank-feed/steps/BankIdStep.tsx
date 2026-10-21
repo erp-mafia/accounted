@@ -154,6 +154,8 @@ export function BankIdStep({
   }
 
   const failed = state.pollState === 'failed'
+  // The poll gave up (crm#1355): the connection is gone or nothing answers.
+  const pollError = state.pollError
   // A refusal the person resolves in the online bank: the text, no Försök igen.
   const permanent = failed && isPermanentConsentFailure(state.failure?.code)
   const partial = state.pollState === 'partially_authorised'
@@ -179,7 +181,16 @@ export function BankIdStep({
 
   return (
     <div className="space-y-4">
-      {failed ? (
+      {pollError ? (
+        <div className="space-y-3 text-center">
+          <AttnLine className="text-center">{pollError.text}</AttnLine>
+          {pollError.reason === 'unreachable' ? (
+            <Button onClick={() => dispatch({ type: 'poll_retry' })}>{t('try_again')}</Button>
+          ) : (
+            <Button onClick={() => dispatch({ type: 'start_over' })}>{t('start_over')}</Button>
+          )}
+        </div>
+      ) : failed ? (
         <div className="space-y-3 text-center">
           {/* One attention line: a restart that failed replaces the bank's earlier refusal. */}
           <AttnLine className="text-center">{state.startError ?? failureText}</AttnLine>
@@ -243,12 +254,12 @@ export function BankIdStep({
       )}
       <DialogFooter>
         {closeButton}
-        {secondSignatory && (
+        {secondSignatory && !pollError && (
           <Button onClick={() => onSignAsSignatory(signatoryMethod)} loading={state.starting} disabled={signatoryDisabled}>
             {t('sign_as_signatory')}
           </Button>
         )}
-        {redirect && !redirectWaiting && !failed && !partial && !state.confirmed && redirectUrl && (
+        {redirect && !redirectWaiting && !failed && !pollError && !partial && !state.confirmed && redirectUrl && (
           <Button onClick={() => onContinueToBank(redirectUrl)}>{t('redirect_continue', { bank: bankName })}</Button>
         )}
       </DialogFooter>

@@ -133,6 +133,39 @@ describe('runConnectionSync', () => {
     })
   })
 
+  // PH 195: Enable Banking answered a Swedbank account's first import with
+  // 100 pages of empty transactions, each with a continuation key. The read
+  // stopped at the cap, and the first import was stamped complete with
+  // nothing in it, so it was never asked for again.
+  it('leaves a first sync the bank had not finished owed, storing what came', async () => {
+    const { supabase } = createTableMockSupabase({ sie_imports: { data: null } })
+    const log = { info: vi.fn(), warn: vi.fn() }
+    mockSync
+      .mockResolvedValueOnce(result({ imported: 0, duplicates: 0, truncated: true }) as never)
+      .mockResolvedValueOnce(result({ returnedMinBookingDate: '2026-07-05', returnedMaxBookingDate: '2026-09-30' }) as never)
+
+    const outcome = await runConnectionSync(input(supabase, { firstSync: true, log }))
+
+    expect(outcome.truncated).toBe(true)
+    expect(outcome.imported).toBe(2)
+    // The rows and balances are persisted, the first import is not completed.
+    expect(mockPersist).toHaveBeenCalledTimes(1)
+    expect(mockPersist.mock.calls[0][1]).not.toHaveProperty('initialSync')
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('window is incomplete'),
+      expect.objectContaining({ connectionId: 'conn-1', firstSync: true }),
+    )
+  })
+
+  it('reports an incremental sync read to its end as not truncated', async () => {
+    const { supabase } = createTableMockSupabase({ sie_imports: { data: null } })
+    mockSync.mockResolvedValue(result() as never)
+
+    const outcome = await runConnectionSync(input(supabase, { lookbackDays: 7 }))
+
+    expect(outcome.truncated).toBe(false)
+  })
+
   it('links instead of booking over a completed SIE import, sweeping from the oldest returned date', async () => {
     const { supabase, payloads } = createTableMockSupabase({
       sie_imports: { data: { id: 'sie-1' } },

@@ -1865,11 +1865,13 @@ export interface InvoiceItem {
   // every write path round-trips it.
   sales_order_item_id?: string | null
 
-  // Periodisering (förutbetald intäkt): when set, the revenue entry credits
-  // accrual_balance_account (29xx) instead of the line's revenue account, and
-  // an accrual_schedules row dissolves the net amount monthly over the
-  // period. Output VAT is never deferred. Both dates set together or not at
-  // all. Not combinable with ROT/RUT or text lines.
+  // Periodisering: when set, the revenue entry credits
+  // accrual_balance_account instead of the line's revenue account, and an
+  // accrual_schedules row dissolves the net amount monthly over the period:
+  // 29xx is a förutbetald intäkt, 17xx an upplupen intäkt (months before the
+  // invoice month, each booked on its last day). Output VAT is never
+  // deferred. Both dates set together or not at all. Not combinable with
+  // ROT/RUT or text lines.
   accrual_period_start?: string | null
   accrual_period_end?: string | null
   accrual_balance_account?: string | null
@@ -2304,8 +2306,8 @@ export interface AccrualSchedule {
   invoice_id: string | null
   invoice_item_id: string | null
   // Interim balance account (17xx förutbetald or 29xx upplupen for expense,
-  // 29xx for revenue) and the P&L account each installment dissolves to.
-  // Strings, like all accounts.
+  // 29xx förutbetald or 17xx upplupen for revenue) and the P&L account each
+  // installment dissolves to. Strings, like all accounts.
   balance_account: string
   target_account: string
   // Net SEK amount as booked (ex VAT). Always equals the sum of installments.
@@ -3021,7 +3023,12 @@ export interface CalendarFeed {
 export type InboxItemStatus = 'received' | 'processing' | 'error'
 export type InboxItemSource = 'email' | 'upload' | 'whatsapp' | 'mail_hunt' | 'peppol'
 
-export type CompanyInboxStatus = 'active' | 'deprecated' | 'blocked'
+/**
+ * active: the company's address. previous: an earlier address a rename kept,
+ * still receiving (rename_company_inbox). deprecated: retired, the webhook
+ * answers 410 (rotate_company_inbox). blocked: refused.
+ */
+export type CompanyInboxStatus = 'active' | 'previous' | 'deprecated' | 'blocked'
 
 export interface CompanyInbox {
   id: string

@@ -1,6 +1,6 @@
 import { proposeSendLines } from '@/lib/bookkeeping/propose-send-lines'
 import { buildInvoiceCashLines } from '@/lib/bookkeeping/invoice-lines'
-import { computeLineNet } from '@/lib/bookkeeping/invoice-line-amounts'
+import { computeLineNet, computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import { roundOre } from '@/lib/money'
 import {
   buildCreditNoteFields,
@@ -99,7 +99,7 @@ function draftInvoice(input: DraftVoucherInput) {
       discount_percent: discount ?? undefined,
       line_total: lineTotal,
       vat_rate: rate,
-      vat_amount: Math.round(lineTotal * rate / 100 * 100) / 100,
+      vat_amount: computeLineVat(lineTotal, rate),
       deduction_type: item.deduction_type ?? null,
       work_type: item.work_type ?? null,
     } as InvoiceItem

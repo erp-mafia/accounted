@@ -191,6 +191,104 @@ describe('persistAndSend', () => {
   })
 })
 
+describe('persistAndSend: files picked in the editor confirm (#79, crm#1315, PH 198)', () => {
+  const doc1 = '11111111-1111-4111-8111-111111111111'
+  const doc2 = '22222222-2222-4222-8222-222222222222'
+
+  it('links the files to the created draft, then emails it', async () => {
+    const { fetchImpl, calls } = stubFetch([
+      { json: { data: { id: 'inv-1', invoice_number: '1043' } } },
+      { json: { data: [{ document_id: doc1 }, { document_id: doc2 }] } },
+      { json: { success: true, message: 'Fakturan har skickats' } },
+    ])
+    const result = await persistAndSend(input({ attachmentDocumentIds: [doc1, doc2] }), fetchImpl)
+    expect(calls.map((c) => [c.method, c.url, c.body])).toEqual([
+      ['POST', '/api/invoices', { customer_id: 'c1', items: [] }],
+      ['POST', '/api/invoices/inv-1/attachments', { document_ids: [doc1, doc2] }],
+      ['POST', '/api/invoices/inv-1/send', undefined],
+    ])
+    expect(result).toMatchObject({ ok: true, invoiceId: 'inv-1', invoiceNumber: '1043' })
+  })
+
+  it('links after the finalize of an edited unnumbered draft', async () => {
+    const { fetchImpl, calls } = stubFetch([
+      { json: { data: { id: 'inv-9' } } },
+      { json: { data: { id: 'inv-9', invoice_number: '1050' } } },
+      { json: { data: [{ document_id: doc1 }] } },
+      { json: { success: true } },
+    ])
+    await persistAndSend(
+      input({ mode: 'edit', invoiceId: 'inv-9', invoiceNumber: null, attachmentDocumentIds: [doc1] }),
+      fetchImpl,
+    )
+    expect(calls.map((c) => c.url)).toEqual([
+      '/api/invoices/inv-9',
+      '/api/invoices/inv-9/finalize',
+      '/api/invoices/inv-9/attachments',
+      '/api/invoices/inv-9/send',
+    ])
+  })
+
+  it('stops before the send when the files cannot be linked, and reports the saved draft', async () => {
+    // Nothing is sent or booked: the draft exists with its number, and the
+    // invoice page takes over (its send dialog shows Bilagor again).
+    const { fetchImpl, calls } = stubFetch([
+      { json: { data: { id: 'inv-1', invoice_number: '1043' } } },
+      { status: 400, json: { error: { code: 'INVOICE_ATTACHMENTS_TOO_LARGE' } } },
+    ])
+    const result = await persistAndSend(input({ attachmentDocumentIds: [doc1] }), fetchImpl)
+    expect(calls.map((c) => c.url)).toEqual(['/api/invoices', '/api/invoices/inv-1/attachments'])
+    expect(result).toEqual({
+      ok: false,
+      stage: 'attach',
+      invoiceId: 'inv-1',
+      status: 400,
+      error: { error: { code: 'INVOICE_ATTACHMENTS_TOO_LARGE' } },
+    })
+  })
+
+  it('reports the saved draft when the link request never gets an answer', async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url === '/api/invoices') {
+        return new Response(JSON.stringify({ data: { id: 'inv-1', invoice_number: '1043' } }), { status: 201 })
+      }
+      throw new TypeError('Failed to fetch')
+    })
+    const result = await persistAndSend(input({ attachmentDocumentIds: [doc1] }), fetchImpl)
+    expect(result).toMatchObject({ ok: false, stage: 'attach', invoiceId: 'inv-1', status: 0 })
+  })
+
+  it('posts no link step without files', async () => {
+    const { fetchImpl, calls } = stubFetch([
+      { json: { data: { id: 'inv-1', invoice_number: '1043' } } },
+      { json: { success: true } },
+    ])
+    await persistAndSend(input({ attachmentDocumentIds: [] }), fetchImpl)
+    expect(calls.map((c) => c.url)).toEqual(['/api/invoices', '/api/invoices/inv-1/send'])
+  })
+
+  it('never links on a channel that does not email them (the set would be fixed unsent)', async () => {
+    for (const channel of ['manual', 'peppol'] as const) {
+      const { fetchImpl, calls } = stubFetch([
+        { json: { data: { id: 'inv-1', invoice_number: '1043' } } },
+        { json: { success: true } },
+      ])
+      await persistAndSend(input({ channel, attachmentDocumentIds: [doc1] }), fetchImpl)
+      expect(calls.some((c) => c.url.endsWith('/attachments'))).toBe(false)
+    }
+    const paid = stubFetch([
+      { json: { data: { id: 'inv-1', invoice_number: '1043' } } },
+      { json: { success: true } },
+      { json: { success: true } },
+    ])
+    await persistAndSend(
+      input({ paidAtIssue: { account_number: '1930' }, attachmentDocumentIds: [doc1] }),
+      paid.fetchImpl,
+    )
+    expect(paid.calls.some((c) => c.url.endsWith('/attachments'))).toBe(false)
+  })
+})
+
 describe('buildSendBody', () => {
   it('keeps only what carries something', () => {
     expect(buildSendBody(undefined)).toBeNull()

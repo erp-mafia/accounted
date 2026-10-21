@@ -1,0 +1,1 @@
+[2026-10-21] No bank-line lock was added with the editable mall lines: Bokför från mall has no bank row, and locking the bank line in the bank-row JournalEntryForm would have held back 42 single-transaction bank vouchers in 90 days (8 companies) whose bank leg differs from the transaction, so that lock is a separate decision (crm#1351).

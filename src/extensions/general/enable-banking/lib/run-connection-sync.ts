@@ -15,6 +15,10 @@
  *     links the new rows to the verifikat that already describe them: over
  *     the fetched accounts only, from the oldest date the bank returned;
  *   - persisting the result (and, on a first sync, what the bank returned).
+ *     A first sync completes only when every account was read to its end: a
+ *     read the bank had not finished (truncated) leaves the first import
+ *     owed, so the cron asks again instead of recording an empty or partial
+ *     history as the whole of it (PH 195).
  *
  * A failure throws: each door maps it to its own answer.
  */
@@ -83,6 +87,11 @@ export interface ConnectionSyncOutcome {
   sieOverlap: boolean
   /** Rows the post-sync sweep linked to existing verifikat. */
   autoMatched: number
+  /**
+   * At least one account's read stopped while the bank still had pages: the
+   * window is incomplete, and a first sync is not recorded as completed.
+   */
+  truncated: boolean
   completedAt: string
 }
 
@@ -142,6 +151,15 @@ export async function runConnectionSync(input: ConnectionSyncInput): Promise<Con
     .filter((r) => r.historyNarrowed && r.effectiveFromDate)
     .map((r) => r.effectiveFromDate as string)
   const historyFrom = narrowedFrom.length > 0 ? narrowedFrom.reduce((a, b) => (a > b ? a : b)) : null
+  const truncated = results.some((r) => r.truncated === true)
+  if (truncated) {
+    log.warn('Bank read stopped before the bank ran out of pages: the window is incomplete', {
+      connectionId: connection.id,
+      firstSync: input.firstSync === true,
+      fromDate,
+      toDate,
+    })
+  }
 
   // A viewer cannot update transactions, so a viewer's sync never sweeps.
   let autoMatched = 0
@@ -166,7 +184,9 @@ export async function runConnectionSync(input: ConnectionSyncInput): Promise<Con
     startedAt: input.startedAt,
     completedAt,
     accounts,
-    ...(input.firstSync
+    // A truncated first import stays owed (initial_sync_completed_at NULL):
+    // the rows it did get are stored, and the cron runs the first import again.
+    ...(input.firstSync && !truncated
       ? { initialSync: { requestedFrom: fromDate, returnedMin, returnedMax, lookbackDays: input.lookbackDays } }
       : {}),
   })
@@ -181,6 +201,7 @@ export async function runConnectionSync(input: ConnectionSyncInput): Promise<Con
     historyFrom,
     sieOverlap: Boolean(sieOverlap),
     autoMatched,
+    truncated,
     completedAt,
   }
 }

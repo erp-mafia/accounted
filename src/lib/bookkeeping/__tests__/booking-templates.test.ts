@@ -915,6 +915,13 @@ describe('new and split templates', () => {
     expect(t).toBeDefined()
     expect(t!.deductibility_note_sv).toContain('46 kr/person')
   })
+
+  it('representation_external says syfte and deltagare can be written, not only uploaded (crm#1342)', () => {
+    const rule = getTemplateById('representation_external')!.special_rules_sv!
+    expect(rule).toContain('syfte och deltagare')
+    expect(rule).toContain('anteckning')
+    expect(rule).toContain('bifoga')
+  })
 })
 
 // ============================================================

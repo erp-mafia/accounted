@@ -11,8 +11,10 @@
  *   - an untagged entry touching BOTH a declaration account and 2650/1650
  *     is "shaped": excluded from totals, surfaced in
  *     settlement_shaped_entries;
- *   - opening-balance entries are exempt from shaping (carried-in 26xx
- *     balances are unsettled VAT);
+ *   - an opening-balance entry dated on the period's first day never reaches
+ *     the totals: it carries earlier periods, not the period's VAT (crm#1333,
+ *     tests/pg/vat-totals-carried-entries.pg.test.ts, which also covers one
+ *     dated inside the period);
  *   - a plain 2650 payment (no declaration account) is NOT shaped;
  *   - source_type_counts covers all posted/reversed entries in the period,
  *     including tagged settlements.
@@ -325,12 +327,13 @@ describe('get_vat_declaration_totals RPC', () => {
     expect(payload.settlement_shaped_entries[0]).toMatchObject({ source_type: 'storno' })
   })
 
-  it('keeps opening-balance entries: carried-in 26xx balances are unsettled VAT', async () => {
+  it('leaves an opening balance on the period\'s first day out: it carries earlier periods (crm#1333)', async () => {
     const ctx = await seedCompany()
 
-    // Migrating company: undeclared input VAT and a prior VAT debt carried
-    // in through the same opening-balance entry. Touches both a declaration
-    // account and 2650, but the shape rule exempts opening balances.
+    // Migrating company: input VAT and a VAT debt carried in through the same
+    // opening-balance entry. Both belong to the declaration of the period they
+    // arose in, so neither reaches this period's totals, and the IB is no
+    // momsredovisning either.
     await insertJournalEntry({
       ...ctx, voucherNumber: 1, sourceType: 'opening_balance', entryDate: '2026-01-01',
       lines: [
@@ -342,9 +345,11 @@ describe('get_vat_declaration_totals RPC', () => {
 
     const payload = await callRpc(ctx.companyId)
     const totals = totalsByAccount(payload)
-    expect(totals.get('2641')).toMatchObject({ debit: 500, credit: 0 })
-    expect(totals.get('2650')).toMatchObject({ debit: 0, credit: 300 })
+    expect(totals.has('2641')).toBe(false)
+    expect(totals.has('2650')).toBe(false)
     expect(payload.settlement_shaped_entries).toEqual([])
+    // Still a verifikat of the period.
+    expect(payload.source_type_counts).toEqual({ opening_balance: 1 })
   })
 
   it('does not shape a plain VAT payment on 2650 (no declaration account touched)', async () => {

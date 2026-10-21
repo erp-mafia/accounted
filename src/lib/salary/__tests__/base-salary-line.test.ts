@@ -1,12 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { baseSalaryLineType, refreshRunEmployeeSalaryType } from '../base-salary-line'
+import { baseSalaryLineType, refreshRunEmployeeSalaryType, runMonthlySalaryFor } from '../base-salary-line'
 
 const ARGS = {
   companyId: 'company-1',
   salaryRunEmployeeId: 'sre-1',
   salaryType: 'hourly',
+  monthlySalary: 0,
   amount: 4000,
   quantity: 20,
   unitPrice: 200,
@@ -21,6 +22,18 @@ describe('baseSalaryLineType', () => {
   it('maps the pay type to its display line', () => {
     expect(baseSalaryLineType('monthly')).toBe('monthly_salary')
     expect(baseSalaryLineType('hourly')).toBe('hourly_salary')
+  })
+})
+
+describe('runMonthlySalaryFor (crm#1337)', () => {
+  it("is the employee's monthly salary for monthly pay", () => {
+    expect(runMonthlySalaryFor({ salary_type: 'monthly', monthly_salary: 32000 })).toBe(32000)
+    expect(runMonthlySalaryFor({ salary_type: 'monthly', monthly_salary: null })).toBe(0)
+  })
+
+  it('is 0 for hourly pay, whatever monthly figure is left on the employee', () => {
+    expect(runMonthlySalaryFor({ salary_type: 'hourly', monthly_salary: 28000 })).toBe(0)
+    expect(runMonthlySalaryFor({ salary_type: 'hourly', monthly_salary: null })).toBe(0)
   })
 })
 
@@ -54,7 +67,28 @@ describe('refreshRunEmployeeSalaryType', () => {
     // Only the OTHER base type is deleted: never the line just inserted.
     const inCalls = mock.findCalls('salary_line_items', 'in')
     expect(inCalls.at(-1)).toEqual(['item_type', ['monthly_salary']])
-    expect(mock.findCall('salary_run_employees', 'update')).toEqual([{ salary_type: 'hourly' }])
+    // The row's monthly salary goes with the pay type (crm#1337).
+    expect(mock.findCall('salary_run_employees', 'update')).toEqual([{ salary_type: 'hourly', monthly_salary: 0 }])
+  })
+
+  it("writes the employee's monthly salary with a switch to monthly pay", async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({ data: [{ id: 'li-old', item_type: 'hourly_salary' }] })
+    mock.enqueue({ data: null }) // new line insert
+    mock.enqueue({ data: null }) // old line delete
+    mock.enqueue({ data: null }) // snapshot update
+
+    const { error } = await refreshRunEmployeeSalaryType(mock.supabase as unknown as SupabaseClient, {
+      ...ARGS,
+      salaryType: 'monthly',
+      monthlySalary: 32000,
+      amount: 0,
+      quantity: null,
+      unitPrice: null,
+    })
+
+    expect(error).toBeNull()
+    expect(mock.findCall('salary_run_employees', 'update')).toEqual([{ salary_type: 'monthly', monthly_salary: 32000 }])
   })
 
   it('does not insert a second new line when a retry finds one (idempotent after a partial failure)', async () => {

@@ -281,12 +281,51 @@ describe('runSalaryCalculation: a stale salary_type snapshot (agent feedback seq
       description: 'Grundlön',
     })
     expect(mock.findCalls('salary_line_items', 'in')[1]).toEqual(['item_type', ['hourly_salary']])
-    expect(mock.findCalls('salary_run_employees', 'update')[0][0]).toEqual({ salary_type: 'monthly' })
+    expect(mock.findCalls('salary_run_employees', 'update')[0][0]).toEqual({ salary_type: 'monthly', monthly_salary: 30000 })
     expect(mock.findCall('salary_line_items', 'update')?.[0]).toEqual({ amount: 30000 })
     // The engine priced the live pay type, and the row write keeps the
     // snapshot in line with it.
     expect(vi.mocked(calculateSalary).mock.calls[0][0]).toMatchObject({ salaryType: 'monthly', monthlySalary: 30000 })
     expect(rosterWrite(mock).salary_type).toBe('monthly')
+  })
+
+  it("prices an employee now paid monthly at the employee's monthly salary, not the hourly row's 0 kr (crm#1337)", async () => {
+    // Joined the run as hourly: the row never had a monthly salary of its own.
+    const mock = client(
+      [rosterRow({ salary_type: 'hourly', monthly_salary: 0, line_items: [{ id: 'li-old', item_type: 'hourly_salary', amount: 0 }] })],
+      [{ id: 'li-old', item_type: 'hourly_salary' }],
+    )
+
+    const result = await calculate(mock)
+
+    expect(result.ok).toBe(true)
+    expect(vi.mocked(calculateSalary).mock.calls[0][0]).toMatchObject({ salaryType: 'monthly', monthlySalary: 30000 })
+    expect(mock.findCalls('salary_run_employees', 'update')[0][0]).toEqual({ salary_type: 'monthly', monthly_salary: 30000 })
+    expect(mock.findCall('salary_line_items', 'update')?.[0]).toEqual({ amount: 30000 })
+  })
+
+  it('clears the monthly salary of an employee now paid hourly (crm#1337)', async () => {
+    const hourly = { ...EMPLOYEE, salary_type: 'hourly', hourly_rate: 185 }
+    const mock = client(
+      [rosterRow({ employee: hourly, hours_worked: 10, line_items: [{ id: 'li-old', item_type: 'monthly_salary', amount: 30000 }] })],
+      [{ id: 'li-old', item_type: 'monthly_salary' }],
+    )
+
+    const result = await calculate(mock)
+
+    expect(result.ok).toBe(true)
+    expect(mock.findCalls('salary_run_employees', 'update')[0][0]).toEqual({ salary_type: 'hourly', monthly_salary: 0 })
+    expect(vi.mocked(calculateSalary).mock.calls[0][0]).toMatchObject({ salaryType: 'hourly', monthlySalary: 0 })
+  })
+
+  it('keeps a monthly salary set in the run when the pay type is unchanged', async () => {
+    // 25 000 typed in the run; the employee's own salary is 30 000.
+    const mock = client([rosterRow({ monthly_salary: 25000 })])
+
+    const result = await calculate(mock)
+
+    expect(result.ok).toBe(true)
+    expect(vi.mocked(calculateSalary).mock.calls[0][0]).toMatchObject({ salaryType: 'monthly', monthlySalary: 25000 })
   })
 
   it('leaves the base line alone when the snapshot matches the employee', async () => {

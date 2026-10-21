@@ -28,6 +28,10 @@ export interface FakeEntry {
   source_type: string
   status?: 'posted' | 'reversed' | 'draft'
   fiscal_period_id: string
+  /** The entry a storno reverses. */
+  reverses_id?: string | null
+  /** The entry a rättelse corrects. */
+  correction_of_id?: string | null
   lines: FakeLine[]
 }
 
@@ -192,6 +196,52 @@ export function createFakeLedger(data: FakeLedgerData, failures: FakeFailures = 
   )
   const entryById = new Map(entries.map((e) => [e.id, e]))
   const shapedIds = new Set(data.vatShapedEntryIds ?? [])
+  // The IB chain as get_vat_declaration_totals reads it (crm#1333): every
+  // opening balance that is a balance (no resultatkonto line, class 3-8), and
+  // every storno or rättelse of a member down the chain, each with the IB at
+  // its root.
+  const isResultAccount = (account: string) => ['3', '4', '5', '6', '7', '8'].includes(account.charAt(0))
+  const ibRoot = new Map(
+    entries
+      .filter((e) => e.source_type === 'opening_balance' && !e.lines.some((l) => isResultAccount(l.account_number)))
+      .map((e) => [e.id, e.id] as const),
+  )
+  for (let grew = true; grew; ) {
+    grew = false
+    for (const e of entries) {
+      if (ibRoot.has(e.id)) continue
+      const root = [e.reverses_id, e.correction_of_id]
+        .map((id) => (id ? ibRoot.get(id) : undefined))
+        .find((r) => r !== undefined)
+      if (root !== undefined) {
+        ibRoot.set(e.id, root)
+        grew = true
+      }
+    }
+  }
+  /**
+   * An IB counts in a declaration when it is dated inside the range after its
+   * first day and no other verifikat of the range is dated before it.
+   */
+  const ibCounts = (rootId: string, args: Record<string, unknown>) => {
+    const root = entryById.get(rootId)!
+    const start = args.p_start as string
+    if (root.entry_date <= start || root.entry_date > (args.p_end as string)) return false
+    return !entries.some(
+      (e) =>
+        LEDGER_STATUSES.has(e.status) &&
+        !ibRoot.has(e.id) &&
+        e.entry_date >= start &&
+        e.entry_date < root.entry_date,
+    )
+  }
+  /** Carried for the range: a chain member whose root IB does not count. */
+  const carried = (id: string, args: Record<string, unknown>) => {
+    const root = ibRoot.get(id)
+    return root !== undefined && !ibCounts(root, args)
+  }
+  /** A fixture's shape is the SQL's decision, except that the IB chain is kept out of the shapes. */
+  const shaped = (id: string) => shapedIds.has(id) && !ibRoot.has(id)
 
   const tables: Record<string, Row[]> = {
     fiscal_periods: data.fiscalPeriods.map((p) => ({ company_id: companyId, ...p })),
@@ -295,7 +345,7 @@ export function createFakeLedger(data: FakeLedgerData, failures: FakeFailures = 
       return {
         totals: [...totals].map(([account_number, t]) => ({ account_number, debit: t.debit, credit: t.credit })),
         settlement_shaped_entries: entries
-          .filter((e) => shapedIds.has(e.id) && LEDGER_STATUSES.has(e.status) && inRange(e, args))
+          .filter((e) => shaped(e.id) && LEDGER_STATUSES.has(e.status) && inRange(e, args))
           .map((e) => ({
             id: e.id,
             status: e.status,
@@ -305,6 +355,9 @@ export function createFakeLedger(data: FakeLedgerData, failures: FakeFailures = 
             voucher_number: e.voucher_number,
           })),
         source_type_counts: {},
+        counted_opening_balances: entries
+          .filter((e) => ibRoot.get(e.id) === e.id && LEDGER_STATUSES.has(e.status) && inRange(e, args) && !carried(e.id, args))
+          .map((e) => ({ id: e.id, status: e.status, entry_date: e.entry_date })),
       }
     },
     get_vat_ruta_source_lines(args) {
@@ -330,10 +383,18 @@ export function createFakeLedger(data: FakeLedgerData, failures: FakeFailures = 
     return entry.entry_date >= (args.p_start as string) && entry.entry_date <= (args.p_end as string)
   }
 
-  /** The lines a momsdeklaration reads: the range, momsredovisningar left out (tagged ones, and those the fixture names shaped). */
+  /**
+   * The lines a momsdeklaration reads: the range, momsredovisningar left out
+   * (tagged ones, and those the fixture names shaped), and the IB chains
+   * whose root IB the declaration does not count.
+   */
   function vatLines(args: Record<string, unknown>) {
     return ledgerLines().filter(
-      ({ entry }) => inRange(entry, args) && entry.source_type !== 'vat_settlement' && !shapedIds.has(entry.id),
+      ({ entry }) =>
+        inRange(entry, args) &&
+        entry.source_type !== 'vat_settlement' &&
+        !shaped(entry.id) &&
+        !carried(entry.id, args),
     )
   }
 

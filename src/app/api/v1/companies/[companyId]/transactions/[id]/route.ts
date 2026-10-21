@@ -12,6 +12,7 @@ import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { v1OperationHandler } from '@/lib/operations/v1'
 import { transactionsDelete, transactionsUpdate } from '@/lib/operations/transactions'
 import { readTransactionParts } from '@/lib/transactions/parts-read'
+import { TRANSACTION_DETAIL_COLUMNS } from '@/lib/transactions/detail-columns'
 
 const TransactionPartSuggestedInvoice = z.object({
   kind: z.enum(['customer_invoice', 'supplier_invoice']),
@@ -47,6 +48,7 @@ const TransactionDetail = z.object({
   reference: z.string().nullable(),
   merchant_name: z.string().nullable(),
   counterparty_account: z.string().nullable(),
+  counterparty_iban: z.string().nullable().optional().describe('The counterparty\'s IBAN as the bank sent it (the payee of a foreign payment, the payer of an incoming transfer).'),
   counterparty_org_number: z.string().nullable().optional().describe('The counterparty\'s organisationsnummer, digits only, when the bank\'s enrichment names it.'),
   instructed_amount: z.number().nullable().optional().describe('The amount in the currency the payment was made in, when that differs from the account currency (a card purchase abroad).'),
   instructed_currency: z.string().nullable().optional().describe('The currency of instructed_amount.'),
@@ -69,15 +71,6 @@ const TransactionDetail = z.object({
   created_at: z.string(),
   updated_at: z.string(),
 })
-
-// Detail endpoint carve-out: a single-row drill-in is the user's intentional
-// request for the full row. Verbose by design: list endpoint stays minimal.
-const TRANSACTION_DETAIL_COLUMNS =
-  'id, date, description, amount, currency, amount_sek, reference, merchant_name, ' +
-  'counterparty_account, counterparty_org_number, instructed_amount, instructed_currency, ' +
-  'balance_after, is_enriched, journal_entry_id, invoice_id, supplier_invoice_id, ' +
-  'potential_invoice_id, is_business, category, receipt_id, document_id, ' +
-  'external_id, import_source, reconciliation_method, cash_account_id, potential_match_method, created_at, updated_at'
 
 registerEndpoint({
   operation: 'transactions.get',

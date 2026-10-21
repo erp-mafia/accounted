@@ -177,6 +177,7 @@ describe('gnubok_list_supplier_invoices: filters', () => {
   it('combines status, supplier_id, supplier_name and date range', async () => {
     const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
     enqueue({ data: [{ id: SUPPLIER_UUID, name: 'Office Depot AB' }] }) // suppliers fetch
+    enqueue({ data: { accounting_method: 'accrual' } }) // company_settings: to_pay
     enqueue({ data: [invoiceRow()], count: 1 }) // invoice list
 
     const result = (await tool().execute(
@@ -194,7 +195,7 @@ describe('gnubok_list_supplier_invoices: filters', () => {
 
     expect(result.count).toBe(1)
     const inCalls = findCalls('supplier_invoices', 'in')
-    expect(inCalls).toContainEqual(['status', ['approved', 'overdue']])
+    expect(inCalls).toContainEqual(['status', ['approved', 'overdue', 'partially_paid']])
     expect(inCalls).toContainEqual(['supplier_id', [SUPPLIER_UUID]])
     expect(findCalls('supplier_invoices', 'eq')).toContainEqual(['supplier_id', SUPPLIER_UUID])
     expect(findCall('supplier_invoices', 'gte')).toEqual(['invoice_date', '2026-01-01'])
@@ -203,6 +204,38 @@ describe('gnubok_list_supplier_invoices: filters', () => {
     const orderCalls = findCalls('supplier_invoices', 'order')
     expect(orderCalls).toContainEqual(['due_date', { ascending: true }])
     expect(orderCalls).toContainEqual(['id', { ascending: true }])
+  })
+
+  // crm#1141: kontantmetoden has no attest step, so a registered invoice is
+  // already to pay; the app offers Markera som betald on the same rows.
+  it('to_pay includes registered invoices under kontantmetoden only', async () => {
+    const cash = createQueuedMockSupabase()
+    cash.enqueue({ data: { accounting_method: 'cash' } })
+    cash.enqueue({ data: [invoiceRow({ status: 'registered' })], count: 1 })
+    const result = (await tool().execute({ status: 'to_pay' }, COMPANY, USER, cash.supabase as never)) as ListResult
+    expect(result.invoices[0]).toMatchObject({ status: 'registered' })
+    expect(cash.findCalls('company_settings', 'eq')).toContainEqual(['company_id', COMPANY])
+    expect(cash.findCalls('supplier_invoices', 'in')).toContainEqual([
+      'status',
+      ['registered', 'approved', 'overdue', 'partially_paid'],
+    ])
+
+    const accrual = createQueuedMockSupabase()
+    accrual.enqueue({ data: { accounting_method: 'accrual' } })
+    accrual.enqueue({ data: [], count: 0 })
+    await tool().execute({ status: 'to_pay' }, COMPANY, USER, accrual.supabase as never)
+    expect(accrual.findCalls('supplier_invoices', 'in')).toContainEqual([
+      'status',
+      ['approved', 'overdue', 'partially_paid'],
+    ])
+  })
+
+  it('reads the accounting method only for to_pay', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [invoiceRow({ status: 'registered' })], count: 1 })
+    await tool().execute({ status: 'registered' }, COMPANY, USER, supabase as never)
+    expect(findCalls('company_settings', 'select')).toHaveLength(0)
+    expect(findCalls('supplier_invoices', 'eq')).toContainEqual(['status', 'registered'])
   })
 
   it('rejects a malformed date', async () => {
@@ -278,6 +311,7 @@ describe('gnubok_list_supplier_invoices: filters', () => {
 describe('gnubok_list_supplier_invoices: attest and "I banken" marks', () => {
   it('projects approved_at and bank_entered_at and returns them on each invoice', async () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { accounting_method: 'accrual' } }) // company_settings: to_pay
     enqueue({
       data: [
         invoiceRow({ status: 'overdue', approved_at: '2026-04-01T08:00:00Z', bank_entered_at: '2026-04-08T09:00:00Z' }),

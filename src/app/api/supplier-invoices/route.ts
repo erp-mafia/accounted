@@ -7,6 +7,7 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
 import { createSupplierInvoice } from '@/lib/supplier-invoices/create'
 import { loadOpenPaymentInstructions } from '@/lib/supplier-invoices/lifecycle-stages'
 import { SETTLED_SUPPLIER_INVOICE_STATUSES } from '@/lib/supplier-invoices/stages'
+import { payableSupplierInvoiceStatuses } from '@/lib/supplier-invoices/lifecycle'
 
 export const GET = withRouteContext(
   'supplier_invoice.list',
@@ -20,6 +21,21 @@ export const GET = withRouteContext(
     // Paged: the list used to end at 1,000 invoices.
     let data: unknown[]
     try {
+      // to_pay is the rows Markera som betald is offered for, which hangs on
+      // whether the company attests (kontantmetoden does not, crm#1141).
+      let toPayStatuses: readonly string[] = []
+      if (status === 'to_pay') {
+        const { data: settings, error: settingsError } = await supabase
+          .from('company_settings')
+          .select('accounting_method')
+          .eq('company_id', companyId)
+          .maybeSingle()
+        if (settingsError) throw settingsError
+        toPayStatuses = payableSupplierInvoiceStatuses(
+          (settings?.accounting_method as string | null | undefined) ?? null,
+        )
+      }
+
       data = await fetchAllRows<unknown>(({ from, to }) => {
         let query = supabase
           .from('supplier_invoices')
@@ -34,7 +50,7 @@ export const GET = withRouteContext(
 
         if (status && status !== 'all') {
           if (status === 'to_pay') {
-            query = query.in('status', ['approved', 'overdue'])
+            query = query.in('status', [...toPayStatuses])
           } else {
             query = query.eq('status', status)
           }

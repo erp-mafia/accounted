@@ -481,6 +481,49 @@ describe('getAccountStatus', () => {
     })
   })
 
+  // PH 195: a connected account the bank had delivered nothing for compared
+  // an empty bank side with an empty ledger and read "Banken och bokföringen
+  // stämmer". Two zeros are no agreement.
+  it('never calls a bank account without a single bank row avstämd', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: cashAccount(ID_A, { balance: 40.53, balance_updated_at: '2026-10-20T07:48:46Z' }) })
+    bankStatusMock.mockResolvedValue(bankStatus({
+      bank_transaction_total: 0,
+      bank_transaction_count: 0,
+      gl_1930_balance: 0,
+      gl_1930_period_movement: 0,
+      matched_count: 0,
+      history_start: null,
+      is_reconciled: true,
+    }))
+    enqueue({ data: null }) // no transaction on the account
+    enqueue({ data: { last_synced_at: '2026-10-20T08:28:05Z' } })
+
+    const s = await getAccountStatus(supabase as never, COMPANY, bankAccountKey(ID_A), { today: '2026-10-20' })
+    if (!s) throw new Error('expected status')
+    expect(s.difference).toBe(0)
+    expect(s.is_reconciled).toBe(false)
+    expect(s.bank).toMatchObject({ no_bank_rows: true })
+  })
+
+  it('keeps a quiet window on an account with bank history avstämd', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: cashAccount(ID_A) })
+    bankStatusMock.mockResolvedValue(bankStatus({
+      bank_transaction_total: 0,
+      bank_transaction_count: 0,
+      gl_1930_period_movement: 0,
+      history_start: '2025-01-20',
+      is_reconciled: true,
+    }))
+    enqueue({ data: { created_at: '2026-10-01T06:00:00Z' } })
+
+    const s = await getAccountStatus(supabase as never, COMPANY, bankAccountKey(ID_A), { today: '2026-10-20' })
+    if (!s) throw new Error('expected status')
+    expect(s.is_reconciled).toBe(true)
+    expect(s.bank).toMatchObject({ no_bank_rows: false })
+  })
+
   it('leaves external_balance null on the bank kind when no balance was ever synced', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: cashAccount(ID_A, { balance: null, available_balance: null, balance_updated_at: null }) })

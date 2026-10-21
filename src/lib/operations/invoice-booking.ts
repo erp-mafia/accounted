@@ -102,7 +102,7 @@ export const invoicesBook = defineOperation({
   docs: {
     summary: 'Book a sent customer invoice that was issued without a verifikat (the deferred Bokför step).',
     description:
-      'For companies with defer_invoice_booking=true (Registrera men bokför inte): :send and :mark-sent issue the invoice without posting anything, and this step posts the revenue verifikat afterwards (Debit 1510 Kundfordringar / Credit revenue per VAT rate + utgående moms; ROT/RUT share on 1513; periodiserade lines on 29xx with their schedules). Dated on the invoice date. The invoice is claimed with a compare-and-set, so a concurrent book, payment or credit cancels this entry instead of double-posting. The delivered PDF, if archived at send, is linked to the verifikat. Idempotent. Dry-runnable: the dry run previews the exact lines and writes nothing.',
+      'For companies with defer_invoice_booking=true (Registrera men bokför inte): :send and :mark-sent issue the invoice without posting anything, and this step posts the revenue verifikat afterwards (Debit 1510 Kundfordringar / Credit revenue per VAT rate + utgående moms; ROT/RUT share on 1513; periodiserade lines on 29xx or 17xx with their schedules). Dated on the invoice date. An upplupen intäkt (17xx line, months before the invoice month) books each month of its period on the last day of that month right after; a month that cannot take the entry refuses the booking with INVOICE_ACCRUED_INCOME_PERIOD_LOCKED before anything is posted. The invoice is claimed with a compare-and-set, so a concurrent book, payment or credit cancels this entry instead of double-posting. The delivered PDF, if archived at send, is linked to the verifikat. Idempotent. Dry-runnable: the dry run previews the exact lines and writes nothing.',
     useWhen:
       'A customer invoice is sent or overdue, has no journal_entry_id, and the company books invoices in a separate step (defer_invoice_booking), typically after someone has checked the kontering.',
     doNotUseFor:
@@ -147,6 +147,8 @@ export const invoicesBook = defineOperation({
     'INVOICE_BOOK_CASH_METHOD',
     'PERIOD_LOCKED',
     'INVOICE_BOOK_NO_FISCAL_PERIOD',
+    'INVOICE_ACCRUED_INCOME_PERIOD_INVALID',
+    'INVOICE_ACCRUED_INCOME_PERIOD_LOCKED',
     'INVOICE_BOOK_CONFLICT',
     'INVOICE_BOOK_FAILED',
   ],

@@ -297,6 +297,44 @@ describe('gnubok_import_sie: update_account_names staging', () => {
     expect((staged[0].params as Record<string, unknown>).update_account_names).toBe(false)
   })
 
+  // #63: submitSIEJob drops the unused definitions' mappings at approval;
+  // the approver sees how many are left out.
+  it('stages only_used_accounts when asked and shows how many mappings it leaves out', async () => {
+    const { supabase, staged } = buildCapturingSupabase()
+    const unused = { sourceAccount: '2440', sourceName: 'Leverantörsskulder', targetAccount: '2440', targetName: 'Leverantörsskulder', confidence: 1, matchType: 'exact', isOverride: false }
+
+    const result = (await importSie.execute(
+      {
+        file_content: VALID_SIE.replace('#KONTO 6110', '#KONTO 2440 "Leverantörsskulder"\n#KONTO 6110'),
+        filename: 'bok.se',
+        mappings: [...COVER_VALID_SIE, unused],
+        only_used_accounts: true,
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' },
+    )) as { preview: Record<string, unknown> }
+
+    expect((staged[0].params as Record<string, unknown>).only_used_accounts).toBe(true)
+    expect(result.preview.only_used_accounts).toEqual({ mappings_kept: 2, mappings_left_out: 1 })
+  })
+
+  it('leaves only_used_accounts out of the staged params by default', async () => {
+    const { supabase, staged } = buildCapturingSupabase()
+
+    const result = (await importSie.execute(
+      { file_content: VALID_SIE, filename: 'bok.se', mappings: COVER_VALID_SIE },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' },
+    )) as { preview: Record<string, unknown> }
+
+    expect(staged[0].params as Record<string, unknown>).not.toHaveProperty('only_used_accounts')
+    expect(result.preview).not.toHaveProperty('only_used_accounts')
+  })
+
   it('passes opening_balance_series through to the staged params (issue #1882)', async () => {
     const { supabase, staged } = buildCapturingSupabase()
 

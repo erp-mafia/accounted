@@ -15,9 +15,10 @@ import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
-const leaf = vi.hoisted(() => ({ loadAttestBlockedInvoiceIds: vi.fn() }))
+const leaf = vi.hoisted(() => ({ loadAttestBlockedInvoiceIds: vi.fn(), loadCompanyAttestsSupplierInvoices: vi.fn() }))
 vi.mock('@/lib/supplier-invoices/attest-policy-read', () => ({
   loadAttestBlockedInvoiceIds: leaf.loadAttestBlockedInvoiceIds,
+  loadCompanyAttestsSupplierInvoices: leaf.loadCompanyAttestsSupplierInvoices,
 }))
 
 import { PAYMENT_ATTEST_GATE } from '../payment-attest-gate'
@@ -31,6 +32,7 @@ const LEAF = 'supplier-invoices/attest-policy-read'
 describe('PAYMENT_ATTEST_GATE', () => {
   beforeEach(() => {
     leaf.loadAttestBlockedInvoiceIds.mockReset()
+    leaf.loadCompanyAttestsSupplierInvoices.mockReset()
   })
 
   it('is the supplier invoice attest policy, owned by the module of its leaf, and frozen', () => {
@@ -51,6 +53,17 @@ describe('PAYMENT_ATTEST_GATE', () => {
     expect(leaf.loadAttestBlockedInvoiceIds).toHaveBeenCalledTimes(1)
     expect(leaf.loadAttestBlockedInvoiceIds).toHaveBeenCalledWith(supabase, 'company-1', ids)
     expect(leaf.loadAttestBlockedInvoiceIds.mock.calls[0]![2]).toBe(ids)
+  })
+
+  it('answers whether the company attests at all from supplier invoices\' one rule (crm#1141)', async () => {
+    const supabase = {} as SupabaseClient
+    for (const attests of [false, true]) {
+      leaf.loadCompanyAttestsSupplierInvoices.mockResolvedValueOnce(attests)
+      await expect(PAYMENT_ATTEST_GATE.attestsSupplierInvoices(supabase, 'company-1')).resolves.toBe(attests)
+    }
+    expect(leaf.loadCompanyAttestsSupplierInvoices).toHaveBeenCalledTimes(2)
+    expect(leaf.loadCompanyAttestsSupplierInvoices).toHaveBeenCalledWith(supabase, 'company-1')
+    expect(leaf.loadAttestBlockedInvoiceIds).not.toHaveBeenCalled()
   })
 
   it('passes a failed read on as it is: payment never reads it as no policy', async () => {

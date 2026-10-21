@@ -49,6 +49,33 @@ describe('SIE durable input boundaries', () => {
     expect(jobInput(job).mappings).toEqual(customMappings)
   })
 
+  it('seals the used and the own accounts\' mappings, without unused BAS ones, when the import asks (#63)', async () => {
+    vi.stubEnv('SIE_IMPORT_JOBS', 'true')
+    const source = '#RAR 0 20260101 20261231\n#KONTO 9999 "Unused custom account"\n#KONTO 2440 "Unused BAS account"\n' + content
+    const fullChart = [...mappings, ...['9999', '2440'].map(number => ({ ...mappings[1], sourceAccount: number, targetAccount: number }))]
+    const submit = async (submitted: typeof options & { onlyUsedAccounts?: boolean }) => {
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      enqueueMany([{ data: { id: 'period-1' } }, { data: null }, { data: { id: 'import-1', job_state: 'queued' } }])
+      await submitSIEJob(supabase as unknown as SupabaseClient, 'company-1', 'user-1', source, fullChart, submitted)
+      return vi.mocked(supabase.rpc).mock.calls[0][1].p_manifest.input
+    }
+
+    const usedOnly = await submit({ ...options, onlyUsedAccounts: true })
+    // 2440 is unused BAS: left out. 9999 is unused but outside BAS: kept.
+    expect(usedOnly.mappings.map((m: AccountMapping) => m.sourceAccount)).toEqual(['1930', '3001', '9999'])
+    expect(usedOnly.options.onlyUsedAccounts).toBe(true)
+    // The worker reads the sealed input on every lease, so a resumed
+    // preparation creates the same accounts.
+    const fileHash = createHash('sha256').update(source).digest('hex')
+    const sealed = { id: 'import-1', file_hash: fileHash, manifest: { input: { ...usedOnly, sourceHash: fileHash } } } as unknown as SIEJob
+    expect(jobInput(sealed).mappings.map(m => m.sourceAccount)).toEqual(['1930', '3001', '9999'])
+
+    // Without the flag the input is what it was before the option existed.
+    const whole = await submit(options)
+    expect(whole.mappings.map((m: AccountMapping) => m.sourceAccount)).toEqual(['1930', '3001', '9999', '2440'])
+    expect(whole.options).not.toHaveProperty('onlyUsedAccounts')
+  })
+
   it('retains an empty target for accounts the import will treat as unmapped', () => {
     const unmapped = { ...mappings[0], targetAccount: '', targetName: '' }
     expect(SIEJobMappingsSchema.parse([unmapped])).toEqual([unmapped])

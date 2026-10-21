@@ -28,6 +28,7 @@ import type {
   OpenPaymentsBankDetails,
   PolledAccount,
 } from './open-payments-client'
+import type { PollGiveUpReason } from './poll-loop'
 
 export interface FlowBank {
   bic: string
@@ -84,6 +85,13 @@ export interface FlowState {
   /** The bank's steps this consent has been through: a second one means a new QR replaced a scanned one. */
   stepsSeen: ConsentStep[]
   failure: { code: string | null; text: string | null } | null
+  /**
+   * The consent poll gave up (poll-loop.ts, crm#1355): the server refused it
+   * (the connection is gone or no longer waits for a BankID) or nothing
+   * answered for a while. The step says so instead of waiting forever, with
+   * Börja om or Försök igen. Null while the poll runs or has not started.
+   */
+  pollError: { reason: PollGiveUpReason; text: string } | null
   /** Set while the flow was reopened by a return from the bank's own page; cleared by the next start. */
   returned: FlowReturn | null
   starting: boolean
@@ -147,6 +155,7 @@ export function openFlow(mode: FlowMode, options: OpenFlowOptions = {}): FlowSta
     consentStep: null,
     stepsSeen: [],
     failure: returned?.result === 'error' ? { code: returned.code, text: null } : null,
+    pollError: null,
     returned,
     starting: false,
     startError: null,
@@ -188,6 +197,12 @@ export type FlowAction =
   | { type: 'started'; result: CreateConnectionResult }
   | { type: 'start_failed'; message: string }
   | { type: 'polled'; poll: ConnectionPoll }
+  /** The poll loop ended on a failure: `text` is the sentence the step shows. */
+  | { type: 'poll_gave_up'; reason: PollGiveUpReason; text: string }
+  /** Försök igen after nothing answered: the poll runs again on the same consent. */
+  | { type: 'poll_retry' }
+  /** Börja om after the poll was refused: back to the BankID start (a resumed connection: a new connection from the bank step). */
+  | { type: 'start_over' }
   | { type: 'account_toggled'; uid: string }
   | { type: 'ledger_set'; uid: string; ledger: string }
   | { type: 'activate' }
@@ -202,7 +217,7 @@ export type FlowAction =
 
 /** Whether the bank is still working on the consent: the poll keeps asking. */
 export function pollingActive(state: FlowState): boolean {
-  if (state.step !== 'bankid' || !state.connectionId) return false
+  if (state.step !== 'bankid' || !state.connectionId || state.pollError) return false
   if (state.mode === 'resume' && state.attempt === null) return state.pollState !== 'failed' && state.pollState !== 'valid'
   return state.attempt !== null && (state.pollState === null || state.pollState === 'pending' || state.pollState === 'partially_authorised')
 }
@@ -257,6 +272,48 @@ function mergeChallenge(state: FlowState, poll: ConnectionPoll): ConnectionAttem
     step: poll.step,
     failure_code: poll.failure_code,
     failure_text: poll.failure_text,
+  }
+}
+
+/**
+ * Börja om after a refused poll: the connection the flow waited on is gone or
+ * no longer waits for a BankID, so nothing on it can be resumed. A new
+ * connection, a switch and a renewal go back to the BankID start with the
+ * bank and the typed numbers kept, and the next start makes a new
+ * connection. A resumed connection has nothing of its own to start from: the
+ * flow opens anew at the bank step, the bank preselected when it is known.
+ * The payments offer, probed once at open, is kept either way.
+ */
+function startOver(state: FlowState): FlowState {
+  const kept = {
+    personalNumber: state.personalNumber,
+    psuAuthoriserId: state.psuAuthoriserId,
+    paymentsOffered: state.paymentsOffered,
+    verification: state.verification,
+    verificationUntil: state.verificationUntil,
+    verificationState: state.verificationState,
+    verificationLinkExpiresAt: state.verificationLinkExpiresAt,
+    verificationUrl: state.verificationUrl,
+  }
+  if (state.mode === 'resume') return { ...openFlow('new', { bank: state.bank?.bic ? state.bank : null }), ...kept }
+  return {
+    ...state,
+    ...kept,
+    step: 'bankid',
+    connectionId: null,
+    attempt: null,
+    pollState: null,
+    consentStep: null,
+    stepsSeen: [],
+    failure: null,
+    pollError: null,
+    returned: null,
+    starting: false,
+    startError: null,
+    secondConsent: false,
+    confirmed: false,
+    accounts: [],
+    selection: {},
   }
 }
 
@@ -318,7 +375,7 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
       return { ...state, psuAuthoriserId: action.value }
 
     case 'start':
-      return { ...state, starting: true, startError: null, failure: null, stepsSeen: [] }
+      return { ...state, starting: true, startError: null, failure: null, pollError: null, stepsSeen: [] }
 
     case 'started': {
       // A start can fail at once (the bank refused): the attempt says so with
@@ -329,6 +386,7 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
         starting: false,
         startError: null,
         failure: attempt.state === 'failed' ? { code: attempt.failure_code, text: attempt.failure_text } : null,
+        pollError: null,
         returned: null,
         connectionId: action.result.connection_id,
         attempt,
@@ -366,6 +424,15 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
       }
       return { ...base, failure: null }
     }
+
+    case 'poll_gave_up':
+      return { ...state, pollError: { reason: action.reason, text: action.text } }
+
+    case 'poll_retry':
+      return state.pollError?.reason === 'unreachable' ? { ...state, pollError: null } : state
+
+    case 'start_over':
+      return startOver(state)
 
     case 'account_toggled':
       return { ...state, selection: toggleAccount(state.selection, action.uid), activateError: null }

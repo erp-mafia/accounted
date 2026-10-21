@@ -17,6 +17,7 @@ import {
   rejectSupplierInvoice,
   saveAttestPolicy,
 } from '../attest-service'
+import { loadCompanyAttestsSupplierInvoices } from '../attest-policy-read'
 
 const ANNA = 'anna'
 const BO = 'bo'
@@ -233,6 +234,22 @@ describe('loadAttestBlockedInvoiceIds', () => {
   it('throws when it cannot read the policy: payment must not read "no attest needed" from an error', async () => {
     const mock = createTableMockSupabase({ company_attest_policies: { error: { message: 'boom' } } })
     await expect(loadAttestBlockedInvoiceIds(mock.supabase as unknown as SupabaseClient, 'company-1', ['a'])).rejects.toBeTruthy()
+  })
+})
+
+// crm#1141: the payment paths' unattested warning asks this, the one rule.
+describe('loadCompanyAttestsSupplierInvoices', () => {
+  it('kontantmetoden has no attest step; faktureringsmetoden and a company without a setting attest', async () => {
+    for (const [method, attests] of [['cash', false], ['accrual', true], [null, true]] as const) {
+      const mock = createTableMockSupabase({ company_settings: { data: method === null ? null : { accounting_method: method } } })
+      expect(await loadCompanyAttestsSupplierInvoices(mock.supabase as unknown as SupabaseClient, 'company-1'), String(method)).toBe(attests)
+      expect(mock.findCall('company_settings', 'eq')).toEqual(['company_id', 'company-1'])
+    }
+  })
+
+  it('a failed read answers true: the warning it decides never blocks, so it stays', async () => {
+    const mock = createTableMockSupabase({ company_settings: { error: { message: 'boom' } } })
+    expect(await loadCompanyAttestsSupplierInvoices(mock.supabase as unknown as SupabaseClient, 'company-1')).toBe(true)
   })
 })
 

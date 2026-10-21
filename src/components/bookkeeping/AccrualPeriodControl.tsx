@@ -20,7 +20,8 @@ import {
 } from '@/lib/bookkeeping/accruals/compute'
 import { accrualHintKey, accrualThresholdSek, shouldShowK2AccrualHint } from '@/components/bookkeeping/accrual-k2-hint'
 import {
-  isAccruedCostAccount,
+  DEFAULT_ACCRUED_REVENUE_ACCOUNT,
+  isAccruedBalanceAccount,
   periodEndsBeforeInvoiceMonth,
 } from '@/lib/bookkeeping/accruals/account-suggestions'
 import type { AccrualDirection, EntityType } from '@/types'
@@ -33,8 +34,9 @@ export interface AccrualFormValue {
 
 // The statutory BAS interim accounts per direction: a fixed list reads
 // better than a full account combobox and mirrors the DB CHECK (17xx/29xx).
-// A cost has two kinds: förutbetald (17xx, months from the invoice on) and
-// upplupen (29xx, months before the invoice month).
+// Each direction has two kinds: förutbetald (months from the invoice on) and
+// upplupen (months before the invoice month): a cost on 17xx / 29xx, revenue
+// on 29xx / 17xx.
 const BALANCE_ACCOUNT_OPTIONS: Record<AccrualDirection, Array<{ value: string; label: string }>> = {
   expense: [
     { value: '1710', label: '1710 Förutbetalda hyreskostnader' },
@@ -50,6 +52,9 @@ const BALANCE_ACCOUNT_OPTIONS: Record<AccrualDirection, Array<{ value: string; l
     { value: '2971', label: '2971 Förutbetalda hyresintäkter' },
     { value: '2972', label: '2972 Förutbetalda medlemsavgifter' },
     { value: '2979', label: '2979 Övriga förutbetalda intäkter' },
+    // Upplupen intäkt: BAS 1790, the catch-all interimsfordran (the API also
+    // takes 1750/1760/1780).
+    { value: DEFAULT_ACCRUED_REVENUE_ACCOUNT, label: `${DEFAULT_ACCRUED_REVENUE_ACCOUNT} Övriga upplupna intäkter` },
   ],
 }
 
@@ -98,9 +103,9 @@ export default function AccrualPeriodControl({
   entityType?: EntityType | null
   /**
    * The invoice date on the form. A period lying only in its month is
-   * refused by the API (nothing would be deferred), and with a 29xx account
-   * (upplupen kostnad) the period has to end before this date's month; the
-   * panel says so.
+   * refused by the API (nothing would be deferred), and with an upplupen
+   * account (29xx on a cost, 17xx on revenue) the period has to end before
+   * this date's month; the panel says so.
    */
   invoiceDate?: string | null
   /**
@@ -113,11 +118,11 @@ export default function AccrualPeriodControl({
   const t = useTranslations('accruals')
   const locale = useLocale()
 
-  // Upplupen kostnad: only an expense line on 29xx. Its months must lie
-  // before the invoice month (the API refuses anything else).
-  const accruedCost = direction === 'expense' && isAccruedCostAccount(value.balanceAccount)
-  const accruedCostReachesInvoiceMonth =
-    accruedCost && Boolean(value.end && invoiceDate) &&
+  // Upplupen kostnad (expense on 29xx) or intäkt (revenue on 17xx). Its
+  // months must lie before the invoice month (the API refuses anything else).
+  const accrued = isAccruedBalanceAccount(direction, value.balanceAccount)
+  const accruedReachesInvoiceMonth =
+    accrued && Boolean(value.end && invoiceDate) &&
     !periodEndsBeforeInvoiceMonth(value.end, invoiceDate as string)
 
   let preview: string | null = null
@@ -225,9 +230,11 @@ export default function AccrualPeriodControl({
           {previewInvalid ?? preview}
         </p>
       )}
-      {accruedCost && (
-        <p className={accruedCostReachesInvoiceMonth ? 'text-xs text-destructive' : 'text-xs text-muted-foreground'}>
-          {accruedCostReachesInvoiceMonth ? t('accrued_cost_period_invalid') : t('accrued_cost_hint')}
+      {accrued && (
+        <p className={accruedReachesInvoiceMonth ? 'text-xs text-destructive' : 'text-xs text-muted-foreground'}>
+          {direction === 'expense'
+            ? t(accruedReachesInvoiceMonth ? 'accrued_cost_period_invalid' : 'accrued_cost_hint')
+            : t(accruedReachesInvoiceMonth ? 'accrued_income_period_invalid' : 'accrued_income_hint')}
         </p>
       )}
       {showMaterialityHint && (

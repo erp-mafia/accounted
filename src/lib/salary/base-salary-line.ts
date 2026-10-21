@@ -9,6 +9,17 @@ export function baseSalaryLineType(salaryType: string): MoneyLineItemType {
 }
 
 /**
+ * The monthly salary a run row starts from: the employee's for monthly pay,
+ * none for hourly pay. Hourly gross is timlön x hours, so a monthly figure
+ * still stored on an hourly employee (left from before a switch to timlön)
+ * is never priced; copied onto the run row it only showed up as this run's
+ * "Månadslön" next to colleagues paid the same timlön (crm#1337).
+ */
+export function runMonthlySalaryFor(employee: { salary_type: string; monthly_salary: number | null }): number {
+  return employee.salary_type === 'monthly' ? employee.monthly_salary || 0 : 0
+}
+
+/**
  * Bring a DRAFT run row in line with the employee's current pay type.
  *
  * salary_run_employees.salary_type is a snapshot taken when the employee
@@ -19,6 +30,13 @@ export function baseSalaryLineType(salaryType: string): MoneyLineItemType {
  * pay type (agent feedback seq 869949). This swaps the base display line and
  * then rewrites the snapshot; the caller prices the new line (the engine
  * never reads it: gross comes from monthly_salary or rate x hours).
+ *
+ * The row's monthly salary is rewritten with the pay type (crm#1337): a row
+ * that was hourly never had a monthly salary of its own (the per-run salary
+ * command refreshes the pay type before it writes one), so a switch to
+ * monthly pay takes the employee's, and a switch to hourly pay clears it.
+ * Kept, the old figure priced a 0 kr Grundlön (or a salary from before the
+ * last switch) without a word.
  *
  * Order is chosen so a failure part-way leaves a state the next call
  * repairs: the new line is inserted only if the row has none of that type,
@@ -35,6 +53,8 @@ export async function refreshRunEmployeeSalaryType(
     companyId: string
     salaryRunEmployeeId: string
     salaryType: string
+    /** The row's monthly salary under the new pay type (runMonthlySalaryFor). */
+    monthlySalary: number
     /** Initial figures for the new display line. */
     amount: number
     quantity: number | null
@@ -80,7 +100,7 @@ export async function refreshRunEmployeeSalaryType(
 
   const { error: snapError } = await supabase
     .from('salary_run_employees')
-    .update({ salary_type: args.salaryType })
+    .update({ salary_type: args.salaryType, monthly_salary: args.monthlySalary })
     .eq('id', args.salaryRunEmployeeId)
     .eq('company_id', args.companyId)
   return { error: snapError }

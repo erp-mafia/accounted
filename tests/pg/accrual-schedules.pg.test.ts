@@ -189,7 +189,9 @@ describe('accrual_schedules constraints', () => {
     await expect(insertSchedule({ ...ctx, balanceAccount: '2960', targetAccount: '8410' })).resolves.toBeDefined()
   })
 
-  it('rejects a non-29xx balance account on a revenue schedule', async () => {
+  it('rejects a balance account outside 17xx/29xx on a revenue schedule', async () => {
+    // 20261021002400: a 17xx upplupen intäkt is accepted on revenue (see
+    // accrued-income-on-invoices.pg.test.ts); anything else stays refused.
     const ctx = await seedScheduleContext()
     const invoiceId = await insertCustomerInvoice(ctx.companyId, ctx.userId)
     await expect(
@@ -198,7 +200,7 @@ describe('accrual_schedules constraints', () => {
         direction: 'revenue',
         supplierInvoiceIdOverride: null,
         invoiceId,
-        balanceAccount: '1730',
+        balanceAccount: '1510',
         targetAccount: '3001',
       }),
     ).rejects.toThrow(/balance_account_range/i)

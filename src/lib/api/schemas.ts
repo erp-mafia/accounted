@@ -114,6 +114,10 @@ export const SIEJobOptionsSchema = z.object({
   openingBalanceSeries: z.string().trim().min(1).max(16).optional(),
   updateAccountNames: z.boolean().default(true),
   markImportedNoDocRequired: z.boolean().default(false),
+  // Create only the accounts the file uses (#63); unused #KONTO definitions
+  // stay in the archived original. Optional, not defaulted: a job submitted
+  // without it keeps its input (an identical retry's identity) byte for byte.
+  onlyUsedAccounts: z.boolean().optional(),
   onExistingPeriod: z.enum(['block','replace']).default('block'),
   supersedesImportId: z.string().uuid().optional(),
   // The file's #ORGNR is not the company's and the user said import anyway.
@@ -289,10 +293,13 @@ const expenseAccrualAccount = z
   .string()
   .regex(/^(17|29)\d{2}$/, 'Balanskonto för periodiserad kostnad måste vara ett 17xx-konto (förutbetald) eller 29xx-konto (upplupen)')
 
-/** Periodisering: förutbetalda intäkter live on 29xx. */
-const deferredRevenueAccount = z
+/**
+ * Periodisering of revenue: förutbetalda intäkter live on 29xx, upplupna
+ * intäkter (months before the invoice month) on 17xx.
+ */
+const revenueAccrualAccount = z
   .string()
-  .regex(/^29\d{2}$/, 'Balanskonto för periodiserad intäkt måste vara ett 29xx-konto')
+  .regex(/^(17|29)\d{2}$/, 'Balanskonto för periodiserad intäkt måste vara ett 29xx-konto (förutbetald) eller 17xx-konto (upplupen)')
 
 /**
  * Shared periodisering period rules for invoice line items: both dates or
@@ -604,12 +611,14 @@ export const CreateInvoiceItemSchema = z
       .transform((v) => v || null)
       .nullable()
       .optional(),
-    // Periodisering (förutbetald intäkt): defer the line's net revenue over
-    // the service period. The revenue entry credits the 29xx interim account
-    // instead of the revenue account; output VAT is never deferred.
+    // Periodisering: spread the line's net revenue over the service period.
+    // The revenue entry credits the interim account instead of the revenue
+    // account; output VAT is never deferred. 29xx is a förutbetald intäkt
+    // (months from the invoice on), 17xx an upplupen intäkt (months before
+    // the invoice month, each booked on its last day).
     accrual_period_start: isoDate.nullable().optional(),
     accrual_period_end: isoDate.nullable().optional(),
-    accrual_balance_account: deferredRevenueAccount.nullable().optional(),
+    accrual_balance_account: revenueAccrualAccount.nullable().optional(),
     // Dimensions PR7: per-item bag merged over the invoice's
     // default_dimensions on the revenue line this item books to.
     dimensions: DimensionsBagSchema.optional(),

@@ -259,6 +259,48 @@ describe('sealPersonnummer', () => {
   })
 })
 
+describe('updateEmployee: a corrected monthly salary reaches draft runs (crm#1337)', () => {
+  const args = (patch: Record<string, unknown>, dryRun = false) => ({
+    companyId: COMPANY_ID,
+    employeeId: EMPLOYEE_ID,
+    patch,
+    dryRun,
+  })
+
+  it('moves the draft rows that still hold the old salary to the new one', async () => {
+    mock.enqueue({ data: STORED }) // fetch existing
+    mock.enqueue({ data: summaryRow(true) }) // employee update
+    mock.enqueue({ data: [{ id: 'run-draft' }] }) // draft runs
+    mock.enqueue({ data: [{ id: 'sre-1' }] }) // compare-and-set
+    mock.enqueue({ data: null }) // Grundlön line
+
+    const result = await updateEmployee(supabase, args({ monthly_salary: 38000 }))
+
+    expect(result.ok).toBe(true)
+    expect(mock.findCall('salary_run_employees', 'update')).toEqual([
+      { monthly_salary: 38000, calculation_breakdown: null },
+    ])
+    // Only rows still on the old salary follow.
+    expect(mock.findCalls('salary_run_employees', 'eq')).toContainEqual(['monthly_salary', 35000])
+  })
+
+  it('leaves draft runs alone when the salary is unchanged, and on a dry run', async () => {
+    mock.enqueue({ data: STORED })
+    mock.enqueue({ data: summaryRow(true) })
+    const other = await updateEmployee(supabase, args({ phone: '0700000000' }))
+    mock.enqueue({ data: STORED })
+    mock.enqueue({ data: summaryRow(true) })
+    const same = await updateEmployee(supabase, args({ monthly_salary: 35000 }))
+    mock.enqueue({ data: STORED })
+    const dry = await updateEmployee(supabase, args({ monthly_salary: 38000 }, true))
+
+    expect([other.ok, same.ok, dry.ok]).toEqual([true, true, true])
+    expect(mock.findCalls('employees', 'update')).toHaveLength(2)
+    expect(mock.findCalls('salary_runs', 'select')).toHaveLength(0)
+    expect(mock.findCall('salary_run_employees', 'update')).toBeUndefined()
+  })
+})
+
 describe('updateEmployee: dry run and columns', () => {
   it('validates the merged row and answers it masked in the caller\'s columns, writing nothing', async () => {
     mock.enqueue({ data: STORED })

@@ -1,6 +1,7 @@
 'use client'
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
+import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { LEGACY_INBOX_HREF } from '@/lib/inkorg/flag'
@@ -14,8 +15,9 @@ import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { visibleWorklistTotal } from '@/lib/worklist/visible-total'
 import type { AiTaskCategory } from '@/lib/worklist/ai-task'
-import type { PaymentsVerificationDue, SupplierPayeeChangeDue } from '@/lib/worklist/types'
+import type { PaymentsVerificationDue, SuggestedMatch, SupplierPayeeChangeDue } from '@/lib/worklist/types'
 import { PayeeChangeDialog } from '@/components/payments/PayeeChangeDialog'
+import type { AllocationTransaction } from '@/components/transactions/MatchAllocationDialog'
 import { PAYMENTS_PAGE_PATH } from '@/lib/payments/orders/page-path'
 import type { MissingUnderlagSample } from '@/lib/worklist/missing-underlag'
 import { NO_AI_CONNECTION, type AiConnection } from '@/lib/onboarding/ai-clients'
@@ -54,6 +56,9 @@ import type {
   WorklistCounts,
 } from '@/lib/worklist/types'
 
+// Loaded when a several-invoice row's "Matcha" is pressed, not with Hem.
+const MatchAllocationDialog = dynamic(() => import('@/components/transactions/MatchAllocationDialog'))
+
 /**
  * AttGoraSection: the dashboard's unified worklist ("Att göra").
  *
@@ -66,7 +71,10 @@ import type {
  * Suggested transaction↔invoice matches are one Bokför row with their count
  * (lib/worklist suggested_match), leading to Transaktioner, whose inbox lists
  * the rows with a match first. They are a subset of the transactions the row
- * above counts, so the row carries no list of its own.
+ * above counts, so the row carries no list of its own. The exception is a
+ * payment that settles several invoices of one counterparty (PH 192): the
+ * inbox has no hint for it, so it is its own row here, and "Matcha" opens
+ * the batch allocation with the invoices already picked.
  */
 
 interface ExpiringBankConnection {
@@ -106,6 +114,15 @@ interface AttGoraSectionProps {
    * each is held until it is decided.
    */
   supplierPayeeChanges?: SupplierPayeeChangeDue[]
+  /**
+   * Bank rows that settle several open invoices of one counterparty
+   * (lib/worklist listSuggestedMatches, the matches carrying `allocations`):
+   * one Bokför row each, "Betalningen matchar 2 fakturor från X", whose
+   * "Matcha" opens the batch allocation (MatchAllocationDialog) prefilled.
+   * They are part of counts.suggested_match, so the generic row counts the
+   * rest.
+   */
+  invoiceSets?: SuggestedMatch[]
   /**
    * Open suggestions (lib/worklist suggestion; lib/suggestions/list.ts): at
    * most three Förslag cards, ranked, each answered with Ja, Inte nu or Visa
@@ -229,6 +246,7 @@ export default function AttGoraSection({
   bankSwitches = [],
   paymentsVerification = null,
   supplierPayeeChanges = [],
+  invoiceSets = [],
   suggestions = [],
   grantReview = null,
   expiringBankConnections = [],
@@ -257,6 +275,23 @@ export default function AttGoraSection({
   const [payeeChanges, setPayeeChanges] = useState(supplierPayeeChanges)
   const [openSuggestions, setOpenSuggestions] = useState(suggestions)
   const [reviewingPayeeId, setReviewingPayeeId] = useState<string | null>(null)
+  const [invoiceSetRows, setInvoiceSetRows] = useState(invoiceSets)
+  // The several-invoice row whose batch allocation is open.
+  const [allocating, setAllocating] = useState<SuggestedMatch | null>(null)
+  // One object per opening: the dialog reloads its candidates when it changes.
+  const allocatingTransaction = useMemo<AllocationTransaction | null>(
+    () =>
+      allocating
+        ? {
+            id: allocating.transaction_id,
+            amount: allocating.transaction_amount,
+            currency: allocating.transaction_currency,
+            date: allocating.transaction_date,
+            description: allocating.transaction_description,
+          }
+        : null,
+    [allocating],
+  )
   // A router.refresh() (RefreshWhenRestored) hands this mounted section a new
   // server render: take its numbers instead of keeping the first ones. Same
   // adjust-state-during-render pattern as DashboardNav.
@@ -267,6 +302,7 @@ export default function AttGoraSection({
     setTotal(worklist.total)
     setOverdueInvoices(worklist.overdueInvoices ?? null)
     setPayeeChanges(supplierPayeeChanges)
+    setInvoiceSetRows(invoiceSets)
     setOpenSuggestions(suggestions)
   }
 
@@ -291,11 +327,15 @@ export default function AttGoraSection({
   }
 
   const showInboxDocuments = hasAi && counts.inbox_document > 0
+  // The several-invoice rows have their own lines; the generic row counts
+  // the single-invoice matches the Transaktioner inbox lists first.
+  const otherSuggestedMatches = Math.max(0, counts.suggested_match - invoiceSetRows.length)
   const bokforRows =
     counts.book_transaction > 0 ||
     counts.book_skattekonto > 0 ||
     showInboxDocuments ||
-    counts.suggested_match > 0
+    invoiceSetRows.length > 0 ||
+    otherSuggestedMatches > 0
   const betalaRows = expensePayouts.length > 0 || skattekontoPayment !== null
   const granskaRows =
     attestsDue.length > 0 ||
@@ -395,6 +435,42 @@ export default function AttGoraSection({
       }
     />
   )
+
+  // One row per bank row that settles several invoices of one counterparty
+  // (PH 192): the label opens the row in Transaktioner, "Matcha" the batch
+  // allocation with the invoices picked, confirmed there before anything is
+  // booked.
+  const invoiceSetRow = (item: SuggestedMatch) => {
+    const count = item.allocations?.length ?? 0
+    const receipt = item.kind === 'invoice'
+    const label = item.counterparty_name
+      ? t(receipt ? 'row_invoice_set_receipt' : 'row_invoice_set_payment', { count, name: item.counterparty_name })
+      : t(receipt ? 'row_invoice_set_receipt_unnamed' : 'row_invoice_set_payment_unnamed', { count })
+    return (
+      <WorklistRow
+        key={`invoice-set-${item.transaction_id}`}
+        href={`/transactions?highlight=${item.transaction_id}`}
+        icon={Link2}
+        label={label}
+        hint={t('row_invoice_set_hint')}
+        detail={
+          item.candidate_number
+            ? t('row_invoice_set_detail', { date: formatDate(item.transaction_date), invoices: item.candidate_number })
+            : formatDate(item.transaction_date)
+        }
+        badge={
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {formatCurrency(Math.abs(item.transaction_amount), item.transaction_currency)}
+          </span>
+        }
+        action={
+          <Button size="sm" variant="outline" onClick={() => setAllocating(item)}>
+            {t('invoice_set_match')}
+          </Button>
+        }
+      />
+    )
+  }
 
   // One row per supplier invoice whose bank details wait for a decision: the
   // label opens the invoice, "Granska" the decision itself. A changed account
@@ -504,12 +580,13 @@ export default function AttGoraSection({
                         count={counts.book_skattekonto}
                       />
                     )}
-                    {counts.suggested_match > 0 && (
+                    {invoiceSetRows.map(invoiceSetRow)}
+                    {otherSuggestedMatches > 0 && (
                       <WorklistRow
                         href="/transactions"
                         icon={Link2}
                         label={t('row_suggested_matches')}
-                        count={counts.suggested_match}
+                        count={otherSuggestedMatches}
                       />
                     )}
                     {showInboxDocuments && (
@@ -814,6 +891,23 @@ export default function AttGoraSection({
           hasBank={hasActiveBankConnection}
           hasSkatteverket={hasSkatteverketConnection}
           skvOmbudEnabled={skvOmbudEnabled}
+        />
+      )}
+      {allocating && (
+        <MatchAllocationDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setAllocating(null)
+          }}
+          transaction={allocatingTransaction}
+          initialAllocations={allocating.allocations ?? null}
+          onSuccess={() => {
+            // Booked: the row is done. The counts catch up from the server.
+            const bookedId = allocating.transaction_id
+            setInvoiceSetRows((prev) => prev.filter((row) => row.transaction_id !== bookedId))
+            setCounts((prev) => ({ ...prev, suggested_match: Math.max(0, prev.suggested_match - 1) }))
+            void refetchCounts()
+          }}
         />
       )}
       {reviewingPayeeId && (

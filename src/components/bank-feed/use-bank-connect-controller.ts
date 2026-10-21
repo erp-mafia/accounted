@@ -25,7 +25,7 @@ import {
   type SignerInput,
 } from './open-payments-client'
 import { normalizePersonalNumber } from './personal-number'
-import { startPollLoop } from './poll-loop'
+import { startPollLoop, type PollGiveUpReason } from './poll-loop'
 import { selectionPayload } from './account-selection'
 import type { BankConnectSession } from './use-bank-connect-flow'
 
@@ -157,6 +157,17 @@ export function useBankConnectController({ session, backend, banks, banksFailed,
     return getErrorMessage(body, { locale, fallback })
   }
 
+  // The sentence for a consent poll the loop gave up on (crm#1355): a
+  // connection that is gone says so plainly, any other refusal in the
+  // server's own words, and a poll nothing answered asks for a moment. A ref,
+  // so the poll effect below keeps its dependencies.
+  const pollGiveUpText = useRef<(error: unknown, reason: PollGiveUpReason) => string>(() => '')
+  pollGiveUpText.current = (error, reason) => {
+    if (reason === 'unreachable') return t('poll_unreachable')
+    if (error instanceof OpenPaymentsClientError && error.status === 404) return t('poll_gone')
+    return describe(error, t('poll_gone'))
+  }
+
   // Whether the person has a signer on file and whether payments through the
   // bank are on offer (available, not yet verified). One probe of each at
   // open, so the step count is settled before the person reaches the accounts.
@@ -240,7 +251,9 @@ export function useBankConnectController({ session, backend, banks, banksFailed,
   // Poll while the bank works on the consent. One request at a time; a
   // consent waiting for a second signatory is asked about less often. The
   // typed personnummer rides along (the bank wants the PSU on every call);
-  // the server never stores it.
+  // the server never stores it. A poll the server refuses (the connection is
+  // gone, or no longer waits for a BankID) or that nothing answers ends the
+  // loop (poll-loop.ts), and the step says so instead of waiting forever.
   const polling = pollingActive(state)
   const secondSigner = state.pollState === 'partially_authorised'
   const pollAtOnce = state.attempt === null
@@ -264,6 +277,7 @@ export function useBankConnectController({ session, backend, banks, banksFailed,
       },
       intervalMs: secondSigner ? SECOND_SIGNER_POLL_MS : CONSENT_POLL_MS,
       immediate: pollAtOnce,
+      onGiveUp: (error, reason) => dispatch({ type: 'poll_gave_up', reason, text: pollGiveUpText.current(error, reason) }),
     })
   }, [polling, connectionId, secondSigner, pollAtOnce, typedPersonalNumber, typedPsuAuthoriserId])
 
