@@ -8,7 +8,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { addEmployeeToRun, removeEmployeeFromRun, setRunEmployeeSalary } from '@/lib/salary/run-employees'
+import {
+  addEmployeeToRun,
+  followEmployeeSalaryInDraftRuns,
+  removeEmployeeFromRun,
+  setRunEmployeeSalary,
+} from '@/lib/salary/run-employees'
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const RUN_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
@@ -123,6 +128,34 @@ describe('addEmployeeToRun', () => {
     ])
   })
 
+  it('gives an hourly employee no monthly salary on the run, even with one left on the employee (crm#1337)', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    // A monthly figure kept on the employee from before the switch to timlön.
+    mock.enqueue({ data: { ...MONTHLY_EMPLOYEE, salary_type: 'hourly', monthly_salary: 28000, hourly_rate: 185 } })
+    mock.enqueue({ data: null }) // duplicate check: none
+    mock.enqueue({ data: { id: SRE_ID } })
+    mock.enqueue({ data: null }) // line insert
+
+    const result = await addEmployeeToRun(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      employeeId: EMPLOYEE_ID,
+      hoursWorked: 10,
+    })
+
+    expect(result.ok).toBe(true)
+    expect(mock.findCall('salary_run_employees', 'insert')?.[0]).toMatchObject({
+      salary_type: 'hourly',
+      monthly_salary: 0,
+    })
+    expect(mock.findCall('salary_line_items', 'insert')?.[0]).toMatchObject({
+      item_type: 'hourly_salary',
+      quantity: 10,
+      unit_price: 185,
+      amount: 1850,
+    })
+  })
+
   it('dry-run returns the would-be snapshot without inserting', async () => {
     mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
     mock.enqueue({ data: MONTHLY_EMPLOYEE })
@@ -159,6 +192,88 @@ describe('addEmployeeToRun', () => {
     })
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.code).toBe('SALARY_RUN_EMPLOYEE_DUPLICATE')
+  })
+})
+
+describe('followEmployeeSalaryInDraftRuns (crm#1337)', () => {
+  const args = (
+    previous: Record<string, unknown>,
+    current: Record<string, unknown>,
+  ) => ({ companyId: COMPANY_ID, employeeId: EMPLOYEE_ID, previous, current })
+  const MONTHLY = { salary_type: 'monthly', monthly_salary: 30000, employment_degree: 80 }
+
+  it('sets the new salary on draft rows still holding the old one, compare-and-set, and clears the calculation', async () => {
+    mock.enqueue({ data: [{ id: RUN_ID }, { id: 'run-2' }] }) // draft runs
+    mock.enqueue({ data: [{ id: SRE_ID }] }) // rows that followed
+    mock.enqueue({ data: null }) // Grundlön line
+
+    const result = await followEmployeeSalaryInDraftRuns(
+      supabase,
+      args(MONTHLY, { ...MONTHLY, monthly_salary: 32000 }),
+    )
+
+    expect(result).toEqual({ ok: true, data: { salary_run_employee_ids: [SRE_ID] } })
+    expect(mock.findCalls('salary_runs', 'eq')).toEqual([
+      ['company_id', COMPANY_ID],
+      ['status', 'draft'],
+    ])
+    expect(mock.findCall('salary_run_employees', 'update')).toEqual([
+      { monthly_salary: 32000, calculation_breakdown: null },
+    ])
+    expect(mock.findCalls('salary_run_employees', 'eq')).toEqual([
+      ['company_id', COMPANY_ID],
+      ['employee_id', EMPLOYEE_ID],
+      ['salary_type', 'monthly'],
+      // A row with any other figure had a salary typed in the run: kept.
+      ['monthly_salary', 30000],
+    ])
+    expect(mock.findCall('salary_run_employees', 'in')).toEqual(['salary_run_id', [RUN_ID, 'run-2']])
+    // The display line at the employee's degree, as the calculation prices it.
+    expect(mock.findCall('salary_line_items', 'update')).toEqual([{ amount: 25600 }])
+    expect(mock.findCall('salary_line_items', 'in')).toEqual(['salary_run_employee_id', [SRE_ID]])
+  })
+
+  it('touches no line when no draft row still held the old salary', async () => {
+    mock.enqueue({ data: [{ id: RUN_ID }] })
+    mock.enqueue({ data: [] })
+
+    const result = await followEmployeeSalaryInDraftRuns(
+      supabase,
+      args(MONTHLY, { ...MONTHLY, monthly_salary: 32000 }),
+    )
+
+    expect(result).toEqual({ ok: true, data: { salary_run_employee_ids: [] } })
+    expect(mock.findCall('salary_line_items', 'update')).toBeUndefined()
+  })
+
+  it('writes nothing without a draft run', async () => {
+    mock.enqueue({ data: [] })
+
+    await followEmployeeSalaryInDraftRuns(supabase, args(MONTHLY, { ...MONTHLY, monthly_salary: 32000 }))
+
+    expect(mock.findCall('salary_run_employees', 'update')).toBeUndefined()
+  })
+
+  it('reads nothing for an unchanged salary or an employee paid hourly', async () => {
+    await followEmployeeSalaryInDraftRuns(supabase, args(MONTHLY, { ...MONTHLY, employment_degree: 100 }))
+    await followEmployeeSalaryInDraftRuns(
+      supabase,
+      args(MONTHLY, { salary_type: 'hourly', monthly_salary: 32000, employment_degree: 100 }),
+    )
+
+    expect(mock.supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('reports a failed read without writing', async () => {
+    mock.enqueue({ data: null, error: { message: 'boom' } })
+
+    const result = await followEmployeeSalaryInDraftRuns(
+      supabase,
+      args(MONTHLY, { ...MONTHLY, monthly_salary: 32000 }),
+    )
+
+    expect(result).toMatchObject({ ok: false, code: 'INTERNAL_ERROR' })
+    expect(mock.findCall('salary_run_employees', 'update')).toBeUndefined()
   })
 })
 
@@ -391,7 +506,7 @@ describe('setRunEmployeeSalary', () => {
     }
     const sreUpdates = mock.findCalls('salary_run_employees', 'update').map((a) => a[0])
     expect(sreUpdates).toEqual([
-      { salary_type: 'monthly' },
+      { salary_type: 'monthly', monthly_salary: 30000 },
       { monthly_salary: 30000, calculation_breakdown: null },
     ])
     expect(mock.findCalls('salary_line_items', 'in').at(-1)).toEqual(['item_type', ['hourly_salary']])

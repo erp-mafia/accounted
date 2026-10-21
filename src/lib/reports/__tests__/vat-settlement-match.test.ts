@@ -171,11 +171,14 @@ describe('helårsmoms refund settled after a closed broken räkenskapsår', () =
     expect(outcome).toMatchObject({ ok: false, code: 'VAT_SETTLEMENT_ALREADY_BOOKED', details: { journal_entry_id: refund.id } })
   })
 
-  it('keeps gating the next year, whose declaration reads the balances the opening balance carried in', async () => {
+  it('leaves the next year ungated: its declaration no longer reads what the opening balance carried in (crm#1333)', async () => {
+    // The opening balance carries the closed year's VAT, which that year's
+    // declaration already holds; the refund settles the closed year, so it
+    // belongs to one period only, and the next year has nothing to settle.
     const supabase = ledger({ fiscalPeriods: years, entries: [purchases, openingBalance, refund], shaped: [refund], lockedThrough: '2026-09-30' })
     const proposal = await buildVatSettlementProposal(supabase, CO, 'yearly', 2027, 1)
-    expect(proposal.existing_entries.map((e) => e.id)).toEqual([refund.id])
-    expect(proposal.existing_entries[0]).not.toHaveProperty('late_settlement')
+    expect(proposal.filed_net).toBe(0)
+    expect(proposal.existing_entries).toEqual([])
   })
 })
 
@@ -255,5 +258,39 @@ describe('quarterly momsredovisning', () => {
       ok: false,
       code: 'VAT_SETTLEMENT_ALREADY_BOOKED',
     })
+  })
+})
+
+describe('an opening balance in a quarterly momsredovisning (crm#1333)', () => {
+  const years = calendarYears([], [2026])
+  // A migration mid-year: the opening balance carries January's VAT (2611 500,
+  // 2641 40), whose verifikat are not in the books.
+  const openingBalance = (date: string) =>
+    entry(date, [
+      { account_number: '2641', debit: 40 },
+      { account_number: '1930', debit: 460 },
+      { account_number: '2611', credit: 500 },
+    ], { source_type: 'opening_balance' })
+  const march = entry('2026-03-10', [{ account_number: '1930', debit: 1_150 }, { account_number: '2641', debit: 100 }, { account_number: '2611', credit: 1_250 }])
+
+  it('settles an opening balance dated inside the quarter with the quarter: it carries the quarter\'s own days', async () => {
+    const supabase = ledger({ fiscalPeriods: years, entries: [openingBalance('2026-02-01'), march], shaped: [] })
+    const q1 = await buildVatSettlementProposal(supabase, CO, 'quarterly', 2026, 1)
+    expect(q1.filed_net).toBe(1_610)
+  })
+
+  it('leaves an opening balance dated on the quarter\'s first day out: it carries only earlier quarters', async () => {
+    const supabase = ledger({ fiscalPeriods: years, entries: [openingBalance('2026-01-01'), march], shaped: [] })
+    const q1 = await buildVatSettlementProposal(supabase, CO, 'quarterly', 2026, 1)
+    expect(q1.filed_net).toBe(1_150)
+  })
+
+  it('leaves an opening balance inside the quarter out when the quarter\'s earlier days are in the books: no double count', async () => {
+    // A räkenskapsår starting 1 February rolls its IB forward from the
+    // books, which also hold January's own verifikat (2611 500, 2641 40).
+    const january = entry('2026-01-20', [{ account_number: '1930', debit: 460 }, { account_number: '2641', debit: 40 }, { account_number: '2611', credit: 500 }])
+    const supabase = ledger({ fiscalPeriods: years, entries: [january, openingBalance('2026-02-01'), march], shaped: [] })
+    const q1 = await buildVatSettlementProposal(supabase, CO, 'quarterly', 2026, 1)
+    expect(q1.filed_net).toBe(1_610)
   })
 })

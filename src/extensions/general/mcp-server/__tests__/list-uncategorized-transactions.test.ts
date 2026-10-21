@@ -87,6 +87,26 @@ describe('gnubok_list_uncategorized_transactions', () => {
     expect(inCalls).toEqual([['id', ['ca-1930']]])
   })
 
+  it('carries each row\'s source id, so a Stripe row and its fee row trace back to the balance transaction (crm#1347)', async () => {
+    const rows = [
+      { id: 't-1', date: '2026-03-09', description: 'Stripe-betalning', amount: 100, currency: 'SEK', merchant_name: null, reference: null, is_business: null, category: null, cash_account_id: null, external_id: 'stripe_acct_1_txn_1' },
+      { id: 't-2', date: '2026-03-09', description: 'Stripe-avgift (Stripe-betalning)', amount: -3, currency: 'SEK', merchant_name: null, reference: null, is_business: null, category: null, cash_account_id: null, external_id: 'stripe_acct_1_txn_1_fee' },
+    ]
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueuePage(enqueue, rows)
+
+    const result = (await tool.execute({ limit: 20 }, 'company-1', 'user-1', supabase as never)) as {
+      transactions: Array<{ transaction_id: string; external_id: string | null }>
+    }
+
+    const select = String(findCalls('transactions', 'select')[0][0]).split(',').map((c) => c.trim())
+    expect(select).toContain('external_id')
+    expect(result.transactions.map((t) => [t.transaction_id, t.external_id])).toEqual([
+      ['t-1', 'stripe_acct_1_txn_1'],
+      ['t-2', 'stripe_acct_1_txn_1_fee'],
+    ])
+  })
+
   it('narrows the page and its count to one bank account when cash_account_id is given', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueuePage(enqueue, [{ id: 't-1', date: '2026-03-09', description: 'A', amount: -10, currency: 'SEK', merchant_name: null, reference: null, is_business: null, category: null, cash_account_id: null }])
@@ -120,6 +140,18 @@ describe('gnubok_list_uncategorized_transactions', () => {
     await expect(
       tool.execute({ limit: 20, cash_account_id: '1930' }, 'company-1', 'user-1', supabase as never),
     ).rejects.toThrow(/cash_account_id must be a cash account UUID/)
+  })
+
+  it('returns the counterparty IBAN the bank sent, the only payee a foreign payment may name (PH 196)', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueuePage(enqueue, [
+      { id: 't-foreign', date: '2026-10-16', description: 'UTLANDSBETALNING', amount: -5000, currency: 'SEK', merchant_name: 'UTLANDSBETALNING', reference: 'UTLANDSBETALNING', is_business: null, category: null, cash_account_id: null, counterparty_account: null, counterparty_iban: 'NO9386011117947' },
+    ])
+
+    const result = (await tool.execute({ limit: 20 }, 'company-1', 'user-1', supabase as never)) as { transactions: Array<Record<string, unknown>> }
+
+    expect(String(findCalls('transactions', 'select')[0][0])).toContain('counterparty_iban')
+    expect(result.transactions[0]).toMatchObject({ transaction_id: 't-foreign', counterparty_account: null, counterparty_iban: 'NO9386011117947' })
   })
 
   it('reads the work queue server-side: not ignored, not private, anchored to no verifikat', async () => {

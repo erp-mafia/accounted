@@ -1,7 +1,8 @@
 'use client'
 
 // Periodiseringar: running accrual schedules (förutbetalda kostnader 17xx,
-// upplupna kostnader 29xx / förutbetalda intäkter 29xx) created from
+// upplupna kostnader 29xx / förutbetalda intäkter 29xx, upplupna intäkter
+// 17xx) created from
 // invoice lines. Not on the stays-Swedish list (.claude/rules/i18n.md), so
 // the chrome reads the `periodiseringar` namespace; account numbers and
 // server error texts pass through as they are.

@@ -2576,6 +2576,52 @@
               "amount_in_currency": null
             }
           ]
+        },
+        {
+          "voucher_series": "D",
+          "voucher_number": 1,
+          "entry_date": "2026-05-10",
+          "description": "Leverantörsfaktura 88245, Demokafé AB (ankomstnr 2)",
+          "source_type": "supplier_invoice_registered",
+          "status": "posted",
+          "notes": "Extern representation, kundlunch. Syfte: uppföljning av webbutvecklingsuppdraget och planering av nästa fas. Deltagare: Demo Användare (Sandlådan Konsult) och Karin Björk (Björk & Partner AB).",
+          "reverses": null,
+          "corrects": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "268.8",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Leverantörsfaktura 88245, Demokafé AB (ankomstnr 2)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "28.8",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 12% Leverantörsfaktura 88245, Demokafé AB (ankomstnr 2)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "240",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6072",
+              "line_description": "Leverantörsfaktura 88245, Demokafé AB (ankomstnr 2)",
+              "amount_in_currency": null
+            }
+          ]
         }
       ]
     }

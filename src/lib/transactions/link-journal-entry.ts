@@ -36,6 +36,7 @@ import { resolveInvoiceSettlementSide } from '@/lib/invoices/invoice-settlement-
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import {
+  bankLinkMethod,
   hasLiveJournalEntryLink,
   prepareBankLink,
   writeBankLink,
@@ -202,7 +203,7 @@ function linkRefusal(
 // checks, the optimistic-lock invoice update, the invoice_payments insert,
 // and the compensating-rollback path. No select('*').
 const LINK_TX_COLUMNS =
-  'id, date, amount, currency, exchange_rate, description, merchant_name, cash_account_id, journal_entry_id, invoice_id, is_business, is_ignored, potential_invoice_id, potential_supplier_invoice_id, potential_rot_rut_payout_request_id'
+  'id, date, amount, currency, exchange_rate, description, merchant_name, cash_account_id, journal_entry_id, reconciliation_method, invoice_id, is_business, is_ignored, potential_invoice_id, potential_supplier_invoice_id, potential_rot_rut_payout_request_id'
 
 export async function linkTransactionToJournalEntry(
   supabase: SupabaseClient,
@@ -399,6 +400,8 @@ export async function linkTransactionToJournalEntry(
   const priorTxState = {
     // null, or a stale 'reversed'-entry id we're clearing (validated not-live above)
     journal_entry_id: prepared.previousJournalEntryId,
+    // The link writes its reconciliation_method (writeBankLink).
+    reconciliation_method: (transaction.reconciliation_method as string | null | undefined) ?? null,
     // A link to a voucher on a sibling ledger moved the row there.
     ...(prepared.repointCashAccountId ? { cash_account_id: transaction.cash_account_id } : {}),
     invoice_id: transaction.invoice_id,
@@ -574,6 +577,7 @@ export async function linkTransactionToJournalEntry(
     invoiceId,
     newState: {
       journal_entry_id: journalEntryId,
+      reconciliation_method: bankLinkMethod(prepared.entry, transactionId),
       invoice_id: invoiceId ?? null,
       invoice_status: invoice ? newStatus : null,
     },

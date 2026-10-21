@@ -31,3 +31,21 @@ export function consentState(consentExpires: string | null, now: number): Consen
   const daysLeft = (until - now) / 86_400_000
   return daysLeft <= RENEWAL_WINDOW_DAYS ? { kind: 'renew_by', until: consentExpires } : { kind: 'active', until: consentExpires }
 }
+
+/**
+ * What one Open Payments connection row says, from its stored status first
+ * and its consent date second. The date only says how long a live consent
+ * has left: a row the sync marked 'expired' while its date is still ahead
+ * (the bank refused it for good, or ended the consent early, crm#1355) has
+ * ended all the same, and reading the date alone showed it as active.
+ */
+export type ConnectionRowState = ConsentState | { kind: 'choose_accounts' } | { kind: 'sync_failed' } | { kind: 'ended' }
+
+export function connectionRowState(status: string, consentExpires: string | null, now: number): ConnectionRowState {
+  const consent = consentState(consentExpires, now)
+  if (consent.kind === 'expired') return consent
+  if (status === 'expired') return { kind: 'ended' }
+  if (status === 'pending_selection') return { kind: 'choose_accounts' }
+  if (status === 'error') return { kind: 'sync_failed' }
+  return consent
+}

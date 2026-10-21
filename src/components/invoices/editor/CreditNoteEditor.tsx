@@ -19,6 +19,8 @@ import { EditorEmailPreview, type EmailTextOverride } from './EditorEmailPreview
 import { EditorStatusLine } from './EditorStatusLine'
 import { EditorSection } from './EditorSection'
 import { SendConfirmDialog, type ConfirmVoucher } from './SendConfirmDialog'
+import type { InvoiceAttachmentFile } from '@/components/invoices/InvoiceAttachmentsSection'
+import { offersInvoiceAttachments } from '@/lib/invoices/invoice-attachment-limits'
 import { useInvoicePdfPreview } from './use-editor-previews'
 import { buildSummaryVatLines } from '@/lib/invoices/editor/summary-vat'
 import {
@@ -91,6 +93,8 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
   const [pane, setPane] = useState<EditorPane>('form')
   const [confirmIntent, setConfirmIntent] = useState<CreditIntent | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  // Bilagor picked in the confirm (#79): linked once the send has created the credit note.
+  const [stagedAttachments, setStagedAttachments] = useState<InvoiceAttachmentFile[]>([])
 
   useEffect(() => {
     let cancelled = false
@@ -250,6 +254,7 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
         documentType: 'invoice',
         payload: { credited_invoice_id: invoice.id, reason },
         channel,
+        attachmentDocumentIds: channel === 'email' ? stagedAttachments.map((file) => file.document_id) : undefined,
         email:
           channel === 'email'
             ? {
@@ -619,6 +624,11 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
         title={confirmTitle}
         rows={confirmRows}
         voucher={confirmVoucher}
+        attachments={
+          canWrite && offersInvoiceAttachments({ channel: confirmChannel, status: null, isSandbox, canEmail })
+            ? { kind: 'staged', files: stagedAttachments, onChange: setStagedAttachments }
+            : null
+        }
         confirmLabel={confirmLabel}
         confirmDisabled={!canWrite || (confirmChannel === 'email' && isCompanyAdmin && extraCcError !== null)}
         busy={isSubmitting}

@@ -44,6 +44,8 @@ export const TARGET_PERIOD_CLOSED = 'TARGET_PERIOD_CLOSED' as const
 export const TARGET_PERIOD_LOCKED = 'TARGET_PERIOD_LOCKED' as const
 export const SI_ACCRUED_COST_PERIOD_INVALID = 'SI_ACCRUED_COST_PERIOD_INVALID' as const
 export const SI_ACCRUED_COST_PERIOD_LOCKED = 'SI_ACCRUED_COST_PERIOD_LOCKED' as const
+export const INVOICE_ACCRUED_INCOME_PERIOD_INVALID = 'INVOICE_ACCRUED_INCOME_PERIOD_INVALID' as const
+export const INVOICE_ACCRUED_INCOME_PERIOD_LOCKED = 'INVOICE_ACCRUED_INCOME_PERIOD_LOCKED' as const
 export const CUTOFF_CARRY_REVERSAL_DATE = 'CUTOFF_CARRY_REVERSAL_DATE' as const
 export const KONTANTMETOD_CARRY_HAS_SETTLEMENTS = 'KONTANTMETOD_CARRY_HAS_SETTLEMENTS' as const
 export const CUTOFF_CARRY_CORRECTION_REFUSED = 'CUTOFF_CARRY_CORRECTION_REFUSED' as const
@@ -467,6 +469,42 @@ export class AccruedCostPeriodLockedError extends Error {
 }
 
 /**
+ * Raised before a customer invoice's revenue entry is posted when a line
+ * books an upplupen intäkt (17xx) for a period that does not end before the
+ * invoice month (#62). The invoice month's own revenue is no accrual: the
+ * line has to be split instead.
+ */
+export class AccruedIncomePeriodInvalidError extends Error {
+  readonly code = INVOICE_ACCRUED_INCOME_PERIOD_INVALID
+  constructor(
+    public readonly periodStart: string,
+    public readonly periodEnd: string,
+    public readonly invoiceDate: string
+  ) {
+    super(
+      `Accrued income (17xx) must cover months before the invoice month: the period ${periodStart} to ${periodEnd} reaches the month of the invoice dated ${invoiceDate}. Split the line.`
+    )
+    this.name = 'AccruedIncomePeriodInvalidError'
+  }
+}
+
+/**
+ * Raised before a customer invoice's revenue entry is posted when an
+ * upplupen intäkt (17xx) would book on a month-end that cannot take an entry
+ * (the same reasons as AccruedCostPeriodLockedError). The revenue belongs to
+ * that month, so it is never moved to another one: nothing is written.
+ */
+export class AccruedIncomePeriodLockedError extends Error {
+  readonly code = INVOICE_ACCRUED_INCOME_PERIOD_LOCKED
+  constructor(public readonly blocked: AccruedCostBlockedDate[]) {
+    super(
+      `Accrued income (17xx) would post on ${blocked.map((b) => `${b.date} (${b.reason})`).join(', ')}, which cannot take entries. Nothing was booked.`
+    )
+    this.name = 'AccruedIncomePeriodLockedError'
+  }
+}
+
+/**
  * A kontantmetod year-end carry (årsomföring, #3440) may only be stornoed on
  * its own date: the moms it declared in the closed year's final VAT period
  * must leave that same period. The database refuses the same thing
@@ -670,6 +708,8 @@ export function isBookkeepingError(err: unknown): boolean {
     err instanceof TargetPeriodLockedError ||
     err instanceof AccruedCostPeriodInvalidError ||
     err instanceof AccruedCostPeriodLockedError ||
+    err instanceof AccruedIncomePeriodInvalidError ||
+    err instanceof AccruedIncomePeriodLockedError ||
     err instanceof CutoffCarryReversalDateError ||
     err instanceof KontantmetodCarryHasSettlementsError ||
     err instanceof CutoffCarryCorrectionRefusedError ||
@@ -1070,7 +1110,7 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
     )
   }
 
-  if (err instanceof AccruedCostPeriodInvalidError) {
+  if (err instanceof AccruedCostPeriodInvalidError || err instanceof AccruedIncomePeriodInvalidError) {
     return NextResponse.json(
       {
         error: {
@@ -1083,7 +1123,7 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
     )
   }
 
-  if (err instanceof AccruedCostPeriodLockedError) {
+  if (err instanceof AccruedCostPeriodLockedError || err instanceof AccruedIncomePeriodLockedError) {
     return NextResponse.json(
       { error: { code: err.code, message: err.message, details: { blocked: err.blocked } } },
       { status: 400 }

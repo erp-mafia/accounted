@@ -114,29 +114,61 @@ export function canApproveSupplierInvoice(invoice: {
 }
 
 /**
- * Statuses in which "Inlagd i banken" (#2220) can be recorded: the invoice
- * has passed attest and money is still outstanding. Exactly the rows the
- * detail page offers "Markera som betald" for, because the mark is the step
- * right before that one. Kept in sync with the CAS predicate in
- * app/api/supplier-invoices/[id]/bank-entered/route.ts.
+ * The statuses past the attest step: attest moves 'registered' to 'approved',
+ * and an invoice that aged ('overdue') or is part paid ('partially_paid') is
+ * payable whatever its attest state, so it never gets stuck behind attest.
  */
-export const BANK_ENTERED_SUPPLIER_INVOICE_STATUSES = [
-  'approved',
-  'overdue',
-  'partially_paid',
-] as const
+const PAYABLE_AFTER_ATTEST_STATUSES = ['approved', 'overdue', 'partially_paid'] as const
 
 /**
- * True when the user may mark the invoice as entered at the bank by hand. A
- * credit note is never a payment instruction, so it can never be "in the
- * bank". Clearing the mark is always allowed and does not go through here.
+ * The statuses in which the product offers to settle a supplier invoice by
+ * hand: "Markera som betald" (with its "Befintlig verifikation" tab, the link
+ * to a verifikat already booked from the bank) and the "Inlagd i banken" mark
+ * right before it (#2220).
+ *
+ * Where the company attests, 'registered' waits for attest. Kontantmetoden
+ * has no attest step (companyAttestsSupplierInvoices), so there a registered
+ * invoice is payable as it stands. The pages used to hold the attesting
+ * company's list for everyone, so a kontantmetod invoice could only be marked
+ * paid once the overdue cron had moved it past its due date (crm#1141).
+ *
+ * The settlement doors themselves (mark-paid, link-to-voucher, the bank
+ * match) accept every unsettled status for every company
+ * (lib/bookkeeping/matchable-statuses.ts); this is what the product offers.
  */
-export function canMarkSupplierInvoiceBankEntered(invoice: {
-  status: string
-  is_credit_note?: boolean | null
-}): boolean {
+export function payableSupplierInvoiceStatuses(
+  accountingMethod: string | null | undefined,
+): readonly string[] {
+  return companyAttestsSupplierInvoices(accountingMethod)
+    ? PAYABLE_AFTER_ATTEST_STATUSES
+    : ['registered', ...PAYABLE_AFTER_ATTEST_STATUSES]
+}
+
+/**
+ * True when "Markera som betald" is offered for the invoice. One rule for the
+ * detail page, the "Inlagd i banken" mark and the to_pay filters.
+ */
+export function canMarkSupplierInvoicePaid(
+  invoice: { status: string },
+  accountingMethod: string | null | undefined,
+): boolean {
+  return payableSupplierInvoiceStatuses(accountingMethod).includes(invoice.status)
+}
+
+/**
+ * True when the user may mark the invoice as entered at the bank by hand.
+ * The mark is the step right before "Markera som betald", so it is offered on
+ * exactly those rows; the compare-and-set in setSupplierInvoiceBankEntered
+ * (manage.ts) reads the same statuses. A credit note is never a payment
+ * instruction, so it can never be "in the bank". Clearing the mark is always
+ * allowed and does not go through here.
+ */
+export function canMarkSupplierInvoiceBankEntered(
+  invoice: { status: string; is_credit_note?: boolean | null },
+  accountingMethod: string | null | undefined,
+): boolean {
   if (invoice.is_credit_note) return false
-  return (BANK_ENTERED_SUPPLIER_INVOICE_STATUSES as readonly string[]).includes(invoice.status)
+  return canMarkSupplierInvoicePaid(invoice, accountingMethod)
 }
 
 /**

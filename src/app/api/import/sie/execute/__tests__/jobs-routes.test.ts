@@ -255,6 +255,29 @@ describe('durable SIE HTTP boundaries',()=>{
     expect(submit.mock.calls[0][5]).toMatchObject({ confirmOrgNumberMismatch: true })
   })
 
+  // #63: the switch travels as an option; submitSIEJob drops the unused
+  // definitions' mappings (covered in sie-job-input.test.ts).
+  it('passes the only-used-accounts option through to submission, also without supplied mappings', async () => {
+    const form = new FormData()
+    form.set('file', new File(['#SIETYP 4\n#RAR 0 20260101 20261231\n#KONTO 1930 "Bank"\n#KONTO 3001 "Sales"\n#KONTO 6110 "Unused"\n' +
+      '#VER A 1 20260201 "Sale"\n{\n#TRANS 1930 {} 100\n#TRANS 3001 {} -100\n}'], 'used-only.se'))
+    form.set('options', JSON.stringify({ onlyUsedAccounts: true }))
+    queued.enqueue({ data: [] }) // stored mappings
+    const response = await routes.execute(new Request('https://example.test/api/import/sie/execute', { method: 'POST', body: form }))
+    expect(response.status).toBe(202)
+    expect(submit.mock.calls[0][5]).toMatchObject({ onlyUsedAccounts: true, filename: 'used-only.se' })
+  })
+
+  it('refuses a non-boolean only-used-accounts option before submitting', async () => {
+    const form = new FormData()
+    form.set('file', new File(['#SIETYP 4\n#RAR 0 20260101 20261231'], 'bad-option.se'))
+    form.set('mappings', '[]')
+    form.set('options', JSON.stringify({ onlyUsedAccounts: 'yes' }))
+    const response = await routes.execute(new Request('https://example.test/api/import/sie/execute', { method: 'POST', body: form }))
+    expect(response.status).toBe(400)
+    expect(submit).not.toHaveBeenCalled()
+  })
+
   it('without supplied mappings, applies the upload\'s class 9 decision over a stored 9xxx mapping (#3312)', async () => {
     // What an earlier provider import saved for the account, which the job refuses as a target for amounts.
     queued.enqueue({ data: [{ id: 'm-1', user_id: 'actor-1', source_account: '9999', source_name: 'OBS', target_account: '9999',

@@ -7,7 +7,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { archiveSIEIntakeText, isSIEIntakePath, readSIEIntakeFile } from '../sie-intake'
+import { archiveSIEIntakeText, isSIEIntakePath, readSIEIntakeFile, SIEArchiveUnavailableError } from '../sie-intake'
 import { SIEIntakeNotFoundError, SIEIntakePathError, SIEJobValidationError } from '../sie-jobs'
 
 function memoryBucket(initial: Record<string, string> = {}) {
@@ -109,11 +109,47 @@ describe('archiveSIEIntakeText', () => {
     expect(files.size).toBe(1)
   })
 
-  it('refuses to reuse a different object found at the path', async () => {
-    const { supabase, files } = memoryBucket()
+  it('refuses to reuse a different object found at the path, without retrying', async () => {
+    const { supabase, files, bucket } = memoryBucket()
     const { path } = await archiveSIEIntakeText(supabase, 'company-1', SIE)
     files.set(path, new Blob(['#FLAGGA 0\n']))
-    await expect(archiveSIEIntakeText(supabase, 'company-1', SIE)).rejects.toThrow('kunde inte arkiveras')
+    bucket.upload.mockClear()
+    const archive = archiveSIEIntakeText(supabase, 'company-1', SIE, { retryDelaysMs: [0, 0] })
+    await expect(archive).rejects.toThrow('kunde inte arkiveras')
+    await expect(archive).rejects.not.toBeInstanceOf(SIEArchiveUnavailableError)
+    expect(bucket.upload).toHaveBeenCalledTimes(1)
+  })
+
+  // PH 193: storage timed out (HTTP 544) on one of three provider files and
+  // stored nothing; the whole migration failed although the fetch had worked.
+  it('uploads again when storage stored nothing, and archives the file', async () => {
+    const { supabase, files, bucket } = memoryBucket()
+    const realUpload = bucket.upload.getMockImplementation()!
+    bucket.upload.mockImplementationOnce(async () => ({ data: null, error: { message: 'timeout', statusCode: '544' } }))
+    bucket.upload.mockImplementation(realUpload)
+    const { path } = await archiveSIEIntakeText(supabase, 'company-1', SIE, { retryDelaysMs: [0, 0] })
+    expect(bucket.upload).toHaveBeenCalledTimes(2)
+    expect(await files.get(path)!.text()).toBe(SIE)
+  })
+
+  it('takes the object when storage kept the upload but failed to answer', async () => {
+    const { supabase, files, bucket } = memoryBucket()
+    bucket.upload.mockImplementationOnce(async (path: string, body: Blob) => {
+      files.set(path, body)
+      return { data: null, error: { message: 'timeout', statusCode: '544' } }
+    })
+    const { path } = await archiveSIEIntakeText(supabase, 'company-1', SIE, { retryDelaysMs: [0, 0] })
+    expect(bucket.upload).toHaveBeenCalledTimes(1)
+    expect(await files.get(path)!.text()).toBe(SIE)
+  })
+
+  it('gives up as a transient archive failure when storage keeps storing nothing', async () => {
+    const { supabase, files, bucket } = memoryBucket()
+    bucket.upload.mockImplementation(async () => ({ data: null, error: { message: 'timeout', statusCode: '544' } }))
+    const archive = archiveSIEIntakeText(supabase, 'company-1', SIE, { retryDelaysMs: [0, 0] })
+    await expect(archive).rejects.toBeInstanceOf(SIEArchiveUnavailableError)
+    expect(bucket.upload).toHaveBeenCalledTimes(3)
+    expect(files.size).toBe(0)
   })
 
   it('refuses an empty file without writing anything', async () => {

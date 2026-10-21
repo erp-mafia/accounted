@@ -44,13 +44,19 @@ vi.mock('@/lib/reconciliation/items', async () => {
   const actual = await vi.importActual<typeof import('@/lib/reconciliation/items')>('@/lib/reconciliation/items')
   return { ...actual, listAccountItems: itemsMock }
 })
-vi.mock('@/lib/reconciliation/actions', () => ({
-  matchPairs: matchMock,
-  unmatchLink: unmatchMock,
-  setItemIgnored: ignoreMock,
-}))
+vi.mock('@/lib/reconciliation/actions', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/reconciliation/actions')>('@/lib/reconciliation/actions')
+  return {
+    // Pure: the real refusal-to-code rule the routes answer with.
+    reconciliationRefusalCode: actual.reconciliationRefusalCode,
+    matchPairs: matchMock,
+    unmatchLink: unmatchMock,
+    setItemIgnored: ignoreMock,
+  }
+})
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { SkattekontoLinkError } from '@/lib/skatteverket/skattekonto-link'
 import { GET as listGET } from '../route'
 import { GET as statusGET } from '../[accountKey]/route'
 import { GET as itemsGET } from '../[accountKey]/items/route'
@@ -352,6 +358,70 @@ describe('v1 reconciliation accounts', () => {
     expect(unmatchMock).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, 'user-1', 'skattekonto', ROW)
     const bad = await linkDELETE(req(`${BASE}/skattekonto/links/abc`, { method: 'DELETE' }), params({ accountKey: 'skattekonto', linkId: 'abc' }))
     expect(bad.status).toBe(404)
+  })
+
+  describe('refusals are typed 4xx, never 500 INTERNAL_ERROR (PH 194)', () => {
+    const BANK = `bank:${CASH}`
+    const del = () =>
+      linkDELETE(req(`${BASE}/${BANK}/links/${ROW}`, { method: 'DELETE' }), params({ accountKey: BANK, linkId: ROW }))
+    type ErrorBody = { error: { code: string; message: string; recovery_hint?: string; details?: { reason?: string } } }
+
+    it('401 without a valid key, 403 without reconciliation:write', async () => {
+      mockValidate.mockResolvedValue({ valid: false, error: 'invalid' })
+      expect((await del()).status).toBe(401)
+      authOk(['reconciliation:read'])
+      expect((await del()).status).toBe(403)
+      expect(unmatchMock).not.toHaveBeenCalled()
+    })
+
+    it('409 RECONCILIATION_UNLINK_IS_BOOKING for a bank row booked from itself, with the storno hint', async () => {
+      authOk(['reconciliation:write'])
+      const sv = 'Transaktionen är bokförd med verifikatet, inte bara kopplad till det, så kopplingen kan inte tas bort.'
+      unmatchMock.mockRejectedValueOnce(new SkattekontoLinkError(sv, 'LINK_IS_BOOKING'))
+      const res = await del()
+      expect(res.status).toBe(409)
+      const body = (await res.json()) as ErrorBody
+      expect(body.error.code).toBe('RECONCILIATION_UNLINK_IS_BOOKING')
+      expect(body.error.message).toBe(sv)
+      expect(body.error.details?.reason).toBe('LINK_IS_BOOKING')
+      expect(body.error.recovery_hint).toMatch(/storno/)
+    })
+
+    it('409 RECONCILIATION_NOT_LINKED for a row with no link, 404 NOT_FOUND for an unknown row', async () => {
+      authOk(['reconciliation:write'])
+      unmatchMock.mockRejectedValueOnce(new SkattekontoLinkError('Transaktionen är inte kopplad till något verifikat.', 'NOT_LINKED'))
+      const notLinked = await del()
+      expect(notLinked.status).toBe(409)
+      expect(((await notLinked.json()) as ErrorBody).error.code).toBe('RECONCILIATION_NOT_LINKED')
+
+      unmatchMock.mockRejectedValueOnce(new SkattekontoLinkError('Transaktionen hittades inte.', 'TRANSACTION_NOT_FOUND'))
+      const missing = await del()
+      expect(missing.status).toBe(404)
+      expect(((await missing.json()) as ErrorBody).error).toMatchObject({ code: 'NOT_FOUND', message: 'Transaktionen hittades inte.' })
+    })
+
+    it('a failure that is no refusal stays a server error', async () => {
+      authOk(['reconciliation:write'])
+      unmatchMock.mockRejectedValueOnce(new Error('connection reset'))
+      const res = await del()
+      expect(res.status).toBe(500)
+    })
+
+    it('POST ignore answers a booked row 409 TX_IGNORE_ALREADY_BOOKED and a bad body 400', async () => {
+      authOk(['reconciliation:write'])
+      ignoreMock.mockRejectedValueOnce(new SkattekontoLinkError('En bokförd transaktion kan inte ignoreras.', 'ALREADY_BOOKED'))
+      const booked = await ignorePOST(req(`${BASE}/${BANK}/items/${ROW}/ignore`, { method: 'POST' }), params({ accountKey: BANK, itemId: ROW }))
+      expect(booked.status).toBe(409)
+      expect(((await booked.json()) as ErrorBody).error).toMatchObject({
+        code: 'TX_IGNORE_ALREADY_BOOKED',
+        message: 'En bokförd transaktion kan inte ignoreras.',
+      })
+      const bad = await ignorePOST(
+        req(`${BASE}/${BANK}/items/${ROW}/ignore`, { method: 'POST', body: { ignored: 'yes' } }),
+        params({ accountKey: BANK, itemId: ROW }),
+      )
+      expect(bad.status).toBe(400)
+    })
   })
 
   it('POST ignore defaults to ignored: true and accepts an explicit restore', async () => {

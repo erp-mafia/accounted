@@ -144,6 +144,34 @@ describe('preparePaymentOrders', () => {
     expect(result.data.warnings).toContainEqual({ supplier_invoice_id: 'a', code: 'unattested' })
   })
 
+  // crm#1141: kontantmetoden has no attest step, so Betala via banken warned
+  // "Ej attesterad" on every one of its invoices.
+  it('kontantmetoden: an unattested invoice is paid without the unattested warning, in the drafts and the dry run', async () => {
+    db.setTable('company_settings', { data: { accounting_method: 'cash' } })
+    db.setTable('supplier_invoices', { data: [invoice('a', { status: 'registered', approved_at: null, user_id: 'user-1', total: 737.5 })] })
+    db.setTable('rpc:create_payment_orders', { data: { ok: true, orders: [{ id: 'order-a', supplier_invoice_id: 'a' }] } })
+
+    const result = await preparePaymentOrders(ctx, { supplierInvoiceIds: ['a'], cashAccountId: 'acct-1', today: '2026-09-30' })
+    if (!result.ok || result.dryRun) throw new Error('unexpected')
+    expect(result.data.skipped).toEqual([])
+    expect(result.data.warnings.filter((w) => w.code === 'unattested')).toEqual([])
+
+    const dry = await preparePaymentOrders(ctx, { supplierInvoiceIds: ['a'], cashAccountId: 'acct-1', today: '2026-09-30', dryRun: true })
+    if (!dry.ok || !dry.dryRun) throw new Error('unexpected')
+    const lines = (dry.preview as { lines: Array<{ supplier_invoice_id: string; warnings: string[] }> }).lines
+    expect(lines.map((l) => [l.supplier_invoice_id, l.warnings])).toEqual([['a', []]])
+  })
+
+  it('faktureringsmetoden: the dry run line still says unattested', async () => {
+    db.setTable('company_settings', { data: { accounting_method: 'accrual' } })
+    db.setTable('supplier_invoices', { data: [invoice('a', { status: 'registered', approved_at: null, user_id: 'user-1', total: 737.5 })] })
+
+    const dry = await preparePaymentOrders(ctx, { supplierInvoiceIds: ['a'], cashAccountId: 'acct-1', today: '2026-09-30', dryRun: true })
+    if (!dry.ok || !dry.dryRun) throw new Error('unexpected')
+    const lines = (dry.preview as { lines: Array<{ supplier_invoice_id: string; warnings: string[] }> }).lines
+    expect(lines.map((l) => [l.supplier_invoice_id, l.warnings])).toEqual([['a', ['unattested']]])
+  })
+
   it('warns from what the database decided: a changed account names the other one, a new one asks for a check', async () => {
     db.setTable('supplier_invoices', { data: [invoice('a', { payee_bankgiro: '5402-0102' }), invoice('b')] })
     // A person confirmed the invoice's account for the supplier; the card still pays the old one.

@@ -23,6 +23,10 @@
  *     amount, except a vacation row carrying days (text-rows.ts). A text row
  *     is forced to amount 0, every flag false and no account, and a row is
  *     never turned into or out of a text row.
+ *   - The payslip's own Grundlön or Timlön is the calculation's (Step 1 prices
+ *     it from the pay type): no row of that type is added or typed by hand.
+ *     The other base type is pay on top, such as extra hours at timlön on a
+ *     monthly payslip (line-item-roles.ts, crm#1331).
  *
  * Result-object convention mirrors lib/salary/run-calculation.ts:
  * `{ ok: true, data } | { ok: false, code, details? }` where `code` is a key
@@ -38,6 +42,7 @@ import { roundOre } from '@/lib/money'
 import { isCalculatedLine, isCalculatedLineType } from '@/lib/salary/calculated-line-items'
 import { ADDITION_ITEM_TYPES } from '@/lib/salary/calculation-engine'
 import { isBenefitItemType } from '@/lib/salary/benefit-payments'
+import { isBaseSalaryDisplayLine, isBaseSalaryLineType } from '@/lib/salary/line-item-roles'
 import {
   TEXT_ROW_FLAGS,
   TEXT_ROW_RETYPE_MESSAGE,
@@ -239,6 +244,49 @@ function calculatedLineRefusal(details: Record<string, unknown>): PayslipLineRes
   return { ok: false, code: 'SALARY_LINE_CALCULATED', details }
 }
 
+export const OWN_MONTHLY_SALARY_LINE_MESSAGE =
+  'Grundlönen för en månadsavlönad räknas fram av lönekörningen från månadslönen och visas på raden Grundlön. ' +
+  'Ändra lönen för den här lönekörningen i stället. Extra timmar läggs som Timlön, ett annat tillägg som Övrigt.'
+export const OWN_HOURLY_SALARY_LINE_MESSAGE =
+  'Timlönen för en timavlönad räknas fram av lönekörningen från de arbetade timmarna och visas på raden Timlön. ' +
+  'Ändra timmarna i stället. Extra ersättning med ett annat timpris läggs som Övrigt.'
+
+/**
+ * Refuses a Grundlön/Timlön row of the payslip's own pay type: Step 1 prices
+ * that pay from the monthly salary or the worked hours and never reads the
+ * row, so a second one would be printed and paid nothing (crm#1331). Judged
+ * against the run's snapshot and the employee's current pay type, since the
+ * next calculation makes the current one the payslip's. The other base type
+ * is accepted: it is pay on top.
+ */
+async function ownBaseSalaryLineRefusal(
+  supabase: SupabaseClient,
+  companyId: string,
+  salaryRunEmployeeId: string,
+  itemType: unknown,
+): Promise<PayslipLineResult<never> | null> {
+  if (!isBaseSalaryLineType(itemType)) return null
+  const { data, error } = await supabase
+    .from('salary_run_employees')
+    .select('salary_type, employee:employees(salary_type)')
+    .eq('id', salaryRunEmployeeId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error) {
+    return { ok: false, code: 'INTERNAL_ERROR', details: { message: error.message } }
+  }
+  const row = data as { salary_type?: string | null; employee?: { salary_type?: string | null } | null } | null
+  if (!isBaseSalaryDisplayLine(itemType, [row?.salary_type, row?.employee?.salary_type])) return null
+  return {
+    ok: false,
+    code: 'VALIDATION_ERROR',
+    details: {
+      field: 'item_type',
+      message: itemType === 'monthly_salary' ? OWN_MONTHLY_SALARY_LINE_MESSAGE : OWN_HOURLY_SALARY_LINE_MESSAGE,
+    },
+  }
+}
+
 export async function createPayslipLine(
   supabase: SupabaseClient,
   args: {
@@ -259,6 +307,9 @@ export async function createPayslipLine(
 
   const sre = await resolveRunEmployee(supabase, args.companyId, args.salaryRunId, args.target)
   if (!sre.ok) return sre
+
+  const ownBase = await ownBaseSalaryLineRefusal(supabase, args.companyId, sre.data.id, args.input.item_type)
+  if (ownBase) return ownBase
 
   const input = args.input
   const text = isTextRow(input)
@@ -311,8 +362,9 @@ export async function createPayslipLine(
     description: text ? normalizeTextRow(input.description) : input.description,
     quantity: input.quantity ?? null,
     unit_price: input.unit_price ?? null,
-    // validatePayslipLineContent guaranteed a finite amount on a money row.
-    amount: text ? 0 : roundOre(input.amount as number),
+    // validatePayslipLineContent guaranteed a finite amount on a money row;
+    // a vacation row that carries only its days is stored at 0 kr.
+    amount: text ? 0 : roundOre(input.amount ?? 0),
     ...flags,
     account_number: accountNumber,
     sort_order: input.sort_order,
@@ -361,6 +413,17 @@ export async function updatePayslipLine(
     return calculatedLineRefusal({ salary_line_item_id: args.lineId, item_type: loaded.data.line.item_type })
   }
   const existing = { data: loaded.data.line }
+  // Retyping a row into the payslip's own Grundlön/Timlön (an edit of that
+  // row itself keeps its type and is not judged here).
+  if (args.patch.item_type !== undefined && args.patch.item_type !== existing.data.item_type) {
+    const ownBase = await ownBaseSalaryLineRefusal(
+      supabase,
+      args.companyId,
+      existing.data.salary_run_employee_id,
+      args.patch.item_type,
+    )
+    if (ownBase) return ownBase
+  }
   const text = isTextRow(existing.data)
   if (args.patch.item_type !== undefined && isTextRow(args.patch) !== text) {
     return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'item_type', message: TEXT_ROW_RETYPE_MESSAGE } }

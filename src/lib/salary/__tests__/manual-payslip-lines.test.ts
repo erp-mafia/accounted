@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { TAX_FREE_REIMBURSEMENT_TYPES } from '@/lib/salary/account-mapping'
+import { validatePayslipLineContent } from '@/lib/salary/text-rows'
 import {
   MANUAL_PAYSLIP_LINE_SPECS,
   MANUAL_PAYSLIP_LINE_TYPES,
@@ -23,7 +24,7 @@ describe('manual payslip line catalogue', () => {
     }
     for (const derived of [
       'monthly_salary', 'hourly_salary', 'sick_karens', 'sick_day2_14', 'sick_day15_plus',
-      'vab', 'parental_leave', 'vacation', 'semesterersattning', 'oresavrundning',
+      'vab', 'parental_leave', 'semesterersattning', 'oresavrundning',
       'expense_reimbursement', 'benefit_car', 'net_deduction_benefit_payment',
     ]) {
       expect(isManualPayslipLineType(derived), derived).toBe(false)
@@ -232,5 +233,70 @@ describe('Textrad', () => {
       ok: false,
       reason: 'no_text',
     })
+  })
+})
+
+describe('Semester (vacation days taken, crm#1331)', () => {
+  it('is offered with days as its unit, and is no calculated type', () => {
+    expect(isManualPayslipLineType('vacation')).toBe(true)
+    expect(isCalculatedLineType('vacation')).toBe(false)
+    expect(MANUAL_PAYSLIP_LINE_SPECS.vacation).toMatchObject({ label: 'Semester', unit: 'dagar', sign: 'signed' })
+  })
+
+  it('its amount is gross pay, taxed and in the avgiftsunderlag, but not semestergrundande', () => {
+    expect(MANUAL_PAYSLIP_LINE_SPECS.vacation.flags).toEqual({
+      is_taxable: true,
+      is_avgift_basis: true,
+      is_vacation_basis: false,
+      is_gross_deduction: false,
+      is_net_deduction: false,
+    })
+  })
+
+  it('the days alone: stored at 0 kr with the days and the category, the shape every door accepts', () => {
+    const b = body(buildManualPayslipLine({ item_type: 'vacation', quantity: 5, vacation_category: 'saved' }))
+    expect(b).toEqual({
+      item_type: 'vacation',
+      description: 'Semester',
+      quantity: 5,
+      amount: 0,
+      vacation_category: 'saved',
+      is_taxable: true,
+      is_avgift_basis: true,
+      is_vacation_basis: false,
+      is_gross_deduction: false,
+      is_net_deduction: false,
+    })
+    expect(validatePayslipLineContent(b)).toBeNull()
+  })
+
+  it('a semestertillägg as days x à-pris, rounded to öre; a typed amount when there is no à-pris', () => {
+    // 0,43 % of a 42 849 kr monthly salary is 184,2507 kr a day.
+    const tillagg = body(buildManualPayslipLine({ item_type: 'vacation', quantity: 15, unit_price: 184.2507, amount: 1 }))
+    expect(tillagg.amount).toBe(2763.76)
+    expect(tillagg.unit_price).toBe(184.2507)
+    expect(body(buildManualPayslipLine({ item_type: 'vacation', quantity: 5, amount: 860 })).amount).toBe(860)
+  })
+
+  it('keeps the sign typed: a semesterlöneavdrag is negative', () => {
+    expect(body(buildManualPayslipLine({ item_type: 'vacation', quantity: 5, amount: -9000 })).amount).toBe(-9000)
+    expect(body(buildManualPayslipLine({ item_type: 'vacation', quantity: 1, amount: -0.001 })).amount).toBe(0)
+    expect(Object.is(body(buildManualPayslipLine({ item_type: 'vacation', quantity: 1, amount: -0.001 })).amount, -0)).toBe(false)
+  })
+
+  it('omits the category when none is chosen (paid by default)', () => {
+    expect('vacation_category' in body(buildManualPayslipLine({ item_type: 'vacation', quantity: 2 }))).toBe(false)
+  })
+
+  it('refuses a vacation line without days, whatever the amount', () => {
+    for (const input of [
+      { item_type: 'vacation' as const },
+      { item_type: 'vacation' as const, quantity: 0 },
+      { item_type: 'vacation' as const, quantity: -3 },
+      { item_type: 'vacation' as const, amount: 860 },
+      { item_type: 'vacation' as const, quantity: Number.NaN, unit_price: 172 },
+    ]) {
+      expect(buildManualPayslipLine(input)).toEqual({ ok: false, reason: 'no_days' })
+    }
   })
 })

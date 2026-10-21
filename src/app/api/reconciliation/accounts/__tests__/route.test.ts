@@ -44,6 +44,7 @@ vi.mock('@/lib/reconciliation/actions', () => ({
   setItemIgnored: (...args: unknown[]) => ignoreMock(...args),
 }))
 
+import { SkattekontoLinkError } from '@/lib/skatteverket/skattekonto-link'
 import { GET as listGET } from '../route'
 import { GET as statusGET } from '../[accountKey]/route'
 import { GET as itemsGET } from '../[accountKey]/items/route'
@@ -279,5 +280,17 @@ describe('dashboard reconciliation routes', () => {
     const ign = await ignorePOST(createMockRequest(`/api/reconciliation/accounts/skattekonto/items/${ROW}/ignore`, { method: 'POST', body: { ignored: false } }), p({ accountKey: 'skattekonto', itemId: ROW }))
     expect(ign.status).toBe(200)
     expect(ignoreMock).toHaveBeenCalledWith(supabase, 'company-1', 'skattekonto', ROW, false, 'user-1')
+  })
+
+  it('Koppla bort on a bank row booked from itself answers its Swedish refusal, not 500 (PH 194)', async () => {
+    const sv = 'Transaktionen är bokförd med verifikatet, inte bara kopplad till det, så kopplingen kan inte tas bort.'
+    unmatchMock.mockRejectedValueOnce(new SkattekontoLinkError(sv, 'LINK_IS_BOOKING'))
+    const res = await linkDELETE(
+      createMockRequest(`/api/reconciliation/accounts/bank:${CASH}/links/${ROW}`, { method: 'DELETE' }),
+      p({ accountKey: `bank:${CASH}`, linkId: ROW }),
+    )
+    expect(res.status).toBe(400)
+    const { body } = await parseJsonResponse<{ error: string; code: string }>(res)
+    expect(body).toEqual({ error: sv, code: 'LINK_IS_BOOKING' })
   })
 })

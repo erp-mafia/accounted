@@ -63,6 +63,13 @@ export interface FeedConnectorSpec<C extends FeedConnectionRow, S extends FeedSy
   /** The sync cursor (ISO): the backfill moves it back to the chosen date. */
   cursorColumn: string
   maxBackfillYears: number
+  /**
+   * The cursor (ISO) a validated backfill start day ('YYYY-MM-DD') becomes.
+   * Default: midnight UTC. A connector that dates its rows on the Swedish
+   * calendar day starts the chosen day at Swedish midnight instead, or the
+   * first hour or two of that day would fall outside its own backfill.
+   */
+  backfillCursor?: (day: string) => string
   /** 404 copy when the company has no active connection (Swedish). */
   notConnectedMessage: string
   /** Columns safe to hand to the browser: never the encrypted credentials. */
@@ -226,6 +233,7 @@ export function feedBackfillRoute<C extends FeedConnectionRow, S extends FeedSyn
           { status: 400 },
         )
       }
+      const cursorIso = spec.backfillCursor ? spec.backfillCursor(parsed.iso.slice(0, 10)) : parsed.iso
 
       // A start date belongs to one connection: connection_id may be omitted
       // only when the company has a single active one.
@@ -252,7 +260,7 @@ export function feedBackfillRoute<C extends FeedConnectionRow, S extends FeedSyn
 
       const { error: cursorError } = await ctx.supabase
         .from(spec.table)
-        .update({ [spec.cursorColumn]: parsed.iso, error_message: null })
+        .update({ [spec.cursorColumn]: cursorIso, error_message: null })
         .eq('id', connection.id)
         .eq('company_id', ctx.companyId)
         .eq('status', 'active')
@@ -267,7 +275,7 @@ export function feedBackfillRoute<C extends FeedConnectionRow, S extends FeedSyn
       try {
         const summary = await spec.sync(
           serviceClient,
-          { ...connection, [spec.cursorColumn]: parsed.iso },
+          { ...connection, [spec.cursorColumn]: cursorIso },
           budgetDeadline(spec),
         )
         if (summary.locked) {
@@ -283,7 +291,7 @@ export function feedBackfillRoute<C extends FeedConnectionRow, S extends FeedSyn
         }
         return NextResponse.json({
           success: true,
-          from: parsed.iso,
+          from: cursorIso,
           connection_id: connection.id,
           transactions: summary,
         })

@@ -25,9 +25,10 @@ import { isCalculatedLineType } from '@/lib/salary/calculated-line-items'
 
 export type LineAccountOverride = 'none' | 'class_7' | 'any'
 
-// Utlägg, the rounding row, the vacation-day row the absence register
-// writes, and the text row.
-const NO_OVERRIDE_TYPES = new Set(['expense_reimbursement', 'oresavrundning', 'vacation', 'text'])
+// Utlägg, the rounding row and the text row. A vacation row is a pay row:
+// no register writes it, and the amount it carries (a semestertillägg, a
+// semesterlöneavdrag) posts on its own account (crm#1331).
+const NO_OVERRIDE_TYPES = new Set(['expense_reimbursement', 'oresavrundning', 'text'])
 
 export function lineAccountOverride(itemType: string): LineAccountOverride {
   if (itemType.startsWith('benefit_')) return 'none'

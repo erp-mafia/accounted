@@ -6,6 +6,7 @@ import {
   TEXT_ROW_MAX_LENGTH,
   TEXT_ROW_QUANTITY_MESSAGE,
   TEXT_ROW_TOO_LONG_MESSAGE,
+  VACATION_ROW_MESSAGE,
   ZERO_AMOUNT_MESSAGE,
   comparePayslipLines,
   isTextRow,
@@ -76,7 +77,42 @@ describe('validatePayslipLineContent (every door)', () => {
 
   it('accepts a vacation row that carries days and no amount, but not one with neither', () => {
     expect(validatePayslipLineContent({ item_type: 'vacation', description: 'Semester', amount: 0, quantity: 3 })).toBeNull()
-    expect(validatePayslipLineContent({ item_type: 'vacation', description: 'Semester', amount: 0 })?.field).toBe('amount')
+    expect(validatePayslipLineContent({ item_type: 'vacation', description: 'Semester', amount: 0 })).toEqual({
+      field: 'quantity',
+      message: VACATION_ROW_MESSAGE,
+    })
+  })
+
+  it('accepts a vacation row whose amount is left out, as the docs promise (crm#1331)', () => {
+    // The days alone: the amount omitted or null, not only an explicit 0.
+    for (const amount of [undefined, null, 0]) {
+      expect(validatePayslipLineContent({ item_type: 'vacation', description: 'Semester', quantity: 5, amount }), `amount ${amount}`).toBeNull()
+    }
+    // A semestertillägg or a semesterlöneavdrag next to the days, or alone.
+    expect(validatePayslipLineContent({ item_type: 'vacation', description: 'Semester', quantity: 5, amount: 860 })).toBeNull()
+    expect(validatePayslipLineContent({ item_type: 'vacation', description: 'Semesterlöneavdrag', quantity: 5, amount: -9000 })).toBeNull()
+    expect(validatePayslipLineContent({ item_type: 'vacation', description: 'Semesterlön', amount: 9500 })).toBeNull()
+  })
+
+  it('refuses a vacation row with neither days nor an amount, and one with a broken amount', () => {
+    for (const shape of [{}, { amount: 0 }, { quantity: 0 }, { quantity: -2 }, { quantity: null, amount: null }]) {
+      expect(validatePayslipLineContent({ item_type: 'vacation', description: 'Semester', ...shape })).toEqual({
+        field: 'quantity',
+        message: VACATION_ROW_MESSAGE,
+      })
+    }
+    expect(validatePayslipLineContent({ item_type: 'vacation', description: 'Semester', quantity: 5, amount: Number.NaN })).toEqual({
+      field: 'amount',
+      message: VACATION_ROW_MESSAGE,
+    })
+  })
+
+  it('the vacation rule is the vacation row\'s alone: another row with days still needs an amount', () => {
+    expect(validatePayslipLineContent({ item_type: 'traktamente_taxfree', description: 'Traktamente', quantity: 3 })).toEqual({
+      field: 'amount',
+      message: ZERO_AMOUNT_MESSAGE,
+    })
+    expect(validatePayslipLineContent({ item_type: 'overtime', description: 'Övertid', quantity: 4, amount: 0 })?.field).toBe('amount')
   })
 })
 

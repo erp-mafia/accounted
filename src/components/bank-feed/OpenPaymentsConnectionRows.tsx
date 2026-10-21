@@ -13,7 +13,7 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 import { bankLogoUrl } from '@/lib/cash-accounts/bank-logos'
 import { notifyBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
 import { cn } from '@/lib/utils'
-import { consentState } from './connection-kind'
+import { connectionRowState } from './connection-kind'
 import { deleteOpenPaymentsConnection, OpenPaymentsClientError } from './open-payments-client'
 import type { BankConnectFlow } from './use-bank-connect-flow'
 import type { BankConnectionRow } from './use-open-payments-connections'
@@ -44,8 +44,9 @@ interface OpenPaymentsConnectionRowProps {
 
 /**
  * One Open Payments connection as a flat hairline row: the bank, where it
- * stands (muted when fine, the one ochre sentence when its last sync failed
- * or it needs a renewal inside 14 days), and the two actions, Förnya and
+ * stands (muted when fine, the one ochre sentence when its last sync failed,
+ * the bank no longer accepts it, or it needs a renewal inside 14 days;
+ * connectionRowState, status before date), and the two actions, Förnya and
  * Koppla bort. A row signed at the bank whose accounts were never chosen
  * (the person left the account step, often after the BankID app on a phone)
  * reads nothing until they are: it says so and offers Välj konton, which
@@ -61,21 +62,22 @@ export function OpenPaymentsConnectionRow({ connection, flow, onChanged, canRene
   const [now] = useState(() => Date.now())
   const [confirmOpen, setConfirmOpen] = useState(false)
 
-  const consent = consentState(connection.consent_expires, now)
-  const awaitingAccounts = connection.status === 'pending_selection' && consent.kind !== 'expired'
-  const syncFailed = connection.status === 'error' && consent.kind !== 'expired'
+  const state = connectionRowState(connection.status, connection.consent_expires, now)
+  const awaitingAccounts = state.kind === 'choose_accounts'
   const stateText = awaitingAccounts
     ? t('op_choose_accounts')
-    : syncFailed
+    : state.kind === 'sync_failed'
     ? t('sync_failed')
-    : consent.kind === 'active'
-      ? t('op_active_until', { date: formatDateLong(consent.until) })
-      : consent.kind === 'renew_by'
-        ? t('op_renew_by', { date: formatDateLong(consent.until) })
-        : consent.kind === 'expired'
-          ? t('op_expired')
-          : t('op_active')
-  const attention = awaitingAccounts || syncFailed || consent.kind === 'renew_by' || consent.kind === 'expired'
+    : state.kind === 'ended'
+      ? t('op_ended')
+      : state.kind === 'active'
+        ? t('op_active_until', { date: formatDateLong(state.until) })
+        : state.kind === 'renew_by'
+          ? t('op_renew_by', { date: formatDateLong(state.until) })
+          : state.kind === 'expired'
+            ? t('op_expired')
+            : t('op_active')
+  const attention = state.kind !== 'active' && state.kind !== 'unknown'
   const bankName = connection.bank_name ?? ''
 
   async function disconnect() {

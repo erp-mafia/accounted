@@ -190,6 +190,21 @@ describe('POST /imports/sie', () => {
     expect((submitSIEJobMock.mock.calls[0][5] as Record<string, unknown>).confirmOrgNumberMismatch).toBeUndefined()
   })
 
+  // #63: submitSIEJob drops the unused definitions' mappings when it is true.
+  it('passes onlyUsedAccounts through, leaves it undefined by default and refuses a non-boolean', async () => {
+    await callRoute({ onlyUsedAccounts: true })
+    expect(submitSIEJobMock.mock.calls[0][5]).toMatchObject({ onlyUsedAccounts: true })
+
+    submitSIEJobMock.mockClear()
+    await callRoute()
+    expect((submitSIEJobMock.mock.calls[0][5] as Record<string, unknown>).onlyUsedAccounts).toBeUndefined()
+
+    submitSIEJobMock.mockClear()
+    const res = await callRoute({ onlyUsedAccounts: 'yes' })
+    expect(res.status).toBe(400)
+    expect(submitSIEJobMock).not.toHaveBeenCalled()
+  })
+
   it('answers another organisation\'s file with 409 and both numbers', async () => {
     submitSIEJobMock.mockRejectedValueOnce(new SIEJobValidationError('mismatch', 'SIE_IMPORT_ORG_NUMBER_MISMATCH', {
       file_org_number: '5566778899', company_org_number: '5599887766', file_company_name: 'Import AB',

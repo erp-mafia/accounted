@@ -3,11 +3,13 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import {
   PICKER_LIMIT,
+  loadInvoicesForPaste,
   loadOpenInvoicesForMatch,
   pickerSearchPattern,
   searchOpenInvoices,
   searchOpenSupplierInvoices,
 } from '../open-invoice-search'
+import { closedLookupNumbers, parseInvoicePaste } from '../invoice-number-paste'
 import {
   MATCHABLE_INVOICE_STATUSES,
   MATCHABLE_SUPPLIER_INVOICE_STATUSES,
@@ -183,5 +185,157 @@ describe('loadOpenInvoicesForMatch', () => {
     await expect(loadOpenInvoicesForMatch<StatusRow>(client, 'company-1', 'customer', '')).rejects.toThrow(
       'payments down',
     )
+  })
+})
+
+describe('loadOpenInvoicesForMatch payment lookup', () => {
+  it('reads the payment vouchers of a long list in slices of 100 ids', async () => {
+    const many = Array.from({ length: 150 }, (_, i) => ({ id: `s${i}`, status: 'sent', invoice_date: '2026-09-01' }))
+    enqueue({ data: many })
+    enqueue({ data: [] })
+    enqueue({ data: [{ invoice_id: 's120' }] })
+
+    const { rows } = await loadOpenInvoicesForMatch<{ id: string; status: string; invoice_date: string }>(
+      client,
+      'company-1',
+      'customer',
+      '',
+    )
+
+    const slices = findCalls('invoice_payments', 'in')
+    expect(slices.map(([, ids]) => (ids as string[]).length)).toEqual([100, 50])
+    expect(rows).toHaveLength(149)
+  })
+})
+
+describe('loadInvoicesForPaste', () => {
+  const customerRow = (id: string, invoice_number: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    invoice_number,
+    status: 'sent',
+    total: 1000,
+    remaining_amount: 1000,
+    currency: 'SEK',
+    exchange_rate: null,
+    due_date: '2026-09-30',
+    invoice_date: '2026-09-01',
+    customer: { name: 'Kund' },
+    ...extra,
+  })
+  const supplierRow = (id: string, supplier_invoice_number: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    supplier_invoice_number,
+    payment_reference: null,
+    arrival_number: 7,
+    status: 'approved',
+    total: 500,
+    remaining_amount: 500,
+    currency: 'SEK',
+    exchange_rate: null,
+    due_date: '2026-09-30',
+    invoice_date: '2026-09-01',
+    supplier: { name: 'Leverantör' },
+    ...extra,
+  })
+
+  it('reads every open customer invoice with the picker guards, then the named ones outside that set', async () => {
+    enqueue({ data: [customerRow('open-1', '1001'), customerRow('part-1', '1003', { status: 'partially_paid' })] })
+    enqueue({ data: [customerRow('paid-1', '1002', { status: 'paid', remaining_amount: 0 })] })
+    enqueue({ data: [] })
+
+    const { invoices, capped } = await loadInvoicesForPaste(
+      client,
+      'company-1',
+      'customer',
+      parseInvoicePaste('1001\n1002\n1003').references,
+    )
+
+    expect(capped).toBe(false)
+    expect(invoices.map((i) => [i.id, i.state, i.label, i.counterpartyName, i.remaining])).toEqual([
+      ['open-1', 'open', '1001', 'Kund', 1000],
+      ['part-1', 'open', '1003', 'Kund', 1000],
+      ['paid-1', 'paid', '1002', 'Kund', 0],
+    ])
+    // The open set: the same guards as the picker, ordered by id for paging.
+    expect(findCalls('invoices', 'eq')).toEqual(
+      expect.arrayContaining([
+        ['company_id', 'company-1'],
+        ['document_type', 'invoice'],
+      ]),
+    )
+    expect(findCalls('invoices', 'is')).toEqual([['credited_invoice_id', null]])
+    expect(findCalls('invoices', 'gt')).toEqual([['remaining_amount', 0]])
+    expect(findCalls('invoices', 'order')).toEqual([['id', { ascending: true }]])
+    expect(findCalls('invoices', 'in')).toEqual([
+      ['status', [...MATCHABLE_INVOICE_STATUSES]],
+      ['invoice_number', ['1001', '1002', '1003']],
+    ])
+    // The status-leak guard runs on the open invoice the paste names, not the partially paid one.
+    expect(findCalls('invoice_payments', 'in')).toEqual([['invoice_id', ['open-1']]])
+  })
+
+  it('counts an open-looking invoice that already has a payment voucher as paid', async () => {
+    enqueue({ data: [customerRow('leak', '1001')] })
+    enqueue({ data: [] })
+    enqueue({ data: [{ invoice_id: 'leak' }] })
+
+    const { invoices } = await loadInvoicesForPaste(client, 'company-1', 'customer', parseInvoicePaste('1001').references)
+
+    expect(invoices.map((i) => [i.id, i.state])).toEqual([['leak', 'paid']])
+  })
+
+  it('looks the named numbers up in slices of 100, so a long paste never becomes one oversized query', async () => {
+    for (let i = 0; i < 4; i++) enqueue({ data: [] })
+    const references = parseInvoicePaste(Array.from({ length: 250 }, (_, i) => String(50000 + i)).join('\n')).references
+
+    await loadInvoicesForPaste(client, 'company-1', 'customer', references)
+
+    // The 250 numbers, plus the number each one that reads as an OCR was built from.
+    const lookups = findCalls('invoices', 'in')
+      .filter(([column]) => column === 'invoice_number')
+      .map(([, numbers]) => numbers as string[])
+    expect(lookups.map((slice) => slice.length)).toEqual([100, 100, 77])
+    expect(lookups.flat()).toEqual(closedLookupNumbers(references, 'customer'))
+    expect(findCalls('invoice_payments', 'in')).toEqual([])
+  })
+
+  it('reads supplier invoices by number and by payment reference, each row once', async () => {
+    enqueue({ data: [supplierRow('open-1', 'A-1')] })
+    enqueue({ data: [supplierRow('paid-1', 'B-2', { status: 'paid', remaining_amount: 0 })] })
+    enqueue({ data: [supplierRow('paid-1', 'B-2', { status: 'paid', remaining_amount: 0, payment_reference: 'B-2' })] })
+    enqueue({ data: [] })
+
+    const { invoices } = await loadInvoicesForPaste(client, 'company-1', 'supplier', parseInvoicePaste('A-1\nB-2').references)
+
+    expect(invoices.map((i) => [i.id, i.state])).toEqual([
+      ['open-1', 'open'],
+      ['paid-1', 'paid'],
+    ])
+    expect(findCalls('supplier_invoices', 'in')).toEqual([
+      ['status', [...MATCHABLE_SUPPLIER_INVOICE_STATUSES]],
+      ['supplier_invoice_number', ['A-1', '1', 'B-2', '2']],
+      ['payment_reference', ['A-1', '1', 'B-2', '2']],
+    ])
+    expect(findCalls('supplier_invoice_payments', 'in')).toEqual([['supplier_invoice_id', ['open-1']]])
+  })
+
+  it('names a supplier invoice without a number by its arrival number', async () => {
+    enqueue({ data: [supplierRow('no-number', null as unknown as string, { payment_reference: '5551234' })] })
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+
+    const { invoices } = await loadInvoicesForPaste(client, 'company-1', 'supplier', parseInvoicePaste('5551234').references)
+
+    expect(invoices[0].label).toBe('LF-7')
+  })
+
+  it('throws when a lookup fails instead of reporting numbers as not found', async () => {
+    enqueue({ data: [] })
+    enqueue({ data: null, error: { message: 'lookup down' } })
+
+    await expect(
+      loadInvoicesForPaste(client, 'company-1', 'customer', parseInvoicePaste('1001').references),
+    ).rejects.toThrow('lookup down')
   })
 })

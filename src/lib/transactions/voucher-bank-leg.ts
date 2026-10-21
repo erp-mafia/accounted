@@ -31,8 +31,10 @@
  * agree on what is free: the bank link core (prepareBankLink), the 1:N split
  * (linkTransactionToVouchers), the confirmed suggestion and the auto-link
  * after an invoice is linked to its voucher (lib/reconciliation), the
- * account-keyed dry run (matchPairs) and the bulk link to an existing
- * verifikat (bulkBookTransactions).
+ * account-keyed dry run (matchPairs). The bulk link to an existing verifikat
+ * (bulkBookTransactions) applies the same rule inside its RPC, on the sum of
+ * its rows, under the verifikat's row lock (bulk_book_transactions,
+ * 20261021001900): change one, change the other.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { ledgerLineAmountIn, type LedgerLineAmount } from '@/lib/bookkeeping/ledger-line-amount'
@@ -268,18 +270,24 @@ export function fitsBankLeg(room: BankLegRoom, amount: number, overrun = 0): Ban
 
 /**
  * The Swedish refusal for a row that does not fit, naming the verifikat, what
- * it books, what other rows hold and what to do instead.
+ * it books, what other rows hold and what to do instead. `rowCount` > 1: the
+ * rows of one bulk link, refused together at their sum.
  */
 export function bankLegConsumedMessage(args: {
   voucherLabel: string
   accountNumber: string
   amount: number
   verdict: Extract<BankLegVerdict, { fits: false }>
+  rowCount?: number
 }): string {
   const { voucherLabel, accountNumber, verdict } = args
   const amount = roundOre(args.amount)
   if (verdict.booked === null) {
     return `Verifikat ${voucherLabel} saknar belopp i transaktionens valuta på ${accountNumber}, och en annan transaktion är redan kopplad till det (${verdict.held}). Transaktionen på ${amount} kan inte kopplas dit också. Är den en egen affärshändelse, bokför den som ett eget verifikat. Är den andra kopplingen fel, koppla bort den transaktionen först.`
   }
-  return `Verifikat ${voucherLabel} bokför ${verdict.booked} på ${accountNumber}, och ${verdict.held} av det är redan kopplat till andra transaktioner (kvar: ${verdict.remaining}). Transaktionen på ${amount} ryms inte i verifikatet. Är den en egen affärshändelse, bokför den som ett eget verifikat. Är den andra kopplingen fel, koppla bort den transaktionen först.`
+  const rows =
+    (args.rowCount ?? 1) > 1
+      ? `De ${args.rowCount} transaktionerna på sammanlagt ${amount} ryms inte i verifikatet. Är de egna affärshändelser, bokför dem som egna verifikat.`
+      : `Transaktionen på ${amount} ryms inte i verifikatet. Är den en egen affärshändelse, bokför den som ett eget verifikat.`
+  return `Verifikat ${voucherLabel} bokför ${verdict.booked} på ${accountNumber}, och ${verdict.held} av det är redan kopplat till andra transaktioner (kvar: ${verdict.remaining}). ${rows} Är den andra kopplingen fel, koppla bort den transaktionen först.`
 }

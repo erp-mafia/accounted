@@ -611,7 +611,9 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     vat_rate: 0.12,
     deductibility: 'conditional',
     deductibility_note_sv: 'Momsavdrag på högst 300 kr/person (schablon 46 kr/person vid mat och alkohol); måltider inte avdragsgilla för inkomstskatt sedan 2017',
-    special_rules_sv: 'Dokumentera syfte, deltagare och företag.',
+    // Said where it goes: "Dokumentera" alone read as "upload a file", and
+    // a written note on the verifikat is enough (crm#1342).
+    special_rules_sv: 'Skriv syfte och deltagare (namn och företag) i verifikatets anteckning, eller bifoga ett underlag där de står.',
     mcc_codes: [5812, 5813, 5814],
     keywords: ['representation', 'lunch', 'middag', 'restaurang', 'restaurant', 'kund', 'kundmöte', 'gåva', 'present', 'representationsgåva'],
     risk_level: 'HIGH',

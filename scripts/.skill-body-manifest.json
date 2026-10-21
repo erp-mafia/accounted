@@ -180,8 +180,8 @@
     "version": 7
   },
   "horizontal/swedish-payroll/agi-filing": {
-    "hash": "1b9ebae06fe7b94f91e07f736d38006df294dd51bc38da30bd4fbc3419b687cf",
-    "version": 3
+    "hash": "5a491218da623d2fd1a1fd865be40a3be168cce27465bb3c90bf507c9c11ff45",
+    "version": 4
   },
   "horizontal/swedish-payroll/bas-7xxx": {
     "hash": "4762bef1db349e411087889e835d4672c56b1fe8f9d095ecc1d89ab9991991d8",
@@ -468,8 +468,8 @@
     "version": 4
   },
   "vertical/konsult-it": {
-    "hash": "05e8ff043fcf23bd706b3b8266c8c4f9c50b1a3f7300d087c72b664110929bf9",
-    "version": 3
+    "hash": "7a3d2c2d11f3bdd007b5edcba5e81ef59491ddf1a4dea3e0e81862996e929cb1",
+    "version": 4
   },
   "vertical/konsult-it/3-12-rules": {
     "hash": "341d013b503161dbc6ebafaaa2171c9cabfc6d200483f375ea2ce744ccbb7bef",
@@ -512,8 +512,8 @@
     "version": 1
   },
   "vertical/software-saas-ai": {
-    "hash": "672b70b05bf1fedbd0ecfd05020017850ca8800d77ac579b7666d48b1f660b06",
-    "version": 3
+    "hash": "81e92668a91465e4da0881929c64afe893ff71b5f84bffec00dc93473bf44dec",
+    "version": 4
   },
   "vertical/vard-halsa": {
     "hash": "2c54cb41a496d773c168e3cbfa7390d44d871353d9d6102abe747ff9b836006d",

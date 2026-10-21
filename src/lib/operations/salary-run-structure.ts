@@ -470,13 +470,13 @@ export const salaryRunsLinesCreate = defineOperation({
     employee_id: EMPLOYEE_ID,
     ...LINE,
     item_type: LINE.item_type.describe(
-      'Pay: bonus, commission (provision), overtime (övertid, quantity = hours), other, correction. ' +
+      'Pay: bonus, commission (provision), overtime (övertid, quantity = hours), other, correction; hourly_salary for extra hours at timlön on a monthly-paid payslip (quantity = hours, amount = hours × timlön). ' +
         'text: a text row (Textrad), words only on the payslip, no amount. ' +
         'Travel: traktamente_taxfree or traktamente_taxable (quantity = days), mileage_taxfree or mileage_taxable (milersättning, quantity = mil). ' +
         'Deductions: gross_deduction_pension or gross_deduction_other (bruttolöneavdrag); net_deduction_advance (förskott), net_deduction_union, net_deduction_benefit_payment or net_deduction_other (nettolöneavdrag). ' +
         'vacation: semesterdagar taken (quantity = days). benefit_*: förmånsvärde (registered benefits are added at calculation). ' +
         'The calculation replaces sick_*, vab, parental_leave, overtime_50, overtime_100 and ob_* lines with ones derived from absence and worked hours, ' +
-        'so a one-off OB amount goes on other. Not for the base salary (gnubok_set_run_salary), absence (gnubok_register_absence) ' +
+        'so a one-off OB amount goes on other. Not for the base salary (gnubok_set_run_salary; a line of the payslip\'s own Grundlön or Timlön type is refused), absence (gnubok_register_absence) ' +
         'or utlägg (gnubok_attach_salary_expense_claims).',
     ),
     description: LINE.description.describe(

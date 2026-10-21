@@ -32,6 +32,7 @@ import {
   manualLink,
   unlinkReconciliation,
   type BankLinkRefusalCode,
+  type UnlinkReconciliationResult,
 } from './bank-reconciliation'
 import { resolveSkattekontoAccount, type SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 import { getSkattekontoReconciliationStatus } from './skattekonto-reconciliation'
@@ -993,7 +994,10 @@ export async function unmatchLink(
       }
     }
     const r = await unlinkReconciliation(supabase, companyId, linkId, userId)
-    if (!r.success) throw new Error(r.error ?? 'Kunde inte koppla bort')
+    // A refusal is the surface's typed refusal, as on the skattekonto branch
+    // and setItemIgnored: a bare Error here answered 500 for a row whose
+    // verifikat is its booking (PH 194).
+    if (!r.success) throw bankUnlinkRefusal(r)
     // A split row (1:N) has no pointer: the engine collected its junction
     // vouchers before deleting them, so the first one is reported here.
     previous = tx?.journal_entry_id ?? r.previousJournalEntryIds?.[0] ?? null
@@ -1003,6 +1007,43 @@ export async function unmatchLink(
     payload: { accountKey, externalId: linkId, previousJournalEntryId: previous, userId, companyId },
   })
   return { external_id: linkId, previous_journal_entry_id: previous }
+}
+
+function bankUnlinkRefusal(r: UnlinkReconciliationResult): Error {
+  switch (r.code) {
+    case 'TRANSACTION_NOT_FOUND':
+      return new SkattekontoLinkError('Transaktionen hittades inte.', 'TRANSACTION_NOT_FOUND')
+    case 'NOT_LINKED':
+      return new SkattekontoLinkError('Transaktionen är inte kopplad till något verifikat.', 'NOT_LINKED')
+    case 'LINK_IS_BOOKING':
+      return new SkattekontoLinkError(
+        'Transaktionen är bokförd med verifikatet, inte bara kopplad till det, så kopplingen kan inte tas bort. Återför verifikatet med storno i stället, så kommer transaktionen tillbaka till Att bokföra.',
+        'LINK_IS_BOOKING',
+      )
+    default:
+      return dbError(r.cause ?? { message: r.error ?? 'Kunde inte koppla bort transaktionen' })
+  }
+}
+
+/**
+ * The registered code (lib/errors/structured-errors.ts) the v1 API answers a
+ * refusal of this surface with, or null for one that is no business refusal
+ * (a failed write), which stays a server error. The page routes and the MCP
+ * executor read err.code themselves.
+ */
+export function reconciliationRefusalCode(err: SkattekontoLinkError): string | null {
+  switch (err.code) {
+    case 'TRANSACTION_NOT_FOUND':
+      return 'NOT_FOUND'
+    case 'NOT_LINKED':
+      return 'RECONCILIATION_NOT_LINKED'
+    case 'LINK_IS_BOOKING':
+      return 'RECONCILIATION_UNLINK_IS_BOOKING'
+    case 'ALREADY_BOOKED':
+      return 'TX_IGNORE_ALREADY_BOOKED'
+    default:
+      return null
+  }
 }
 
 /**

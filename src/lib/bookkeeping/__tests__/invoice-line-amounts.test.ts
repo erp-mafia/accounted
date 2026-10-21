@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase, makeCustomer } from '@/tests/helpers'
-import { computeLineAmounts, computeLineNet, hasLineDiscount } from '@/lib/bookkeeping/invoice-line-amounts'
+import { computeLineAmounts, computeLineNet, computeLineVat, hasLineDiscount } from '@/lib/bookkeeping/invoice-line-amounts'
 import { computeDeduction } from '@/lib/bookkeeping/rot-rut-rules'
 import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
 
@@ -37,6 +37,40 @@ describe('computeLineAmounts', () => {
   })
 })
 
+describe('computeLineVat', () => {
+  it('rounds an exact half öre up (crm#1343)', () => {
+    // 5713 st x 0,10 kr = 571,30 kr; 25 % of it is exactly 142,825 kr. In
+    // binary floating point 571.3 * 25 is 14282.499999999998, which the
+    // hand-rolled scale-round-scale form rounded down to 142,82.
+    const net = computeLineNet(5713, 0.1)
+    expect(net).toBe(571.3)
+    expect(computeLineVat(net, 25)).toBe(142.83)
+    expect(computeLineVat(38.98, 25)).toBe(9.75)
+    expect(computeLineVat(66.82, 25)).toBe(16.71)
+  })
+
+  it('computes ordinary lines at every Swedish rate', () => {
+    expect(computeLineVat(10000, 25)).toBe(2500)
+    expect(computeLineVat(100, 12)).toBe(12)
+    expect(computeLineVat(99.99, 6)).toBe(6)
+    expect(computeLineVat(99.99, 25)).toBe(25)
+    expect(computeLineVat(1500, 0)).toBe(0)
+    expect(computeLineVat(0, 25)).toBe(0)
+  })
+
+  it('equals exact integer öre arithmetic, half up, for every net up to 2 000 kr', () => {
+    for (const rate of [6, 12, 25]) {
+      for (let ore = 1; ore <= 200_000; ore++) {
+        const expectedOre = Math.floor((ore * rate + 50) / 100)
+        const vat = computeLineVat(ore / 100, rate)
+        if (vat !== expectedOre / 100) {
+          throw new Error(`${ore / 100} kr at ${rate} %: got ${vat}, expected ${expectedOre / 100}`)
+        }
+      }
+    }
+  })
+})
+
 describe('computeDeduction with a line discount', () => {
   it('deducts on the net line total (what the customer pays)', () => {
     // 10 tim * 1000 = 10 000, 10% rabatt -> 9 000 net, incl VAT 11 250,
@@ -53,6 +87,17 @@ describe('computeDeduction with a line discount', () => {
     expect(
       computeDeduction({ unit_price: 1000, quantity: 10, deduction_type: 'rot', vat_rate: 25 }),
     ).toBe(3750)
+  })
+})
+
+describe('computeDeduction on a half-öre VAT line', () => {
+  it('bases the deduction on the line VAT the invoice stores', () => {
+    // 2,30 kr at 25 % is exactly 0,575 kr VAT, stored as 0,58: the RUT base
+    // is 2,88 incl. VAT and half of it is 1,44 (it was 1,43 on 0,57).
+    expect(computeLineVat(2.3, 25)).toBe(0.58)
+    expect(
+      computeDeduction({ unit_price: 2.3, quantity: 1, deduction_type: 'rut', vat_rate: 25 }),
+    ).toBe(1.44)
   })
 })
 

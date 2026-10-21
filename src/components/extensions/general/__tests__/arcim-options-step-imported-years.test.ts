@@ -5,7 +5,7 @@ import { NextIntlClientProvider, createTranslator } from 'next-intl'
 import sv from '@/messages/sv.json'
 import en from '@/messages/en.json'
 
-import { OptionsStep, optionsAfterSieData, sieFilesToImport } from '../ArcimMigrationWorkspace'
+import { DEFAULT_OPTIONS, OptionsStep, optionsAfterSieData, sieFilesToImport } from '../ArcimMigrationWorkspace'
 
 /**
  * PH 185, PH 180 (and PH 163 before them): running the migration guide
@@ -57,6 +57,7 @@ const BASE_OPTIONS: Options = {
   importAssets: true,
   voucherSeries: 'B',
   replaceImportedYears: [],
+  onlyUsedAccounts: false,
 }
 
 /** The shape of the second run in PH 185: two older years added, three already imported. */
@@ -92,11 +93,12 @@ function sieData(fileStatuses: FileStatus[]): SieData {
   }
 }
 
-function render(fileStatuses: FileStatus[], options: Options, locale: 'sv' | 'en' = 'sv'): string {
+function render(fileStatuses: FileStatus[], options: Options, locale: 'sv' | 'en' = 'sv',
+  preview?: SieData['preview']): string {
   const step = createElement(OptionsStep, {
     options,
     sieAvailable: true,
-    sieData: sieData(fileStatuses),
+    sieData: { ...sieData(fileStatuses), ...(preview ? { preview } : {}) },
     hasSieData: true,
     provider: 'fortnox',
     isStarting: false,
@@ -217,5 +219,27 @@ describe('the confirm dialog sentences', () => {
   it('name the kept years', () => {
     expect(tSv('ext_arcim_confirm_sie_kept', { count: 3, years: '2024, 2025, 2026' }))
       .toBe('Räkenskapsår 2024, 2025, 2026 är redan importerade och hämtas inte igen.')
+  })
+})
+
+// #63: the source system's export carries its whole chart in #KONTO.
+describe('OptionsStep: only the accounts the files use', () => {
+  const unused = { unusedAccounts: [{ number: '2440', name: 'Leverantörsskulder' }, { number: '6110', name: 'Kontorsmateriel' }] }
+
+  it.each([['sv', tSv], ['en', tEn]] as const)('offers the switch with the count of unused definitions (%s)', (locale, t) => {
+    const html = render([file(2025), file(2026)], BASE_OPTIONS, locale, unused)
+    expect(html).toContain(t('ext_arcim_option_only_used_accounts'))
+    expect(html).toContain(t('ext_arcim_option_only_used_accounts_desc', { count: 2 }))
+  })
+
+  it('is on by default for a provider migration and survives the fetched years', () => {
+    // A provider export is the provider's whole chart template.
+    expect(DEFAULT_OPTIONS.onlyUsedAccounts).toBe(true)
+    expect(optionsAfterSieData(DEFAULT_OPTIONS, SECOND_RUN).onlyUsedAccounts).toBe(true)
+  })
+
+  it('shows no switch when every definition is used', () => {
+    const html = render([file(2025), file(2026)], BASE_OPTIONS, 'sv', { unusedAccounts: [] })
+    expect(html).not.toContain(tSv('ext_arcim_option_only_used_accounts'))
   })
 })

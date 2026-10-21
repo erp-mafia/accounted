@@ -15,16 +15,26 @@ import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
+import {
+  balancingAmountInput,
+  checkTemplateLines,
+  shownTemplateLines,
+  templateLinesSeed,
+  withLineAccount,
+  withLineAmount,
+  type TemplateLinesEdits,
+} from '@/lib/bookkeeping/template-line-edit'
 import { proposalLinesToFormLines } from '@/lib/bookkeeping/proposal-lines'
 import { useProposalPreview } from '@/lib/hooks/use-proposal-preview'
 import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import TemplatePicker from '@/components/transactions/TemplatePicker'
+import { KonteringLinesEditor } from '@/components/bookkeeping/KonteringLinesEditor'
 import { useCompany } from '@/contexts/CompanyContext'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
-import { roundOre, parseAmountInput } from '@/lib/money'
-import { ArrowLeft, Check } from 'lucide-react'
+import { parseAmountInput } from '@/lib/money'
+import { ArrowLeft, Check, RotateCcw } from 'lucide-react'
 import type { BookingTemplateLibrary } from '@/types'
-import { useFiscalPeriods } from '@/lib/reference-data/hooks'
+import { useAccounts, useFiscalPeriods } from '@/lib/reference-data/hooks'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
@@ -35,10 +45,7 @@ interface Props {
   onCreated: () => void
 }
 
-/** Sum a side of the computed lines in öre-safe steps. */
-function sumSide(lines: FormLine[], side: 'debit_amount' | 'credit_amount'): number {
-  return lines.reduce((acc, l) => roundOre(acc + (parseFloat(l[side]) || 0)), 0)
-}
+const BLANK_LINE: FormLine = { account_number: '', debit_amount: '', credit_amount: '', line_description: '' }
 
 /**
  * "Bokför från mall" (UI-migration plan PR 4, scene 9): a centered modal
@@ -46,18 +53,29 @@ function sumSide(lines: FormLine[], side: 'debit_amount' | 'credit_amount'): num
  * library templates, by family), then date + editable amount that recomputes
  * the kontering live, a "Balanserar" row, and direct booking (user action, so
  * no Granskning detour).
+ *
+ * The kontering is the mall's starting point, not a lock (crm#1351): its
+ * lines sit in the same editor as a verifikat's, so a share that differs
+ * from booking to booking (a fee taken off a payout) is adjusted before
+ * booking, and booking waits until debit and credit match. A new total or
+ * another mall computes the lines again; the mall itself is never changed
+ * (lib/bookkeeping/template-line-edit.ts).
  */
 export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Props) {
   const t = useTranslations('bookkeeping')
+  const tLines = useTranslations('journal_form')
   const { toast } = useToast()
 
   const { company } = useCompany()
   const { periods } = useFiscalPeriods()
+  const { accounts, isLoading: accountsLoading } = useAccounts()
   const [selected, setSelected] = useState<
     { kind: 'library'; raw: BookingTemplateLibrary } | { kind: 'static'; template: BookingTemplate } | null
   >(null)
   const [entryDate, setEntryDate] = useState(() => todayIsoStockholm())
   const [amountInput, setAmountInput] = useState('')
+  // The person's changes to the computed lines, for the mall and total they were made on.
+  const [edits, setEdits] = useState<TemplateLinesEdits<FormLine> | null>(null)
   // Which button's request is in flight: only that one spins, both stay disabled.
   const [submitting, setSubmitting] = useState<'book' | 'draft' | null>(null)
 
@@ -66,6 +84,7 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
     if (open) return
     setSelected(null)
     setAmountInput('')
+    setEdits(null)
     setEntryDate(todayIsoStockholm())
   }, [open])
 
@@ -81,7 +100,7 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
   const staticPreview = useProposalPreview(
     selected?.kind === 'static' && amount > 0 ? { amount, template_id: selected.template.id } : null,
   )
-  const lines = useMemo<FormLine[]>(() => {
+  const computedLines = useMemo<FormLine[]>(() => {
     if (!selected || amount <= 0) return []
     return selected.kind === 'library'
       ? applyTemplate(selected.raw.lines, amount)
@@ -90,9 +109,24 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
   // Never book lines computed for an amount the field no longer shows.
   const linesPending = selected?.kind === 'static' && staticPreview.loading
   const selectedName = selected ? (selected.kind === 'library' ? selected.raw.name : selected.template.name_sv) : null
-  const totalDebit = sumSide(lines, 'debit_amount')
-  const totalCredit = sumSide(lines, 'credit_amount')
-  const balanced = !linesPending && lines.length >= 2 && totalDebit === totalCredit && totalDebit > 0
+  const seed = templateLinesSeed(
+    selected ? (selected.kind === 'library' ? selected.raw.id : selected.template.id) : '',
+    amount,
+  )
+  const lines = shownTemplateLines(computedLines, edits, seed)
+  const edited = edits !== null && edits.seed === seed
+  const check = useMemo(() => checkTemplateLines(lines), [lines])
+  const balanced = !linesPending && check.bookable
+
+  const accountNames = useMemo(
+    () => new Map(accounts.map((a) => [a.account_number, a.account_name])),
+    [accounts],
+  )
+  // Every change starts from the lines on screen and belongs to this mall and total.
+  const editLines = (change: (current: FormLine[]) => FormLine[]) => {
+    if (linesPending) return
+    setEdits({ seed, lines: change(lines) })
+  }
 
   const periodForDate = periods.find(
     (p) => p.period_start <= entryDate && entryDate <= p.period_end,
@@ -120,12 +154,7 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
           fiscal_period_id: periodForDate.id,
           entry_date: entryDate,
           description: selectedName,
-          lines: lines.map((l) => ({
-            account_number: l.account_number,
-            debit_amount: parseFloat(l.debit_amount) || 0,
-            credit_amount: parseFloat(l.credit_amount) || 0,
-            line_description: l.line_description || undefined,
-          })),
+          lines: check.postLines,
         }),
         },
       )
@@ -163,7 +192,7 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
 
   return (
     <Dialog open={open} onOpenChange={(next) => !submitting && onOpenChange(next)}>
-      <DialogContent className="sm:min-w-[460px] sm:max-w-lg">
+      <DialogContent className={cn('sm:min-w-[460px]', selected ? 'sm:max-w-2xl' : 'sm:max-w-lg')}>
         <DialogHeader>
           {/* data-ph-mask: the template name is user data */}
           <DialogTitle data-ph-mask="" className="font-display text-lg tracking-tight">
@@ -217,52 +246,82 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
               </div>
             </div>
 
-            {/* Live kontering preview */}
-            <div className="rounded-lg border border-border">
-              {selected.kind === 'static' && staticPreview.error ? (
-                <p role="alert" className="px-3 py-4 text-center text-[13px] text-destructive">
-                  {staticPreview.error}
-                </p>
-              ) : lines.length === 0 ? (
-                <p className="px-3 py-4 text-center text-[13px] text-muted-foreground">
-                  {t('tpl_enter_amount')}
-                </p>
-              ) : (
-                <>
-                  {lines.map((l, i) => (
-                    <div
-                      key={i}
-                      className="flex items-center gap-3 border-b border-border px-3 py-2 text-[13px] last:border-b-0"
-                    >
-                      <span className="w-12 font-mono text-muted-foreground">
-                        {l.account_number}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate">{l.line_description}</span>
-                      <span className="w-24 text-right tabular-nums">
-                        {l.debit_amount ? formatCurrency(parseFloat(l.debit_amount)) : ''}
-                      </span>
-                      <span className="w-24 text-right tabular-nums text-muted-foreground">
-                        {l.credit_amount ? formatCurrency(parseFloat(l.credit_amount)) : ''}
-                      </span>
-                    </div>
-                  ))}
-                  <div
-                    className={cn(
-                      'flex items-center justify-between px-3 py-2 text-[12.5px]',
-                      balanced ? 'text-success' : 'text-destructive',
-                    )}
-                  >
-                    <span className="inline-flex items-center gap-1.5">
-                      {balanced && <Check className="h-3.5 w-3.5" />}
-                      {balanced ? t('tpl_balances') : t('tpl_not_balancing')}
-                    </span>
-                    <span className="tabular-nums">
-                      {formatCurrency(totalDebit)} / {formatCurrency(totalCredit)}
-                    </span>
-                  </div>
-                </>
-              )}
-            </div>
+            {/* Live kontering: the mall's lines, editable before booking */}
+            {(selected.kind === 'static' && staticPreview.error) || lines.length === 0 ? (
+              <div className="rounded-lg border border-border">
+                {selected.kind === 'static' && staticPreview.error ? (
+                  <p role="alert" className="px-3 py-4 text-center text-[13px] text-destructive">
+                    {staticPreview.error}
+                  </p>
+                ) : (
+                  <p className="px-3 py-4 text-center text-[13px] text-muted-foreground">
+                    {t('tpl_enter_amount')}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">{t('tpl_lines_hint')}</p>
+                <KonteringLinesEditor
+                  lines={lines}
+                  accounts={accounts}
+                  accountName={(accountNumber) => accountNames.get(accountNumber)}
+                  accountsDisabled={accountsLoading || linesPending}
+                  onAccountChange={(index, accountNumber) =>
+                    editLines((current) =>
+                      withLineAccount(current, index, accountNumber, accountNames.get(accountNumber) ?? ''),
+                    )
+                  }
+                  onAmountChange={(index, field, value) =>
+                    editLines((current) => withLineAmount(current, index, field, value))
+                  }
+                  amountInputProps={(index, field) => ({
+                    onDoubleClick: () => {
+                      const fill = balancingAmountInput(lines, index, field)
+                      if (fill !== null) editLines((current) => withLineAmount(current, index, field, fill))
+                    },
+                    title: t('tpl_fill_balance_tooltip'),
+                  })}
+                  onAdd={() => editLines((current) => [...current, { ...BLANK_LINE }])}
+                  onRemove={(index) => editLines((current) => current.filter((_, i) => i !== index))}
+                  labels={{
+                    account: tLines('col_account'),
+                    debit: tLines('col_debit'),
+                    credit: tLines('col_credit'),
+                    addRow: tLines('add_line'),
+                    removeRow: tLines('remove_line'),
+                  }}
+                  toolbar={
+                    edited ? (
+                      <Button type="button" variant="ghost" size="sm" onClick={() => setEdits(null)}>
+                        <RotateCcw className="mr-1 h-3.5 w-3.5" aria-hidden />
+                        {t('tpl_reset_lines')}
+                      </Button>
+                    ) : undefined
+                  }
+                />
+                <div
+                  className={cn(
+                    'flex items-center justify-between border-t border-border px-1 pt-2 text-[12.5px]',
+                    balanced ? 'text-success' : 'text-destructive',
+                  )}
+                >
+                  <span className="inline-flex items-center gap-1.5">
+                    {balanced && <Check className="h-3.5 w-3.5" />}
+                    {balanced
+                      ? t('tpl_balances')
+                      : check.incomplete > 0
+                        ? t('tpl_line_incomplete')
+                        : check.difference !== 0
+                          ? t('tpl_not_balancing_diff', { amount: formatCurrency(Math.abs(check.difference)) })
+                          : t('tpl_not_balancing')}
+                  </span>
+                  <span className="tabular-nums">
+                    {formatCurrency(check.totalDebit)} / {formatCurrency(check.totalCredit)}
+                  </span>
+                </div>
+              </div>
+            )}
 
             <div className="flex justify-end gap-2">
               <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={submitting !== null}>

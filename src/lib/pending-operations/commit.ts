@@ -5511,6 +5511,8 @@ async function commitImportSie(
   // Only a literal true confirms another organisation's file: submitSIEJob
   // checks the file's #ORGNR again at approval.
   const confirmOrgNumberMismatch = params.confirm_org_number_mismatch === true
+  // Only a literal true leaves the file's unused #KONTO definitions out (#63).
+  const onlyUsedAccounts = params.only_used_accounts === true
 
   if (!fileContent || !filename || !Array.isArray(mappings)) {
     return { error: 'file_content, filename, and mappings are required', status: 400 }
@@ -5521,7 +5523,7 @@ async function commitImportSie(
   try {
     job = await submitSIEJob(supabase,companyId,userId,fileContent,mappings,{
       filename,createFiscalPeriod,importOpeningBalances,importTransactions,voucherSeries,openingBalanceSeries,updateAccountNames,
-      confirmOrgNumberMismatch,
+      confirmOrgNumberMismatch,...(onlyUsedAccounts ? { onlyUsedAccounts } : {}),
     },undefined,'sie_file',{source:'sie',via:'mcp',fetchedBy:{type:'user',user_id:userId,label:'mcp-approval'}})
   } catch (err) {
     // A refusal the job RPC raised rolled back: nothing started. It answers

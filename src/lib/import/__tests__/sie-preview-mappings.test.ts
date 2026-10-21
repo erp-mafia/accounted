@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
 import { SIEJobMappingsSchema } from '@/lib/api/schemas'
 import { suggestMappings } from '../account-mapper'
-import { prepareSIEPreviewMappings } from '../sie-preview-mappings'
+import { onlyUsedSIEMappings, prepareSIEPreviewMappings, sieUsedAccounts } from '../sie-preview-mappings'
 import { parseSIEFile } from '../sie-parser'
 import { SIEJobValidationError, validateSIEJobInput } from '../sie-jobs'
 import { buildSIEAccountRows } from '../account-sync'
@@ -112,5 +112,87 @@ describe('SIE preview account boundaries', () => {
     expect(prepareSIEPreviewMappings(parsed, [{ ...mappings[0], targetAccount: '193000' }]).mappings[0].targetAccount).toBe('')
     expect(prepareSIEPreviewMappings(parsed, [{ ...mappings[0], targetAccount: '9999' }]).mappings[0].targetAccount).toBe('')
     expect(prepareSIEPreviewMappings(parsed, [{ ...mappings[0], targetAccount: '1940' }]).mappings[0].targetAccount).toBe('1940')
+  })
+})
+
+describe('only the accounts the file uses (#63)', () => {
+  // A provider export carries its whole chart in #KONTO: 2440 and 6110 are
+  // defined but nothing in the file touches them.
+  const chart = '#KONTO 2440 "Leverantörsskulder"\n#KONTO 6110 "Kontorsmateriel"\n'
+  const unusedOf = (source: string) => preview(source).unusedAccounts.map(a => a.number)
+
+  it('names unused BAS definitions and keeps every used account', () => {
+    const result = preview(chart + ledger)
+    expect(result.unusedAccounts).toEqual([
+      { number: '2440', name: 'Leverantörsskulder' },
+      { number: '6110', name: 'Kontorsmateriel' },
+    ])
+    expect(result.unusedOwnAccounts).toEqual([])
+    // The default keeps the file's chart (#2605): the unused rows stay mapped.
+    expect(result.mappings.map(m => m.sourceAccount)).toEqual(['2440', '6110', '1930', '3001'])
+    expect(onlyUsedSIEMappings(parseSIEFile(chart + ledger), result.mappings).map(m => m.sourceAccount))
+      .toEqual(['1930', '3001'])
+  })
+
+  it('counts a voucher line of any amount, struck and added rättelse lines included', () => {
+    expect(unusedOf(chart + ledger + '\n#VER A 2 20260202 "Noll"\n{\n#TRANS 6110 {} 0\n#TRANS 1930 {} 0\n}'))
+      .toEqual(['2440'])
+    expect(unusedOf(chart + ledger +
+      '\n#VER A 2 20260202 "Rättad"\n{\n#BTRANS 6110 {} 100\n#RTRANS 2440 {} 100\n#TRANS 2440 {} 100\n#TRANS 3001 {} -100\n}'))
+      .toEqual([])
+  })
+
+  it.each(['#IB 0', '#IB -1', '#UB 0', '#UB -1', '#RES 0', '#RES -1'])('counts a non-zero %s row', tag => {
+    expect(unusedOf(chart + ledger + `\n${tag} 2440 -100`)).toEqual(['6110'])
+  })
+
+  it('counts object balances with an amount', () => {
+    expect(unusedOf(chart + '#DIM 6 "Projekt"\n#OBJEKT 6 "P1" "Projekt 1"\n' + ledger + '\n#OIB 0 2440 {6 "P1"} -100'))
+      .toEqual(['6110'])
+  })
+
+  it('leaves out a BAS definition whose only balances are zero', () => {
+    expect(unusedOf(chart + ledger + '\n#IB 0 2440 0\n#UB 0 2440 0.00\n#RES 0 6110 0')).toEqual(['2440', '6110'])
+    // A number outside BAS is the company's own: kept, and as before a zero
+    // row on a number no chart can hold still needs a hand-made target.
+    const zeroOnly = preview('#KONTO 193000 "Underkonto"\n' + ledger + '\n#IB 0 193000 0')
+    expect(zeroOnly.mappings.find(m => m.sourceAccount === '193000')?.targetAccount).toBe('')
+    expect(zeroOnly.unusedAccounts).toEqual([])
+    expect(zeroOnly.unusedOwnAccounts.map(a => a.number)).toEqual(['193000'])
+  })
+
+  it('keeps the company\'s own unused accounts: only unused BAS accounts can be added back from the catalog', () => {
+    const source = chart + '#KONTO 1932 "Sparkonto"\n#KONTO 6111 "Egen kostnad"\n' + ledger
+    const result = preview(source)
+    expect(result.unusedAccounts.map(a => a.number)).toEqual(['2440', '6110'])
+    expect(result.unusedOwnAccounts).toEqual([
+      { number: '1932', name: 'Sparkonto' },
+      { number: '6111', name: 'Egen kostnad' },
+    ])
+    expect(onlyUsedSIEMappings(parseSIEFile(source), result.mappings).map(m => m.sourceAccount))
+      .toEqual(['1932', '6111', '1930', '3001'])
+  })
+
+  it('keeps an account a parse issue names: its amount could not be read', () => {
+    expect(unusedOf(chart + ledger + '\n#IB 0 2440 invalid')).toEqual(['6110'])
+    expect(sieUsedAccounts(parseSIEFile(chart + ledger + '\n#IB 0 2440 invalid')).has('2440')).toBe(true)
+  })
+
+  it('never lists system or archive-only definitions: they are not created either way', () => {
+    const result = preview('#KONTO 0099 "Internt"\n#KONTO 999 "Kort"\n' + chart + ledger)
+    expect(result.excludedSystemAccounts.map(a => a.number)).toEqual(['0099'])
+    expect(result.archivedOnlyAccounts.map(a => a.number)).toEqual(['999'])
+    expect(result.unusedAccounts.map(a => a.number)).toEqual(['2440', '6110'])
+  })
+
+  it('creates the used accounts and the own ones, and still passes the job input check', () => {
+    const source = chart + '#KONTO 9999 "Oanvänt OBS"\n' + ledger + '\n#IB 0 1930 500\n#IB 0 2440 -500'
+    const parsed = parseSIEFile(source)
+    const kept = SIEJobMappingsSchema.parse(onlyUsedSIEMappings(parsed, preview(source).mappings))
+    // 6110 is unused BAS: left out. 9999 is unused but the company's own: kept, as #2605.
+    expect(kept.map(m => m.sourceAccount).sort()).toEqual(['1930', '2440', '3001', '9999'])
+    expect(() => validateSIEJobInput(source, parsed, kept,
+      { filename: 'test.se', createFiscalPeriod: true, importTransactions: true, importOpeningBalances: true })).not.toThrow()
+    expect(buildSIEAccountRows('company', 'user', kept).map(a => a.account_number).sort()).toEqual(['1930', '2440', '3001', '9999'])
   })
 })

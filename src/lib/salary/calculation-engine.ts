@@ -14,6 +14,7 @@ import { degreeAdjustedMonthlySalary } from './work-schedule'
 import { isVaxaStodRefundMonth, VAXA_STOD_CONFIGURED_CAP_FROM, VAXA_STOD_REFUND_STEP_LABEL } from './vaxa-stod'
 import { computeExtraTax, type StatutoryTaxBranch } from './extra-tax'
 import type { SalaryLineItemType } from '@/types'
+import { isBaseSalaryDisplayLine, lineTypesWithRole } from './line-item-roles'
 
 // ============================================================
 // Types
@@ -113,24 +114,19 @@ export interface SalaryCalculationInput {
 
 /**
  * Line types summed into gross pay as additions (Step 2) when taxable and
- * not a gross or net deduction. Exported so the payslip line commands can
- * tell which lines the avgiftsunderlag always includes. Traktamente and
- * milersättning above Skatteverket's schablon are taxed as salary with full
- * arbetsgivaravgifter (travel-expenses.md); left out, they reached neither
- * gross, tax nor payout, and the booking took them off the base salary debit.
+ * not a gross or net deduction (line-item-roles.ts: 'addition', plus the
+ * Grundlön/Timlön type that is not the payslip's own, whose own row
+ * calculateSalary drops before any step). Exported so the payslip line
+ * commands can tell which lines the avgiftsunderlag always includes.
+ * Traktamente and milersättning above Skatteverket's schablon are taxed as
+ * salary with full arbetsgivaravgifter (travel-expenses.md); left out, they
+ * reached neither gross, tax nor payout, and the booking took them off the
+ * base salary debit.
  */
-export const ADDITION_ITEM_TYPES: readonly SalaryLineItemType[] = [
-  'overtime', 'overtime_50', 'overtime_100',
-  'ob_weekday_evening', 'ob_weekend', 'ob_night', 'ob_holiday',
-  'bonus', 'commission',
-  'traktamente_taxable', 'mileage_taxable',
-  'other', 'correction', 'semesterersattning',
-]
+export const ADDITION_ITEM_TYPES: readonly SalaryLineItemType[] = lineTypesWithRole('addition', 'base_salary')
 
 /** Row types Step 3 consumes as signed absence; Step 4 must never see them again. */
-const ABSENCE_ITEM_TYPES: ReadonlySet<string> = new Set([
-  'sick_karens', 'sick_day2_14', 'sick_day15_plus', 'vab', 'parental_leave', 'unpaid_leave', 'vacation',
-])
+const ABSENCE_ITEM_TYPES: ReadonlySet<string> = new Set(lineTypesWithRole('absence'))
 
 export interface CalculationLineItem {
   itemType: SalaryLineItemType
@@ -224,17 +220,16 @@ function r(x: number): number {
 
 /**
  * Sum vacation-basis line items that ADD to base salary (overtime, bonus,
- * etc). Excludes monthly_salary/hourly_salary because those line items mirror
- * the engine's own baseSalary computation: counting them would double the
- * vacation basis. Excludes semesterersattning too: semesterlön is not
- * semesterlönegrundande (SemL 16 §), so a manually entered semesterersättning
- * payout must neither accrue vacation pay nor earn semesterersättning on
- * itself.
+ * extra hours at timlön, etc). The payslip's own Grundlön/Timlön row is not
+ * here: calculateSalary drops it before any step, because it mirrors the
+ * engine's own baseSalary and would double the vacation basis. Excludes
+ * semesterersattning: semesterlön is not semesterlönegrundande (SemL 16 §),
+ * so a manually entered semesterersättning payout must neither accrue
+ * vacation pay nor earn semesterersättning on itself.
  */
 function vacationBasisAdditions(lineItems: CalculationLineItem[]): number {
   return lineItems
     .filter(li => li.isVacationBasis)
-    .filter(li => li.itemType !== 'monthly_salary' && li.itemType !== 'hourly_salary')
     .filter(li => li.itemType !== 'semesterersattning')
     .reduce((sum, li) => sum + li.amount, 0)
 }
@@ -440,10 +435,18 @@ export function monthlyBaseSalary(input: MonthlyBaseInput): number {
  *  10. Avgifter on vacation accrual
  */
 export function calculateSalary(
-  input: SalaryCalculationInput,
+  given: SalaryCalculationInput,
   config: PayrollConfig,
   taxRates: TaxTableRate[]
 ): SalaryCalculationResult {
+  // The payslip's own Grundlön or Timlön row shows Step 1 and is never an
+  // input: Step 1 prices the base from the pay type. A base-salary row of the
+  // other type is pay on top (extra hours at timlön on a monthly payslip) and
+  // stays, a Step 2 addition (line-item-roles.ts, crm#1331).
+  const input: SalaryCalculationInput = {
+    ...given,
+    lineItems: given.lineItems.filter(li => !isBaseSalaryDisplayLine(li.itemType, [given.salaryType])),
+  }
   const steps: CalculationStep[] = []
 
   // ─── Step 1: Base salary ───
@@ -508,6 +511,8 @@ export function calculateSalary(
   // deductions belong to Steps 4 and 7 and rows that are not taxable are
   // not wages; neither is an addition. The engine-derived semesterersättning
   // row never reaches this list (run-calculation filters it by provenance).
+  // Neither does the payslip's own Grundlön/Timlön row (dropped above); a
+  // Timlön row on a monthly payslip is extra hours and is summed here.
   const additions = input.lineItems.filter(
     li => ADDITION_ITEM_TYPES.includes(li.itemType) && li.isTaxable && !li.isGrossDeduction && !li.isNetDeduction
   )
@@ -838,9 +843,9 @@ export function calculateSalary(
 
   // ─── Step 9: Vacation accrual ───
   // Vacation basis = baseSalary (computed at the top) + any *additional*
-  // vacation-basis line items (overtime, bonus, etc). We must NOT add
-  // monthly_salary/hourly_salary line items here: those are auto-created at
-  // employee-add time and represent the same baseSalary already accounted for.
+  // vacation-basis line items (overtime, bonus, extra hours at timlön, etc).
+  // The payslip's own Grundlön/Timlön row was dropped at the top: it is
+  // created at employee-add time and represents the same baseSalary.
   // Hourly pay adds its semesterlönegrundande frånvaro (absenceBasis above).
   const vacationBasis = r(baseSalary + vacationBasisAdditions(input.lineItems) + absenceBasis)
   let vacationAccrual: number

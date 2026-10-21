@@ -202,6 +202,7 @@ describe('GET /api/supplier-invoices', () => {
 
   it('handles to_pay virtual status', async () => {
     setTable('supplier_invoices', { data: [] })
+    setTable('company_settings', { data: { accounting_method: 'accrual' } })
 
     const request = createMockRequest('/api/supplier-invoices', {
       searchParams: { status: 'to_pay' },
@@ -210,7 +211,25 @@ describe('GET /api/supplier-invoices', () => {
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(200)
-    expect(findCall('supplier_invoices', 'in')).toEqual(['status', ['approved', 'overdue']])
+    expect(findCall('supplier_invoices', 'in')).toEqual(['status', ['approved', 'overdue', 'partially_paid']])
+    expect(findCalls('company_settings', 'eq')).toContainEqual(['company_id', 'company-1'])
+  })
+
+  // crm#1141: kontantmetoden has no attest step, so registered is to pay.
+  it('includes registered invoices in to_pay under kontantmetoden', async () => {
+    setTable('supplier_invoices', { data: [] })
+    setTable('company_settings', { data: { accounting_method: 'cash' } })
+
+    const request = createMockRequest('/api/supplier-invoices', {
+      searchParams: { status: 'to_pay' },
+    })
+    const response = await GET(request)
+
+    expect(response.status).toBe(200)
+    expect(findCall('supplier_invoices', 'in')).toEqual([
+      'status',
+      ['registered', 'approved', 'overdue', 'partially_paid'],
+    ])
   })
 
   it('applies supplier_id filter', async () => {

@@ -14,14 +14,30 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { formatCurrency, formatDate, cn, isValidExchangeRate } from '@/lib/utils'
-import { Search, X, Plus, Check, AlertTriangle, Link2, Loader2 } from 'lucide-react'
+import { formatCurrency, formatDate, cn, isValidExchangeRate, chunk } from '@/lib/utils'
+import { Search, X, Plus, Check, AlertTriangle, Link2, Loader2, ClipboardPaste, ChevronDown } from 'lucide-react'
 import type { Invoice, Customer, SupplierInvoice, Supplier } from '@/types'
-import { PICKER_LIMIT, loadOpenInvoicesForMatch } from '@/lib/invoices/open-invoice-search'
+import {
+  PASTE_OPEN_INVOICES_MAX,
+  PICKER_LIMIT,
+  loadInvoicesForPaste,
+  loadOpenInvoicesForMatch,
+  type PasteLookupInvoice,
+} from '@/lib/invoices/open-invoice-search'
+import {
+  MAX_PASTED_REFERENCES,
+  parseInvoicePaste,
+  planInvoicePaste,
+  type InvoicePasteResult,
+  type PasteSkip,
+  type PasteSkipReason,
+} from '@/lib/invoices/invoice-number-paste'
+import { ID_READ_CHUNK, MAX_BANK_ROW_SPLIT } from '@/lib/reconciliation/limits'
 import type { TransactionWithInvoice } from './transaction-types'
 import type { BatchAllocationPrefill } from '@/lib/transactions/parts-read'
 import { parseAmountInput, formatAmountInput, roundOre } from '@/lib/money'
@@ -29,10 +45,39 @@ import { parseAmountInput, formatAmountInput, roundOre } from '@/lib/money'
 /** Pause after the last keystroke before the search goes to the database. */
 const SEARCH_DEBOUNCE_MS = 250
 
+/**
+ * Picked invoices shown as rows above the search results. Past this many
+ * they fold into one summary line (count and sum, expandable): after a paste
+ * of hundreds, every search result would otherwise sit below all of them.
+ */
+const PICKED_INLINE_MAX = 10
+
+/** Why a pasted number was not picked, as the reason line beside it says. */
+const PASTE_REASON_KEYS: Record<PasteSkipReason, string> = {
+  not_found: 'paste_reason_not_found',
+  already_paid: 'paste_reason_already_paid',
+  not_open: 'paste_reason_not_open',
+  ambiguous: 'paste_reason_ambiguous',
+  other_currency: 'paste_reason_other_currency',
+  amount_above_remaining: 'paste_reason_amount_above_remaining',
+  same_invoice: 'paste_reason_same_invoice',
+  conflicting_amounts: 'paste_reason_conflicting_amounts',
+  unreadable: 'paste_reason_unreadable',
+}
+
+/**
+ * What the dialog reads of the bank row. Att göra opens it from a worklist
+ * suggestion (lib/worklist SuggestedMatch with allocations), which carries
+ * these and nothing more.
+ */
+export type AllocationTransaction = Pick<TransactionWithInvoice, 'id' | 'amount' | 'date' | 'description'> & {
+  currency: string
+}
+
 interface MatchAllocationDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  transaction: TransactionWithInvoice | null
+  transaction: AllocationTransaction | null
   /**
    * Allocations to start from (the row's Bankgirot split, one per suggested
    * part): picked with their amounts as soon as the candidates load, an
@@ -115,6 +160,22 @@ function parseAmount(s: string): number {
   return parseAmountInput(s) ?? 0
 }
 
+/** A pasted invoice as a dialog row: the same shape a click adds. */
+function pasteCandidate(kind: AllocationCandidate['kind'], invoice: PasteLookupInvoice, unknownName: string): AllocationCandidate {
+  return {
+    kind,
+    id: invoice.id,
+    label: invoice.label,
+    counterpartyName: invoice.counterpartyName ?? unknownName,
+    remaining: invoice.remaining,
+    total: invoice.total,
+    currency: invoice.currency ?? 'SEK',
+    exchangeRate: invoice.exchangeRate,
+    dueDate: invoice.dueDate,
+    invoiceDate: invoice.invoiceDate,
+  }
+}
+
 export default function MatchAllocationDialog({
   open,
   onOpenChange,
@@ -151,6 +212,12 @@ export default function MatchAllocationDialog({
   const [explaining, setExplaining] = useState<ExplainingSet | null>(null)
   const [explainingAcknowledged, setExplainingAcknowledged] = useState(false)
   const [linking, setLinking] = useState(false)
+  // Paste a list of invoice numbers (#75): hundreds picked in one go.
+  const [pasteOpen, setPasteOpen] = useState(false)
+  const [pasteText, setPasteText] = useState('')
+  const [pasting, setPasting] = useState(false)
+  const [pasteResult, setPasteResult] = useState<(InvoicePasteResult<PasteLookupInvoice> & { capped: boolean }) | null>(null)
+  const [pickedExpanded, setPickedExpanded] = useState(false)
 
   useEffect(() => {
     const handle = setTimeout(() => setAppliedSearch(search.trim()), SEARCH_DEBOUNCE_MS)
@@ -226,20 +293,22 @@ export default function MatchAllocationDialog({
           const idOf = (a: BatchAllocationPrefill) => (a.kind === 'customer_invoice' ? a.invoice_id : a.supplier_invoice_id)
           const known = new Set(loaded.map((c) => c.id))
           const missingIds = prefill.map(idOf).filter((id) => !known.has(id))
-          if (missingIds.length > 0) {
+          // In slices: ids travel in the query string, and a prefill of
+          // hundreds in one read is answered with 414 (#2395).
+          for (const slice of chunk(missingIds, ID_READ_CHUNK)) {
             if (kind === 'customer_invoice') {
               const { data } = await supabase
                 .from('invoices')
                 .select('*, customer:customers(*)')
                 .eq('company_id', companyId)
-                .in('id', missingIds)
+                .in('id', slice)
               loaded = [...loaded, ...((data ?? []) as CustomerInvoiceRow[]).map(customerCandidate)]
             } else {
               const { data } = await supabase
                 .from('supplier_invoices')
                 .select('*, supplier:suppliers(*)')
                 .eq('company_id', companyId)
-                .in('id', missingIds)
+                .in('id', slice)
               loaded = [...loaded, ...((data ?? []) as SupplierInvoiceRow[]).map(supplierCandidate)]
             }
           }
@@ -303,6 +372,10 @@ export default function MatchAllocationDialog({
       setAppliedSearch('')
       setExplaining(null)
       setExplainingAcknowledged(false)
+      setPasteOpen(false)
+      setPasteText('')
+      setPasteResult(null)
+      setPickedExpanded(false)
       prefillApplied.current = false
     }
   }, [open])
@@ -336,8 +409,15 @@ export default function MatchAllocationDialog({
     Math.abs(leftover) < TOLERANCE && Object.keys(drafts).length > 0
   const undershoot = leftover > TOLERANCE
 
+  // One bank row settles at most MAX_BANK_ROW_SPLIT invoices (the route
+  // refuses more with a 400): say so here and hold the confirm instead.
+  const pickedCount = Object.keys(drafts).length
+  const overLimit = pickedCount > MAX_BANK_ROW_SPLIT
+  const collapsePicked = pickedCount > PICKED_INLINE_MAX
+
   // Picked rows first (they stay whatever the search says), then the rows the
-  // search returned, oldest due date first.
+  // search returned, oldest due date first. Past PICKED_INLINE_MAX the picked
+  // rows fold into the summary line and show only when it is expanded.
   const filteredCandidates = useMemo(() => {
     const picked = Object.values(drafts)
       .map((d) => d.candidate)
@@ -346,8 +426,8 @@ export default function MatchAllocationDialog({
     const rest = candidates
       .filter((c) => !pickedIds.has(c.id))
       .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
-    return [...picked, ...rest]
-  }, [candidates, drafts])
+    return collapsePicked && !pickedExpanded ? rest : [...picked, ...rest]
+  }, [candidates, drafts, collapsePicked, pickedExpanded])
 
   function addAllocation(candidate: AllocationCandidate) {
     setDrafts((prev) => {
@@ -402,12 +482,59 @@ export default function MatchAllocationDialog({
     })
   }
 
+  /**
+   * Resolve the pasted numbers against the company's invoices of the row's
+   * direction and pick what they name, at the pasted amount or else what each
+   * invoice owes (lib/invoices/invoice-number-paste). Every number not picked
+   * is listed with its reason.
+   */
+  async function handleApplyPaste() {
+    if (!company || !transaction) return
+    const parsed = parseInvoicePaste(pasteText)
+    if (parsed.references.length === 0 && parsed.unreadable.length === 0 && parsed.conflicting.length === 0) return
+    setPasting(true)
+    try {
+      const pasteKind = kind === 'customer_invoice' ? 'customer' : 'supplier'
+      const { invoices, capped: openCapped } = await loadInvoicesForPaste(supabase, company.id, pasteKind, parsed.references)
+      const result = planInvoicePaste(parsed, invoices, { kind: pasteKind, currency: txCurrency })
+      const unknownName = kind === 'customer_invoice' ? t('unknown_customer') : t('unknown_supplier')
+      setDrafts((prev) => {
+        const next = { ...prev }
+        for (const pick of result.picks) {
+          next[pick.invoice.id] = {
+            candidate: pasteCandidate(kind, pick.invoice, unknownName),
+            amount: formatAmountInput(pick.amount),
+          }
+        }
+        return next
+      })
+      setPasteResult({ ...result, capped: openCapped })
+      setPasteOpen(false)
+      setPickedExpanded(false)
+    } catch (err) {
+      toast({
+        title: t('paste_failed'),
+        description: getErrorMessage(err, { context: kind === 'customer_invoice' ? 'invoice' : 'supplier_invoice' }),
+        variant: 'destructive',
+      })
+    } finally {
+      setPasting(false)
+    }
+  }
+
+  /** The reason beside one number; ambiguous and same_invoice say how many and which. */
+  function pasteReasonLabel(skip: PasteSkip): string {
+    if (skip.reason === 'ambiguous') return t('paste_reason_ambiguous_row', { count: skip.count ?? 0 })
+    if (skip.reason === 'same_invoice') return t('paste_reason_same_invoice_row', { earlier: skip.earlier ?? '' })
+    return t(PASTE_REASON_KEYS[skip.reason])
+  }
+
   async function handleConfirm() {
     if (!transaction) return
     // PR #607 round-1 review: require balanced. Undershoot is no longer
     // allowed because it leaves the bank line short of tx_abs and breaks
     // reconciliation.
-    if (!balanced || overshoot) return
+    if (!balanced || overshoot || overLimit) return
 
     setSubmitting(true)
     try {
@@ -687,20 +814,139 @@ export default function MatchAllocationDialog({
             </div>
           )}
 
-          {/* Search */}
-          <div className="relative">
-            {isSearching ? (
-              <Loader2 className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-muted-foreground" />
-            ) : (
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            )}
-            <Input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder={t('search_placeholder')}
-              className="pl-9"
-            />
+          {/* Search, and the paste box for a list of invoice numbers (#75) */}
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              {isSearching ? (
+                <Loader2 className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-muted-foreground" />
+              ) : (
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              )}
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={t('search_placeholder')}
+                className="pl-9"
+              />
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setPasteOpen((v) => !v)}
+              aria-expanded={pasteOpen}
+              aria-controls="match-allocation-paste"
+            >
+              <ClipboardPaste className="mr-2 h-4 w-4" />
+              {t('paste_toggle')}
+            </Button>
           </div>
+
+          {pasteOpen && (
+            <div id="match-allocation-paste" className="space-y-2 rounded-lg border p-3">
+              <label htmlFor="match-allocation-paste-text" className="text-sm font-medium">
+                {t('paste_label')}
+              </label>
+              <Textarea
+                id="match-allocation-paste-text"
+                value={pasteText}
+                onChange={(e) => setPasteText(e.target.value)}
+                placeholder={t('paste_placeholder')}
+                className="min-h-[120px] font-mono text-[13px]"
+                spellCheck={false}
+              />
+              <p className="text-xs text-muted-foreground">
+                {kind === 'customer_invoice' ? t('paste_hint_customer') : t('paste_hint_supplier')}
+              </p>
+              <div className="flex justify-end gap-2">
+                <Button type="button" size="sm" variant="ghost" onClick={() => setPasteOpen(false)} disabled={pasting}>
+                  {t('cancel')}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={handleApplyPaste}
+                  loading={pasting}
+                  disabled={!pasteText.trim() || submitting}
+                >
+                  {t('paste_apply')}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {pasteResult && (
+            <div className="space-y-2 rounded-lg border p-3 text-sm" role="status" aria-live="polite">
+              <div className="flex items-start justify-between gap-3">
+                <p className="tabular-nums">
+                  {t('paste_result_picked', {
+                    count: pasteResult.picks.length,
+                    amount: formatCurrency(pasteResult.pickedTotal, txCurrency),
+                  })}
+                </p>
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="ghost"
+                  onClick={() => setPasteResult(null)}
+                  aria-label={t('paste_close')}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+              {pasteResult.skipped.length > 0 && (
+                <>
+                  <p className="text-xs text-attn tabular-nums">
+                    {t('paste_result_skipped', { count: pasteResult.skipped.length })}{' '}
+                    {(Object.keys(PASTE_REASON_KEYS) as PasteSkipReason[])
+                      .filter((reason) => pasteResult.counts[reason] > 0)
+                      .map((reason) =>
+                        t('paste_reason_count', {
+                          reason: t(PASTE_REASON_KEYS[reason]),
+                          count: pasteResult.counts[reason],
+                        }),
+                      )
+                      .join(' · ')}
+                  </p>
+                  <ul className="max-h-40 space-y-1 overflow-y-auto">
+                    {pasteResult.skipped.map((skip, i) => (
+                      <li key={`${skip.reason}-${skip.text}-${i}`} className="flex items-center justify-between gap-3 text-xs">
+                        <span className="min-w-0 truncate font-mono tabular-nums">{skip.text}</span>
+                        <span className="shrink-0 text-muted-foreground">{pasteReasonLabel(skip)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              {pasteResult.truncated && (
+                <p className="text-xs text-attn">{t('paste_truncated', { max: MAX_PASTED_REFERENCES })}</p>
+              )}
+              {pasteResult.capped && (
+                <p className="text-xs text-attn">{t('paste_capped', { max: PASTE_OPEN_INVOICES_MAX })}</p>
+              )}
+            </div>
+          )}
+
+          {/* Hundreds of picks fold into one line, expandable */}
+          {collapsePicked && (
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-foreground bg-card px-3 py-2 text-sm">
+              <button
+                type="button"
+                onClick={() => setPickedExpanded((v) => !v)}
+                aria-expanded={pickedExpanded}
+                className="flex min-w-0 items-center gap-2 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <ChevronDown
+                  className={cn('h-4 w-4 shrink-0 transition-transform duration-150', !pickedExpanded && '-rotate-90')}
+                />
+                <span className="truncate tabular-nums">
+                  {t('picked_summary', { count: pickedCount, amount: formatCurrency(allocated, txCurrency) })}
+                </span>
+              </button>
+              <Button type="button" size="sm" variant="ghost" onClick={() => setDrafts({})} className="text-muted-foreground">
+                {t('picked_clear')}
+              </Button>
+            </div>
+          )}
 
           {/* Candidate list */}
           {loading ? (
@@ -709,7 +955,7 @@ export default function MatchAllocationDialog({
               <Skeleton className="h-16 w-full" />
               <Skeleton className="h-16 w-full" />
             </div>
-          ) : filteredCandidates.length === 0 ? (
+          ) : filteredCandidates.length === 0 && collapsePicked ? null : filteredCandidates.length === 0 ? (
             <div className="rounded-lg border border-dashed bg-muted/30 p-6 text-center">
               <p className="text-sm font-medium">{t('empty_title')}</p>
               <p className="mt-1 text-xs text-muted-foreground">{t('empty_description')}</p>
@@ -824,7 +1070,14 @@ export default function MatchAllocationDialog({
           {/* Tally */}
           <div className="space-y-2 border-t pt-3">
             <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">{t('allocated_label')}</span>
+              <span className="text-muted-foreground">
+                {t('allocated_label')}
+                {collapsePicked && (
+                  <span className={cn('ml-2 tabular-nums', overLimit && 'text-destructive')}>
+                    {t('picked_count', { count: pickedCount, max: MAX_BANK_ROW_SPLIT })}
+                  </span>
+                )}
+              </span>
               <span
                 className={cn(
                   'font-mono tabular-nums',
@@ -836,6 +1089,14 @@ export default function MatchAllocationDialog({
                 {formatCurrency(txAmountAbs, transaction.currency)}
               </span>
             </div>
+            {overLimit && (
+              <div className="flex items-center gap-2 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
+                <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                <p>
+                  {t('over_limit_warning', { max: MAX_BANK_ROW_SPLIT, excess: pickedCount - MAX_BANK_ROW_SPLIT })}
+                </p>
+              </div>
+            )}
             {overshoot ? (
               <div className="flex items-center gap-2 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
                 <AlertTriangle className="h-4 w-4 flex-shrink-0" />
@@ -876,7 +1137,7 @@ export default function MatchAllocationDialog({
             // Confirm requires sum == tx_abs exactly (within rounding).
             // Anything else lets the JE diverge from the bank line and
             // breaks reconciliation. PR #607 round-1 review fix.
-            disabled={linking || !balanced || overshoot || explainingBlocks}
+            disabled={linking || !balanced || overshoot || overLimit || explainingBlocks}
             loading={submitting}
           >
             {t('confirm')}

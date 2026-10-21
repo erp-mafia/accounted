@@ -738,6 +738,44 @@ describe('PATCH /accounts (enable-banking)', () => {
       })
     })
 
+    // PH 195: Enable Banking handed out 100 empty pages, each with a
+    // continuation key, and the first import was stamped complete with
+    // nothing in it while the panel said "connected".
+    it('answers a first import the bank had not finished as incomplete and leaves it owed', async () => {
+      mockedSync.mockResolvedValue({
+        requestedFromDate: '2025-10-20',
+        historyNarrowed: false,
+        imported: 0,
+        duplicates: 0,
+        errors: 0,
+        truncated: true,
+      })
+
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        connectionRow: {
+          id: 'conn-1',
+          status: 'pending_selection',
+          accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true }],
+        },
+      }
+      const supabase = buildSupabase(stub)
+      const ctx = makeContext(supabase)
+
+      const res = await accountsRoute.handler(
+        makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'], initial_lookback_days: 365 }),
+        ctx
+      )
+
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.success).toBe(true)
+      expect(body.initial_sync).toBeUndefined()
+      expect(body.initial_sync_error).toBe('initial_sync_incomplete')
+      // What came is stored, but the first import is not completed: the cron owes it.
+      expect(stub.capturedSync).toMatchObject({ p_connection_id: 'conn-1', p_initial_sync: null })
+    })
+
     it('suppresses auto-categorization and reconciles per ledger account when the window overlaps an SIE import (renewal-flood guard)', async () => {
       mockedSync.mockResolvedValue({
         requestedFromDate: '2026-01-01',

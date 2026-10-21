@@ -1,10 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { assertAccruedCostLinesBookable } from '@/lib/bookkeeping/accruals/accrued-cost-guard'
+import {
+  assertAccruedCostLinesBookable,
+  assertAccruedIncomeLinesBookable,
+} from '@/lib/bookkeeping/accruals/accrued-cost-guard'
 import { checkPeriodLock, type PeriodLockVerdict } from '@/lib/api/v1/check-period-lock'
 import {
   AccruedCostPeriodInvalidError,
   AccruedCostPeriodLockedError,
+  AccruedIncomePeriodInvalidError,
+  AccruedIncomePeriodLockedError,
+  INVOICE_ACCRUED_INCOME_PERIOD_LOCKED,
   SI_ACCRUED_COST_PERIOD_LOCKED,
   isBookkeepingError,
 } from '@/lib/bookkeeping/errors'
@@ -154,6 +160,87 @@ describe('the refusal as a structured error', () => {
       details: { periodStart: '2026-09-01', periodEnd: '2026-10-31', invoiceDate: '2026-10-05' },
     })
     expect(getErrorMessage({ error: { code: 'SI_ACCRUED_COST_PERIOD_INVALID', message: err.message } })).toMatch(
+      /dela raden/i,
+    )
+  })
+})
+
+// Upplupen intäkt (17xx, #62): September consulting on an October invoice.
+describe('assertAccruedIncomeLinesBookable', () => {
+  it('reads nothing when no line is an upplupen intäkt (a 29xx deferral, no periodisering)', async () => {
+    await assertAccruedIncomeLinesBookable(supabase, COMPANY, '2026-10-15', [
+      accruedLine('2026-11-01', '2027-04-30', '2970'),
+      { accrual_period_start: null, accrual_period_end: null, accrual_balance_account: null },
+    ])
+    expect(mockCheckPeriodLock).not.toHaveBeenCalled()
+  })
+
+  it('checks every month-end of the period before the invoice month', async () => {
+    await assertAccruedIncomeLinesBookable(supabase, COMPANY, '2026-10-15', [
+      accruedLine('2026-08-01', '2026-09-30', '1790'),
+    ])
+    expect(mockCheckPeriodLock.mock.calls.map((call) => call[2])).toEqual(['2026-08-31', '2026-09-30'])
+  })
+
+  it('refuses a period that reaches the invoice month, before any lookup', async () => {
+    const attempt = assertAccruedIncomeLinesBookable(supabase, COMPANY, '2026-10-15', [
+      accruedLine('2026-09-01', '2026-10-31', '1790'),
+    ])
+    await expect(attempt).rejects.toBeInstanceOf(AccruedIncomePeriodInvalidError)
+    expect(mockCheckPeriodLock).not.toHaveBeenCalled()
+  })
+
+  it('refuses the whole booking when a month is locked or behind the lock date, naming each', async () => {
+    mockCheckPeriodLock.mockImplementation(async (_s, _c, date) =>
+      date === '2026-08-31' ? { locked: true, reason: 'company_lock_date_covers' } : open,
+    )
+    await expect(
+      assertAccruedIncomeLinesBookable(supabase, COMPANY, '2026-10-15', [accruedLine('2026-08-01', '2026-09-30', '1780')]),
+    ).rejects.toMatchObject({
+      code: INVOICE_ACCRUED_INCOME_PERIOD_LOCKED,
+      blocked: [{ date: '2026-08-31', reason: 'company_lock_date_covers' }],
+    })
+  })
+
+  it('blocks a month-end no fiscal year covers', async () => {
+    mockCheckPeriodLock.mockResolvedValue({ locked: false, reason: 'no_fiscal_period' })
+    await expect(
+      assertAccruedIncomeLinesBookable(supabase, COMPANY, '2026-01-20', [accruedLine('2025-12-01', '2025-12-31', '1790')]),
+    ).rejects.toBeInstanceOf(AccruedIncomePeriodLockedError)
+  })
+
+  it('leaves a 29xx upplupen kostnad to the supplier guard', async () => {
+    await assertAccruedIncomeLinesBookable(supabase, COMPANY, '2026-10-15', [
+      accruedLine('2026-09-01', '2026-10-31', '2990'),
+    ])
+    expect(mockCheckPeriodLock).not.toHaveBeenCalled()
+  })
+})
+
+describe('the accrued income refusal as a structured error', () => {
+  it('is a typed bookkeeping error with the blocked dates, read as Swedish', () => {
+    const err = new AccruedIncomePeriodLockedError([{ date: '2026-09-30', reason: 'period_locked_at_set' }])
+    expect(isBookkeepingError(err)).toBe(true)
+    expect(classifyError(err)).toMatchObject({
+      code: 'INVOICE_ACCRUED_INCOME_PERIOD_LOCKED',
+      details: { blocked: [{ date: '2026-09-30', reason: 'period_locked_at_set' }] },
+    })
+    const message = getErrorMessage({
+      error: { code: 'INVOICE_ACCRUED_INCOME_PERIOD_LOCKED', message: err.message, details: { blocked: err.blocked } },
+    })
+    expect(message).toContain('En upplupen intäkt')
+    expect(message).toContain('2026-09-30 (perioden är låst)')
+    expect(message).toMatch(/Intäkten flyttas inte till en annan månad/)
+  })
+
+  it('names the invalid period code too', () => {
+    const err = new AccruedIncomePeriodInvalidError('2026-09-01', '2026-10-31', '2026-10-15')
+    expect(isBookkeepingError(err)).toBe(true)
+    expect(classifyError(err)).toMatchObject({
+      code: 'INVOICE_ACCRUED_INCOME_PERIOD_INVALID',
+      details: { periodStart: '2026-09-01', periodEnd: '2026-10-31', invoiceDate: '2026-10-15' },
+    })
+    expect(getErrorMessage({ error: { code: 'INVOICE_ACCRUED_INCOME_PERIOD_INVALID', message: err.message } })).toMatch(
       /dela raden/i,
     )
   })

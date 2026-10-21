@@ -5,6 +5,7 @@
  */
 import { whenInitialized } from '@/lib/initialized'
 import { globalSingleton } from '@/lib/global-singleton'
+import { brandError, isBrandedInstance } from '@/lib/errors/brand'
 
 export type PeppolDeliveryStatus =
   | 'staged'
@@ -173,7 +174,18 @@ export interface PeppolInboundListOptions {
  * operational problem (network, rate limit, credentials) from a verdict on the
  * document itself (rejected, duplicate); the send route records them as
  * different lifecycle events.
+ *
+ * `instanceof` answers by a process-wide mark, not by the prototype
+ * (lib/errors/brand.ts): lib/init registers the transports in the
+ * instrumentation hook's copy of this module, so an adapter throws that
+ * copy's class, while the send, the registration and the delivery sync catch
+ * with the route's copy. A prototype check would read every access point
+ * refusal as an unknown failure: a rejected document recorded as retryable
+ * with no reason, a failed recipient lookup answered as a 500 (the crm#1282
+ * mechanism).
  */
+const PEPPOL_TRANSPORT_ERROR = 'accounted.peppol.transportError'
+
 export class PeppolTransportError extends Error {
   readonly retryable: boolean
   readonly detail: string | null
@@ -194,6 +206,11 @@ export class PeppolTransportError extends Error {
     this.retryable = options.retryable
     this.detail = options.detail ?? null
     this.code = options.code ?? null
+    brandError(this, PEPPOL_TRANSPORT_ERROR)
+  }
+
+  static [Symbol.hasInstance](value: unknown): value is PeppolTransportError {
+    return isBrandedInstance(this, PeppolTransportError, PEPPOL_TRANSPORT_ERROR, value)
   }
 }
 

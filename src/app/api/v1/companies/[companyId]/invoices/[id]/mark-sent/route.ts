@@ -19,7 +19,7 @@
  *      defer_invoice_booking) AND document_type='invoice', the revenue
  *      verifikat is posted from the full items (fakturamodellen: Dr 1510
  *      customer share + Dr 1513 Skatteverket share on ROT/RUT; periodised
- *      lines on 29xx with their accrual schedules). When it cannot be
+ *      lines on 29xx or 17xx with their accrual schedules). When it cannot be
  *      posted the invoice goes back to draft (number kept) and the request
  *      fails. Under kontantmetoden no journal entry is created here.
  *   4. The PDF is archived as underlag, the manual delivery recorded and

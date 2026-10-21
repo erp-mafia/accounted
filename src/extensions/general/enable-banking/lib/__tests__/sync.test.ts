@@ -793,6 +793,32 @@ describe('syncAccountTransactions', () => {
     warnSpy.mockRestore()
   })
 
+  // PH 195: the read stopped at the page cap while the bank still had pages.
+  it('passes on a read the bank had not finished as truncated', async () => {
+    mockGetAllTransactionsWithRaw.mockResolvedValue({
+      transactions: [],
+      rawPages: ['{"transactions":[],"continuation_key":"k"}'],
+      requestedDateFrom: '2025-10-20',
+      effectiveDateFrom: '2025-10-20',
+      narrowed: false,
+      truncated: true,
+    })
+    mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+
+    const result = await syncAccountTransactions(
+      {} as never,
+      COMPANY_ID,
+      USER_ID,
+      CONNECTION_ID,
+      makeAccount(),
+      '2025-10-20',
+      '2026-10-20',
+      mockIngest
+    )
+
+    expect(result.truncated).toBe(true)
+  })
+
   it('never shrinks accepted_history_days: an incremental sync keeps the wider record', async () => {
     mockGetAllTransactionsWithRaw.mockResolvedValue({
       transactions: [],

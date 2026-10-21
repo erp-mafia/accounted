@@ -1,9 +1,18 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { escapeLikePattern } from '@/lib/supabase/like-pattern'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { chunk } from '@/lib/utils'
 import {
   MATCHABLE_INVOICE_STATUSES,
   MATCHABLE_SUPPLIER_INVOICE_STATUSES,
 } from '@/lib/bookkeeping/matchable-statuses'
+import {
+  closedLookupNumbers,
+  resolvePastedReferences,
+  type PasteInvoice,
+  type PasteInvoiceState,
+  type PastedReference,
+} from './invoice-number-paste'
 
 /**
  * Open customer and supplier invoices for the surfaces that match a bank
@@ -186,30 +195,268 @@ export async function loadOpenInvoicesForMatch<T extends MatchRow>(
       : await searchOpenSupplierInvoices<T>(supabase, companyId, term)
   const fullIds = all.filter((inv) => inv.status !== 'partially_paid').map((inv) => inv.id)
   if (fullIds.length === 0) return { rows: all, capped: all.length >= PICKER_LIMIT }
-
-  // Literal select strings, one per table: the schema guard checks their columns.
-  const paidIds =
-    kind === 'customer'
-      ? (
-          await rowsOf<{ invoice_id: string }>(
-            supabase
-              .from('invoice_payments')
-              .select('invoice_id')
-              .eq('company_id', companyId)
-              .in('invoice_id', fullIds)
-              .not('journal_entry_id', 'is', null),
-          )
-        ).map((r) => r.invoice_id)
-      : (
-          await rowsOf<{ supplier_invoice_id: string }>(
-            supabase
-              .from('supplier_invoice_payments')
-              .select('supplier_invoice_id')
-              .eq('company_id', companyId)
-              .in('supplier_invoice_id', fullIds)
-              .not('journal_entry_id', 'is', null),
-          )
-        ).map((r) => r.supplier_invoice_id)
-  const paid = new Set(paidIds)
+  const paid = await idsWithPaymentVoucher(supabase, companyId, kind, fullIds)
   return { rows: all.filter((inv) => !paid.has(inv.id)), capped: all.length >= PICKER_LIMIT }
+}
+
+/**
+ * Ids or numbers per `.in()` read. They travel in the GET query string, and a
+ * gateway with the stock 8 KB header buffer answers a long one with 414
+ * before PostgREST sees it (#2395): 100 uuids are about 3.7 KB. The same
+ * bound as ID_READ_CHUNK in lib/reconciliation/limits.
+ */
+const IN_READ_CHUNK = 100
+
+/**
+ * The status-leak guard: which of these invoices, though their status says
+ * unpaid, already have a payment voucher. Read in slices, so a long list
+ * never becomes one oversized query string.
+ */
+async function idsWithPaymentVoucher(
+  supabase: SupabaseClient,
+  companyId: string,
+  kind: OpenInvoiceKind,
+  ids: readonly string[],
+): Promise<Set<string>> {
+  const paid = new Set<string>()
+  for (const slice of chunk(ids, IN_READ_CHUNK)) {
+    // Literal select strings, one per table: the schema guard checks their columns.
+    const found =
+      kind === 'customer'
+        ? (
+            await rowsOf<{ invoice_id: string }>(
+              supabase
+                .from('invoice_payments')
+                .select('invoice_id')
+                .eq('company_id', companyId)
+                .in('invoice_id', slice)
+                .not('journal_entry_id', 'is', null),
+            )
+          ).map((r) => r.invoice_id)
+        : (
+            await rowsOf<{ supplier_invoice_id: string }>(
+              supabase
+                .from('supplier_invoice_payments')
+                .select('supplier_invoice_id')
+                .eq('company_id', companyId)
+                .in('supplier_invoice_id', slice)
+                .not('journal_entry_id', 'is', null),
+            )
+          ).map((r) => r.supplier_invoice_id)
+    for (const id of found) paid.add(id)
+  }
+  return paid
+}
+
+/** An invoice a pasted list of numbers can name, with what the batch dialog shows of it. */
+export interface PasteLookupInvoice extends PasteInvoice {
+  /** The number shown in the dialog (a supplier invoice without one shows its LF arrival number). */
+  label: string
+  counterpartyName: string | null
+  status: string
+  total: number
+  exchangeRate: number | null
+  dueDate: string
+  invoiceDate: string | null
+}
+
+export interface InvoicesForPaste {
+  invoices: PasteLookupInvoice[]
+  /** The company has more open invoices than one paste reads: some may be missing. */
+  capped: boolean
+}
+
+/** Open invoices one paste reads: far above any company's open ledger, a bound on a runaway read. */
+export const PASTE_OPEN_INVOICES_MAX = 20_000
+
+interface CustomerPasteRow {
+  id: string
+  invoice_number: string | null
+  status: string
+  total: number | null
+  remaining_amount: number | null
+  currency: string | null
+  exchange_rate: number | null
+  due_date: string | null
+  invoice_date: string | null
+  customer: { name: string | null } | null
+}
+
+interface SupplierPasteRow {
+  id: string
+  supplier_invoice_number: string | null
+  payment_reference: string | null
+  arrival_number: number | null
+  status: string
+  total: number | null
+  remaining_amount: number | null
+  currency: string | null
+  exchange_rate: number | null
+  due_date: string | null
+  invoice_date: string | null
+  supplier: { name: string | null } | null
+}
+
+/** A row outside the open set: paid when its money is in, otherwise not open (draft, credited, cancelled, proforma). */
+function closedState(row: { status: string; remaining_amount: number | null }): PasteInvoiceState {
+  return row.status === 'paid' || Number(row.remaining_amount ?? 0) <= 0 ? 'paid' : 'not_open'
+}
+
+function customerPasteInvoice(row: CustomerPasteRow, state: PasteInvoiceState): PasteLookupInvoice {
+  return {
+    id: row.id,
+    number: row.invoice_number,
+    state,
+    currency: row.currency,
+    remaining: Number(row.remaining_amount ?? row.total ?? 0),
+    label: row.invoice_number ?? row.id.slice(0, 8),
+    counterpartyName: row.customer?.name ?? null,
+    status: row.status,
+    total: Number(row.total ?? 0),
+    exchangeRate: row.exchange_rate != null ? Number(row.exchange_rate) : null,
+    dueDate: row.due_date ?? '',
+    invoiceDate: row.invoice_date,
+  }
+}
+
+function supplierPasteInvoice(row: SupplierPasteRow, state: PasteInvoiceState): PasteLookupInvoice {
+  return {
+    id: row.id,
+    number: row.supplier_invoice_number,
+    paymentReference: row.payment_reference,
+    state,
+    currency: row.currency,
+    remaining: Number(row.remaining_amount ?? row.total ?? 0),
+    label: row.supplier_invoice_number ?? `LF-${row.arrival_number}`,
+    counterpartyName: row.supplier?.name ?? null,
+    status: row.status,
+    total: Number(row.total ?? 0),
+    exchangeRate: row.exchange_rate != null ? Number(row.exchange_rate) : null,
+    dueDate: row.due_date ?? '',
+    invoiceDate: row.invoice_date,
+  }
+}
+
+/**
+ * The invoices a pasted list of numbers is resolved against
+ * (lib/invoices/invoice-number-paste): every open invoice of the direction,
+ * with the guards searchOpenInvoices / searchOpenSupplierInvoices apply, read
+ * whole (an open ledger is at most about a thousand rows), so an OCR or a
+ * number a spreadsheet stripped of its leading zeros still resolves; plus
+ * the invoices outside that set whose number the paste names, so a paid one
+ * is reported as paid and is never confused with an open one. Last, the
+ * status-leak guard of loadOpenInvoicesForMatch on the open invoices the
+ * paste names: one whose status still says unpaid but has a payment voucher
+ * counts as paid.
+ */
+export async function loadInvoicesForPaste(
+  supabase: SupabaseClient,
+  companyId: string,
+  kind: OpenInvoiceKind,
+  references: readonly PastedReference[],
+): Promise<InvoicesForPaste> {
+  const numbers = closedLookupNumbers(references, kind)
+  let invoices: PasteLookupInvoice[]
+  let capped: boolean
+  // Literal select strings throughout: the schema guard checks their columns.
+  if (kind === 'customer') {
+    // The embed is many-to-one (an object at runtime); the untyped client infers an array.
+    const open = (await fetchAllRows(
+      ({ from, to }) =>
+        supabase
+          .from('invoices')
+          .select(
+            'id, invoice_number, status, total, remaining_amount, currency, exchange_rate, due_date, invoice_date, customer:customers(name)',
+          )
+          .eq('company_id', companyId)
+          .eq('document_type', 'invoice')
+          .is('credited_invoice_id', null)
+          .in('status', [...MATCHABLE_INVOICE_STATUSES])
+          .gt('remaining_amount', 0)
+          .order('id', { ascending: true })
+          .range(from, to),
+      { dedupeBy: (row) => row.id, maxRows: PASTE_OPEN_INVOICES_MAX },
+    )) as unknown as CustomerPasteRow[]
+    capped = open.length >= PASTE_OPEN_INVOICES_MAX
+    const openIds = new Set(open.map((row) => row.id))
+    const closed: CustomerPasteRow[] = []
+    for (const slice of chunk(numbers, IN_READ_CHUNK)) {
+      const rows = await rowsOf<CustomerPasteRow>(
+        supabase
+          .from('invoices')
+          .select(
+            'id, invoice_number, status, total, remaining_amount, currency, exchange_rate, due_date, invoice_date, customer:customers(name)',
+          )
+          .eq('company_id', companyId)
+          .in('invoice_number', slice),
+      )
+      closed.push(...rows.filter((row) => !openIds.has(row.id)))
+    }
+    invoices = [
+      ...open.map((row) => customerPasteInvoice(row, 'open')),
+      ...closed.map((row) => customerPasteInvoice(row, closedState(row))),
+    ]
+  } else {
+    // The embed is many-to-one (an object at runtime); the untyped client infers an array.
+    const open = (await fetchAllRows(
+      ({ from, to }) =>
+        supabase
+          .from('supplier_invoices')
+          .select(
+            'id, supplier_invoice_number, payment_reference, arrival_number, status, total, remaining_amount, currency, exchange_rate, due_date, invoice_date, supplier:suppliers(name)',
+          )
+          .eq('company_id', companyId)
+          .in('status', [...MATCHABLE_SUPPLIER_INVOICE_STATUSES])
+          .gt('remaining_amount', 0)
+          .order('id', { ascending: true })
+          .range(from, to),
+      { dedupeBy: (row) => row.id, maxRows: PASTE_OPEN_INVOICES_MAX },
+    )) as unknown as SupplierPasteRow[]
+    capped = open.length >= PASTE_OPEN_INVOICES_MAX
+    const seen = new Set(open.map((row) => row.id))
+    const closed: SupplierPasteRow[] = []
+    for (const slice of chunk(numbers, IN_READ_CHUNK)) {
+      // By the supplier's invoice number and by its payment reference (OCR).
+      const byNumber = await rowsOf<SupplierPasteRow>(
+        supabase
+          .from('supplier_invoices')
+          .select(
+            'id, supplier_invoice_number, payment_reference, arrival_number, status, total, remaining_amount, currency, exchange_rate, due_date, invoice_date, supplier:suppliers(name)',
+          )
+          .eq('company_id', companyId)
+          .in('supplier_invoice_number', slice),
+      )
+      const byReference = await rowsOf<SupplierPasteRow>(
+        supabase
+          .from('supplier_invoices')
+          .select(
+            'id, supplier_invoice_number, payment_reference, arrival_number, status, total, remaining_amount, currency, exchange_rate, due_date, invoice_date, supplier:suppliers(name)',
+          )
+          .eq('company_id', companyId)
+          .in('payment_reference', slice),
+      )
+      for (const row of [...byNumber, ...byReference]) {
+        if (seen.has(row.id)) continue
+        seen.add(row.id)
+        closed.push(row)
+      }
+    }
+    invoices = [
+      ...open.map((row) => supplierPasteInvoice(row, 'open')),
+      ...closed.map((row) => supplierPasteInvoice(row, closedState(row))),
+    ]
+  }
+
+  const named = resolvePastedReferences(references, invoices, kind)
+  const guardIds = new Set<string>()
+  for (const resolution of named) {
+    if (resolution.kind !== 'one') continue
+    const invoice = resolution.invoice
+    if (invoice.state === 'open' && invoice.status !== 'partially_paid') guardIds.add(invoice.id)
+  }
+  if (guardIds.size > 0) {
+    const paid = await idsWithPaymentVoucher(supabase, companyId, kind, [...guardIds])
+    invoices = invoices.map((invoice) => (paid.has(invoice.id) ? { ...invoice, state: 'paid' as const } : invoice))
+  }
+  return { invoices, capped }
 }

@@ -5,7 +5,7 @@ import type { SalaryLineItemType } from '@/types'
 /**
  * The one definition of "taxable förmånsvärde after the employee's own
  * payment". The calculation engine (tax base, avgifter basis), the AGI
- * generator (FK012/FK013/FK015) and the KU route all read it, so the three
+ * generator (FK012/FK013) and the KU route all read it, so the three
  * can never disagree about what a benefit is worth.
  *
  * Rule (swedish-payroll skill, references/deductions-lonevaxling.md): a

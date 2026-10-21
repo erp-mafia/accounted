@@ -733,8 +733,9 @@ export default function SupplierInvoicesPage() {
                       : inv.status
                 // Aged-but-unapproved invoices sit on 'overdue' (the cron flips
                 // them there), so attest keys off approved_at, not the status.
+                // Kontantmetoden has no attest step, so nothing waits for it.
                 const canApprove =
-                  canApproveSupplierInvoice(inv) && !inv.is_credit_note && canWrite
+                  attests && canApproveSupplierInvoice(inv) && !inv.is_credit_note && canWrite
                 const selectable = canWrite && isRowSelectable(inv)
                 // What already covers the invoice: a bank payment or a file.
                 const openPayment = openPaymentMarker(inv)
@@ -745,7 +746,7 @@ export default function SupplierInvoicesPage() {
                 const bankEntered = !!inv.bank_entered_at
                 const showBankEntered =
                   !canApprove &&
-                  canMarkSupplierInvoiceBankEntered(inv) &&
+                  canMarkSupplierInvoiceBankEntered(inv, companySettings?.accounting_method) &&
                   (bankEntered || (canWrite && openPayment !== 'bank_payment'))
                 // Same shape as the customer list: the section header is a
                 // sibling row decided from the previous row's key.
@@ -864,7 +865,7 @@ export default function SupplierInvoicesPage() {
                       className={cn(TD_CLASS, 'whitespace-nowrap text-right')}
                       onClick={(e) => e.stopPropagation()}
                     >
-                      {canApprove && attests && (
+                      {canApprove && (
                         <button
                           type="button"
                           className={cn(

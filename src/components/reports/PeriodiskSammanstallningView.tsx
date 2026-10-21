@@ -148,6 +148,9 @@ export function PeriodiskSammanstallningView() {
   const errors = data?.warnings.filter(w => w.level === 'error') ?? []
   const cautions = data?.warnings.filter(w => w.level === 'warning') ?? []
   const hasBlockingErrors = errors.length > 0
+  // An EU sale no buyer can be named for (crm#1336): blocking for goods, a
+  // warning for services, never "nothing to file" either way.
+  const hasUnattributedSales = data?.warnings.some(w => w.code === 'UNATTRIBUTED_EU_SALE') ?? false
 
   return (
     <div className="space-y-8">
@@ -423,7 +426,10 @@ export function PeriodiskSammanstallningView() {
                 </Table>
               </CardContent>
             </Card>
-          ) : (
+          ) : hasBlockingErrors || hasUnattributedSales ? null : (
+            // "Nothing to file" only when nothing is listed above either: an
+            // EU sale no buyer can be named for leaves no rows but may still
+            // be owed a row, and the cards above name the verifikat.
             <EmptyState
               icon={FileText}
               title="Inga EU-försäljningar i perioden"

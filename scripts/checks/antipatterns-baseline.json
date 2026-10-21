@@ -247,7 +247,7 @@
     ]
   },
   "basAccountLiteral": {
-    "count": 1479,
+    "count": 1480,
     "files": {
       "app/(dashboard)/assets/[id]/dispose/page.tsx": 1,
       "app/(dashboard)/bookkeeping/year-end/periodisering/page.tsx": 11,
@@ -259,6 +259,7 @@
       "app/api/reports/vat-declaration/rc-basis-gaps/fix/route.ts": 7,
       "app/api/sandbox/seed/ledger-history.ts": 46,
       "app/api/sandbox/seed/pending-operations.ts": 10,
+      "app/api/sandbox/seed/representation.ts": 1,
       "app/api/sandbox/seed/route.ts": 17,
       "app/api/sandbox/seed/salary-vouchers.ts": 1,
       "app/api/sandbox/seed/salary.ts": 1,

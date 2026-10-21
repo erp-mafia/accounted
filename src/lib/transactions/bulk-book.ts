@@ -11,7 +11,11 @@
  *      on the ledgers the rows settle on: all of 19xx for a row on a 19xx
  *      account, the ledger alone for a cash account kept elsewhere, such as
  *      a Stripe balance on 1686. bankNetAccountTest in
- *      lib/bookkeeping/bank-leg.ts states the rule the RPC applies);
+ *      lib/bookkeeping/bank-leg.ts states the rule the RPC applies. The rows
+ *      must also fit in what other rows leave of the voucher's bank leg,
+ *      the single doors' rule (VOUCHER_BANK_LEG_CONSUMED,
+ *      lib/transactions/voucher-bank-leg.ts), and every linked row records
+ *      reconciliation_method 'manual' so it can be unlinked);
  *   2. template_id + mode + entry_description: expand a booking template
  *      per row (one_line_per_tx) or on the sum (sum_per_account);
  *   3. manual_lines + entry_description: caller-built balanced lines.
@@ -73,6 +77,7 @@ import {
   detectBookingDuplicate,
   type BookedDuplicateCandidate,
 } from '@/lib/transactions/booking-duplicate-detection'
+import { bankLegConsumedMessage } from '@/lib/transactions/voucher-bank-leg'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { finalFromLines, recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
@@ -464,7 +469,13 @@ export async function bulkBookTransactions(
   const result = data as RpcOk | RpcErr | null
   if (!result || !result.ok) {
     const code = (result as RpcErr | null)?.code ?? 'BULK_BOOK_RPC_FAILED'
-    return { ok: false, code, details: (result as RpcErr | null)?.details }
+    const details = (result as RpcErr | null)?.details
+    if (code === 'VOUCHER_BANK_LEG_CONSUMED' && details) {
+      // Other rows already hold the verifikat's bank leg (GitHub #3507): the
+      // single doors' code, with their message naming the verifikat.
+      return { ok: false, code, messageSv: bankLegConsumedRefusal(details, body.tx_ids.length), details }
+    }
+    return { ok: false, code, details }
   }
 
   // One decision row per bank line, all pointing at the one verifikat.
@@ -535,6 +546,27 @@ export async function bulkBookTransactions(
       docs_linked: result.docs_linked,
     },
   }
+}
+
+/**
+ * The Swedish message for the RPC's VOUCHER_BANK_LEG_CONSUMED, from its
+ * details (the verifikat, the ledger, the rows' sum and what the leg books,
+ * holds and has left): the wording of the single doors.
+ */
+function bankLegConsumedRefusal(details: Record<string, unknown>, rowCount: number): string {
+  const num = (v: unknown): number | null => {
+    const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN
+    return Number.isFinite(n) ? roundOre(n) : null
+  }
+  const series = typeof details.voucher_series === 'string' ? details.voucher_series : 'A'
+  const number = num(details.voucher_number)
+  return bankLegConsumedMessage({
+    voucherLabel: number !== null ? `${series}-${number}` : String(details.journal_entry_id ?? ''),
+    accountNumber: String(details.account ?? ''),
+    amount: num(details.tx_sum) ?? 0,
+    verdict: { fits: false, booked: num(details.booked), held: num(details.held) ?? 0, remaining: num(details.remaining) },
+    rowCount,
+  })
 }
 
 /**

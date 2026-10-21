@@ -212,6 +212,42 @@ describe('POST /api/import/sie/parse', () => {
       })
     })
 
+    it('plans the chart with and without the file\'s unused definitions (#63)', async () => {
+      enqueue({ data: [{ account_number: '1930' }] }) // company chart: 1930 only
+      enqueue({ data: { id: 'p-2024' } }) // containing period
+
+      const response = await POST(
+        fileRequest(CLEAN_SIE.replace('#KONTO 1930',
+          '#KONTO 2440 "Leverantörsskulder"\n#KONTO 6110 "Kontorsmateriel"\n#KONTO 6111 "Egen kostnad"\n#KONTO 1930')),
+        emptyParams,
+      )
+      const body = (await response.json()) as ParseResponse & {
+        preview: Pick<ImportPreview, 'unusedAccounts' | 'unusedOwnAccounts' | 'chartUsedOnly'>
+      }
+
+      expect(response.status).toBe(200)
+      // Unused BAS accounts are left out by the option; the company's own 6111 is kept.
+      expect(body.preview.unusedAccounts?.map((account) => account.number)).toEqual(['2440', '6110'])
+      expect(body.preview.unusedOwnAccounts?.map((account) => account.number)).toEqual(['6111'])
+      expect(body.preview.chart).toMatchObject({ toCreate: 4, existing: 1 })
+      expect(body.preview.chartUsedOnly).toEqual({
+        toCreate: 2,
+        existing: 1,
+        sample: [{ number: '4056', name: expect.any(String) }, { number: '6111', name: 'Egen kostnad' }],
+      })
+    })
+
+    it('adds no second plan when the file uses every account it defines', async () => {
+      enqueue({ data: [] }) // company chart
+      enqueue({ data: { id: 'p-2024' } }) // containing period
+
+      const response = await POST(fileRequest(CLEAN_SIE), emptyParams)
+      const body = (await response.json()) as { preview: Pick<ImportPreview, 'unusedAccounts' | 'chartUsedOnly'> }
+
+      expect(body.preview.unusedAccounts).toEqual([])
+      expect(body.preview.chartUsedOnly).toBeUndefined()
+    })
+
     it('reports match when a fiscal period already contains the file year', async () => {
       enqueue({ data: [] })
       enqueue({ data: { id: 'p-2024' } })

@@ -100,7 +100,8 @@ export class ConsentNotFoundError extends Error {
  * company id for the wrong company imports a FOREIGN legal entity's customers,
  * suppliers and invoices into this ledger. Nothing errors, so the first signal
  * is the user noticing their books are full of a stranger's data. Both org
- * numbers are carried on the error so the wizard can name the two companies.
+ * numbers and the opened company's name are carried on the error so the
+ * message can name them (./company-mismatch-message).
  */
 export class ProviderCompanyMismatchError extends Error {
   constructor(

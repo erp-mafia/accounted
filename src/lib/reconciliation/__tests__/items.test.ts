@@ -20,6 +20,7 @@ vi.mock('../bank-reconciliation', async (importOriginal) => {
     fetchBankHistoryStart: (...args: unknown[]) => historyStartMock(...args),
     // Pure: the real per-verifikat rule.
     openAmountByEntry: actual.openAmountByEntry,
+    isUnlinkableBankLink: actual.isUnlinkableBankLink,
   }
 })
 const coveringSetsMock = vi.fn()
@@ -137,8 +138,10 @@ describe('listAccountItems', () => {
         { id: 't-link', date: '2026-08-03', description: 'Lön', merchant_name: null, amount: -31200, currency: 'SEK', journal_entry_id: 'e-1', potential_journal_entry_id: null, potential_match_method: 'manual', potential_match_confidence: null, is_ignored: false, reconciliation_method: 'manual' },
         { id: 't-prop', date: '2026-08-02', description: 'Swish', merchant_name: 'Swish 123', amount: 2400, currency: 'SEK', journal_entry_id: null, potential_journal_entry_id: 'e-2', potential_match_method: 'auto_fuzzy', potential_match_confidence: '0.82', is_ignored: false, reconciliation_method: null },
         { id: 't-open', date: '2026-08-01', description: 'Elgiganten', merchant_name: null, amount: -1046, currency: 'SEK', journal_entry_id: null, potential_journal_entry_id: null, potential_match_method: null, potential_match_confidence: null, is_ignored: false, reconciliation_method: null },
-        // Anchored only through transaction_voucher_links (bulk-book / residual): matched, pointer NULL.
-        { id: 't-junc', date: '2026-07-31', description: 'Samlingsverifikat', merchant_name: null, amount: -500, currency: 'SEK', journal_entry_id: null, potential_journal_entry_id: null, potential_match_method: null, potential_match_confidence: null, is_ignored: false, reconciliation_method: null },
+        // Anchored only through transaction_voucher_links (a 1:N split): matched, pointer NULL.
+        { id: 't-junc', date: '2026-07-31', description: 'Samlingsverifikat', merchant_name: null, amount: -500, currency: 'SEK', journal_entry_id: null, potential_journal_entry_id: null, potential_match_method: null, potential_match_confidence: null, is_ignored: false, reconciliation_method: 'manual' },
+        // Booked from itself (categorize): no reconciliation method, so no unmatch (PH 194).
+        { id: 't-booked', date: '2026-07-30', description: 'Hyra', merchant_name: null, amount: -8000, currency: 'SEK', journal_entry_id: 'e-7', potential_journal_entry_id: null, potential_match_method: null, potential_match_confidence: null, is_ignored: false, reconciliation_method: null },
       ],
     })
     junctionMock.mockResolvedValue(new Map([['t-junc', ['e-junc-a', 'e-junc-b']]]))
@@ -156,10 +159,12 @@ describe('listAccountItems', () => {
     expect(byId['t-ign']).toMatchObject({ bucket: 'ignored', actions: ['unignore'] })
     // A split row reports the first bank_line verifikat, not null (crm#48).
     expect(byId['t-junc']).toMatchObject({ bucket: 'matched', linked_journal_entry_id: 'e-junc-a', actions: ['unmatch'] })
+    // Koppla bort refuses a booking (unlinkReconciliation), so the row does not offer it.
+    expect(byId['t-booked']).toMatchObject({ bucket: 'matched', linked_journal_entry_id: 'e-7', actions: [] })
     expect(byId['e-3']).toMatchObject({ bucket: 'unmatched_ledger', side: 'ledger', amount: -1000, voucher_number: 231 })
     // Work order: proposed, unmatched external, unmatched ledger, ignored, upcoming, matched
-    expect(result?.items.map((i) => i.bucket)).toEqual(['proposed', 'unmatched_external', 'unmatched_ledger', 'ignored', 'matched', 'matched'])
-    expect(result?.total_count).toBe(6)
+    expect(result?.items.map((i) => i.bucket)).toEqual(['proposed', 'unmatched_external', 'unmatched_ledger', 'ignored', 'matched', 'matched', 'matched'])
+    expect(result?.total_count).toBe(7)
     // Only the rows nothing explains yet are searched for a covering set: not
     // the ignored, linked, junction-anchored or already-proposed ones.
     expect(coveringSetsMock).toHaveBeenCalledTimes(1)

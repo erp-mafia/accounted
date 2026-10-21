@@ -2,7 +2,10 @@ import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { issueBooksDocument } from '@/lib/bookkeeping/booking-mode'
-import { createSchedulesForCustomerInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
+import {
+  ACCRUAL_RELEASE_FAILED_WARNING,
+  createSchedulesForCustomerInvoice,
+} from '@/lib/bookkeeping/accruals/from-invoices'
 import { eventBus } from '@/lib/events'
 import { ensureInvoiceNumber, invoiceNumberingFailure } from '@/lib/invoices/ensure-invoice-number'
 import type { CustomIssuanceLine } from '@/lib/invoices/issuance-custom-lines'
@@ -344,6 +347,14 @@ export async function markInvoiceSentAndBook(
             partialFailures.push({
               step: 'accrual_schedules',
               reason: `${accrual.failed} periodisering(ar) kunde inte skapas`,
+            })
+          }
+          // An upplupen intäkt (17xx) posts all its months now: one that
+          // could not leaves 17xx credited without its revenue until retried.
+          if ((accrual.releasesFailed ?? 0) > 0) {
+            partialFailures.push({
+              step: 'accrual_releases',
+              reason: ACCRUAL_RELEASE_FAILED_WARNING.message_sv,
             })
           }
         }

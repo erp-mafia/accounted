@@ -986,11 +986,48 @@
         "sandbox-user-1",
         {
           "fiscal_period_id": "fiscal_periods-2",
+          "entry_date": "2026-05-10",
+          "description": "Leverantörsfaktura 88245, Demokafé AB (ankomstnr 2)",
+          "source_type": "supplier_invoice_registered",
+          "source_id": "supplier_invoices-63",
+          "notes": "Extern representation, kundlunch. Syfte: uppföljning av webbutvecklingsuppdraget och planering av nästa fas. Deltagare: Demo Användare (Sandlådan Konsult) och Karin Björk (Björk & Partner AB).",
+          "lines": [
+            {
+              "account_number": "6072",
+              "debit_amount": 240,
+              "credit_amount": 0,
+              "line_description": "Leverantörsfaktura 88245, Demokafé AB (ankomstnr 2)",
+              "dimensions": {}
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 28.8,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 12% Leverantörsfaktura 88245, Demokafé AB (ankomstnr 2)",
+              "dimensions": {}
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 268.8,
+              "line_description": "Leverantörsfaktura 88245, Demokafé AB (ankomstnr 2)",
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
           "voucher_series": "A",
           "entry_date": "2026-04-25",
           "description": "Lön 2026-04",
           "source_type": "salary_payment",
-          "source_id": "salary_runs-75",
+          "source_id": "salary_runs-77",
           "lines": [
             {
               "account_number": "7210",
@@ -1027,7 +1064,7 @@
           "entry_date": "2026-04-25",
           "description": "Lön 2026-04: arbetsgivaravgifter",
           "source_type": "salary_payment",
-          "source_id": "salary_runs-75",
+          "source_id": "salary_runs-77",
           "lines": [
             {
               "account_number": "7510",
@@ -1057,7 +1094,7 @@
           "entry_date": "2026-04-25",
           "description": "Lön 2026-04: semesterlöneskuld",
           "source_type": "salary_payment",
-          "source_id": "salary_runs-75",
+          "source_id": "salary_runs-77",
           "lines": [
             {
               "account_number": "7290",
@@ -1173,11 +1210,48 @@
         "sandbox-user-1",
         {
           "fiscal_period_id": "fiscal_periods-2",
+          "entry_date": "2026-01-01",
+          "description": "Leverantörsfaktura 88245, Demokafé AB (ankomstnr 2)",
+          "source_type": "supplier_invoice_registered",
+          "source_id": "supplier_invoices-63",
+          "notes": "Extern representation, kundlunch. Syfte: uppföljning av webbutvecklingsuppdraget och planering av nästa fas. Deltagare: Demo Användare (Sandlådan Konsult) och Karin Björk (Björk & Partner AB).",
+          "lines": [
+            {
+              "account_number": "6072",
+              "debit_amount": 240,
+              "credit_amount": 0,
+              "line_description": "Leverantörsfaktura 88245, Demokafé AB (ankomstnr 2)",
+              "dimensions": {}
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 28.8,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 12% Leverantörsfaktura 88245, Demokafé AB (ankomstnr 2)",
+              "dimensions": {}
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 268.8,
+              "line_description": "Leverantörsfaktura 88245, Demokafé AB (ankomstnr 2)",
+              "dimensions": {}
+            }
+          ]
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "sandbox-company-1",
+        "sandbox-user-1",
+        {
+          "fiscal_period_id": "fiscal_periods-2",
           "voucher_series": "A",
           "entry_date": "2026-01-25",
           "description": "Lön 2026-01",
           "source_type": "salary_payment",
-          "source_id": "salary_runs-75",
+          "source_id": "salary_runs-77",
           "lines": [
             {
               "account_number": "7210",
@@ -1214,7 +1288,7 @@
           "entry_date": "2026-01-25",
           "description": "Lön 2026-01: arbetsgivaravgifter",
           "source_type": "salary_payment",
-          "source_id": "salary_runs-75",
+          "source_id": "salary_runs-77",
           "lines": [
             {
               "account_number": "7510",
@@ -1244,7 +1318,7 @@
           "entry_date": "2026-01-25",
           "description": "Lön 2026-01: semesterlöneskuld",
           "source_type": "salary_payment",
-          "source_id": "salary_runs-75",
+          "source_id": "salary_runs-77",
           "lines": [
             {
               "account_number": "7290",

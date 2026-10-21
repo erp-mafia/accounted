@@ -312,6 +312,39 @@ describe('POST /inbound', () => {
     expect(res.status).toBe(410)
   })
 
+  it('files mail sent to a previous address a rename kept (crm#1334)', async () => {
+    vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent() as never)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'inbox-old', company_id: 'company-1', status: 'previous' } }) // inbox lookup
+    enqueue({ data: { created_by: 'user-owner-1' } }) // company owner
+    enqueue({ data: { id: 'existing-item-1' } }) // per-attachment dup check finds existing row
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+    vi.mocked(fetchReceivingEmail).mockResolvedValue({
+      object: 'email',
+      id: 'em_123',
+      to: ['acme-ab-x7f2@arcim.io'],
+      from: 'billing@supplier.com',
+      created_at: '2026-04-20T10:00:00Z',
+      subject: 'Invoice #5678',
+      bcc: null,
+      cc: null,
+      reply_to: null,
+      html: null,
+      text: null,
+      headers: {},
+      message_id: '<msg-id@supplier.com>',
+      raw: null,
+      attachments: [
+        { id: 'att_1', filename: 'invoice.pdf', size: 12345, content_type: 'application/pdf', content_id: null, content_disposition: 'attachment' },
+      ],
+    } as never)
+
+    const request = createMockRequest('/inbound', { method: 'POST', body: {} })
+    const res = await webhookRoute.handler(request)
+    expect(res.status).toBe(200)
+    expect(vi.mocked(fetchReceivingEmail)).toHaveBeenCalled()
+  })
+
   it('skips already-processed attachments (per-attachment idempotency)', async () => {
     vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent() as never)
     const { supabase, enqueue } = createQueuedMockSupabase()

@@ -133,6 +133,43 @@ describe('evaluateInvoiceForBatch', () => {
     expect(result.eligible && result.warnings).toContain('unattested')
   })
 
+  // crm#1141: kontantmetoden has no attest step, so "not attested" is every
+  // invoice there and the warning said nothing.
+  it('does not warn on an un-attested invoice where the company has no attest step (kontantmetoden)', () => {
+    for (const status of PAYABLE_SUPPLIER_INVOICE_STATUSES) {
+      const result = evaluateInvoiceForBatch(invoice({ status, approved_at: null }), supplier, {
+        today: TODAY,
+        companyAttests: false,
+      })
+      expect(result.eligible, status).toBe(true)
+      expect(result.eligible && result.warnings, status).toEqual([])
+    }
+  })
+
+  it('warns on an un-attested invoice where the company attests (faktureringsmetoden), as before', () => {
+    for (const status of PAYABLE_SUPPLIER_INVOICE_STATUSES) {
+      const result = evaluateInvoiceForBatch(invoice({ status, approved_at: null }), supplier, {
+        today: TODAY,
+        companyAttests: true,
+      })
+      expect(result.eligible && result.warnings, status).toEqual(['unattested'])
+    }
+    // An attested invoice carries no warning under either method.
+    for (const companyAttests of [true, false]) {
+      const result = evaluateInvoiceForBatch(invoice(), supplier, { today: TODAY, companyAttests })
+      expect(result.eligible && result.warnings).toEqual([])
+    }
+  })
+
+  it('keeps the other warnings under kontantmetoden', () => {
+    const result = evaluateInvoiceForBatch(
+      invoice({ status: 'registered', approved_at: null, payment_reference: '1234568' }),
+      { ...supplier, city: null },
+      { today: TODAY, companyAttests: false, activeBatchIdByInvoice: new Map([['inv-1', 'batch-9']]) },
+    )
+    expect(result.eligible && result.warnings).toEqual(['already_batched', 'ocr_invalid', 'payee_city_missing'])
+  })
+
   it('excludes an invoice the attest policy waits on (attest_required), and only that one', () => {
     const blocked = evaluateInvoiceForBatch(invoice({ status: 'registered', approved_at: null }), supplier, {
       today: TODAY,

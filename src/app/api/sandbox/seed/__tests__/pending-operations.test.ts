@@ -98,4 +98,27 @@ describe('sandbox pending-operation seed data', () => {
     const credit = preview.preview_lines.reduce((n, l) => n + l.credit, 0)
     expect(roundOre(debit)).toBe(roundOre(credit))
   })
+
+  it('stages the representation lunch on 6072 with syfte and deltagare as a note (accounted#80, crm#1342)', () => {
+    const supplierInvoice = buildSandboxPendingOperations(input).find(
+      (op) => op.operation_type === 'create_supplier_invoice_from_inbox',
+    )!
+    const params = supplierInvoice.params as {
+      notes: string
+      vat_amount: number
+      items: Array<{ account_number: string; vat_rate: number; vat_amount: number }>
+    }
+    const preview = supplierInvoice.preview_data as {
+      preview_lines: Array<{ account: string; debit: number; credit: number }>
+    }
+
+    // What approving books (the items) and what the card shows agree.
+    expect(params.items.map((i) => i.account_number)).toEqual(['6072'])
+    expect(preview.preview_lines.map((l) => l.account)).toEqual(['6072', '2641', '2440'])
+    // 12 % on 240 kr for two people: under the 2 × 36 kr cap, all deductible.
+    expect(params.items[0]).toMatchObject({ vat_rate: 12, vat_amount: 28.8 })
+    expect(preview.preview_lines[1].debit).toBe(params.vat_amount)
+    expect(params.vat_amount).toBeLessThanOrEqual(2 * 36)
+    expect(params.notes).toMatch(/Syfte: .+Deltagare: /)
+  })
 })

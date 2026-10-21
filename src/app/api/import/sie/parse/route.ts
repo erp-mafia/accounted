@@ -115,7 +115,7 @@ export const POST = withRouteContext(
         .select('*')
         .eq('company_id', companyId)
 
-      const { mappings, archivedOnlyAccounts, excludedSystemAccounts } = suggestSIEMappings(
+      const { mappings, archivedOnlyAccounts, excludedSystemAccounts, unusedAccounts, unusedOwnAccounts } = suggestSIEMappings(
         parsed,
         BAS_REFERENCE,
         (storedMappings as SIEAccountMappingRecord[]) || undefined,
@@ -124,6 +124,8 @@ export const POST = withRouteContext(
       const preview = generateImportPreview(parsed, mappings)
       preview.excludedSystemAccounts = excludedSystemAccounts
       preview.archivedOnlyAccounts = archivedOnlyAccounts
+      preview.unusedAccounts = unusedAccounts
+      preview.unusedOwnAccounts = unusedOwnAccounts
       preview.accountCount = parsed.accounts.length - excludedSystemAccounts.length
 
       // The mapping stats above score the file against the BAS reference. A
@@ -138,10 +140,17 @@ export const POST = withRouteContext(
           .order('account_number')
           .range(from, to),
       )
-      preview.chart = planChartChanges(
-        mappings,
-        new Set(chartRows.map((r) => r.account_number)),
-      )
+      const chartNumbers = new Set(chartRows.map((r) => r.account_number))
+      preview.chart = planChartChanges(mappings, chartNumbers)
+      // The same plan with the "only the accounts the file uses" switch on
+      // (#63), so the wizard can show either without parsing again.
+      if (unusedAccounts.length > 0) {
+        const unused = new Set(unusedAccounts.map((account) => account.number))
+        preview.chartUsedOnly = planChartChanges(
+          mappings.filter((mapping) => !unused.has(mapping.sourceAccount)),
+          chartNumbers,
+        )
+      }
 
       // Another organisation's file: the review step asks for the
       // confirmation the submit gate (submitSIEJob) requires.

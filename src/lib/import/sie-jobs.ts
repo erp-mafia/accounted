@@ -10,6 +10,7 @@ import { SIE_JOB_VERSION, SIE_LIMITS, type SIEJob } from './sie-job-contract'
 import { SIEJobMappingsSchema, SIEJobOptionsSchema } from '@/lib/api/schemas'
 import { isAccountNumber } from '@/lib/invariants/account-number'
 import { isValidBASRange } from './account-mapper'
+import { onlyUsedSIEMappings } from './sie-preview-mappings'
 import { SIELegacyReviewRequiredError } from './sie-legacy-recovery'
 import { checkSIEOrgNumber } from './sie-org-number'
 import { getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
@@ -25,6 +26,10 @@ export interface SIEJobOptions {
   openingBalanceSeries?: string
   updateAccountNames?: boolean
   markImportedNoDocRequired?: boolean
+  /** Create only the accounts the file uses (#63). The mappings of every
+   *  other #KONTO definition are dropped at submit, so the sealed input and
+   *  every resumed preparation create the same accounts. */
+  onlyUsedAccounts?: boolean
   onExistingPeriod?: 'block' | 'replace'
   supersedesImportId?: string
   /** Import a file whose #ORGNR is not the company's (ombildning, a company
@@ -357,6 +362,9 @@ export async function submitSIEJob(supabase: SupabaseClient, companyId: string, 
   options = {...jobOptions,filename:options.filename}
   mappings = checkedMappings.data
   const parsed = parseSIEFile(content)
+  // Decided here, before the input is sealed, so the job's account pass and
+  // every resumed checkpoint read the same mappings (#63).
+  if (options.onlyUsedAccounts) mappings = onlyUsedSIEMappings(parsed, mappings)
   await resolveSIEFiscalYear(supabase,companyId,parsed)
   validateSIEJobInput(content, parsed, mappings, options)
   // Every door passes here (dashboard, onboarding, v1, MCP approval, provider

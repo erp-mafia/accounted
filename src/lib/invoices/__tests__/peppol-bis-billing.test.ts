@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { createQueuedMockSupabase, makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
 import { generateOcrReference } from '@/lib/bankgiro/luhn'
+import { computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
+import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
 import { roundOre, sumOre } from '@/lib/money'
 import type { EntityType, InvoiceItem } from '@/types'
 import {
@@ -74,12 +77,13 @@ function makeValidInput() {
 
 /**
  * Per-line VAT exactly as the creation path stores it: every line is rounded to
- * öre on its own and the header VAT is the sum of those rounded amounts
- * (lib/invoices/build-invoice-write.ts). Sweden permits that; EN 16931 has no
- * way to express it, which is why the difference has to travel in BT-114.
+ * öre on its own (computeLineVat, which lib/invoices/build-invoice-write.ts
+ * stores) and the header VAT is the sum of those rounded amounts. Sweden
+ * permits that; EN 16931 has no way to express it, which is why the
+ * difference has to travel in BT-114.
  */
 function storedLineVat(lineTotal: number, vatRate: number): number {
-  return roundOre((lineTotal * vatRate) / 100)
+  return computeLineVat(lineTotal, vatRate)
 }
 
 /** An invoice built from single-unit lines with creation-path per-line VAT. */
@@ -326,6 +330,60 @@ describe('generatePeppolBisBillingInvoice', () => {
       'LINE_VAT_MISMATCH',
       'VAT_ROUNDING_MISMATCH',
     ]))
+  })
+
+  it('accepts a half-öre VAT line exactly as the invoice builder stores it (crm#1343)', async () => {
+    // 5713 st x 0,10 kr at 25 %: the builder stored 142,82 while this check
+    // computed 142,83, so the invoice could not be sent (LINE_VAT_MISMATCH).
+    // Both now use computeLineVat.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+    const input = makeValidInput()
+    const build = await buildInvoiceWriteData({
+      supabase: supabase as unknown as SupabaseClient,
+      companyId: 'company-1',
+      customer: input.customer,
+      documentType: 'invoice',
+      input: {
+        customer_id: input.customer.id,
+        invoice_date: '2026-08-13',
+        due_date: '2026-09-12',
+        currency: 'SEK',
+        items: [{ description: 'Etikett', quantity: 5713, unit: 'st', unit_price: 0.1, vat_rate: 25 }],
+      },
+    })
+    expect(build.ok).toBe(true)
+    if (!build.ok) return
+    input.items = build.items.map((row, index) => makeItem({
+      ...row,
+      id: `item-${index + 1}`,
+      line_type: 'product',
+    }))
+    input.invoice = makeInvoice({
+      ...input.invoice,
+      subtotal: build.invoiceFields.subtotal,
+      vat_amount: build.invoiceFields.vat_amount,
+      total: build.invoiceFields.total,
+      remaining_amount: build.invoiceFields.remaining_amount,
+      ore_rounding: false,
+    })
+    expect(input.items[0].vat_amount).toBe(142.83)
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok ? [] : result.issues.map(({ code }) => code)).toEqual([])
+  })
+
+  it('still flags the 142,82 the old rounding stored on that line', () => {
+    const input = makePerLineRoundingInput([{ unitPrice: 571.3, vatRate: 25 }])
+    input.items = [{ ...input.items[0], vat_amount: 142.82 }]
+    input.invoice = makeInvoice({ ...input.invoice, vat_amount: 142.82, total: 714.12, remaining_amount: 714.12 })
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.issues.map(({ code }) => code)).toContain('LINE_VAT_MISMATCH')
   })
 
   it('rejects invoice totals that do not reconcile to the emitted lines', () => {

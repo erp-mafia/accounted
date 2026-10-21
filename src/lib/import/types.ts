@@ -505,6 +505,12 @@ export interface ImportResult {
 export interface ImportPreview {
   /** Unused source definitions retained in the archive, not created as ledger accounts. */
   archivedOnlyAccounts?: SIEAccount[]
+  /** Mapped BAS definitions the file does not use (#63): with the import's
+   *  "only the accounts the file uses" option they are not created. */
+  unusedAccounts?: SIEAccount[]
+  /** Mapped definitions outside BAS the file does not use: the company's own
+   *  accounts, created with or without that option. */
+  unusedOwnAccounts?: SIEAccount[]
   // Company info from file
   companyName: string | null
   orgNumber: string | null
@@ -558,6 +564,8 @@ export interface ImportPreview {
   // mapped target account (planChartChanges in chart-plan.ts). Optional:
   // previews built before this field existed lack it.
   chart?: ChartPlan
+  /** `chart` with the "only the accounts the file uses" option on (#63). */
+  chartUsedOnly?: ChartPlan
 
   // How the file's räkenskapsår relates to the company's existing fiscal
   // periods, from the same precheck the import runs (precheckFiscalPeriod).

@@ -1615,7 +1615,6 @@ export async function manualLink(
     transactionId,
     journalEntryId,
     prepared,
-    fields: { reconciliation_method: 'manual' as ReconciliationMethod },
     linkBasis: options.linkBasis,
   })
   if (!written.ok) {
@@ -2020,16 +2019,35 @@ export async function linkTransactionToVouchers(
   return { success: true, allocations: resolved }
 }
 
+/** Why unlinkReconciliation refused; the caller turns it into its door's answer. */
+export type UnlinkReconciliationCode = 'TRANSACTION_NOT_FOUND' | 'NOT_LINKED' | 'LINK_IS_BOOKING' | 'DB_ERROR'
+
 export interface UnlinkReconciliationResult {
   success: boolean
   error?: string
+  /** Set on every refusal. */
+  code?: UnlinkReconciliationCode
+  /** The database error behind DB_ERROR. */
+  cause?: { code?: string | null; message: string }
   /** Verifikat the row was anchored to before the unlink (pointer first, then junction rows). */
   previousJournalEntryIds?: string[]
 }
 
 /**
- * Remove a reconciliation link.
- * Only allowed when reconciliation_method IS NOT NULL (prevents unlinking categorization-created entries).
+ * Whether koppla-bort may undo a bank row's link. A link records how the row
+ * was paired with a verifikat that already existed (reconciliation_method:
+ * the matcher's auto_* or 'manual'); a row without one was booked from
+ * itself (categorize, match-invoice, a direct booking), so its verifikat is
+ * its booking, undone by storno and never by unlinking. The reconciliation
+ * items offer 'unmatch' by this same rule, so they never list an action that
+ * is refused.
+ */
+export function isUnlinkableBankLink(row: { reconciliation_method?: string | null }): boolean {
+  return Boolean(row.reconciliation_method)
+}
+
+/**
+ * Remove a reconciliation link (isUnlinkableBankLink).
  * A row with no pointer but junction rows (a 1:N split) is unlinkable too.
  */
 export async function unlinkReconciliation(
@@ -2044,10 +2062,13 @@ export async function unlinkReconciliation(
     .select('id, journal_entry_id, reconciliation_method')
     .eq('id', transactionId)
     .eq('company_id', companyId)
-    .single()
+    .maybeSingle()
 
-  if (txError || !tx) {
-    return { success: false, error: 'Transaction not found' }
+  if (txError) {
+    return { success: false, code: 'DB_ERROR', error: 'Failed to read transaction', cause: txError }
+  }
+  if (!tx) {
+    return { success: false, code: 'TRANSACTION_NOT_FOUND', error: 'Transaction not found' }
   }
 
   // Collected BEFORE the delete so the audit row and the caller's
@@ -2063,12 +2084,16 @@ export async function unlinkReconciliation(
       previousJournalEntryIds.push(row.journal_entry_id)
     }
     if (previousJournalEntryIds.length === 0) {
-      return { success: false, error: 'Transaction is not linked to any journal entry' }
+      return { success: false, code: 'NOT_LINKED', error: 'Transaction is not linked to any journal entry' }
     }
   }
 
-  if (!tx.reconciliation_method) {
-    return { success: false, error: 'Cannot unlink a categorization-created entry. Use storno to reverse it instead.' }
+  if (!isUnlinkableBankLink(tx)) {
+    return {
+      success: false,
+      code: 'LINK_IS_BOOKING',
+      error: 'Cannot unlink a categorization-created entry. Use storno to reverse it instead.',
+    }
   }
 
   const { error: updateError } = await supabase
@@ -2082,7 +2107,7 @@ export async function unlinkReconciliation(
     .eq('company_id', companyId)
 
   if (updateError) {
-    return { success: false, error: 'Failed to unlink transaction' }
+    return { success: false, code: 'DB_ERROR', error: 'Failed to unlink transaction', cause: updateError }
   }
 
   // A residual booking, a bulk-book or a 1:N split anchors the same

@@ -1,0 +1,1 @@
+[2026-10-21] A bank account without a single bank row is never avstämd in the account status (lib/reconciliation/service.ts, the Konton list, the account page, v1 and MCP) and its page says no transactions have come from the bank; the raw engine that the VAT close gate and bokslut readiness read is left as it is, so a dormant company gets no new blocker (PH 195).

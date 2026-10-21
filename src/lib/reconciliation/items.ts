@@ -6,6 +6,7 @@ import {
   fetchBankHistoryStart,
   fetchJunctionLinkMap,
   fetchUnlinkedGLLines,
+  isUnlinkableBankLink,
   openAmountByEntry,
   scopeTransactionsToAccount,
 } from './bank-reconciliation'
@@ -471,6 +472,9 @@ export async function listAccountItems(
               }
             : null
           if (persisted && bucket === 'proposed') persistedProposals.push(persisted)
+          // A row booked from itself is undone by storno of its verifikat,
+          // never unlinked, so it offers no unmatch (PH 194).
+          const matchedActions: ReconciliationItem['actions'] = isUnlinkableBankLink(tx) ? ['unmatch'] : []
           push({
             item_id: tx.id,
             item_type: 'transaction',
@@ -484,7 +488,7 @@ export async function listAccountItems(
             proposal: persisted ?? coveringSet,
             actions:
               bucket === 'matched'
-                ? ['unmatch']
+                ? matchedActions
                 : bucket === 'ignored'
                   ? ['unignore']
                   : bucket === 'proposed'

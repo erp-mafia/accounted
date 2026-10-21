@@ -330,9 +330,13 @@ interface MigrationOptions {
    * with the options on every run, so a replacement is never carried over.
    */
   replaceImportedYears: number[]
+  /** Leave out the BAS accounts no SIE file uses (#63). On by default here:
+   *  a provider export is that provider's whole chart template. The
+   *  company's own (non-BAS) accounts are created either way. */
+  onlyUsedAccounts: boolean
 }
 
-const DEFAULT_OPTIONS: MigrationOptions = {
+export const DEFAULT_OPTIONS: MigrationOptions = {
   importCompanyInfo: true,
   importSIEData: true,
   importCustomers: true,
@@ -343,6 +347,7 @@ const DEFAULT_OPTIONS: MigrationOptions = {
   importAssets: true,
   voucherSeries: 'B',
   replaceImportedYears: [],
+  onlyUsedAccounts: true,
 }
 
 /**
@@ -472,6 +477,8 @@ interface SIEData {
   // result so nobody believes the books are complete (#2211).
   omittedYears?: SourceFiscalYear[]
   basAccounts: BASAccount[]
+  // Definitions no selected year uses (#63), for the options step's count.
+  preview?: { unusedAccounts?: { number: string; name: string }[] }
 }
 
 /**
@@ -1583,6 +1590,7 @@ export function OptionsStep({
     ? sieFilesToImport(fileStatuses, options).length > 0
     : options.importSIEData
   const failedYears = sieData?.failedYears ?? []
+  const unusedAccountCount = sieData?.preview?.unusedAccounts?.length ?? 0
 
   const toggleReplaceYear = (year: number) => {
     onChange({
@@ -1708,6 +1716,17 @@ export function OptionsStep({
                   value={options.voucherSeries}
                   onChange={(e) => onChange({ ...options, voucherSeries: e.target.value.toUpperCase() || 'B' })}
                   maxLength={2}
+                />
+              </div>
+            )}
+            {/* #63: the source system's export carries its whole chart. */}
+            {importsLedger && unusedAccountCount > 0 && (
+              <div className="border-t border-border">
+                <OptionRow
+                  label={t('ext_arcim_option_only_used_accounts')}
+                  description={t('ext_arcim_option_only_used_accounts_desc', { count: unusedAccountCount })}
+                  checked={options.onlyUsedAccounts}
+                  onChange={() => toggleOption('onlyUsedAccounts')}
                 />
               </div>
             )}
@@ -4137,6 +4156,7 @@ export default function ArcimMigrationWorkspace({
                 importTransactions: true,
                 voucherSeries: migrationOptions.voucherSeries,
                 supersedesImportId:filesToImport[i].previousImport?.id,
+                ...(migrationOptions.onlyUsedAccounts ? { onlyUsedAccounts: true } : {}),
               },
             }),
           })

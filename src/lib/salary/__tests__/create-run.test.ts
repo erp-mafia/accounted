@@ -144,6 +144,22 @@ describe('createSalaryRunWithEmployees', () => {
     expect(explicit.inserts.salary_runs[0]).toMatchObject({ voucher_series: 'L' })
   })
 
+  it('seeds an hourly employee without a monthly salary, even with one left on the employee (crm#1337)', async () => {
+    const hourlyEmployee = { ...monthlyEmployee, id: 'emp-2', salary_type: 'hourly', monthly_salary: 28000, hourly_rate: 185 }
+    const { client, inserts } = mockDb({ employees: [monthlyEmployee, hourlyEmployee] })
+
+    await createSalaryRunWithEmployees(client, 'company-1', 'user-1', {
+      periodYear: 2026,
+      periodMonth: 6,
+      paymentDate: '2026-06-25',
+    })
+
+    expect(inserts.salary_run_employees).toEqual([
+      expect.objectContaining({ employee_id: 'emp-1', salary_type: 'monthly', monthly_salary: 35000 }),
+      expect.objectContaining({ employee_id: 'emp-2', salary_type: 'hourly', monthly_salary: 0 }),
+    ])
+  })
+
   it('leaves the run empty when seedEmployees is false (the v1 contract)', async () => {
     const { client, inserts } = mockDb({ employees: [monthlyEmployee], settings: STANDARD_SETTINGS })
 

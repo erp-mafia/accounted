@@ -787,12 +787,65 @@ describe('generateAgiDeclaration: utlägg repaid with the salary (#2331)', () =>
     expect(iu).toContain('<gem:AvdrPrelSkatt faltkod="001">12000</gem:AvdrPrelSkatt>')
     expect(iu).not.toContain('41234')
     expect(iu).not.toContain('41235')
-    // No benefit field is derived from the line (FK012/FK013/FK015/FK018).
-    for (const code of ['012', '013', '015', '018']) {
+    // No benefit field is derived from the line (FK012/FK013/FK018).
+    for (const code of ['012', '013', '018']) {
       expect(iu).not.toContain(`faltkod="${code}"`)
     }
     // The employer's FK487 underlag is the same as without the line.
     expect(result.xml).toContain('faltkod="487">12568<')
+  })
+})
+
+describe('generateAgiDeclaration: kostförmån is declared in FK012 (#81)', () => {
+  // Skatteverket's XML schema (arbetsgivardeklaration_component_1.1.xsd) and
+  // Bilaga Fältlista 1.1.18.1 define no kostförmån field: FK012 "Övriga
+  // skattepliktiga förmåner" carries every benefit except bil and drivmedel,
+  // kost included (FK132 when the benefit is no underlag for SA). The
+  // generator used to emit KostformanUlagAG faltkod 015, which no schema has.
+  const MEALS = { item_type: 'benefit_meals', amount: 1200 }
+  const BIKE = { item_type: 'benefit_bike', amount: 300 }
+
+  async function generate(roster: unknown[]) {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueHappyPath(enqueueMany, roster)
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error('AGI refused')
+    return result
+  }
+
+  it('sums kost with the other benefits in FK012 and emits no kostförmån field', async () => {
+    const result = await generate([
+      {
+        ...REGULAR_ROW,
+        benefit_values: 1500,
+        avgifter_basis: 41500,
+        avgifter_amount: roundOre(41500 * 0.3142),
+        line_items: [{ item_type: 'monthly_salary', amount: 40000 }, MEALS, BIKE],
+      },
+    ])
+    const iu = iuBlockFor(result.xml, '199001011234')
+    expect(iu).toContain('<gem:SkatteplOvrigaFormanerUlagAG faltkod="012">1500</gem:SkatteplOvrigaFormanerUlagAG>')
+    expect(result.xml).not.toContain('Kostforman')
+    expect(result.xml).not.toContain('faltkod="015"')
+  })
+
+  it('files a kost-only IU with FK012 and FK001 = 0', async () => {
+    const result = await generate([
+      { ...REGULAR_ROW, monthly_salary: 0, gross_salary: 0, tax_withheld: 0, benefit_values: 1200, avgifter_basis: 1200, avgifter_amount: roundOre(1200 * 0.3142), line_items: [MEALS] },
+    ])
+    const iu = iuBlockFor(result.xml, '199001011234')
+    expect(iu).toContain('<gem:SkatteplOvrigaFormanerUlagAG faltkod="012">1200</gem:SkatteplOvrigaFormanerUlagAG>')
+    expect(iu).toContain('<gem:AvdrPrelSkatt faltkod="001">0</gem:AvdrPrelSkatt>')
+    expect(iu).not.toContain('faltkod="015"')
+  })
+
+  it("declares an F-skatt payee's kost in FK132, never FK139", async () => {
+    const result = await generate([{ ...F_SKATT_ROW, line_items: [MEALS] }])
+    const iu = iuBlockFor(result.xml, '198506159876')
+    expect(iu).toContain('<gem:SkatteplOvrigaFormanerEjUlagSA faltkod="132">1200</gem:SkatteplOvrigaFormanerEjUlagSA>')
+    expect(iu).not.toContain('faltkod="139"')
+    expect(iu).not.toContain('Kostforman')
   })
 })
 

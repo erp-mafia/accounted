@@ -19,6 +19,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
 import { roundOre, parseDecimalInput } from '@/lib/money'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { VACATION_CATEGORIES, type VacationCategory } from '@/lib/salary/vacation-category'
 import {
   MANUAL_PAYSLIP_LINE_SPECS,
   MANUAL_PAYSLIP_LINE_TYPES,
@@ -43,7 +44,8 @@ const parseNumber = (s: string): number | undefined => parseDecimalInput(s) ?? u
  * carries live in lib/salary/manual-payslip-lines.ts; this dialog only
  * collects the numbers, or the text, and, on rows that post on their own
  * account, an optional account override (empty = the default the booking
- * resolves for this employee).
+ * resolves for this employee). Semester takes the days taken and which days
+ * they are; its amount is optional (crm#1331).
  */
 export function AddPayslipLineDialog({
   open,
@@ -77,10 +79,13 @@ export function AddPayslipLineDialog({
   const [invalid, setInvalid] = useState(false)
   const [account, setAccount] = useState('')
   const [accountInvalid, setAccountInvalid] = useState(false)
+  const [vacationCategory, setVacationCategory] = useState<VacationCategory>('paid')
 
   const spec = MANUAL_PAYSLIP_LINE_SPECS[type]
   // A Textrad is words only: no quantity, no à-pris, no amount.
   const isText = isTextRow({ item_type: type })
+  // Semester needs its days; the amount is optional.
+  const isVacation = type === 'vacation'
   const quantityN = parseNumber(quantity)
   const unitPriceN = parseNumber(unitPrice)
   // Quantity x unit price wins over a typed amount, same rule as the body
@@ -94,12 +99,14 @@ export function AddPayslipLineDialog({
       quantity: quantityN,
       unit_price: unitPriceN,
       amount: parseNumber(amount),
+      vacation_category: isVacation ? vacationCategory : undefined,
     },
     taxFreeCaps,
   )
   const preview = built.ok ? built.body : null
   const aboveCap = !built.ok && built.reason === 'above_tax_free_cap' ? built : null
   const noText = !built.ok && built.reason === 'no_text'
+  const noDays = !built.ok && built.reason === 'no_days'
 
   function reset() {
     setType(DEFAULT_TYPE)
@@ -110,6 +117,7 @@ export function AddPayslipLineDialog({
     setInvalid(false)
     setAccount('')
     setAccountInvalid(false)
+    setVacationCategory('paid')
     onOpenChange(false)
   }
 
@@ -216,6 +224,26 @@ export function AddPayslipLineDialog({
             )}
           </div>
 
+          {isVacation && (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="payslip_line_vacation_category">{t('add_line_vacation_category')}</Label>
+                <Select value={vacationCategory} onValueChange={(v) => setVacationCategory(v as VacationCategory)}>
+                  <SelectTrigger id="payslip_line_vacation_category">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {VACATION_CATEGORIES.map((category) => (
+                      <SelectItem key={category} value={category}>
+                        {t(`add_line_vacation_category_${category}`)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          )}
+
           {isText ? (
             <div className="space-y-2">
               <Label htmlFor="payslip_line_text">{t('add_line_text')}</Label>
@@ -246,6 +274,8 @@ export function AddPayslipLineDialog({
                   inputMode="decimal"
                   value={quantity}
                   onChange={(e) => { setQuantity(e.target.value); setInvalid(false) }}
+                  required={isVacation}
+                  aria-invalid={(invalid && noDays) || undefined}
                 />
               </div>
               <div className="space-y-2">
@@ -269,7 +299,7 @@ export function AddPayslipLineDialog({
                   value={product !== undefined ? String(product) : amount}
                   onChange={(e) => { setAmount(e.target.value); setInvalid(false) }}
                   disabled={computed}
-                  aria-invalid={invalid || !!aboveCap || undefined}
+                  aria-invalid={(invalid && !noDays) || !!aboveCap || undefined}
                 />
               </div>
             </div>
@@ -284,10 +314,12 @@ export function AddPayslipLineDialog({
               : invalid
                 ? noText
                   ? t('add_line_invalid_text', { max: TEXT_ROW_MAX_LENGTH })
-                  : t('add_line_invalid')
+                  : noDays
+                    ? t('add_line_invalid_vacation')
+                    : t('add_line_invalid')
                 : computed && preview && !isText
                   ? `${t('add_line_computed')} = ${formatCurrency(preview.amount)}`
-                  : t(hintKey)}
+                  : t(isVacation ? 'add_line_hint_vacation' : hintKey)}
           </p>
 
           <LineAccountField

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createTableMockSupabase } from '@/tests/helpers'
-import { createSupplierPaymentBatch, previewSupplierPaymentBatch } from '@/lib/payments/batch-service'
+import { createSupplierPaymentBatch, planSupplierPaymentBatch, previewSupplierPaymentBatch } from '@/lib/payments/batch-service'
 
 /**
  * The payment file path under the attest policy: an invoice the policy
@@ -41,11 +41,11 @@ const row = (id: string, overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 })
 
-function db(policy: Record<string, unknown> | null) {
+function db(policy: Record<string, unknown> | null, accountingMethod: string | null = 'accrual') {
   return createTableMockSupabase({
     companies: { data: { name: 'Testbolaget AB', org_number: '556677-8899' } },
     company_settings: {
-      data: { company_name: 'Testbolaget AB', org_number: '556677-8899', city: 'Stockholm', iban: 'SE3550000000054910000003', bic: 'ESSESESS', bankgiro: '991-2346', clearing_number: null, bank_name: null, accounting_method: 'accrual' },
+      data: { company_name: 'Testbolaget AB', org_number: '556677-8899', city: 'Stockholm', iban: 'SE3550000000054910000003', bic: 'ESSESESS', bankgiro: '991-2346', clearing_number: null, bank_name: null, accounting_method: accountingMethod },
     },
     supplier_invoices: { data: [row('unattested'), row('attested', { status: 'approved', approved_at: '2026-08-01T10:00:00Z' })] },
     supplier_payment_batch_items: { data: [] },
@@ -93,5 +93,61 @@ describe('payment file under the attest policy', () => {
     const preview = await previewSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, { ids: ['unattested'] })
     expect(preview.excluded).toEqual([])
     expect(preview.eligible[0]!.warnings).toContain('unattested')
+  })
+})
+
+// crm#1141: kontantmetoden has no attest step (companyAttestsSupplierInvoices),
+// so the warning sat on every one of its invoices in the betalfil dialog.
+describe('payment file: the unattested warning follows the attest rule', () => {
+  const DEBTOR_SETTINGS = { company_name: 'Testbolaget AB', org_number: '556677-8899', city: 'Stockholm', iban: 'SE3550000000054910000003', bic: 'ESSESESS', bankgiro: '991-2346', clearing_number: null, bank_name: null }
+
+  it('kontantmetoden: preview and plan carry no unattested warning', async () => {
+    const mock = db(null, 'cash')
+    const preview = await previewSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, { ids: ['unattested', 'attested'] })
+    expect(preview.excluded).toEqual([])
+    expect(preview.eligible.map((l) => [l.id, l.warnings])).toEqual([
+      ['unattested', []],
+      ['attested', []],
+    ])
+
+    const planned = await planSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, {
+      format: 'pain001',
+      items: [{ supplier_invoice_id: 'unattested' }],
+    })
+    expect(planned.ok && planned.plan.warnings).toEqual([[]])
+  })
+
+  it('faktureringsmetoden, and a company without a setting: the warning stays', async () => {
+    for (const method of ['accrual', null]) {
+      const mock = db(null, method)
+      const preview = await previewSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, { ids: ['unattested', 'attested'] })
+      expect(preview.eligible.map((l) => [l.id, l.warnings]), String(method)).toEqual([
+        ['unattested', ['unattested']],
+        ['attested', []],
+      ])
+      const planned = await planSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, {
+        format: 'pain001',
+        items: [{ supplier_invoice_id: 'unattested' }],
+      })
+      expect(planned.ok && planned.plan.warnings, String(method)).toEqual([['unattested']])
+    }
+  })
+
+  it('kontantmetoden with the attest policy on: nothing is left out and nothing warns (the policy never applies there)', async () => {
+    const mock = db(POLICY_ON, 'cash')
+    const preview = await previewSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, { ids: ['unattested'] })
+    expect(preview.excluded).toEqual([])
+    expect(preview.eligible[0]!.warnings).toEqual([])
+  })
+
+  it('a failed method read keeps the warning: it never blocks, so the safe side is to show it', async () => {
+    const mock = db(null)
+    mock.setTable('company_settings', (chain) =>
+      chain.some((c) => c.method === 'select' && c.args[0] === 'accounting_method')
+        ? { data: null, error: { message: 'settings read failed' } }
+        : { data: { ...DEBTOR_SETTINGS, accounting_method: 'cash' } },
+    )
+    const preview = await previewSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, { ids: ['unattested'] })
+    expect(preview.eligible[0]!.warnings).toEqual(['unattested'])
   })
 })

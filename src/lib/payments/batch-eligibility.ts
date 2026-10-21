@@ -7,12 +7,13 @@
  * details edited) is rejected instead of silently paid on stale terms.
  *
  * Warnings never block; exclusions always do. An un-attested invoice is a
- * warning (mark-paid pays registered invoices today, and sjalvbokforare have
- * no attest step), while a missing payee is an exclusion (there is nothing to
- * route the payment to). With the company's attest policy on, an invoice the
- * policy requires attest for and has not got it is an exclusion instead
- * (attest_required): the caller reads which ones through the attest gate
- * (attest-gate.ts).
+ * warning (mark-paid pays registered invoices today), while a missing payee
+ * is an exclusion (there is nothing to route the payment to). The warning is
+ * only for a company that attests at all: kontantmetoden has no attest step,
+ * so there it would sit on every line and mean nothing (crm#1141); the caller
+ * reads that through the attest gate (attest-gate.ts). With the company's
+ * attest policy on, an invoice the policy requires attest for and has not got
+ * it is an exclusion instead (attest_required), read through the same gate.
  */
 
 import { ORE_TOLERANCE, roundOre } from '@/lib/money'
@@ -88,6 +89,13 @@ export interface BatchEvaluationOptions {
   activeBatchIdByInvoice?: ReadonlyMap<string, string>
   /** Invoices payment waits with: the attest policy requires attest and it has not been given. */
   attestBlocked?: ReadonlySet<string>
+  /**
+   * Whether the company attests supplier invoices at all
+   * (PAYMENT_ATTEST_GATE.attestsSupplierInvoices). False (kontantmetoden): an
+   * invoice without approved_at is not 'unattested'. Absent reads as true, as
+   * a company without a setting reads as faktureringsmetoden.
+   */
+  companyAttests?: boolean
 }
 
 export type BatchInvoiceEvaluation =
@@ -126,7 +134,7 @@ export function evaluateInvoiceForBatch(
   if (!reference) return { eligible: false, reason: 'reference_missing' }
 
   const warnings: BatchItemWarning[] = []
-  if (!invoice.approved_at) warnings.push('unattested')
+  if (options.companyAttests !== false && !invoice.approved_at) warnings.push('unattested')
   const activeBatchId = options.activeBatchIdByInvoice?.get(invoice.id) ?? null
   if (activeBatchId) warnings.push('already_batched')
   if (ocrInvalid) warnings.push('ocr_invalid')

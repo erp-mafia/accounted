@@ -1577,7 +1577,8 @@ describe('posting port parity, the ledger\'s own doors (pg)', () => {
           )
           if (mode === 'shadow') {
             expect(status).toBe(200)
-            expect(posted.length).toBe(28)
+            // 28 until accounted#80 added the representation lunch's registration verifikat.
+            expect(posted.length).toBe(29)
           } else {
             expect(status).toBe(500)
             expect(attempt[0]!.status).toBe('failed')

@@ -298,6 +298,75 @@ describe('the BankID step', () => {
   })
 })
 
+// crm#1355: the poll used to retry a refusal forever, so the step kept its
+// waiting view over a connection that was gone. The loop now gives up and
+// the step says so, with a way on.
+describe('a consent poll that gave up', () => {
+  const atBankId = run(openFlow('new'), { type: 'bank_picked', bank: SWEDBANK }, { type: 'context_set', context: 'corporate' }, { type: 'to_bankid' }, { type: 'personal_number_set', value: '199001011234' })
+  const started = run(atBankId, { type: 'start' }, { type: 'started', result: { connection_id: 'c-1', attempt: attempt() } })
+  const gone = flowReducer(started, { type: 'poll_gave_up', reason: 'refused', text: 'Kopplingen finns inte längre.' })
+
+  it('stops polling and keeps the sentence for the step', () => {
+    expect(pollingActive(started)).toBe(true)
+    expect(gone.pollError).toEqual({ reason: 'refused', text: 'Kopplingen finns inte längre.' })
+    expect(pollingActive(gone)).toBe(false)
+  })
+
+  it('Börja om goes back to the BankID start with the bank and the number kept, and the next start makes a new connection', () => {
+    const over = flowReducer(gone, { type: 'start_over' })
+    expect(over.step).toBe('bankid')
+    expect(over.mode).toBe('new')
+    expect(over.bank).toEqual(SWEDBANK)
+    expect(over.context).toBe('corporate')
+    expect(over.personalNumber).toBe('199001011234')
+    expect(over.connectionId).toBeNull()
+    expect(over.attempt).toBeNull()
+    expect(over.pollState).toBeNull()
+    expect(over.pollError).toBeNull()
+    expect(pollingActive(over)).toBe(false)
+    const again = run(over, { type: 'start' }, { type: 'started', result: { connection_id: 'c-2', attempt: attempt() } })
+    expect(again.connectionId).toBe('c-2')
+    expect(pollingActive(again)).toBe(true)
+  })
+
+  it('a renewal keeps the connection it replaces through Börja om', () => {
+    const renewing = run(openFlow('renew', { bank: SWEDBANK, replaceConnectionId: 'old' }), { type: 'to_bankid' }, { type: 'start' }, { type: 'started', result: { connection_id: 'c-1', attempt: attempt() } })
+    const over = run(renewing, { type: 'poll_gave_up', reason: 'refused', text: 'x' }, { type: 'start_over' })
+    expect(over.mode).toBe('renew')
+    expect(over.replaceConnectionId).toBe('old')
+    expect(over.bankLocked).toBe(true)
+    expect(over.connectionId).toBeNull()
+  })
+
+  it('a resumed connection that is gone starts over as a new connection at the bank step', () => {
+    const resumed = openFlow('resume', { connectionId: 'gone-1' })
+    expect(pollingActive(resumed)).toBe(true)
+    const refused = run(resumed, { type: 'payments_offer', offered: true, verification: null }, { type: 'poll_gave_up', reason: 'refused', text: 'x' })
+    expect(pollingActive(refused)).toBe(false)
+    const over = flowReducer(refused, { type: 'start_over' })
+    expect(over.mode).toBe('new')
+    expect(over.step).toBe('bank')
+    expect(over.connectionId).toBeNull()
+    expect(over.bank).toBeNull()
+    expect(over.paymentsOffered).toBe(true)
+  })
+
+  it('Försök igen after nothing answered polls the same consent again; it does nothing after a refusal', () => {
+    const silent = flowReducer(started, { type: 'poll_gave_up', reason: 'unreachable', text: 'Inget svar.' })
+    expect(pollingActive(silent)).toBe(false)
+    const retried = flowReducer(silent, { type: 'poll_retry' })
+    expect(retried.pollError).toBeNull()
+    expect(retried.connectionId).toBe('c-1')
+    expect(pollingActive(retried)).toBe(true)
+    expect(flowReducer(gone, { type: 'poll_retry' })).toBe(gone)
+  })
+
+  it('a new start clears the give-up', () => {
+    const restarted = run(gone, { type: 'start' })
+    expect(restarted.pollError).toBeNull()
+  })
+})
+
 describe('the accounts step', () => {
   const accounts = [account({ uid: 'orga' }), account({ uid: 'kept', matches_existing: '1932' })]
   const atAccounts = run(

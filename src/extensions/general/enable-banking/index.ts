@@ -34,7 +34,7 @@ import {
 } from '@/lib/bank-sync/persist-sync-result'
 import { isBankRoutingConflict, isBankRouteUnresolved } from '@/lib/bank-sync/ingest-route'
 import { SYNC_COOLDOWN_MS } from '@/lib/bank-sync/trigger-sync-contract'
-import { INITIAL_SYNC_DEFERRED } from '@/lib/bank-sync/initial-sync-error'
+import { INITIAL_SYNC_DEFERRED, INITIAL_SYNC_INCOMPLETE } from '@/lib/bank-sync/initial-sync-error'
 import { triggerConnectionSync } from './lib/trigger-sync'
 import { findReusableSessions } from './lib/session-sharing'
 import { retireBankConnection } from './lib/retire-connection'
@@ -923,6 +923,9 @@ export const enableBankingExtension: Extension = {
             requested_from: fromDate,
             history_narrowed: historyFrom !== null,
             history_from: historyFrom,
+            // The bank had not handed out every page when the read stopped:
+            // the window is incomplete, never "Synkronisering klar" (PH 195).
+            incomplete: outcome.truncated,
           })
         } catch (error) {
           // One durable row per failed sync, whichever branch below answers
@@ -1723,7 +1726,7 @@ export const enableBankingExtension: Extension = {
               signer: presentPerson(request, companyId),
               log,
             })
-            initialSyncSummary = {
+            const summary = {
               imported: outcome.imported,
               duplicates: outcome.duplicates,
               auto_matched: outcome.autoMatched,
@@ -1731,10 +1734,22 @@ export const enableBankingExtension: Extension = {
               returned_min_date: outcome.returnedMin,
               returned_max_date: outcome.returnedMax,
             }
-            log.info('[enable-banking] Inline initial backfill complete', {
-              connectionId: connection.id,
-              ...initialSyncSummary,
-            })
+            if (outcome.truncated) {
+              // The bank had not finished: the first import stays owed (the
+              // runner did not complete it) and the cron asks again. Answered
+              // as an outcome, never as a finished import of what came (PH 195).
+              initialSyncError = INITIAL_SYNC_INCOMPLETE
+              log.warn('[enable-banking] Inline initial backfill incomplete: the bank had more pages, cron will retry', {
+                connectionId: connection.id,
+                ...summary,
+              })
+            } else {
+              initialSyncSummary = summary
+              log.info('[enable-banking] Inline initial backfill complete', {
+                connectionId: connection.id,
+                ...initialSyncSummary,
+              })
+            }
           } catch (syncError) {
             initialSyncError = syncError instanceof Error ? syncError.message : String(syncError)
             log.error('[enable-banking] Inline initial backfill failed: cron will retry', {

@@ -187,7 +187,13 @@ export function useBankSync() {
         }
         throw new Error(data.error || 'Sync failed')
       }
-      toast({ title: t('bank_sync_button_now'), description: syncedDescription(data.imported, data.duplicates) })
+      // A read the bank had not finished is said as such, never as a plain
+      // count that reads like a complete sync (PH 195).
+      const described = syncedDescription(data.imported, data.duplicates)
+      toast({
+        title: t('bank_sync_button_now'),
+        description: data.incomplete ? `${described.replace(/\.$/, '')}. ${t('bank_sync_incomplete')}` : described,
+      })
       // Tell the neighbouring status chip to refetch so it doesn't keep showing
       // the pre-sync "synced Nd ago" until a hard reload.
       notifyBankSyncUpdated()

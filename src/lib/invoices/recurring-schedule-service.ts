@@ -29,7 +29,7 @@ import {
   buildRecurringPlaceholderValues,
 } from '@/lib/invoices/recurring-placeholders'
 import { isTextLine } from '@/lib/invoices/recurring-schedule-items'
-import { computeLineNet } from '@/lib/bookkeeping/invoice-line-amounts'
+import { computeLineNet, computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import { roundOre } from '@/lib/money'
 import { yourReferenceForNewInvoice } from '@/lib/customers/invoice-reference'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
@@ -317,7 +317,7 @@ export async function executeRecurringSchedule(
     }
     const itemRate = lineRate(item)
     const lineTotal = computeLineNet(item.quantity, item.unit_price)
-    vatAmount = roundOre(vatAmount + Math.round((lineTotal * itemRate) / 100 * 100) / 100)
+    vatAmount = roundOre(vatAmount + computeLineVat(lineTotal, itemRate))
   }
   const total = roundOre(subtotal + vatAmount)
 
@@ -441,7 +441,7 @@ export async function executeRecurringSchedule(
     }
     const itemRate = lineRate(item)
     const lineTotal = computeLineNet(item.quantity, item.unit_price)
-    const itemVat = Math.round((lineTotal * itemRate) / 100 * 100) / 100
+    const itemVat = computeLineVat(lineTotal, itemRate)
     return {
       invoice_id: invoice.id,
       sort_order: index,

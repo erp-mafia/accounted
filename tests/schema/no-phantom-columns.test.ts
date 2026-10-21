@@ -280,7 +280,12 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // 435 (2026-10-18): +1 for the webhook fan-out from the event outbox
 // (lib/webhooks/handler.ts): the upsert keyed by outbox id writes the same
 // per-webhook rows the inline insert beside it already builds at runtime.
-const UNRESOLVED_CEILING = 435
+// 436 (2026-10-21, crm#1347): +1 for MCP gnubok_get_transaction
+// (lib/transactions/read-with-vouchers.ts), which now selects the v1 detail
+// endpoint's TRANSACTION_DETAIL_COLUMNS instead of its own literal copy, the
+// copy that never had external_id. The shared list is checked against the
+// replayed schema in lib/transactions/__tests__/detail-columns.test.ts.
+const UNRESOLVED_CEILING = 436
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

@@ -1,25 +1,34 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { chunk } from '@/lib/utils'
+import { chunk, formatCurrency } from '@/lib/utils'
 import {
   INVOICE_SOURCED_ENTRY_TYPES,
   LINK_LOOKUP_CHUNK,
   getInvoicesExplainingJournalEntries,
 } from '@/lib/core/bookkeeping/journal-entry-references'
 import { calculatePeriodDates, formatPeriodLabel } from './period-dates'
-import { calculateVatDeclaration } from './vat-declaration'
+import {
+  ACCOUNT_RUTA,
+  VAT_ACCOUNTS,
+  VAT_SETTLEMENT_NET_ACCOUNTS,
+  calculateVatDeclaration,
+} from './vat-declaration'
+import { fetchDynamicVatAccounts } from './vat-revenue-accounts'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
 
 /**
  * Periodisk sammanställning (EC Sales List / SKV 5740).
  *
  * Pure projection from the general ledger: posted journal entry lines on the
- * three EU revenue accounts (3308 services, 3108 goods, 3107 triangulation)
- * are joined back to the originating invoice and customer to produce one row
- * per (country, vat_number) with three amount buckets.
+ * accounts the momsdeklaration puts in rutor 39 (services, BAS 3308), 35
+ * (goods, BAS 3108) and 38 (triangulation, BAS 3107) are joined back to the
+ * originating invoice and customer to produce one row per (country,
+ * vat_number) with three amount buckets.
  *
- * Shares its source data with vat-declaration.ts so the PS totals and the
- * momsdeklaration Ruta 35/38/39 can never drift. See §1.2 of the plan.
+ * The PS is the per-buyer breakdown of rutor 35, 38 and 39, so it reads the
+ * same account-to-ruta mapping the declaration does, the company's own
+ * momskod on an account included (crm#1336): every line the declaration
+ * counts there is either filed under a buyer or reported, never dropped.
  *
  * Notes:
  *   - Which invoice a posting belongs to is resolved through every link the
@@ -28,10 +37,15 @@ import { normalizeCountryCode } from '@/lib/vat/country-codes'
  *     its invoice afterwards and a kontantmetod inbetalning are filed too
  *     (#2298). A storno or rättelse of such a posting is filed under the
  *     same invoice by following reverses_id / correction_of_id (#2351), so a
- *     makulerad sale nets to zero here exactly as it does in ruta 39. A
- *     3308/3108 posting no invoice points at is not filed (there is no
- *     customer to name); the momsdeklaration reconciliation (ruta 35/38/39)
- *     is where such a gap shows.
+ *     makulerad sale nets to zero here exactly as it does in ruta 39.
+ *   - A posting no invoice points at (a manual, imported or bank-booked EU
+ *     sale) has no buyer VAT number to file it under. It cannot be filed,
+ *     but the declaration counts it, so it is reported as an
+ *     UNATTRIBUTED_EU_SALE naming the verifikat (crm#1336): blocking on
+ *     ruta 35/38 (goods are always reported per buyer), a warning on ruta
+ *     39 (a service is owed a row only when the buyer has a VAT number and
+ *     it is taxed in the buyer's country). Before, it was left out silently
+ *     and the report could read "no EU sales" while ruta 39 held the sale.
  *   - Account 3305/3105 (non-EU export) are NOT in this report: they go to
  *     Ruta 36/40 only.
  *   - Trepartshandel (3107) is included so the report works if someone posts
@@ -64,6 +78,8 @@ export type PsWarningCode =
   | 'GOODS_SOLD_WITH_QUARTERLY_PERIOD'
   /** One verifikat linked to invoices of different customers: cannot be split per customer. */
   | 'MIXED_CUSTOMER_SETTLEMENT'
+  /** A posted EU sale the declaration counts but no invoice names a buyer for. */
+  | 'UNATTRIBUTED_EU_SALE'
 
 export interface PsWarning {
   level: 'error' | 'warning'
@@ -72,7 +88,7 @@ export interface PsWarning {
   customerId?: string
   customerName?: string
   invoiceId?: string
-  /** The verifikat a MIXED_CUSTOMER_SETTLEMENT warning is about. */
+  /** The verifikat a MIXED_CUSTOMER_SETTLEMENT or UNATTRIBUTED_EU_SALE warning is about. */
   journalEntryId?: string
   amount?: number
 }
@@ -116,13 +132,88 @@ function toVatCountryCode(iso: string): string {
   return iso === 'GR' ? 'EL' : iso.toUpperCase()
 }
 
-const ACCOUNT_TO_BUCKET: Record<string, 'services' | 'goods' | 'triangulation'> = {
-  '3308': 'services',
-  '3108': 'goods',
-  '3107': 'triangulation',
+type PsBucket = 'services' | 'goods' | 'triangulation'
+
+/** The momsdeklaration ruta each PS bucket breaks down per buyer. */
+const RUTA_TO_BUCKET: Readonly<Record<string, PsBucket>> = {
+  ruta39: 'services',
+  ruta35: 'goods',
+  ruta38: 'triangulation',
 }
 
-const PS_ACCOUNTS = Object.keys(ACCOUNT_TO_BUCKET)
+const BUCKET_RUTA: Readonly<Record<PsBucket, string>> = { services: '39', goods: '35', triangulation: '38' }
+
+/**
+ * The company's PS accounts and the bucket each feeds, resolved the way the
+ * declaration resolves its rutor (and the ruta drill-down inverts them): the
+ * fixed BAS map minus the accounts the company classified itself, then the
+ * company's own classification. A hardcoded 3308/3108/3107 list missed every
+ * EU sale on an account the company gave an EU momskod, while ruta 35/39 kept it.
+ */
+async function resolvePsAccountBuckets(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<Map<string, PsBucket>> {
+  const dynamic = await fetchDynamicVatAccounts(supabase, companyId)
+  const buckets = new Map<string, PsBucket>()
+  for (const [account, mapping] of Object.entries(ACCOUNT_RUTA)) {
+    const bucket = RUTA_TO_BUCKET[mapping.box]
+    if (bucket && !dynamic.explicitAccounts.has(account)) buckets.set(account, bucket)
+  }
+  for (const [account, mapping] of dynamic.mappingByAccount) {
+    const bucket = RUTA_TO_BUCKET[mapping.box]
+    if (bucket) buckets.set(account, bucket)
+  }
+  return buckets
+}
+
+/** get_vat_ruta_source_lines caps a page at 501 rows. */
+const SOURCE_LINES_PAGE = 500
+
+/**
+ * Ids of the verifikat the momsdeklaration counts on these accounts in the
+ * period. Read through get_vat_ruta_source_lines, the ruta drill-down's RPC,
+ * with the declaration's own settlement-shape parameters, so it drops what
+ * the figure drops (the posted bokslut, momsredovisningar, the kontantmetod
+ * cut-off reversals) and nothing else. There is deliberately no TypeScript
+ * copy of those exclusions.
+ */
+async function fetchDeclaredEntryIds(
+  supabase: SupabaseClient,
+  companyId: string,
+  start: string,
+  end: string,
+  accounts: string[],
+): Promise<Set<string>> {
+  const ids = new Set<string>()
+  let cursor: { date: string; voucher: number; entryId: string; lineId: string } | null = null
+  for (;;) {
+    const { data, error } = await supabase.rpc('get_vat_ruta_source_lines', {
+      p_company_id: companyId,
+      p_start: start,
+      p_end: end,
+      p_accounts: accounts,
+      p_ruta_accounts: VAT_ACCOUNTS,
+      p_net_accounts: VAT_SETTLEMENT_NET_ACCOUNTS,
+      p_cursor_date: cursor?.date ?? null,
+      p_cursor_voucher_number: cursor?.voucher ?? null,
+      p_cursor_entry_id: cursor?.entryId ?? null,
+      p_cursor_line_id: cursor?.lineId ?? null,
+      p_limit: SOURCE_LINES_PAGE,
+    })
+    if (error) throw new Error(`get_vat_ruta_source_lines failed: ${error.message}`)
+    const rows = (data ?? []) as Array<{
+      line_id: string
+      journal_entry_id: string
+      voucher_number: number
+      entry_date: string
+    }>
+    for (const row of rows) ids.add(row.journal_entry_id)
+    if (rows.length < SOURCE_LINES_PAGE) return ids
+    const last = rows[rows.length - 1]
+    cursor = { date: last.entry_date, voucher: last.voucher_number, entryId: last.journal_entry_id, lineId: last.line_id }
+  }
+}
 
 interface RawEntryLine {
   account_number: string
@@ -209,6 +300,92 @@ function customerIdentity(invoice: RawInvoice | undefined, invoiceId: string): s
   return `${customer.id}|${country}|${normalizeVatNumber(customer.vat_number)}`
 }
 
+/**
+ * The entry a storno or rättelse chain starts at, within the fetched period:
+ * the unattributed lines of an original, its storno and its correction are
+ * one sale and net together, as they do in ruta 39.
+ */
+function chainRoot(entry: RawEntry, byId: Map<string, RawEntry>): RawEntry {
+  const seen = new Set<string>([entry.id])
+  let current = entry
+  for (;;) {
+    const parentId = current.reverses_id ?? current.correction_of_id
+    const parent = parentId ? byId.get(parentId) : undefined
+    if (!parent || seen.has(parent.id)) return current
+    seen.add(parent.id)
+    current = parent
+  }
+}
+
+function byVoucherOrder(a: RawEntry, b: RawEntry): number {
+  if (a.entry_date !== b.entry_date) return a.entry_date < b.entry_date ? -1 : 1
+  return (a.voucher_number ?? 0) - (b.voucher_number ?? 0)
+}
+
+/**
+ * One UNATTRIBUTED_EU_SALE per sale (chain) and account: the posted EU-sale
+ * amount the declaration counts but no invoice names a buyer for. Blocking
+ * for goods and trepartshandel, a warning for services (see below).
+ * A chain that nets to zero (a makulerad manual sale) is in neither figure
+ * and is not reported.
+ */
+function unattributedWarnings(
+  lines: Array<FlatLine & { bucket: PsBucket }>,
+  byId: Map<string, RawEntry>,
+): PsWarning[] {
+  const groups = new Map<string, { account: string; bucket: PsBucket; net: number; members: Map<string, RawEntry> }>()
+  for (const line of lines) {
+    const key = `${chainRoot(line.entry, byId).id}|${line.account_number}`
+    let group = groups.get(key)
+    if (!group) {
+      group = { account: line.account_number, bucket: line.bucket, net: 0, members: new Map() }
+      groups.set(key, group)
+    }
+    group.net += (Number(line.credit_amount) || 0) - (Number(line.debit_amount) || 0)
+    group.members.set(line.entry.id, line.entry)
+  }
+
+  const warnings: PsWarning[] = []
+  for (const group of groups.values()) {
+    const amount = Math.round(group.net * 100) / 100
+    if (amount === 0) continue
+    const members = Array.from(group.members.values()).sort(byVoucherOrder)
+    // The verifikat to act on: the latest one still posted (a correction
+    // rather than the original it replaced).
+    const live = members.filter((e) => e.status === 'posted').pop() ?? members[members.length - 1]
+    const what =
+      `Verifikat ${members.map(voucherLabel).join(', ')} (${live.entry_date}) bokför ${formatCurrency(amount)} ` +
+      `på konto ${group.account} (ruta ${BUCKET_RUTA[group.bucket]}) utan någon kundfaktura som anger köparens VAT-nummer`
+    // Services: a PS row is owed only when the buyer has a VAT number and the
+    // service is taxed in the buyer's country, so ruta 39 may legitimately
+    // differ from the list; the file stays allowed. Goods and trepartshandel
+    // (ruta 35/38): every such sale is reported per buyer and the
+    // exemption rests on it, so the file is refused until it is.
+    warnings.push(group.bucket === 'services'
+      ? {
+          level: 'warning',
+          code: 'UNATTRIBUTED_EU_SALE',
+          message:
+            `${what}, så sammanställningen kan vara ofullständig. Om köparen har ett VAT-nummer och tjänsten ` +
+            'beskattas i köparens land ska köparen redovisas: koppla verifikatet till kundfakturan, eller lägg till ' +
+            'raden i Skatteverkets e-tjänst.',
+          journalEntryId: live.id,
+          amount,
+        }
+      : {
+          level: 'error',
+          code: 'UNATTRIBUTED_EU_SALE',
+          message:
+            `${what}. Försäljningen ingår i momsdeklarationen men saknas i sammanställningen, och en EU-varuförsäljning ` +
+            'ska alltid redovisas per köpare. Koppla verifikatet till kundfakturan, eller lämna sammanställningen i ' +
+            'Skatteverkets e-tjänst och ta med köparen där.',
+          journalEntryId: live.id,
+          amount,
+        })
+  }
+  return warnings
+}
+
 interface Accumulator {
   country: string
   vatNumber: string
@@ -240,6 +417,8 @@ export async function generatePeriodiskSammanstallning(
   }
 
   const { start, end } = calculatePeriodDates(periodType, year, period)
+  const accountBuckets = await resolvePsAccountBuckets(supabase, companyId)
+  const psAccounts = Array.from(accountBuckets.keys())
 
   // Driven from journal_entries (company + date indexed) with the EU-revenue
   // condition as an inner embed: the planner probes journal_entry_lines per
@@ -256,7 +435,7 @@ export async function generatePeriodiskSammanstallning(
       .in('status', ['posted', 'reversed'])
       .gte('entry_date', start)
       .lte('entry_date', end)
-      .in('journal_entry_lines.account_number', PS_ACCOUNTS)
+      .in('journal_entry_lines.account_number', psAccounts)
       // Stable total order for correct paging (see fetch-all.ts).
       .order('id', { ascending: true })
       .range(from, to) as unknown as PromiseLike<{ data: RawEntry[] | null; error: { message: string } | null }>,
@@ -324,16 +503,22 @@ export async function generatePeriodiskSammanstallning(
   // Verifikat already reported as MIXED_CUSTOMER_SETTLEMENT: one warning per
   // verifikat, not one per line.
   const mixedReported = new Set<string>()
+  // Postings no register invoice points at: no buyer to file them under.
+  const unattributed: Array<FlatLine & { bucket: PsBucket }> = []
 
   for (const line of lines) {
-    const bucket = ACCOUNT_TO_BUCKET[line.account_number]
+    const bucket = accountBuckets.get(line.account_number)
     if (!bucket) continue
     const invoiceIds = invoiceIdsByEntry.get(line.entry.id)
-    // A manual or imported posting no register invoice points at is not
-    // filed (see the header). The engine's own entries never take this exit:
-    // an engine entry whose invoice is gone is a data defect and falls
-    // through to CUSTOMER_NOT_FOUND below.
-    if (!invoiceIds && !INVOICE_SOURCED_ENTRY_TYPES.has(line.entry.source_type ?? '')) continue
+    // A manual, imported or bank-booked posting no register invoice points
+    // at cannot be filed (see the header); it is reported below instead. The
+    // engine's own entries never take this exit: an engine entry whose
+    // invoice is gone is a data defect and falls through to
+    // CUSTOMER_NOT_FOUND below.
+    if (!invoiceIds && !INVOICE_SOURCED_ENTRY_TYPES.has(line.entry.source_type ?? '')) {
+      unattributed.push({ ...line, bucket })
+      continue
+    }
     if (bucket === 'goods' || bucket === 'triangulation') goodsLineSeen = true
 
     // One posting, several invoices (a deposit settling more than one): fine
@@ -473,6 +658,18 @@ export async function generatePeriodiskSammanstallning(
       net,
       blocking,
     )
+  }
+
+  // What the PS cannot file but the declaration counts (crm#1336). A chain
+  // that nets to zero is in neither figure, so the declaration is asked only
+  // when an amount is left; it decides which verifikat count (the posted
+  // bokslut zeroing 3308 is no sale).
+  if (unattributed.length > 0) {
+    const byId = new Map(entries.map((entry) => [entry.id, entry]))
+    if (unattributedWarnings(unattributed, byId).length > 0) {
+      const declared = await fetchDeclaredEntryIds(supabase, companyId, start, end, psAccounts)
+      warnings.push(...unattributedWarnings(unattributed.filter((line) => declared.has(line.entry.id)), byId))
+    }
   }
 
   // Goods-sold-with-quarterly-period: blocking under SFL 35 kap. 2 §.

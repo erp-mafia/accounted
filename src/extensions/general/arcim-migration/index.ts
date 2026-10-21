@@ -1,7 +1,8 @@
 import { migrationJobRoutes } from './lib/migration-job-routes'
 import { invoiceCompletionRoutes } from './lib/invoice-completion-routes'
 import { deductionBackfillRoutes } from './lib/deduction-backfill-routes'
-import { archiveSIEIntakeText, readSIEIntakeFile } from '@/lib/import/sie-intake'
+import { companyMismatchMessages } from './lib/company-mismatch-message'
+import { archiveSIEIntakeText, readSIEIntakeFile, SIEArchiveUnavailableError } from '@/lib/import/sie-intake'
 import { buildTheaterModel } from '@/lib/import/theater-model'
 import { submitSIEJob } from '@/lib/import/sie-jobs'
 import { runSIEWorker } from '@/lib/import/sie-job-worker'
@@ -685,10 +686,13 @@ export const arcimMigrationExtension: Extension = {
               details: { provider, reason: error.message },
             })
           }
-          // Valid credentials, wrong company: name both org numbers so the user
-          // can see at a glance which company the token actually opened.
+          // Valid credentials, wrong company: the message names the company the
+          // token opened and how to bring that company in instead.
           if (error instanceof ProviderCompanyMismatchError) {
+            const message = companyMismatchMessages(error)
             return errorResponseFromCode('PROVIDER_COMPANY_MISMATCH', moduleLog, {
+              messageSv: message.sv,
+              messageEn: message.en,
               details: {
                 provider,
                 expectedOrgNumber: error.expectedOrgNumber,
@@ -741,11 +745,14 @@ export const arcimMigrationExtension: Extension = {
         // nonce.
         const scriptNonce = requestCspNonce(request.headers)
 
-        const respondWithError = (reason: string, consentId?: string) => {
+        // urlReason: what the no-opener fallback carries in its URL instead,
+        // when `reason` names something that must not land in a URL (browser
+        // history, request logs, analytics page URLs).
+        const respondWithError = (reason: string, consentId?: string, urlReason = reason) => {
           const cancelled = reason === OAUTH_CANCELLED_MESSAGE
           const fallbackUrl = new URL(`${responseOrigin}/import`)
           fallbackUrl.searchParams.set('migration', 'error')
-          fallbackUrl.searchParams.set('reason', reason)
+          fallbackUrl.searchParams.set('reason', urlReason)
           if (consentId) fallbackUrl.searchParams.set('consentId', consentId)
           if (cancelled) fallbackUrl.searchParams.set('cancelled', '1')
 
@@ -949,13 +956,18 @@ export const arcimMigrationExtension: Extension = {
         } catch (error) {
           log.error('OAuth callback exchange failed', error)
           // Valid tokens for the WRONG company: exchangeAuthToken stored
-          // nothing. Show the user-facing sentence from the error registry
-          // (the same one /submit-token answers with for Bokio/WINT) instead
-          // of the English diagnostic on the error object.
+          // nothing. Show the same Swedish sentence /submit-token answers with
+          // for Bokio/WINT (it names the company the login opened) instead of
+          // the English diagnostic on the error object. The completing session
+          // was checked against the initiator above, so the name goes only to
+          // the user who just signed in to that company. The fallback URL gets
+          // the registry sentence: an enskild firma's org number is a
+          // personnummer, and a URL lands in history, logs and analytics.
           if (error instanceof ProviderCompanyMismatchError) {
             return respondWithError(
-              getErrorEntry('PROVIDER_COMPANY_MISMATCH')?.message_sv ?? error.message,
+              companyMismatchMessages(error).sv,
               callbackConsentId,
+              getErrorEntry('PROVIDER_COMPANY_MISMATCH')?.message_sv,
             )
           }
           // Björn Lundén via Lundify: the User-Key probe has the same three
@@ -1342,6 +1354,10 @@ export const arcimMigrationExtension: Extension = {
           // Definitions the decision left out of the mapping (unused numbers
           // no chart can hold) are named, as the upload's preview names them.
           preview.archivedOnlyAccounts = decided.archivedOnlyAccounts
+          // Across every selected year: the unused BAS definitions the
+          // options step's "only the accounts the files use" switch leaves
+          // out (#63). The job decides again per year's file at submit.
+          preview.unusedAccounts = decided.unusedAccounts
 
           // Each file is archived here, on the server, and the wizard gets
           // its path, never its text: the text in the response and again in
@@ -1454,6 +1470,11 @@ export const arcimMigrationExtension: Extension = {
           // A file the archive refuses (over 50 MB) names itself.
           if (error instanceof SIEJobValidationError) return sieJobValidationResponse(error, moduleLog, ctx?.requestId)
           log.error('arcim sie-data fetch failed', error as Error)
+          // Fetched fine, but storage would not keep a file: say that, never
+          // "could not fetch from the provider" (PH 193).
+          if (error instanceof SIEArchiveUnavailableError) {
+            return errorResponseFromCode('SIE_INTAKE_ARCHIVE_UNAVAILABLE', moduleLog, { requestId: ctx?.requestId })
+          }
           return providerFailureResponse(error, 'PROVIDER_SIE_FETCH_FAILED')
         }
       },
@@ -1483,6 +1504,7 @@ export const arcimMigrationExtension: Extension = {
             voucherSeries?: string
             updateAccountNames?: boolean
             supersedesImportId?: string
+            onlyUsedAccounts?: boolean
           }
         } | null
         const { storagePath, filename = 'migration.se', mappings, options } = body ?? {}

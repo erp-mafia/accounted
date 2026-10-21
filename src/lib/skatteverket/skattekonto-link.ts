@@ -41,6 +41,8 @@ export type SkattekontoLinkErrorCode =
   | 'INVALID_CANDIDATE'
   | 'NOT_LINKED'
   | 'LINK_RACE'
+  /** Bank rows on the account-keyed surface: the row's verifikat is its booking, not a link (isUnlinkableBankLink). */
+  | 'LINK_IS_BOOKING'
 
 export class SkattekontoLinkError extends Error {
   constructor(

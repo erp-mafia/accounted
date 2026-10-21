@@ -175,4 +175,17 @@ describe('bankLegConsumedMessage', () => {
       'Verifikat A-17 bokför 2800 på 1930, och 2800 av det är redan kopplat till andra transaktioner (kvar: 0). Transaktionen på 2800 ryms inte i verifikatet. Är den en egen affärshändelse, bokför den som ett eget verifikat. Är den andra kopplingen fel, koppla bort den transaktionen först.',
     )
   })
+
+  it('speaks of the rows of a bulk link together, at their sum', () => {
+    const message = bankLegConsumedMessage({
+      voucherLabel: 'A-17',
+      accountNumber: '1930',
+      amount: -2800,
+      verdict: { fits: false, booked: -2800, held: -2800, remaining: 0 },
+      rowCount: 2,
+    })
+    expect(message).toBe(
+      'Verifikat A-17 bokför -2800 på 1930, och -2800 av det är redan kopplat till andra transaktioner (kvar: 0). De 2 transaktionerna på sammanlagt -2800 ryms inte i verifikatet. Är de egna affärshändelser, bokför dem som egna verifikat. Är den andra kopplingen fel, koppla bort den transaktionen först.',
+    )
+  })
 })

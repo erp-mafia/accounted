@@ -336,6 +336,28 @@ describe('buildInvoiceWriteData', () => {
     expect(result.invoiceFields.total_sek).toBe(125)
     expect(result.invoiceFields.remaining_amount).toBe(125)
   })
+  it('rounds an exact half öre of line VAT up, on the row and in the header (crm#1343)', async () => {
+    // 5713 st x 0,10 kr = 571,30 kr at 25 % is exactly 142,825 kr VAT. The
+    // row used to store 142,82 (571.3 * 25 is 14282.499999999998 in binary
+    // floating point) while the Peppol readiness check expected 142,83.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    const customer = makeCustomer({ customer_type: 'swedish_business' })
+    const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
+      ...baseHeader,
+      items: [{ description: 'Etikett', quantity: 5713, unit: 'st', unit_price: 0.1, vat_rate: 25 }],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.items[0]).toMatchObject({ line_total: 571.3, vat_amount: 142.83 })
+    expect(result.invoiceFields.subtotal).toBe(571.3)
+    expect(result.invoiceFields.vat_amount).toBe(142.83)
+    expect(result.invoiceFields.total).toBe(714.13)
+    expect(result.invoiceFields.vat_amount_sek).toBe(142.83)
+    expect(result.invoiceFields.remaining_amount).toBe(714.13)
+  })
 })
 
 describe('buildInvoiceWriteData stored ROT/RUT personnummer (edit path)', () => {

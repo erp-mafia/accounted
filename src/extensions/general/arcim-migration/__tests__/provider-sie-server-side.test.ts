@@ -162,6 +162,32 @@ describe('GET /sie-data: archives each file and answers with its path', () => {
   })
 })
 
+describe('GET /sie-data: storage that will not keep a file is not a provider failure (PH 193)', () => {
+  const storageTimeout = async () => ({ data: null, error: { message: 'timeout', statusCode: '544' } })
+
+  it('uploads again after a storage timeout and answers with every path', async () => {
+    const { ctx, intake } = buildCtx()
+    const realUpload = intake.bucket.upload.getMockImplementation()!
+    intake.bucket.upload.mockImplementationOnce(storageTimeout)
+    intake.bucket.upload.mockImplementation(realUpload)
+    const { status, body } = await parseJsonResponse<{ fileStatuses: FileStatus[] }>(await getSieData(ctx))
+    expect(status).toBe(200)
+    expect(body.fileStatuses).toHaveLength(2)
+    expect(intake.files.size).toBe(2)
+  })
+
+  it('answers 503 SIE_INTAKE_ARCHIVE_UNAVAILABLE in Swedish, never "could not fetch from the provider"', async () => {
+    const { ctx, intake } = buildCtx()
+    intake.bucket.upload.mockImplementation(storageTimeout)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(await getSieData(ctx))
+    expect(status).toBe(503)
+    expect(body.error.code).toBe('SIE_INTAKE_ARCHIVE_UNAVAILABLE')
+    expect(body.error.message).toContain('Bokföringen hämtades')
+    expect(body.error.message).toContain('Inget har importerats')
+    expect(body.error.message).not.toContain('leverantören')
+  })
+})
+
 describe('POST /import-sie: reads the file by path, only from the active company', () => {
   const OWN = intakePath('company-1')
 

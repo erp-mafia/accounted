@@ -56,6 +56,8 @@ interface ImportReviewStepProps {
    *  Rendered beside the action row: the wizard stays on this step after a
    *  rejection, so a message anywhere else is never seen. */
   error?: string | null
+  /** The preview step's "only the accounts the file uses" switch is on (#63). */
+  onlyUsedAccounts?: boolean
 }
 
 export interface ImportExecuteOptions {
@@ -81,6 +83,7 @@ export default function ImportReviewStep({
   isLoading,
   theaterModel = null,
   error = null,
+  onlyUsedAccounts = false,
 }: ImportReviewStepProps) {
   const { canWrite } = useCanWrite()
   const { company } = useCompany()
@@ -299,7 +302,7 @@ export default function ImportReviewStep({
               <div className="space-y-2">
                 <p className="font-medium">Vad händer när du importerar?</p>
                 <p>1. Räkenskapsåret skapas om det inte finns</p>
-                <p>2. {t('review_step_chart')}</p>
+                <p>2. {t(onlyUsedAccounts ? 'review_step_chart_used_only' : 'review_step_chart')}</p>
                 <p>3. En verifikation för ingående balanser skapas</p>
                 <p>4. Alla verifikationer importeras med nya verifikationsnummer</p>
                 <p>5. Kontomappningarna sparas för framtida importer</p>

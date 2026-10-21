@@ -2,9 +2,17 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 const balanceTransactionsList = vi.fn()
+const payoutsList = vi.fn()
 
 vi.mock('@/lib/stripe/client', () => ({
-  getStripe: () => ({ balanceTransactions: { list: balanceTransactionsList } }),
+  getStripe: () => ({
+    balanceTransactions: { list: balanceTransactionsList },
+    payouts: { list: payoutsList },
+  }),
+}))
+
+vi.mock('@/lib/reconciliation/gl-balance', () => ({
+  sumAccountBalance: vi.fn(),
 }))
 
 vi.mock('@/lib/transactions/ingest', () => ({
@@ -22,6 +30,7 @@ vi.mock('@/lib/import/account-sync', () => ({
 import { ingestTransactions } from '@/lib/transactions/ingest'
 import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
 import { syncMappedAccounts } from '@/lib/import/account-sync'
+import { sumAccountBalance } from '@/lib/reconciliation/gl-balance'
 import { eventBus } from '@/lib/events/bus'
 import {
   STRIPE_IMPORT_SOURCE,
@@ -154,6 +163,9 @@ beforeEach(() => {
   eventBus.clear()
   vi.useFakeTimers()
   vi.setSystemTime(new Date('2026-07-23T10:00:00.000Z'))
+  // Default: an empty 1686 and no payout before the connection.
+  vi.mocked(sumAccountBalance).mockResolvedValue(0)
+  payoutsList.mockResolvedValue({ data: [] })
   vi.mocked(ingestTransactions).mockResolvedValue({
     imported: 0,
     duplicates: 0,
@@ -299,6 +311,15 @@ describe('mapBalanceTransaction', () => {
     expect(rows[0].transaction_method).toBe('fee')
   })
 
+  it('dates rows on the Swedish day, not the UTC day (crm#1344)', () => {
+    // 2026-10-17T23:00:55Z is 01:00 on 18 October in Stockholm.
+    const rows = mapBalanceTransaction('acct_1', makeCharge({ created: 1_792_278_055 }))
+    expect(rows.map((r) => r.date)).toEqual(['2026-10-18', '2026-10-18'])
+    // Winter time: 2026-12-31T23:30Z is already 1 January in Stockholm.
+    const newYear = Math.floor(Date.parse('2026-12-31T23:30:00Z') / 1000)
+    expect(mapBalanceTransaction('acct_1', makeCharge({ created: newYear }))[0].date).toBe('2027-01-01')
+  })
+
   it('dates rows on created, not available_on semantics', () => {
     // created is the only date input: a mapped row for a txn created on the
     // 10th must land on the 10th even though Stripe settles days later.
@@ -310,30 +331,181 @@ describe('mapBalanceTransaction', () => {
 describe('syncStripeBalanceTransactions', () => {
   const CONNECTED_SEC = Math.floor(Date.parse(CONNECTION.connected_at!) / 1000)
 
-  it('starts the first run at the connection moment, not a day earlier', async () => {
-    // The OAuth callback seeds the cursor with connected_at; the 24h overlap
-    // must not drag the window back into money the user booked from the bank
-    // (issue #2631).
-    stubList([makeCharge()])
-    const { supabase } = createCaptureSupabase({
-      company_settings: [{ data: { bookkeeping_locked_through: null }, error: null }],
+  describe('first run after connecting (crm#1344)', () => {
+    // 2026-10-17T23:17:34Z = 01:17 on 18 October in Stockholm (CEST).
+    const TICKET = { connected_at: '2026-10-17T23:17:34.194Z', last_balance_txn_synced_at: '2026-10-17T23:17:34.194Z' }
+    const TICKET_SEC = Math.floor(Date.parse(TICKET.connected_at) / 1000)
+    // Swedish midnight starting 18 October.
+    const DAY_START_SEC = Math.floor(Date.parse('2026-10-17T22:00:00Z') / 1000)
+    // The charge from the ticket: 23:00:55Z, 17 minutes before connecting.
+    const BEFORE_CONNECTING = 1_792_278_055
+
+    beforeEach(() => {
+      vi.setSystemTime(new Date('2026-10-20T03:30:00.000Z'))
     })
 
-    await syncStripeBalanceTransactions(supabase, {
-      ...CONNECTION,
-      last_balance_txn_synced_at: CONNECTION.connected_at,
+    it('starts at Swedish midnight of the connection day when 1686 already carries the balance', async () => {
+      // The books hold the Stripe balance (kept by hand up to the day before):
+      // the feed starts at the connection day, as the panel says, so a payment
+      // made earlier that same day is not lost between the two.
+      vi.mocked(sumAccountBalance).mockResolvedValue(2116.99)
+      stubList([makeCharge({ id: 'txn_night', created: BEFORE_CONNECTING })])
+      const { supabase } = createCaptureSupabase({
+        company_settings: [{ data: { bookkeeping_locked_through: null }, error: null }],
+      })
+
+      const summary = await syncStripeBalanceTransactions(supabase, { ...CONNECTION, ...TICKET })
+
+      expect(listWindowGte()).toBe(DAY_START_SEC)
+      expect(vi.mocked(sumAccountBalance)).toHaveBeenCalledWith(supabase, 'company-1', '1686', {
+        beforeDate: '2026-10-18',
+      })
+      // The ledger already answers it: Stripe's payouts are never asked.
+      expect(payoutsList).not.toHaveBeenCalled()
+      expect(summary.fetched).toBe(1)
+      const rows = vi.mocked(ingestTransactions).mock.calls[0][3] as Array<{ date: string; external_id: string }>
+      expect(rows[0]).toMatchObject({ date: '2026-10-18', external_id: 'stripe_acct_1_txn_night' })
     })
 
-    expect(listWindowGte()).toBe(CONNECTED_SEC)
+    it('treats a failed ledger read like a carried balance (never imports more than before)', async () => {
+      vi.mocked(sumAccountBalance).mockResolvedValue(null)
+      stubList([])
+      const { supabase } = createCaptureSupabase()
+
+      await syncStripeBalanceTransactions(supabase, { ...CONNECTION, ...TICKET })
+
+      expect(listWindowGte()).toBe(DAY_START_SEC)
+      expect(payoutsList).not.toHaveBeenCalled()
+    })
+
+    it('reads what was still on the Stripe balance at the connection moment when 1686 is empty', async () => {
+      // Last payout before connecting: 15 October 03:00Z. It took everything
+      // payable by then; anything payable later was still on the balance.
+      const LAST_PAYOUT = Math.floor(Date.parse('2026-10-15T03:00:00Z') / 1000)
+      payoutsList.mockResolvedValue({
+        data: [
+          { id: 'po_last', currency: 'sek', created: LAST_PAYOUT },
+          { id: 'po_older', currency: 'sek', created: LAST_PAYOUT - 86_400 },
+        ],
+      })
+      const day = 86_400
+      stubList([
+        // Paid out on the 15th: in the bank, booked from there.
+        makeCharge({ id: 'txn_paid', created: LAST_PAYOUT - 8 * day, available_on: LAST_PAYOUT - day }),
+        // The payout itself, before connecting: booked from the bank deposit.
+        makePayoutTxn({ id: 'txn_po_last', created: LAST_PAYOUT, available_on: LAST_PAYOUT }),
+        // Charged before the last payout but payable only after it: still on
+        // the balance, so the next payout carries it out against 1686.
+        makeCharge({ id: 'txn_pending', created: LAST_PAYOUT - 2 * day, available_on: LAST_PAYOUT + 5 * day }),
+        // The ticket's charge: made 17 minutes before connecting, not yet paid out.
+        makeCharge({ id: 'txn_night', created: BEFORE_CONNECTING, available_on: BEFORE_CONNECTING + 7 * day }),
+        // After connecting: always in.
+        makeCharge({ id: 'txn_after', created: TICKET_SEC + 3600, available_on: TICKET_SEC + 8 * day }),
+      ])
+      const { supabase, queriesFor, op } = createCaptureSupabase({
+        company_settings: [{ data: { bookkeeping_locked_through: null }, error: null }],
+      })
+      vi.mocked(ingestTransactions).mockResolvedValue({
+        imported: 6, duplicates: 0, reconciled: 0, auto_categorized: 0,
+        auto_matched_invoices: 0, errors: 0, transaction_ids: [],
+      } as never)
+
+      const summary = await syncStripeBalanceTransactions(supabase, { ...CONNECTION, ...TICKET })
+
+      // Payouts before the connection moment, on the connected account.
+      expect(payoutsList).toHaveBeenCalledWith(
+        { created: { lt: TICKET_SEC }, limit: 100 },
+        { stripeAccount: 'acct_1' },
+      )
+      // Reaches back far enough for a charge held up to the longest payout delay.
+      expect(listWindowGte()).toBe(LAST_PAYOUT - 31 * day)
+      const ids = (vi.mocked(ingestTransactions).mock.calls[0][3] as Array<{ external_id: string }>)
+        .map((r) => r.external_id)
+        .filter((id) => !id.endsWith('_fee'))
+      expect(ids).toEqual([
+        'stripe_acct_1_txn_pending',
+        'stripe_acct_1_txn_night',
+        'stripe_acct_1_txn_after',
+      ])
+      expect(summary.fetched).toBe(3)
+      // No cursor write ever lands before the connection moment: a stopped
+      // first run must rerun as a first run, not read as a backfill.
+      for (const q of queriesFor('stripe_connections')) {
+        const written = (op(q, 'update')!.args[0] as { last_balance_txn_synced_at: string }).last_balance_txn_synced_at
+        expect(Date.parse(written)).toBeGreaterThanOrEqual(Date.parse(TICKET.connected_at))
+      }
+    })
+
+    it('keeps a pre-connection chunk without moving the seeded cursor back', async () => {
+      const LAST_PAYOUT = Math.floor(Date.parse('2026-10-15T03:00:00Z') / 1000)
+      payoutsList.mockResolvedValue({ data: [{ id: 'po_last', currency: 'sek', created: LAST_PAYOUT }] })
+      stubList([makeCharge({ id: 'txn_night', created: BEFORE_CONNECTING, available_on: BEFORE_CONNECTING + 86_400 })])
+      const { supabase, queriesFor, op } = createCaptureSupabase()
+
+      await syncStripeBalanceTransactions(supabase, { ...CONNECTION, ...TICKET })
+
+      // Only the run-start watermark is written; the chunk at 23:00Z is not.
+      const writes = queriesFor('stripe_connections').map(
+        (q) => (op(q, 'update')!.args[0] as { last_balance_txn_synced_at: string }).last_balance_txn_synced_at,
+      )
+      expect(writes).toEqual(['2026-10-20T03:30:00.000Z'])
+    })
+
+    it('reads the lookback in full when the account had no payout before connecting', async () => {
+      stubList([
+        makeCharge({ id: 'txn_old', created: TICKET_SEC - 20 * 86_400, available_on: TICKET_SEC - 13 * 86_400 }),
+        makePayoutTxn({ id: 'txn_po', created: TICKET_SEC - 86_400 }),
+      ])
+      const { supabase } = createCaptureSupabase()
+
+      const summary = await syncStripeBalanceTransactions(supabase, { ...CONNECTION, ...TICKET })
+
+      expect(listWindowGte()).toBe(TICKET_SEC - 90 * 86_400)
+      expect(summary.fetched).toBe(1)
+    })
+
+    it('falls back to the connection day when Stripe will not list payouts', async () => {
+      payoutsList.mockRejectedValue(Object.assign(new Error('boom'), { type: 'StripeAPIError' }))
+      stubList([])
+      const { supabase } = createCaptureSupabase()
+
+      await syncStripeBalanceTransactions(supabase, { ...CONNECTION, ...TICKET })
+
+      expect(listWindowGte()).toBe(DAY_START_SEC)
+    })
+
+    it('marks the connection revoked when the payout list says access is gone', async () => {
+      payoutsList.mockRejectedValue({ type: 'StripePermissionError' })
+      const { supabase } = createCaptureSupabase()
+
+      const summary = await syncStripeBalanceTransactions(supabase, { ...CONNECTION, ...TICKET })
+
+      expect(summary.revoked).toBe(true)
+      expect(balanceTransactionsList).not.toHaveBeenCalled()
+    })
+
+    it('floors the open-balance window at the first Swedish day after the lock date', async () => {
+      payoutsList.mockResolvedValue({ data: [] })
+      stubList([])
+      const { supabase } = createCaptureSupabase({
+        company_settings: [{ data: { bookkeeping_locked_through: '2026-09-30' }, error: null }],
+      })
+
+      await syncStripeBalanceTransactions(supabase, { ...CONNECTION, ...TICKET })
+
+      expect(listWindowGte()).toBe(Math.floor(Date.parse('2026-09-30T22:00:00Z') / 1000))
+    })
   })
 
-  it('falls back to the connection moment when the cursor is null (legacy row)', async () => {
+  it('treats a legacy null cursor as a first run', async () => {
     stubList([makeCharge()])
     const { supabase } = createCaptureSupabase()
 
     await syncStripeBalanceTransactions(supabase, { ...CONNECTION })
 
-    expect(listWindowGte()).toBe(CONNECTED_SEC)
+    // Empty 1686, no payout: the open-balance lookback from the connection.
+    expect(listWindowGte()).toBe(CONNECTED_SEC - 90 * 86_400)
+    expect(vi.mocked(sumAccountBalance)).toHaveBeenCalledTimes(1)
   })
 
   it('clamps the overlap at the connection moment while still within a day of it', async () => {
@@ -348,21 +520,53 @@ describe('syncStripeBalanceTransactions', () => {
     expect(listWindowGte()).toBe(CONNECTED_SEC)
   })
 
-  it('honours an explicit backfill cursor exactly when nothing is locked', async () => {
+  // A backfill to 1 January: Swedish midnight, as the backfill route sets it.
+  const BACKFILL = '2025-12-31T23:00:00.000Z'
+  const BACKFILL_SEC = Math.floor(Date.parse(BACKFILL) / 1000)
+
+  it('honours a backfill day exactly when 1686 already carries the balance before it', async () => {
+    vi.mocked(sumAccountBalance).mockResolvedValue(-120.5)
     stubList([makeCharge()])
     const { supabase } = createCaptureSupabase({
       company_settings: [{ data: { bookkeeping_locked_through: null }, error: null }],
     })
 
-    await syncStripeBalanceTransactions(supabase, {
-      ...CONNECTION,
-      last_balance_txn_synced_at: '2026-01-01T00:00:00.000Z',
-    })
+    await syncStripeBalanceTransactions(supabase, { ...CONNECTION, last_balance_txn_synced_at: BACKFILL })
 
-    expect(listWindowGte()).toBe(Math.floor(Date.parse('2026-01-01T00:00:00Z') / 1000))
+    expect(listWindowGte()).toBe(BACKFILL_SEC)
+    expect(vi.mocked(sumAccountBalance)).toHaveBeenCalledWith(supabase, 'company-1', '1686', {
+      beforeDate: '2026-01-01',
+    })
+    expect(payoutsList).not.toHaveBeenCalled()
   })
 
-  it('floors a backfill window at the day after the company lock date', async () => {
+  it('reads the balance still unpaid on a backfill day when 1686 is empty before it', async () => {
+    // The chosen day must not cut through the Stripe balance either: the
+    // first payout after it carries that money out against 1686.
+    const LAST_PAYOUT = Math.floor(Date.parse('2025-12-30T03:00:00Z') / 1000)
+    payoutsList.mockResolvedValue({ data: [{ id: 'po_dec', currency: 'sek', created: LAST_PAYOUT }] })
+    stubList([
+      makeCharge({ id: 'txn_paid_out', created: LAST_PAYOUT - 9 * 86_400, available_on: LAST_PAYOUT - 86_400 }),
+      makeCharge({ id: 'txn_unpaid', created: BACKFILL_SEC - 3600, available_on: BACKFILL_SEC + 6 * 86_400 }),
+    ])
+    const { supabase } = createCaptureSupabase()
+
+    const summary = await syncStripeBalanceTransactions(supabase, {
+      ...CONNECTION,
+      last_balance_txn_synced_at: BACKFILL,
+    })
+
+    expect(payoutsList).toHaveBeenCalledWith(
+      { created: { lt: BACKFILL_SEC }, limit: 100 },
+      { stripeAccount: 'acct_1' },
+    )
+    expect(listWindowGte()).toBe(LAST_PAYOUT - 31 * 86_400)
+    expect(summary.fetched).toBe(1)
+    const rows = vi.mocked(ingestTransactions).mock.calls[0][3] as Array<{ external_id: string; date: string }>
+    expect(rows[0]).toMatchObject({ external_id: 'stripe_acct_1_txn_unpaid', date: '2025-12-31' })
+  })
+
+  it('floors a backfill window at Swedish midnight after the company lock date', async () => {
     // Rows on/before the lock date can never be booked; a backfill reaching
     // behind it would only leave permanent inbox noise.
     stubList([makeCharge()])
@@ -375,7 +579,8 @@ describe('syncStripeBalanceTransactions', () => {
       last_balance_txn_synced_at: '2026-01-01T00:00:00.000Z',
     })
 
-    expect(listWindowGte()).toBe(Math.floor(Date.parse('2026-07-01T00:00:00Z') / 1000))
+    // Rows are dated on the Swedish day, and 1 July starts at 22:00Z (CEST).
+    expect(listWindowGte()).toBe(Math.floor(Date.parse('2026-06-30T22:00:00Z') / 1000))
   })
 
   it('polls from the cursor minus the 24h overlap on later runs', async () => {

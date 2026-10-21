@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   INITIAL_SYNC_DEFERRED,
+  INITIAL_SYNC_INCOMPLETE,
   INITIAL_SYNC_TIMEOUT,
   classifyInitialSyncError,
 } from '../initial-sync-error'
@@ -12,6 +13,10 @@ describe('classifyInitialSyncError', () => {
 
   it('reads the timeout code', () => {
     expect(classifyInitialSyncError(INITIAL_SYNC_TIMEOUT)).toBe('timeout')
+  })
+
+  it('reads the incomplete code: the bank had more pages (PH 195)', () => {
+    expect(classifyInitialSyncError(INITIAL_SYNC_INCOMPLETE)).toBe('incomplete')
   })
 
   it('treats any other message as a failure, never as text to show', () => {
@@ -34,5 +39,6 @@ describe('classifyInitialSyncError', () => {
   it('keeps the wire values the accounts route and its tests assert on', () => {
     expect(INITIAL_SYNC_DEFERRED).toBe('initial_sync_deferred')
     expect(INITIAL_SYNC_TIMEOUT).toBe('initial_sync_timeout')
+    expect(INITIAL_SYNC_INCOMPLETE).toBe('initial_sync_incomplete')
   })
 })

@@ -14,7 +14,7 @@ import {
   updatePayslipLine,
   deletePayslipLine,
 } from '@/lib/salary/payslip-lines'
-import { TEXT_ROW_RETYPE_MESSAGE, ZERO_AMOUNT_MESSAGE } from '@/lib/salary/text-rows'
+import { TEXT_ROW_RETYPE_MESSAGE, VACATION_ROW_MESSAGE, ZERO_AMOUNT_MESSAGE } from '@/lib/salary/text-rows'
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const RUN_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
@@ -853,6 +853,27 @@ describe('text rows and the zero-amount rule (crm#1076)', () => {
     const result = await create({ ...BASE_INPUT, item_type: 'vacation', description: 'Semester', quantity: 3, amount: 0 })
     expect(result.ok).toBe(true)
     expect(mock.findCall('salary_line_items', 'insert')?.[0]).toMatchObject({ item_type: 'vacation', quantity: 3, amount: 0 })
+  })
+
+  it('accepts a vacation row whose amount is left out, and stores it at 0 kr (crm#1331)', async () => {
+    // The test above sends amount 0 explicitly; the docs say the days alone
+    // are enough, and an omitted amount was refused before its days were read.
+    gates()
+    mock.enqueue({ data: { ...EXISTING_LINE, item_type: 'vacation', quantity: 5, amount: 0 } })
+    const result = await create({ ...BASE_INPUT, item_type: 'vacation', description: 'Semester', quantity: 5, amount: undefined })
+    expect(result.ok).toBe(true)
+    expect(mock.findCall('salary_line_items', 'insert')?.[0]).toMatchObject({ item_type: 'vacation', quantity: 5, amount: 0 })
+  })
+
+  it('refuses a vacation row with neither days nor an amount, before writing', async () => {
+    gates()
+    const result = await create({ ...BASE_INPUT, item_type: 'vacation', description: 'Semester', amount: undefined })
+    expect(result).toEqual({
+      ok: false,
+      code: 'VALIDATION_ERROR',
+      details: { field: 'quantity', message: VACATION_ROW_MESSAGE },
+    })
+    expect(mock.findCall('salary_line_items', 'insert')).toBeUndefined()
   })
 
   it('refuses turning a money row into a text row', async () => {

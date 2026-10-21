@@ -1,4 +1,7 @@
 import { isAccountNumber } from '@/lib/invariants/account-number'
+// The client-safe number list (this module reaches the import wizards), not
+// the full BAS reference: the same answer without 315 KB in the bundle.
+import { isStandardBASAccountNumber } from '@/lib/bookkeeping/bas-account-numbers'
 import { isSystemAccount, isValidBASRange, suggestMappings, type MappableAccount } from './account-mapper'
 import { rcBasisPairsByAccount } from './rc-basis-pairs'
 import type { AccountMapping, ParsedSIEFile, SIEAccount, SIEAccountMappingRecord } from './types'
@@ -42,6 +45,54 @@ export function obsAccountsOf(
     }
   }
   return [...accounts].sort()
+}
+
+/**
+ * The source accounts an SIE file uses (#63): every account on a voucher
+ * line whatever its amount, struck and added rättelse lines included (a line
+ * on an unmapped account would skip its whole voucher); every #IB, #UB, #RES,
+ * #OIB and #OUB row with an amount; every account a parse issue names. A zero
+ * balance books nothing: the IB voucher and the migration adjustment skip it.
+ * A provider's full chart (Fortnox, Bokio) declares hundreds of #KONTO rows
+ * that none of these touch.
+ */
+export function sieUsedAccounts(parsed: Pick<ParsedSIEFile, 'vouchers' | 'openingBalances' | 'closingBalances' |
+  'resultBalances' | 'objectOpeningBalances' | 'objectClosingBalances' | 'issues'>): Set<string> {
+  const used = new Set<string>()
+  for (const voucher of parsed.vouchers) {
+    for (const line of voucher.lines) used.add(line.account)
+    for (const line of voucher.corrections?.struck ?? []) used.add(line.account)
+    for (const line of voucher.corrections?.added ?? []) used.add(line.account)
+  }
+  for (const balance of [...parsed.openingBalances, ...parsed.closingBalances, ...parsed.resultBalances,
+    ...parsed.objectOpeningBalances ?? [], ...parsed.objectClosingBalances ?? []]) {
+    if (balance.amount !== 0) used.add(balance.account)
+  }
+  for (const issue of parsed.issues) if (issue.account) used.add(issue.account)
+  return used
+}
+
+/**
+ * Whether the import's "only the accounts the file uses" option (#63) leaves
+ * a definition out: a BAS 2026 account the file does not use. The person can
+ * add it from the BAS catalog whenever it is needed. An unused account
+ * outside BAS is the company's own deviation from the standard chart (BFNAR
+ * 2013:2 p. 9.2) that no catalog can restore, so it is still created.
+ */
+function leftOutWhenOnlyUsed(sourceAccount: string, used: ReadonlySet<string>): boolean {
+  return !used.has(sourceAccount) && isStandardBASAccountNumber(sourceAccount)
+}
+
+/**
+ * The import's "only the accounts the file uses" option (#63): the mappings
+ * left once every unused BAS definition is dropped, so the job neither
+ * creates nor renames those accounts. The archived original keeps the whole
+ * source chart. Applied by submitSIEJob, the one gate every door passes.
+ */
+export function onlyUsedSIEMappings<T extends Pick<AccountMapping, 'sourceAccount'>>(
+  parsed: Parameters<typeof sieUsedAccounts>[0], mappings: T[]): T[] {
+  const used = sieUsedAccounts(parsed)
+  return mappings.filter(mapping => !leftOutWhenOnlyUsed(mapping.sourceAccount, used))
 }
 
 /** Preview evidence only. Execution revalidates the original file independently. */
@@ -96,5 +147,18 @@ export function prepareSIEPreviewMappings(parsed: ParsedSIEFile, suggested: Acco
     const rcBasisPair = rcBasisPairs.get(mapping.sourceAccount)
     return rcBasisPair ? { ...mapping, rcBasisPair } : mapping
   })
-  return { mappings, archivedOnlyAccounts, excludedSystemAccounts }
+  // What the "only the accounts the file uses" option (#63) leaves out of the
+  // chart (unused BAS definitions) and what it keeps although unused (the
+  // company's own accounts): the wizard counts both beside the switch and
+  // drops the first from the mapping step while it is on.
+  const used = sieUsedAccounts(parsed)
+  const unusedAccounts: SIEAccount[] = []
+  const unusedOwnAccounts: SIEAccount[] = []
+  for (const mapping of mappings) {
+    if (used.has(mapping.sourceAccount)) continue
+    const account = { number: mapping.sourceAccount, name: mapping.sourceName }
+    if (leftOutWhenOnlyUsed(mapping.sourceAccount, used)) unusedAccounts.push(account)
+    else unusedOwnAccounts.push(account)
+  }
+  return { mappings, archivedOnlyAccounts, excludedSystemAccounts, unusedAccounts, unusedOwnAccounts }
 }

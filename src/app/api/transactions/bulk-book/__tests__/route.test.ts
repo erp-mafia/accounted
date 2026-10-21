@@ -361,6 +361,53 @@ describe('POST /api/transactions/bulk-book', () => {
     expect(status).toBe(400)
     expect(body.error.code).toBe('BULK_BOOK_DATE_MISMATCH')
   })
+
+  // GitHub #3507: rows linked to a verifikat whose bank leg another row
+  // already settled are refused by the RPC with the single doors' code, and
+  // answered with their message naming the verifikat.
+  it('answers a link refused for a consumed bank leg with 409 VOUCHER_BANK_LEG_CONSUMED and the Swedish message', async () => {
+    enqueue({
+      data: [
+        { id: TX1, amount: -1400, currency: 'SEK', description: 'Hyra del 1', date: '2026-07-03' },
+        { id: TX2, amount: -1400, currency: 'SEK', description: 'Hyra del 2', date: '2026-07-03' },
+      ],
+      error: null,
+    })
+    enqueue({
+      data: {
+        ok: false,
+        code: 'VOUCHER_BANK_LEG_CONSUMED',
+        details: {
+          journal_entry_id: JE,
+          voucher_series: 'A',
+          voucher_number: 12,
+          account: '1930',
+          tx_sum: -2800,
+          booked: -2800,
+          held: -2800,
+          remaining: 0,
+        },
+      },
+      error: null,
+    })
+
+    const request = createMockRequest('/api/transactions/bulk-book', {
+      method: 'POST',
+      body: { tx_ids: [TX1, TX2], existing_journal_entry_id: JE },
+    })
+    const response = await POST(request, createMockRouteParams({}))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('VOUCHER_BANK_LEG_CONSUMED')
+    expect(body.error.message).toBe(
+      'Verifikat A-12 bokför -2800 på 1930, och -2800 av det är redan kopplat till andra transaktioner (kvar: 0). ' +
+        'De 2 transaktionerna på sammanlagt -2800 ryms inte i verifikatet. Är de egna affärshändelser, bokför dem som egna verifikat. ' +
+        'Är den andra kopplingen fel, koppla bort den transaktionen först.',
+    )
+    // Nothing was linked: no row is announced as reconciled.
+    expect(eventBus.emit).not.toHaveBeenCalled()
+    expect(propagateUnderlagForBookedTransaction).not.toHaveBeenCalled()
+  })
 })
 
 /**

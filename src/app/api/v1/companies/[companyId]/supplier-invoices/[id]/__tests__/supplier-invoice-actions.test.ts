@@ -523,13 +523,35 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/bank-entered',
     expect((await post({ entered: 'yes' })).status).toBe(400)
   })
 
-  it('400 SI_BANK_ENTERED_NOT_PAYABLE on a registered (unattested) invoice', async () => {
-    const client = makeClient({ company_members: OWNER, supplier_invoices: { data: invoice({ status: 'registered' }) } })
+  it('400 SI_BANK_ENTERED_NOT_PAYABLE on a registered invoice still waiting for attest (faktureringsmetoden)', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      supplier_invoices: { data: invoice({ status: 'registered' }) },
+      company_settings: { data: { accounting_method: 'accrual' }, error: null },
+    })
     mockServiceClient.mockReturnValue(client)
     const res = await post({ entered: true })
     expect(res.status).toBe(400)
     expect((await res.json()).error.code).toBe('SI_BANK_ENTERED_NOT_PAYABLE')
     expect(wrote(client)).toBe(false)
+  })
+
+  it('marks a registered invoice under kontantmetoden, which has no attest step (crm#1141)', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      supplier_invoices: [{ data: invoice({ status: 'registered' }) }, { data: { id: SI_ID, bank_entered_at: '2026-10-20T10:00:00.000Z' } }],
+      company_settings: { data: { accounting_method: 'cash' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ entered: true })
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toEqual({ supplier_invoice_id: SI_ID, bank_entered_at: '2026-10-20T10:00:00.000Z' })
+    expect(client.calls).toContainEqual({ table: 'company_settings', method: 'eq', args: ['company_id', COMPANY_ID] })
+    expect(client.calls).toContainEqual({
+      table: 'supplier_invoices',
+      method: 'in',
+      args: ['status', ['registered', 'approved', 'overdue', 'partially_paid']],
+    })
   })
 
   it('marks an approved invoice, with a compare-and-set on its eligibility', async () => {

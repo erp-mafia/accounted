@@ -88,7 +88,8 @@ const POSTGRES_ERROR_MAP: Record<string, Bilingual> = {
   '22003': { sv: 'Värdet är utanför tillåtet intervall.', en: 'Value is out of allowed range.' },
 }
 
-// Why a month-end cannot take an upplupen kostnad (SI_ACCRUED_COST_PERIOD_LOCKED
+// Why a month-end cannot take an upplupen kostnad or intäkt
+// (SI_ACCRUED_COST_PERIOD_LOCKED / INVOICE_ACCRUED_INCOME_PERIOD_LOCKED
 // details.blocked[].reason, checkPeriodLock's vocabulary).
 const ACCRUED_COST_BLOCK_REASON_SV: Record<string, string> = {
   company_lock_date_covers: 'inom företagets låsdatum',
@@ -811,9 +812,10 @@ export function getErrorMessage(
           : 'Räkenskapsperioden för det valda datumet är låst. Lås upp perioden för att flytta verifikationen dit.'
       }
 
-      // Name each month-end an upplupen kostnad cannot book on, and why: the
-      // user has to unlock exactly those periods (or create the year).
-      if (structured.code === 'SI_ACCRUED_COST_PERIOD_LOCKED') {
+      // Name each month-end an upplupen kostnad or intäkt cannot book on, and
+      // why: the user has to unlock exactly those periods (or create the year).
+      if (structured.code === 'SI_ACCRUED_COST_PERIOD_LOCKED' || structured.code === 'INVOICE_ACCRUED_INCOME_PERIOD_LOCKED') {
+        const income = structured.code === 'INVOICE_ACCRUED_INCOME_PERIOD_LOCKED'
         const blocked = (structured.details as { blocked?: unknown } | undefined)?.blocked
         const named = Array.isArray(blocked)
           ? blocked.flatMap((entry: unknown) => {
@@ -824,7 +826,9 @@ export function getErrorMessage(
             })
           : []
         if (named.length > 0) {
-          return `En upplupen kostnad bokförs sista dagen i varje månad, men ${named.join(', ')} kan inte ta emot verifikationer. Kostnaden flyttas inte till en annan månad, så inget har bokförts. Lås upp perioden eller lägg upp räkenskapsåret, eller bokför raden utan periodisering.`
+          return income
+            ? `En upplupen intäkt bokförs sista dagen i varje månad, men ${named.join(', ')} kan inte ta emot verifikationer. Intäkten flyttas inte till en annan månad, så inget har bokförts. Lås upp perioden eller lägg upp räkenskapsåret, eller bokför raden utan periodisering.`
+            : `En upplupen kostnad bokförs sista dagen i varje månad, men ${named.join(', ')} kan inte ta emot verifikationer. Kostnaden flyttas inte till en annan månad, så inget har bokförts. Lås upp perioden eller lägg upp räkenskapsåret, eller bokför raden utan periodisering.`
         }
       }
 

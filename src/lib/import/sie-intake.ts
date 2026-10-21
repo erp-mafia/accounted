@@ -31,6 +31,25 @@ export async function readSIERequestFile(form:FormData,supabase:SupabaseClient,c
 const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
 
 /**
+ * Storage kept failing to keep a file that was itself fine, and holds nothing
+ * at its path. Transient: nothing was imported, so the same step can simply
+ * run again (SIE_INTAKE_ARCHIVE_UNAVAILABLE).
+ */
+export class SIEArchiveUnavailableError extends Error {
+  constructor() {
+    super('SIE-filen kunde inte arkiveras.')
+    this.name = 'SIEArchiveUnavailableError'
+  }
+}
+
+/**
+ * The waits before uploading again after storage stored nothing. Prod
+ * (PH 193): one storage timeout (HTTP 544) on one of three uploads failed a
+ * three-year provider migration whose fetch had worked.
+ */
+const ARCHIVE_RETRY_DELAYS_MS: readonly number[] = [300, 1200]
+
+/**
  * Archive SIE text the server fetched itself (a provider migration) where a
  * browser upload puts its file, and return the path the import reads it back
  * from. The text then never crosses a request or response body, so the
@@ -44,6 +63,7 @@ export async function archiveSIEIntakeText(
   supabase: SupabaseClient,
   companyId: string,
   content: string,
+  options: { retryDelaysMs?: readonly number[] } = {},
 ): Promise<{ path: string; bytes: number }> {
   const bytes = new TextEncoder().encode(content)
   if (!bytes.byteLength || bytes.byteLength > SIE_LIMITS.fileBytes) {
@@ -53,13 +73,22 @@ export async function archiveSIEIntakeText(
   const name = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`
   const path = `${companyId}/sie-intake/${name}.se`
   const bucket = supabase.storage.from('sie-files')
-  const { error } = await bucket.upload(path, new Blob([bytes], { type: 'text/plain' }), { upsert: false })
-  if (error) {
-    // Only an identical object already at this path is a safe reuse.
+  const blob = new Blob([bytes], { type: 'text/plain' })
+  const retryDelaysMs = options.retryDelaysMs ?? ARCHIVE_RETRY_DELAYS_MS
+  for (let attempt = 0; ; attempt++) {
+    const { error } = await bucket.upload(path, blob, { upsert: false })
+    if (!error) return { path, bytes: bytes.byteLength }
     const existing = await bucket.download(path)
-    if (existing.error || !existing.data || sha256(new Uint8Array(await existing.data.arrayBuffer())) !== hash) {
+    if (!existing.error && existing.data) {
+      // Only an identical object already at this path is a safe reuse: the
+      // same export fetched before, or this upload when storage kept it but
+      // failed to answer. A different object is never overwritten, and no
+      // retry can change it.
+      if (sha256(new Uint8Array(await existing.data.arrayBuffer())) === hash) return { path, bytes: bytes.byteLength }
       throw new Error('SIE-filen kunde inte arkiveras.')
     }
+    // Nothing stored: the upload itself failed. Try again before giving up.
+    if (attempt >= retryDelaysMs.length) throw new SIEArchiveUnavailableError()
+    await new Promise((resolve) => setTimeout(resolve, retryDelaysMs[attempt]))
   }
-  return { path, bytes: bytes.byteLength }
 }

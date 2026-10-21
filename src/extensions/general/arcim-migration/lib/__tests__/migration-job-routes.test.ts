@@ -107,7 +107,9 @@ describe('source identity before the job is created', () => {
     ensureIdentity.mockRejectedValue(new MismatchError('5560160680', '5567037485', 'Annat Bolag AB'))
     const response = await route('POST')(request({ consentId: id, resources: ['customers'] }), ctx)
     expect(response.status).toBe(422)
-    expect((await response.json()).error.code).toBe('PROVIDER_COMPANY_MISMATCH')
+    const { error } = await response.json()
+    expect(error.code).toBe('PROVIDER_COMPANY_MISMATCH')
+    expect(error.message).toContain('Annat Bolag AB (org.nr 556703-7485)')
     expect(serviceRpc).not.toHaveBeenCalled()
   })
 

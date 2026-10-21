@@ -208,3 +208,39 @@ describe('#3312: the onboarding provider step on a year with class 9 amounts', (
     expect(body.error.details).toEqual({ account_numbers: ['9998'] })
   })
 })
+
+describe('#63: only the accounts the files use', () => {
+  it('names the definitions no selected year uses and hands the switch to the job', async () => {
+    ;(fetchProviderSieFiles as Mock).mockResolvedValue({
+      files: [
+        { fiscalYear: 2025, rawContent: FY2025.replace('#KONTO 1930', '#KONTO 2440 "Leverantörsskulder"\n#KONTO 1930') },
+        { fiscalYear: 2026, rawContent: FY2026 },
+      ],
+      sourceYears: [],
+      failedYears: [],
+      omittedYears: [],
+    })
+    const ctx = buildCtx([])
+    const res = await sieData(createMockRequest('http://localhost/api/extensions/ext/arcim-migration/sie-data', {
+      searchParams: { consentId: 'consent-1', years: '2025,2026' },
+    }), ctx)
+    const { status, body } = await parseJsonResponse<{
+      mappings: AccountMapping[]
+      preview: { unusedAccounts?: SIEAccount[] }
+      fileStatuses: { fiscalYear: number; storagePath: string; filename: string }[]
+    }>(res)
+    expect(status).toBe(200)
+    expect(body.preview.unusedAccounts?.map((account) => account.number)).toEqual(['2440'])
+    // The default still maps it: the switch is the user's.
+    expect(body.mappings.some((m) => m.sourceAccount === '2440')).toBe(true)
+
+    const fy2026 = body.fileStatuses.find((f) => f.fiscalYear === 2026)!
+    const imported = await importSie(createMockRequest('http://localhost/api/extensions/ext/arcim-migration/import-sie', {
+      method: 'POST',
+      body: { storagePath: fy2026.storagePath, filename: fy2026.filename, mappings: body.mappings,
+        options: { createFiscalPeriod: true, importOpeningBalances: true, importTransactions: true, onlyUsedAccounts: true } },
+    }), ctx)
+    expect(imported.status).toBe(202)
+    expect((submitSIEJob as Mock).mock.calls[0][5]).toMatchObject({ onlyUsedAccounts: true })
+  })
+})

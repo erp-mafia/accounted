@@ -23,7 +23,7 @@ import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/accou
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { addDaysIso } from '@/lib/dates/iso'
 import { roundOre } from '@/lib/money'
-import { VAT_SETTLEMENT_NET_ACCOUNTS, fetchVatAccountTotals, isMomsAccount } from './vat-declaration'
+import { VAT_SETTLEMENT_NET_ACCOUNTS, fetchVatAccountTotals, isMomsAccount, type VatAccountTotals } from './vat-declaration'
 
 /** Ruta 49 is filed in whole kronor (öretal faller bort): the net may differ from the öre sum by under a krona. */
 export const FILED_ROUNDING = 1
@@ -188,28 +188,26 @@ export async function settlementsDated(
 }
 
 /**
- * What the opening balances dated from `start` through `end` carry onto the
- * moms accounts, read the way a period's balances are (credit minus debit).
- * The declaration counts an opening balance's 26xx lines as the period's
- * (carried-in VAT not yet settled), so a year closed before its
- * momsredovisning was booked opens the next year with the same balances.
+ * What the opening balances a period's declaration counts carry onto the moms
+ * accounts, read the way a period's balances are (credit minus debit). Which
+ * ones count is get_vat_declaration_totals' decision (crm#1333), read from the
+ * period's ledger: an IB dated inside the period with nothing of the period
+ * before it in the books, so its balances are part of the period's own. One
+ * on the period's first day, or one whose earlier days are in the books, is
+ * not, and nothing is subtracted for it. Posted ones only: a reversed IB and
+ * its storno net to nothing.
  */
 export async function carriedIntoPeriod(
   supabase: SupabaseClient,
   companyId: string,
-  start: string,
-  end: string,
+  ledger: Pick<VatAccountTotals, 'countedOpeningBalances'>,
 ): Promise<number> {
+  const ids = ledger.countedOpeningBalances.filter((e) => e.status === 'posted').map((e) => e.id)
+  if (ids.length === 0) return 0
   const lines = await fetchEntryLines<{ account_number: string; debit_amount: number; credit_amount: number }>({
     supabase,
     lineColumns: 'account_number, debit_amount, credit_amount',
-    filterEntries: (q: EntryLinesQuery) =>
-      q
-        .eq('company_id', companyId)
-        .eq('source_type', 'opening_balance')
-        .eq('status', 'posted')
-        .gte('entry_date', start)
-        .lte('entry_date', end),
+    filterEntries: (q: EntryLinesQuery) => q.eq('company_id', companyId).in('id', ids),
     attachEntriesAs: null,
   })
   const net = new Set(VAT_SETTLEMENT_NET_ACCOUNTS)

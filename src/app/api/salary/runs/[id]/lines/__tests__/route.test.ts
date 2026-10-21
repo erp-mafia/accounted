@@ -275,3 +275,101 @@ describe('POST /api/salary/runs/[id]/lines: text rows and 0 kr rows', () => {
     expect(body.code).toBe('SALARY_RUN_EMPLOYEE_NOT_FOUND')
   })
 })
+
+// Vacation days taken (item_type 'vacation', quantity = days): the docs say
+// the days alone are enough, but an omitted amount was refused before the
+// days were read (crm#1331).
+describe('POST /api/salary/runs/[id]/lines: vacation rows', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(requireWritePermission).mockResolvedValue({ ok: true } as never)
+  })
+
+  function authedWithCalls() {
+    const mock = createQueuedMockSupabase()
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: mockUser as never,
+      supabase: mock.supabase as never,
+      error: null,
+    })
+    return mock
+  }
+
+  const vacationBody = {
+    salary_run_employee_id: SRE_UUID,
+    item_type: 'vacation',
+    description: 'Semester',
+    quantity: 5,
+  }
+
+  async function post(body: unknown) {
+    const response = await POST(
+      createMockRequest('/api/salary/runs/run-1/lines', { method: 'POST', body }),
+      createMockRouteParams({ id: 'run-1' }),
+    )
+    return parseJsonResponse<{ data?: { id: string }; error?: string; code?: string }>(response)
+  }
+
+  it('returns 401 when not authenticated', async () => {
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: null,
+      supabase: null as never,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+    const { status } = await post(vacationBody)
+    expect(status).toBe(401)
+  })
+
+  it('creates a vacation row with days and no amount, stored at 0 kr (201)', async () => {
+    const { enqueueMany, findCall } = authedWithCalls()
+    enqueueMany([
+      { data: { id: 'run-1', status: 'draft' } },
+      { data: { id: SRE_UUID, employee_id: 'emp-1' } },
+      { data: { id: 'li-vacation' } },
+    ])
+    const { status, body } = await post({ ...vacationBody, vacation_category: 'saved' })
+    expect(status).toBe(201)
+    expect(body.data?.id).toBe('li-vacation')
+    expect(findCall('salary_line_items', 'insert')?.[0]).toMatchObject({
+      item_type: 'vacation',
+      quantity: 5,
+      amount: 0,
+      vacation_category: 'saved',
+    })
+  })
+
+  it('keeps the explicit 0 kr workaround and a semestertillägg amount working (201)', async () => {
+    for (const amount of [0, 860]) {
+      const { enqueueMany, findCall } = authedWithCalls()
+      enqueueMany([
+        { data: { id: 'run-1', status: 'draft' } },
+        { data: { id: SRE_UUID, employee_id: 'emp-1' } },
+        { data: { id: 'li-vacation' } },
+      ])
+      const { status } = await post({ ...vacationBody, amount })
+      expect(status, `amount ${amount}`).toBe(201)
+      expect(findCall('salary_line_items', 'insert')?.[0]).toMatchObject({ quantity: 5, amount })
+    }
+  })
+
+  it('returns 400 with the Swedish reason for a vacation row with neither days nor an amount', async () => {
+    const { enqueueMany, findCall } = authedWithCalls()
+    enqueueMany([
+      { data: { id: 'run-1', status: 'draft' } },
+      { data: { id: SRE_UUID, employee_id: 'emp-1' } },
+    ])
+    const { status, body } = await post({ ...vacationBody, quantity: undefined })
+    expect(status).toBe(400)
+    expect(body.code).toBe('VALIDATION_ERROR')
+    expect(body.error).toMatch(/semesterrad behöver antal semesterdagar/)
+    expect(findCall('salary_line_items', 'insert')).toBeUndefined()
+  })
+
+  it('returns 404 for an unknown run', async () => {
+    const { enqueueMany } = authedWithCalls()
+    enqueueMany([{ data: null }])
+    const { status, body } = await post(vacationBody)
+    expect(status).toBe(404)
+    expect(body.code).toBe('SALARY_RUN_NOT_FOUND')
+  })
+})

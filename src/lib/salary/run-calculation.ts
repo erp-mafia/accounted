@@ -64,7 +64,8 @@ import { computePremiumLines } from './shift-premium-engine'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { effectiveRow } from './effective-figures'
-import { refreshRunEmployeeSalaryType } from './base-salary-line'
+import { refreshRunEmployeeSalaryType, runMonthlySalaryFor } from './base-salary-line'
+import { isBaseSalaryDisplayLine } from './line-item-roles'
 import { computePriorYtd, loadOpeningBalances } from './ytd'
 import { dailyDivisor, degreeAdjustedMonthlySalary, hourlyDivisor, scheduledHoursPerDay } from './work-schedule'
 import { paidDaysPerDayOff } from './vacation-net-days'
@@ -593,6 +594,10 @@ export async function runSalaryCalculation(
     //     branches below price the new line.
     const staleSalaryType = Boolean(sre.salary_type && emp.salary_type && sre.salary_type !== emp.salary_type)
     if (staleSalaryType) staleSalaryTypeRows.push(sre)
+    // The run's monthly salary under the live pay type. A row whose pay type
+    // is stale never had one of its own (lib/salary/base-salary-line.ts), so
+    // it is priced from the employee's, the figure 9a writes back (crm#1337).
+    const runMonthlySalary: number = staleSalaryType ? runMonthlySalaryFor(emp) : sre.monthly_salary
 
     // 8a. Derive absence line items from per-day records. The cutover karens
     //     adjustment applies only while the 12-month högriskskydd lookback
@@ -615,7 +620,7 @@ export async function runSalaryCalculation(
         // no such salary (a stale monthly_salary from before a switch to hourly
         // must never be deducted from timlön): sick pay is priced from the
         // timlön and the hours on the sick rows instead.
-        monthlySalary: hourlyPay ? 0 : degreeAdjustedMonthlySalary(sre.monthly_salary, emp.employment_degree),
+        monthlySalary: hourlyPay ? 0 : degreeAdjustedMonthlySalary(runMonthlySalary, emp.employment_degree),
         salaryType: hourlyPay ? 'hourly' : 'monthly',
         hourlyRate: hourlyPay ? emp.hourly_rate : null,
         payrollConfig: config,
@@ -706,7 +711,7 @@ export async function runSalaryCalculation(
     // recalculation of an unchanged draft rewrites nothing.
     if (emp.salary_type === 'monthly') {
       const baseAmount = monthlyBaseSalary({
-        monthlySalary: sre.monthly_salary || 0,
+        monthlySalary: runMonthlySalary || 0,
         employmentDegree: emp.employment_degree,
         employmentStart: emp.employment_start,
         employmentEnd: emp.employment_end,
@@ -836,7 +841,7 @@ export async function runSalaryCalculation(
       const baseHourlyRate = effectiveHourlyRate({
         salary_type: emp.salary_type,
         hourly_rate: emp.hourly_rate,
-        monthly_salary: sre.monthly_salary,
+        monthly_salary: runMonthlySalary,
         employment_degree: emp.employment_degree,
         hours_per_week: emp.hours_per_week,
       })
@@ -875,8 +880,12 @@ export async function runSalaryCalculation(
       // manual lines (only the engine's own semesterersättning row counts as
       // derived: a manually entered one is a wage the operator decided on).
       // The line commands refuse hand edits to exactly these rows. A text row
-      // is words only and never reaches the engine.
+      // is words only and never reaches the engine. Nor does the Grundlön/
+      // Timlön row that shows Step 1: of the live pay type, or of the
+      // snapshot's while 9a has yet to swap it (it deletes that row). A
+      // base-salary row of another type is pay on top (crm#1331).
       .filter((li: Record<string, unknown>) => !isCalculatedLine(li) && !isTextRow(li))
+      .filter((li: Record<string, unknown>) => !isBaseSalaryDisplayLine(li.item_type, [emp.salary_type, sre.salary_type]))
       .map((li: Record<string, unknown>) => ({
         itemType: li.item_type as SalaryLineItemType,
         amount: li.amount as number,
@@ -1031,7 +1040,7 @@ export async function runSalaryCalculation(
       {
         employmentType: emp.employment_type,
         salaryType: emp.salary_type,
-        monthlySalary: sre.monthly_salary || 0,
+        monthlySalary: runMonthlySalary || 0,
         hourlyRate: emp.hourly_rate || undefined,
         hoursWorked:
           derivedHoursWorked !== null && derivedHoursWorked > 0
@@ -1241,6 +1250,7 @@ export async function runSalaryCalculation(
       companyId,
       salaryRunEmployeeId: sre.id,
       salaryType: emp.salary_type,
+      monthlySalary: runMonthlySalaryFor(emp),
       amount: hourly ? roundOre((emp.hourly_rate || 0) * (sre.hours_worked || 0)) : 0,
       quantity: hourly ? (sre.hours_worked ?? null) : null,
       unitPrice: hourly ? (emp.hourly_rate ?? null) : null,

@@ -139,6 +139,11 @@ export function TransactionDrawer({
     : null
   const rateText = instructedRate != null ? new Intl.NumberFormat('sv-SE', { maximumFractionDigits: 4 }).format(instructedRate) : null
   const balanceAfter = transaction.balance_after != null ? formatCurrency(transaction.balance_after, transaction.currency) : null
+  // The counterparty's IBAN, as the bank sent it: often the only thing a
+  // foreign payment names its payee by (PH 196). Groups of four, as printed.
+  const counterpartyIban = transaction.counterparty_iban
+    ? transaction.counterparty_iban.replace(/\s+/g, '').replace(/(.{4})/g, '$1 ').trim()
+    : null
 
   const fact = (label: string, value: ReactNode) =>
     value == null || value === '' ? null : (
@@ -301,7 +306,7 @@ export function TransactionDrawer({
 
         {/* Only when there is a fact to show: a heading over nothing reads as
             something missing. */}
-        {(accountLabel || originalName || transaction.original_description || giroCounterparty || methodLabel || booked || skvCounterpartDate || isPreMigration || extra || orgNumber || instructed || balanceAfter || (transaction.currency !== 'SEK' && transaction.amount_sek != null)) && (
+        {(accountLabel || originalName || transaction.original_description || giroCounterparty || counterpartyIban || methodLabel || booked || skvCounterpartDate || isPreMigration || extra || orgNumber || instructed || balanceAfter || (transaction.currency !== 'SEK' && transaction.amount_sek != null)) && (
         <div className="px-5 py-3">
           <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{t('drawer_details')}</p>
           <dl className="grid grid-cols-[110px_1fr] gap-x-3 gap-y-1.5 text-[12.5px]">
@@ -319,6 +324,7 @@ export function TransactionDrawer({
             )}
             {fact(t('drawer_bank_text'), originalName ?? transaction.original_description ?? null)}
             {fact(t('drawer_counterparty'), giroCounterparty ? giroText.sentence(giroCounterparty) : null)}
+            {fact(t('drawer_counterparty_iban'), counterpartyIban ? <span className="tabular-nums">{counterpartyIban}</span> : null)}
             {fact(t('drawer_method'), methodLabel)}
             {transaction.currency !== 'SEK' && transaction.amount_sek != null
               ? fact(t('drawer_amount_fx'), <span className="tabular-nums">{formatCurrency(transaction.amount_sek)}</span>)

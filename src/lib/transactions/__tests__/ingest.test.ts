@@ -3027,6 +3027,40 @@ describe('ingestTransactions', () => {
         expect(enrichmentPatch(storedIncome({ is_enriched: true, reference: '1001000000017', merchant_name: 'Kund AB', counterparty_account: '5050-1055', counterparty_org_number: '5560160680', balance_after: 20500.5 }), rereadIncome({ is_enriched: false }), NOW).patch).toBeNull()
       })
 
+      it('takes the payee the enriched re-read names over the payment type the first read put there, and the IBAN it adds (PH 196)', () => {
+        // The bank's first read of a foreign payment names only the payment
+        // type, in every text field; its daily enrichment adds the payee.
+        const stored = storedIncome({
+          amount: -5000, description: 'UTLANDSBETALNING', original_description: 'UTLANDSBETALNING',
+          merchant_name: 'UTLANDSBETALNING', reference: 'UTLANDSBETALNING', counterparty_iban: null, is_enriched: null,
+          journal_entry_id: 'je-1',
+        })
+        const reread = makeRaw({
+          external_id: stored.external_id!, date: '2026-10-12', amount: -5000, description: 'UTLANDSBETALNING', import_source: 'open_payments',
+          bank_connection_id: 'conn-1', merchant_name: 'Payee AS', reference: 'UTLANDSBETALNING', counterparty_iban: 'NO9386011117947',
+        })
+        const { patch, keysChanged } = enrichmentPatch(stored, reread, NOW)
+        expect(patch).toEqual({ merchant_name: 'Payee AS', counterparty_iban: 'NO9386011117947' })
+        expect(keysChanged).toBe(true)
+        // The bank text and the booking stay as they were.
+        expect(patch).not.toHaveProperty('description')
+        expect(patch).not.toHaveProperty('journal_entry_id')
+      })
+
+      it('keeps a name another feed stored: an Open Payments re-read never replaces an Enable Banking payee with its own word', () => {
+        const stored = storedIncome({ import_source: 'enable_banking', merchant_name: 'Payee AS', reference: '1001000000017', counterparty_account: '5050-1055', counterparty_org_number: '5560160680', balance_after: 20500.5, is_enriched: true })
+        expect(enrichmentPatch(stored, rereadIncome({ merchant_name: 'UTLANDSBETALNING' }), NOW).patch).toBeNull()
+        // Where that feed stored no name, the re-read fills it.
+        expect(enrichmentPatch({ ...stored, merchant_name: null }, rereadIncome({ merchant_name: 'Kund AB' }), NOW).patch).toEqual({ merchant_name: 'Kund AB' })
+      })
+
+      it('leaves the stored name when the re-read sends none or the same one', () => {
+        const stored = storedIncome({ merchant_name: 'Kund AB', reference: '1001000000017', counterparty_account: '5050-1055', counterparty_org_number: '5560160680', balance_after: 20500.5, is_enriched: true })
+        expect(enrichmentPatch(stored, rereadIncome({ merchant_name: undefined }), NOW).patch).toBeNull()
+        expect(enrichmentPatch(stored, rereadIncome({ merchant_name: '  ' }), NOW).patch).toBeNull()
+        expect(enrichmentPatch(stored, rereadIncome({ merchant_name: ' Kund AB ' }), NOW).patch).toBeNull()
+      })
+
       it('stores a foreign purchase\'s instructed amount and currency, and the bank\'s rate only on a SEK account', () => {
         const sek = makeTransaction({ id: 'tx-sek', currency: 'SEK', amount: -125.5, exchange_rate: null, import_source: 'open_payments' })
         const purchase = makeRaw({ currency: 'SEK', amount: -125.5, import_source: 'open_payments', instructed_amount: -11.9, instructed_currency: 'eur', exchange_rate: 11.26 })

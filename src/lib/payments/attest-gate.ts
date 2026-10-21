@@ -1,7 +1,8 @@
 /**
  * The attest gate: which supplier invoices a payment must leave out because
  * the company's attest policy requires attest for them and it has not been
- * given (attest_required, batch-eligibility.ts). The payment file
+ * given (attest_required, batch-eligibility.ts), and whether the company
+ * attests supplier invoices at all (the unattested warning). The payment file
  * (batch-service.ts) and the bank payment preparation (orders/prepare.ts)
  * both ask it before they pay.
  *
@@ -25,4 +26,11 @@ export interface PaymentAttestGate {
    * read "no attest needed" from a failed read.
    */
   blockedInvoiceIds(supabase: SupabaseClient, companyId: string, invoiceIds: readonly string[]): Promise<Set<string>>
+  /**
+   * True when the company has an attest step for supplier invoices at all.
+   * False under kontantmetoden: no invoice there is ever attested, so payment
+   * does not warn that one is not (unattested, batch-eligibility.ts). A
+   * failed read answers true: the warning never blocks.
+   */
+  attestsSupplierInvoices(supabase: SupabaseClient, companyId: string): Promise<boolean>
 }

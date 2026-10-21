@@ -37,6 +37,35 @@ export async function resolveInboxAddress(
 }
 
 /**
+ * The name part of an inbox address for a company name: the same slug
+ * public.generate_inbox_local_part() builds before it appends the random
+ * suffix (and stores as company_inboxes.slug_seed). Swedish vowels and a few
+ * accents folded, lowercased, every other run of characters one hyphen, at
+ * most 24 characters, `company` when nothing is left.
+ */
+export function inboxSlugForName(name: string | null | undefined): string {
+  const fold: Record<string, string> = { å: 'a', ä: 'a', ö: 'o', é: 'e', è: 'e', ê: 'e', à: 'a', â: 'a', ü: 'u', ñ: 'n' }
+  let slug = (name ?? '').toLowerCase().replace(/[åäöéèêàâüñ]/g, (ch) => fold[ch] ?? ch)
+  slug = slug.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  slug = slug.slice(0, 24).replace(/-+$/, '')
+  return slug || 'company'
+}
+
+/**
+ * Whether an inbox address (or its local part) still carries the company's
+ * current name. The address is slugged once and a rename leaves it alone on
+ * purpose (suppliers already send to it), so after a rename this turns false
+ * and an owner or admin can mint one with the new name (rename_company_inbox)
+ * while the old one keeps receiving.
+ */
+export function inboxAddressCarriesName(address: string, companyName: string | null | undefined): boolean {
+  const at = address.indexOf('@')
+  const localPart = (at >= 0 ? address.slice(0, at) : address).split('+')[0]!
+  // The stored slug_seed is the local part without its `-xxxx` suffix.
+  return localPart.replace(/-[^-]+$/, '') === inboxSlugForName(companyName)
+}
+
+/**
  * The inbox address with a plus-address tag: `acme-7f3k@in.example` and
  * `lev` give `acme-7f3k+lev@in.example`. The webhook files a mail on the part
  * before the first `+`, so the tag never changes which company it reaches; it

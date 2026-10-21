@@ -348,7 +348,52 @@ describe('api-client', () => {
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining('Pagination cap reached')
       )
+      // The bank still had pages: the window is incomplete (PH 195).
+      expect(result.truncated).toBe(true)
 
+      warnSpy.mockRestore()
+    })
+
+    // PH 195: Swedbank through Enable Banking answered a first import with
+    // empty pages that each carried a continuation key, past the cap. An
+    // empty result there is not "the account has no transactions".
+    it('reports empty pages that still carry a continuation key as truncated, not as an empty account', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      fetchSpy.mockImplementation(() =>
+        Promise.resolve(
+          new Response(JSON.stringify({ transactions: [], continuation_key: 'still-fetching' }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        ),
+      )
+
+      const result = await getAllTransactionsWithRaw('acc-1', '2025-10-20', '2026-10-20', 'longest')
+
+      expect(result.transactions).toHaveLength(0)
+      expect(result.rawPages).toHaveLength(100)
+      expect(result.truncated).toBe(true)
+      warnSpy.mockRestore()
+    })
+
+    it('a last page without a continuation key is a complete read, even at the cap', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      let call = 0
+      fetchSpy.mockImplementation(() => {
+        call++
+        return Promise.resolve(
+          new Response(
+            JSON.stringify(call < 100 ? { transactions: [], continuation_key: `p${call + 1}` } : { transactions: [] }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          ),
+        )
+      })
+
+      const result = await getAllTransactionsWithRaw('acc-1', '2025-10-20', '2026-10-20')
+
+      expect(fetchSpy).toHaveBeenCalledTimes(100)
+      expect(result.truncated).toBe(false)
+      expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('Pagination cap reached'))
       warnSpy.mockRestore()
     })
   })
@@ -380,6 +425,7 @@ describe('api-client', () => {
       expect(result.rawPages).toHaveLength(2)
       expect(JSON.parse(result.rawPages[0])).toEqual(page1)
       expect(JSON.parse(result.rawPages[1])).toEqual(page2)
+      expect(result.truncated).toBe(false)
     })
 
     it('appends strategy=longest to the request URL when supplied', async () => {

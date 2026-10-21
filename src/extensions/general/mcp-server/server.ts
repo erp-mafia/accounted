@@ -156,7 +156,11 @@ import {
   type PersonRejectionCategory,
 } from '@/lib/pending-operations/rejection-categories'
 import { rejectPendingOperations } from '@/lib/pending-operations/reject'
-import { canApproveSupplierInvoice, companyAttestsSupplierInvoices } from '@/lib/supplier-invoices/lifecycle'
+import {
+  canApproveSupplierInvoice,
+  companyAttestsSupplierInvoices,
+  payableSupplierInvoiceStatuses,
+} from '@/lib/supplier-invoices/lifecycle'
 import { inboxStatedPaymentDetails, planSupplierPaymentBackfill, type SupplierPaymentColumns } from '@/lib/supplier-invoices/payment-details-backfill'
 import { loadOpenPaymentInstructions } from '@/lib/supplier-invoices/lifecycle-stages'
 import { SETTLED_SUPPLIER_INVOICE_STATUSES } from '@/lib/supplier-invoices/stages'
@@ -170,7 +174,7 @@ import {
   type InvoiceVatWarning,
 } from '@/lib/invoices/vat-rules'
 import { DEDUCTION_TYPES, isDeductionType, validateDeductionLines, type DeductionType } from '@/lib/bookkeeping/rot-rut-rules'
-import { computeLineNet } from '@/lib/bookkeeping/invoice-line-amounts'
+import { computeLineNet, computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { MAX_INVOICE_ATTACHMENTS, linkInvoiceAttachments } from '@/lib/invoices/invoice-attachments'
 import { creditNoteNumber, creditNoteOriginalReference } from '@/lib/invoices/build-credit-note'
@@ -387,7 +391,7 @@ import { decodeToolArgs } from './unicode-escape-guard'
 import { findSupplierCandidates, type SupplierRow } from './supplier-candidates'
 import { creditNoteHandoff } from './inbox-credit-note'
 import { resolveInboxKind } from '@/lib/documents/inbox-kind'
-import { resolveInboxAddress } from '@/lib/documents/inbox-address'
+import { inboxAddressCarriesName, resolveInboxAddress } from '@/lib/documents/inbox-address'
 import { intakeSourceForInboxItem, type IntakeSourceId } from '@/lib/intake/sources'
 import { loadDocumentReading } from '@/lib/documents/reading/load'
 import { peppolReader } from '@/lib/invoices/peppol-reading'
@@ -4487,6 +4491,14 @@ const GRANTS_HOW =
 const GRANTS_SWITCHED_OFF_HOW =
   'Rules for automatic booking are switched off on this installation: every write you stage waits for approval. The postings listed were booked under a rule earlier; the user can still review and undo them in Att göra.'
 
+/**
+ * The briefing's inbox.earlier_name, present only when the address no longer
+ * slugs the company's name (crm#1334). A rename leaves the address alone on
+ * purpose; the change is the owner's, in the app, and loses no mail.
+ */
+const INBOX_EARLIER_NAME_NOTE =
+  'The address still carries an earlier company name and keeps working. An owner or admin gets one with the current name in Accounted: Inkorg, Lägg till brevlåda (the + by Brevlådor), "Skapa en med nuvarande namn". The old address keeps receiving, so suppliers can switch at their own pace. No tool changes the address.'
+
 export const tools: McpTool[] = [
   {
     // The bridge that makes `catalogVisibility: 'search'` usable on hosts that
@@ -7312,6 +7324,11 @@ export const tools: McpTool[] = [
           note: inboxAddress
             ? 'Forward mail here, by hand or with a forwarding rule: each attachment, or the mail body when there is none, becomes an inbox item. Holding the file itself? Upload it directly (gnubok_create_document_upload, PUT the bytes, gnubok_complete_document_upload): document_id comes back at once.'
             : 'No inbox address on this install: upload files directly with gnubok_create_document_upload, PUT the bytes, then gnubok_complete_document_upload.',
+          // Only after a rename left the address on the old name (crm#1334):
+          // the agent can tell the user why and where, with no tool to call.
+          ...(inboxAddress && companyRow?.name && !inboxAddressCarriesName(inboxAddress, companyRow.name)
+            ? { earlier_name: INBOX_EARLIER_NAME_NOTE }
+            : {}),
         },
 
         // Defined measures: a pointer, never values (MEASURES_POINTER).
@@ -7554,16 +7571,19 @@ export const tools: McpTool[] = [
       // invoice allocation keeps it NULL. applyUnbookedFilter reads all four
       // anchors server-side (the is_booked computed column), so one query
       // gives the page and an exact total_count.
-      // The enrichment columns (organisationsnummer, the instructed amount of
-      // a foreign purchase, the balance after, the enriched flag) ride the
-      // rows undeclared: the tools/list catalog sits at its token ceiling
-      // (payload-size.bench.test.ts), and output schemas are open.
+      // The enrichment columns (organisationsnummer, the counterparty's IBAN,
+      // the instructed amount of a foreign purchase, the balance after, the
+      // enriched flag) and external_id (the row's id at its source, e.g. the
+      // Stripe balance transaction, crm#1347) ride the rows undeclared: the
+      // tools/list catalog sits at its token ceiling
+      // (payload-size.bench.test.ts), and output schemas are open. The IBAN
+      // is often the only thing a foreign payment names its payee by (PH 196).
       let listQuery = supabase
         .from('transactions')
         .select(
           'id, date, description, amount, currency, merchant_name, reference, is_business, category, cash_account_id, ' +
           'counterparty_org_number, instructed_amount, instructed_currency, balance_after, is_enriched, potential_match_method, ' +
-          'counterparty_account, original_description',
+          'counterparty_account, counterparty_iban, original_description, external_id',
           { count: 'exact' },
         )
         .eq('company_id', companyId)
@@ -7752,6 +7772,7 @@ export const tools: McpTool[] = [
       type: 'object',
       properties: {
         transaction_id: { type: 'string' },
+        external_id: { type: ['string', 'null'] },
         booked: { type: 'boolean' },
         verifikat: { type: 'array', items: { type: 'object' } },
         documents: { type: 'array', items: { type: 'object' } },
@@ -10006,14 +10027,14 @@ export const tools: McpTool[] = [
       if (!pickedRes.ok) throwSalesOrderFailure(pickedRes, `Cannot invoice sales order ${label}`)
       const { picked } = pickedRes
 
-      // Preview line math: computeLineNet + roundOre, the same primitives the
+      // Preview line math: computeLineNet + computeLineVat, the same rules the
       // invoice builder uses; the builder is authoritative at commit.
       let subtotal = 0
       let vatAmount = 0
       const previewLines = picked.map(({ item, quantity }) => {
         const remaining = item.remaining_qty ?? Math.max(0, item.quantity - (item.invoiced_qty ?? 0))
         const lineTotal = computeLineNet(quantity, item.unit_price, item.discount_percent)
-        const lineVat = roundOre((lineTotal * item.vat_rate) / 100)
+        const lineVat = computeLineVat(lineTotal, item.vat_rate)
         subtotal = roundOre(subtotal + lineTotal)
         vatAmount = roundOre(vatAmount + lineVat)
         return {
@@ -11181,7 +11202,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_list_supplier_invoices',
     keywords: ['leverantörsfaktura', 'leverantörsfakturor', 'inköpsfaktura'],
     title: 'List Supplier Invoices',
-    description: 'List supplier invoices (leverantörsfakturor), sorted by due date. Filters: status (to_pay = approved+overdue), supplier_id, supplier_name (substring), date_from/date_to on invoice_date (YYYY-MM-DD).',
+    description: 'List supplier invoices (leverantörsfakturor), sorted by due date. Filters: status (to_pay = payable now; kontantmetod incl. registered), supplier_id, supplier_name (substring), date_from/date_to on invoice_date (YYYY-MM-DD).',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -11292,6 +11313,18 @@ export const tools: McpTool[] = [
         nameMatchedSupplierIds = matchedIds
       }
 
+      // What to_pay means hangs on whether the company attests.
+      let accountingMethod: string | null = null
+      if (status === 'to_pay') {
+        const { data: settings, error: settingsError } = await supabase
+          .from('company_settings')
+          .select('accounting_method')
+          .eq('company_id', companyId)
+          .maybeSingle()
+        if (settingsError) throw dbError(settingsError)
+        accountingMethod = (settings?.accounting_method as string | null | undefined) ?? null
+      }
+
       // count: 'exact' so truncation is SIGNALLED (total_count/has_more): the
       // date filters invite period reconciliation, and a silently capped
       // listing reads as complete (same contract as gnubok_list_invoices).
@@ -11306,7 +11339,10 @@ export const tools: McpTool[] = [
 
       if (status !== 'all') {
         if (status === 'to_pay') {
-          query = query.in('status', ['approved', 'overdue'])
+          // The rows the app offers Markera som betald for: kontantmetoden
+          // has no attest step, so its registered invoices are payable too
+          // (crm#1141).
+          query = query.in('status', [...payableSupplierInvoiceStatuses(accountingMethod)])
         } else {
           query = query.eq('status', status)
         }
@@ -22636,7 +22672,7 @@ export const tools: McpTool[] = [
               brf_org_number: { type: ['string', 'null'] },
               accrual_period_start: { type: ['string', 'null'], description: 'YYYY-MM-DD; with accrual_period_end defers the revenue. Pass back to keep.' },
               accrual_period_end: { type: ['string', 'null'] },
-              accrual_balance_account: { type: ['string', 'null'], description: '29xx interim account; null = default.' },
+              accrual_balance_account: { type: ['string', 'null'], description: '29xx or 17xx interim; null = 2970.' },
               dimensions: {
                 type: 'object',
                 additionalProperties: { type: 'string' },
@@ -22806,7 +22842,7 @@ export const tools: McpTool[] = [
           }
           const lineTotal = computeLineNet(item.quantity, item.unit_price, item.discount_percent)
           subtotal += lineTotal
-          vatAmount += roundOre(lineTotal * itemRate / 100)
+          vatAmount += computeLineVat(lineTotal, itemRate)
         }
 
         // ROT/RUT staging gate: everything buildInvoiceWriteData would refuse
@@ -23321,7 +23357,7 @@ export const tools: McpTool[] = [
       // The dashboard upload's own decision (#3312), so the mappings an agent
       // passes on to gnubok_import_sie are the ones the job accepts: class 9
       // amounts to 2999, also over a stored class 9 mapping.
-      const { mappings } = suggestSIEMappings(
+      const { mappings, unusedAccounts } = suggestSIEMappings(
         parsed,
         BAS_REFERENCE,
         (storedMappings as import('@/lib/import/types').SIEAccountMappingRecord[]) || undefined,
@@ -23433,6 +23469,10 @@ export const tools: McpTool[] = [
                   : `Summarize the scan for the user (source system, fiscal year, voucher count, balance status, any warnings) and name the company it imports into (target_company: ${targetCompany.name ?? companyId}). On their go-ahead call gnubok_import_sie with this same file, the returned mappings and the same company_id; the import stages for approval.` +
                     (bookedIb
                       ? ` This fiscal year already has a posted ingående balans (verifikation ${bookedIb.voucher}): pass import_opening_balances=false, which imports the vouchers on top of it; with true the import is refused. If the file's IB is the correct one, correct the posted IB first (gnubok_correct_opening_balances), then import with import_opening_balances=false.`
+                      : '') +
+                    // #63: a provider export carries its whole chart.
+                    (unusedAccounts.length > 0
+                      ? ` ${unusedAccounts.length} of the ${mappings.length} mapped accounts are BAS accounts with no balance and no voucher line in the file. By default they are created too; only_used_accounts=true leaves them out of the chart (the file's own non-BAS accounts are still created, the archived file keeps everything). Ask the user which they want.`
                       : ''),
       }
     },
@@ -23463,6 +23503,7 @@ export const tools: McpTool[] = [
         voucher_series: { type: 'string', description: 'Override voucher series for imported vouchers' },
         opening_balance_series: { type: 'string', description: 'Series for the IB voucher; default avoids series used by the file' },
         update_account_names: { type: 'boolean', description: 'Use #KONTO names from the file for created and existing accounts (default true). Set false to keep BAS default names.' },
+        only_used_accounts: { type: 'boolean' },
         confirm_org_number_mismatch: { type: 'boolean' },
       },
       required: ['filename', 'mappings'],
@@ -23549,6 +23590,11 @@ export const tools: McpTool[] = [
       )
       const coveredAccounts = [...sourceAccountsInFile].filter((a) => mappedSources.has(a))
       const accountsMapped = { covered: coveredAccounts.length, total: sourceAccountsInFile.size }
+      // #63: what the approver signs off on, by the rule submitSIEJob applies.
+      const onlyUsedAccounts = args.only_used_accounts === true
+      const usedMappings = onlyUsedAccounts
+        ? (await import('@/lib/import/sie-preview-mappings')).onlyUsedSIEMappings(parsed, mappingsParse.data)
+        : null
 
       // Another organisation's file is refused before the approver sees it,
       // unless the user confirmed it belongs here. submitSIEJob checks again
@@ -23588,6 +23634,8 @@ export const tools: McpTool[] = [
               ? args.opening_balance_series
               : undefined,
           update_account_names: flags.updateAccountNames,
+          // #63: absent unless asked for, so the job keeps the file's chart.
+          ...(onlyUsedAccounts ? { only_used_accounts: true } : {}),
           // Confirms only the mismatch seen here; absent when there was none.
           ...(orgCheck.mismatch ? { confirm_org_number_mismatch: true } : {}),
         },
@@ -23610,6 +23658,7 @@ export const tools: McpTool[] = [
           create_fiscal_period: flags.createFiscalPeriod,
           import_opening_balances: flags.importOpeningBalances,
           import_transactions: flags.importTransactions,
+          ...(usedMappings ? { only_used_accounts: { mappings_kept: usedMappings.length, mappings_left_out: mappingsParse.data.length - usedMappings.length } } : {}),
           will: 'create fiscal period + opening balances + journal entries from the parsed SIE',
         },
         actor,

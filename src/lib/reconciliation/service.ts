@@ -210,6 +210,12 @@ async function bankStatus(
     reportedBalance == null || account.available_balance == null
       ? null
       : Number(account.available_balance)
+  // No bank row at all on the account, from any source (the feed, a bank
+  // file, the API): there is no outside side to compare with, so nothing is
+  // avstämt, however equal two zeros are. A connected account the bank has
+  // delivered nothing for read "Banken och bokföringen stämmer" (PH 195).
+  const noBankRows =
+    raw.history_start === null && raw.bank_transaction_count === 0 && raw.ignored_transaction_count === 0
   return {
     account_key: bankAccountKey(account.id),
     kind: 'bank',
@@ -222,7 +228,7 @@ async function bankStatus(
     ledger_balance: raw.gl_1930_period_movement,
     difference: raw.difference,
     unexplained_difference: raw.unexplained_difference,
-    is_reconciled: raw.is_reconciled,
+    is_reconciled: raw.is_reconciled && !noBankRows,
     bridge: bankBridge(raw, account.ledger_account),
     counts: {
       proposed: 0,
@@ -239,6 +245,9 @@ async function bankStatus(
       bank_reported_balance: reportedBalance,
       bank_reported_available_balance: reportedAvailable,
       bank_balance_updated_at: reportedBalance == null ? null : account.balance_updated_at,
+      // True when the account holds no bank row at all: the page says that
+      // instead of a verdict, and the status is never avstämt (PH 195).
+      no_bank_rows: noBankRows,
     },
   }
 }

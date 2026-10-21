@@ -1590,6 +1590,28 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Perioden måste omfatta en annan månad än fakturamånaden. En period som bara ligger i fakturamånaden flyttar inget belopp.',
     message_en: 'The period must cover a month other than the invoice month. A period that lies only in the invoice month moves no amount.',
   },
+  // Upplupen intäkt (17xx) on a customer invoice line (#62): refused by the
+  // invoice builder and, typed (lib/bookkeeping/errors.ts), before the
+  // revenue entry is posted.
+  INVOICE_ACCRUED_INCOME_PERIOD_INVALID: {
+    httpStatus: 400,
+    message_sv:
+      'En upplupen intäkt (17xx) måste avse månader före fakturamånaden. Perioden fortsätter in i fakturans månad: dela raden i en del för månaderna före fakturamånaden (17xx) och en del för resten (29xx eller intäktskontot).',
+    message_en:
+      'Accrued income (17xx) must cover months before the invoice month. The period reaches the month of the invoice: split the line into the months before the invoice month (17xx) and the rest (29xx or the revenue account).',
+  },
+  INVOICE_ACCRUED_INCOME_PERIOD_LOCKED: {
+    httpStatus: 400,
+    message_sv:
+      'En upplupen intäkt (17xx) bokförs sista dagen i varje månad i perioden, och minst en av månaderna kan inte ta emot verifikationer (låst, stängd, inom företagets låsdatum eller utan räkenskapsår). Intäkten flyttas inte till en annan månad, så inget har bokförts. Lås upp perioden eller lägg upp räkenskapsåret, eller bokför raden utan periodisering.',
+    message_en:
+      'Accrued income (17xx) books on the last day of each month in the period, and at least one of those months cannot take entries (locked, closed, behind the company lock date or without a fiscal year). The revenue is never moved to another month, so nothing was booked. Unlock the period or create the fiscal year, or book the line without periodisering.',
+    remediation: {
+      description:
+        'details.blocked lists each month-end date with its reason (company_lock_date_covers, period_locked_at_set, period_is_closed, no_fiscal_period, lookup_failed). Unlock a locked period (gnubok_unlock_period), create the missing fiscal year, or send the line without the accrual fields. Nothing was written.',
+      tool: 'gnubok_unlock_period',
+    },
+  },
   ACCRUAL_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Periodiseringen kunde inte hittas.',
@@ -4065,6 +4087,15 @@ const SIE_IMPORT: Record<string, StructuredErrorEntry> = {
       resource: '/import?mode=sie',
     },
   },
+  // archiveSIEIntakeText: a provider migration's SIE files were fetched, but
+  // storage kept failing to keep one (PH 193: a storage timeout). Not the
+  // provider's fault, so never PROVIDER_SIE_FETCH_FAILED. Nothing imported.
+  SIE_INTAKE_ARCHIVE_UNAVAILABLE: {
+    httpStatus: 503,
+    message_sv: 'Bokföringen hämtades, men Accounted kunde inte spara filerna just nu. Inget har importerats. Försök igen om en stund.',
+    message_en: 'The books were fetched, but Accounted could not store the files right now. Nothing was imported. Try again in a moment.',
+    retryable: true,
+  },
   SIE_PARSE_NO_FILE: {
     httpStatus: 400,
     message_sv: 'Ingen fil bifogad i förfrågan.',
@@ -4935,11 +4966,18 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
     // but they open a DIFFERENT legal entity than the one being imported into.
     // Importing anyway mixes another company's ledger into this one, which is
     // both a bookkeeping and a data-protection problem: refuse at the boundary.
+    // The routes compose the message from the error (the company the
+    // credentials opened, both org numbers: arcim-migration's
+    // company-mismatch-message.ts); this is the fallback without those facts.
+    // Both ways out, because the common case is a bookkeeper still standing in
+    // their own company while bringing in a client's (PH 193), whom choosing
+    // again at the provider can never help.
     httpStatus: 422,
     message_sv:
-      'Uppgifterna gäller ett annat företag än det du importerar till. Kontrollera att du valt rätt företag hos leverantören och försök igen.',
+      'Anslutningen gäller ett annat företag än det du importerar till. Ska det företaget flyttas till Accounted? Välj då Lägg till företag i företagsmenyn (klicka på företagsnamnet) och anslut därifrån. Annars: anslut igen och välj rätt företag.',
     message_en:
-      'These credentials belong to a different company than the one you are importing into. Check that you picked the right company at the provider and try again.',
+      'The connection opened a different company than the one you are importing into. To move that company to Accounted, choose Add company in the company menu (click the company name) and connect from there. Otherwise, connect again and pick the right company.',
+    thrown_message_sv: true,
   },
   PROVIDER_PREVIEW_FAILED: {
     httpStatus: 500,
@@ -8621,6 +8659,28 @@ const RECONCILIATION_LINK: Record<string, StructuredErrorEntry> = {
       'Kopplingen nekades: en verifikation bokför inte beloppet på bankkontot åt samma håll som transaktionen (vid en delning: som sin del av den), eller så har transaktionens bankkonto ändrats. Kontrollera verifikationen och bankkontot innan du försöker igen.',
     message_en:
       'The database refused the bank link: a voucher does not book the amount on the bank ledger in the direction of the transaction (in a 1:N split: of its own slice), or the bank account of the transaction changed. Check the vouchers and the bank account; retrying the same request will not succeed.',
+  },
+  // Koppla bort on a row that has no link (a skattekonto row or a bank row).
+  RECONCILIATION_NOT_LINKED: {
+    httpStatus: 409,
+    message_sv: 'Transaktionen är inte kopplad till något verifikat.',
+    message_en: 'The row is not linked to any verifikat, so there is nothing to unlink.',
+  },
+  // Koppla bort on a bank row whose verifikat was booked from the row itself
+  // (categorize, match-invoice, a direct booking): the verifikat is the row's
+  // booking, not a link, and BFL 5 kap 5 § corrects it by storno. Was a bare
+  // Error answered 500 INTERNAL_ERROR (PH 194).
+  RECONCILIATION_UNLINK_IS_BOOKING: {
+    httpStatus: 409,
+    message_sv:
+      'Transaktionen är bokförd med verifikatet, inte bara kopplad till det, så kopplingen kan inte tas bort. Återför verifikatet med storno i stället, så kommer transaktionen tillbaka till Att bokföra.',
+    message_en:
+      'The bank row was booked with this verifikat (categorize, match-invoice or a direct booking), so the verifikat is its booking, not a link. Reverse the verifikat (POST /journal-entries/{id}/reverse) instead; the row then returns to the to-book list. Retrying the unlink will not succeed.',
+    remediation: {
+      description:
+        'Reverse the row\'s verifikat (storno) instead of unlinking it; the reversal releases the row back to the to-book list.',
+      tool: 'gnubok_reverse_journal_entry',
+    },
   },
 }
 

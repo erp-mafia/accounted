@@ -4,15 +4,18 @@
  * by lib/payments/batch-service.ts and lib/payments/orders/prepare.ts: no
  * lazy registration, no lib/init, no event bus.
  *
- * It wraps the function both paths called before the gate existed,
- * unchanged, with the same arguments: one read, the same answer, and the
- * same throw on a failed read.
+ * blockedInvoiceIds wraps the function both paths called before the gate
+ * existed, unchanged, with the same arguments: one read, the same answer, and
+ * the same throw on a failed read. attestsSupplierInvoices is supplier
+ * invoices' one attest rule (companyAttestsSupplierInvoices) over the
+ * company's accounting method (crm#1141).
  */
 import type { PaymentAttestGate } from '@/lib/payments/attest-gate'
-import { loadAttestBlockedInvoiceIds } from '@/lib/supplier-invoices/attest-policy-read'
+import { loadAttestBlockedInvoiceIds, loadCompanyAttestsSupplierInvoices } from '@/lib/supplier-invoices/attest-policy-read'
 
 export const PAYMENT_ATTEST_GATE: PaymentAttestGate = Object.freeze<PaymentAttestGate>({
   id: 'supplier-invoice-attest-policy',
   module: 'supplier-invoices',
   blockedInvoiceIds: (supabase, companyId, invoiceIds) => loadAttestBlockedInvoiceIds(supabase, companyId, invoiceIds),
+  attestsSupplierInvoices: (supabase, companyId) => loadCompanyAttestsSupplierInvoices(supabase, companyId),
 })

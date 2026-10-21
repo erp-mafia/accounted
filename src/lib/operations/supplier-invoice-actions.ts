@@ -268,11 +268,11 @@ export const supplierInvoicesMarkBankEntered = defineOperation({
   docs: {
     summary: 'Mark a supplier invoice as entered in the internet bank ("inlagd i banken"), or clear the mark.',
     description:
-      'Records that the payment was entered in the bank by hand, so the invoice stops showing as waiting to be paid. A mark, not a payment: it books nothing and changes no amount or status; the payment is still recorded by :mark-paid or the bank match, and the mark clears itself when one of those lands. entered=true needs an unpaid, payable invoice (approved, overdue, partially_paid; never a credit note); entered=false clears it in any status. Marking an already marked invoice keeps the first timestamp. Idempotent. Dry-runnable.',
+      'Records that the payment was entered in the bank by hand, so the invoice stops showing as waiting to be paid. A mark, not a payment: it books nothing and changes no amount or status; the payment is still recorded by :mark-paid or the bank match, and the mark clears itself when one of those lands. entered=true needs an unpaid, payable invoice (approved, overdue, partially_paid, and registered under kontantmetoden, which has no attest step; never a credit note); entered=false clears it in any status. Marking an already marked invoice keeps the first timestamp. Idempotent. Dry-runnable.',
     useWhen: 'The user paid the invoice by typing it into the internet bank (not through a betalfil) and wants the list to say so until the bank transaction arrives.',
     doNotUseFor: 'Recording the payment itself (POST /supplier-invoices/{id}/mark-paid) or payment batches (betalfil).',
     pitfalls: [
-      'A registered (unattested), paid or credited invoice, or a credit note, answers 400 SI_BANK_ENTERED_NOT_PAYABLE with details.currentStatus.',
+      'A registered invoice still waiting for attest (faktureringsmetoden), a paid or credited invoice, or a credit note, answers 400 SI_BANK_ENTERED_NOT_PAYABLE with details.currentStatus.',
       'details.reason race means a payment landed between the read and the write: reload.',
     ],
     example: {

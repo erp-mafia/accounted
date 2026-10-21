@@ -19,6 +19,15 @@
  * books a registration (dashboard and v1 create, inbox convert, the deferred
  * Bokför and its dry run) is held to it. The DB triggers stay authoritative;
  * this answers the caller before a 29xx debit could land without its cost.
+ *
+ * The customer-invoice mirror (#62) is the upplupen intäkt (17xx): revenue
+ * of months before the invoice month (September consulting on an October
+ * invoice), each month booked on its last day (Dr 17xx / Cr revenue, no
+ * moms) right after the invoice's revenue entry (Dr 1510 / Cr 17xx net +
+ * Cr 26xx on the invoice date). assertAccruedIncomeLinesBookable holds the
+ * same two rules, called from buildInvoiceJournalEntryInput, so every door
+ * that books a customer invoice (issue, send, bulk, the deferred Bokför and
+ * its dry run) refuses before anything is written.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -26,11 +35,14 @@ import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import {
   AccruedCostPeriodInvalidError,
   AccruedCostPeriodLockedError,
+  AccruedIncomePeriodInvalidError,
+  AccruedIncomePeriodLockedError,
   type AccruedCostBlockReason,
   type AccruedCostBlockedDate,
 } from '@/lib/bookkeeping/errors'
 import {
   isAccruedCostAccount,
+  isAccruedIncomeAccount,
   itemHasAccrual,
   periodEndsBeforeInvoiceMonth,
 } from '@/lib/bookkeeping/accruals/account-suggestions'
@@ -40,6 +52,36 @@ interface AccruedCostLine {
   accrual_period_start?: string | null
   accrual_period_end?: string | null
   accrual_balance_account?: string | null
+}
+
+/**
+ * The month-ends of `lines` that cannot take an entry, with the reason:
+ * closed or locked, on or before the company lock date, or no fiscal year.
+ */
+async function blockedMonthEnds(
+  supabase: SupabaseClient,
+  companyId: string,
+  lines: ReadonlyArray<AccruedCostLine>,
+): Promise<AccruedCostBlockedDate[]> {
+  const dates = [
+    ...new Set(
+      lines.flatMap((item) =>
+        accruedCostReleaseDates(item.accrual_period_start as string, item.accrual_period_end as string),
+      ),
+    ),
+  ].sort()
+
+  const verdicts = await Promise.all(
+    dates.map(async (date) => ({ date, verdict: await checkPeriodLock(supabase, companyId, date) })),
+  )
+  return verdicts.flatMap(({ date, verdict }) => {
+    // checkPeriodLock answers "open" for a date no fiscal year covers (the
+    // engine may create one for an ad-hoc date); the release posting service
+    // never does, so a missing year blocks an upplupen post too.
+    if (!verdict.locked && verdict.reason !== 'no_fiscal_period') return []
+    const reason: AccruedCostBlockReason = verdict.reason ?? 'lookup_failed'
+    return [{ date, reason }]
+  })
 }
 
 /**
@@ -66,24 +108,36 @@ export async function assertAccruedCostLinesBookable(
     }
   }
 
-  const dates = [
-    ...new Set(
-      accrued.flatMap((item) =>
-        accruedCostReleaseDates(item.accrual_period_start as string, item.accrual_period_end as string),
-      ),
-    ),
-  ].sort()
-
-  const verdicts = await Promise.all(
-    dates.map(async (date) => ({ date, verdict: await checkPeriodLock(supabase, companyId, date) })),
-  )
-  const blocked: AccruedCostBlockedDate[] = verdicts.flatMap(({ date, verdict }) => {
-    // checkPeriodLock answers "open" for a date no fiscal year covers (the
-    // engine may create one for an ad-hoc date); the release posting service
-    // never does, so a missing year blocks an upplupen kostnad too.
-    if (!verdict.locked && verdict.reason !== 'no_fiscal_period') return []
-    const reason: AccruedCostBlockReason = verdict.reason ?? 'lookup_failed'
-    return [{ date, reason }]
-  })
+  const blocked = await blockedMonthEnds(supabase, companyId, accrued)
   if (blocked.length > 0) throw new AccruedCostPeriodLockedError(blocked)
+}
+
+/**
+ * Throws AccruedIncomePeriodInvalidError or AccruedIncomePeriodLockedError
+ * when a 17xx line cannot be booked as an upplupen intäkt; a no-op (and no
+ * reads) when no line is one. Text and ROT/RUT rows never carry a
+ * periodisering (the invoice schema refuses it), so every 17xx line here is
+ * one the schedule service will post.
+ */
+export async function assertAccruedIncomeLinesBookable(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoiceDate: string,
+  items: ReadonlyArray<AccruedCostLine>,
+): Promise<void> {
+  const accrued = items.filter(
+    (item) => itemHasAccrual(item) && isAccruedIncomeAccount(item.accrual_balance_account),
+  )
+  if (accrued.length === 0) return
+
+  for (const item of accrued) {
+    const start = item.accrual_period_start as string
+    const end = item.accrual_period_end as string
+    if (!periodEndsBeforeInvoiceMonth(end, invoiceDate)) {
+      throw new AccruedIncomePeriodInvalidError(start, end, invoiceDate)
+    }
+  }
+
+  const blocked = await blockedMonthEnds(supabase, companyId, accrued)
+  if (blocked.length > 0) throw new AccruedIncomePeriodLockedError(blocked)
 }

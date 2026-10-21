@@ -17,8 +17,11 @@
  *     adapter's cached `bank` details.
  *   - A consent the bank reports over flips the row to 'expired' through
  *     persist_bank_sync_failure, which is what the bank notices read to ask
- *     for a renewal. A provider failure leaves the row alone: the consent is
- *     fine and the next run tries again.
+ *     for a renewal. So does a refusal the bank repeats until a person acts
+ *     (a permanent consent failure code, ./failure-text.ts), with that code's
+ *     own sentence: the cron reads active and error rows only, so it stops
+ *     asking. A provider failure leaves the row alone: the consent is fine
+ *     and the next run tries again.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -36,7 +39,8 @@ import { sweepAfterOverlappingSync } from '@/lib/bank-sync/post-sync-sweep'
 import { SYNC_COOLDOWN_MS, type TriggerSyncInput, type TriggerSyncResult } from '@/lib/bank-sync/trigger-sync-contract'
 import { eventBus } from '@/lib/events/bus'
 import type { Transaction } from '@/types'
-import { BankFeedError, BankThrottledError, ConsentOverError, ProviderUnavailableError, RateLimitedError, getBankFeedConnect, type BankFeedConnect } from './connect'
+import { BankFeedError, BankFeedRefusedError, BankThrottledError, ConsentOverError, ProviderUnavailableError, RateLimitedError, getBankFeedConnect, type BankFeedConnect } from './connect'
+import { consentFailureText, isPermanentConsentFailure } from './failure-text'
 import { claimBankFeedLease, holdBankFeedLease, rateLimitCooldownMs, rateLimitHoldUntil, takeOverBankFeedHold, throttleCooldownMs, UNATTENDED_FAILURE_HOLD_MS } from './lease'
 import { buildBankFeedParty, UNATTENDED_SIGNER, type BankFeedSignerInput } from './party'
 import { syncOpenPaymentsAccount, type BankFeedAccount, type BankFeedIngestFn } from './sync'
@@ -44,6 +48,16 @@ import { syncOpenPaymentsAccount, type BankFeedAccount, type BankFeedIngestFn } 
 /** Shown on a connection whose consent is over; the bank notices surface it. */
 export const CONSENT_EXPIRED_MESSAGE = 'Samtycket till banken har löpt ut. Koppla banken igen med BankID för att fortsätta synka.'
 export const SYNC_FAILED_MESSAGE = 'Banksynkningen misslyckades. Försök igen om en stund.'
+
+/**
+ * Shown on a connection the bank refuses with a permanent consent failure
+ * code: the code's own sentence (the one the BankID step shows for it), then
+ * the renewal, since only a new consent signed by someone the bank accepts
+ * brings the feed back.
+ */
+export function consentRefusedMessage(providerCode: string | null): string {
+  return `${consentFailureText(providerCode).sv} Förnya kopplingen med BankID för att fortsätta synka.`
+}
 
 export const INCREMENTAL_LOOKBACK_DAYS = 7
 /** What a bank serves on an ordinary read when it does not say (Swedbank's transactionHistoryMaxDays). */
@@ -215,10 +229,17 @@ export interface RunOpenPaymentsSyncInput extends TriggerSyncInput {
   connect?: BankFeedConnect
 }
 
-type FailureClass = 'session_expired' | 'rate_limited' | 'throttled' | 'bank_unavailable' | 'unknown'
+type FailureClass = 'session_expired' | 'consent_refused' | 'rate_limited' | 'throttled' | 'bank_unavailable' | 'unknown'
 
 function classify(error: unknown): { status: 'expired' | 'error' | null; code: 'BANK_SESSION_EXPIRED' | 'BANK_RATE_LIMITED' | 'BANK_THROTTLED' | 'BANK_SYNC_FAILED'; errorClass: FailureClass } {
   if (error instanceof ConsentOverError) return { status: 'expired', code: 'BANK_SESSION_EXPIRED', errorClass: 'session_expired' }
+  // The bank refuses the consent with a code the person resolves in the
+  // online bank (an agreement, a right, KYC, crm#1355): it answers the same
+  // on every read until someone renews, so the row needs a renewal exactly
+  // like a consent that is over, never an endless retry.
+  if (error instanceof BankFeedRefusedError && isPermanentConsentFailure(error.providerCode)) {
+    return { status: 'expired', code: 'BANK_SESSION_EXPIRED', errorClass: 'consent_refused' }
+  }
   if (error instanceof RateLimitedError) return { status: null, code: 'BANK_RATE_LIMITED', errorClass: 'rate_limited' }
   if (error instanceof BankThrottledError) return { status: null, code: 'BANK_THROTTLED', errorClass: 'throttled' }
   if (error instanceof ProviderUnavailableError) return { status: null, code: 'BANK_SYNC_FAILED', errorClass: 'bank_unavailable' }
@@ -371,6 +392,7 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
     let windowEnriched: boolean | null = null
     let returnedMin: string | null = null
     let returnedMax: string | null = null
+    let truncated = false
     const transactionIds: string[] = []
     const ledgerAccounts: string[] = []
     const includeEnrichment = shouldAskForEnrichment(connection, input.unattended === true, now)
@@ -398,7 +420,10 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
       transactionIds.push(...result.transactionIds)
       if (result.returnedMinBookingDate && (!returnedMin || result.returnedMinBookingDate < returnedMin)) returnedMin = result.returnedMinBookingDate
       if (result.returnedMaxBookingDate && (!returnedMax || result.returnedMaxBookingDate > returnedMax)) returnedMax = result.returnedMaxBookingDate
-      if (result.truncated) log.warn('open payments sync: the bank had more pages than the service read', { connectionId, accountUid: account.uid })
+      if (result.truncated) {
+        truncated = true
+        log.warn('open payments sync: the bank had more pages than the service read', { connectionId, accountUid: account.uid })
+      }
     }
     // History the books already hold (a completed SIE import over the window)
     // is linked to its verifikat, never left as unhandled rows. A viewer
@@ -424,7 +449,9 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
         ...(a.balance_updated_at !== undefined ? { balance_updated_at: a.balance_updated_at } : {}),
         ...(a.dedup_scope ? { dedup_scope: a.dedup_scope } : {}),
       })),
-      initialSync: initial ? { requestedFrom: window.fromDate, returnedMin, returnedMax, lookbackDays } : undefined,
+      // A first import the bank had not finished stays owed: the rows that
+      // came are stored and the next sync asks for the first import again (PH 195).
+      initialSync: initial && !truncated ? { requestedFrom: window.fromDate, returnedMin, returnedMax, lookbackDays } : undefined,
     })
     // An observation, not configuration: the writer guard lets it through
     // like error_message (persistBankRouteNeedsConfiguration), and a failed
@@ -504,7 +531,10 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
     if (failure.status) {
       const persisted = await persistBankSyncFailure(supabase, {
         companyId, connectionId, sessionId: connection.session_id, startedAt,
-        status: failure.status, message: failure.status === 'expired' ? CONSENT_EXPIRED_MESSAGE : SYNC_FAILED_MESSAGE,
+        status: failure.status,
+        message: failure.errorClass === 'consent_refused'
+          ? consentRefusedMessage(error instanceof BankFeedError ? error.providerCode : null)
+          : failure.status === 'expired' ? CONSENT_EXPIRED_MESSAGE : SYNC_FAILED_MESSAGE,
       }).catch(() => false)
       if (persisted) status = failure.status
     }

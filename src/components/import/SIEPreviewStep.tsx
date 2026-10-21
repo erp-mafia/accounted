@@ -4,6 +4,8 @@ import { useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import { AttnLine } from '@/components/ui/attn-line'
 import { DefList, DefRow } from '@/components/arkiv/DefList'
 import { formatCurrency } from '@/lib/utils'
@@ -26,6 +28,13 @@ interface SIEPreviewStepProps {
    * unexplained amount to 2099 has somewhere to go other than support.
    */
   onOpenManualOpeningBalances?: () => void
+  /**
+   * The "only the accounts the file uses" switch (#63): shown when the file
+   * defines BAS accounts it never uses. `total` counts the file's mapped
+   * definitions, `unused` the unused BAS ones the switch leaves out of the
+   * chart, `own` the unused ones outside BAS that it keeps.
+   */
+  onlyUsedAccounts?: { on: boolean; onChange: (on: boolean) => void; unused: number; own: number; total: number }
 }
 
 export default function SIEPreviewStep({
@@ -37,8 +46,10 @@ export default function SIEPreviewStep({
   onContinue,
   onBack,
   onOpenManualOpeningBalances,
+  onlyUsedAccounts,
 }: SIEPreviewStepProps) {
   const t = useTranslations('import')
+  const tNotice = useTranslations('import_notices')
   const errors = issues.filter((i) => i.severity === 'error')
   const warnings = issues.filter((i) => i.severity === 'warning')
 
@@ -203,6 +214,41 @@ export default function SIEPreviewStep({
           )}
         </DefRow>
       </DefList>
+
+      {/* Another organisation's file is said on the first screen after the
+          upload, not first at the review step after every account and VAT
+          code is mapped (PH 193). The confirmation stays at review. */}
+      {preview.orgNumberMismatch === true && (
+        <AttnLine>
+          {tNotice('sie_org_mismatch', {
+            fileOrg: preview.orgNumber ?? '?',
+            companyOrg: preview.companyOrgNumber ?? '?',
+          })}
+        </AttnLine>
+      )}
+
+      {/* #63: a provider's export carries its whole chart in #KONTO. */}
+      {onlyUsedAccounts && onlyUsedAccounts.unused > 0 && (
+        <div className="flex items-start justify-between gap-4">
+          <div className="space-y-0.5">
+            <Label htmlFor="sie-only-used-accounts" className="font-medium">
+              {t('only_used_accounts_label')}
+            </Label>
+            <p className="text-[13px] text-muted-foreground">
+              {t('only_used_accounts_hint', {
+                used: onlyUsedAccounts.total - onlyUsedAccounts.unused - onlyUsedAccounts.own,
+                total: onlyUsedAccounts.total,
+                unused: onlyUsedAccounts.unused,
+              })}
+            </p>
+          </div>
+          <Switch
+            id="sie-only-used-accounts"
+            checked={onlyUsedAccounts.on}
+            onCheckedChange={onlyUsedAccounts.onChange}
+          />
+        </div>
+      )}
 
       {/* Parsing errors block the import: the list stays in view. */}
       {errors.length > 0 && (

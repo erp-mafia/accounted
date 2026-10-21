@@ -699,8 +699,15 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
       return `${l.count} ${label.charAt(0).toLowerCase()}${label.slice(1)}`
     })
   const diffAbs = Math.abs(status.difference ?? 0)
-  const verdict =
-    status.is_reconciled || diffAbs < 0.005
+  // No bank row at all on the account (lib/reconciliation/service.ts): two
+  // zeros are no agreement, so the sentence says what is missing instead of
+  // "Banken och bokföringen stämmer" (PH 195).
+  const noBankRows = !isSkv && !isManual && (status.bank as { no_bank_rows?: boolean } | null)?.no_bank_rows === true
+  const verdict = noBankRows
+    ? fetchedAt
+      ? t('v2_verdict_no_bank_rows_synced', { date: formatDate(fetchedAt) })
+      : t('v2_verdict_no_bank_rows')
+    : status.is_reconciled || diffAbs < 0.005
       ? isSkv
         ? t('v2_verdict_ok_skv')
         : isManual

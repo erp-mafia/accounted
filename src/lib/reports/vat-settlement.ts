@@ -342,27 +342,37 @@ async function vatPeriodHolding(
   return { type, ...calculatePeriodDates(type, year, period) }
 }
 
-/** Reads the VAT balances of other periods while one proposal is built, each period once. */
-function periodBalances(supabase: SupabaseClient, companyId: string) {
+/**
+ * Reads the VAT balances of other periods while one proposal is built, each
+ * period's ledger once. The proposal's own ledger seeds it.
+ */
+function periodBalances(
+  supabase: SupabaseClient,
+  companyId: string,
+  own: { period: PeriodRange; ledger: VatDeclarationLedger },
+) {
+  const keyOf = (period: PeriodRange) => `${period.start}:${period.end}`
+  const ledgers = new Map<string, Promise<VatDeclarationLedger>>([[keyOf(own.period), Promise.resolve(own.ledger)]])
+  const ledgerOf = (period: PeriodRange): Promise<VatDeclarationLedger> => {
+    const key = keyOf(period)
+    if (!ledgers.has(key)) ledgers.set(key, loadVatDeclarationLedger(supabase, companyId, period.start, period.end))
+    return ledgers.get(key)!
+  }
   const balances = new Map<string, Promise<PeriodVatBalance>>()
   const carried = new Map<string, Promise<number>>()
   return {
     balance(period: PeriodRange): Promise<PeriodVatBalance> {
-      const key = `${period.start}:${period.end}`
+      const key = keyOf(period)
       if (!balances.has(key)) {
-        balances.set(
-          key,
-          loadVatDeclarationLedger(supabase, companyId, period.start, period.end).then((ledger) => {
-            const built = settlementLines(ledger)
-            return proposalBalance(built)
-          }),
-        )
+        balances.set(key, ledgerOf(period).then((ledger) => proposalBalance(settlementLines(ledger))))
       }
       return balances.get(key)!
     },
     carried(period: PeriodRange): Promise<number> {
-      const key = `${period.start}:${period.end}`
-      if (!carried.has(key)) carried.set(key, carriedIntoPeriod(supabase, companyId, period.start, period.end))
+      const key = keyOf(period)
+      if (!carried.has(key)) {
+        carried.set(key, ledgerOf(period).then((ledger) => carriedIntoPeriod(supabase, companyId, ledger)))
+      }
       return carried.get(key)!
     },
   }
@@ -376,9 +386,11 @@ type Balances = ReturnType<typeof periodBalances>
  * next period (crm#1316), and its shape alone would count it as this period's
  * own, offering this period as already booked. It is the previous period's
  * when it clears neither this period's balances nor what an opening balance
- * carried into it, but exactly the previous period's, and nothing dated in
- * the previous period settles that one. Anything less certain stays this
- * period's, so it gates booking as before.
+ * the declaration counts in it (part of this period's balances, see
+ * carriedIntoPeriod), but exactly the previous period's, and nothing dated in
+ * the previous period settles that one. An IB the declaration leaves out is
+ * no part of them (crm#1333), so clearing it settles the earlier period.
+ * Anything less certain stays this period's, so it gates booking as before.
  */
 async function previousPeriodSettlements(
   supabase: SupabaseClient,
@@ -416,9 +428,9 @@ async function previousPeriodSettlements(
  * period's balances and moves the filed net, to 2650/1650 or straight to the
  * skattekonto. It is not this period's when it is the own momsredovisning of
  * the period it is dated in (it clears that period's activity, an opening
- * balance aside) or of a period between the two: equal VAT in two periods
- * (a fixed rent, a monthly subscription) is common, and the latest period it
- * fits is the one it was booked for.
+ * balance its declaration counts aside) or of a period between the two: equal VAT
+ * in two periods (a fixed rent, a monthly subscription) is common, and the
+ * latest period it fits is the one it was booked for.
  */
 async function lateSettlement(
   supabase: SupabaseClient,
@@ -513,7 +525,7 @@ export async function buildVatSettlementProposal(
   const { lines, filed_net: filedNet, rounding_amount: roundingAmount } = settlementLines(ledger)
   const balance = proposalBalance({ lines, filed_net: filedNet })
   const range: PeriodRange = { type: periodType, start, end }
-  const balances = periodBalances(supabase, companyId)
+  const balances = periodBalances(supabase, companyId, { period: range, ledger })
 
   // Shape-detected settlements (manual momsomföring, SIE imports) gate the
   // booking button exactly like tagged ones (#984): the proposal re-clears the

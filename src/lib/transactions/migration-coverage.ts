@@ -1,9 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { isBankRangeAccount } from '@/lib/transactions/booking-duplicate-detection'
 
 /**
  * End of the company's SIE-migration data coverage: the latest entry_date
- * among posted imported verifikat. Drives the quiet "från perioden före din
- * migrering" marker on inbox rows.
+ * among posted imported verifikat. The outer bound of the quiet "från
+ * perioden före din migrering" marker on inbox rows: only a row dated on or
+ * before it can carry the marker, and only when the ledger also explains it
+ * (fetchOpenPreMigrationRows below, crm#1239).
  *
  * Derived from journal_entries, NOT from sie_imports.fiscal_year_end: a SIE
  * file exported mid-year still declares the full fiscal year in #RAR 0, so
@@ -68,4 +72,117 @@ export async function fetchMigrationCoverageEnd(
     .limit(1)
     .maybeSingle()
   return (data as { entry_date?: string } | null)?.entry_date ?? null
+}
+
+/**
+ * An open inbox row in the columns the explaining-set detector reads
+ * (detectExplainingVoucherSets in lib/invoices/duplicate-payment-detection).
+ */
+export interface PreMigrationRow {
+  id: string
+  date: string
+  amount: number
+  currency: string | null
+  amount_sek: number | null
+  exchange_rate: number | null
+}
+
+/** The open pre-migration rows of one cash account and the ledger scope to search for them. */
+export interface PreMigrationRowGroup {
+  /** The ledger account the detector scans: null scans the whole bank range (1910-1949). */
+  scanAccount: string | null
+  rows: PreMigrationRow[]
+}
+
+/**
+ * Pure: the ledger scope that can explain a row settling on `ledgerAccount`.
+ *
+ * A bank account (1910-1949) widens to the whole bank range: the cash
+ * account's ledger mapping is set up here, after the old system booked, and
+ * in production most marked rows that have a same-amount bank leg within a
+ * week have it only on another bank account than the one the row is mapped
+ * to (1930 against 1940). The marker claims the movement is already in the
+ * imported bookkeeping, which holds on any bank account. Any other settlement account
+ * (a 1686 payment provider, a 2890 card) stays exactly itself, like the
+ * booking doors: a 1930 voucher never explains a card row.
+ */
+export function preMigrationScanAccount(ledgerAccount: string | null | undefined): string | null {
+  const account = ledgerAccount?.trim() || null
+  if (!account || isBankRangeAccount(account)) return null
+  return account
+}
+
+type OpenRow = PreMigrationRow & { cash_account_id: string | null }
+
+/**
+ * The open inbox rows dated on or before the migration coverage end, grouped
+ * per cash account with the ledger scope to search (crm#1239).
+ *
+ * WHY. The marker used to be date-only: every open row on or before the
+ * latest imported voucher said "it most likely corresponds to an already
+ * imported verifikat". The latest imported voucher is any voucher, so one
+ * late customer payment stretched the window over weeks the old system never
+ * booked, and rows the matcher had already found nothing for told the user
+ * they were booked. The caller now asks the ledger per row, with the same
+ * detector the booking doors and the reconciliation view use, and marks only
+ * the rows it explains.
+ *
+ * One group per cash account (rows without one form their own group): the
+ * detector lets a voucher explain one row per call, so separate calls keep an
+ * own-account transfer explaining both of its rows, the 1930 one and the 1931
+ * one. Same open-row filter as the inbox's pending fetch (not booked, not
+ * ignored). A failed cash account lookup throws: the scope of a row would be
+ * a guess.
+ */
+export async function fetchOpenPreMigrationRows(
+  supabase: SupabaseClient,
+  companyId: string,
+  coverageEnd: string,
+): Promise<PreMigrationRowGroup[]> {
+  const rows = await fetchAllRows<OpenRow>(({ from, to }) =>
+    supabase
+      .from('transactions')
+      .select('id, date, amount, currency, amount_sek, exchange_rate, cash_account_id')
+      .eq('company_id', companyId)
+      .is('journal_entry_id', null)
+      .is('is_business', null)
+      .eq('is_ignored', false)
+      .lte('date', coverageEnd)
+      .order('date', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
+  if (rows.length === 0) return []
+
+  const ledgerByCashAccount = new Map<string, string | null>()
+  if (rows.some((r) => r.cash_account_id)) {
+    const { data, error } = await supabase
+      .from('cash_accounts')
+      .select('id, ledger_account')
+      .eq('company_id', companyId)
+    if (error) throw new Error(`migration coverage: cash account lookup failed: ${error.message}`)
+    for (const account of (data ?? []) as Array<{ id: string; ledger_account: string | null }>) {
+      ledgerByCashAccount.set(account.id, account.ledger_account)
+    }
+  }
+
+  const groups = new Map<string, PreMigrationRowGroup>()
+  for (const { cash_account_id: cashAccountId, ...row } of rows) {
+    const key = cashAccountId ?? ''
+    let group = groups.get(key)
+    if (!group) {
+      group = {
+        scanAccount: preMigrationScanAccount(cashAccountId ? ledgerByCashAccount.get(cashAccountId) : null),
+        rows: [],
+      }
+      groups.set(key, group)
+    }
+    group.rows.push({
+      ...row,
+      amount: Number(row.amount),
+      amount_sek: row.amount_sek == null ? null : Number(row.amount_sek),
+      exchange_rate: row.exchange_rate == null ? null : Number(row.exchange_rate),
+    })
+  }
+  return Array.from(groups.values())
 }

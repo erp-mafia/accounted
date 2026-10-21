@@ -164,6 +164,23 @@ describe('POST /backfill', () => {
     expect(res.status).toBe(200)
     expect(vi.mocked(s.sync).mock.calls[0][1].cursor_at).toBe('2026-01-01T00:00:00.000Z')
   })
+
+  it("lets a connector say where the chosen day starts (validated day in, cursor out)", async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    serviceReturning({ data: [ACTIVE] })
+    enqueue({ data: [] })
+    const backfillCursor = vi.fn(() => '2025-12-31T23:00:00.000Z')
+    const s = spec({ backfillCursor })
+    const res = await feedBackfillRoute(s).handler(request('POST', { from: '2026-01-01' }), context(supabase))
+    expect(res.status).toBe(200)
+    expect(backfillCursor).toHaveBeenCalledWith('2026-01-01')
+    expect(findCalls('feed_connections', 'update')[0][0]).toEqual({
+      cursor_at: '2025-12-31T23:00:00.000Z',
+      error_message: null,
+    })
+    expect(vi.mocked(s.sync).mock.calls[0][1].cursor_at).toBe('2025-12-31T23:00:00.000Z')
+    expect((await res.json()).from).toBe('2025-12-31T23:00:00.000Z')
+  })
 })
 
 describe('POST /transaction-sync', () => {

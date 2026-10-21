@@ -3,9 +3,12 @@
  *
  * Single source of truth consumed by the internal dashboard routes
  * (app/api/salary/runs/[id]/employees/**) and the v1 REST routes. Attaching
- * snapshots the employee's pay config onto salary_run_employees (so later
- * employee edits don't retroactively change an open run) and seeds the base
- * salary line item.
+ * copies the employee's pay config onto salary_run_employees and seeds the
+ * base salary line item. In a draft the calculation prices the employee's
+ * live pay type, rate, degree and tax table; the row's monthly salary is the
+ * one per-run figure (a salary typed in the run), and it follows a corrected
+ * employee salary until one is typed (followEmployeeSalaryInDraftRuns).
+ * An approved or booked run keeps what it was calculated with.
  *
  * Result-object convention mirrors lib/salary/run-calculation.ts.
  */
@@ -15,7 +18,7 @@ import { roundOre } from '@/lib/money'
 import { degreeAdjustedMonthlySalary } from '@/lib/salary/work-schedule'
 import { runDeviationWindow } from '@/lib/salary/deviation-period'
 import { SALARY_OVERRIDE_MAX } from '@/lib/api/schemas'
-import { refreshRunEmployeeSalaryType } from '@/lib/salary/base-salary-line'
+import { refreshRunEmployeeSalaryType, runMonthlySalaryFor } from '@/lib/salary/base-salary-line'
 import type { SalaryLineItemType } from '@/types'
 
 export type RunEmployeeResult<T> =
@@ -142,7 +145,7 @@ export async function addEmployeeToRun(
     employee_id: emp.id,
     company_id: args.companyId,
     employment_degree: emp.employment_degree,
-    monthly_salary: emp.monthly_salary || 0,
+    monthly_salary: runMonthlySalaryFor(emp),
     salary_type: emp.salary_type,
     hours_worked: args.hoursWorked ?? null,
     tax_table_number: emp.tax_table_number,
@@ -396,6 +399,8 @@ export async function setRunEmployeeSalary(
       companyId: args.companyId,
       salaryRunEmployeeId: row.id,
       salaryType,
+      // A monthly figure is written right below; hourly pay has none.
+      monthlySalary: hasMonthly ? monthly : 0,
       amount: 0,
       quantity: null,
       unitPrice: null,
@@ -461,6 +466,77 @@ export async function setRunEmployeeSalary(
   }
 
   return { ok: true, data }
+}
+
+/**
+ * Carry a corrected monthly salary from the employee to the DRAFT runs that
+ * still start from the old one (crm#1337). A draft row whose monthly salary
+ * equals the employee's previous salary has had no salary of its own typed
+ * in the run, so it takes the new one; a row with any other figure was set
+ * in the run deliberately (a different month, a nollkörning) and is kept.
+ * Without this the run kept the figure the employee was added with, and
+ * the run and the employee card disagreed until the run row was edited by
+ * hand. Hourly rows are left out: they have no monthly salary, and a row
+ * whose pay type changed takes the employee's at its next calculation.
+ *
+ * Compare-and-set in one statement, so a salary typed in the run meanwhile
+ * is never overwritten. The calculation is cleared, as a per-run salary
+ * edit clears it, so booking needs a recalculation first. Approved and
+ * booked runs are never touched.
+ */
+export async function followEmployeeSalaryInDraftRuns(
+  supabase: SupabaseClient,
+  args: {
+    companyId: string
+    employeeId: string
+    previous: { salary_type?: unknown; monthly_salary?: unknown }
+    current: { salary_type?: unknown; monthly_salary?: unknown; employment_degree?: unknown }
+  },
+): Promise<RunEmployeeResult<{ salary_run_employee_ids: string[] }>> {
+  const none = { ok: true as const, data: { salary_run_employee_ids: [] } }
+  if (args.current.salary_type !== 'monthly') return none
+  const previousSalary = roundOre(Number(args.previous.monthly_salary) || 0)
+  const salary = roundOre(Number(args.current.monthly_salary) || 0)
+  if (salary === previousSalary || salary <= 0) return none
+
+  const { data: drafts, error: draftError } = await supabase
+    .from('salary_runs')
+    .select('id')
+    .eq('company_id', args.companyId)
+    .eq('status', 'draft')
+  if (draftError) {
+    return { ok: false, code: 'INTERNAL_ERROR', details: { message: draftError.message } }
+  }
+  const draftRunIds = ((drafts ?? []) as Array<{ id: string }>).map((r) => r.id)
+  if (draftRunIds.length === 0) return none
+
+  const { data: followed, error: followError } = await supabase
+    .from('salary_run_employees')
+    .update({ monthly_salary: salary, calculation_breakdown: null })
+    .eq('company_id', args.companyId)
+    .eq('employee_id', args.employeeId)
+    .in('salary_run_id', draftRunIds)
+    .eq('salary_type', 'monthly')
+    .eq('monthly_salary', previousSalary)
+    .select('id')
+  if (followError) {
+    return { ok: false, code: 'INTERNAL_ERROR', details: { message: followError.message } }
+  }
+  const ids = ((followed ?? []) as Array<{ id: string }>).map((r) => r.id)
+  if (ids.length === 0) return none
+
+  // The Grundlön display line, as the per-run salary edit keeps it. Display
+  // only (the calculation prices the row's monthly salary and rewrites this
+  // line), so a failure here does not undo the salary that now follows.
+  const degree = args.current.employment_degree == null ? null : Number(args.current.employment_degree)
+  await supabase
+    .from('salary_line_items')
+    .update({ amount: degreeAdjustedMonthlySalary(salary, Number.isFinite(degree) ? degree : null) })
+    .in('salary_run_employee_id', ids)
+    .eq('company_id', args.companyId)
+    .eq('item_type', 'monthly_salary')
+
+  return { ok: true, data: { salary_run_employee_ids: ids } }
 }
 
 export async function removeEmployeeFromRun(

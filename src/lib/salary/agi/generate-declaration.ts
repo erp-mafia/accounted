@@ -445,13 +445,11 @@ export async function generateAgiDeclaration(
       const benefitCar = reduced('benefit_car', sumLineItemAmounts(lineItems, ['benefit_car']))
       const benefitFuel = sumLineItemAmounts(lineItems, ['benefit_fuel'])
       const benefitHousing = reduced('benefit_housing', sumLineItemAmounts(lineItems, ['benefit_housing']))
-      // FK015 kostförmån has its own field: never fold into FK012.
-      // Skatteverket cross-checks the krona-amount against the PBB-schablon.
-      const benefitMeals = reduced('benefit_meals', sumLineItemAmounts(lineItems, ['benefit_meals']))
-      // FK012 SkatteplOvrigaFormanerUlagAG is the catch-all for taxable
-      // benefits without their own FK code (bike, wellness, "other") PLUS
-      // the krona-amount for housing (since FK041/FK043 carry only the flag).
-      const FK012_TYPES = ['benefit_bike', 'benefit_wellness', 'benefit_other'] as const
+      // FK012 SkatteplOvrigaFormanerUlagAG carries every taxable benefit
+      // except bil and drivmedel: kost, bike, wellness, "other" PLUS the
+      // krona-amount for housing (FK041/FK043 carry only the flag).
+      // Kostförmån has no field of its own in Skatteverket's schema (#81).
+      const FK012_TYPES = ['benefit_meals', 'benefit_bike', 'benefit_wellness', 'benefit_other'] as const
       const benefitOther =
         (reduction > 0
           ? FK012_TYPES.reduce((sum, type) => sum + (taxableByType[type] ?? 0), 0)
@@ -484,12 +482,11 @@ export async function generateAgiDeclaration(
         fSkattPayment: isFSkatt ? sre.gross_salary : undefined,
         // F-skatt payees: cash goes to FK131 ONLY (grossSalary is zeroed so
         // FK011 is never emitted for the same payment) and benefits to the
-        // ej-UlagSA variants (FK132/FK133/FK134/FK137/FK138/FK139). Regular
-        // employees get FK011 + FK012/FK013/FK015/FK018/FK041/FK043.
+        // ej-UlagSA variants (FK132/FK133/FK134/FK137/FK138). Regular
+        // employees get FK011 + FK012/FK013/FK018/FK041/FK043.
         benefitsExcludedFromSAUnderlag: isFSkatt ? true : undefined,
         benefitCar: benefitCar > 0 ? benefitCar : undefined,
         benefitFuel: benefitFuel > 0 ? benefitFuel : undefined,
-        benefitMeals: benefitMeals > 0 ? benefitMeals : undefined,
         housingBenefit,
         benefitOther: benefitOther > 0 ? benefitOther : undefined,
         benefitsAdjusted: Boolean(sre.benefits_adjusted),
@@ -514,7 +511,6 @@ export async function generateAgiDeclaration(
         (e.fSkattPayment ?? 0) > 0 ||
         (e.benefitCar ?? 0) > 0 ||
         (e.benefitFuel ?? 0) > 0 ||
-        (e.benefitMeals ?? 0) > 0 ||
         (e.benefitOther ?? 0) > 0 ||
         e.housingBenefit !== undefined ||
         (e.sickDays ?? 0) > 0 ||

@@ -57,9 +57,14 @@ import {
 } from './lib/resend-inbound'
 import {
   rotateCompanyInbox,
+  renameCompanyInbox,
+  InboxRenameRefused,
   getActiveInbox,
+  listPreviousInboxes,
+  inboxReceivesMail,
   composeInboxAddress,
 } from './lib/inbox-provisioning'
+import { inboxAddressCarriesName } from '@/lib/documents/inbox-address'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { roundOre } from '@/lib/money'
 import { CreateSupplierInvoiceSchema, BookInboxItemDirectlySchema, BulkBookInboxSchema } from '@/lib/api/schemas'
@@ -102,6 +107,9 @@ import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
 import type { InvoiceExtractionResult } from '@/types'
 
 const MAX_ATTACHMENTS_PER_EMAIL = 20
+
+/** POST /inbox/rotate: an empty body rotates; keep_previous renames. */
+const RotateInboxSchema = z.object({ keep_previous: z.boolean().optional() }).strict()
 // Received-mail panel window (#2181): 30 days covers "the mail I sent last
 // week"; the hard cap keeps the query bounded.
 const INBOUND_HISTORY_DEFAULT_DAYS = 30
@@ -1139,12 +1147,23 @@ export const invoiceInboxExtension: Extension = {
           if (!inbox) {
             return NextResponse.json({ error: 'No active inbox' }, { status: 404 })
           }
+          // Read alongside, never a reason to fail the address: null when unread.
+          const [previous, company] = await Promise.all([
+            listPreviousInboxes(ctx.supabase, ctx.companyId).catch(() => null),
+            ctx.supabase.from('companies').select('name').eq('id', ctx.companyId).maybeSingle(),
+          ])
+          const companyName = (company.data as { name?: string } | null)?.name
           return NextResponse.json({
             data: {
               address: composeInboxAddress(inbox.local_part, domain),
               local_part: inbox.local_part,
               status: inbox.status,
               created_at: inbox.created_at,
+              // A rename leaves the address alone (suppliers send to it): false
+              // once it no longer carries the company's name (crm#1334).
+              carries_company_name: companyName ? inboxAddressCarriesName(inbox.local_part, companyName) : null,
+              // Earlier addresses a rename kept: they still receive.
+              previous: previous?.map((localPart) => composeInboxAddress(localPart, domain)) ?? null,
             },
           })
         } catch (err) {
@@ -1157,20 +1176,39 @@ export const invoiceInboxExtension: Extension = {
     },
 
     // ── Rotate inbox address (admin/owner only) ─────────────
+    // No body: a new address, every old one stops (410). keep_previous: a new
+    // address with the company's current name while the old one keeps
+    // receiving (rename_company_inbox, crm#1334); refused with 409 when the
+    // address already carries the name.
     {
       method: 'POST',
       path: '/inbox/rotate',
-      handler: async (_request: Request, ctx: ExtensionContext) => {
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const domain = process.env.RESEND_INBOUND_DOMAIN
         if (!domain) {
           return NextResponse.json({ error: 'RESEND_INBOUND_DOMAIN not configured' }, { status: 503 })
         }
 
+        const raw = await request.text().catch(() => '')
+        let body: unknown = {}
+        if (raw.trim()) {
+          try {
+            body = JSON.parse(raw)
+          } catch {
+            return NextResponse.json({ error: 'Ogiltig begäran.' }, { status: 400 })
+          }
+        }
+        const parsed = RotateInboxSchema.safeParse(body)
+        if (!parsed.success) return NextResponse.json({ error: 'Ogiltig begäran.' }, { status: 400 })
+        const keepPrevious = parsed.data.keep_previous === true
+
         const isAdmin = await isCompanyAdmin(ctx.supabase, ctx.userId, ctx.companyId)
         if (!isAdmin) return NextResponse.json({ error: 'Behörighet saknas.' }, { status: 403 })
 
         try {
-          const newInbox = await rotateCompanyInbox(ctx.supabase, ctx.companyId)
+          const newInbox = keepPrevious
+            ? await renameCompanyInbox(ctx.supabase, ctx.companyId)
+            : await rotateCompanyInbox(ctx.supabase, ctx.companyId)
           return NextResponse.json({
             data: {
               address: composeInboxAddress(newInbox.local_part, domain),
@@ -1179,6 +1217,11 @@ export const invoiceInboxExtension: Extension = {
             },
           })
         } catch (err) {
+          if (err instanceof InboxRenameRefused) {
+            return err.reason === 'unchanged'
+              ? NextResponse.json({ error: 'Inkorgsadressen har redan bolagets namn.' }, { status: 409 })
+              : NextResponse.json({ error: 'Bolaget har ingen inkorgsadress att byta.' }, { status: 404 })
+          }
           console.error('[invoice-inbox/inbox/rotate] Failed:', err)
           return NextResponse.json(
             { error: err instanceof Error ? err.message : 'Rotation failed' },
@@ -1251,11 +1294,13 @@ export const invoiceInboxExtension: Extension = {
             .eq('local_part', group.localPart)
             .maybeSingle()
           if (!inbox) continue
-          if (inbox.status !== 'active') {
+          // The active address, or an earlier one a rename kept (crm#1334).
+          if (!inboxReceivesMail(inbox.status)) {
             sharedInboxStatus ??= inbox.status
             continue
           }
-          // Two active addresses of one company file once.
+          // Two receiving addresses of one company (old and new, or one under
+          // two tags) file once.
           if (targets.some((t) => t.companyId === inbox.company_id)) continue
           // Sender-declared kind from the +lev / +ver tag. Set only from the
           // addresses that resolved this company: a tag on an unknown or

@@ -41,6 +41,7 @@ import { resolveSekAmountOrNull } from '@/lib/bookkeeping/currency-utils'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { getPrimaryJournalEntryId } from '@/lib/transactions/is-booked'
 import { idsProveDistinctBookings, type TransactionIdentity } from '@/lib/transactions/external-id'
+import { isAccountNumber } from '@/lib/invariants/account-number'
 
 /** Integer öre: representation-agnostic amount key (mirrors the ingest dedup). */
 function toOre(amount: number | string): number {
@@ -526,6 +527,15 @@ const UNVERIFIED_VOUCHER_DATE_WINDOW_DAYS = 1
 /** BAS "kassa och bank" range. 1910-1919 = kassa, 1920-1949 = bank/giro. */
 const BANK_ACCOUNT_LOW = 1910
 const BANK_ACCOUNT_HIGH = 1949
+
+/**
+ * True for an account inside the range the ledger guards scan when a bank
+ * row names no account. Compared as text, like the PostgREST range filter
+ * below: account numbers are identifiers, never quantities.
+ */
+export function isBankRangeAccount(account: string): boolean {
+  return isAccountNumber(account) && account >= String(BANK_ACCOUNT_LOW) && account <= String(BANK_ACCOUNT_HIGH)
+}
 
 /**
  * Find an unlinked posted voucher whose bank/cash (19xx) leg already books this

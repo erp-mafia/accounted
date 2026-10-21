@@ -14,6 +14,7 @@ import type { CustomerDto, SalesInvoiceDto, SupplierDto, SupplierInvoiceDto } fr
 import { runProviderMigrationWorker, failureCode } from './migration-job-worker'
 import { fiscalYearScopeFromImports } from './invoice-scope'
 import { ensureConsentSourceIdentity, ProviderCompanyMismatchError } from './provider-client'
+import { companyMismatchMessages } from './company-mismatch-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
@@ -51,7 +52,9 @@ async function sourceIdentityRefusal(ctx: ExtensionContext, consentId: string): 
     return null
   } catch (e) {
     if (e instanceof ProviderCompanyMismatchError) {
+      const message = companyMismatchMessages(e)
       return errorResponseFromCode('PROVIDER_COMPANY_MISMATCH', ctx.log, {
+        messageSv: message.sv, messageEn: message.en,
         details: { expectedOrgNumber: e.expectedOrgNumber, actualOrgNumber: e.actualOrgNumber, actualCompanyName: e.actualCompanyName },
       })
     }

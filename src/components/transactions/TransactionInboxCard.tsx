@@ -119,11 +119,12 @@ interface TransactionInboxCardProps {
    *  gates the move action, which is pointless with a single account. */
   cashAccounts?: CashAccount[]
   onToggleSelect: (id: string, extend?: boolean) => void
-  /** End date of the company's completed SIE-import coverage. Rows on or
-   *  before it are pre-migration history: they most likely correspond to an
-   *  already-imported verifikat, so the row carries a quiet marker steering
-   *  toward matching rather than re-booking. */
-  preMigrationCutoff?: string | null
+  /** Pre-migration history the imported bokföring already explains: dated
+   *  inside its coverage, with unlinked vouchers of the same amount within a
+   *  week (GET /api/transactions/migration-coverage). The row carries a quiet
+   *  marker steering toward matching rather than re-booking. Date alone is
+   *  not enough: it marked rows the old system never booked (crm#1239). */
+  preMigration?: boolean
   /** The visible columns (lib/transactions/columns-v2, UI v2 PR 4). */
   columns: ReadonlySet<TxColumnId>
   /** Konto column: bank and account, resolved by the page from cashAccounts. */
@@ -169,7 +170,7 @@ export default function TransactionInboxCard({
   onMoveCashAccount,
   cashAccounts,
   onToggleSelect,
-  preMigrationCutoff = null,
+  preMigration = false,
   columns,
   accountLabel = null,
   categoryLabel = null,
@@ -328,10 +329,9 @@ export default function TransactionInboxCard({
   const showOverflowMenu =
     showInvoiceMatchButton || showMatchVoucherItem || showMatchExpenseItem || showAttachDocumentItem || showSplitItem || showEditItem || showMoveAccountItem || showIgnoreItem || showDeleteItem
 
-  // Pre-migration history row (ISO dates compare lexically): most likely
-  // corresponds to an already-imported verifikat, so it carries a quiet
-  // marker steering toward matching rather than re-booking.
-  const isPreMigration = !!preMigrationCutoff && transaction.date <= preMigrationCutoff
+  // Pre-migration history row the imported bokföring explains: it carries a
+  // quiet marker steering toward matching rather than re-booking.
+  const isPreMigration = preMigration
   // The Bankgirot split behind the row (bank_transaction_parts), counted by
   // the list fetch: a quiet marker; the parts themselves are in the drawer.
   const partsCount = transaction.parts_count?.[0]?.count ?? 0

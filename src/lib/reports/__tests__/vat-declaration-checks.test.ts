@@ -568,6 +568,79 @@ describe('runVatDeclarationChecks', () => {
     ).toBe('ERROR')
   })
 
+  // crm#1348: an earlier period's import moved off 4545 to a cost account in a
+  // later period, its importmoms left where it was. Ruta 50 goes negative with
+  // rutor 60-62 empty; the proportional rule only saw positive bases, so the
+  // period read as clean while Skatteverket refused it (FK005 tests presence).
+  it('flags ERROR for a negative import base with rutor 60-62 empty (FK005)', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      ruta21: 4000,
+      ruta30: 1000,
+      ruta48: 1500,
+      ruta49: -500,
+      ruta50: -1200.5,
+    }
+    const findings = runVatDeclarationChecks(rutor)
+    expect(findings.map((f) => f.code)).toEqual(['IMPORT_BASE_WITHOUT_OUTPUT'])
+    const finding = findings[0]
+    expect(finding.status).toBe('ERROR')
+    expect(finding.message).toMatch(/1[\s ]?200 kr/)
+    expect(finding.message).toContain('FK005')
+    expect(finding.message).toContain('storno')
+    expect(isFilingBlocked(findings)).toBe(true)
+  })
+
+  it('flags ERROR for negative importmoms with ruta 50 empty (FK006)', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      ruta60: -250,
+      ruta48: -250,
+      ruta49: 0,
+    }
+    const findings = runVatDeclarationChecks(rutor)
+    expect(findings.map((f) => f.code)).toEqual(['IMPORT_OUTPUT_WITHOUT_BASE'])
+    expect(findings[0].status).toBe('ERROR')
+    expect(findings[0].message).toContain('FK006')
+  })
+
+  it('does not flag an import credited in full, base and importmoms together', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      ruta50: -1000,
+      ruta60: -250,
+      ruta48: -250,
+      ruta49: 0,
+    }
+    expect(runVatDeclarationChecks(rutor)).toEqual([])
+  })
+
+  // Presence is per ruta, as Skatteverket reads it: two rutor that net to zero
+  // are still two amounts in 60-62.
+  it('flags importmoms rutor that net to zero when ruta 50 is empty', () => {
+    const rutor: VatDeclarationRutor = { ...emptyRutor, ruta60: 100, ruta61: -100 }
+    expect(
+      runVatDeclarationChecks(rutor).find((f) => f.code === 'IMPORT_OUTPUT_WITHOUT_BASE')?.status,
+    ).toBe('ERROR')
+  })
+
+  // Presence is read on whole kronor as filed: öre alone file as 0, so
+  // Skatteverket sees no amount and neither does the check.
+  it('does not flag an öre-only ruta 50 without importmoms', () => {
+    for (const ruta50 of [0.8, -0.8]) {
+      expect(runVatDeclarationChecks({ ...emptyRutor, ruta50 })).toEqual([])
+    }
+  })
+
+  // A 1 kr base sits exactly on the proportional rule's 1 kr floor, so only the
+  // presence rule sees it; Skatteverket files it as 1 and refuses (FK005).
+  it('flags a whole-krona import base the tolerance floor would absorb', () => {
+    const finding = runVatDeclarationChecks({ ...emptyRutor, ruta50: 1 })
+      .find((f) => f.code === 'IMPORT_BASE_WITHOUT_OUTPUT')
+    expect(finding?.status).toBe('ERROR')
+    expect(finding?.message).toContain('2615/2625/2635')
+  })
+
   // At a small import base the tolerance is the 1 kr floor, not 0.5% (which
   // would be 0.50 kr on a 100 kr base). Every other import case above has a
   // basis large enough that the percentage branch wins, so the floor branch of
