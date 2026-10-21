@@ -58,12 +58,13 @@ function makeRequest(query: string) {
 /**
  * chart_of_accounts builder for fetchDynamicRuta05Accounts: which of the
  * company's own class 3 accounts carry a "Standard moms" and therefore belong
- * in ruta 05. Empty by default, i.e. a plain BAS chart.
+ * in ruta 05. Empty by default, i.e. a plain BAS chart. The same empty builder
+ * answers the invoice_write_offs read (no kundförlust decisions in the period).
  */
 function chartBuilder(accounts: Array<{ account_number: string; default_vat_rate: number }> = []) {
   const result = { data: accounts, error: null }
   const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'not', 'order']) b[m] = vi.fn().mockReturnValue(b)
+  for (const m of ['select', 'eq', 'in', 'not', 'order', 'gte', 'lte']) b[m] = vi.fn().mockReturnValue(b)
   b.range = vi.fn().mockResolvedValue(result)
   b.then = (resolve: (v: unknown) => void) => resolve(result)
   return b
@@ -156,9 +157,10 @@ describe('GET /api/reports/vat-declaration', () => {
 
     // Regression guard: the dead company_settings round trip is gone and
     // resolvePeriodDates makes no DB call for calendar quarters. The only
-    // table read left is chart_of_accounts, for the company's own ruta 05
-    // accounts (#1261).
-    expect(mockSupabase.from.mock.calls.map(([t]) => t)).toEqual(['chart_of_accounts'])
+    // table reads left are chart_of_accounts, for the company's own ruta 05
+    // accounts (#1261), and invoice_write_offs, for the kundförlust decisions
+    // that move ruta 05 to 08 in the period.
+    expect(mockSupabase.from.mock.calls.map(([t]) => t)).toEqual(['chart_of_accounts', 'invoice_write_offs'])
     expect(mockSupabase.rpc).toHaveBeenCalledTimes(1)
     expect(mockSupabase.rpc).toHaveBeenCalledWith(
       'get_vat_declaration_totals',

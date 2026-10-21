@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { releaseDoubtfulReserveAfterChange } from '@/lib/customer-loss/doubtful'
 import { eventBus } from '@/lib/events'
 import { createCreditNoteJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { creditBooksOriginalFirst, creditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
@@ -448,6 +449,14 @@ export async function issueCreditNote(input: IssueCreditNoteInput): Promise<Issu
     }
     originalStatusChanged = true
   }
+
+  // A befarad kundförlust reserve on the credited invoice is no longer
+  // needed (Dr 1519 / Cr 6352 in the credit note's period). Never throws.
+  await releaseDoubtfulReserveAfterChange(supabase, companyId, userId, {
+    invoiceId: originalInvoice.id,
+    entryDate: creditNote.invoice_date,
+    trigger: 'credit_note',
+  })
 
   if (originalStatusChanged) {
     try {

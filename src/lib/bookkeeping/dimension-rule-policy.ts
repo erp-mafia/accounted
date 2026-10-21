@@ -55,9 +55,12 @@ export type DimensionRulePolicy = 'enforced' | 'exempt'
  *     retries the same impossible entry while the interim account stays
  *     overstated);
  *   - vat_settlement, rot_rut_payout, rot_rut_reclaim,
- *     rot_rut_reclassification, expense_payout, stripe_payout: settlements computed from balances already booked
- *     (26xx, 1513, 2820/2893, the Stripe balance). Their only result lines
- *     (öresavrundning, Stripe fees) belong to no single project.
+ *     rot_rut_reclassification, expense_payout, stripe_payout,
+ *     collection_settlement: settlements computed from balances already
+ *     booked (26xx, 1513, 2820/2893, the Stripe balance, the collections
+ *     clearing account). Their only result lines (öresavrundning, Stripe
+ *     fees, the collections provider's deductions) belong to no single
+ *     project.
  */
 export const DIMENSION_RULE_POLICY: Readonly<Record<JournalEntrySourceType, DimensionRulePolicy>> = {
   manual: 'enforced',
@@ -89,7 +92,11 @@ export const DIMENSION_RULE_POLICY: Readonly<Record<JournalEntrySourceType, Dime
   vat_settlement: 'exempt',
   rot_rut_payout: 'exempt',
   rot_rut_reclaim: 'exempt',
+  // Kundförlust is computed from the invoice's own booked lines (1510,
+  // 26xx, the reserve on 1519); a required rule could never be met by it.
+  customer_loss: 'exempt',
   rot_rut_reclassification: 'exempt',
   expense_payout: 'exempt',
   stripe_payout: 'exempt',
+  collection_settlement: 'exempt',
 }

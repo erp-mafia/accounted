@@ -378,6 +378,11 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
     message_en:
       'A storno entry cannot be reversed. If the entry was cancelled by mistake, re-book it (copy the original).',
   },
+  CANNOT_REVERSE_COLLECTED_PAYMENT: {
+    httpStatus: 409,
+    message_sv: 'Betalningen kom via inkassobolaget och kan inte stornas här. Bokför om den under Avräkningar.',
+    message_en: 'The payment came through the collection agency and cannot be reversed here. Rebook it under Settlements.',
+  },
   CANNOT_CORRECT_NON_POSTED: {
     httpStatus: 400,
     message_sv: 'Endast bokförda verifikationer kan rättas.',
@@ -9029,6 +9034,99 @@ const COLLECTIONS: Record<string, StructuredErrorEntry> = {
     message_sv: 'Fakturan har redan ett ärende.',
     message_en: 'The invoice already has a case.',
   },
+  COLLECTION_SETTLEMENT_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Avräkningen från inkassobolaget hittades inte.',
+    message_en: 'The settlement from the collection agency was not found.',
+  },
+  COLLECTION_SETTLEMENT_NOT_BOOKABLE: {
+    httpStatus: 409,
+    message_sv: 'Avräkningen kan inte bokföras: inkassobolaget har markerat den som ogiltig, eller så har den redan hanterats.',
+    message_en: 'The settlement cannot be booked: the collection agency marked it as not valid, or it has already been handled.',
+  },
+  COLLECTION_SETTLEMENT_BUSY: {
+    httpStatus: 409,
+    message_sv: 'Avräkningen bokförs just nu. Vänta en stund och ladda om sidan.',
+    message_en: 'The settlement is being booked right now. Wait a moment and reload the page.',
+  },
+  COLLECTION_SETTLEMENT_NOT_POSSIBLE_DUPLICATE: {
+    httpStatus: 409,
+    message_sv: 'Avräkningen väntar inte på besked om en möjlig dubblett. Ladda om sidan.',
+    message_en: 'The settlement is not waiting for an answer about a possible duplicate. Reload the page.',
+  },
+  COLLECTION_SETTLEMENT_DOCUMENT_PENDING: {
+    httpStatus: 409,
+    message_sv: 'Inkassobolaget har inte tagit fram avräkningens underlag än. Försök igen senare.',
+    message_en: 'The collection agency has not produced the settlement document yet. Try again later.',
+  },
+  COLLECTED_PAYMENT_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Inbetalningen har ändrats sedan bokföringen förbereddes. Förbered den igen.',
+    message_en: 'The payment changed after the booking was staged. Stage it again.',
+    remediation: {
+      description: 'Read the payment again with gnubok_list_collection_settlements and stage a new booking.',
+      tool: 'gnubok_list_collection_settlements',
+    },
+  },
+  COLLECTION_SETTLEMENT_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Avräkningen har ändrats sedan bokföringen förbereddes. Förbered den igen.',
+    message_en: 'The settlement changed after the booking was staged. Stage it again.',
+    remediation: {
+      description: 'Read the payout again with gnubok_list_collection_settlements (settlement_id) and stage a new booking with its current lines.',
+      tool: 'gnubok_list_collection_settlements',
+    },
+  },
+  COLLECTION_SETTLEMENT_NEEDS_PERSON: {
+    httpStatus: 409,
+    message_sv: 'Avräkningen kan inte bokföras som den är. Välj konto för raderna som saknar ett, eller låt en person titta på den under Avräkningar.',
+    message_en: 'The settlement cannot be booked as it is. Choose an account for the lines that have none, or leave it to a person under Settlements.',
+    remediation: {
+      description:
+        'details.reason and details.issues say what is missing. Pass lines with an account for each line that needs_account or needs_vat_account (read them with gnubok_list_collection_settlements and settlement_id); anything else is for a person in Avräkningar.',
+      tool: 'gnubok_list_collection_settlements',
+    },
+  },
+  COLLECTION_SETTLEMENT_POSSIBLE_DUPLICATE: {
+    httpStatus: 409,
+    message_sv: 'Utbetalningen kan redan vara bokförd för hand. En person svarar på det under Avräkningar.',
+    message_en: 'The payout may already be booked by hand. A person answers that under Settlements.',
+  },
+  COLLECTION_SETTLEMENT_LINE_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Kontot kan inte användas för den här raden i avräkningen.',
+    message_en: 'The account cannot be used for this settlement line.',
+  },
+  COLLECTED_PAYMENT_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Inbetalningen till inkassobolaget hittades inte.',
+    message_en: 'The payment to the collection agency was not found.',
+  },
+  COLLECTED_PAYMENT_IGNORED: {
+    httpStatus: 409,
+    message_sv: 'Inbetalningen är markerad som hanterad och bokförs inte.',
+    message_en: 'The payment is marked as handled and is not booked.',
+  },
+  COLLECTED_PAYMENT_BUSY: {
+    httpStatus: 409,
+    message_sv: 'Inbetalningen bokförs just nu. Vänta en stund och ladda om sidan.',
+    message_en: 'The payment is being booked right now. Wait a moment and reload the page.',
+  },
+  COLLECTED_PAYMENT_NOT_BOOKED: {
+    httpStatus: 409,
+    message_sv: 'Inbetalningen är inte bokförd. Bokför den i stället för att bokföra om den.',
+    message_en: 'The payment is not booked. Book it instead of rebooking it.',
+  },
+  COLLECTED_PAYMENT_SETTLED: {
+    httpStatus: 409,
+    message_sv: 'Inbetalningen ingår i en bokförd utbetalning från inkassobolaget. Makulera utbetalningens verifikation först, sedan kan inbetalningen bokföras om.',
+    message_en: 'The payment is part of a booked payout from the collection agency. Reverse the payout voucher first, then the payment can be rebooked.',
+  },
+  COLLECTED_PAYMENT_VOUCHER_NOT_POSTED: {
+    httpStatus: 409,
+    message_sv: 'Inbetalningens verifikation är inte bokförd och kan inte bokföras om.',
+    message_en: 'The payment\'s voucher is not posted and cannot be rebooked.',
+  },
   COLLECTION_FORWARD_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Rapporteringen till inkassobolaget hittades inte för den här fakturan.',
@@ -9086,6 +9184,12 @@ const COLLECTIONS: Record<string, StructuredErrorEntry> = {
     message_en: 'The collection agency cannot start with that step.',
     thrown_message_sv: true,
   },
+  COLLECTION_REMINDER_FEE_NOT_AGREED: {
+    httpStatus: 409,
+    message_sv: 'En påminnelse från inkassobolaget kostar kunden en påminnelseavgift, och den får bara tas ut om den var avtalad när fakturan ställdes ut. Börja med inkassokrav, eller ange i inkassoinställningarna från vilket datum avgiften står i dina villkor.',
+    message_en: 'A reminder from the collection agency costs the customer a reminder fee, which may only be charged if it was agreed when the invoice was issued. Start with a collection notice, or set in the collection settings the date your terms have included the fee.',
+    thrown_message_sv: true,
+  },
   COLLECTION_PAYMENT_HISTORY_UNSUPPORTED: {
     httpStatus: 409,
     message_sv: 'Fakturans betalningar kan inte rapporteras till inkassobolaget. Kontrollera betalningarna på fakturan.',
@@ -9122,8 +9226,8 @@ const COLLECTIONS: Record<string, StructuredErrorEntry> = {
   },
   COLLECTION_PAUSE_UNTIL_INVALID: {
     httpStatus: 400,
-    message_sv: 'Välj ett datum efter i dag och högst ett år fram.',
-    message_en: 'Choose a date after today and at most a year ahead.',
+    message_sv: 'Välj ett datum efter i dag och högst 14 dagar fram, eller pausa utan datum.',
+    message_en: 'Choose a date after today and at most 14 days ahead, or pause without a date.',
   },
   COLLECTION_PAYMENT_NOT_REPORTED: {
     httpStatus: 409,
@@ -9566,6 +9670,120 @@ const OPEN_BANKING: Record<string, StructuredErrorEntry> = {
   },
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Kundförlust (lib/customer-loss). Befarad reserve, konstaterad write-off
+// and recovery on a customer invoice; behind CUSTOMER_LOSS_ENABLED.
+// ─────────────────────────────────────────────────────────────────
+
+const CUSTOMER_LOSS: Record<string, StructuredErrorEntry> = {
+  CUSTOMER_LOSS_DISABLED: {
+    httpStatus: 503,
+    message_sv: 'Kundförlust kan inte bokföras här just nu.',
+    message_en: 'Customer losses cannot be booked here right now.',
+  },
+  CUSTOMER_LOSS_FORBIDDEN: {
+    httpStatus: 403,
+    message_sv: 'Du har inte behörighet att bokföra kundförluster i det här företaget.',
+    message_en: 'You are not allowed to book customer losses in this company.',
+  },
+  CUSTOMER_LOSS_INVOICE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Fakturan hittades inte.',
+    message_en: 'Invoice not found.',
+  },
+  CUSTOMER_LOSS_INVOICE_NOT_OPEN: {
+    httpStatus: 409,
+    message_sv: 'Kundförlust kan bara bokföras på en skickad faktura som inte är betald eller krediterad.',
+    message_en: 'A customer loss can only be booked on a sent invoice that is neither paid nor credited.',
+  },
+  CUSTOMER_LOSS_CURRENCY_UNSUPPORTED: {
+    httpStatus: 422,
+    message_sv: 'Kundförlust kan bara bokföras här för fakturor i kronor.',
+    message_en: 'A customer loss can only be booked here for invoices in Swedish kronor.',
+  },
+  CUSTOMER_LOSS_DEDUCTION_UNSUPPORTED: {
+    httpStatus: 422,
+    message_sv: 'Kundförlust kan inte bokföras här för en faktura med ROT-, RUT- eller grön teknik-avdrag. Bokför den manuellt med din redovisningskonsult.',
+    message_en: 'A customer loss cannot be booked here for an invoice with a ROT, RUT or green technology deduction. Book it manually with your accountant.',
+  },
+  CUSTOMER_LOSS_INVOICE_NOT_BOOKED: {
+    httpStatus: 409,
+    message_sv: 'Fakturan är inte bokförd än. Bokför fakturan innan du bokför en kundförlust.',
+    message_en: 'The invoice is not booked yet. Book the invoice before booking a customer loss.',
+  },
+  CUSTOMER_LOSS_DOUBTFUL_NOT_BOOKED: {
+    httpStatus: 409,
+    message_sv: 'Fakturan är inte bokförd som fordran (kontantmetoden), så en befarad kundförlust påverkar inte bokföringen. Bokför en konstaterad kundförlust när förlusten är visad.',
+    message_en: 'The invoice is not booked as a receivable (cash method), so a doubtful loss does not affect the books. Book a confirmed loss once the loss is shown.',
+  },
+  CUSTOMER_LOSS_LEDGER_MISMATCH: {
+    httpStatus: 409,
+    message_sv: 'Fakturans kvarvarande belopp stämmer inte med verifikationen i bokföringen. Kontrollera fakturans betalningar innan du bokför en kundförlust.',
+    message_en: 'The invoice\'s remaining amount does not match its voucher. Check the invoice\'s payments before booking a customer loss.',
+  },
+  CUSTOMER_LOSS_ALREADY_RESERVED: {
+    httpStatus: 409,
+    message_sv: 'En befarad kundförlust är redan bokförd för hela det obetalda beloppet.',
+    message_en: 'A doubtful loss is already booked for the whole unpaid amount.',
+  },
+  CUSTOMER_LOSS_EVIDENCE_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'En konstaterad kundförlust kräver underlag, till exempel konkursbesked eller beslut från Kronofogden.',
+    message_en: 'A confirmed customer loss needs evidence, for example a bankruptcy notice or a decision from the Enforcement Authority.',
+  },
+  CUSTOMER_LOSS_EVIDENCE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Underlaget hittades inte.',
+    message_en: 'The evidence document was not found.',
+  },
+  CUSTOMER_LOSS_NOT_WRITTEN_OFF: {
+    httpStatus: 409,
+    message_sv: 'Fakturan är inte bokförd som konstaterad kundförlust.',
+    message_en: 'The invoice is not booked as a confirmed customer loss.',
+  },
+  CUSTOMER_LOSS_RECOVERY_EXCEEDS: {
+    httpStatus: 422,
+    message_sv: 'Beloppet är större än det som skrevs av som kundförlust.',
+    message_en: 'The amount is larger than what was written off as a customer loss.',
+  },
+  CUSTOMER_LOSS_RECOVERY_CASE_OPEN: {
+    httpStatus: 409,
+    message_sv: 'Fakturan har ett öppet inkassoärende. Avsluta eller återkalla ärendet först, så att inkassobolaget inte kräver kunden på det som redan är betalt. Bokför sedan betalningen som återvunnen kundförlust.',
+    message_en: 'The invoice has an open collection case. Close or withdraw the case first, so the collection agency does not pursue the customer for what is already paid. Then book the payment as a recovered loss.',
+  },
+  CUSTOMER_LOSS_RECOVERY_NOT_BOOKED: {
+    httpStatus: 409,
+    message_sv: 'Fakturan bokfördes aldrig som fordran (kontantmetoden). Bokför betalningen som en vanlig försäljning.',
+    message_en: 'The invoice was never booked as a receivable (cash method). Book the payment as an ordinary sale.',
+  },
+  CUSTOMER_LOSS_NO_FISCAL_PERIOD: {
+    httpStatus: 422,
+    message_sv: 'Det finns inget öppet räkenskapsår för datumet.',
+    message_en: 'There is no open fiscal year for the date.',
+  },
+  CUSTOMER_LOSS_RACE: {
+    httpStatus: 409,
+    message_sv: 'Kundförlusten bokförs redan. Uppdatera sidan och försök igen.',
+    message_en: 'The customer loss is already being booked. Refresh the page and try again.',
+    retryable: true,
+  },
+  CUSTOMER_LOSS_ANNUL_NOT_LATEST: {
+    httpStatus: 409,
+    message_sv: 'Det finns ett senare kundförlustbeslut på fakturan. Återför det först.',
+    message_en: 'The invoice has a later customer loss decision. Reverse that one first.',
+  },
+  CUSTOMER_LOSS_VOUCHER_LOCKED: {
+    httpStatus: 409,
+    message_sv: 'En kundförlustverifikation rättas inte. Återför verifikationen (storno) och bokför kundförlusten på nytt.',
+    message_en: 'A customer loss voucher is not corrected in place. Reverse it and book the customer loss again.',
+  },
+  CUSTOMER_LOSS_RECORD_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kundförlusten kunde inte registreras på fakturan, så verifikationen återfördes direkt. Försök igen eller kontakta support.',
+    message_en: 'The customer loss could not be recorded on the invoice, so its voucher was reversed at once. Try again or contact support.',
+  },
+}
+
 // The payment signing link (lib/payments/orders/signing-links.ts): a basket
 // of approved bank payments a firmatecknare signs at /betala/<token>.
 const PAYMENT_SIGNING_LINKS: Record<string, StructuredErrorEntry> = {
@@ -9724,6 +9942,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...PAYMENT_ORDERS,
   ...COLLECTIONS,
   ...OPEN_BANKING,
+  ...CUSTOMER_LOSS,
   ...PAYMENT_SIGNING_LINKS,
   ...PENDING_OPERATIONS,
 }

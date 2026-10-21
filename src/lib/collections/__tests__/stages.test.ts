@@ -43,9 +43,9 @@ describe('stages', () => {
     expect(caseKickerKey('registered')).toBe('card_kicker_collection')
   })
 
-  it('lets a pause run from tomorrow to a year ahead', () => {
-    expect(pauseUntilWindow('2026-10-06')).toEqual({ earliest: '2026-10-07', latest: '2027-10-06' })
-    expect(pauseUntilWindow('2028-02-28')).toEqual({ earliest: '2028-02-29', latest: '2029-02-27' })
+  it('lets a pause run from tomorrow to 14 days ahead, the longest the provider postpones a step', () => {
+    expect(pauseUntilWindow('2026-10-06')).toEqual({ earliest: '2026-10-07', latest: '2026-10-20' })
+    expect(pauseUntilWindow('2028-02-20')).toEqual({ earliest: '2028-02-21', latest: '2028-03-05' })
   })
 
   it('treats every start action as web-only', () => {

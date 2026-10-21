@@ -1,0 +1,1 @@
+[2026-10-07] The kundförlust operation id is invoices.customer-loss.record (the build spec said invoices.record_customer_loss): operation ids are <resource>.<verb> with hyphens only. The MCP tool and pending type keep the spec's names (gnubok_record_customer_loss, record_customer_loss).

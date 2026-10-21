@@ -131,8 +131,14 @@ export function useCollectionsAvailability(): CollectionsAvailability | null {
   return availability
 }
 
-/** Whether a settings entry point for collections should show at all. */
-export function collectionsEntryShown(a: CollectionsAvailability | null): boolean {
+/**
+ * Whether collections is in play for the company (offered, or something
+ * open): a settings entry point shows, and the invoice list and an invoice's
+ * header read an owed invoice past its due date as overdue.
+ */
+export function collectionsEntryShown(
+  a: (Pick<CollectionsAvailability, 'start' | 'obligations'> & { connection: object | null }) | null,
+): boolean {
   return !!a && (a.start !== 'hidden' || a.connection !== null || a.obligations)
 }
 

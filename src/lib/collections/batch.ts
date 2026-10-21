@@ -166,3 +166,24 @@ export const BATCH_CONFIRMATION_WORD = 'skicka'
 export function batchConfirmationMatches(typed: string): boolean {
   return typed.trim().toLocaleLowerCase('sv-SE') === BATCH_CONFIRMATION_WORD
 }
+
+/**
+ * The two collections rows of Att göra count an invoice once. A decision
+ * the pending batch proposes (an approve_step item still in it) belongs to
+ * the batch row: the batch is where it is proposed with the morning's bank
+ * check, and approving the batch sends it. The decision row counts the cases
+ * waiting for a decision outside the batch (a dispute, the customer's
+ * "already paid", or a step taken out of the batch, which goes back to it).
+ */
+export function collectionWorkCounts(
+  decisionCaseIds: readonly string[],
+  batchItems: readonly BatchItem[],
+  removals: readonly BatchRemoval[],
+): { decision: number; batchReady: number } {
+  const remaining = remainingBatchItems({ items: [...batchItems] }, removals)
+  const proposed = new Set(remaining.filter((item) => item.kind === 'approve_step' && item.case_id).map((item) => item.case_id))
+  return {
+    decision: decisionCaseIds.filter((id) => !proposed.has(id)).length,
+    batchReady: remaining.length,
+  }
+}

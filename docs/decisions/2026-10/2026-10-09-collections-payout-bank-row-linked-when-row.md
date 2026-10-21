@@ -1,0 +1,1 @@
+[2026-10-09] The collections payout bank row is linked only when the row's cash account books to the 19xx account the payout voucher debits (rows with no cash account, older imports, stay candidates): a payout row on another bank account never explains the voucher, and linking it would show that account's row as booked while its ledger never got the money.

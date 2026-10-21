@@ -6,6 +6,7 @@ import type {
   CollectionsOnboardingRequest,
   CollectionsSettings,
 } from '@accounted/connect-contract'
+import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { resolveCompanyEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { createLogger } from '@/lib/logger'
@@ -18,6 +19,7 @@ import {
   isEmail,
   normalizeVatNumber,
   payoutOptions,
+  validateBookingAccounts,
   validateCompanyStep,
   validateKycStep,
   validateRulesStep,
@@ -315,6 +317,19 @@ export async function loadActivationContext(
 // ---------------------------------------------------------------------------
 
 /**
+ * What a new connection starts with for automatic booking: off, both for the
+ * payments the provider collected and for payouts. Every booking then waits
+ * for a person in Att göra and Avräkningar until the company turns automatic
+ * booking on under Bokföring. Whether on may be the default is the
+ * accountant's decision (sign-off item); until then a new connection books
+ * nothing by itself. The column defaults (false) say the same.
+ */
+export const NEW_CONNECTION_AUTO_BOOK = Object.freeze({
+  auto_book_collected_payments: false,
+  auto_book_settlements: false,
+})
+
+/**
  * The admin has read the provider's terms (the catalogue's version) and
  * agreed to share customer data: create the connection row. No provider
  * call. The route has already passed the 'activation' start gate.
@@ -352,6 +367,9 @@ export async function recordConsent(deps: ConnectionServiceDeps, body: ConsentBo
       dpa_version: entry.provider.dpaVersion,
       consented_by: deps.actor.userId,
       consented_at: now.toISOString(),
+      // A new connection books nothing by itself until the company turns automatic booking on.
+      auto_book_collected_payments: NEW_CONNECTION_AUTO_BOOK.auto_book_collected_payments,
+      auto_book_settlements: NEW_CONNECTION_AUTO_BOOK.auto_book_settlements,
     })
     .select('*')
     .single()
@@ -705,6 +723,18 @@ export async function endConnection(deps: ConnectionServiceDeps, kind: 'cancel' 
  * once onboarded; both approvals stay locked on in every write. The caller
  * gates turning delivery on (flags.ts 'delivery_settings').
  */
+/** Whether collected payments are booked on the clearing account and not yet paid out by a booked payout. */
+async function hasUnsettledCollectedPayments(db: SupabaseClient, companyId: string): Promise<boolean> {
+  const { count, error } = await db
+    .from('collection_collected_payments')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .eq('status', 'booked')
+    .is('settlement_id', null)
+  if (error) throw new Error(`collection_collected_payments lookup failed: ${error.message}`)
+  return (count ?? 0) > 0
+}
+
 export async function updateConnectionSettings(deps: ConnectionServiceDeps, patch: SettingsPatch): Promise<CollectionConnectionRow> {
   if (!deps.actor) throw new Error('updateConnectionSettings needs a person')
   const row = await requireLive(deps)
@@ -721,9 +751,32 @@ export async function updateConnectionSettings(deps: ConnectionServiceDeps, patc
     { today: todayIsoStockholm(now), requireLadderChoice: false },
   )
   for (const [field, key] of Object.entries(rules)) if (key) errors[field] = key
+  const accountsChanged = patch.clearingAccount !== undefined || patch.payoutAccount !== undefined
+  const accounts = { clearingAccount: patch.clearingAccount ?? row.clearing_account, payoutAccount: patch.payoutAccount ?? row.payout_account }
+  if (accountsChanged) {
+    Object.assign(errors, validateBookingAccounts(accounts))
+    if (!errors.clearingAccount && !errors.payoutAccount) {
+      // The engine seeds a missing BAS account at booking; one it cannot resolve would refuse every booking.
+      const unresolvable = await findUnresolvableAccounts(deps.db, deps.companyId, [accounts.clearingAccount, accounts.payoutAccount])
+      if (unresolvable.includes(accounts.clearingAccount)) errors.clearingAccount = 'account_not_in_chart'
+      if (unresolvable.includes(accounts.payoutAccount)) errors.payoutAccount = 'account_not_in_chart'
+    }
+    // A payout credits the clearing account the connection names when it is
+    // booked, so capital booked on the old account and not paid out yet would
+    // stay there while the new one went short.
+    if (!errors.clearingAccount && accounts.clearingAccount !== row.clearing_account && (await hasUnsettledCollectedPayments(deps.db, deps.companyId))) {
+      errors.clearingAccount = 'clearing_account_in_use'
+    }
+  }
   if (Object.keys(errors).length > 0) throw new ActivationValidationError(errors)
 
   const next: Partial<CollectionConnectionRow> = {}
+  // Booking settings stay in the ledger: the provider is not told. The
+  // database audits every change of them with the person (audit_collection_connections_rules).
+  if (patch.clearingAccount !== undefined) next.clearing_account = accounts.clearingAccount
+  if (patch.payoutAccount !== undefined) next.payout_account = accounts.payoutAccount
+  if (patch.autoBookCollectedPayments !== undefined) next.auto_book_collected_payments = patch.autoBookCollectedPayments
+  if (patch.autoBookSettlements !== undefined) next.auto_book_settlements = patch.autoBookSettlements
   if (patch.minimumAmount !== undefined) next.minimum_amount = roundOre(patch.minimumAmount)
   if (patch.defaultStartStep !== undefined) next.default_start_step = patch.defaultStartStep
   if (patch.reminderFeeTermsSince !== undefined) next.reminder_fee_terms_since = patch.reminderFeeTermsSince

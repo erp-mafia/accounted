@@ -61,6 +61,9 @@ const SERVICE_ROLE_ONLY = [
   'collection_forward_case_for_invoice(uuid,uuid,boolean)',
   // The forward reconcile (20261012030500): the sync cron only.
   'reconcile_collection_forwards(uuid)',
+  // Kundförlust decisions (20261021120700): lib/customer-loss calls it as the
+  // service role after its own writer check; no session records a decision.
+  'record_invoice_write_off(uuid,uuid,uuid,text,date,numeric,numeric,numeric,jsonb,numeric,uuid,uuid,text,uuid,uuid,uuid)',
   // The event outbox (20261017120100): the event bus's writer, the
   // dispatcher, the events cleanup cron and the shadow reconciliation.
   'enqueue_event(text,uuid,jsonb,text[],text,jsonb)',

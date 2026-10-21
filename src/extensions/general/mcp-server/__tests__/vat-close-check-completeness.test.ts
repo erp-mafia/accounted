@@ -633,6 +633,57 @@ describe('gnubok_vat_close_check: declaration completeness', () => {
     expect(result.ready_to_close).toBe(true)
   })
 
+  it('leaves a kundförlust recovery on 3950 out of the warning and keeps warning about 3950 booked by hand', async () => {
+    const chart: MockChartAccount[] = [{
+      account_number: '3950',
+      account_name: 'Återvunna, tidigare avskrivna kundfordringar',
+      account_class: 3,
+      default_vat_rate: null,
+      default_vat_treatment: null,
+    }]
+    const recovery = [{ id: 'w1', kind: 'recovered', net_amount: 400, reverses_id: null, vat_by_rate: [{ account: '2611', rate: 25, vat: 100, base: 400 }] }]
+    // Recovery only: 400 + 100 reported again through ruta 05, nothing to warn about.
+    const recovered = await computeVatCloseCheck(
+      PERIOD,
+      'company-1',
+      mockSupabase(
+        [
+          { entry: 'e1', account_number: '1930', debit_amount: 500 },
+          { entry: 'e1', account_number: '3950', credit_amount: 400 },
+          { entry: 'e1', account_number: '2611', credit_amount: 100 },
+        ],
+        chart,
+        undefined,
+        null,
+        { invoice_write_offs: recovery },
+      ),
+    )
+    expect(recovered.declaration_checks.find((f) => f.code === 'REVENUE_ACCOUNT_WITHOUT_RUTA')?.status ?? 'OK').not.toBe('WARNING')
+
+    // 250 more booked on 3950 by hand: that part is warned about.
+    const byHand = await computeVatCloseCheck(
+      PERIOD,
+      'company-1',
+      mockSupabase(
+        [
+          { entry: 'e1', account_number: '1930', debit_amount: 500 },
+          { entry: 'e1', account_number: '3950', credit_amount: 400 },
+          { entry: 'e1', account_number: '2611', credit_amount: 100 },
+          { entry: 'e2', account_number: '1930', debit_amount: 250 },
+          { entry: 'e2', account_number: '3950', credit_amount: 250 },
+        ],
+        chart,
+        undefined,
+        null,
+        { invoice_write_offs: recovery },
+      ),
+    )
+    const finding = byHand.declaration_checks.find((f) => f.code === 'REVENUE_ACCOUNT_WITHOUT_RUTA')!
+    expect(finding.status).toBe('WARNING')
+    expect(finding.message).toMatch(/3950/)
+    expect(finding.message).toMatch(/250/)
+  })
+
   it('stays silent once the account has a momskod', async () => {
     const result = await computeVatCloseCheck(
       PERIOD,

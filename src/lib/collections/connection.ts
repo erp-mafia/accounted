@@ -137,6 +137,7 @@ export function connectionFacts(row: CollectionConnectionRow): CollectionsConnec
     distributionEnabled: row.distribution_enabled,
     ladderMode: row.ladder_mode,
     displayName: row.display_name,
+    providerRef: row.provider_ref,
   }
 }
 
@@ -169,6 +170,8 @@ export interface CollectionConnectionView {
     ladderDaysAfterDue: number
     clearingAccount: string
     payoutAccount: string
+    autoBookCollectedPayments: boolean
+    autoBookSettlements: boolean
   }
 }
 
@@ -200,6 +203,8 @@ export function connectionView(row: CollectionConnectionRow): CollectionConnecti
       ladderDaysAfterDue: row.ladder_days_after_due,
       clearingAccount: row.clearing_account,
       payoutAccount: row.payout_account,
+      autoBookCollectedPayments: row.auto_book_collected_payments,
+      autoBookSettlements: row.auto_book_settlements,
     },
   }
 }

@@ -105,6 +105,8 @@ export interface CollectionsConnectionFacts {
   ladderMode: 'off' | 'staged' | null
   /** The provider's name as the catalogue gave it at activation (the fallback when the catalogue is down). */
   displayName: string
+  /** The catalogue's provider slug stored at activation (the mark's fallback when the catalogue is down). */
+  providerRef?: string | null
 }
 
 /** Work the company owes or is owed at the provider, whatever the start gates say. */

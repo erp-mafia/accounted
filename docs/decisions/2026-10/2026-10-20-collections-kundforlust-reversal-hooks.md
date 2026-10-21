@@ -1,0 +1,1 @@
+[2026-10-20] The collections payout and kundförlust reversal mirrors move into main's reversal hook registry, as planned on 2026-10-16: the hook context gains the actor and, after the storno, the storno; the rebook flag reaches the payment hook. Phase 2 allows no ledger to invoicing import.

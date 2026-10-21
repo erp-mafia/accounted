@@ -1,6 +1,7 @@
 import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
 import { format as formatDateFns, parseISO, isValid } from "date-fns"
+import { roundOre } from "@/lib/money"
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
@@ -82,6 +83,19 @@ export function formatCurrency(
     // value, never crash the page.
     return `${new Intl.NumberFormat('sv-SE', digits).format(amount)} ${code}`
   }
+}
+
+/**
+ * An amount in kronor with öre only when it has them: whole kronor without
+ * decimals ("12 500 kr"), otherwise both öre digits ("11 250,50 kr"). The
+ * collections screens and the kundförlust texts show amounts this way.
+ * Pure and client-safe.
+ */
+export function formatKronor(amount: number): string {
+  const ore = roundOre(amount)
+  return Number.isInteger(ore)
+    ? formatCurrency(ore, 'SEK', { maximumFractionDigits: 0 })
+    : formatCurrency(ore, 'SEK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 export function formatDate(date: Date | string): string {

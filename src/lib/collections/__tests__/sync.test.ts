@@ -3,7 +3,7 @@ import type { CollectionsChanges, CollectionsChangesRequest } from '@accounted/c
 import { eventBus } from '@/lib/events'
 import { openCollectionCase } from '../open-case'
 import { applyCaseSnapshot, loadCaseById } from '../case'
-import { changeFeedStart, nightlyDue, runCollectionsSync, submissionRetryDelayMs } from '../sync'
+import { changeFeedStart, nightlyDue, runCollectionsSync, SETTLEMENT_SYNC_RESERVE_MS, submissionRetryDelayMs } from '../sync'
 import type { CollectionsAdapter } from '../port'
 import { CONNECTION_ID, createCaseWorld, ENV_OFF, INVOICE_ID, MINUTE, OPENED_AT, retryableError, type CaseWorld } from './case-fixtures'
 import { COMPANY_ID } from './memory-supabase'
@@ -212,6 +212,42 @@ describe('runCollectionsSync: cases', () => {
     const summary = await runCollectionsSync({ db: world.db.client, env: ENV_OFF, now: world.now, adapterFor: () => world.adapter, feedAdapter: null })
     expect(summary.cases.refreshed).toBe(1)
     expect(world.db.rows('collection_cases')[0]).toMatchObject({ stage: 'awaiting_decision', decision_kind: 'approve_collection_notice' })
+  })
+
+  it('keeps the reserve for the settlement work: with only the reserve left, the cases wait and the payouts go on', async () => {
+    const world = await createCaseWorld()
+    await handedOver(world)
+    world.clock.now = OPENED_AT + 6 * MINUTE
+    world.db.rows('collection_cases')[0].last_synced_at = new Date(OPENED_AT).toISOString()
+    world.db.seed('collection_settlements', [
+      {
+        id: 'stl-1',
+        company_id: COMPANY_ID,
+        connection_id: CONNECTION_ID,
+        provider_settlement_ref: '7731',
+        payment_date: '2026-10-01',
+        amount: 100,
+        currency: 'SEK',
+        status: 'booked',
+        journal_entry_id: 'je-d1',
+        booked_at: world.now().toISOString(),
+        provider_acknowledged_at: null,
+        bank_reference: null,
+      },
+    ])
+    // The fake provider never pays out; this one takes the booked mark.
+    const adapter: CollectionsAdapter = { ...world.adapter, markSettlementBooked: vi.fn(async () => null) }
+    const summary = await runCollectionsSync({
+      db: world.db.client,
+      env: ENV_OFF,
+      now: world.now,
+      adapterFor: () => adapter,
+      feedAdapter: null,
+      budgetMs: SETTLEMENT_SYNC_RESERVE_MS,
+      clock: () => 0,
+    })
+    expect(summary.cases.refreshed).toBe(0)
+    expect(summary.settlements).toMatchObject({ acknowledged: 1, deferred: 0 })
   })
 
   it('records a failed read on the case and keeps going', async () => {

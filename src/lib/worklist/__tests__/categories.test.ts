@@ -10,13 +10,15 @@ vi.mock('@/lib/bank-feed/switch-campaign', () => ({
 import {
   countBankSwitchDue,
   listBankSwitchDue,
+  countCollectedPaymentsToBook,
+  countCollectionSettlementsToBook,
   countDeadlinesNeedingAction,
   countFailedPeppolDeliveries,
   countInboxDocuments,
   getOverdueInvoicesDue,
   summarizeOverdueInvoices,
   countPendingOperations,
-  countCollectionBatchItems,
+  countCollectionDecisionsAndBatch,
   countReconciliationDue,
   countSuggestedMatches,
   countUnclassifiedDocuments,
@@ -259,6 +261,26 @@ describe('countVerifikatMissingDocument', () => {
   })
 })
 
+describe('Avräkningar rows', () => {
+  it('counts the payouts and collected payments of the company that the page counts as waiting for a person', async () => {
+    enqueue({ count: 2 })
+    await expect(countCollectionSettlementsToBook(supabase, COMPANY)).resolves.toBe(2)
+    expect(findCalls('collection_settlements', 'eq')).toEqual(expect.arrayContaining([['company_id', COMPANY]]))
+    expect(findCalls('collection_settlements', 'in')).toEqual([['status', ['received', 'needs_mapping']]])
+    enqueue({ count: 3 })
+    await expect(countCollectedPaymentsToBook(supabase, COMPANY)).resolves.toBe(3)
+    expect(findCalls('collection_collected_payments', 'eq')).toEqual(expect.arrayContaining([['company_id', COMPANY]]))
+    expect(findCalls('collection_collected_payments', 'in')).toEqual([['status', ['pending', 'needs_review']]])
+  })
+
+  it('soft-fails to 0 on query error', async () => {
+    enqueue({ error: { message: 'boom' } })
+    await expect(countCollectionSettlementsToBook(supabase, COMPANY)).resolves.toBe(0)
+    enqueue({ error: { message: 'boom' } })
+    await expect(countCollectedPaymentsToBook(supabase, COMPANY)).resolves.toBe(0)
+  })
+})
+
 describe('simple head counts', () => {
   it.each([
     ['countSupplierInvoicesAwaitingApproval', countSupplierInvoicesAwaitingApproval, 'supplier_invoices'],
@@ -270,6 +292,10 @@ describe('simple head counts', () => {
     expect(mockSupabase.from).toHaveBeenCalledWith(table)
   })
 })
+
+function item(kind: 'open' | 'start' | 'approve_step', invoiceId: string, caseId: string | null = null) {
+  return { kind, invoice_id: invoiceId, case_id: caseId }
+}
 
 describe('getOverdueInvoicesDue: one grouped row per company (crm#1084, accounted#19)', () => {
   const TODAY = '2026-10-13'
@@ -402,19 +428,36 @@ describe('countPendingOperations and the collections batch', () => {
   })
 
   it('counts the items of the pending batch less the removed ones', async () => {
-    enqueue({ data: [{ id: 'op-1', params: { items: [{}, {}, {}] } }], error: null })
-    enqueue({ count: 1, error: null })
-    await expect(countCollectionBatchItems(supabase, COMPANY)).resolves.toBe(2)
+    enqueue({ data: [], error: null })
+    enqueue({ data: [{ id: 'op-1', params: { items: [item('open', 'i1'), item('open', 'i2'), item('start', 'i3')] } }], error: null })
+    enqueue({ data: [{ invoice_id: 'i3', kind: 'start' }], error: null })
+    await expect(countCollectionDecisionsAndBatch(supabase, COMPANY)).resolves.toEqual({ decision: 0, batchReady: 2 })
     expect(findCalls('collection_batch_removals', 'eq')).toContainEqual(['pending_operation_id', 'op-1'])
-    expect(mockSupabase.from).toHaveBeenCalledWith('pending_operations')
     expect(findCalls('pending_operations', 'eq')).toContainEqual(['operation_type', 'collections_daily_batch'])
+    expect(findCalls('collection_cases', 'eq')).toContainEqual(['stage', 'awaiting_decision'])
   })
 
-  it('counts nothing without a pending batch, and soft-fails to 0', async () => {
+  it('counts a decision the batch proposes once, in the batch row', async () => {
+    enqueue({ data: [{ id: 'case-1' }, { id: 'case-2' }], error: null })
+    enqueue({ data: [{ id: 'op-1', params: { items: [item('open', 'i1'), item('approve_step', 'i9', 'case-1')] } }], error: null })
     enqueue({ data: [], error: null })
-    await expect(countCollectionBatchItems(supabase, COMPANY)).resolves.toBe(0)
+    await expect(countCollectionDecisionsAndBatch(supabase, COMPANY)).resolves.toEqual({ decision: 1, batchReady: 2 })
+  })
+
+  it('gives a decision taken out of the batch back to the decision row', async () => {
+    enqueue({ data: [{ id: 'case-1' }], error: null })
+    enqueue({ data: [{ id: 'op-1', params: { items: [item('open', 'i1'), item('approve_step', 'i9', 'case-1')] } }], error: null })
+    enqueue({ data: [{ invoice_id: 'i9', kind: 'approve_step' }], error: null })
+    await expect(countCollectionDecisionsAndBatch(supabase, COMPANY)).resolves.toEqual({ decision: 1, batchReady: 1 })
+  })
+
+  it('counts decisions alone without a pending batch, and soft-fails each part', async () => {
+    enqueue({ data: [{ id: 'case-1' }], error: null })
+    enqueue({ data: [], error: null })
+    await expect(countCollectionDecisionsAndBatch(supabase, COMPANY)).resolves.toEqual({ decision: 1, batchReady: 0 })
     enqueue({ data: null, error: { message: 'boom' } })
-    await expect(countCollectionBatchItems(supabase, COMPANY)).resolves.toBe(0)
+    enqueue({ data: null, error: { message: 'boom' } })
+    await expect(countCollectionDecisionsAndBatch(supabase, COMPANY)).resolves.toEqual({ decision: 0, batchReady: 0 })
   })
 })
 

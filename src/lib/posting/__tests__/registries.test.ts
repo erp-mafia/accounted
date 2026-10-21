@@ -26,7 +26,8 @@ const SOURCE_TYPES = [
   'supplier_invoice_registered', 'supplier_invoice_paid', 'supplier_invoice_cash_payment',
   'supplier_credit_note', 'currency_revaluation', 'supplier_invoice_privately_paid', 'reminder_fee', 'accrual',
   'result_appropriation', 'rot_rut_payout', 'vat_settlement', 'stripe_payout', 'webshop_order', 'expense_claim',
-  'expense_payout', 'rot_rut_reclaim', 'pos_daily_sales', 'rot_rut_reclassification',
+  'expense_payout', 'rot_rut_reclaim', 'pos_daily_sales', 'rot_rut_reclassification', 'collection_settlement',
+  'customer_loss',
 ]
 
 const TRANSACTION_CATEGORIES: TransactionCategory[] = [
@@ -51,6 +52,7 @@ describe('business event kinds (a closed, add-only list)', () => {
     expect(BUSINESS_EVENT_KINDS.slice(29, 30)).toEqual(['expense.mileage_allowance'])
     expect(BUSINESS_EVENT_KINDS.slice(30, 33)).toEqual(['asset.depreciated', 'asset.disposed', 'se.tax_account.booked'])
     expect(BUSINESS_EVENT_KINDS.slice(33, 34)).toEqual(['payroll.vacation_liability_adjusted'])
+    expect(BUSINESS_EVENT_KINDS.slice(34, 35)).toEqual(['sale.customer_loss'])
   })
 
   it('gives every source type the database accepts a kind, and every kind but the producer-named ones a source type', () => {
@@ -178,6 +180,8 @@ describe('mapping_version', () => {
     expect(mappingVersion('rotRut', 'r1')).toBe('se.rot-rut-lines@r1')
     expect(mappingVersion('reconciliationResidual', 'r1')).toBe('se.reconciliation-residual@r1')
     expect(mappingVersion('vatRcBasisFix', 'r1')).toBe('se.vat-rc-basis-fix@r1')
+    expect(mappingVersion('collectionsSettlement', 'r1')).toBe('se.collections-settlement-lines@r1')
+    expect(mappingVersion('customerLoss', 'r1')).toBe('se.customer-loss-lines@r1')
     const before = { sha: process.env.VERCEL_GIT_COMMIT_SHA, build: process.env.NEXT_PUBLIC_BUILD_ID }
     try {
       process.env.VERCEL_GIT_COMMIT_SHA = 'abcdef1234567890'

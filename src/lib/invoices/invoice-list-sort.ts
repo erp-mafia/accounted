@@ -22,6 +22,8 @@ const statusRank: Record<InvoiceStatus, number> = {
   partially_paid: 2,
   overdue: 3,
   paid: 4,
+  // Settled by a konstaterad kundförlust: after paid, before credited.
+  written_off: 5,
   credited: 6,
   cancelled: 7,
 }

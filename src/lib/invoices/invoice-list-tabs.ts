@@ -19,6 +19,9 @@ export const INVOICE_LIST_MORE_TABS = [
   // collection_attention_case_ids, passed in as the context; without it the
   // view is empty.
   'collections',
+  // "Kundförlust": invoices written off as a konstaterad kundförlust
+  // (lib/customer-loss); shown once there is one.
+  'written_off',
   'proforma',
   'delivery_note',
   'credit',
@@ -37,6 +40,24 @@ export type QuoteListTab = (typeof QUOTE_LIST_TABS)[number]
 
 /** Either list's view id: the two pages share one list component. */
 export type AnyListTab = InvoiceListTab | QuoteListTab
+
+/**
+ * The views the invoice list shows as a visible segmented control while
+ * collections is in play (Förfallna, Hos inkasso). The status picker then
+ * leaves them out, so each view has one door, and while one of them is
+ * active the picker shows its neutral label with nothing checked.
+ */
+export const COLLECTIONS_SEGMENT_TABS = ['overdue', 'collections'] as const
+
+export function statusPickerTabs<T extends string>(tabs: readonly T[], segmentShown: boolean): T[] {
+  if (!segmentShown) return [...tabs]
+  return tabs.filter((tab) => !(COLLECTIONS_SEGMENT_TABS as readonly string[]).includes(tab))
+}
+
+/** Whether the active view belongs to the segmented control rather than the status picker. */
+export function segmentViewActive(tab: string, segmentShown: boolean): boolean {
+  return segmentShown && (COLLECTIONS_SEGMENT_TABS as readonly string[]).includes(tab)
+}
 
 /** ?status= values that are not tab ids: older bookmarks and the words users
  *  reach for ("godkända" is what Visma calls a finalized, unsent invoice). */
@@ -134,6 +155,8 @@ export function matchesInvoiceListTab(invoice: ListInvoice, tab: InvoiceListTab,
       )
     case 'paid':
       return invoice.status === 'paid'
+    case 'written_off':
+      return invoice.status === 'written_off'
     case 'collections':
       return inCollectionsView
     case 'credit':

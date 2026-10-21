@@ -1253,6 +1253,14 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // Bank rows that may have paid an invoice under collection, and the
   // automatic pause and the answer to each.
   { name: 'collection_sweep_hits', file: 'collection_sweep_hits.json', orderBy: 'created_at' },
+  // Payments the debtor made to that provider, the provider's payouts with
+  // each line, and how each was booked (steps C and D).
+  { name: 'collection_collected_payments', file: 'collection_collected_payments.json', orderBy: 'created_at' },
+  { name: 'collection_settlements', file: 'collection_settlements.json', orderBy: 'created_at' },
+  { name: 'collection_settlement_lines', file: 'collection_settlement_lines.json', orderBy: 'created_at' },
+  // Kundförlust decisions: why a receivable was reserved, written off or
+  // recovered, on whose decision and with which evidence (BFL 5 kap 6 §).
+  { name: 'invoice_write_offs', file: 'invoice_write_offs.json', orderBy: 'decided_at' },
   { name: 'mapping_rules', file: 'mapping_rules.json' },
   { name: 'categorization_templates', file: 'categorization_templates.json' },
   { name: 'booking_template_library', file: 'booking_template_library.json' },

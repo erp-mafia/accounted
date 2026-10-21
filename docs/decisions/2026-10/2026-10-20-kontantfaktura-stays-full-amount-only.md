@@ -1,0 +1,1 @@
+[2026-10-20] A kontantfaktura under faktureringsmetoden stays full amount only even with CASH_PARTIAL_PAYMENTS_ENABLED: the pro-rata installment is kontantmetoden's rule, and main books a kontantfaktura as one verifikat at issue; only accounting_method cash reaches the installment.

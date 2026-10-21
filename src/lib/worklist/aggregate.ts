@@ -26,8 +26,9 @@ import {
   countMissedAgreementPayments,
   countArkivFindings,
   countCollectionAttention,
-  countCollectionBatchItems,
-  countCollectionDecisions,
+  countCollectionSettlementsToBook,
+  countCollectedPaymentsToBook,
+  countCollectionDecisionsAndBatch,
   getOverdueInvoicesDue,
   countPaymentsVerificationDue,
   countPendingOperations,
@@ -113,6 +114,8 @@ export async function getWorklistCounts(
   // and Avtal: a row whose page is a 404 for this company is not counted.
   const section = isArkivSectionEnabled(companyId)
   const brain = isArkivBrainEnabled(companyId)
+  // The decision row and the daily batch row count an invoice once (lib/collections/batch.ts).
+  const collectionWork = countCollectionDecisionsAndBatch(supabase, companyId)
   const [
     bookTransaction,
     bookSkattekonto,
@@ -135,6 +138,8 @@ export async function getWorklistCounts(
     peppolDeliveryFailed,
     collectionDecision,
     collectionAttention,
+    collectionSettlementsToBook,
+    collectedPaymentsToBook,
     collectionBatchReady,
     bankSwitch,
     paymentsVerificationRenewal,
@@ -170,9 +175,11 @@ export async function getWorklistCounts(
     brain ? countMissedAgreementPayments(supabase, companyId) : 0,
     brain ? countArkivFindings(supabase, companyId) : 0,
     countFailedPeppolDeliveries(supabase, companyId),
-    countCollectionDecisions(supabase, companyId),
+    collectionWork.then((work) => work.decision),
     countCollectionAttention(supabase, companyId),
-    countCollectionBatchItems(supabase, companyId),
+    countCollectionSettlementsToBook(supabase, companyId),
+    countCollectedPaymentsToBook(supabase, companyId),
+    collectionWork.then((work) => work.batchReady),
     options.bankSwitchDue
       ? Promise.resolve(options.bankSwitchDue).then((b) => b.length)
       : countBankSwitchDue(supabase, companyId),
@@ -212,6 +219,8 @@ export async function getWorklistCounts(
       peppol_delivery_failed: peppolDeliveryFailed,
       collection_decision: collectionDecision,
       collection_attention: collectionAttention,
+      collection_settlements_to_book: collectionSettlementsToBook,
+      collected_payments_to_book: collectedPaymentsToBook,
       collection_batch_ready: collectionBatchReady,
       bank_switch: bankSwitch,
       payments_verification_renewal: paymentsVerificationRenewal,
@@ -238,6 +247,8 @@ export async function getWorklistCounts(
       peppolDeliveryFailed +
       collectionDecision +
       collectionAttention +
+      collectionSettlementsToBook +
+      collectedPaymentsToBook +
       collectionBatchReady +
       bankSwitch +
       paymentsVerificationRenewal +

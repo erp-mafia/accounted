@@ -41,6 +41,14 @@ vi.mock('@/lib/core/documents/customer-invoice-underlag', () => ({
   anchorCustomerInvoiceDocument: mockAnchorCustomerDoc,
 }))
 
+// The befarad kundförlust reserve release after a payment: mocked so it takes
+// no slot in the queued Supabase mock; its own behaviour is pinned by
+// lib/customer-loss/__tests__/services.test.ts.
+const { mockReleaseReserve } = vi.hoisted(() => ({ mockReleaseReserve: vi.fn() }))
+vi.mock('@/lib/customer-loss/doubtful', () => ({
+  releaseDoubtfulReserveAfterChange: mockReleaseReserve,
+}))
+
 // ============================================================
 // validateVoucherForInvoiceLink: happy path + reject codes
 // ============================================================
@@ -856,6 +864,13 @@ describe('linkInvoiceToVoucher', () => {
 
     expect(result.ok).toBe(true)
     expect(paid).toHaveBeenCalledTimes(1)
+    // A befarad kundförlust reserve the payment made unnecessary comes back,
+    // dated at the payment.
+    expect(mockReleaseReserve).toHaveBeenCalledWith(supabase, 'company-1', 'user-1', {
+      invoiceId: 'inv-1',
+      entryDate: '2026-06-01',
+      trigger: 'payment',
+    })
     expect(paid).toHaveBeenCalledWith({
       invoice: expect.objectContaining({ id: 'inv-1', status: 'paid' }),
       paymentAmount: 1000,

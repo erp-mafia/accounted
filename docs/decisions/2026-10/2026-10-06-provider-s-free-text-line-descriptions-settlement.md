@@ -1,0 +1,1 @@
+[2026-10-06] The provider's free-text line descriptions on a settlement are never stored and never used as voucher line texts (the ledger's own label per line kind is used instead): the provider's texts can name the debtor, and anything in a voucher is kept for the whole retention period.

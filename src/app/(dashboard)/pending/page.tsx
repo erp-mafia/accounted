@@ -50,6 +50,7 @@ import {
   AlertTriangle,
   X,
   ArrowDownUp,
+  Gavel,
 } from 'lucide-react'
 import type {
   PendingOperation,
@@ -75,7 +76,8 @@ import { describeRetrievedSkills } from '@/lib/agent-skills/retrieved-skills'
 import { registerBookedLedgerOf } from '@/lib/invoices/register-booked-invoice-mode'
 import { HandoverBatchDialog } from '@/components/collections/HandoverBatchDialog'
 import { COLLECTIONS_BATCH_TYPE } from '@/lib/collections/batch'
-import { BATCH_REVIEW_QUERY, wantsBatchReview } from '@/lib/collections/batch-dialog'
+import { BATCH_REVIEW_QUERY, batchRowKey, isCollectionsRun, runItems, wantsBatchReview } from '@/lib/collections/batch-dialog'
+import { capitalizeFirst } from '@/components/collections/collections-client'
 
 // Terse per-type labels used in the bulk confirmation dialog list. Phrased so
 // they read naturally under the heading "Genom att bekräfta utförs följande:".
@@ -283,6 +285,7 @@ type ViewTab = 'pending' | 'history'
 
 export default function PendingOperationsPage() {
   const t = useTranslations('pending')
+  const tCollections = useTranslations('collections')
   const tSkills = useTranslations('skills_registry')
   const tCommon = useTranslations('common')
   const complianceWarningText = useComplianceWarningText()
@@ -995,7 +998,11 @@ export default function PendingOperationsPage() {
                 showBulkControls && op.status === 'pending' && op.risk_level !== 'high' && !periodLocked
               const isSelected = selectedIds.has(op.id)
               const isCollectionsBatch = op.operation_type === COLLECTIONS_BATCH_TYPE
-              const isAgent = op.actor_type && op.actor_type !== 'user'
+              // The daily collections run is the company's own morning run,
+              // not an agent proposal: no agent mark, no risk chip, its own
+              // words (lib/collections/batch-dialog isCollectionsRun).
+              const isRun = isCollectionsRun(op)
+              const isAgent = op.actor_type && op.actor_type !== 'user' && !isCollectionsBatch
               // High risk, and a registration of an already-booked invoice
               // (it cannot be undone): the consent sentence the approval
               // confirms in a dialog.
@@ -1141,15 +1148,27 @@ export default function PendingOperationsPage() {
                     className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground"
                     aria-hidden
                   >
-                    {isAgent ? <Bot className="h-3.5 w-3.5" /> : <ClipboardCheck className="h-3.5 w-3.5" />}
+                    {isCollectionsBatch ? (
+                      <Gavel className="h-3.5 w-3.5" />
+                    ) : isAgent ? (
+                      <Bot className="h-3.5 w-3.5" />
+                    ) : (
+                      <ClipboardCheck className="h-3.5 w-3.5" />
+                    )}
                   </span>
                   <span className="flex min-w-0 flex-1 items-center gap-2 text-[13px]">
-                    <span className="min-w-0 truncate">{op.title}</span>
+                    {/* The daily collections run reads in its own words, with
+                        what it does as the hover text. */}
+                    <span className="min-w-0 truncate" title={isRun ? tCollections('batch_run_detail') : undefined}>
+                      {isRun && runItems(op.params).length > 0
+                        ? capitalizeFirst(tCollections(batchRowKey(runItems(op.params)), { count: runItems(op.params).length }))
+                        : op.title}
+                    </span>
                     {/* The staged compliance warning stays on the row, as a
                         truncated suffix: approving from the row or with
                         "Godkänn alla" must not pass it unseen (crm#1003).
                         The slide-over has it in full. */}
-                    {complianceWarning && (
+                    {complianceWarning && !isRun && (
                       <span
                         className="flex min-w-[35%] flex-1 items-center gap-1 text-[12.5px] text-attn"
                         title={complianceWarningText(complianceWarning)}
@@ -1164,7 +1183,7 @@ export default function PendingOperationsPage() {
                   </span>
                   {/* Risk chip (concept op-risk), exceptions only: low risk is
                       the normal case and a chip on every row said nothing. */}
-                  {op.risk_level !== 'low' && (
+                  {op.risk_level !== 'low' && !isRun && (
                     <Badge
                       variant={op.risk_level === 'high' ? 'destructive' : 'outline'}
                       className="shrink-0 font-normal"

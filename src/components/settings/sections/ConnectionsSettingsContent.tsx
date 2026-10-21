@@ -58,6 +58,17 @@ function ImgLogo({ src }: { src: string }) {
   return <img src={src} alt="" className="h-5 w-5 object-contain" />
 }
 
+/**
+ * The collections provider's square mark from Connect (lib/collections/provider-mark.ts),
+ * filling the tile; the children when there is none or it does not load.
+ */
+function ProviderMarkOr({ src, children }: { src: string | null; children: React.ReactNode }) {
+  const [failed, setFailed] = useState(false)
+  if (!src || failed) return <>{children}</>
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img src={src} alt="" className="h-full w-full object-cover" onError={() => setFailed(true)} />
+}
+
 interface Status {
   bankName: string | null
   bankCount: number
@@ -613,12 +624,18 @@ export function ConnectionsSettingsContent() {
             })}
           {showCollections &&
             row({
-              logo: <HandCoins className="h-4 w-4 text-foreground" aria-hidden="true" />,
+              logo: (
+                <ProviderMarkOr src={collections?.markUrl ?? null}>
+                  <HandCoins className="h-4 w-4 text-foreground" aria-hidden="true" />
+                </ProviderMarkOr>
+              ),
               name: t('collections'),
               help: t('collections_help'),
               state:
                 collectionsState === 'active'
-                  ? t('collections_active')
+                  ? collections?.displayName
+                    ? t('collections_active_with', { provider: collections.displayName })
+                    : t('collections_active')
                   : collectionsState === 'connecting' || collectionsState === 'needs_setup'
                     ? t('collections_connecting')
                     : t('not_connected'),

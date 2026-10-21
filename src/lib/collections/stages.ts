@@ -137,8 +137,12 @@ export const WEB_ONLY_CASE_ACTIONS: ReadonlySet<CollectionsAction> = new Set([
 /** The shortest written reason an action that needs one accepts. */
 export const MIN_ACTION_MESSAGE = 10
 
-/** The latest date a pause may run to: the provider's next step is postponed at most this far. */
-export const MAX_PAUSE_DAYS = 365
+/**
+ * The latest date a pause may run to: the provider's next step is postponed at
+ * most this far. The provider postpones a planned step by at most 14 days
+ * (its answer of 2026-10-16); a longer hold is a pause without a date.
+ */
+export const MAX_PAUSE_DAYS = 14
 
 function addIsoDays(isoDate: string, days: number): string {
   const [y, m, d] = isoDate.split('-').map(Number)

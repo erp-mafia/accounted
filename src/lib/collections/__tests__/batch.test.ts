@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { batchConfirmationMatches, batchParamsSchema, batchSkipReason, remainingBatchItems, type BatchItem } from '../batch'
+import { batchConfirmationMatches, batchParamsSchema, batchSkipReason, collectionWorkCounts, remainingBatchItems, type BatchItem } from '../batch'
 
 const A = '11111111-1111-4111-8111-1111111111aa'
 const B = '11111111-1111-4111-8111-1111111111bb'
@@ -62,5 +62,24 @@ describe('batchConfirmationMatches', () => {
     expect(batchConfirmationMatches('  Skicka ')).toBe(true)
     expect(batchConfirmationMatches('godkänn')).toBe(false)
     expect(batchConfirmationMatches('')).toBe(false)
+  })
+})
+
+describe('collectionWorkCounts (Att göra counts an invoice once)', () => {
+  const CASE = '11111111-1111-4111-8111-1111111111cc'
+
+  it('leaves a decision the batch proposes to the batch row', () => {
+    expect(collectionWorkCounts([CASE, 'other-case'], [item(A), item(B, 'approve_step')], [])).toEqual({ decision: 1, batchReady: 2 })
+  })
+
+  it('gives a decision back to the decision row once it is taken out of the batch', () => {
+    expect(collectionWorkCounts([CASE], [item(A), item(B, 'approve_step')], [{ invoice_id: B, kind: 'approve_step' }])).toEqual({
+      decision: 1,
+      batchReady: 1,
+    })
+  })
+
+  it('counts every decision without a batch', () => {
+    expect(collectionWorkCounts([CASE], [], [])).toEqual({ decision: 1, batchReady: 0 })
   })
 })

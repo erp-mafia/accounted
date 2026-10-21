@@ -623,6 +623,39 @@ describe('generateARLedger: historical as-of reconstruction (#1020)', () => {
     expect(report.total_outstanding).toBe(6000)
   })
 
+  it('keeps an invoice written off after the as-of date, and drops one written off by then', async () => {
+    results = [
+      {
+        data: [
+          // Konstaterad on or before the as-of date: off 1510 by then.
+          { ...invoiceBase, id: 'inv-1', invoice_number: 'F001', total: 5000, paid_amount: 0, status: 'written_off' },
+          // Konstaterad after the as-of date: still an open claim on the day.
+          { ...invoiceBase, id: 'inv-2', invoice_number: 'F002', total: 3000, paid_amount: 1000, status: 'written_off' },
+          // Konstaterad and annulled (storno) before the as-of date: open.
+          { ...invoiceBase, id: 'inv-3', invoice_number: 'F003', total: 2000, paid_amount: 0, status: 'written_off' },
+        ],
+        error: null,
+      },
+      { data: [{ invoice_id: 'inv-2', amount: 1000, payment_date: '2024-06-01' }], error: null },
+      // Kundförlust decisions dated on or before the as-of date.
+      {
+        data: [
+          { id: 'w-1', invoice_id: 'inv-1', kind: 'confirmed', reverses_id: null },
+          { id: 'w-3', invoice_id: 'inv-3', kind: 'confirmed', reverses_id: null },
+          { id: 'w-4', invoice_id: 'inv-3', kind: 'annulled', reverses_id: 'w-3' },
+        ],
+        error: null,
+      },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1', '2024-06-15')
+
+    expect(calls.some((c) => c.method === 'in' && (c.args[1] as string[]).includes('written_off'))).toBe(true)
+    const ids = report.entries.flatMap((e) => e.invoices.map((i) => i.invoice_number))
+    expect(ids.sort()).toEqual(['F002', 'F003'])
+    expect(report.total_outstanding).toBe(4000)
+  })
+
   it('skips invoices already settled by the as-of date', async () => {
     results = [
       {

@@ -2,7 +2,15 @@ import type { CollectionsAction, CollectionsDecisionKind } from '@accounted/conn
 import type { CollectionCaseView } from './case'
 import { bankCheckState, type BankCheckState } from './handover-dialog'
 import type { CaseEscalationCheckView } from './invoice-collection'
-import { BANK_CHECKED_ACTIONS, MESSAGE_REQUIRED_ACTIONS, MIN_ACTION_MESSAGE, pauseUntilWindow } from './stages'
+import {
+  BANK_CHECKED_ACTIONS,
+  CHIP_VARIANTS,
+  MESSAGE_REQUIRED_ACTIONS,
+  MIN_ACTION_MESSAGE,
+  STAGE_LABEL_KEYS,
+  collectionChipKind,
+  pauseUntilWindow,
+} from './stages'
 
 /**
  * The case card's decisions (build spec 3.5), pure and client-safe: which
@@ -12,21 +20,24 @@ import { BANK_CHECKED_ACTIONS, MESSAGE_REQUIRED_ACTIONS, MIN_ACTION_MESSAGE, pau
  * again at commit.
  */
 
-/** Actions confirmed in the card's own dialog. `start` opens the handover dialog; `already_paid` the payment dialog. */
+/**
+ * Actions confirmed in the card's own dialog. `start` opens the handover
+ * dialog. `already_paid` has no button here: a case is open only on an
+ * unpaid customer invoice, where the page header's "Markera som betald"
+ * opens the payment dialog, and booking the payment reports it.
+ */
 export type CardDialogAction = Exclude<CollectionsAction, 'start' | 'already_paid'>
 
 export type CardButton =
   | { kind: 'handover'; action: 'start'; labelKey: string; primary: true }
-  | { kind: 'payment'; action: 'already_paid'; labelKey: string; primary: false }
   | { kind: 'dialog'; action: CardDialogAction; labelKey: string; primary: boolean }
 
 /** The order the card shows its buttons in: the decision the provider waits for first, then the rest. */
-const BUTTON_ORDER: readonly CollectionsAction[] = [
+const BUTTON_ORDER: readonly Exclude<CollectionsAction, 'already_paid'>[] = [
   'start',
   'approve_step',
   'approve_legal_action',
   'decline_legal_action',
-  'already_paid',
   'confirm_not_paid',
   'contest_dispute',
   'resume',
@@ -64,7 +75,6 @@ export function caseCardButtons(
   const offered = new Set(view.actions)
   return BUTTON_ORDER.filter((action) => offered.has(action)).map((action): CardButton => {
     if (action === 'start') return { kind: 'handover', action, labelKey: BUTTON_KEYS[action], primary: true }
-    if (action === 'already_paid') return { kind: 'payment', action, labelKey: BUTTON_KEYS[action], primary: false }
     return { kind: 'dialog', action, labelKey: BUTTON_KEYS[action], primary: PRIMARY_ACTIONS.has(action) }
   })
 }
@@ -259,4 +269,69 @@ export function caseNotes(
     notes.push(view.possiblePayments.length > 0 ? 'card_paused_possible_payment' : 'card_paused_possible_payment_answered')
   }
   return notes
+}
+
+// ---------------------------------------------------------------------------
+// The compact card at the top of the invoice (inkasso lives on the invoice)
+// ---------------------------------------------------------------------------
+
+/**
+ * Where the card sits on the invoice page: at the top, under the header,
+ * while the case is open (or still being registered), so the work waiting
+ * on the invoice is the first thing the owner sees; a closed or refused
+ * case moves down with the rest of the invoice's history.
+ */
+export function casePlacement(view: Pick<CollectionCaseView, 'isOpen'>): 'top' | 'history' {
+  return view.isOpen ? 'top' : 'history'
+}
+
+/**
+ * The stage as the card's one chip: the stage's own words ("Påminnelse",
+ * "Inkassokrav", "Väntar på ditt beslut", "Pausad"), in the variant the
+ * list's chip uses for the same stage. Null for a closed case (the close
+ * reason reads as text) and a case not registered yet.
+ */
+export function caseStageChip(
+  view: Pick<CollectionCaseView, 'stage' | 'isOpen' | 'submissionStatus'>,
+): { labelKey: string; variant: 'warning' | 'secondary' | 'outline' } | null {
+  if (!view.isOpen || view.submissionStatus !== 'registered') return null
+  const kind = collectionChipKind(view.stage)
+  if (!kind) return null
+  return { labelKey: STAGE_LABEL_KEYS[view.stage], variant: CHIP_VARIANTS[kind] }
+}
+
+/**
+ * The card's amounts in owner words: what is still unpaid (the provider's
+ * open principal) and, when the provider's fees and interest make it
+ * larger, what the customer must pay in all. Null where the provider has
+ * not said (a case still being registered).
+ */
+export function caseAmounts(
+  view: Pick<CollectionCaseView, 'isOpen' | 'outstandingPrincipal' | 'outstandingTotal'>,
+): { unpaid: number | null; customerTotal: number | null } {
+  if (!view.isOpen) return { unpaid: null, customerTotal: null }
+  const unpaid = view.outstandingPrincipal
+  const total = view.outstandingTotal
+  return { unpaid, customerTotal: total !== null && total !== unpaid ? total : null }
+}
+
+/**
+ * Händelser, collapsed: the latest event alone until the person asks for
+ * all of them ("Visa alla"). Events arrive newest first.
+ */
+export function caseTimeline<T>(events: readonly T[], expanded: boolean): { shown: T[]; hidden: number } {
+  if (expanded || events.length <= 1) return { shown: [...events], hidden: 0 }
+  return { shown: events.slice(0, 1), hidden: events.length - 1 }
+}
+
+/**
+ * Whether the card shows an event's time beside its date: two events on
+ * one day otherwise read without order. A payment the provider dated without
+ * a time (the trail stores it at noon, label key event_collected) and a
+ * provider timestamp at exactly midnight UTC carry no real time: date only.
+ */
+export function eventShowsTime(event: { occurredAt: string; labelKey: string | null }): boolean {
+  if (event.labelKey === 'event_collected') return false
+  if (!event.occurredAt.includes('T')) return false
+  return !/T00:00(:00(\.0+)?)?(Z|[+-]00:?00)$/.test(event.occurredAt)
 }

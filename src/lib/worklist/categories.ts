@@ -31,7 +31,8 @@ import { matchRowsToInvoiceCombinations, type CombinationInvoice } from '@/lib/t
 import { BANKGIRO_SPLIT_METHOD } from '@/lib/transactions/part-suggestions'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { filterOverdueInvoices, invoiceDaysOverdue } from '@/lib/invoices/overdue'
-import { COLLECTIONS_BATCH_TYPE } from '@/lib/collections/batch'
+import { PAYMENT_STATUSES_TO_BOOK, SETTLEMENT_STATUSES_TO_BOOK } from '@/lib/collections/settlements-ui'
+import { COLLECTIONS_BATCH_TYPE, collectionWorkCounts, type BatchItem, type BatchRemoval } from '@/lib/collections/batch'
 import { resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
 import { listPeppolFailedInvoiceIds } from '@/lib/invoices/peppol-failed-invoices'
 import { switchStateFor } from '@/lib/bank-feed/switch-campaign'
@@ -502,23 +503,33 @@ export async function countFailedPeppolDeliveries(
   }
 }
 
-/** Open collection cases waiting for the company's decision. */
-export async function countCollectionDecisions(supabase: SupabaseClient, companyId: string): Promise<number> {
-  const { count, error } = await supabase
-    .from('collection_cases')
-    .select('id', { count: 'exact', head: true })
-    .eq('company_id', companyId)
-    .eq('is_open', true)
-    .eq('stage', 'awaiting_decision')
-  if (error) return logAndZero('collection_decision', companyId, error)
-  return count ?? 0
-}
-
 /** Collections cases a person must look at: collection_attention_case_ids, on the session client. */
 export async function countCollectionAttention(supabase: SupabaseClient, companyId: string): Promise<number> {
   const { data, error } = await supabase.rpc('collection_attention_case_ids', { p_company_id: companyId })
   if (error) return logAndZero('collection_attention', companyId, error)
   return Array.isArray(data) ? data.length : 0
+}
+
+/** Payouts from the collections provider to book or answer (Avräkningar counts the same). */
+export async function countCollectionSettlementsToBook(supabase: SupabaseClient, companyId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from('collection_settlements')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .in('status', [...SETTLEMENT_STATUSES_TO_BOOK])
+  if (error) return logAndZero('collection_settlements_to_book', companyId, error)
+  return count ?? 0
+}
+
+/** Payments the collections provider collected, not booked yet or refused by the books (Avräkningar counts the same). */
+export async function countCollectedPaymentsToBook(supabase: SupabaseClient, companyId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from('collection_collected_payments')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .in('status', [...PAYMENT_STATUSES_TO_BOOK])
+  if (error) return logAndZero('collected_payments_to_book', companyId, error)
+  return count ?? 0
 }
 
 /** An overdue invoice as the grouped Att göra row and the MCP attention resource read it. */
@@ -690,28 +701,49 @@ export async function countPendingOperations(
 }
 
 /**
- * The items of the company's pending daily collections batch (at most one is
- * pending), less those an administrator already took out of it.
+ * The two collections rows of Att göra, counted together so an invoice is
+ * counted once (collectionWorkCounts): open cases waiting for the company's
+ * decision ("collection_decision") outside the pending daily batch, and the
+ * items of that batch (at most one is pending) less those an administrator
+ * took out ("collection_batch_ready"). Each read soft-fails on its own.
  */
-export async function countCollectionBatchItems(supabase: SupabaseClient, companyId: string): Promise<number> {
-  const { data, error } = await supabase
-    .from('pending_operations')
-    .select('id, params')
-    .eq('company_id', companyId)
-    .eq('operation_type', COLLECTIONS_BATCH_TYPE)
-    .eq('status', 'pending')
-    .limit(1)
-  if (error) return logAndZero('collection_batch_ready', companyId, error)
-  const batch = (data ?? [])[0] as { id: string; params?: { items?: unknown } } | undefined
-  const items = batch?.params?.items
-  if (!batch || !Array.isArray(items) || items.length === 0) return 0
-  const { count, error: removedError } = await supabase
+export async function countCollectionDecisionsAndBatch(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<{ decision: number; batchReady: number }> {
+  const [casesRes, batchRes] = await Promise.all([
+    supabase
+      .from('collection_cases')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('is_open', true)
+      .eq('stage', 'awaiting_decision'),
+    supabase
+      .from('pending_operations')
+      .select('id, params')
+      .eq('company_id', companyId)
+      .eq('operation_type', COLLECTIONS_BATCH_TYPE)
+      .eq('status', 'pending')
+      .limit(1),
+  ])
+  if (casesRes.error) logAndZero('collection_decision', companyId, casesRes.error)
+  if (batchRes.error) logAndZero('collection_batch_ready', companyId, batchRes.error)
+  const decisionCaseIds = casesRes.error ? [] : ((casesRes.data ?? []) as { id: string }[]).map((row) => row.id)
+  const batch = batchRes.error ? undefined : ((batchRes.data ?? [])[0] as { id: string; params?: { items?: unknown } } | undefined)
+  const rawItems = batch?.params?.items
+  const items = Array.isArray(rawItems) ? (rawItems.filter((item) => item && typeof item === 'object') as BatchItem[]) : []
+  if (!batch || items.length === 0) return collectionWorkCounts(decisionCaseIds, [], [])
+  const { data: removed, error: removedError } = await supabase
     .from('collection_batch_removals')
-    .select('id', { count: 'exact', head: true })
+    .select('invoice_id, kind')
     .eq('company_id', companyId)
     .eq('pending_operation_id', batch.id)
-  if (removedError) return logAndZero('collection_batch_ready', companyId, removedError)
-  return Math.max(0, items.length - (count ?? 0))
+  if (removedError) {
+    // Without the removals the batch cannot be counted: it shows no row, and its decisions stay on theirs.
+    logAndZero('collection_batch_ready', companyId, removedError)
+    return { decision: decisionCaseIds.length, batchReady: 0 }
+  }
+  return collectionWorkCounts(decisionCaseIds, items, (removed ?? []) as BatchRemoval[])
 }
 
 interface SuggestedMatchTxRow {

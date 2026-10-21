@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { BrandMark } from '@/components/parties/BrandMark'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -35,7 +36,8 @@ interface Props {
 }
 
 export function ConnectionStatusPanel({ data, connection, onChanged }: Props) {
-  const { t, tp, locale } = useCollectionsWords(data.availability.displayName ?? connection.displayName)
+  const providerName = data.availability.displayName ?? connection.displayName
+  const { t, tp, locale } = useCollectionsWords(providerName)
   const canManage = data.canManage
   const [busy, setBusy] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
@@ -87,7 +89,12 @@ export function ConnectionStatusPanel({ data, connection, onChanged }: Props) {
     <div>
       <SettingsGroup>
         <SettingsRow label={t('status_label')}>
-          <SettingsRowNote className="text-foreground">{tp(connectionStatusKey(connection))}</SettingsRowNote>
+          <SettingsRowNote className="inline-flex items-center gap-2 text-[13px] text-foreground">
+            <BrandMark name={providerName} variant="mark" size={22} logoUrl={data.availability.markUrl} />
+            <span>{providerName}</span>
+            <span className="text-muted-foreground">·</span>
+            <span>{tp(connectionStatusKey(connection))}</span>
+          </SettingsRowNote>
           {canManage && connection.state !== 'disconnected' && (connection.submittedAt || connection.onboarded) ? (
             <SettingsRowEnd>
               <Button variant="outline" size="sm" loading={busy === 'refresh'} onClick={() => run('refresh', '/refresh')}>

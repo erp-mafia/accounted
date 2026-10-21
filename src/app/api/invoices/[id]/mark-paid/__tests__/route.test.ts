@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // The sale-first rule (defer_invoice_booking) has its own suites
 // (lib/invoices/__tests__/sale-first.test.ts and the deferred-door tests);
@@ -39,11 +39,17 @@ vi.mock('@/lib/auth/require-write', () => ({
 
 const mockCreateInvoicePaymentJournalEntry = vi.fn()
 const mockCreateInvoiceCashEntry = vi.fn()
+const mockCreateInvoiceCashPartialEntry = vi.fn()
+const mockCheckPriorCashRecognition = vi.fn()
 vi.mock('@/lib/bookkeeping/invoice-entries', () => ({
   createInvoicePaymentJournalEntry: (...args: unknown[]) =>
     mockCreateInvoicePaymentJournalEntry(...args),
   createInvoiceCashEntry: (...args: unknown[]) =>
     mockCreateInvoiceCashEntry(...args),
+  createInvoiceCashPartialEntry: (...args: unknown[]) =>
+    mockCreateInvoiceCashPartialEntry(...args),
+  checkPriorCashRecognition: (...args: unknown[]) =>
+    mockCheckPriorCashRecognition(...args),
 }))
 
 const mockCreateJournalEntry = vi.fn()
@@ -264,6 +270,89 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     expect(mockCreateInvoicePaymentJournalEntry).toHaveBeenCalled()
     // No silent "paid with no journal entry": GL must not diverge from the AR ledger.
     expect(body.error.code).toBe('INVOICE_PAID_BOOK_FAILED')
+  })
+
+  describe('kontantmetoden: the rest of a part-paid never-booked invoice', () => {
+    // 1 000 + 250 moms, 500 already paid: "Markera som betald" pays the 750 left.
+    const partPaid = () =>
+      makeInvoice({
+        id: 'inv-1',
+        status: 'partially_paid',
+        subtotal: 1000,
+        vat_amount: 250,
+        total: 1250,
+        paid_amount: 500,
+        remaining_amount: 750,
+        journal_entry_id: null,
+        customer: makeCustomer(),
+      })
+    function enqueueUntilSettle() {
+      enqueue({ data: partPaid(), error: null })
+      enqueue({ data: [], error: null }) // duplicate guard: counterparty probe
+      enqueue({ data: [], error: null }) // duplicate guard: aggregate sweep
+      enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
+    }
+    afterEach(() => {
+      vi.unstubAllEnvs()
+    })
+
+    it('is refused in the words it always had while CASH_PARTIAL_PAYMENTS_ENABLED is unset', async () => {
+      vi.stubEnv('CASH_PARTIAL_PAYMENTS_ENABLED', '')
+      enqueueUntilSettle()
+
+      const request = createMockRequest('/api/invoices/inv-1/mark-paid', { method: 'POST' })
+      const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+      const { status, body } = await parseJsonResponse<{ error: { code: string; message: string; details: unknown } }>(response)
+
+      expect(status).toBe(400)
+      expect(body.error.code).toBe('INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED')
+      expect(body.error.message).toBe(
+        'Kontantmetoden kan inte bokföra delbetalningar av en obokförd faktura automatiskt: hela fakturan bokförs vid betalning. Ta emot hela beloppet i en betalning, byt till faktureringsmetoden eller bokför betalningen manuellt som verifikation.',
+      )
+      expect(body.error.details).toEqual({
+        reason: 'previously_partially_paid',
+        payment_amount: 750,
+        paid_amount: 500,
+        invoice_total: 1250,
+      })
+      expect(mockCheckPriorCashRecognition).not.toHaveBeenCalled()
+      expect(mockCreateInvoiceCashPartialEntry).not.toHaveBeenCalled()
+      expect(mockCreateInvoiceCashEntry).not.toHaveBeenCalled()
+      expect(findCalls('invoices', 'update')).toHaveLength(0)
+    })
+
+    it('books the rest pro rata once CASH_PARTIAL_PAYMENTS_ENABLED is set', async () => {
+      vi.stubEnv('CASH_PARTIAL_PAYMENTS_ENABLED', '1')
+      enqueueUntilSettle()
+      mockCheckPriorCashRecognition.mockResolvedValue({ ok: true })
+      mockCreateInvoiceCashPartialEntry.mockResolvedValue({ id: 'je-rest' })
+      enqueue({ data: { id: 'ip-2' }, error: null }) // invoice_payments insert
+      enqueue({ data: [{ id: 'inv-1' }], error: null }) // CAS update matched
+
+      const request = createMockRequest('/api/invoices/inv-1/mark-paid', { method: 'POST' })
+      const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+      const { status, body } = await parseJsonResponse<{ status: string; journal_entry_id: string | null }>(response)
+
+      expect(status).toBe(200)
+      expect(body.status).toBe('paid')
+      expect(body.journal_entry_id).toBe('je-rest')
+      expect(mockCheckPriorCashRecognition).toHaveBeenCalled()
+      expect(mockCreateInvoiceCashPartialEntry).toHaveBeenCalledWith(
+        expect.anything(),
+        'company-1',
+        'user-1',
+        'inv-1',
+        expect.objectContaining({
+          lines: expect.arrayContaining([
+            expect.objectContaining({ account_number: '1930', debit_amount: 750, credit_amount: 0 }),
+          ]),
+        }),
+        expect.any(String),
+        // What the door saw, for the posting port (read only while POSTING_EVENTS is on).
+        expect.any(Function),
+      )
+      expect(mockCreateInvoiceCashEntry).not.toHaveBeenCalled()
+    })
   })
 
   it('marks overdue invoice as paid with cash method', async () => {

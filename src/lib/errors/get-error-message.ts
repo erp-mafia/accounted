@@ -158,6 +158,18 @@ const ERROR_PATTERN_MAP: [RegExp, string | null][] = [
     'Betalningen togs emot av inkassobolaget och ingår i dess utbetalning. Den kan inte tas bort här; bokför om den via avräkningen.',
   ],
   [
+    // guard_invoice_written_off_status (migration 20261021120700): a claim
+    // written off as a konstaterad kundförlust is no longer on 1510.
+    /INVOICE_WRITTEN_OFF_STATUS_LOCKED/,
+    'Fakturan är bokförd som kundförlust. En betalning efter avskrivningen bokförs som återvunnen kundförlust på fakturan.',
+  ],
+  [
+    // guard_customer_loss_voucher_* (migration 20261021120700): the decision
+    // row names the voucher's amounts and date.
+    /CUSTOMER_LOSS_VOUCHER_LOCKED/,
+    'En kundförlustverifikation rättas inte. Återför verifikationen (storno) och bokför kundförlusten på nytt.',
+  ],
+  [
     /Cannot attach documents to entries in a locked/i,
     'Kan inte bifoga dokument till verifikationer i en låst period.',
   ],

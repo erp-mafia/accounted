@@ -6,7 +6,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { CollectionsCase } from '@accounted/connect-contract'
-import { eventLabelKey, normalizeCaseRow, snapshotCasePatch, snapshotEvents } from '../case'
+import { applyCaseSnapshot, eventLabelKey, normalizeCaseRow, snapshotCasePatch, snapshotEvents } from '../case'
+import { createMemorySupabase } from './memory-supabase'
 
 const snapshot = (overrides: Partial<CollectionsCase> = {}): CollectionsCase => ({
   caseRef: 'c-1',
@@ -92,5 +93,22 @@ describe('snapshotCasePatch', () => {
       outstanding_mismatch: null,
     })
     expect(snapshotCasePatch(row, snapshot(), new Date())).not.toHaveProperty('paused_by_sweep')
+  })
+})
+
+describe('applyCaseSnapshot: collected payments are kept for their booking', () => {
+  it('stores each payment with capital the provider collected itself, once, as pending', async () => {
+    const mem = createMemorySupabase()
+    mem.seed('collection_cases', [{ id: 'case-1', company_id: 'company-1', invoice_id: 'invoice-1', stage: 'reminder', is_open: true, opened_by: null }])
+    const row = normalizeCaseRow(mem.rows('collection_cases')[0]!)
+    const collected = snapshot({
+      collectedPayments: [{ paymentRef: 'p-1', paidAt: '2026-10-05', total: 1060, capitalPaid: 1000, toCreditorOther: 0, toAgency: 60 }],
+      reportedPayments: [{ paymentRef: 'ours', amount: 200, matchedAmount: 200, date: '2026-10-04' }],
+    })
+    await applyCaseSnapshot(mem.client, row, collected)
+    await applyCaseSnapshot(mem.client, row, collected)
+    expect(mem.rows('collection_collected_payments')).toEqual([
+      expect.objectContaining({ case_id: 'case-1', invoice_id: 'invoice-1', provider_payment_ref: 'p-1', capital_paid: 1000, to_agency: 60 }),
+    ])
   })
 })

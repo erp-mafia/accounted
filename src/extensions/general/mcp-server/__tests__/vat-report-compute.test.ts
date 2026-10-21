@@ -39,6 +39,7 @@ function mockSupabaseWithLines(
   fiscalPeriod?: { period_start: string; period_end: string },
   rpcExcludedEntryIds: string[] = [],
   chart: MockChartRow[] = [],
+  writeOffs: unknown[] = [],
 ) {
   // journal_entries / journal_entry_lines still serve the whole fixture, every
   // entry included, so a report that went back to scanning the journal itself
@@ -84,6 +85,7 @@ function mockSupabaseWithLines(
       }
       if (table === 'chart_of_accounts') return makeChain(chart)
       if (table === 'fiscal_periods') return makeChain(fiscalPeriod ? [fiscalPeriod] : [])
+      if (table === 'invoice_write_offs') return makeChain(writeOffs)
       return makeChain(bareLines)
     },
     rpc: (fn: string, params?: { p_accounts?: string[] }) =>
@@ -450,6 +452,26 @@ describe('computeVatReport', () => {
     expect(report.rutor.ruta49).toBe(-125)
     expect(report.rutor).toEqual(declaration.rutor)
     expect(report.summary).toContain('Moms att få tillbaka: 125 kr')
+  })
+
+  it('prints ruta 05 signed: a konstaterad kundförlust can take the sales base below zero', async () => {
+    // A konstaterad loss on 1 000 + 250 in a period with 400 + 100 of sales.
+    const lines: MockLine[] = [
+      { account_number: '3001', debit_amount: 0, credit_amount: 400 },
+      { account_number: '2611', debit_amount: 0, credit_amount: 100 },
+      { account_number: '6351', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '2611', debit_amount: 250, credit_amount: 0 },
+    ]
+    const writeOffs = [{ id: 'w1', kind: 'confirmed', net_amount: 1000, reverses_id: null, vat_by_rate: [{ account: '2611', rate: 25, vat: 250, base: 1000 }] }]
+    const result = await computeVatReport(
+      { period_type: 'monthly', year: 2026, period: 1 },
+      'company-1',
+      mockSupabaseWithLines(lines, undefined, [], [], writeOffs),
+    )
+    expect(result.rutor.ruta05).toBe(-600)
+    // Every box is signed as filed: the write-off's 250 of output VAT takes
+    // ruta 10 below zero too.
+    expect(result.rutor.ruta10).toBe(-150)
   })
 
   it('refund summary string when ruta49 is negative', async () => {

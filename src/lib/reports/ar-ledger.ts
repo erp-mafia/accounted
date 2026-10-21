@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { invoicesWrittenOffAsOf } from '@/lib/core/bookkeeping/written-off-as-of'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { roundOre } from '@/lib/money'
 import { fetchPaymentsAsOf, outstandingAsOf, todayIsoDate, type PaymentsAsOf } from './reskontra-payments'
@@ -131,9 +132,10 @@ export async function generateARLedger(
 
   // Fetch the ledger population. Live view: open invoices, plus paid ones
   // still awaiting Skatteverket's share of a ROT/RUT deduction. Historical
-  // view: also invoices paid since the as-of date, restricted to invoice
-  // dates on or before it. Invoices cancelled since are treated as never
-  // having existed (their cancellation is not reliably dated).
+  // view: also invoices paid or written off (konstaterad kundförlust) since
+  // the as-of date, restricted to invoice dates on or before it. Invoices
+  // cancelled since are treated as never having existed (their cancellation
+  // is not reliably dated).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let invoices: any[]
   let payments: PaymentsAsOf | null = null
@@ -148,7 +150,7 @@ export async function generateARLedger(
         // Proformas, delivery notes and quotes are never receivables.
         .eq('document_type', 'invoice')
       query = isHistorical
-        ? query.in('status', [...AR_LEDGER_STATUSES, 'paid']).lte('invoice_date', asOfDate!)
+        ? query.in('status', [...AR_LEDGER_STATUSES, 'paid', 'written_off']).lte('invoice_date', asOfDate!)
         : query.or('status.in.(sent,overdue,partially_paid,credited),and(status.eq.paid,deduction_total.gt.0)')
       return query
         // Stable total order for correct paging (see fetch-all.ts).
@@ -174,6 +176,12 @@ export async function generateARLedger(
 
     if (isHistorical) {
       payments = await fetchPaymentsAsOf(supabase, 'invoice_payments', 'invoice_id', companyId, asOfDate!)
+      // A claim written off on or before the as-of date had left 1510 by then;
+      // one written off later was still open on the day.
+      if (invoices.some((inv) => inv.status === 'written_off')) {
+        const writtenOff = await invoicesWrittenOffAsOf(supabase, companyId, asOfDate!)
+        invoices = invoices.filter((inv) => inv.status !== 'written_off' || !writtenOff.has(inv.id))
+      }
     }
   } catch (err) {
     if (options?.strict) throw err

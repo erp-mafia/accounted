@@ -1,0 +1,1 @@
+[2026-10-07] The collections booking operations import their services when they run, not at module load: the services reach the payment record's PDF renderer, and the operation registry is imported by every door and by many tests that mock the renderer.

@@ -83,6 +83,7 @@ import {
   ClipboardList,
   ExternalLink,
   Gavel,
+  HandCoins,
 } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
@@ -119,8 +120,15 @@ import { getCountryName } from '@/lib/vat/country-codes'
 import { remindersActiveFor } from '@/lib/invoices/reminders-enabled'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 import { CollectionCaseCard } from '@/components/collections/CollectionCaseCard'
-import { CollectionChip } from '@/components/collections/CollectionChip'
 import { SendToCollectionDialog } from '@/components/collections/SendToCollectionDialog'
+import { OverdueCollectionBanner } from '@/components/collections/OverdueCollectionBanner'
+import { usePendingCollectionsRun } from '@/components/collections/collections-run-client'
+import { batchItemFor } from '@/lib/collections/overdue-banner'
+import { casePlacement } from '@/lib/collections/case-card'
+import { CustomerLossDialog } from '@/components/customer-loss/CustomerLossDialog'
+import { CustomerLossNote } from '@/components/customer-loss/CustomerLossNote'
+import { RecoveredLossDialog } from '@/components/customer-loss/RecoveredLossDialog'
+import { useCustomerLoss } from '@/components/customer-loss/use-customer-loss'
 import { useCaseWords, useInvoiceCollection } from '@/components/collections/case-client'
 import { remindersAside, showSendToCollection } from '@/lib/collections/invoice-entry'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -219,7 +227,7 @@ function WithCorrection({
 
 export default function InvoiceDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { canWrite } = useCanWrite()
-  const { company, isSandbox } = useCompany()
+  const { company, isSandbox, role: companyRole } = useCompany()
   const canEmail = useCapability(CAPABILITY.email_send)
   const { id } = use(params)
   const router = useRouter()
@@ -406,8 +414,24 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const collectionEligible =
     !!invoice && (invoice.document_type ?? 'invoice') === 'invoice' && !invoice.credited_invoice_id && !invoice.is_self_billed
   const collection = useInvoiceCollection(id, collectionEligible)
-  const { tp: tCollections } = useCaseWords(collection.data?.availability.displayName ?? null)
+  const { tp: tCollections, words: collectionWords } = useCaseWords(collection.data?.availability.displayName ?? null)
   const [showCollectionDialog, setShowCollectionDialog] = useState(false)
+  // Bumped when the handover dialog closes: the overdue banner reads its bank check again.
+  const [collectionCheckKey, setCollectionCheckKey] = useState(0)
+  // Today's pending collections run, read only where the ladder proposes one:
+  // an invoice it proposes points to the run instead of a send of its own.
+  const collectionsRun = usePendingCollectionsRun(
+    company?.id,
+    collection.data?.availability.start === 'ready' && collection.data.availability.connection?.ladderMode === 'staged',
+  )
+  // Kundförlust (lib/customer-loss, behind CUSTOMER_LOSS_ENABLED): the same
+  // invoices as collections, once issued. Decisions already made show
+  // whatever the flag says; the menu entries only while it is on.
+  const customerLossEligible = collectionEligible && invoice?.status !== 'draft' && invoice?.status !== 'cancelled'
+  const customerLoss = useCustomerLoss(id, customerLossEligible)
+  const tLoss = useTranslations('customer_loss')
+  const [showLossDialog, setShowLossDialog] = useState(false)
+  const [showRecoveryDialog, setShowRecoveryDialog] = useState(false)
   const [showFinalizeDialog, setShowFinalizeDialog] = useState(false)
   const [isFinalizing, setIsFinalizing] = useState(false)
   const [nextNumberPreview, setNextNumberPreview] = useState<string | null>(null)
@@ -1981,7 +2005,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // a delivered claim the provider offers to start), while the start entry
   // points are not hidden (lib/collections/invoice-entry.ts).
   const collectionCase = collection.data?.case ?? null
-  const collectionCaseOpen = collectionCase?.isOpen === true
+  // An open case sits at the top as a compact card; a closed or refused one further down.
+  const collectionCaseOnTop = !!collectionCase && casePlacement(collectionCase) === 'top'
   const showCollectionItem =
     collectionEligible &&
     !!collection.data &&
@@ -1998,12 +2023,16 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const collectionRemindersAside: string | null = collectionAside
     ? tCollections(collectionAside.key, collectionAside.key === 'reminders_batch' ? { days: collectionAside.days } : {})
     : null
+  const showCustomerLossItem = customerLoss.view?.menuVisible === true
+  const showRecoveryItem = customerLoss.view?.recovery?.available === true
   // Correcting the invoice's voucher (storno + rättelse) is a rare repair,
   // so it lives in the header menu rather than as a line in Detaljer.
   const showCorrectionItem = canWrite && !!invoice.journal_entry_id
   const hasMenu =
     showCorrectionItem ||
     showCollectionItem ||
+    showCustomerLossItem ||
+    showRecoveryItem ||
     canCreateOrder ||
     (quoteDecisionInMenu && canDecideQuote) ||
     offersOwnPdf ||
@@ -2074,11 +2103,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           The page-header hooks turn it into the top bar: the sidebar says
           where we are, so there is no back link, and the prev/next pager
           sits in the bar. */}
-      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+      <div className="page-header page-header-wrap flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="page-header-lead min-w-0">
           <div className="flex flex-wrap items-center gap-3">
             {/* data-ph-mask: the title carries the invoice number */}
             <h1 data-ph-mask="" className="page-header-title font-display text-2xl leading-8 tracking-tight">{title}</h1>
+            {/* The invoice's own status; an open case's stage is the case card's one chip. */}
             {status.exception ? (
               <Badge variant={status.variant}>{status.label}</Badge>
             ) : (
@@ -2089,9 +2119,6 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 <CalendarClock className="h-3 w-3" />
                 {t('badge_accrued')}
               </Badge>
-            )}
-            {collectionCaseOpen && collectionCase?.submissionStatus === 'registered' && invoice.status !== 'paid' && (
-              <CollectionChip stage={collectionCase.stage} displayName={collection.data?.availability.displayName ?? null} />
             )}
           </div>
           <p className="page-header-desc mt-1 text-sm text-muted-foreground">{metaParts.join(' · ')}</p>
@@ -2370,6 +2397,18 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                         {tCollections('menu_send')}
                       </DropdownMenuItem>
                     )}
+                    {showCustomerLossItem && (
+                      <DropdownMenuItem onSelect={() => setShowLossDialog(true)} disabled={!canWrite}>
+                        <HandCoins className="h-4 w-4" />
+                        {tLoss('menu')}
+                      </DropdownMenuItem>
+                    )}
+                    {showRecoveryItem && (
+                      <DropdownMenuItem onSelect={() => setShowRecoveryDialog(true)} disabled={!canWrite}>
+                        <HandCoins className="h-4 w-4" />
+                        {tLoss('recovery_menu')}
+                      </DropdownMenuItem>
+                    )}
                     {showPeppolActions && (
                       <>
                         <DropdownMenuSeparator />
@@ -2469,6 +2508,41 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           )}
         </div>
       </div>
+
+      {/* Inkasso lives on the invoice: an open case as a compact card under
+          the header, else, on an owed invoice past its due date, the overdue
+          banner with its one send button. Neither renders while collections
+          is hidden and nothing is open (lib/collections/overdue-banner.ts). */}
+      {collectionCase && collection.data && collectionCaseOnTop ? (
+        <CollectionCaseCard
+          placement="top"
+          invoiceId={invoice.id}
+          view={collectionCase}
+          availability={collection.data.availability}
+          withdrawFee={collection.data.withdrawFee}
+          invoiceStatus={invoice.status}
+          canWrite={canWrite}
+          onChanged={collection.setCase}
+          onRefresh={collection.reload}
+          onOpenHandover={() => setShowCollectionDialog(true)}
+        />
+      ) : (
+        collectionEligible &&
+        collection.data && (
+          <OverdueCollectionBanner
+            invoiceId={invoice.id}
+            invoice={invoice}
+            availability={collection.data.availability}
+            openCase={collectionCase}
+            canWrite={canWrite}
+            canManage={companyRole === 'owner' || companyRole === 'admin'}
+            today={todayIsoStockholm()}
+            refreshKey={collectionCheckKey}
+            batchItem={batchItemFor(collectionsRun.run?.items, invoice.id)}
+            onSend={() => setShowCollectionDialog(true)}
+          />
+        )
+      )}
 
       {/* Why the VAT treatment is what it is (#2749, #2558): the page's one
           ochre sentence, with the VIES check inline. Drafts only: an issued
@@ -3069,7 +3143,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         </DetailSection>
       )}
 
-      {collectionCase && collection.data && (
+      <CustomerLossNote view={customerLoss.view} />
+
+      {collectionCase && collection.data && !collectionCaseOnTop && (
         <CollectionCaseCard
           invoiceId={invoice.id}
           view={collectionCase}
@@ -3080,7 +3156,6 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           onChanged={collection.setCase}
           onRefresh={collection.reload}
           onOpenHandover={() => setShowCollectionDialog(true)}
-          onRegisterPayment={() => setShowPaymentDialog(true)}
         />
       )}
 
@@ -3192,9 +3267,42 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           invoiceId={invoice.id}
           invoiceNumber={invoice.invoice_number}
           open={showCollectionDialog}
-          onOpenChange={setShowCollectionDialog}
+          onOpenChange={(next) => {
+            setShowCollectionDialog(next)
+            if (!next) setCollectionCheckKey((k) => k + 1)
+          }}
           availability={collection.data.availability}
           onDone={collection.setCase}
+        />
+      )}
+
+      {customerLoss.view && showCustomerLossItem && (
+        <CustomerLossDialog
+          invoiceId={invoice.id}
+          invoiceNumber={invoice.invoice_number}
+          view={customerLoss.view}
+          providerName={collectionWords.provider}
+          today={todayIsoStockholm()}
+          open={showLossDialog}
+          onOpenChange={setShowLossDialog}
+          onDone={() => {
+            void fetchInvoice()
+            void customerLoss.refresh()
+          }}
+        />
+      )}
+      {customerLoss.view?.recovery && showRecoveryItem && (
+        <RecoveredLossDialog
+          invoiceId={invoice.id}
+          invoiceNumber={invoice.invoice_number}
+          left={customerLoss.view.recovery.left}
+          today={todayIsoStockholm()}
+          open={showRecoveryDialog}
+          onOpenChange={setShowRecoveryDialog}
+          onDone={() => {
+            void fetchInvoice()
+            void customerLoss.refresh()
+          }}
         />
       )}
 

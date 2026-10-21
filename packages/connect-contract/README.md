@@ -91,6 +91,12 @@ These hold for the catalogue, collections and delivery families.
   the installation only here. Parse each entry's `features` with
   `CATALOGUE_FEATURE_SCHEMAS` and skip a capability you do not know. Links are
   https only.
+- **Provider marks.** The service serves each catalogue provider's square mark
+  as a static SVG at `{service origin}/providers/{ref}.svg`, `ref` being the
+  profile's slug (URL-encoded). It is a convention, not a schema field: a
+  provider without a file there answers 404, and the installation then shows
+  the provider's initials. The installation never ships a provider's logo
+  itself.
 
 ## Use
 

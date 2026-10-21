@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef, use } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { settlementsToastAction } from '@/components/collections/settlements-toast-action'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { AccountNumber } from '@/components/ui/account-number'
@@ -144,6 +145,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const t = useTranslations('journal_detail')
   const tCommon = useTranslations('common')
   const tCorrection = useTranslations('journal_correction')
+  const tSettlements = useTranslations('settlements')
   const sourceTypeLabels = useSourceTypeLabels()
   const [entry, setEntry] = useState<JournalEntry | null>(null)
   const [chain, setChain] = useState<JournalEntry[]>([])
@@ -399,14 +401,19 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         setShowReverseConfirm(false)
         setReverseDeepChainDepth(result.error?.details?.depth ?? 3)
       } else {
-        toast({ title: t('toast_reverse_failed'), description: getErrorMessage(result, { context: 'journal_entry' }), variant: 'destructive' })
+        toast({
+          title: t('toast_reverse_failed'),
+          description: getErrorMessage(result, { context: 'journal_entry' }),
+          variant: 'destructive',
+          action: settlementsToastAction(result, tSettlements('open_settlements')),
+        })
       }
     } catch {
       toast({ title: t('toast_reverse_failed'), variant: 'destructive' })
     } finally {
       setIsReversing(false)
     }
-  }, [id, toast, fetchData, t])
+  }, [id, toast, fetchData, t, tSettlements])
 
   useEffect(() => {
     fetchData()

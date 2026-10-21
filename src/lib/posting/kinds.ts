@@ -50,6 +50,7 @@ export const BUSINESS_EVENT_KINDS = [
   'asset.disposed',
   'se.tax_account.booked',
   'payroll.vacation_liability_adjusted',
+  'sale.customer_loss',
 ] as const
 
 export type BusinessEventKind = (typeof BUSINESS_EVENT_KINDS)[number]
@@ -115,6 +116,11 @@ export const KIND_BY_SOURCE_TYPE: Readonly<Record<JournalEntrySourceType, Busine
   rot_rut_payout: 'se.rot_rut.payout_received',
   rot_rut_reclaim: 'se.rot_rut.reclaimed',
   rot_rut_reclassification: 'se.rot_rut.reclassified',
+  // A collections provider's payout: what it collected for the company's
+  // invoices, net of its fees, settled to the bank, as a PSP payout is.
+  collection_settlement: 'sale.payout_settled',
+  // A kundförlust decision: befarad, its reversal, konstaterad or recovered.
+  customer_loss: 'sale.customer_loss',
 })
 
 export function isBusinessEventKind(value: unknown): value is BusinessEventKind {

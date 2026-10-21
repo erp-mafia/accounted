@@ -111,6 +111,7 @@ import {
   type PaymentsAsOf,
 } from '@/lib/reports/reskontra-payments'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { invoicesWrittenOffAsOf } from '@/lib/core/bookkeeping/written-off-as-of'
 import {
   kontantmetodCutoffBusinessEvent,
   systemDerivedLinkBasis,
@@ -1836,7 +1837,8 @@ export async function collectKontantmetodCutoff(
             .select('id, invoice_number, invoice_date, status, total, total_sek, vat_amount, vat_amount_sek, vat_treatment, delivery_country, credited_invoice_id, document_type, currency, exchange_rate, deduction_total, deduction_reclaimed_total, paid_amount, paid_at, journal_entry_id')
             .eq('company_id', companyId)
             .lte('invoice_date', periodEnd)
-            .in('status', ['sent', 'overdue', 'partially_paid', 'paid', 'credited'])
+            // written_off: open on the day unless written off by then (below).
+            .in('status', ['sent', 'overdue', 'partially_paid', 'paid', 'credited', 'written_off'])
           if (perInvoice) query = query.is('journal_entry_id', null)
           return query.order('id', { ascending: true }).range(from, to)
         },
@@ -1868,6 +1870,21 @@ export async function collectKontantmetodCutoff(
       'Kontantmetodens bokslutsavgränsning kunde inte läsa reskontran: ' +
         (err instanceof Error ? err.message : 'okänt fel'),
     )
+  }
+
+  // A konstaterad kundförlust dated on or before period end took the claim
+  // out of the fordringar; one dated later leaves it open on the day.
+  if (invoices.some((row) => row.status === 'written_off')) {
+    let writtenOff: Set<string>
+    try {
+      writtenOff = await invoicesWrittenOffAsOf(supabase, companyId, periodEnd)
+    } catch (err) {
+      throw new Error(
+        'Kontantmetodens bokslutsavgränsning kunde inte läsa kundförlusterna: ' +
+          (err instanceof Error ? err.message : 'okänt fel'),
+      )
+    }
+    invoices = invoices.filter((row) => row.status !== 'written_off' || !writtenOff.has(row.id as string))
   }
 
   // Payments ON OR BEFORE period end reduce the outstanding balance; later

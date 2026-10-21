@@ -122,6 +122,11 @@ describe('recordConsent', () => {
     expect(spy).not.toHaveBeenCalled()
   })
 
+  it('starts a new connection with automatic booking off for collected payments and payouts', async () => {
+    const row = await consent()
+    expect(row).toMatchObject({ auto_book_collected_payments: false, auto_book_settlements: false })
+  })
+
   it('routes a real company to Connect and a sandbox to the fake', async () => {
     const real = await recordConsent(deps({ env: readCollectionsEnv({ COLLECTIONS_ENABLED: '1' }) }), {
       termsVersion: 'fake-2026-10',
@@ -509,6 +514,61 @@ describe('settings', () => {
       (e: unknown) => e,
     )
     expect((error as ActivationValidationError).errors).toEqual({ reminderFeeTermsSince: 'date_in_future', lateInterestPercent: 'invalid_percent' })
+  })
+})
+
+describe('booking settings', () => {
+  it('keeps the accounts and the automatic booking in the ledger, never tells the provider', async () => {
+    const update = vi.spyOn(adapter, 'updateSettings')
+    await consent()
+    await submitOnboarding(deps(), onboardingBody())
+    const row = await updateConnectionSettings(deps(), {
+      clearingAccount: '1680',
+      payoutAccount: '1940',
+      autoBookCollectedPayments: true,
+      autoBookSettlements: true,
+    })
+    expect(update).not.toHaveBeenCalled()
+    expect(row).toMatchObject({ clearing_account: '1680', payout_account: '1940', auto_book_collected_payments: true, auto_book_settlements: true })
+    expect(liveRow().user_id).toBe(ADMIN_ID)
+
+    await updateConnectionSettings(deps(), { autoBookSettlements: false })
+    expect(liveRow()).toMatchObject({ clearing_account: '1680', payout_account: '1940', auto_book_collected_payments: true, auto_book_settlements: false })
+  })
+
+  it('refuses a clearing account outside the receivables, a payout account that is no bank account, and an account the chart cannot hold', async () => {
+    await consent()
+    const errorsOf = async (patch: Parameters<typeof updateConnectionSettings>[1]) =>
+      ((await updateConnectionSettings(deps(), patch).catch((e: unknown) => e)) as ActivationValidationError).errors
+    expect(await errorsOf({ clearingAccount: '1930', payoutAccount: '1689' })).toEqual({
+      clearingAccount: 'invalid_clearing_account',
+      payoutAccount: 'invalid_payout_account',
+    })
+    expect(await errorsOf({ clearingAccount: '3010' })).toEqual({ clearingAccount: 'invalid_clearing_account' })
+    expect(await errorsOf({ clearingAccount: '16890' })).toEqual({ clearingAccount: 'invalid_clearing_account' })
+    expect(await errorsOf({ clearingAccount: '1001' })).toEqual({ clearingAccount: 'account_not_in_chart' })
+    expect(liveRow()).toMatchObject({ clearing_account: '1689', payout_account: '1930' })
+  })
+
+  it('keeps the clearing account while collected payments booked on it wait for their payout', async () => {
+    await consent()
+    const errorsOf = async (patch: Parameters<typeof updateConnectionSettings>[1]) =>
+      ((await updateConnectionSettings(deps(), patch).catch((e: unknown) => e)) as ActivationValidationError).errors
+    db.seed('collection_collected_payments', [
+      { id: 'cp-settled', company_id: COMPANY_ID, status: 'booked', settlement_id: 'settlement-1' },
+      { id: 'cp-pending', company_id: COMPANY_ID, status: 'pending', settlement_id: null },
+      { id: 'cp-other-company', company_id: 'other-company', status: 'booked', settlement_id: null },
+    ])
+    // Nothing waits on 1689: the change goes through.
+    await updateConnectionSettings(deps(), { clearingAccount: '1680' })
+    expect(liveRow().clearing_account).toBe('1680')
+
+    db.seed('collection_collected_payments', [{ id: 'cp-open', company_id: COMPANY_ID, status: 'booked', settlement_id: null }])
+    expect(await errorsOf({ clearingAccount: '1689' })).toEqual({ clearingAccount: 'clearing_account_in_use' })
+    expect(liveRow().clearing_account).toBe('1680')
+    // The same account, the payout account and the automatic booking stay changeable.
+    await updateConnectionSettings(deps(), { clearingAccount: '1680', payoutAccount: '1940', autoBookSettlements: true })
+    expect(liveRow()).toMatchObject({ clearing_account: '1680', payout_account: '1940', auto_book_settlements: true })
   })
 })
 

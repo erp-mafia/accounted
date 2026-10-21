@@ -21,6 +21,7 @@ import { getCollectionsProvider } from './catalogue'
 import { normalizeConnectionRow, type CollectionConnectionRow } from './connection'
 import { collectionsGate, readCollectionsEnv, type CollectionsEnv, type CollectionsGateFacts } from './flags'
 import { HandoverNotFoundError } from './readiness'
+import { resolveStartStep, startStepsFor } from './start-step'
 
 /**
  * The daily collections batch (build spec 3.6): once a day, per company with
@@ -253,7 +254,11 @@ export async function gatherDailyBatch(db: Pick<SupabaseClient, 'from'>, input: 
       ...base,
       case_id: itemKind === 'start' ? (row.openCase?.id ?? null) : null,
       remaining_amount: roundOre(row.eligibility.claim.remaining),
-      start_step: connection.default_start_step,
+      start_step:
+        resolveStartStep(
+          connection.default_start_step,
+          startStepsFor(input.features?.startSteps ?? ['reminder', 'collection'], row.eligibility.reminderFeeAgreed),
+        ) ?? connection.default_start_step,
       decision_kind: null,
       reminder_fee_agreed: row.eligibility.reminderFeeAgreed,
       bank_check: 'pass',

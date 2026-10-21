@@ -1,11 +1,16 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { releaseDoubtfulReserveAfterChange } from '@/lib/customer-loss/doubtful'
 import {
-  createInvoicePaymentJournalEntry,
+  checkPriorCashRecognition,
   createInvoiceCashEntry,
+  createInvoiceCashPartialEntry,
+  createInvoicePaymentJournalEntry,
 } from '@/lib/bookkeeping/invoice-entries'
+import { buildInvoiceCashPartialLines } from '@/lib/bookkeeping/invoice-lines'
 import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { invoicePaymentBusinessEvent, type InvoicePaymentPostingContext } from '@/lib/bookkeeping/invoice-business-events'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
+import { ORE_TOLERANCE, equalOre, isZeroOre, roundOre } from '@/lib/money'
 import { resolveInvoicePaymentSourceType } from '@/lib/bookkeeping/propose-payment-lines'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
@@ -19,10 +24,16 @@ import {
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { linkBasisColumnsFor, type LinkBasisInput } from '@/lib/links/stamp'
-import { roundOre } from '@/lib/money'
 import { postingPort } from '@/lib/posting/port'
-import type { CreateJournalEntryInput, Customer, EntityType, Invoice } from '@/types'
+import type {
+  CreateJournalEntryInput,
+  CreateJournalEntryLineInput,
+  Customer,
+  EntityType,
+  Invoice,
+} from '@/types'
 import { MATCHABLE_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
+import { cashPartialPaymentsEnabled } from '@/lib/env/cash-partial-payments-switch'
 import {
   bookSaleBeforeSettlement,
   clearsReceivable,
@@ -46,8 +57,10 @@ const log = createLogger('settle-invoice-payment')
  *      verifikat yet: the Bokför step books it on its invoice date, and a
  *      refusal there refuses the payment with nothing written
  *      (lib/invoices/sale-first.ts)
- *   3. journal entry: custom lines | cash entry (kontantmetoden, unbooked) |
- *      payment entry (clears 1510), fail-closed for real invoices
+ *   3. journal entry: custom lines | cash entry (kontantmetoden, unbooked;
+ *      pro rata per installment when the payment is partial and
+ *      CASH_PARTIAL_PAYMENTS_ENABLED is set) | payment entry (clears 1510),
+ *      fail-closed for real invoices
  *   4. invoice_payments row (the AR sub-ledger): the only source of the
  *      payment DATE, which the kontantmetod bokslut cut-off, the voucher ->
  *      invoice reference map and the "Betalningar" view all read (#2019)
@@ -231,21 +244,36 @@ export async function settleInvoicePayment(
 
   const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
 
-  // The generated cash entry (createInvoiceCashEntry) books the FULL invoice
-  // and takes no payment amount, so a never-booked kontantmetoden invoice can
-  // only be settled in full from a fully unpaid state. Partials used to book
-  // the entire revenue + moms against a smaller bank movement (bokslutsmetoden
-  // reports moms at payment, per installment), and completing a
-  // prior partial would book the full total a second time. Custom lines are
-  // NOT exempt: the dialog pre-fills the same full-invoice shape, so lines
-  // would book the identical error under a user-shaped label.
+  // The whole-payment cash entry (createInvoiceCashEntry) books the FULL
+  // invoice and takes no payment amount, so it is only right for a payment
+  // that settles a fully unpaid invoice. Bokslutsmetoden reports moms at
+  // payment, per installment: a partial, or the completion of an earlier
+  // partial, books one pro-rata installment instead
+  // (buildInvoiceCashPartialLines), whose installments together book exactly
+  // what the whole-payment entry would. Refused, as before, for what the
+  // builder cannot split:
+  //   - custom lines: the dialog pre-fills the whole-invoice shape, so they
+  //     would book the old error under a user-shaped label;
+  //   - foreign-currency and ROT/RUT invoices, and lines that do not add up
+  //     to the total (the builder's own refusals);
+  //   - a plan the builder disagrees with on what is still owed;
+  //   - earlier installments the ledger does not show as pro-rata ones
+  //     (checkPriorCashRecognition), where the next share would double-count.
+  // The pro-rata rule waits for the accountant: while
+  // CASH_PARTIAL_PAYMENTS_ENABLED is unset every such payment is refused as
+  // it always was, with the same details, on every door that reaches here.
   const cashBlock = cashPartialBlockReason({
     invoiceAlreadyBooked,
     accountingMethod: bookingMethod,
     priorPaidAmount: invoice.paid_amount,
     paysRemainingInFull: newStatus === 'paid',
   })
-  if (isRealInvoice && cashBlock) {
+  const proRataEnabled = cashPartialPaymentsEnabled()
+  let cashInstallment: { description: string; lines: CreateJournalEntryLineInput[] } | null = null
+  // The pro-rata rule is kontantmetoden's: a kontantfaktura under
+  // faktureringsmetoden (recognizeSaleAtPayment) takes the cash shape only
+  // because it is paid at issue, so it stays full amount only.
+  if (isRealInvoice && cashBlock && (!proRataEnabled || accountingMethod !== 'cash')) {
     return {
       ok: false,
       code: 'INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED',
@@ -256,6 +284,51 @@ export async function settleInvoicePayment(
         invoice_total: invoice.total,
       },
     }
+  }
+  if (isRealInvoice && cashBlock) {
+    const refuse = (
+      unsupported: string,
+      extra?: Record<string, unknown>,
+    ): SettleInvoicePaymentResult => ({
+      ok: false,
+      code: 'INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED',
+      details: {
+        reason: cashBlock,
+        unsupported,
+        payment_amount: paymentAmountInInvoiceCurrency,
+        paid_amount: invoice.paid_amount ?? 0,
+        invoice_total: invoice.total,
+        ...extra,
+      },
+    })
+    if (customLines) return refuse('custom_lines')
+
+    const priorPaid = invoice.paid_amount ?? 0
+    const installment = buildInvoiceCashPartialLines(
+      invoice,
+      entityType,
+      { priorPaid, amount: paymentAmountInInvoiceCurrency },
+      invoice.customer?.name ?? undefined,
+      settlementAccountNumber,
+    )
+    if (!installment.ok) return refuse(installment.reason)
+    // The plan (remaining_amount) and the builder (total minus paid_amount)
+    // must agree on what this payment leaves: the invoice reaches paid only
+    // when its installments have recognised all of it.
+    if (installment.settles !== (newStatus === 'paid') || !equalOre(installment.paidAfter, newPaidAmount)) {
+      return refuse('remaining_mismatch', { paid_after: installment.paidAfter, new_paid_amount: newPaidAmount })
+    }
+    if (!isZeroOre(priorPaid)) {
+      const prior = await checkPriorCashRecognition(
+        supabase,
+        companyId,
+        invoice.id,
+        priorPaid,
+        installment.recognisedBefore,
+      )
+      if (!prior.ok) return refuse(prior.reason, prior.details)
+    }
+    cashInstallment = { description: installment.description, lines: installment.lines }
   }
 
   let journalEntryId: string | null = null
@@ -354,6 +427,17 @@ export async function settleInvoicePayment(
           input,
         })
         journalEntryId = journalEntry?.id ?? null
+      } else if (cashInstallment) {
+        const journalEntry = await createInvoiceCashPartialEntry(
+          supabase,
+          companyId,
+          userId,
+          invoice.id,
+          cashInstallment,
+          paymentDate,
+          () => ({ invoice: invoice as Invoice, context: posting() }),
+        )
+        journalEntryId = journalEntry?.id ?? null
       } else if (useCashEntry) {
         // The entry helpers never read invoice.customer (the display name is
         // passed explicitly), so the partial customer relation is safe here.
@@ -448,7 +532,7 @@ export async function settleInvoicePayment(
   }
 
   // CAS guard: only update if status is still in a payable state.
-  const { data: updateResult, error: updateError } = await supabase
+  let casUpdate = supabase
     .from('invoices')
     .update({
       status: newStatus,
@@ -459,12 +543,35 @@ export async function settleInvoicePayment(
     .eq('id', invoice.id)
     .eq('company_id', companyId)
     .in('status', [...MATCHABLE_INVOICE_STATUSES])
-    .select('id')
+  if (isRealInvoice && useCashEntry && proRataEnabled) {
+    // Every kontantmetoden entry here is computed from the paid_amount read
+    // above: an installment takes its share from it, and the whole-payment
+    // entry (or custom lines) assumes nothing was paid. When another payment
+    // moved paid_amount in between, the entry no longer fits the invoice: two
+    // installments would overlap, or a whole payment would book again the
+    // revenue and moms of an installment that landed first. Lose the race
+    // instead. The band is the half öre the read-side checks allow, so a
+    // stored value that is not exactly two decimals never blocks a payment.
+    // Only with the pro-rata rule on: without it no installment can land on
+    // a never-booked invoice, and the update stays what it always was.
+    const priorPaid = roundOre(invoice.paid_amount ?? 0)
+    const above = priorPaid - ORE_TOLERANCE
+    const below = priorPaid + ORE_TOLERANCE
+    // Nothing paid yet: the band around zero, ±ORE_TOLERANCE (0.005), written
+    // as a literal filter so the schema guard checks its columns.
+    casUpdate =
+      priorPaid === 0
+        ? casUpdate.or('paid_amount.is.null,and(paid_amount.gt.-0.005,paid_amount.lt.0.005)')
+        : casUpdate.gt('paid_amount', above).lt('paid_amount', below)
+  }
+  const { data: updateResult, error: updateError } = await casUpdate.select('id')
 
   if (updateError) {
     // The payment voucher already posted but the invoice row did not flip to
     // paid; cancel the orphan so the GL doesn't diverge from the sub-ledger.
-    await removeInvoicePaymentRow(supabase, companyId, paymentRowId)
+    // Voucher first, then the row: a row the collections provider collected
+    // may only be removed once its voucher is cancelled
+    // (block_delete_collected_payment, 20261021120600).
     if (journalEntryId) {
       await cancelOrphanedPaymentEntry(
         supabase,
@@ -474,13 +581,14 @@ export async function settleInvoicePayment(
         'Automatiskt makulerad: fakturauppdatering misslyckades efter bokförd betalning',
       )
     }
+    await removeInvoicePaymentRow(supabase, companyId, paymentRowId)
     return { ok: false, code: 'UPDATE_FAILED', error: updateError }
   }
 
   if (!updateResult || updateResult.length === 0) {
     // Status changed between read and write (concurrent settle): cancel the
     // orphaned payment voucher; the trigger documents the voucher gap.
-    await removeInvoicePaymentRow(supabase, companyId, paymentRowId)
+    // Voucher first, then the row (same order as above).
     if (journalEntryId) {
       await cancelOrphanedPaymentEntry(
         supabase,
@@ -490,6 +598,7 @@ export async function settleInvoicePayment(
         'Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd',
       )
     }
+    await removeInvoicePaymentRow(supabase, companyId, paymentRowId)
     return { ok: false, code: 'INVOICE_PAID_RACE' }
   }
 
@@ -518,6 +627,14 @@ export async function settleInvoicePayment(
     userId,
     paymentAmount: paymentAmountInInvoiceCurrency,
     paymentDate,
+  })
+
+  // A befarad kundförlust reserve the payment made unnecessary comes back in
+  // the same run (Dr 1519 / Cr 6352). Never throws: the payment stands.
+  await releaseDoubtfulReserveAfterChange(supabase, companyId, userId, {
+    invoiceId: invoice.id,
+    entryDate: paymentDate,
+    trigger: 'payment',
   })
 
   return {

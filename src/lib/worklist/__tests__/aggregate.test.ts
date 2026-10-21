@@ -26,9 +26,10 @@ vi.mock('../categories', () => ({
   countExpensePayoutsDue: vi.fn().mockResolvedValue(2),
   countSkattekontoPaymentDue: vi.fn().mockResolvedValue(1),
   countFailedPeppolDeliveries: vi.fn().mockResolvedValue(2),
-  countCollectionDecisions: vi.fn().mockResolvedValue(0),
+  countCollectionDecisionsAndBatch: vi.fn().mockResolvedValue({ decision: 0, batchReady: 0 }),
   countCollectionAttention: vi.fn().mockResolvedValue(0),
-  countCollectionBatchItems: vi.fn().mockResolvedValue(0),
+  countCollectionSettlementsToBook: vi.fn().mockResolvedValue(0),
+  countCollectedPaymentsToBook: vi.fn().mockResolvedValue(0),
   countBankSwitchDue: vi.fn().mockResolvedValue(0),
   countPaymentsVerificationDue: vi.fn().mockResolvedValue(0),
   countSupplierPayeeChangesDue: vi.fn().mockResolvedValue(0),
@@ -82,6 +83,8 @@ describe('getWorklistCounts', () => {
       peppol_delivery_failed: 2,
       collection_decision: 0,
       collection_attention: 0,
+      collection_settlements_to_book: 0,
+      collected_payments_to_book: 0,
       collection_batch_ready: 0,
       bank_switch: 0,
       payments_verification_renewal: 0,
@@ -129,24 +132,38 @@ describe('getWorklistCounts', () => {
     expect(countBankSwitchDue).not.toHaveBeenCalled()
   })
 
+  it('counts payouts and collected payments waiting in Avräkningar into the total', async () => {
+    const { countCollectionSettlementsToBook, countCollectedPaymentsToBook } = await import('../categories')
+    vi.mocked(countCollectionSettlementsToBook).mockResolvedValueOnce(2)
+    vi.mocked(countCollectedPaymentsToBook).mockResolvedValueOnce(3)
+    const { counts, total } = await getWorklistCounts(supabase, 'company-1')
+    expect(counts.collection_settlements_to_book).toBe(2)
+    expect(counts.collected_payments_to_book).toBe(3)
+    expect(total).toBe(36)
+    expect(countCollectionSettlementsToBook).toHaveBeenCalledWith(supabase, 'company-1')
+    expect(countCollectedPaymentsToBook).toHaveBeenCalledWith(supabase, 'company-1')
+  })
+
   it('counts collection decisions and collections attention into the total', async () => {
-    const { countCollectionDecisions, countCollectionAttention } = await import('../categories')
-    vi.mocked(countCollectionDecisions).mockResolvedValueOnce(2)
+    const { countCollectionDecisionsAndBatch, countCollectionAttention } = await import('../categories')
+    vi.mocked(countCollectionDecisionsAndBatch).mockResolvedValueOnce({ decision: 2, batchReady: 0 })
     vi.mocked(countCollectionAttention).mockResolvedValueOnce(1)
     const { counts, total } = await getWorklistCounts(supabase, 'company-1')
     expect(counts.collection_decision).toBe(2)
     expect(counts.collection_attention).toBe(1)
     expect(total).toBe(34)
-    expect(countCollectionDecisions).toHaveBeenCalledWith(supabase, 'company-1')
+    expect(countCollectionDecisionsAndBatch).toHaveBeenCalledWith(supabase, 'company-1')
   })
 
   it('counts the pending collections batch items into the total, on the session client', async () => {
-    const { countCollectionBatchItems } = await import('../categories')
-    vi.mocked(countCollectionBatchItems).mockResolvedValueOnce(4)
+    const { countCollectionDecisionsAndBatch } = await import('../categories')
+    vi.mocked(countCollectionDecisionsAndBatch).mockResolvedValueOnce({ decision: 1, batchReady: 4 })
     const { counts, total } = await getWorklistCounts(supabase, 'company-1')
     expect(counts.collection_batch_ready).toBe(4)
-    expect(total).toBe(35)
-    expect(countCollectionBatchItems).toHaveBeenCalledWith(supabase, 'company-1')
+    expect(counts.collection_decision).toBe(1)
+    expect(total).toBe(36)
+    expect(countCollectionDecisionsAndBatch).toHaveBeenCalledTimes(1)
+    expect(countCollectionDecisionsAndBatch).toHaveBeenCalledWith(supabase, 'company-1')
   })
 
   it('counts failed Peppol deliveries on the caller session client, like every other category', async () => {

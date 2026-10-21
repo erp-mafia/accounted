@@ -7,6 +7,8 @@ import {
   matchesQuoteListTab,
   parseInvoiceListTab,
   parseQuoteListTab,
+  segmentViewActive,
+  statusPickerTabs,
   type InvoiceListTab,
   type QuoteListTab,
 } from '../invoice-list-tabs'
@@ -219,3 +221,54 @@ describe('the collections tab', () => {
   })
 })
 
+
+describe('Förfallna follows the due date (crm#1084), with collections in play', () => {
+  const today = '2026-10-09'
+  const context = { today, inCollection: new Set(['at-provider']) }
+
+  it('follows the due date: a sent invoice past it is overdue though no reminder set the status', () => {
+    const sent = row({ status: 'sent', id: 'a', due_date: '2026-09-02', remaining_amount: 1250 })
+    expect(matchesInvoiceListTab(sent, 'overdue', context)).toBe(true)
+  })
+
+  it('includes a partly paid invoice past its due date', () => {
+    expect(matchesInvoiceListTab(row({ status: 'partially_paid', id: 'b', due_date: '2026-09-02', remaining_amount: 100 }), 'overdue', context)).toBe(
+      true,
+    )
+  })
+
+  it('leaves out an invoice not due yet, a paid one and one already at the provider', () => {
+    expect(matchesInvoiceListTab(row({ status: 'sent', id: 'c', due_date: today, remaining_amount: 1 }), 'overdue', context)).toBe(false)
+    expect(matchesInvoiceListTab(row({ status: 'overdue', id: 'd', due_date: '2026-09-02', remaining_amount: 0 }), 'overdue', context)).toBe(false)
+    expect(
+      matchesInvoiceListTab(row({ status: 'overdue', id: 'at-provider', due_date: '2026-09-02', remaining_amount: 10 }), 'overdue', context),
+    ).toBe(false)
+  })
+
+  it('never lists a credit note', () => {
+    expect(
+      matchesInvoiceListTab(row({ status: 'sent', id: 'e', due_date: '2026-09-02', remaining_amount: -10, credited_invoice_id: 'x' }), 'overdue', context),
+    ).toBe(false)
+  })
+})
+
+describe('one door for Förfallna and Hos inkasso', () => {
+  it('leaves the segmented views out of the status picker while the segmented control shows', () => {
+    const picker = statusPickerTabs(INVOICE_LIST_TABS, true)
+    expect(picker).not.toContain('overdue')
+    expect(picker).not.toContain('collections')
+    expect(picker).toContain('all')
+    expect(picker).toContain('unpaid')
+  })
+
+  it('keeps every view in the picker while collections is not in play', () => {
+    expect(statusPickerTabs(INVOICE_LIST_TABS, false)).toEqual([...INVOICE_LIST_TABS])
+  })
+
+  it('says when the active view is the segmented control\'s', () => {
+    expect(segmentViewActive('overdue', true)).toBe(true)
+    expect(segmentViewActive('collections', true)).toBe(true)
+    expect(segmentViewActive('paid', true)).toBe(false)
+    expect(segmentViewActive('overdue', false)).toBe(false)
+  })
+})

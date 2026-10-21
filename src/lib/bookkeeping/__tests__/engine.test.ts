@@ -15,6 +15,7 @@ import {
   AccountsNotInChartError,
   BookkeepingDatabaseError,
   CannotReverseStornoError,
+  CannotReverseCollectedPaymentError,
   EntryDateOutsideFiscalPeriodError,
   JournalLineBothSidesNonZeroError,
   JournalLineNegativeAmountError,
@@ -56,6 +57,20 @@ vi.mock('@/lib/core/bookkeeping/storno-target', () => ({
 // Mock event bus
 vi.mock('@/lib/events', () => ({
   eventBus: { emit: vi.fn().mockResolvedValue([]) },
+}))
+
+// The payout mirror after a reversed collections payout voucher.
+const mockReleaseSettlement = vi.fn().mockResolvedValue({ released: true })
+vi.mock('@/lib/collections/settlement-reversal', () => ({
+  releaseSettlementAfterReversal: (...args: unknown[]) => mockReleaseSettlement(...args),
+}))
+
+// The kundförlust decision mirror around a storno of a customer_loss voucher.
+const mockAssertCustomerLossReversible = vi.fn().mockResolvedValue(undefined)
+const mockSyncCustomerLoss = vi.fn().mockResolvedValue(undefined)
+vi.mock('@/lib/customer-loss/reversal', () => ({
+  assertCustomerLossReversible: (...args: unknown[]) => mockAssertCustomerLossReversible(...args),
+  syncCustomerLossAfterReversal: (...args: unknown[]) => mockSyncCustomerLoss(...args),
 }))
 
 // Mock the on-demand BAS backfill, default: nothing seedable. Individual
@@ -1735,6 +1750,180 @@ describe('reverseEntry: storno guard', () => {
     expect(insertedEntry!.source_type).toBe('storno')
     expect(insertedEntry!.reverses_id).toBe('entry-1')
     expect(insertedEntry!.description).toBe('Makulering: Rättelse: Hyra november')
+  })
+})
+
+describe('reverseEntry: collections', () => {
+  function original(overrides: Record<string, unknown>) {
+    return {
+      id: 'entry-1',
+      company_id: 'company-1',
+      status: 'posted',
+      fiscal_period_id: 'period-1',
+      voucher_series: 'C',
+      voucher_number: 3,
+      entry_date: '2026-09-27',
+      description: 'Inbetalning',
+      source_id: null,
+      lines: [
+        { account_number: '1689', debit_amount: 1000, credit_amount: 0 },
+        { account_number: '1510', debit_amount: 0, credit_amount: 1000 },
+      ],
+      ...overrides,
+    }
+  }
+
+  function supabaseFor(entry: Record<string, unknown>, collectionsRows: { id: string }[], rebookRows: { id: string }[] = []) {
+    const reversal = { id: 'reversal-1', reverses_id: 'entry-1' }
+    let jeCall = 0
+    const jeResults = [
+      { data: entry, error: null },
+      { data: reversal, error: null },
+      { data: [{ id: 'entry-1' }], error: null },
+      { data: { ...reversal, lines: [] }, error: null },
+    ]
+    const paymentFilters: unknown[][] = []
+    const rebookFilters: unknown[][] = []
+    function jeBuilder() {
+      const b: Record<string, unknown> = {}
+      for (const m of ['select', 'eq', 'in', 'update', 'insert']) b[m] = vi.fn().mockReturnValue(b)
+      b.single = vi.fn().mockImplementation(async () => jeResults[jeCall++])
+      b.then = (resolve: (v: unknown) => void) => resolve(jeResults[jeCall++])
+      return b
+    }
+    function paymentsBuilder() {
+      const b: Record<string, unknown> = {}
+      b.select = vi.fn().mockReturnValue(b)
+      b.eq = vi.fn().mockImplementation((...args: unknown[]) => {
+        paymentFilters.push(args)
+        return b
+      })
+      b.limit = vi.fn().mockResolvedValue({ data: collectionsRows, error: null })
+      return b
+    }
+    const supabase = {
+      rpc: vi.fn().mockResolvedValue({ data: 4, error: null }),
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === 'journal_entries') return jeBuilder()
+        if (table === 'invoice_payments') return paymentsBuilder()
+        if (table === 'collection_collected_payments') {
+          const b: Record<string, unknown> = {}
+          for (const m of ['select', 'eq', 'is', 'gt']) {
+            b[m] = vi.fn().mockImplementation((...args: unknown[]) => {
+              rebookFilters.push([m, ...args])
+              return b
+            })
+          }
+          b.limit = vi.fn().mockResolvedValue({ data: rebookRows, error: null })
+          return b
+        }
+        if (table === 'chart_of_accounts') {
+          const b: Record<string, unknown> = {}
+          for (const m of ['select', 'eq', 'in']) b[m] = vi.fn().mockReturnValue(b)
+          b.then = (resolve: (v: unknown) => void) =>
+            resolve({
+              data: [
+                { id: 'acc-1689', account_number: '1689' },
+                { id: 'acc-1510', account_number: '1510' },
+                { id: 'acc-1930', account_number: '1930' },
+              ],
+              error: null,
+            })
+          return b
+        }
+        if (table === 'journal_entry_lines') return { insert: vi.fn().mockResolvedValue({ error: null }) }
+        return createMockChain()
+      }),
+    }
+    return { supabase, paymentFilters, rebookFilters }
+  }
+
+  beforeEach(() => {
+    mockReleaseSettlement.mockClear()
+  })
+
+  it('refuses a generic storno of a payment the collections provider collected, before any voucher number is drawn', async () => {
+    const { supabase, paymentFilters } = supabaseFor(original({ source_type: 'invoice_paid' }), [{ id: 'ip-1' }])
+    await expect(reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')).rejects.toBeInstanceOf(
+      CannotReverseCollectedPaymentError,
+    )
+    expect(paymentFilters).toEqual(
+      expect.arrayContaining([
+        ['company_id', 'company-1'],
+        ['journal_entry_id', 'entry-1'],
+        ['source', 'collections'],
+      ]),
+    )
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('lets the collections rebook storno through while it holds the payment, and only then', async () => {
+    const held = supabaseFor(original({ source_type: 'invoice_paid' }), [{ id: 'ip-1' }], [{ id: 'collected-1' }])
+    await expect(
+      reverseEntry(held.supabase as never, 'company-1', 'user-1', 'entry-1', undefined, { collectionsRebook: true }),
+    ).resolves.toMatchObject({ id: 'reversal-1' })
+    expect(held.rebookFilters).toEqual(
+      expect.arrayContaining([
+        ['eq', 'company_id', 'company-1'],
+        ['eq', 'journal_entry_id', 'entry-1'],
+        ['eq', 'status', 'booked'],
+        ['is', 'settlement_id', null],
+        ['gt', 'booking_lease_until', expect.any(String)],
+      ]),
+    )
+
+    // The option alone is not enough: the rebook must hold the payment.
+    const notHeld = supabaseFor(original({ source_type: 'invoice_paid' }), [{ id: 'ip-1' }], [])
+    await expect(
+      reverseEntry(notHeld.supabase as never, 'company-1', 'user-1', 'entry-1', undefined, { collectionsRebook: true }),
+    ).rejects.toBeInstanceOf(CannotReverseCollectedPaymentError)
+    expect(notHeld.supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('returns the payout of a reversed payout voucher to the settlements view', async () => {
+    const { supabase } = supabaseFor(
+      original({
+        source_type: 'collection_settlement',
+        source_id: 'stl-1',
+        lines: [
+          { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
+          { account_number: '1689', debit_amount: 0, credit_amount: 1000 },
+        ],
+      }),
+      [],
+    )
+    await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+    expect(mockReleaseSettlement).toHaveBeenCalledWith('company-1', 'entry-1')
+    // A payout voucher carries no invoice payment: the collected-payment guard does not apply.
+    expect(supabase.from).not.toHaveBeenCalledWith('invoice_payments')
+  })
+
+  it('refuses a generic storno of a recovery booked from a collected payment; the rebook holding it goes through', async () => {
+    mockAssertCustomerLossReversible.mockClear()
+    mockSyncCustomerLoss.mockClear()
+    const recovery = original({ source_type: 'customer_loss', voucher_series: 'A', source_id: 'decision-1', description: 'Återvunnen kundförlust' })
+    const generic = supabaseFor(recovery, [], [{ id: 'collected-1' }])
+    await expect(reverseEntry(generic.supabase as never, 'company-1', 'user-1', 'entry-1')).rejects.toBeInstanceOf(
+      CannotReverseCollectedPaymentError,
+    )
+    expect(generic.rebookFilters).toEqual(expect.arrayContaining([['eq', 'journal_entry_id', 'entry-1']]))
+    expect(generic.supabase.rpc).not.toHaveBeenCalled()
+    expect(mockAssertCustomerLossReversible).not.toHaveBeenCalled()
+
+    const held = supabaseFor(recovery, [], [{ id: 'collected-1' }])
+    await expect(
+      reverseEntry(held.supabase as never, 'company-1', 'user-1', 'entry-1', undefined, { collectionsRebook: true }),
+    ).resolves.toMatchObject({ id: 'reversal-1' })
+    expect(held.rebookFilters).toEqual(expect.arrayContaining([['gt', 'booking_lease_until', expect.any(String)]]))
+    expect(mockAssertCustomerLossReversible).toHaveBeenCalledWith(expect.anything(), 'company-1', 'entry-1')
+    expect(mockSyncCustomerLoss).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'entry-1', expect.objectContaining({ id: 'reversal-1' }))
+    // A recovery carries no invoice payment row: the payment guard never looks.
+    expect(held.supabase.from).not.toHaveBeenCalledWith('invoice_payments')
+  })
+
+  it('leaves a kundförlust voucher no collected payment holds to the generic storno', async () => {
+    const { supabase } = supabaseFor(original({ source_type: 'customer_loss', voucher_series: 'A', source_id: 'decision-2' }), [], [])
+    await expect(reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')).resolves.toMatchObject({ id: 'reversal-1' })
   })
 })
 

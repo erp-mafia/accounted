@@ -244,6 +244,20 @@ const RETAINED = new Set([
   // collection pays something else. The company's record of why the case
   // went on.
   'collection_sweep_hits.resolved_by',
+  // Collected payments and payouts: who booked each, and who chose the
+  // account for a payout line the ledger could not place. The company's
+  // record of who decided a posting.
+  'collection_collected_payments.booked_by',
+  'collection_settlement_lines.account_chosen_by',
+  'collection_settlements.booked_by',
+  // ...and who confirmed a payout is not a duplicate of a voucher booked by
+  // hand, or marked it handled elsewhere: the company's record of why a
+  // payout was booked or left out.
+  'collection_settlements.duplicate_cleared_by',
+  'collection_settlements.ignored_by',
+  // Kundförlust: who decided that a claim is doubtful, lost or recovered.
+  // The company's record of why a receivable left its books (BFL 5 kap 6 §).
+  'invoice_write_offs.decided_by',
   // Company integrations: the company's accounts, not the person's
   'pos_connections.created_by',
   'pos_connections.ended_by',

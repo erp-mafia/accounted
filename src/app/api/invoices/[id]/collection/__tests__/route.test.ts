@@ -124,11 +124,20 @@ describe('GET /api/invoices/[id]/collection', () => {
     expect(body.data).toMatchObject({ availability: { start: 'hidden' }, case: null, readiness: null })
   })
 
+  it('names the inkassokrav as the first step when no reminder fee was agreed for the invoice', async () => {
+    switchOn()
+    world.db.rows('collection_connections')[0].reminder_fee_terms_since = null
+    const body = await json<{ data: { availability: unknown } }>(await call(GET, 'GET', INVOICE_ID))
+    expect(body.data.availability).toMatchObject({ connection: { defaultStartStep: 'collection' } })
+  })
+
   it('answers the dialog checklist once the company can hand over', async () => {
     switchOn()
     const res = await call(GET, 'GET', INVOICE_ID, undefined, '?readiness=1')
     const body = await json<{ data: { availability: { start: string; displayName: string }; readiness: Record<string, unknown> } }>(res)
     expect(body.data.availability).toMatchObject({ start: 'ready', displayName: 'Acme Inkasso' })
+    // The overdue banner names the company's configured first step.
+    expect(body.data.availability).toMatchObject({ connection: { defaultStartStep: 'reminder' } })
     expect(body.data.readiness).toMatchObject({
       eligible: true,
       claim: { amount: 1250, remaining: 1250 },

@@ -1,0 +1,1 @@
+[2026-10-14] New collections connections start with automatic booking of collected payments and payouts off (supersedes the 2026-10-09 line): whether on may be the default is the accountant's decision, and until then a new connection books nothing by itself.

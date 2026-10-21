@@ -100,6 +100,7 @@ const ENGINE_OWNED = [
   'rot_rut_reclassification',
   'expense_payout',
   'stripe_payout',
+  'collection_settlement',
 ]
 
 function makeRequest(path: string, body: unknown, { auth = true } = {}): Request {

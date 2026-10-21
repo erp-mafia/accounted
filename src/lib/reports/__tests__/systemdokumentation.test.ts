@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildSystemdokumentation, loadSystemdokumentationFacts, type SystemdokumentationFacts } from '../systemdokumentation'
-import { KONTANTMETOD_CUTOFF_RULES, SUPPLIER_INVOICE_ROUNDING_RULES, VOUCHER_SERIES_RULES } from '../system-rules'
+import { CASH_PARTIAL_PAYMENT_RULE, KONTANTMETOD_CUTOFF_RULES, SUPPLIER_INVOICE_ROUNDING_RULES, VOUCHER_SERIES_RULES } from '../system-rules'
 
 vi.mock('@/lib/branding/service', () => ({
   getBranding: () => ({ appName: 'Accounted', appUrl: 'https://app.accounted.se' }),
@@ -138,6 +138,13 @@ describe('buildSystemdokumentation', () => {
     expect(rule).toContain('Dröjsmålsränta enligt räntelagen.')
     expect(rule).toContain('konto 1689')
     expect(rule).toContain('efter att en användare har godkänt varje bokföring')
+    expect(rule).toContain('kan inte makuleras med en vanlig storno')
+    expect(rule).toContain('betalningsunderlag')
+    expect(rule).toContain('bokföras om under Avräkningar')
+    expect(rule).toContain('inte är en dubblett')
+    expect(rule).toContain('Bankraden för en bokförd utbetalning')
+    expect(rule).toContain('på det bankkonto utbetalningen bokförs mot')
+    expect(rule).toContain('anger vilken verifikation det ersätter')
     // The handover rules (bank check, a person's approval, no reminders of our own beside the provider's).
     expect(rule).toContain('banken inte visar en obokförd inbetalning')
     expect(rule).toContain('Bara en person godkänner en överlämning')
@@ -172,6 +179,51 @@ describe('buildSystemdokumentation', () => {
     const t2 = Object.fromEntries(withAutoLock.behandlingsregler.map((x) => [x.rubrik, x.text]))
     expect(t2['Öresavrundning på kundfakturor']).toContain('3740')
     expect(t2['Automatisk låsning']).toContain('45 dagar')
+  })
+
+  it('describes the kontantmetoden part-payment rule while its switch is on for a cash-method company, or once it booked', () => {
+    const rubrik = 'Delbetalningar, kontantmetoden'
+    const on = { switches: { cashPartialPayments: true, collections: false, customerLoss: false }, vouchers: { cashPartialPayments: false, collectionSettlement: false, customerLoss: false } }
+    const cashSettings = { ...facts().settings!, accounting_method: 'cash' as const }
+    // Switch off, nothing booked by the rule: not described, cash or not.
+    expect(buildSystemdokumentation(facts({ settings: cashSettings })).behandlingsregler.find((x) => x.rubrik === rubrik)).toBeUndefined()
+    // Switch on: only a cash-method company books by it.
+    expect(buildSystemdokumentation(facts({ switchedRules: on })).behandlingsregler.find((x) => x.rubrik === rubrik)).toBeUndefined()
+    // Switched off again after it booked: still described, for as long as the books hold its vouchers.
+    const used = { ...on, switches: { ...on.switches, cashPartialPayments: false }, vouchers: { ...on.vouchers, cashPartialPayments: true } }
+    expect(buildSystemdokumentation(facts({ switchedRules: used })).behandlingsregler.find((x) => x.rubrik === rubrik)?.text).toBe(CASH_PARTIAL_PAYMENT_RULE)
+
+    const cash = buildSystemdokumentation(facts({ settings: cashSettings, switchedRules: on }))
+    const rule = cash.behandlingsregler.find((x) => x.rubrik === rubrik)
+    expect(rule?.text).toBe(CASH_PARTIAL_PAYMENT_RULE)
+    expect(rule?.text).toContain('i proportion till det inbetalda beloppet')
+    // The exclusions match what the code refuses (cashProRataUnsupportedReason
+    // and the doors that still refuse every partial).
+    expect(rule?.text).toContain('utländsk valuta')
+    expect(rule?.text).toContain('skattereduktion för grön teknik')
+    expect(rule?.text).toContain('bankmatchning eller med API-nyckel')
+  })
+
+  it('lists the series of the collections payout and kundförlust while their switch is on or once they booked', () => {
+    const listed = (r: ReturnType<typeof buildSystemdokumentation>) => r.verifikationsserier.per_source_type.map((row) => row.source_type)
+    const none = { switches: { cashPartialPayments: false, collections: false, customerLoss: false }, vouchers: { cashPartialPayments: false, collectionSettlement: false, customerLoss: false } }
+
+    const dark = listed(buildSystemdokumentation(facts()))
+    expect(dark).not.toContain('collection_settlement')
+    expect(dark).not.toContain('customer_loss')
+    expect(dark).toContain('invoice_cash_payment')
+
+    const switchedOn = listed(buildSystemdokumentation(facts({ switchedRules: { ...none, switches: { ...none.switches, collections: true, customerLoss: true } } })))
+    expect(switchedOn).toContain('collection_settlement')
+    expect(switchedOn).toContain('customer_loss')
+
+    // Switched off after use: the series that were used stay described.
+    const usedPayout = listed(buildSystemdokumentation(facts({ switchedRules: { ...none, vouchers: { ...none.vouchers, collectionSettlement: true } } })))
+    expect(usedPayout).toContain('collection_settlement')
+    expect(usedPayout).not.toContain('customer_loss')
+    const usedLoss = listed(buildSystemdokumentation(facts({ switchedRules: { ...none, vouchers: { ...none.vouchers, customerLoss: true } } })))
+    expect(usedLoss).toContain('customer_loss')
+    expect(usedLoss).not.toContain('collection_settlement')
   })
 
   it('lists members by role with labels and API keys with scope labels and the numeric cap', () => {
@@ -271,6 +323,43 @@ describe('loadSystemdokumentationFacts', () => {
     for (const table of ['chart_of_accounts', 'voucher_sequences', 'cash_accounts', 'company_members', 'stripe_connections', 'extension_data']) {
       expect(db.calls.some((c) => c.table === table && c.method === 'eq' && c.args[0] === 'company_id' && c.args[1] === 'company-1')).toBe(true)
     }
+  })
+
+  it('reads the switches and whether the books hold vouchers only a switched rule writes', async () => {
+    const base = {
+      fiscal_periods: { data: PERIOD },
+      companies: { data: { name: 'Test AB', org_number: null } },
+      company_members: { data: [{ user_id: 'u1', role: 'owner', joined_at: '2026-01-01T00:00:00Z' }] },
+    }
+    const dark = await loadSystemdokumentationFacts(tableMock({ ...base, journal_entries: { data: [] } }).client, 'company-1', 'p1')
+    expect(dark!.switchedRules).toEqual({
+      switches: { cashPartialPayments: false, collections: false, customerLoss: false },
+      vouchers: { cashPartialPayments: false, collectionSettlement: false, customerLoss: false },
+    })
+
+    vi.stubEnv('CASH_PARTIAL_PAYMENTS_ENABLED', '1')
+    vi.stubEnv('COLLECTIONS_ENABLED', 'true')
+    vi.stubEnv('CUSTOMER_LOSS_ENABLED', '1')
+    const db = tableMock({ ...base, journal_entries: { data: [{ id: 'je-1' }] } })
+    const used = await loadSystemdokumentationFacts(db.client, 'company-1', 'p1')
+    expect(used!.switchedRules).toEqual({
+      switches: { cashPartialPayments: true, collections: true, customerLoss: true },
+      vouchers: { cashPartialPayments: true, collectionSettlement: true, customerLoss: true },
+    })
+    const voucherReads = db.calls.filter((c) => c.table === 'journal_entries' && c.method === 'eq' && c.args[0] === 'source_type').map((c) => c.args[1])
+    expect(voucherReads.sort()).toEqual(['collection_settlement', 'customer_loss', 'invoice_cash_payment'])
+    expect(db.calls.find((c) => c.table === 'journal_entries' && c.method === 'like')?.args).toEqual(['description', 'Kontant delbetalning kundfaktura%'])
+    expect(db.calls.filter((c) => c.table === 'journal_entries' && c.method === 'eq' && c.args[0] === 'company_id')).toHaveLength(3)
+  })
+
+  it('refuses the document when the voucher read fails: a used series left out would be wrong', async () => {
+    const db = tableMock({
+      fiscal_periods: { data: PERIOD },
+      companies: { data: { name: 'Test AB', org_number: null } },
+      company_members: { data: [{ user_id: 'u1', role: 'owner', joined_at: '2026-01-01T00:00:00Z' }] },
+      journal_entries: { error: { message: 'timeout' } },
+    })
+    await expect(loadSystemdokumentationFacts(db.client, 'company-1', 'p1')).rejects.toThrow('verifikationer')
   })
 
   it('refuses the document when the member read fails: an empty access section would be wrong, not degraded', async () => {

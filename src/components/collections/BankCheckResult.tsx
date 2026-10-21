@@ -6,7 +6,8 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { useBankSync } from '@/components/transactions/BankSyncNowButton'
 import type { BankCheckState } from '@/lib/collections/handover-dialog'
 import type { BankCheckView } from '@/lib/collections/invoice-collection'
-import { formatCurrency, formatDate, formatDateLong } from '@/lib/utils'
+import { formatKronor } from '@/lib/collections/amount-text'
+import { formatDate, formatDateTime } from '@/lib/utils'
 
 /**
  * The bank check as both collections dialogs show it (build spec 3.4): a
@@ -24,7 +25,6 @@ export function BankCheckResult({
   onAttestedChange,
   onSynced,
   tp,
-  locale,
 }: {
   bank: BankCheckView
   state: BankCheckState
@@ -35,14 +35,13 @@ export function BankCheckResult({
   /** The bank was synced from here: read the check again. */
   onSynced: () => void
   tp: (key: string, values?: Record<string, string | number>) => string
-  locale: 'sv' | 'en'
 }) {
   return (
     <div className="min-w-0 space-y-2">
       {state.outcome === 'pass' && (
         <p>
           {bank.lastSyncedAt
-            ? tp('bank_check_pass', { date: formatDateLong(bank.lastSyncedAt, locale) })
+            ? tp('bank_check_pass', { date: formatDateTime(bank.lastSyncedAt) })
             : tp('bank_check_pass_no_date')}
         </p>
       )}
@@ -61,7 +60,7 @@ export function BankCheckResult({
             return (
               <li key={c.transactionId} className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-[12.5px]">
                 <span className="tabular-nums text-muted-foreground">{formatDate(c.date)}</span>
-                <span className="tabular-nums">{formatCurrency(c.amount)}</span>
+                <span className="tabular-nums">{formatKronor(c.amount)}</span>
                 <span className="min-w-0 flex-1 truncate text-muted-foreground">{c.description}</span>
                 {!c.dismissed && (
                   <button
@@ -86,7 +85,7 @@ export function BankCheckResult({
               : state.staleAccount?.syncedAt
                 ? tp('bank_check_stale', {
                     account: state.staleAccount.name,
-                    date: formatDateLong(state.staleAccount.syncedAt, locale),
+                    date: formatDateTime(state.staleAccount.syncedAt),
                   })
                 : tp('bank_check_stale_never', { account: state.staleAccount?.name ?? '' })}
           </p>

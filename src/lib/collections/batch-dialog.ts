@@ -1,5 +1,6 @@
 import {
   BATCH_ITEM_KINDS,
+  COLLECTIONS_BATCH_TYPE,
   BATCH_SKIP_REASONS,
   batchConfirmationMatches,
   type BatchCommitResult,
@@ -232,4 +233,41 @@ export const BATCH_REVIEW_HREF = `/pending?${BATCH_REVIEW_QUERY}=collections_dai
 /** Whether a /pending URL asks for the batch dialog. */
 export function wantsBatchReview(search: string): boolean {
   return new URLSearchParams(search).get(BATCH_REVIEW_QUERY) === 'collections_daily_batch'
+}
+
+// ---------------------------------------------------------------------------
+// The daily run in Att göra and on /pending (a collections row, not an agent proposal)
+// ---------------------------------------------------------------------------
+
+/**
+ * The step an item proposes: a new handover or a reminder start names its
+ * first step; a next step to approve is the reminder or the inkassokrav the
+ * provider waits to send.
+ */
+export function batchItemStep(item: Pick<BatchItem, 'kind' | 'start_step' | 'decision_kind'>): 'reminder' | 'collection' {
+  if (item.kind === 'approve_step') return item.decision_kind === 'approve_reminder' ? 'reminder' : 'collection'
+  return item.start_step === 'collection' ? 'collection' : 'reminder'
+}
+
+/**
+ * The run's row in owner words ("3 förfallna fakturor föreslås för
+ * påminnelse"): the step every remaining item proposes, or "inkasso" when
+ * they differ. The i18n key (collections namespace) takes `count`.
+ */
+export function batchRowKey(items: ReadonlyArray<Pick<BatchItem, 'kind' | 'start_step' | 'decision_kind'>>): 'batch_row_reminder' | 'batch_row_collection' | 'batch_row_mixed' {
+  const steps = new Set(items.map(batchItemStep))
+  if (steps.size === 1) return steps.has('reminder') ? 'batch_row_reminder' : 'batch_row_collection'
+  return items.length === 0 ? 'batch_row_reminder' : 'batch_row_mixed'
+}
+
+/** A pending operation is the daily collections run: reviewed in its own dialog, never framed as an agent proposal. */
+export function isCollectionsRun(op: { operation_type: string; status: string }): boolean {
+  return op.operation_type === COLLECTIONS_BATCH_TYPE && op.status === 'pending'
+}
+
+/** The run's items from a pending operation's params, less the ones taken out; [] when they cannot be read. */
+export function runItems(params: unknown, removedInvoiceIds: readonly string[] = []): BatchItem[] {
+  const items = (params as { items?: unknown } | null)?.items
+  if (!Array.isArray(items)) return []
+  return (items as BatchItem[]).filter((item) => item && typeof item === 'object' && !removedInvoiceIds.includes(item.invoice_id))
 }

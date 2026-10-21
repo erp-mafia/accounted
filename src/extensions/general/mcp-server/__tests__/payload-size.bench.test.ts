@@ -731,6 +731,11 @@ describe('tools/list payload size guard', () => {
     //     pattern 135 times. With the team_ prefix, gnubok_create_company's
     //     team_id is a typed id field too. Measured 65 693 (was 66 083).
     //     Ceiling unchanged.
+    //   * Kundförlust status (2026-10-15): gnubok_list_invoices' status
+    //     filter gains written_off, paid for by tightening the filter's
+    //     overdue note. Measured 65 899 (single-company 60 890) before the
+    //     typed handles above; 65 696 (single-company 61 227) with them.
+    //     Ceiling unchanged.
     //   * One document read (2026-10-15): gnubok_get_document_content gains
     //     include (text, reading, links, arrivals), from_page and max_chars,
     //     so a client that cannot open the signed URL still reads the

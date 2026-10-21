@@ -26,6 +26,7 @@ export const ENTRY_DATE_OUTSIDE_FISCAL_PERIOD = 'ENTRY_DATE_OUTSIDE_FISCAL_PERIO
 export const JOURNAL_ENTRY_NOT_FOUND = 'JOURNAL_ENTRY_NOT_FOUND' as const
 export const CANNOT_REVERSE_NON_POSTED = 'CANNOT_REVERSE_NON_POSTED' as const
 export const CANNOT_REVERSE_STORNO = 'CANNOT_REVERSE_STORNO' as const
+export const CANNOT_REVERSE_COLLECTED_PAYMENT = 'CANNOT_REVERSE_COLLECTED_PAYMENT' as const
 export const CANNOT_CORRECT_NON_POSTED = 'CANNOT_CORRECT_NON_POSTED' as const
 export const CANNOT_EDIT_NON_DRAFT = 'CANNOT_EDIT_NON_DRAFT' as const
 export const CANNOT_CANCEL_NON_DRAFT = 'CANNOT_CANCEL_NON_DRAFT' as const
@@ -207,6 +208,21 @@ export class CannotReverseStornoError extends Error {
   constructor(public readonly sourceType: string) {
     super('Cannot reverse a storno entry')
     this.name = 'CannotReverseStornoError'
+  }
+}
+
+/**
+ * A payment the collections provider collected (invoice_payments.source
+ * 'collections') is corrected only through the collections rebook, never a
+ * generic storno: the payment row cannot be removed (block_delete_collected_
+ * payment), so a storno would reopen the receivable in the ledger while the
+ * invoice stays paid and the provider's payout still clears the capital.
+ */
+export class CannotReverseCollectedPaymentError extends Error {
+  readonly code = CANNOT_REVERSE_COLLECTED_PAYMENT
+  constructor() {
+    super('A payment collected by the collections provider cannot be reversed through the generic storno')
+    this.name = 'CannotReverseCollectedPaymentError'
   }
 }
 
@@ -607,6 +623,8 @@ export type BookkeepingOperation =
   | 'fetch_asset_disposal_entry'
   | 'commit_asset_depreciation'
   | 'fetch_asset_depreciation_entry'
+  | 'load_collected_payment_rows'
+  | 'load_collections_rebook'
   | 'create_reversal_entry'
   | 'create_reversal_lines'
   | 'post_reversal_entry'
@@ -691,6 +709,7 @@ export function isBookkeepingError(err: unknown): boolean {
     err instanceof JournalEntryNotFoundError ||
     err instanceof CannotReverseNonPostedError ||
     err instanceof CannotReverseStornoError ||
+    err instanceof CannotReverseCollectedPaymentError ||
     err instanceof CannotCorrectNonPostedError ||
     err instanceof CannotEditNonDraftError ||
     err instanceof CannotCancelNonDraftError ||

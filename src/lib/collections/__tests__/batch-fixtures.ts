@@ -28,7 +28,7 @@ export async function ladderWorld(options: Parameters<typeof createCaseWorld>[0]
     ladder_enabled_at: '2026-10-01T08:00:00Z',
     default_start_step: 'reminder',
     minimum_amount: 100,
-    reminder_fee_terms_since: null,
+    reminder_fee_terms_since: '2026-01-01',
   })
   world.db.seed('company_members', [
     { company_id: COMPANY_ID, user_id: ADMIN_ID, role: 'admin' },

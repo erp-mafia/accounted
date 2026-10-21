@@ -1,4 +1,5 @@
 import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
+import { releaseDoubtfulReserveAfterChange } from '@/lib/customer-loss/doubtful'
 import { NextResponse } from 'next/server'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
@@ -980,6 +981,13 @@ export const POST = withRouteContext(
       paymentDate: transaction.date,
       userId: user.id,
       companyId,
+    })
+    // A befarad kundförlust reserve the payment made unnecessary comes back
+    // (Dr 1519 / Cr 6352), as on every payment path. Never throws.
+    await releaseDoubtfulReserveAfterChange(supabase, companyId, user.id, {
+      invoiceId: invoice.id,
+      entryDate: transaction.date,
+      trigger: 'payment',
     })
 
     return NextResponse.json({

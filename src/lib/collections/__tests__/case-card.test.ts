@@ -39,12 +39,9 @@ describe('caseCardButtons', () => {
     expect(buttons[2]).toMatchObject({ primary: false })
   })
 
-  it('opens the handover dialog for start and the payment dialog for "already paid"', () => {
+  it('opens the handover dialog for start and leaves "already paid" to the page header', () => {
     const buttons = caseCardButtons({ ...openCase, actions: ['already_paid', 'start'] }, true)
-    expect(buttons.map((b) => [b.action, b.kind])).toEqual([
-      ['start', 'handover'],
-      ['already_paid', 'payment'],
-    ])
+    expect(buttons.map((b) => [b.action, b.kind])).toEqual([['start', 'handover']])
   })
 
   it('shows nothing to a reader, for a case being registered, or for a closed case', () => {
@@ -53,9 +50,9 @@ describe('caseCardButtons', () => {
     expect(caseCardButtons({ isOpen: false, submissionStatus: 'registered', actions: ['pause'] }, true)).toEqual([])
   })
 
-  it('has a button for every contract action', () => {
+  it('has a button for every contract action but "already paid", which the page header carries', () => {
     const all = caseCardButtons({ ...openCase, actions: [...collectionsActionSchema.options] }, true)
-    expect(all).toHaveLength(collectionsActionSchema.options.length)
+    expect(all.map((b) => b.action).sort()).toEqual(collectionsActionSchema.options.filter((a) => a !== 'already_paid').sort())
   })
 })
 
@@ -124,11 +121,11 @@ describe('pauseUntilProblem', () => {
     expect(pauseUntilProblem('', '2026-10-06')).toBeNull()
   })
 
-  it('needs a date after today and at most a year ahead', () => {
+  it('needs a date after today and at most 14 days ahead', () => {
     expect(pauseUntilProblem('2026-10-06', '2026-10-06')).toBe('pause_until_after_today')
     expect(pauseUntilProblem('2026-10-07', '2026-10-06')).toBeNull()
-    expect(pauseUntilProblem('2027-10-06', '2026-10-06')).toBeNull()
-    expect(pauseUntilProblem('2027-10-07', '2026-10-06')).toBe('pause_until_too_far')
+    expect(pauseUntilProblem('2026-10-20', '2026-10-06')).toBeNull()
+    expect(pauseUntilProblem('2026-10-21', '2026-10-06')).toBe('pause_until_too_far')
   })
 })
 

@@ -1,11 +1,13 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import Link from 'next/link'
+import { Check, ChevronRight, CircleAlert } from 'lucide-react'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { BrandMark } from '@/components/parties/BrandMark'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import type { CollectionCaseView } from '@/lib/collections/case'
@@ -22,7 +24,8 @@ import {
   type StartStep,
 } from '@/lib/collections/handover-dialog'
 import type { CollectionReadinessView } from '@/lib/collections/invoice-collection'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { formatKronor } from '@/lib/collections/amount-text'
+import { cn, formatDate } from '@/lib/utils'
 import { BankCheckResult } from './BankCheckResult'
 import { fetchCollectionReadiness, postOpenCase, useCaseWords, type InvoiceCollectionAvailability } from './case-client'
 
@@ -44,7 +47,16 @@ interface Props {
   onDone: (next: CollectionCaseView) => void
 }
 
-const ROW = 'grid grid-cols-[9rem_minmax(0,1fr)] gap-x-4 py-2 text-[13px] sm:grid-cols-[11rem_minmax(0,1fr)]'
+/** One line of the checks list: a quiet tick when it holds, an attention mark when the person should look. */
+function CheckLine({ ok, children }: { ok: boolean; children: ReactNode }) {
+  const Icon = ok ? Check : CircleAlert
+  return (
+    <li className="flex items-start gap-2.5 py-2">
+      <Icon aria-hidden className={cn('mt-[3px] h-3.5 w-3.5 shrink-0', ok ? 'text-muted-foreground' : 'text-attn')} />
+      <div className="min-w-0 flex-1">{children}</div>
+    </li>
+  )
+}
 
 export function SendToCollectionDialog({ invoiceId, invoiceNumber, open, onOpenChange, availability, onDone }: Props) {
   const { tp, locale } = useCaseWords(availability.displayName)
@@ -88,9 +100,10 @@ export function SendToCollectionDialog({ invoiceId, invoiceNumber, open, onOpenC
   const bank = readiness ? bankCheckState(readiness.bankCheck, dismissed) : null
   const canSend = !!readiness && handoverCanSend(readiness, answers)
   const startSteps = readiness ? offeredStartSteps(readiness) : []
+  const orgNumberBlock = readiness?.blocks.find((b) => b.code === 'debtor_invalid_org_number' || b.code === 'debtor_missing_org_number')?.code ?? null
 
   function blockText(block: EligibilityBlock): string {
-    if (block.code === 'elig_below_minimum') return tp(block.code, { amount: formatCurrency(Number(block.params?.amount ?? 0)) })
+    if (block.code === 'elig_below_minimum') return tp(block.code, { amount: formatKronor(Number(block.params?.amount ?? 0)) })
     return tp(block.code)
   }
 
@@ -129,9 +142,23 @@ export function SendToCollectionDialog({ invoiceId, invoiceNumber, open, onOpenC
     <Dialog open={open} onOpenChange={(next) => !sending && onOpenChange(next)}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle data-ph-mask="" className="font-display text-lg tracking-tight">
-            {title}
+          <DialogTitle data-ph-mask="" className="flex items-center gap-2.5 font-display text-lg tracking-tight">
+            {availability.displayName && (
+              <BrandMark name={availability.displayName} variant="mark" size={28} logoUrl={availability.markUrl} />
+            )}
+            <span className="min-w-0">{title}</span>
           </DialogTitle>
+          {readiness && (
+            <DialogDescription data-ph-mask="" className="tabular-nums">
+              {tp('send_summary', {
+                customer: readiness.customer.name ?? '',
+                amount: formatKronor(readiness.claim.remaining),
+                date: formatDate(readiness.dueDate),
+                days: readiness.overdueDays,
+              })}
+              {readiness.rotRut && <span className="mt-1 block">{tp('send_rot_rut_note')}</span>}
+            </DialogDescription>
+          )}
           {availability.sandbox && <DialogDescription>{tp('sandbox_note')}</DialogDescription>}
         </DialogHeader>
 
@@ -189,76 +216,33 @@ export function SendToCollectionDialog({ invoiceId, invoiceNumber, open, onOpenC
                   </div>
                 )}
 
-                <div className="divide-y divide-border border-y border-border" data-ph-mask="">
-                  <div className={ROW}>
-                    <span className="text-muted-foreground">{tp('send_row_customer')}</span>
-                    <span className="min-w-0 truncate">{readiness.customer.name}</span>
-                  </div>
-                  <div className={ROW}>
-                    <span className="text-muted-foreground">{tp('send_row_amount')}</span>
-                    <span>
-                      <span className="tabular-nums">{formatCurrency(readiness.claim.remaining)}</span>
-                      {readiness.rotRut && <span className="mt-1 block text-[12.5px] text-muted-foreground">{tp('send_rot_rut_note')}</span>}
-                    </span>
-                  </div>
-                  <div className={ROW}>
-                    <span className="text-muted-foreground">{tp('send_row_overdue')}</span>
-                    <span className="tabular-nums">
-                      {tp('send_overdue_value', { days: readiness.overdueDays, date: formatDate(readiness.dueDate) })}
-                    </span>
-                  </div>
-                  <div className={ROW}>
-                    <span className="text-muted-foreground">{tp('send_row_address')}</span>
-                    <span>
-                      {readiness.customer.missingAddress.length === 0
-                        ? tp('send_address_ok')
-                        : tp('send_address_missing', {
-                            fields: readiness.customer.missingAddress.map((f) => tp(`address_field_${f}`)).join(', '),
-                          })}
-                    </span>
-                  </div>
+                <ul className="divide-y divide-border border-y border-border text-[13px]" data-ph-mask="">
+                  <CheckLine ok={readiness.customer.missingAddress.length === 0}>
+                    {readiness.customer.missingAddress.length === 0
+                      ? tp('send_check_address_ok')
+                      : tp('send_check_address_missing', {
+                          fields: readiness.customer.missingAddress.map((f) => tp(`address_field_${f}`)).join(', '),
+                        })}
+                  </CheckLine>
                   {readiness.customer.kind === 'private' ? (
-                    <div className={ROW}>
-                      <span className="text-muted-foreground">{tp('send_row_identity_private')}</span>
-                      <span>
-                        {readiness.customer.identity === 'ok'
-                          ? tp('send_identity_ok')
-                          : tp(readiness.customer.identity === 'invalid' ? 'send_identity_invalid' : 'send_identity_missing')}
-                        {readiness.customer.identity !== 'ok' && readiness.customer.id && (
-                          <>
-                            {' '}
-                            <Link href={`/customers/${readiness.customer.id}`} className="underline underline-offset-2">
-                              {tp('send_identity_add')}
-                            </Link>
-                          </>
-                        )}
-                      </span>
-                    </div>
+                    <CheckLine ok={readiness.customer.identity === 'ok'}>
+                      {readiness.customer.identity === 'ok'
+                        ? tp('send_check_personal_number_ok')
+                        : tp(readiness.customer.identity === 'invalid' ? 'send_identity_invalid' : 'send_identity_missing')}
+                      {readiness.customer.identity !== 'ok' && readiness.customer.id && (
+                        <>
+                          {' '}
+                          <Link href={`/customers/${readiness.customer.id}`} className="underline underline-offset-2">
+                            {tp('send_identity_add')}
+                          </Link>
+                        </>
+                      )}
+                    </CheckLine>
                   ) : (
-                    <div className={ROW}>
-                      <span className="text-muted-foreground">{tp('send_row_identity_business')}</span>
-                      <span>
-                        {readiness.blocks.some((b) => b.code === 'debtor_missing_org_number' || b.code === 'debtor_invalid_org_number')
-                          ? tp(readiness.blocks.some((b) => b.code === 'debtor_invalid_org_number') ? 'debtor_invalid_org_number' : 'debtor_missing_org_number')
-                          : tp('send_identity_ok')}
-                      </span>
-                    </div>
+                    <CheckLine ok={!orgNumberBlock}>{orgNumberBlock ? tp(orgNumberBlock) : tp('send_check_org_number_ok')}</CheckLine>
                   )}
-                  <div className={ROW}>
-                    <span className="text-muted-foreground">{tp('send_row_reminder_fee')}</span>
-                    <span>
-                      {readiness.reminderFee.agreed && readiness.reminderFee.since
-                        ? tp('send_reminder_fee_yes', { date: formatDate(readiness.reminderFee.since) })
-                        : tp('send_reminder_fee_no')}
-                    </span>
-                  </div>
-                  <div className={ROW}>
-                    <span className="text-muted-foreground">{tp('send_row_interest')}</span>
-                    <span>{tp('send_interest_none')}</span>
-                  </div>
                   {bank && (
-                    <div className={ROW}>
-                      <span className="text-muted-foreground">{tp('send_row_bank_check')}</span>
+                    <CheckLine ok={bank.outcome === 'pass'}>
                       <BankCheckResult
                         bank={readiness.bankCheck}
                         state={bank}
@@ -268,11 +252,21 @@ export function SendToCollectionDialog({ invoiceId, invoiceNumber, open, onOpenC
                         onAttestedChange={setBankAttested}
                         onSynced={() => void load()}
                         tp={tp}
-                        locale={locale}
                       />
-                    </div>
+                    </CheckLine>
                   )}
-                </div>
+                  {startSteps.length === 1 && (
+                    <CheckLine ok>
+                      {tp(
+                        startSteps[0] === 'reminder'
+                          ? 'send_check_start_reminder'
+                          : readiness.reminderFee.agreed
+                            ? 'send_check_start_collection'
+                            : 'send_check_start_collection_no_fee',
+                      )}
+                    </CheckLine>
+                  )}
+                </ul>
 
                 {readiness.deliveryAttestation && (
                   <div className="space-y-2 text-[13px]">
@@ -295,7 +289,7 @@ export function SendToCollectionDialog({ invoiceId, invoiceNumber, open, onOpenC
                   </div>
                 )}
 
-                {startSteps.length > 0 && (
+                {startSteps.length > 1 && (
                   <fieldset className="space-y-2">
                     <legend className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{tp('send_start_with')}</legend>
                     {startSteps.map((step) => (
@@ -325,16 +319,18 @@ export function SendToCollectionDialog({ invoiceId, invoiceNumber, open, onOpenC
                   </fieldset>
                 )}
 
-                <div className="space-y-2 text-[12.5px] text-muted-foreground">
-                  <p>{tp('send_explainer')}</p>
-                  {availability.feeSummarySv && (
-                    <p>
-                      <span className="text-foreground">{tp('send_fees_heading')}: </span>
-                      {availability.feeSummarySv}
-                    </p>
-                  )}
-                  <p>{tp('send_exclusivity')}</p>
-                </div>
+                <details className="group text-[12.5px] text-muted-foreground">
+                  <summary className="flex cursor-pointer list-none items-center gap-1 text-[13px] text-foreground [&::-webkit-details-marker]:hidden">
+                    <ChevronRight aria-hidden className="h-3.5 w-3.5 transition-transform duration-150 group-open:rotate-90" />
+                    {tp('send_details_summary')}
+                  </summary>
+                  <div className="mt-2 space-y-2 pl-[18px]">
+                    <p>{tp('send_explainer')}</p>
+                    {availability.feeSummarySv && <p>{availability.feeSummarySv}</p>}
+                    <p>{tp('send_exclusivity')}</p>
+                    <p>{tp('send_interest_note')}</p>
+                  </div>
+                </details>
               </>
             )}
             {error && <p className="text-[13px] text-destructive">{error}</p>}

@@ -60,6 +60,35 @@ describe('buildCollectionsAvailability', () => {
   })
 })
 
+describe('the provider mark', () => {
+  const BASE = 'https://connect.example.test'
+
+  it('points at the mark Connect serves for the catalogue provider', () => {
+    const a = buildCollectionsAvailability({ env: ON, facts: facts({ connection: ACTIVE }), sandbox: false, provider: ENTRY, connectBaseUrl: BASE })
+    expect(a.markUrl).toBe(`${BASE}/providers/acme-inkasso.svg`)
+  })
+
+  it('falls back to the provider stored on the connection when the catalogue is down', () => {
+    const a = buildCollectionsAvailability({
+      env: ON,
+      facts: facts({ connection: { ...ACTIVE, providerRef: 'stored-ref' } }),
+      sandbox: false,
+      provider: null,
+      connectBaseUrl: BASE,
+    })
+    expect(a.markUrl).toBe(`${BASE}/providers/stored-ref.svg`)
+  })
+
+  it('has none without a connector, on the fake route or in a sandbox', () => {
+    expect(buildCollectionsAvailability({ env: ON, facts: facts({ connection: ACTIVE }), sandbox: false, provider: ENTRY }).markUrl).toBeNull()
+    expect(
+      buildCollectionsAvailability({ env: ON, facts: facts({ connection: { ...ACTIVE, route: 'fake' } }), sandbox: false, provider: ENTRY, connectBaseUrl: BASE })
+        .markUrl,
+    ).toBeNull()
+    expect(buildCollectionsAvailability({ env: ON, facts: facts({ connection: ACTIVE }), sandbox: true, provider: ENTRY, connectBaseUrl: BASE }).markUrl).toBeNull()
+  })
+})
+
 describe('getCollectionsAvailability', () => {
   it('makes no Connect call on a dark installation', async () => {
     vi.stubEnv('GNUBOK_CONNECTOR_KEY', 'gnubok_ck_x')

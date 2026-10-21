@@ -36,6 +36,7 @@ import { loadInvoiceCase } from '@/lib/collections/invoice-collection'
 import { MAX_PAUSE_DAYS, withdrawFeeInfo } from '@/lib/collections/stages'
 import { gateRefusal, hasCollectionsWording, type CollectionsRefusal, type CollectionsServiceDeps } from '@/lib/collections/service-deps'
 import { createServiceClient } from '@/lib/supabase/server'
+import { COLLECTIONS_BOOKING_OPERATION_LIST } from './collections-booking'
 import type { OperationContext, OperationOutcome } from './types'
 import { defineOperation } from './types'
 
@@ -355,10 +356,11 @@ export const collectionsCasesOpen = defineOperation({
       'expected_remaining must equal what is still owed: a payment that arrived meanwhile answers 409 COLLECTION_REMAINING_CHANGED.',
       '409 COLLECTION_BANK_CANDIDATES: an unbooked incoming payment may be this invoice; book it or let a person dismiss it.',
       '409 COLLECTION_BANK_STALE: the account the customer pays to was not synced in 24 hours.',
+      '409 COLLECTION_REMINDER_FEE_NOT_AGREED: a reminder needs a reminder fee agreed by the invoice date; omit start_step to start at the inkassokrav.',
       'Approval is web-only: a person approves the staged operation in Accounted.',
     ],
     example: {
-      request: { invoice_id: '7d1e…', expected_remaining: 12500, start_step: 'reminder' },
+      request: { invoice_id: '7d1e…', expected_remaining: 12500, start_step: 'collection' },
       response: { data: { case: { case_id: '2b9c…', stage: 'registered', submission_status: 'registered' }, registered: true }, meta: META },
     },
   },
@@ -384,6 +386,8 @@ export const collectionsCasesOpen = defineOperation({
     'COLLECTION_REMAINING_CHANGED',
     'COLLECTION_CASE_EXISTS',
     'COLLECTION_PAYMENT_HISTORY_UNSUPPORTED',
+    'COLLECTION_START_STEP_UNAVAILABLE',
+    'COLLECTION_REMINDER_FEE_NOT_AGREED',
   ],
   mcp: {
     name: 'gnubok_send_invoice_to_collection',
@@ -538,4 +542,5 @@ export const COLLECTIONS_OPERATION_LIST = [
   collectionsCasesGet,
   collectionsCasesOpen,
   collectionsCasesAction,
+  ...COLLECTIONS_BOOKING_OPERATION_LIST,
 ] as const

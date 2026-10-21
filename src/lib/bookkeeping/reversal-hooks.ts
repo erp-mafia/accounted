@@ -30,8 +30,23 @@ export { ReversalHookMissingError }
 export interface ReversalHookContext {
   readonly supabase: SupabaseClient
   readonly companyId: string
+  /** reverseEntry's userId: who the storno is posted for. */
+  readonly userId: string
   /** The posted original being reversed, with its lines, exactly as reverseEntry read it. */
   readonly entry: JournalEntry
+  /**
+   * Set only on the collections rebook's storno (reverseEntry option
+   * collectionsRebook, lib/collections/rebook.ts): the payment mirror leaves
+   * the payment rows the collections provider collected, which the rebook
+   * removes itself inside the window block_delete_collected_payment opens
+   * for it. Absent on every other storno.
+   */
+  readonly leaveCollectedPaymentRows?: true
+}
+
+/** What an afterReversal gets: the context plus the storno reverseEntry posted. */
+export interface ReversalHookAfterContext extends ReversalHookContext {
+  readonly storno: { readonly id: string; readonly entry_date: string }
 }
 
 export interface ReversalHook {
@@ -44,7 +59,7 @@ export interface ReversalHook {
   /** Before anything is written. A throw refuses the storno; no voucher number is spent. */
   beforeReversal?(ctx: ReversalHookContext): Promise<void>
   /** After the storno is posted and the original marked reversed, before the emits. */
-  afterReversal?(ctx: ReversalHookContext): Promise<void>
+  afterReversal?(ctx: ReversalHookAfterContext): Promise<void>
 }
 
 /**
@@ -59,6 +74,8 @@ export const REVERSAL_MIRROR_REQUIRED: readonly JournalEntrySourceType[] = Objec
   'supplier_invoice_cash_payment',
   'rot_rut_reclaim',
   'rot_rut_reclassification',
+  'collection_settlement',
+  'customer_loss',
 ] satisfies JournalEntrySourceType[])
 
 /**
