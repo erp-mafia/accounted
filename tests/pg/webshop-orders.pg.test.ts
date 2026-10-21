@@ -154,11 +154,12 @@ describe('webshop_orders financial freeze', () => {
       ),
     ).rejects.toThrow(/financial fields are frozen/i)
 
-    // Non-financial fields keep syncing on frozen rows.
+    // Non-financial fields keep syncing on frozen rows, the destination
+    // country included (filled in on booked rows by a resync, crm#1032).
     const ok = await getPool().query(
       `UPDATE public.webshop_orders
          SET status = 'refunded', refunded_total = 500.00,
-             remote_changed_after_freeze = true
+             remote_changed_after_freeze = true, customer_country = 'DK'
        WHERE id = $1`,
       [rowId],
     )

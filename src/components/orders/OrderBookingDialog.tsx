@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -19,6 +19,7 @@ import {
   resolvePaymentAccount,
 } from '@/lib/webshop-orders/booking-lines'
 import { formatCurrency, formatDate } from '@/lib/utils'
+import { getCountryName } from '@/lib/vat/country-codes'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
 import type { WebshopOrder, WebshopStoreSettings } from '@/types'
 import { formatAmountInput } from '@/lib/money'
@@ -48,6 +49,7 @@ export default function OrderBookingDialog({
   onSettingsSaved,
 }: OrderBookingDialogProps) {
   const t = useTranslations('webshop_orders')
+  const locale = useLocale() === 'en' ? 'en' : 'sv'
   const resolved = useMemo(
     () => resolvePaymentAccount(order, storeSettings),
     [order, storeSettings],
@@ -126,6 +128,9 @@ export default function OrderBookingDialog({
             {' · '}
             {formatCurrency(order.total, order.currency)}
             {methodLabel ? ` · ${methodLabel}` : ''}
+            {order.customer_country
+              ? ` · ${t('country_label', { country: getCountryName(order.customer_country, locale) })}`
+              : ''}
           </DialogDescription>
         </DialogHeader>
 

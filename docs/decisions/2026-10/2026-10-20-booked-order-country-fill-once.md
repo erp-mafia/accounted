@@ -1,0 +1,1 @@
+[2026-10-20] crm#1032 a resync fills customer_country on a booked webshop order only when it is empty, never changes or clears it: the row keeps the country it was booked with, and a store that later withholds addresses cannot erase it; unbooked rows still follow the store.
