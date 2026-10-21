@@ -852,6 +852,29 @@ export function AGIPanel(props: AGIPanelProps) {
     }
   }
 
+  // Manual filing needs neither a Skatteverket connection nor a plan, so every
+  // branch below offers the file, not only the connected one (crm#1345).
+  const downloadXmlButton = (
+    <Button
+      size="sm"
+      variant="outline"
+      onClick={handleDownloadXml}
+      loading={actionLoading === 'download'}
+      title={t('download_xml_title')}
+    >
+      {actionLoading !== 'download' && <Download className="mr-2 h-3.5 w-3.5" />}
+      {t('download_xml_button')}
+    </Button>
+  )
+  // The connected branch renders `error` in its own block; the early branches
+  // only need it for a failed download.
+  const downloadError = error && (
+    <p className="mt-3 text-sm text-destructive">
+      <AlertCircle className="mr-1 inline h-3.5 w-3.5" />
+      {error}
+    </p>
+  )
+
   // ── Render branches ─────────────────────────────────────────────
 
   if (extensionDisabled) {
@@ -862,6 +885,8 @@ export function AGIPanel(props: AGIPanelProps) {
           <code className="mx-1 rounded-sm bg-muted px-1 py-0.5 text-xs">SKATTEVERKET_ENABLED</code>
           {t('disabled_after')}
         </p>
+        {downloadError}
+        {!readOnly && <div className="mt-3 flex justify-end">{downloadXmlButton}</div>}
       </DetailSection>
     )
   }
@@ -881,8 +906,10 @@ export function AGIPanel(props: AGIPanelProps) {
     return (
       <DetailSection kicker={t('title')}>
         <p className="text-sm text-muted-foreground">{t('connect_description')}</p>
+        {downloadError}
         {!readOnly && (
-          <div className="mt-3 flex justify-end">
+          <div className="mt-3 flex flex-wrap justify-end gap-2">
+            {downloadXmlButton}
             <Button onClick={handleConnect} disabled={connecting}>
               <Link2 className="mr-2 h-4 w-4" />
               {connecting ? t('connect_waiting') : t('connect_button')}
@@ -1277,16 +1304,7 @@ export function AGIPanel(props: AGIPanelProps) {
                 )}
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={handleDownloadXml}
-                  loading={actionLoading === 'download'}
-                  title={t('download_xml_title')}
-                >
-                  {actionLoading !== 'download' && <Download className="mr-2 h-3.5 w-3.5" />}
-                  {t('download_xml_button')}
-                </Button>
+                {downloadXmlButton}
                 {!awaitingSigning && (
                   <Button
                     onClick={handleSubmitChain}

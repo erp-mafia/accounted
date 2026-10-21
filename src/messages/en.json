@@ -9861,7 +9861,7 @@
     "loading_status": "Fetching Skatteverket status...",
     "disabled_before": "The Skatteverket integration is disabled in this environment. Enable",
     "disabled_after": "to submit AGI directly to Skatteverket.",
-    "connect_description": "Connect to Skatteverket with BankID to submit AGI directly from accounted.",
+    "connect_description": "Download the AGI file and file it yourself in Skatteverket's e-service, or connect with BankID to submit AGI directly from accounted.",
     "connect_button": "Connect with BankID",
     "reconnect_button": "Reconnect with BankID",
     "connect_waiting": "Waiting for BankID…",

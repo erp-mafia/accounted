@@ -9861,7 +9861,7 @@
     "loading_status": "Hämtar Skatteverket-status...",
     "disabled_before": "Skatteverket-integrationen är inaktiverad i denna miljö. Aktivera",
     "disabled_after": "för att skicka AGI direkt till Skatteverket.",
-    "connect_description": "Anslut till Skatteverket med BankID för att skicka AGI direkt från accounted.",
+    "connect_description": "Ladda ner AGI-filen och lämna in den själv i Skatteverkets e-tjänst, eller anslut med BankID för att skicka AGI direkt från accounted.",
     "connect_button": "Anslut med BankID",
     "reconnect_button": "Återanslut med BankID",
     "connect_waiting": "Väntar på BankID…",
