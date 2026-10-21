@@ -136,6 +136,15 @@ import { invoiceDaysOverdue, isInvoiceOverdue } from '@/lib/invoices/overdue'
 import { newEditorHref } from '@/lib/invoices/editor/new-editor-params'
 import { invoiceStatusDisplay } from '@/lib/invoices/status-display'
 import type { StatusChip } from '@/lib/status-display'
+import { DIGITAL_MAILBOX_PROVIDER_NAMES } from '@/lib/digital-mailboxes/sending-status'
+import type { DigitalMailboxProviderId } from '@/lib/digital-mailboxes/types'
+import {
+  EMPTY_INVOICE_MAILBOX_VIEW,
+  mailboxSendActions,
+  parseInvoiceMailboxView,
+  type InvoiceMailboxView,
+  type MailboxSendBlock,
+} from '@/lib/invoices/digital-mailbox-view'
 
 /** Minimized Peppol delivery projection from GET /api/invoices/[id]/peppol/deliveries. */
 interface PeppolDeliveryView {
@@ -159,6 +168,12 @@ const PEPPOL_FAILED_DELIVERY_STATUSES = new Set(['failed', 'no_route'])
 // How long the access point may hold a submission without news of delivery
 // before the page says so.
 const PEPPOL_UNCONFIRMED_AFTER_MS = 60 * 60 * 1000
+
+// Why a "Skicka till Kivra/Billo" item is disabled, as invoice_detail keys.
+const MAILBOX_BLOCK_KEYS: Record<MailboxSendBlock, string> = {
+  recipient_unidentified: 'mailbox_block_recipient_unidentified',
+  currency: 'mailbox_block_currency',
+}
 
 // The reminder history card's columns. Never '*': action_token is the
 // customer's bearer link, withheld from end-user roles by a column grant, so
@@ -406,6 +421,13 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // When the deliveries were read: the clock the "not confirmed yet" line
   // measures against, set with the rows so rendering stays pure.
   const [peppolReadAt, setPeppolReadAt] = useState<number | null>(null)
+  // Kivra and Billo (lib/invoices/digital-mailbox-view.ts): the providers the
+  // company sends through, as this invoice can use them, and its dispatches.
+  // Kept with the invoice it was read for, so a pager step never shows
+  // another invoice's items or rows.
+  const [mailboxState, setMailboxState] = useState<{ invoiceId: string; view: InvoiceMailboxView } | null>(null)
+  const [mailboxConfirmProvider, setMailboxConfirmProvider] = useState<DigitalMailboxProviderId | null>(null)
+  const [isSendingMailbox, setIsSendingMailbox] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   // Collections: the invoice's case and the handover dialog. Only a customer
@@ -499,6 +521,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       && !invoice.is_self_billed
     if (!eligible) return
     void loadPeppolDeliveries()
+    void loadMailbox()
   }, [id, invoice?.id, invoice?.status, invoice?.invoice_number]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /**
@@ -1399,6 +1422,71 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     }
   }
 
+  async function loadMailbox() {
+    const forId = id
+    try {
+      const response = await fetch(`/api/invoices/${encodeURIComponent(forId)}/digital-mailbox`)
+      if (!response.ok) return
+      setMailboxState({ invoiceId: forId, view: parseInvoiceMailboxView(await response.json()) })
+    } catch {
+      // Supplementary, like the Peppol status: the page works without it.
+    }
+  }
+
+  /**
+   * Send to the customer's Kivra or Billo mailbox. A draft is issued on the
+   * way (numbered, booked, PDF archived) after every refusing check; a
+   * customer without a mailbox there leaves it a draft. A delivery that
+   * fails after the issue leaves an issued invoice: sending again resends it.
+   */
+  async function sendToMailbox(provider: DigitalMailboxProviderId) {
+    if (!invoice) return
+    const providerName = DIGITAL_MAILBOX_PROVIDER_NAMES[provider]
+    const errorLocale: ErrorLocale = locale.startsWith('sv') ? 'sv' : 'en'
+    setIsSendingMailbox(true)
+    try {
+      const response = await fetch(`/api/invoices/${encodeURIComponent(invoice.id)}/digital-mailbox/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider }),
+      })
+      const body = (await response.json().catch(() => null)) as {
+        data?: { issued?: boolean; journal_entry_id?: string | null }
+      } | null
+      if (!response.ok) {
+        toast({
+          title: t('mailbox_send_failed_title', { provider: providerName }),
+          description: getUserErrorMessage(body ?? new Error(`HTTP ${response.status}`), {
+            locale: errorLocale,
+            context: 'invoice',
+            statusCode: response.status,
+          }),
+          variant: 'destructive',
+        })
+      } else {
+        toast({
+          title: t('mailbox_sent_title', { provider: providerName }),
+          description: body?.data?.issued
+            ? t(body.data.journal_entry_id ? 'mailbox_sent_issued_booked' : 'mailbox_sent_issued', { provider: providerName })
+            : t('mailbox_sent_description', { provider: providerName }),
+        })
+      }
+    } catch (error) {
+      toast({
+        title: t('mailbox_send_failed_title', { provider: providerName }),
+        description: getUserErrorMessage(error, { locale: errorLocale, context: 'invoice' }),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsSendingMailbox(false)
+      setMailboxConfirmProvider(null)
+    }
+    // Sent or not, the send may have issued the draft and logged a
+    // dispatch: show where the invoice stands.
+    await fetchInvoice()
+    await loadMailbox()
+  }
+
   async function sendViaPeppol() {
     if (!invoice) return
     setIsSendingPeppol(true)
@@ -1989,6 +2077,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // The other way to the buyer. A draft (put back after the failure) can be
   // emailed from here; an issued invoice cannot (the email send issues
   // drafts only), so it offers the PDF to send by hand.
+  // "Skicka till Kivra/Billo": the providers the company sends through, for
+  // a customer invoice of our own in a sendable status.
+  const mailboxView = mailboxState?.invoiceId === invoice.id ? mailboxState.view : EMPTY_INVOICE_MAILBOX_VIEW
+  const mailboxActions =
+    isRealInvoice && !isCreditNote && !isSelfBilled ? mailboxSendActions(invoice.status, mailboxView.options) : []
+  const mailboxConfirmName = mailboxConfirmProvider ? DIGITAL_MAILBOX_PROVIDER_NAMES[mailboxConfirmProvider] : ''
   const peppolOtherWay = invoice.status === 'draft'
     ? (canWrite ? { label: t('peppol_failed_email_action'), onClick: () => openSendDialog('email') } : null)
     : { label: t('download_pdf'), onClick: () => void downloadPDF() }
@@ -2041,6 +2135,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     canResend ||
     canCreateCreditNote ||
     showPeppolActions ||
+    mailboxActions.length > 0 ||
     showDestructive
 
   // Aggregated VAT per rate for the totals block. Shown when at least one
@@ -2455,6 +2550,35 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                             </span>
                           </DropdownMenuItem>
                         )}
+                      </>
+                    )}
+                    {mailboxActions.length > 0 && (
+                      <>
+                        <DropdownMenuSeparator />
+                        {mailboxActions.map((action) => {
+                          const label = t('send_via_mailbox', { provider: DIGITAL_MAILBOX_PROVIDER_NAMES[action.provider] })
+                          return action.blockedBy ? (
+                            // A disabled item takes no hover, so it says why on itself.
+                            <DropdownMenuItem key={action.provider} disabled className="items-start">
+                              <Send className="mt-0.5 h-4 w-4" />
+                              <span className="min-w-0">
+                                <span className="block">{label}</span>
+                                <span className="block text-[11px] leading-snug text-muted-foreground">
+                                  {t(MAILBOX_BLOCK_KEYS[action.blockedBy])}
+                                </span>
+                              </span>
+                            </DropdownMenuItem>
+                          ) : (
+                            <DropdownMenuItem
+                              key={action.provider}
+                              onSelect={() => setMailboxConfirmProvider(action.provider)}
+                              disabled={isSendingMailbox || !canWrite}
+                            >
+                              <Send className="h-4 w-4" />
+                              {label}
+                            </DropdownMenuItem>
+                          )
+                        })}
                       </>
                     )}
                     {canDecideQuote && quoteStatus !== 'declined' && (
@@ -3249,6 +3373,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       {isRealInvoice && !isSelfBilled && !deliveriesUnreadable && (
         <InvoiceDeliveryHistory
           deliveries={deliveries}
+          mailboxDispatches={mailboxView.dispatches}
           showLegacyEmptyState={[
             'sent',
             'paid',
@@ -3325,6 +3450,48 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </Button>
             <Button onClick={() => void sendViaPeppol()} loading={isSendingPeppol}>
               {isSendingPeppol ? t('peppol_sending') : t('peppol_send_confirm_action')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Kivra/Billo send confirmation (convention 10: confirm up front). */}
+      <Dialog
+        open={mailboxConfirmProvider !== null}
+        onOpenChange={(open) => {
+          if (!open && !isSendingMailbox) setMailboxConfirmProvider(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('mailbox_send_confirm_title', { provider: mailboxConfirmName })}</DialogTitle>
+            <DialogDescription>
+              {t(
+                invoice.status !== 'draft'
+                  ? 'mailbox_send_confirm_issued'
+                  : issuesByBooking
+                    ? 'mailbox_send_confirm_draft_book'
+                    : 'mailbox_send_confirm_draft',
+                { provider: mailboxConfirmName },
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setMailboxConfirmProvider(null)}
+              disabled={isSendingMailbox}
+            >
+              {t('delete_dialog_cancel')}
+            </Button>
+            <Button
+              onClick={() => {
+                if (mailboxConfirmProvider) void sendToMailbox(mailboxConfirmProvider)
+              }}
+              loading={isSendingMailbox}
+              disabled={!canWrite}
+            >
+              {t('send_via_mailbox', { provider: mailboxConfirmName })}
             </Button>
           </DialogFooter>
         </DialogContent>

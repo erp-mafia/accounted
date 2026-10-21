@@ -138,12 +138,16 @@ import { offersInvoiceAttachments } from '@/lib/invoices/invoice-attachment-limi
 import { useInvoicePdfPreview } from '@/components/invoices/editor/use-editor-previews'
 import {
   emailPreviewBlock,
+  isMailboxChannel,
   resolveChannelOptions,
   resolveEffectiveChannel,
+  resolveMailboxReady,
   type ChannelContext,
   type EditorChannel,
   type EmailBlockReason,
+  type MailboxChannel,
 } from '@/lib/invoices/editor/channel'
+import { DIGITAL_MAILBOX_PROVIDER_NAMES, fetchActiveSendingProviders } from '@/lib/digital-mailboxes/sending-status'
 import {
   booksOnIssue as resolveBooksOnIssue,
   resolveEditorMenu,
@@ -983,6 +987,19 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       .catch(() => {
         // Best-effort: without the list the invoice simply uses the default.
       })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  // The digital mailboxes this company sends through (Kivra, Billo), read
+  // once: the caret menu offers one only where its send can go. A failed
+  // read offers none; email stays the channel.
+  const [mailboxProviders, setMailboxProviders] = useState<MailboxChannel[]>([])
+  useEffect(() => {
+    let cancelled = false
+    void fetchActiveSendingProviders().then((providers) => {
+      if (!cancelled) setMailboxProviders(providers)
+    })
     return () => {
       cancelled = true
     }
@@ -2609,7 +2626,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             : tSend('partial_success', { message: result.message ?? tShell('toast_sent_title') })
           : channel === 'email'
             ? result.message ?? undefined
-            : undefined,
+            : isMailboxChannel(channel)
+              ? tShell('toast_sent_mailbox', { provider: DIGITAL_MAILBOX_PROVIDER_NAMES[channel] })
+              : undefined,
         ...(result.partial ? { variant: 'destructive' as const } : {}),
       })
       setConfirmIntent(null)
@@ -2965,6 +2984,15 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     // No company-access or customer-participant signal exists before the
     // invoice does; e-fakturor are sent from the detail page.
     peppolReady: false,
+    // Kivra, Billo: a plain SEK faktura to a customer the mailbox can be
+    // addressed to, where the company sends through the provider.
+    mailboxReady: resolveMailboxReady({
+      activeProviders: mailboxProviders,
+      documentType: watchDocumentType,
+      isCreditNote: Boolean(initial?.credited_invoice_id),
+      currency: watchCurrency,
+      customer: selectedCustomer,
+    }),
   }
   const channelOptions = resolveChannelOptions(channelContext)
   const channel = resolveEffectiveChannel(channelChoice, channelContext)
@@ -2977,7 +3005,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         ? tShell('email_unavailable_manual')
         : emailTabBlock === 'peppol'
           ? tShell('email_unavailable_peppol')
-          : tShell(EMAIL_BLOCK_KEYS[emailTabBlock])
+          : emailTabBlock === 'kivra' || emailTabBlock === 'billo'
+            ? tShell('email_unavailable_mailbox', { provider: DIGITAL_MAILBOX_PROVIDER_NAMES[emailTabBlock] })
+            : tShell(EMAIL_BLOCK_KEYS[emailTabBlock])
   const editorMode = isEditMode ? 'edit' : 'create'
   const primaryContext = { mode: editorMode, isSelfBilled, documentType: watchDocumentType, channel, booksOnIssue } as const
   const primaryAction = resolvePrimaryAction(primaryContext)
@@ -3380,6 +3410,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       : (isEditMode ? initial?.invoice_number : null) ?? confirmContinuation?.number ?? numberPreview
   const confirmDoc = tShell(`doc_${confirmDocType}`)
   const confirmCustomer = selectedCustomer?.name ?? ''
+  // A mailbox send names its provider in the title and the Utskick row.
+  const confirmMailbox = confirmChannel && isMailboxChannel(confirmChannel) ? confirmChannel : null
+  const confirmProvider = confirmMailbox ? DIGITAL_MAILBOX_PROVIDER_NAMES[confirmMailbox] : ''
   const confirmTitleKey =
     confirmIntent?.kind === 'create'
       ? 'confirm_title_create'
@@ -3387,16 +3420,23 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         ? 'confirm_title_paid'
         : confirmChannel === 'email'
         ? 'confirm_title_email'
-        : 'confirm_title_manual'
+        : confirmMailbox
+          ? 'confirm_title_mailbox'
+          : 'confirm_title_manual'
   const confirmTitle = confirmNumber
-    ? tShell(confirmTitleKey, { doc: confirmDoc, number: confirmNumber, customer: confirmCustomer })
-    : tShell(`${confirmTitleKey}_no_number`, { doc: confirmDoc, customer: confirmCustomer })
+    ? tShell(confirmTitleKey, { doc: confirmDoc, number: confirmNumber, customer: confirmCustomer, provider: confirmProvider })
+    : tShell(`${confirmTitleKey}_no_number`, { doc: confirmDoc, customer: confirmCustomer, provider: confirmProvider })
   const confirmCurrency = (confirmData?.currency ?? watchCurrency) as Currency
   const confirmRows: Array<{ label: string; value: string }> = []
   if (confirmChannel === 'email') {
     confirmRows.push({
       label: tShell('confirm_row_to'),
       value: [tShell('confirm_to_with_pdf', { email: selectedCustomer?.email ?? '' }), ...(isCompanyAdmin ? extraCc : [])].join(', '),
+    })
+  } else if (confirmMailbox) {
+    confirmRows.push({
+      label: tShell('confirm_row_channel'),
+      value: tShell('confirm_channel_mailbox', { provider: confirmProvider }),
     })
   } else if (confirmChannel) {
     confirmRows.push({
@@ -3588,7 +3628,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           label: tShell(entry.label),
           selected: entry.selected,
           disabled: !entry.available || !canWrite,
-          reason: entry.reason ? tShell(EMAIL_BLOCK_KEYS[entry.reason]) : null,
+          // A mailbox says where the faktura lands ("Till kundens Kivra").
+          reason: entry.reason
+            ? tShell(EMAIL_BLOCK_KEYS[entry.reason])
+            : isMailboxChannel(entry.channel)
+              ? tShell('channel_mailbox_hint', { provider: DIGITAL_MAILBOX_PROVIDER_NAMES[entry.channel] })
+              : null,
           onSelect: () => requestIntent(entry.intent),
         })),
         actions: editorMenu.actions.map((entry) => ({

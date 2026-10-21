@@ -1113,6 +1113,13 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
     file: 'peppol_inbound_documents.json',
     orderBy: 'received_at',
   },
+  // Invoices sent to the customer's Kivra or Billo mailbox: which recipient
+  // received the archived PDF through which provider, and when.
+  {
+    name: 'digital_mailbox_dispatches',
+    file: 'digital_mailbox_dispatches.json',
+    orderBy: 'created_at',
+  },
   { name: 'recurring_invoice_schedules', file: 'recurring_invoice_schedules.json' },
   // Supplier invoicing
   { name: 'supplier_invoices', file: 'supplier_invoices.json', orderBy: 'invoice_date' },
@@ -1487,6 +1494,8 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   inbox_rate_counters: 'infrastructure',
   mail_connections:
     'mailbox OAuth grants (live refresh tokens), not portable. The receipts they find are archived as documents.',
+  digital_mailbox_connections:
+    'Kivra and Billo connection state (provider keys, sync cursor, sender switch); the documents read from the mailbox are archived as arrivals',
   migration_jobs: 'provider worker leases and cursors tied to nonportable provider consents',
   migration_job_chunks: 'encrypted provider replay snapshots and worker receipts; imported documents are archived in their registers',
   mcp_tasks: 'MCP task handles: transient tool-call state with a 1-hour TTL',

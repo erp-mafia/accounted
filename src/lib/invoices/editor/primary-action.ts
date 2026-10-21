@@ -1,5 +1,5 @@
 import type { InvoiceDocumentType } from '@/types'
-import type { ChannelOption, EditorChannel, EmailBlockReason } from './channel'
+import { isMailboxChannel, type ChannelOption, type EditorChannel, type EmailBlockReason, type MailboxChannel } from './channel'
 
 /**
  * What the invoice editor's top-bar primary and its caret menu do, and what
@@ -35,6 +35,8 @@ export type EditorActionLabel =
   | 'action_mark_sent_book_download'
   | 'action_mark_sent_download'
   | 'action_send_peppol'
+  | 'action_send_kivra'
+  | 'action_send_billo'
   | 'action_save_changes'
   | 'action_register_self_billed'
   | 'action_create_without_sending'
@@ -43,6 +45,8 @@ export type EditorActionLabel =
   | 'channel_email'
   | 'channel_manual'
   | 'channel_peppol'
+  | 'channel_kivra'
+  | 'channel_billo'
 
 export interface BookingContext {
   accountingMethod: 'accrual' | 'cash'
@@ -66,10 +70,20 @@ export interface SendLabelContext {
   booksOnIssue: boolean
 }
 
-/** The label of a send on this channel: the primary's face and the confirm button. */
+const MAILBOX_SEND_LABEL: Record<MailboxChannel, EditorActionLabel> = {
+  kivra: 'action_send_kivra',
+  billo: 'action_send_billo',
+}
+
+/**
+ * The label of a send on this channel: the primary's face and the confirm
+ * button. Peppol and the mailboxes name where the faktura goes; the confirm
+ * dialog's verifikat says what is booked.
+ */
 export function resolveSendLabel(ctx: SendLabelContext): EditorActionLabel {
   const books = ctx.booksOnIssue && ctx.documentType === 'invoice'
   if (ctx.channel === 'peppol') return 'action_send_peppol'
+  if (isMailboxChannel(ctx.channel)) return MAILBOX_SEND_LABEL[ctx.channel]
   if (ctx.channel === 'email') {
     if (ctx.documentType === 'quote') return 'action_send_quote'
     return books ? 'action_send_and_book' : 'action_send'
@@ -130,6 +144,8 @@ export function resolveEditorMenu(ctx: MenuContext): EditorMenu | null {
     email: 'channel_email',
     manual: 'channel_manual',
     peppol: 'channel_peppol',
+    kivra: 'channel_kivra',
+    billo: 'channel_billo',
   }
   const channels: MenuChannelEntry[] = ctx.channelOptions.map((option) => ({
     channel: option.channel,

@@ -23,8 +23,10 @@
  *
  * A dry run reads and checks and answers who would get a link and who lacks
  * an email address. It sends nothing, rotates no link and logs no delivery
- * (it is also the MCP staging preview). No personnummer is read here, so none
- * can reach a staged payload or a preview.
+ * (it is also the MCP staging preview). No personnummer is read for the
+ * email link or a dry run, so none can reach a staged payload or a preview;
+ * the digital mailbox channel reads it to address the mailbox, in
+ * send-digital-mailbox.ts, and keeps it there.
  */
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { getEmailService } from '@/lib/email/service'
@@ -40,6 +42,15 @@ import {
   issuePayslipSections,
   type IssuableRun,
 } from '@/lib/salary/payslips/section-snapshot'
+import { deliverPayslipsToMailbox, payslipMailboxBlock } from '@/lib/salary/payslips/send-digital-mailbox'
+import type { DigitalMailboxProviderId } from '@/lib/digital-mailboxes/types'
+
+/**
+ * How the payslips go out: the email link (default), or a digital mailbox
+ * first (Kivra, Billo) with the email link for whoever it does not reach
+ * (send-digital-mailbox.ts).
+ */
+export type PayslipChannel = 'email' | DigitalMailboxProviderId
 
 /** Run statuses from which lönebesked may be sent. */
 export const PAYSLIP_SENDABLE_STATUSES = PAYSLIP_ISSUABLE_STATUSES
@@ -65,7 +76,14 @@ export interface SendPayslipsResult {
 
 interface RunEmployeeRow {
   employee_id: string
-  employee: { first_name: string; last_name: string; email: string | null } | null
+  employee: {
+    first_name: string
+    last_name: string
+    email: string | null
+    /** Read only for a digital mailbox channel, never for the email link or a dry run. */
+    phone?: string | null
+    personnummer?: string | null
+  } | null
 }
 
 function nameOf(row: RunEmployeeRow): string {
@@ -76,9 +94,10 @@ function nameOf(row: RunEmployeeRow): string {
 export async function sendPayslips(
   ctx: OperationContext,
   salaryRunId: string,
-  options: { dryRun?: boolean } = {},
+  options: { dryRun?: boolean; channel?: PayslipChannel } = {},
 ): Promise<OperationOutcome<SendPayslipsResult>> {
   const { supabase, companyId, userId, log } = ctx
+  const mailbox = options.channel && options.channel !== 'email' ? options.channel : null
 
   if (await isSandboxCompany(supabase, companyId)) {
     return { ok: false, code: 'SALARY_PAYSLIPS_SEND_SANDBOX' }
@@ -111,6 +130,11 @@ export async function sendPayslips(
     }
   }
 
+  if (mailbox) {
+    const blocked = await payslipMailboxBlock(supabase, companyId, mailbox)
+    if (blocked) return { ok: false, code: blocked, details: { channel: mailbox } }
+  }
+
   const { data: company } = await supabase
     .from('companies')
     .select('name, org_number')
@@ -122,11 +146,17 @@ export async function sendPayslips(
   // (company_settings.company_name), not the frozen onboarding companies.name.
   const displayName = await getCompanyDisplayName(supabase, companyId)
 
-  const { data: runEmployeesData } = await supabase
-    .from('salary_run_employees')
-    .select('employee_id, employee:employees(first_name, last_name, email)')
-    .eq('salary_run_id', salaryRunId)
-    .eq('company_id', companyId)
+  const { data: runEmployeesData } = mailbox && !options.dryRun
+    ? await supabase
+        .from('salary_run_employees')
+        .select('employee_id, employee:employees(first_name, last_name, email, phone, personnummer)')
+        .eq('salary_run_id', salaryRunId)
+        .eq('company_id', companyId)
+    : await supabase
+        .from('salary_run_employees')
+        .select('employee_id, employee:employees(first_name, last_name, email)')
+        .eq('salary_run_id', salaryRunId)
+        .eq('company_id', companyId)
 
   const runEmployees = (runEmployeesData ?? []) as unknown as RunEmployeeRow[]
   if (runEmployees.length === 0) {
@@ -153,7 +183,10 @@ export async function sendPayslips(
         would_skip_missing_email: missing.length,
         recipients,
         employees_missing_email: missing.map((r) => r.employee_name),
-        delivery: 'A secure link per employee (no attachment); any earlier link for the run stops working.',
+        delivery: mailbox
+          ? `The payslip PDF to each employee's ${mailbox === 'kivra' ? 'Kivra' : 'Billo'} mailbox where it reaches them, a secure link by email for the rest.`
+          : 'A secure link per employee (no attachment); any earlier link for the run stops working.',
+        channel: mailbox ?? 'email',
       },
     }
   }
@@ -163,7 +196,7 @@ export async function sendPayslips(
   // email will actually be sent: a run where nobody has an address reaches
   // no employee. Fail closed: without the switches nothing is sent, so no
   // employee receives a payslip whose content is not on record.
-  if (runEmployees.some((row) => Boolean(row.employee?.email))) {
+  if (mailbox || runEmployees.some((row) => Boolean(row.employee?.email))) {
     const { data: sectionSettings, error: settingsError } = await supabase
       .from('company_settings')
       .select('salary_payslip_show_employer_cost, salary_payslip_show_breakdown')
@@ -193,7 +226,31 @@ export async function sendPayslips(
   const record = (row: RunEmployeeRow, status: PayslipDeliveryStatus, error: string | null) =>
     result.deliveries.push({ employee_id: row.employee_id, employee_name: nameOf(row), status, error })
 
+  // Digital mailbox first: whoever it reaches is done; the rest get the
+  // email link below, as without the channel.
+  const reachedByMailbox = new Set<string>()
+  if (mailbox) {
+    const mailboxResults = await deliverPayslipsToMailbox(
+      { supabase, companyId, userId, log },
+      {
+        provider: mailbox,
+        salaryRunId,
+        period: { year: runRow.period_year, month: runRow.period_month, paymentDate: runRow.payment_date },
+        employees: runEmployees,
+      },
+    )
+    for (const delivered of mailboxResults) {
+      if (delivered.status !== 'sent') continue
+      reachedByMailbox.add(delivered.employee_id)
+      const row = runEmployees.find((r) => r.employee_id === delivered.employee_id)
+      if (!row) continue
+      result.sent++
+      record(row, 'sent', null)
+    }
+  }
+
   for (const sre of runEmployees) {
+    if (reachedByMailbox.has(sre.employee_id)) continue
     const emp = sre.employee
 
     if (!emp?.email) {

@@ -53,6 +53,12 @@ vi.mock('@/lib/salary/payslips/links', async (importOriginal) => {
   }
 })
 
+const mailboxMock = vi.hoisted(() => ({
+  payslipMailboxBlock: vi.fn(),
+  deliverPayslipsToMailbox: vi.fn(),
+}))
+vi.mock('@/lib/salary/payslips/send-digital-mailbox', () => mailboxMock)
+
 import { POST } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { getEmailService } from '@/lib/email/service'
@@ -427,6 +433,70 @@ describe('POST /api/salary/runs/[id]/payslips/send', () => {
       expect(response.status).toBe(200)
       expect(findCall('salary_runs', 'update')).toBeUndefined()
       expect(findCall('company_settings', 'select')).toBeUndefined()
+    })
+  })
+
+  describe('digital mailbox channel', () => {
+    beforeEach(() => {
+      mailboxMock.payslipMailboxBlock.mockResolvedValue(null)
+      mailboxMock.deliverPayslipsToMailbox.mockResolvedValue([])
+    })
+
+    it('returns 400 for an unknown channel', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      authed(supabase)
+      const request = createMockRequest('/api/salary/runs/run-1/payslips/send', { method: 'POST', body: { channel: 'fax' } })
+      const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+      expect(response.status).toBe(400)
+    })
+
+    it('refuses a mailbox channel whose sending is not active', async () => {
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      authed(supabase)
+      mockEmail({ success: true })
+      mailboxMock.payslipMailboxBlock.mockResolvedValue('DIGITAL_MAILBOX_SENDING_NOT_ACTIVE')
+      enqueueMany([{ data: RUN }])
+      const request = createMockRequest('/api/salary/runs/run-1/payslips/send', { method: 'POST', body: { channel: 'billo' } })
+      const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('DIGITAL_MAILBOX_SENDING_NOT_ACTIVE')
+      expect(mailboxMock.deliverPayslipsToMailbox).not.toHaveBeenCalled()
+    })
+
+    it('sends to the mailbox first and emails a link only to whoever it did not reach', async () => {
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      authed(supabase)
+      const sendEmail = mockEmail({ success: true, messageId: 'msg-2' })
+      mailboxMock.deliverPayslipsToMailbox.mockResolvedValue([
+        { employee_id: 'emp-1', status: 'sent', error: null },
+        { employee_id: 'emp-2', status: 'failed', error: 'provider down' },
+      ])
+      enqueueMany([
+        { data: RUN },
+        { data: { name: 'Bolaget AB', org_number: '5560000000' } },
+        {
+          data: [
+            { employee_id: 'emp-1', employee: { first_name: 'Anna', last_name: 'A', email: 'anna@example.test', personnummer: 'enc' } },
+            { employee_id: 'emp-2', employee: { first_name: 'Bo', last_name: 'B', email: 'bo@example.test', personnummer: 'enc' } },
+          ],
+        },
+        ...ISSUE_SECTIONS,
+      ])
+
+      const request = createMockRequest('/api/salary/runs/run-1/payslips/send', { method: 'POST', body: { channel: 'billo' } })
+      const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+      const { status, body } = await parseJsonResponse<{ data: { sent: number; total: number } }>(response)
+
+      expect(status).toBe(200)
+      expect(body.data).toMatchObject({ sent: 2, total: 2 })
+      expect(mailboxMock.deliverPayslipsToMailbox).toHaveBeenCalledWith(
+        expect.objectContaining({ companyId: 'company-1', userId: 'user-1' }),
+        expect.objectContaining({ provider: 'billo', salaryRunId: 'run-1' }),
+      )
+      // Only Bo, whom the mailbox did not reach, gets the email link.
+      expect(sendEmail).toHaveBeenCalledTimes(1)
+      expect(sendEmail.mock.calls[0]![0]).toMatchObject({ to: 'bo@example.test' })
     })
   })
 })

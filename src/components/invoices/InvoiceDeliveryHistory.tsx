@@ -6,7 +6,9 @@ import { Badge } from '@/components/ui/badge'
 import { DetailSection } from '@/components/ui/detail-section'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { useBranding } from '@/lib/branding/brand-context'
+import { DIGITAL_MAILBOX_PROVIDER_NAMES } from '@/lib/digital-mailboxes/sending-status'
 import { isDestructiveDeliveryStatus } from '@/lib/invoices/delivery-recipient-statuses'
+import { mergeDeliveryHistory, type MailboxDispatchView } from '@/lib/invoices/digital-mailbox-view'
 import type { InvoiceDelivery, InvoiceDeliveryProviderStatus } from '@/types'
 
 export type InvoiceDeliveryView = Pick<
@@ -32,6 +34,8 @@ export type InvoiceDeliveryView = Pick<
 
 interface InvoiceDeliveryHistoryProps {
   deliveries: InvoiceDeliveryView[]
+  /** Sends to the customer's Kivra or Billo mailbox, merged in by time. */
+  mailboxDispatches?: MailboxDispatchView[]
   showLegacyEmptyState: boolean
 }
 
@@ -66,13 +70,19 @@ const outcomeVariant: Partial<Record<DeliveryOutcome, 'warning' | 'destructive'>
 
 export function InvoiceDeliveryHistory({
   deliveries,
+  mailboxDispatches = [],
   showLegacyEmptyState,
 }: InvoiceDeliveryHistoryProps) {
   const t = useTranslations('invoice_detail')
   const format = useFormatter()
   const { appName } = useBranding()
 
-  if (deliveries.length === 0 && !showLegacyEmptyState) return null
+  const entries = mergeDeliveryHistory(
+    deliveries,
+    (delivery) => delivery.sent_at || delivery.failed_at || delivery.created_at,
+    mailboxDispatches,
+  )
+  if (entries.length === 0 && !showLegacyEmptyState) return null
 
   const formatTimestamp = (value: string) =>
     format.dateTime(new Date(value), {
@@ -89,12 +99,32 @@ export function InvoiceDeliveryHistory({
       kicker={t('delivery_history_title')}
       help={<HelpPopover>{t('delivery_history_description')}</HelpPopover>}
     >
-      {deliveries.length === 0 ? (
+      {entries.length === 0 ? (
         <p className="text-sm text-muted-foreground">{t('delivery_history_legacy_description')}</p>
       ) : (
         <div className="divide-y divide-border">
-          {deliveries.map((delivery) => {
-            const occurredAt = delivery.sent_at || delivery.failed_at || delivery.created_at
+          {entries.map((entry) => {
+            if (entry.kind === 'mailbox') {
+              // A mailbox send: provider, time and outcome on one line. A
+              // failure carries the chip (convention 5).
+              const { dispatch } = entry
+              return (
+                <div key={`mailbox-${dispatch.id}`} className="flex min-h-11 items-center gap-3 py-2 text-sm">
+                  <span className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <span className="tabular-nums text-muted-foreground">{formatTimestamp(entry.at)}</span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {t('delivery_channel_mailbox', { provider: DIGITAL_MAILBOX_PROVIDER_NAMES[dispatch.provider] })}
+                  </span>
+                  {dispatch.status === 'failed' ? (
+                    <Badge variant="destructive">{t('delivery_status_failed')}</Badge>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">{t('delivery_status_sent')}</span>
+                  )}
+                </div>
+              )
+            }
+            const { delivery } = entry
+            const occurredAt = entry.at
             const isManual = delivery.channel === 'manual'
             const outcome = outcomeOf(delivery)
             const outcomeChip = outcomeVariant[outcome]

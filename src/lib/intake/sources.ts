@@ -55,7 +55,7 @@ export type IntakeSourceKind = 'document' | 'bank' | 'ledger'
 export interface IntakeSource {
   id: IntakeSourceId
   kind: IntakeSourceKind
-  /** True when the door delivers in production today; false for one that is planned only. */
+  /** True when the door is built (it delivers wherever the deployment carries it); false for one that is planned only. */
   live: boolean
   /** next-intl key of the door's name; the same key holds the Swedish (sv.json) and the English (en.json) label. */
   labelKey: `intake_sources.${IntakeSourceId}`
@@ -78,9 +78,14 @@ const source = (id: IntakeSourceId, kind: IntakeSourceKind, live: boolean): Inta
  *     receiving), partner_api (v1), mcp, migration (provider imports),
  *     system (what Accounted produced: invoices, filings, payment files);
  *   - bank_feed (PSD2 sync), bank_file (camt/CSV import), sie (SIE import);
- *   - billo, kivra, paypal, portal: named and planned, not wired. Kivra mail
- *     and supplier-portal invoices reach the books today only when a person
- *     fetches them and uploads them, which is the upload door.
+ *   - billo, kivra: the company's digital mailbox, read into the Inkorg
+ *     (src/lib/digital-mailboxes). Built, so live; whether a deployment
+ *     carries them is runtime config (Accounted's partner credentials, see
+ *     digitalMailboxAvailability), which the surfaces that offer the door
+ *     ask for themselves;
+ *   - paypal, portal: named and planned, not wired. Supplier-portal invoices
+ *     reach the books today only when a person fetches them and uploads
+ *     them, which is the upload door.
  */
 export const INTAKE_SOURCES: Readonly<Record<IntakeSourceId, IntakeSource>> = {
   intake_email: source('intake_email', 'document', true),
@@ -95,8 +100,8 @@ export const INTAKE_SOURCES: Readonly<Record<IntakeSourceId, IntakeSource>> = {
   bank_feed: source('bank_feed', 'bank', true),
   bank_file: source('bank_file', 'bank', true),
   sie: source('sie', 'ledger', true),
-  billo: source('billo', 'document', false),
-  kivra: source('kivra', 'document', false),
+  billo: source('billo', 'document', true),
+  kivra: source('kivra', 'document', true),
   paypal: source('paypal', 'bank', false),
   portal: source('portal', 'document', false),
 }

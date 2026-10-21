@@ -1,21 +1,33 @@
 'use client'
 
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useState, type FormEvent, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
-import { Check, Copy } from 'lucide-react'
+import { Check, Copy, MoreHorizontal } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { AttnLine } from '@/components/ui/attn-line'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Switch } from '@/components/ui/switch'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { copyInboxAddress, type AddressCopyState } from '@/components/extensions/general/inbox-address-copy'
 import { MAIL_SETTINGS_HREF, summarizeMailboxes } from '@/components/extensions/general/mail-connections'
 import { useMailConnections } from '@/components/extensions/general/use-mail-connections'
+import type { ConnectionSummary } from '@/lib/digital-mailboxes/connections'
+import { phoneToE164 } from '@/lib/digital-mailboxes/identifiers'
+import type { DigitalMailboxAvailability } from '@/lib/digital-mailboxes/providers'
+import type { SyncResult } from '@/lib/digital-mailboxes/receive'
+import type { DigitalMailboxProviderId } from '@/lib/digital-mailboxes/types'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
-import { getResponseErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage, getResponseErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { digitalMailboxRowView, type DigitalMailboxRowView } from '@/lib/inkorg/digital-mailbox-row'
 import { mailboxEntries, type MailboxDoor } from '@/lib/inkorg/mailboxes'
+import { formatDateTime, formatOrgNumber } from '@/lib/utils'
 import { DoorMark } from './door-icon'
 
 type AddressState =
@@ -33,15 +45,12 @@ type AddressState =
 /**
  * Lägg till brevlåda: every door a document can come in through, with how
  * to connect it, each over the path that already exists (the intake address
- * here, the WhatsApp, Peppol and Gmail pages under Kopplingar). Billo and
- * Kivra are named and not built: coming soon, not clickable.
+ * here, the WhatsApp, Peppol and Gmail pages under Kopplingar) or, for Kivra
+ * and Billo, right in the row. Kivra and Billo are coming soon, not
+ * clickable, in a deployment without Accounted's credentials for them.
  */
 export function AddMailboxDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const t = useTranslations('inkorg')
-  const entries = mailboxEntries({
-    whatsapp: ENABLED_EXTENSION_IDS.has('whatsapp-inbox'),
-    mail: ENABLED_EXTENSION_IDS.has('mail'),
-  })
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -51,31 +60,54 @@ export function AddMailboxDialog({ open, onOpenChange }: { open: boolean; onOpen
           <DialogDescription>{t('add_mailbox_intro')}</DialogDescription>
         </DialogHeader>
         {/* Radix mounts the body only while open, so each open reads the doors' states anew. */}
-        <ul className="border-t border-border">
-          {entries.map((entry) =>
-            entry.comingSoon ? (
-              <MailboxRow key={entry.door} door={entry.door} muted>
-                <Badge variant="secondary" className="text-[11px]">
-                  {t('coming_soon')}
-                </Badge>
-              </MailboxRow>
-            ) : entry.door === 'intake_email' ? (
-              <IntakeAddressRow key={entry.door} />
-            ) : entry.door === 'whatsapp' ? (
-              <WhatsAppRow key={entry.door} />
-            ) : entry.door === 'mailbox' ? (
-              <GmailRow key={entry.door} />
-            ) : (
-              <MailboxRow key={entry.door} door={entry.door}>
-                <Button asChild variant="secondary" size="sm">
-                  <Link href="/settings/peppol">{t('open')}</Link>
-                </Button>
-              </MailboxRow>
-            ),
-          )}
-        </ul>
+        <MailboxList />
       </DialogContent>
     </Dialog>
+  )
+}
+
+function MailboxList() {
+  const t = useTranslations('inkorg')
+  const digital = useDigitalMailboxes()
+  // Until the answer is in, Kivra and Billo render as rows with a skeleton (or
+  // a failed read's line): only a read that says so turns them into coming soon.
+  const receives = (provider: DigitalMailboxProviderId) =>
+    digital.state.status !== 'ready' || digital.state.providers[provider].available.receive
+  const entries = mailboxEntries({
+    whatsapp: ENABLED_EXTENSION_IDS.has('whatsapp-inbox'),
+    mail: ENABLED_EXTENSION_IDS.has('mail'),
+    kivra: receives('kivra'),
+    billo: receives('billo'),
+  })
+
+  return (
+    <ul className="border-t border-border">
+      {entries.map((entry) =>
+        entry.comingSoon ? (
+          <MailboxRow key={entry.door} door={entry.door} muted>
+            <Badge variant="secondary" className="text-[11px]">
+              {t('coming_soon')}
+            </Badge>
+          </MailboxRow>
+        ) : entry.door === 'intake_email' ? (
+          <IntakeAddressRow key={entry.door} />
+        ) : entry.door === 'whatsapp' ? (
+          <WhatsAppRow key={entry.door} />
+        ) : entry.door === 'mailbox' ? (
+          <GmailRow key={entry.door} />
+        ) : entry.door === 'kivra' ? (
+          <KivraRow key={entry.door} {...digital.rowProps('kivra')} />
+        ) : entry.door === 'billo' ? (
+          <BilloRow key={entry.door} {...digital.rowProps('billo')} />
+        ) : (
+          <MailboxRow key={entry.door} door={entry.door}>
+            <Button asChild variant="secondary" size="sm">
+              <Link href="/settings/peppol">{t('open')}</Link>
+            </Button>
+          </MailboxRow>
+        ),
+      )}
+    </ul>
   )
 }
 
@@ -83,23 +115,27 @@ function MailboxRow({
   door,
   detail,
   muted = false,
+  extra,
   children,
 }: {
   door: MailboxDoor
   /** Replaces the door's one-line description (the address itself, a connected number). */
   detail?: ReactNode
   muted?: boolean
+  /** A quiet second line under the row, spanning the text and the actions (Kivra's and Billo's sending switch). */
+  extra?: ReactNode
   children?: ReactNode
 }) {
   const t = useTranslations('inkorg')
   return (
-    <li className="flex items-center gap-4 border-b border-border py-3">
+    <li className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 border-b border-border py-3">
       <DoorMark door={door} size={28} className={muted ? 'opacity-60' : undefined} />
-      <div className={muted ? 'min-w-0 flex-1 text-muted-foreground' : 'min-w-0 flex-1'}>
+      <div className={muted ? 'text-muted-foreground' : undefined}>
         <p className="text-[13px] font-medium">{t(`mailbox_${door}_name`)}</p>
         <div className="text-[12.5px] text-muted-foreground">{detail ?? t(`mailbox_${door}_body`)}</div>
       </div>
       <div className="flex shrink-0 items-center gap-2">{children}</div>
+      {extra ? <div className="col-span-2 col-start-2">{extra}</div> : null}
     </li>
   )
 }
@@ -296,5 +332,622 @@ function GmailRow() {
         <Link href={MAIL_SETTINGS_HREF}>{connected ? t('open') : t('connect')}</Link>
       </Button>
     </MailboxRow>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Kivra and Billo: the company's digital mailbox, connected in the row
+// ---------------------------------------------------------------------------
+
+interface DigitalProviderAnswer {
+  available: DigitalMailboxAvailability
+  connection: ConnectionSummary | null
+}
+
+type DigitalState =
+  | { status: 'loading' }
+  | { status: 'ready'; providers: Record<DigitalMailboxProviderId, DigitalProviderAnswer> }
+  | { status: 'failed' }
+
+type DigitalSlot = { status: 'loading' } | { status: 'failed' } | { status: 'ready'; answer: DigitalProviderAnswer }
+
+interface DigitalRowProps {
+  slot: DigitalSlot
+  /** Puts the connection a write answered in place, without another read. */
+  onConnection: (connection: ConnectionSummary | null) => void
+  /** Reads both providers again: a sync answers counts, not the connection. */
+  reload: () => void
+}
+
+/** A failed read: a re-read after a write keeps what the rows already show. */
+function failedRead(prev: DigitalState): DigitalState {
+  return prev.status === 'ready' ? prev : { status: 'failed' }
+}
+
+/** GET /api/digital-mailboxes, once per open of the dialog and again on reload(). */
+function useDigitalMailboxes() {
+  const [state, setState] = useState<DigitalState>({ status: 'loading' })
+  const [reads, setReads] = useState(0)
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch('/api/digital-mailboxes')
+        const json = res.ok
+          ? ((await res.json()) as { data?: { providers?: Partial<Record<DigitalMailboxProviderId, DigitalProviderAnswer>> } })
+          : null
+        const kivra = json?.data?.providers?.kivra
+        const billo = json?.data?.providers?.billo
+        if (!cancelled) setState((prev) => (kivra && billo ? { status: 'ready', providers: { kivra, billo } } : failedRead(prev)))
+      } catch {
+        if (!cancelled) setState(failedRead)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [reads])
+
+  const reload = useCallback(() => setReads((n) => n + 1), [])
+
+  const setConnection = useCallback((provider: DigitalMailboxProviderId, connection: ConnectionSummary | null) => {
+    setState((prev) =>
+      prev.status === 'ready'
+        ? { status: 'ready', providers: { ...prev.providers, [provider]: { ...prev.providers[provider], connection } } }
+        : prev,
+    )
+  }, [])
+
+  const rowProps = (provider: DigitalMailboxProviderId): DigitalRowProps => ({
+    slot: state.status === 'ready' ? { status: 'ready', answer: state.providers[provider] } : state,
+    onConnection: (connection) => setConnection(provider, connection),
+    reload,
+  })
+
+  return { state, rowProps }
+}
+
+type Answer<T> = { ok: true; data: T } | { ok: false; code: string | null; message: string }
+
+/** One write to /api/digital-mailboxes/{path}: its data, or the refusal's code and its sentence for the person. */
+async function mailboxRequest<T>(path: string, method: 'POST' | 'DELETE', locale: ErrorLocale, body?: unknown): Promise<Answer<T>> {
+  try {
+    const res = await fetch(`/api/digital-mailboxes/${path}`, {
+      method,
+      ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+    })
+    // Read a copy: the response itself stays unread for getResponseErrorMessage.
+    const json = (await res
+      .clone()
+      .json()
+      .catch(() => null)) as { data?: T; error?: { code?: unknown } } | null
+    if (res.ok && json?.data !== undefined) return { ok: true, data: json.data }
+    const code = typeof json?.error?.code === 'string' ? json.error.code : null
+    return { ok: false, code, message: await getResponseErrorMessage(res, undefined, locale) }
+  } catch {
+    return { ok: false, code: null, message: getErrorMessage(null, { locale }) }
+  }
+}
+
+/** Only an https page is opened in a new tab. */
+function httpsUrl(value: string | null | undefined): string | null {
+  return typeof value === 'string' && value.startsWith('https://') ? value : null
+}
+
+type DigitalBusy = 'connect' | 'sync' | 'sending' | null
+
+/** What both rows do the same way: read now, disconnect, switch sending. */
+function useDigitalMailboxActions(provider: DigitalMailboxProviderId, { onConnection, reload }: Omit<DigitalRowProps, 'slot'>) {
+  const t = useTranslations('inkorg')
+  const tCommon = useTranslations('common')
+  const locale: ErrorLocale = useLocale() === 'en' ? 'en' : 'sv'
+  const { toast } = useToast()
+  const { dialogProps, confirm } = useDestructiveConfirm()
+  const [busy, setBusy] = useState<DigitalBusy>(null)
+  const name = t(`mailbox_${provider}_name`)
+
+  /**
+   * "Hämta nu", and Kivra's "Kontrollera" (`checking`): the sync route first
+   * asks Kivra whether a waiting connection was activated. Not yet is no
+   * failure: the row keeps waiting.
+   */
+  async function sync(checking: boolean): Promise<void> {
+    setBusy('sync')
+    const answer = await mailboxRequest<SyncResult>(`${provider}/sync`, 'POST', locale)
+    setBusy(null)
+    if (answer.ok) {
+      const filed = t('digital_sync_done', { count: answer.data.filed })
+      // What one run did not file (more waiting, or a document that failed) follows with the cron.
+      const rest = answer.data.more || answer.data.failed > 0 ? t('digital_sync_more') : null
+      toast(
+        checking
+          ? { title: t('kivra_activated'), description: rest ? `${filed} ${rest}` : filed }
+          : { title: filed, description: rest ?? undefined },
+      )
+    } else if (checking && answer.code === 'DIGITAL_MAILBOX_NOT_CONNECTED') {
+      toast({ title: t('kivra_not_active_yet') })
+    } else {
+      toast({ title: t('digital_sync_failed'), description: answer.message, variant: 'destructive' })
+    }
+    reload()
+  }
+
+  async function disconnect(): Promise<void> {
+    await confirm(
+      {
+        title: t('digital_disconnect_title', { provider: name }),
+        description: t(provider === 'kivra' ? 'digital_disconnect_kivra_body' : 'digital_disconnect_billo_body'),
+        confirmLabel: t('digital_disconnect'),
+        cancelLabel: tCommon('cancel'),
+      },
+      async () => {
+        const answer = await mailboxRequest<{ connection: ConnectionSummary | null }>(`${provider}/receive`, 'DELETE', locale)
+        if (!answer.ok) {
+          toast({ title: t('digital_disconnect_failed', { provider: name }), description: answer.message, variant: 'destructive' })
+          // Keeps the confirm from resolving as done.
+          throw new Error(answer.message)
+        }
+        onConnection(answer.data.connection)
+        toast({ title: t('digital_disconnected', { provider: name }) })
+      },
+    )
+  }
+
+  async function setSending(on: boolean): Promise<void> {
+    setBusy('sending')
+    const answer = await mailboxRequest<{ connection: ConnectionSummary | null }>(`${provider}/send`, on ? 'POST' : 'DELETE', locale)
+    setBusy(null)
+    if (!answer.ok) {
+      toast({ title: t('digital_sending_failed'), description: answer.message, variant: 'destructive' })
+      return
+    }
+    onConnection(answer.data.connection)
+  }
+
+  return { t, name, locale, toast, busy, setBusy, sync, disconnect, setSending, dialogProps }
+}
+
+/** Before the answer is in, or when it never came: the row without its controls. */
+function DigitalPlaceholderRow({ door, status }: { door: DigitalMailboxProviderId; status: 'loading' | 'failed' }) {
+  const t = useTranslations('inkorg')
+  if (status === 'loading') return <MailboxRow door={door} detail={<Skeleton className="mt-1 h-4 w-48 rounded-sm" />} />
+  return <MailboxRow door={door} detail={<AttnLine>{t('digital_load_failed')}</AttnLine>} />
+}
+
+/** The row's lines for a mailbox that is read or waits: its state, Billo's scanning address, the last failure. */
+function DigitalDetail({ provider, view }: { provider: DigitalMailboxProviderId; view: DigitalMailboxRowView }) {
+  const t = useTranslations('inkorg')
+  const name = t(`mailbox_${provider}_name`)
+  const status =
+    view.receive === 'pending'
+      ? t(provider === 'kivra' ? 'kivra_pending' : 'billo_pending')
+      : view.lastSyncedAt
+        ? t('digital_synced', { time: formatDateTime(view.lastSyncedAt) })
+        : t('digital_never_synced')
+  return (
+    <>
+      <p>{status}</p>
+      {view.postalAddress && (
+        <p data-ph-mask="" className="break-words">
+          {t('billo_postal_address', { address: view.postalAddress })}
+        </p>
+      )}
+      {view.error && (
+        <AttnLine>
+          {view.error.at
+            ? t('digital_error', { provider: name, time: formatDateTime(view.error.at) })
+            : t('digital_error_untimed', { provider: name })}
+        </AttnLine>
+      )}
+    </>
+  )
+}
+
+/** The quiet second line: the company as a sender of invoices and payslips through the provider. */
+function SendingLine({
+  provider,
+  on,
+  busy,
+  onChange,
+}: {
+  provider: DigitalMailboxProviderId
+  on: boolean
+  busy: boolean
+  onChange: (on: boolean) => void
+}) {
+  const t = useTranslations('inkorg')
+  const id = useId()
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <label htmlFor={id} className="text-[12.5px] text-muted-foreground">
+        {t('digital_sending')}
+      </label>
+      <Switch
+        id={id}
+        checked={on}
+        disabled={busy}
+        onCheckedChange={onChange}
+        aria-label={t('digital_sending_aria', { provider: t(`mailbox_${provider}_name`) })}
+      />
+    </div>
+  )
+}
+
+function DigitalRowMenu({ provider, onDisconnect }: { provider: DigitalMailboxProviderId; onDisconnect: () => void }) {
+  const t = useTranslations('inkorg')
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="icon-sm" aria-label={t('digital_more', { provider: t(`mailbox_${provider}_name`) })}>
+          <MoreHorizontal className="h-[15px] w-[15px]" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onSelect={onDisconnect}>{t('digital_disconnect')}</DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/**
+ * Kivra: the company activates Accounted at Kivra (the onboarding page opens
+ * in a new tab); the row waits until Kivra confirms, by its webhook, the
+ * cron's lookup or "Kontrollera", and then reads the mailbox.
+ */
+function KivraRow({ slot, onConnection, reload }: DigitalRowProps) {
+  const actions = useDigitalMailboxActions('kivra', { onConnection, reload })
+  const { t, busy } = actions
+  // Kivra's activation page from the last connect answer, reopened without another round trip.
+  const [onboardingUrl, setOnboardingUrl] = useState<string | null>(null)
+
+  if (slot.status !== 'ready') return <DigitalPlaceholderRow door="kivra" status={slot.status} />
+  const view = digitalMailboxRowView(slot.answer.available, slot.answer.connection)
+
+  async function connect() {
+    // Opened on the click itself, so the browser allows it, and pointed at
+    // Kivra once the answer is in. No 'noopener' feature: with it
+    // window.open returns null; the opener link is cut by hand.
+    const tab = window.open('', '_blank')
+    if (tab) tab.opener = null
+    actions.setBusy('connect')
+    const answer = await mailboxRequest<{ connection: ConnectionSummary; onboarding_url: string | null }>(
+      'kivra/receive',
+      'POST',
+      actions.locale,
+    )
+    actions.setBusy(null)
+    if (!answer.ok) {
+      tab?.close()
+      actions.toast({ title: t('digital_connect_failed', { provider: actions.name }), description: answer.message, variant: 'destructive' })
+      return
+    }
+    onConnection(answer.data.connection)
+    const url = httpsUrl(answer.data.onboarding_url)
+    setOnboardingUrl(url)
+    // Already active at Kivra: nothing to open. A blocked tab leaves the row
+    // waiting with "Öppna Kivra", which opens the page from a click of its own.
+    if (url && tab) tab.location.href = url
+    else tab?.close()
+  }
+
+  function openKivra() {
+    if (onboardingUrl) window.open(onboardingUrl, '_blank', 'noopener,noreferrer')
+    else void connect()
+  }
+
+  const sending = view.sending ? (
+    <SendingLine
+      provider="kivra"
+      on={view.sending === 'active'}
+      busy={busy === 'sending'}
+      onChange={(on) => void actions.setSending(on)}
+    />
+  ) : undefined
+
+  if (view.receive === 'off') {
+    return (
+      <MailboxRow door="kivra" extra={sending}>
+        <Button size="sm" loading={busy === 'connect'} onClick={() => void connect()}>
+          {t('connect_kivra')}
+        </Button>
+      </MailboxRow>
+    )
+  }
+  if (view.receive === 'pending') {
+    return (
+      <MailboxRow door="kivra" detail={<DigitalDetail provider="kivra" view={view} />} extra={sending}>
+        <Button variant="secondary" size="sm" loading={busy === 'connect'} onClick={openKivra}>
+          {t('kivra_open')}
+        </Button>
+        <Button variant="secondary" size="sm" loading={busy === 'sync'} onClick={() => void actions.sync(true)}>
+          {t('kivra_check')}
+        </Button>
+      </MailboxRow>
+    )
+  }
+  return (
+    <MailboxRow door="kivra" detail={<DigitalDetail provider="kivra" view={view} />} extra={sending}>
+      <Button variant="secondary" size="sm" loading={busy === 'sync'} onClick={() => void actions.sync(false)}>
+        {t('digital_fetch_now')}
+      </Button>
+      <DigitalRowMenu provider="kivra" onDisconnect={() => void actions.disconnect()} />
+      <DestructiveConfirmDialog {...actions.dialogProps} />
+    </MailboxRow>
+  )
+}
+
+/**
+ * Billo: the company's business mailbox is created from here, with the
+ * admin (BankID) as its representative, and read from then on.
+ */
+function BilloRow({ slot, onConnection, reload }: DigitalRowProps) {
+  const actions = useDigitalMailboxActions('billo', { onConnection, reload })
+  const { t, busy } = actions
+  const [creating, setCreating] = useState(false)
+
+  if (slot.status !== 'ready') return <DigitalPlaceholderRow door="billo" status={slot.status} />
+  const view = digitalMailboxRowView(slot.answer.available, slot.answer.connection)
+
+  const sending = view.sending ? (
+    <SendingLine
+      provider="billo"
+      on={view.sending === 'active'}
+      busy={busy === 'sending'}
+      onChange={(on) => void actions.setSending(on)}
+    />
+  ) : undefined
+
+  if (view.receive === 'off') {
+    return (
+      <MailboxRow door="billo" extra={sending}>
+        <Button size="sm" onClick={() => setCreating(true)}>
+          {t('billo_create')}
+        </Button>
+        <BilloCreateDialog
+          open={creating}
+          onOpenChange={setCreating}
+          onCreated={(connection) => {
+            setCreating(false)
+            onConnection(connection)
+            actions.toast({ title: t('billo_created') })
+          }}
+        />
+      </MailboxRow>
+    )
+  }
+  return (
+    <MailboxRow door="billo" detail={<DigitalDetail provider="billo" view={view} />} extra={sending}>
+      {view.receive === 'active' && (
+        <Button variant="secondary" size="sm" loading={busy === 'sync'} onClick={() => void actions.sync(false)}>
+          {t('digital_fetch_now')}
+        </Button>
+      )}
+      <DigitalRowMenu provider="billo" onDisconnect={() => void actions.disconnect()} />
+      <DestructiveConfirmDialog {...actions.dialogProps} />
+    </MailboxRow>
+  )
+}
+
+function BilloCreateDialog({
+  open,
+  onOpenChange,
+  onCreated,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onCreated: (connection: ConnectionSummary) => void
+}) {
+  const t = useTranslations('inkorg')
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{t('billo_dialog_title')}</DialogTitle>
+          <DialogDescription>{t('billo_dialog_intro')}</DialogDescription>
+        </DialogHeader>
+        {/* Mounted only while open: each open reads what Billo would get anew. */}
+        <BilloCreateForm onCancel={() => onOpenChange(false)} onCreated={onCreated} />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/** GET /api/digital-mailboxes/billo/representative. */
+interface BilloPreview {
+  representative: { name: string | null; has_bankid: boolean; email: string | null }
+  company: {
+    name: string
+    org_number: string | null
+    address_line1: string | null
+    postal_code: string | null
+    city: string | null
+  } | null
+}
+
+type BilloPreviewState =
+  | { status: 'loading' }
+  | { status: 'ready'; preview: BilloPreview }
+  /** message: the server's refusal (a member who is not an admin), null when the read never got an answer. */
+  | { status: 'failed'; message: string | null }
+
+/** The shape check only; the route validates the address itself. */
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+function BilloCreateForm({ onCancel, onCreated }: { onCancel: () => void; onCreated: (connection: ConnectionSummary) => void }) {
+  const t = useTranslations('inkorg')
+  const tCommon = useTranslations('common')
+  const locale: ErrorLocale = useLocale() === 'en' ? 'en' : 'sv'
+  const emailId = useId()
+  const phoneId = useId()
+  const [state, setState] = useState<BilloPreviewState>({ status: 'loading' })
+  const [email, setEmail] = useState('')
+  const [phone, setPhone] = useState('')
+  const [invalid, setInvalid] = useState({ email: false, phone: false })
+  const [submitting, setSubmitting] = useState(false)
+  const [problem, setProblem] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch('/api/digital-mailboxes/billo/representative')
+        if (!res.ok) {
+          const message = await getResponseErrorMessage(res, undefined, locale)
+          if (!cancelled) setState({ status: 'failed', message })
+          return
+        }
+        const json = (await res.json()) as { data?: BilloPreview }
+        if (cancelled) return
+        const preview = json.data
+        if (!preview) {
+          setState({ status: 'failed', message: null })
+          return
+        }
+        setState({ status: 'ready', preview })
+        setEmail((current) => current || preview.representative.email || '')
+      } catch {
+        if (!cancelled) setState({ status: 'failed', message: null })
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [locale])
+
+  const preview = state.status === 'ready' ? state.preview : null
+  const company = preview?.company ?? null
+  const companyComplete = !!company?.org_number && !!company.address_line1 && !!company.postal_code && !!company.city
+  const canSubmit = !!preview && companyComplete && preview.representative.has_bankid
+  const address = company
+    ? [company.address_line1, [company.postal_code, company.city].filter(Boolean).join(' ')].filter(Boolean).join(', ') || null
+    : null
+  const representative = preview ? (preview.representative.name ?? (preview.representative.has_bankid ? t('billo_you') : null)) : null
+
+  // One attention line: what keeps the mailbox from being created, else what Billo or the route refused.
+  const attention =
+    state.status === 'failed' ? (
+      <AttnLine>{state.message ?? t('billo_load_failed')}</AttnLine>
+    ) : preview && !companyComplete ? (
+      <AttnLine action={{ label: t('billo_open_settings'), href: '/settings/company' }}>{t('billo_needs_company')}</AttnLine>
+    ) : preview && !preview.representative.has_bankid ? (
+      <AttnLine>{t('billo_needs_bankid')}</AttnLine>
+    ) : problem ? (
+      <AttnLine>{problem}</AttnLine>
+    ) : null
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!canSubmit || submitting) return
+    const next = { email: !EMAIL_SHAPE.test(email.trim()), phone: phoneToE164(phone) === null }
+    setInvalid(next)
+    if (next.email || next.phone) return
+    setSubmitting(true)
+    setProblem(null)
+    // The personnummer is never sent: the route reads it from the admin's BankID login.
+    const answer = await mailboxRequest<{ connection: ConnectionSummary }>('billo/receive', 'POST', locale, {
+      email: email.trim(),
+      phone: phone.trim(),
+    })
+    setSubmitting(false)
+    if (!answer.ok) {
+      setProblem(answer.message)
+      return
+    }
+    onCreated(answer.data.connection)
+  }
+
+  return (
+    <form onSubmit={(event) => void submit(event)} noValidate className="space-y-6">
+      {state.status === 'loading' ? (
+        <div className="space-y-2">
+          <Skeleton className="h-4 w-56 rounded-sm" />
+          <Skeleton className="h-4 w-40 rounded-sm" />
+          <Skeleton className="h-4 w-48 rounded-sm" />
+          <Skeleton className="h-4 w-32 rounded-sm" />
+        </div>
+      ) : preview ? (
+        <dl data-ph-mask="" className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-[13px]">
+          <BilloFact label={t('billo_field_company')} value={company?.name || null} />
+          <BilloFact
+            label={t('billo_field_org_number')}
+            value={company?.org_number ? formatOrgNumber(company.org_number) : null}
+          />
+          <BilloFact label={t('billo_field_address')} value={address} />
+          <BilloFact label={t('billo_field_representative')} value={representative} />
+        </dl>
+      ) : null}
+
+      <div className="space-y-4">
+        <div className="space-y-2">
+          <Label htmlFor={emailId}>{t('billo_field_email')}</Label>
+          <Input
+            id={emailId}
+            type="email"
+            autoComplete="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            aria-invalid={invalid.email || undefined}
+            aria-describedby={invalid.email ? `${emailId}-hint` : undefined}
+          />
+          {invalid.email && (
+            <p id={`${emailId}-hint`} className="text-[12.5px] text-destructive">
+              {t('billo_email_invalid')}
+            </p>
+          )}
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor={phoneId}>{t('billo_field_phone')}</Label>
+          <Input
+            id={phoneId}
+            type="tel"
+            autoComplete="tel"
+            placeholder={t('billo_phone_placeholder')}
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            aria-invalid={invalid.phone || undefined}
+            aria-describedby={invalid.phone ? `${phoneId}-hint` : undefined}
+          />
+          {invalid.phone && (
+            <p id={`${phoneId}-hint`} className="text-[12.5px] text-destructive">
+              {t('billo_phone_invalid')}
+            </p>
+          )}
+        </div>
+      </div>
+
+      <p className="text-[12.5px] text-muted-foreground">
+        {t('billo_consent')}{' '}
+        <a
+          href="https://billo.life/terms"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline underline-offset-2 hover:text-foreground"
+        >
+          {t('billo_terms')}
+        </a>
+      </p>
+
+      {attention}
+
+      <DialogFooter>
+        <Button type="button" variant="outline" onClick={onCancel} disabled={submitting}>
+          {tCommon('cancel')}
+        </Button>
+        <Button type="submit" loading={submitting} disabled={!canSubmit}>
+          {t('billo_create')}
+        </Button>
+      </DialogFooter>
+    </form>
+  )
+}
+
+function BilloFact({ label, value }: { label: string; value: string | null }) {
+  const t = useTranslations('inkorg')
+  return (
+    <>
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className={value ? 'min-w-0 break-words' : 'text-muted-foreground'}>{value ?? t('billo_missing')}</dd>
+    </>
   )
 }

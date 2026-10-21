@@ -25,6 +25,7 @@ import { useInvoicePdfPreview } from './use-editor-previews'
 import { buildSummaryVatLines } from '@/lib/invoices/editor/summary-vat'
 import {
   emailPreviewBlock,
+  NO_MAILBOX_READY,
   resolveChannelOptions,
   resolveEffectiveChannel,
   type ChannelContext,
@@ -32,6 +33,7 @@ import {
   type EmailBlockReason,
 } from '@/lib/invoices/editor/channel'
 import { resolveSendLabel } from '@/lib/invoices/editor/primary-action'
+import { DIGITAL_MAILBOX_PROVIDER_NAMES } from '@/lib/digital-mailboxes/sending-status'
 import { resolveEditorStatusLine } from '@/lib/invoices/editor/status-line'
 import { proposeCreditNoteSendLines } from '@/lib/invoices/editor/voucher-preview'
 import { persistAndSend } from '@/lib/invoices/editor/send-sequence'
@@ -166,6 +168,8 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
     customerSelected: Boolean(customer),
     customerEmail: customer?.email ?? null,
     peppolReady: false,
+    // A kreditfaktura never goes to a digital mailbox (the send refuses it).
+    mailboxReady: NO_MAILBOX_READY,
   }
   const channelOptions = resolveChannelOptions(channelContext)
   const channel = resolveEffectiveChannel(channelChoice, channelContext)
@@ -178,7 +182,9 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
         ? tShell('email_unavailable_manual')
         : emailTabBlock === 'peppol'
           ? tShell('email_unavailable_peppol')
-          : tShell(EMAIL_BLOCK_KEYS[emailTabBlock])
+          : emailTabBlock === 'kivra' || emailTabBlock === 'billo'
+            ? tShell('email_unavailable_mailbox', { provider: DIGITAL_MAILBOX_PROVIDER_NAMES[emailTabBlock] })
+            : tShell(EMAIL_BLOCK_KEYS[emailTabBlock])
   const primaryLabel = tShell(resolveSendLabel({ documentType: 'invoice', channel, booksOnIssue: books }))
 
   const extraCc = parseInvoiceRecipientText(extraCcText)

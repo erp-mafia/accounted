@@ -27,6 +27,10 @@ import type { InvoiceDocumentType } from '@/types'
  *               caller downloads the archived PDF afterwards).
  *     - peppol: POST /api/invoices/{id}/peppol/send (the e-faktura through
  *               the company's access point; never a mark-sent).
+ *     - kivra, billo: POST /api/invoices/{id}/digital-mailbox/send with
+ *               { provider } (the PDF to the customer's mailbox; the route
+ *               issues and books the faktura after its own checks, like
+ *               the Peppol send).
  *     Kontantfaktura (paidAtIssue, crm#1281): POST /mark-sent with
  *     paid_at_issue whatever the channel, so the invoice is issued paid as
  *     one cash verifikat; then
@@ -42,12 +46,14 @@ import type { InvoiceDocumentType } from '@/types'
  * so the caller's "saved but not sent" path always runs.
  */
 
-export type SendSequenceChannel = 'email' | 'manual' | 'peppol'
+export type SendSequenceChannel = 'email' | 'manual' | 'peppol' | 'kivra' | 'billo'
 
 const SEND_ROUTES: Record<SendSequenceChannel, string> = {
   email: 'send',
   manual: 'mark-sent',
   peppol: 'peppol/send',
+  kivra: 'digital-mailbox/send',
+  billo: 'digital-mailbox/send',
 }
 
 export interface SendEmailOptions {
@@ -151,6 +157,19 @@ export function buildSendBody(email: SendEmailOptions | undefined): Record<strin
   return Object.keys(body).length > 0 ? body : null
 }
 
+/**
+ * The send step's body: this send's email texts on the email channel, the
+ * provider on a mailbox channel (the route reads it), none otherwise.
+ */
+export function buildSendStepBody(
+  channel: SendSequenceChannel,
+  email: SendEmailOptions | undefined,
+): Record<string, unknown> | null {
+  if (channel === 'email') return buildSendBody(email)
+  if (channel === 'kivra' || channel === 'billo') return { provider: channel }
+  return null
+}
+
 export async function persistAndSend(
   input: SendSequenceInput,
   fetchImpl: FetchLike = fetch,
@@ -213,7 +232,7 @@ export async function persistAndSend(
 
   // 3. Send.
   const route = SEND_ROUTES[input.channel]
-  const body = input.channel === 'email' ? buildSendBody(input.email) : null
+  const body = buildSendStepBody(input.channel, input.email)
   const sent = await step(
     fetchImpl,
     `/api/invoices/${encodeURIComponent(invoiceId)}/${route}`,

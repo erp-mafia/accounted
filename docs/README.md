@@ -23,6 +23,7 @@ Start with the [user and API documentation](https://docs.accounted.se) for using
 - [Legal forms](LEGAL-FORMS.md): capability profiles and the cross-surface support contract.
 - [White-label setup](WHITELABEL.md): branding and partner configuration.
 - [Peppol foundation](PEPPOL_FOUNDATION.md): e-invoicing integration design.
+- [Kivra](integrations/kivra.md) and [Billo](integrations/billo.md): digital mailbox API references (reading a company's mailbox into the Inkorg, sending invoices and payslips).
 - [Bookkeeping packs](../packs/README.md): reusable template data and validation.
 
 ## Hosting and operations

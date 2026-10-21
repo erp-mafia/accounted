@@ -232,6 +232,13 @@ const RETAINED = new Set([
   'collection_connections.ladder_enabled_by',
   'collection_connections.terms_accepted_by',
   'collection_connections.user_id',
+  // Digital mailboxes (Kivra, Billo): who connected the company's mailbox,
+  // who made the company a sender and who sent each invoice to a mailbox.
+  // The company's record of its own mail and of how an invoice reached the
+  // customer.
+  'digital_mailbox_connections.receive_connected_by',
+  'digital_mailbox_connections.send_activated_by',
+  'digital_mailbox_dispatches.sent_by',
   // Collection cases: who handed the invoice over and who decided each step
   // (pause, withdraw, approve). The company's record of what it demanded of
   // its customer and on whose word.

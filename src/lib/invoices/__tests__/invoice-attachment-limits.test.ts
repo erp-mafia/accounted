@@ -56,6 +56,9 @@ describe('offersInvoiceAttachments (#79, crm#1315)', () => {
   it('does not offer them on a channel that does not email them', () => {
     expect(offersInvoiceAttachments({ ...base, channel: 'manual', status: 'draft' })).toBe(false)
     expect(offersInvoiceAttachments({ ...base, channel: 'peppol', status: 'draft' })).toBe(false)
+    // A Kivra or Billo mailbox takes the invoice PDF alone.
+    expect(offersInvoiceAttachments({ ...base, channel: 'kivra', status: 'draft' })).toBe(false)
+    expect(offersInvoiceAttachments({ ...base, channel: 'billo', status: null })).toBe(false)
     expect(offersInvoiceAttachments({ ...base, channel: null, status: null })).toBe(false)
   })
 

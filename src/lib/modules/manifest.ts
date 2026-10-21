@@ -601,6 +601,10 @@ export const INFRA_LIB_FOLDERS: readonly string[] = Object.freeze([
   'currency',
   'dashboard',
   'dates',
+  // Kivra and Billo: the mailbox read into the Inkorg and the sending of
+  // invoices and payslips to recipients' mailboxes. Transport like email,
+  // used by the inbox, invoicing and payroll alike.
+  'digital-mailboxes',
   'docs',
   'domains',
   'email',

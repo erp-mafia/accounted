@@ -1,0 +1,1 @@
+[2026-10-19] Kivra and Billo share one digital-mailbox port in core (src/lib/digital-mailboxes, infra like email) rather than two extensions: the same receive loop files into the Inkorg as arrivals 'kivra'/'billo', and invoicing and payroll send through it without registry plumbing.

@@ -1,4 +1,5 @@
 import { HOSTED_MAX_UPLOAD_BYTES, isShrinkableImage } from '@/lib/documents/upload-size'
+import type { EditorChannel } from '@/lib/invoices/editor/channel'
 
 /**
  * Limits on the files emailed with an invoice after its PDF (crm#1269), and
@@ -54,13 +55,13 @@ export function invoiceAttachmentSizeVerdict(
  * Whether a send step offers Bilagor (#79). One rule for every send step, the
  * invoice page's send dialog and the editor's confirm alike, so one step
  * cannot offer the files while another hides them. Only an email carries
- * them (Peppol, mark-sent and the PDF download do not), and only while the
- * set can still change: a draft, or a document the editor has not saved yet
- * (`status` null). The sandbox sends no email, and a plan without email
- * cannot send one.
+ * them (Peppol, mark-sent, a Kivra or Billo mailbox and the PDF download do
+ * not), and only while the set can still change: a draft, or a document the
+ * editor has not saved yet (`status` null). The sandbox sends no email, and a
+ * plan without email cannot send one.
  */
 export function offersInvoiceAttachments(input: {
-  channel: 'email' | 'manual' | 'peppol' | null
+  channel: EditorChannel | null
   status: string | null
   isSandbox: boolean
   canEmail: boolean

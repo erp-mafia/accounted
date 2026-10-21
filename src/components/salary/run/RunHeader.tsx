@@ -43,6 +43,7 @@ import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { periodLabelOf, type RunDetail } from './types'
 import { salaryRunStatusDisplay } from '@/lib/salary/run-status-display'
+import { resolvePayslipChannel, type PayslipSendChannel } from '@/lib/salary/payslips/channel-options'
 
 const STATUS_RANK: Record<string, number> = {
   draft: 0,
@@ -69,7 +70,11 @@ interface RunHeaderProps {
   onPreview: () => void
   onRevert: () => void
   onUnapprove: () => void
-  onSendPayslips: () => void
+  // The ways the payslips can go out (lib/salary/payslips/channel-options.ts):
+  // the email link, plus each digital mailbox the company sends through.
+  // With a mailbox the send asks which first; email alone sends at once.
+  payslipChannels: PayslipSendChannel[]
+  onSendPayslips: (channel: PayslipSendChannel) => void
   onDownloadPayslips: () => void
   onDownloadAgi: () => void
   onDelete: () => void
@@ -90,6 +95,7 @@ export function RunHeader({
   onPreview,
   onRevert,
   onUnapprove,
+  payslipChannels,
   onSendPayslips,
   onDownloadPayslips,
   onDownloadAgi,
@@ -100,6 +106,10 @@ export function RunHeader({
   const t = useTranslations('salary_run')
   const tSalary = useTranslations('salary')
   const [correctOpen, setCorrectOpen] = useState(false)
+  // The channel dialog: open only when a mailbox can be chosen.
+  const [channelDialogOpen, setChannelDialogOpen] = useState(false)
+  const [channelChoice, setChannelChoice] = useState<PayslipSendChannel | null>(null)
+  const pickedChannel = resolvePayslipChannel(channelChoice, payslipChannels)
   const periodLabel = periodLabelOf(run)
   const hasEmailSend = useCapability(CAPABILITY.email_send)
 
@@ -293,7 +303,17 @@ export function RunHeader({
                   // Email send is a paid capability: without it the item stays
                   // visible but disabled, and says why on the item itself (a
                   // disabled menu item takes no hover, so no tooltip).
-                  <DropdownMenuItem onSelect={onSendPayslips} disabled={busy || !hasEmailSend}>
+                  <DropdownMenuItem
+                    onSelect={() => {
+                      if (payslipChannels.length > 1) {
+                        setChannelChoice(null)
+                        setChannelDialogOpen(true)
+                      } else {
+                        onSendPayslips('email')
+                      }
+                    }}
+                    disabled={busy || !hasEmailSend}
+                  >
                     <Send className="h-4 w-4" />
                     <span className="min-w-0 flex-1">
                       {deliveries && deliveries.sent > 0
@@ -366,6 +386,51 @@ export function RunHeader({
           )}
         </div>
       </div>
+
+      {/* How the payslips go out, when a digital mailbox can carry them: the
+          email link (default), or Billo or Kivra first with the email link
+          for whoever the mailbox does not reach. */}
+      <Dialog open={channelDialogOpen} onOpenChange={setChannelDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('payslips_channel_title')}</DialogTitle>
+            <DialogDescription>{t('payslips_channel_description', { period: periodLabel })}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 text-[13px]" role="radiogroup" aria-label={t('payslips_channel_title')}>
+            {payslipChannels.map((channel) => (
+              <label key={channel} className="flex items-start gap-3 rounded-lg border border-border p-4">
+                <input
+                  type="radio"
+                  name="payslip-channel"
+                  className="mt-1"
+                  checked={pickedChannel === channel}
+                  onChange={() => setChannelChoice(channel)}
+                />
+                <span>
+                  <span className="block">{t(`payslips_channel_${channel}`)}</span>
+                  <span className="block text-[12.5px] text-muted-foreground">
+                    {t(`payslips_channel_${channel}_hint`)}
+                  </span>
+                </span>
+              </label>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setChannelDialogOpen(false)}>
+              {t('payslips_channel_cancel')}
+            </Button>
+            <Button
+              onClick={() => {
+                setChannelDialogOpen(false)
+                onSendPayslips(pickedChannel)
+              }}
+              disabled={busy}
+            >
+              {t('payslips_channel_confirm')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Correction confirm: storno per BFL 5 kap. 5 §, nothing is deleted. */}
       <Dialog open={correctOpen} onOpenChange={setCorrectOpen}>
