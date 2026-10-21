@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { sendPayslips } from '@/lib/salary/payslips/send'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { capabilityBlockedResponse } from '@/lib/entitlements/has-capability'
@@ -19,13 +21,33 @@ import { sandboxBlockedResponse } from '@/lib/sandbox/guard'
  * log) live in lib/salary/payslips/send.ts, shared with the v1 operation
  * salary-runs.send-payslips and gnubok_send_payslips. The sandbox and
  * capability refusals keep the envelopes the UI has always read.
+ *
+ * Optional body { channel: 'email' | 'kivra' | 'billo' }: a digital mailbox
+ * channel sends each payslip's PDF to the employee's Kivra or Billo mailbox
+ * where it reaches them and the email link to the rest
+ * (lib/salary/payslips/send-digital-mailbox.ts). No body is the email link.
  */
+const SendPayslipsBody = z.object({ channel: z.enum(['email', 'kivra', 'billo']).optional() })
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'salary_run.payslips_send',
-  async (_request, { supabase, companyId, user, log, requestId }, { params }) => {
+  async (request, { supabase, companyId, user, log, requestId }, { params }) => {
     const { id } = await params
 
-    const outcome = await sendPayslips({ supabase, companyId, userId: user.id, log }, id)
+    const text = await request.text()
+    let raw: unknown = {}
+    if (text.trim()) {
+      try {
+        raw = JSON.parse(text)
+      } catch {
+        return errorResponseFromCode('VALIDATION_ERROR', log, { requestId, details: { field: 'body' } })
+      }
+    }
+    const body = SendPayslipsBody.safeParse(raw)
+    if (!body.success) {
+      return errorResponseFromCode('VALIDATION_ERROR', log, { requestId, details: { field: 'channel' } })
+    }
+
+    const outcome = await sendPayslips({ supabase, companyId, userId: user.id, log }, id, { channel: body.data.channel })
     if (!outcome.ok) {
       if (outcome.code === 'SALARY_PAYSLIPS_SEND_SANDBOX') return sandboxBlockedResponse()
       if (outcome.code === 'SALARY_PAYSLIPS_SEND_CAPABILITY_BLOCKED') {

@@ -84,6 +84,10 @@ export const SESSION_SEGMENT_PACKAGES: Readonly<Record<string, SwitchablePackage
   arkiv: 'receipts-and-documents',
   'receipt-hunt': 'receipts-and-documents',
   inkorg: 'receipts-and-documents',
+  // Kivra and Billo: connecting the company's mailbox starts a mail
+  // connection (Kvitton och underlag); activating the company as a sender
+  // only enables a delivery channel of documents that already exist.
+  'digital-mailboxes': 'receipts-and-documents',
   // Outside the switchable packages: Bokföring's own surface, the platform,
   // the agent, the byrå tools and the machine endpoints.
   account: null,
@@ -259,6 +263,7 @@ const CUSTOMER_INVOICES: PackageDoors = {
     'POST /api/invoices/:id/mark-sent',
     'POST /api/invoices/:id/peppol',
     'POST /api/invoices/:id/peppol/send',
+    'POST /api/invoices/:id/digital-mailbox/send',
     'POST /api/invoices/:id/quote-status',
     'POST /api/invoices/:id/refresh-exchange-rate',
     'POST /api/invoices/:id/resend',
@@ -407,11 +412,16 @@ const SUPPLIER_INVOICES_AND_PAYMENTS: PackageDoors = {
 
 const RECEIPTS_AND_DOCUMENTS: PackageDoors = {
   start: [
+    'POST /api/digital-mailboxes/:provider/receive',
     'POST /api/extensions/ext/mail/oauth/start',
     // A supplier portal is a new way in for underlag, as a connected mailbox is.
     'POST /api/inkorg/portals',
   ],
   continue: [
+    'DELETE /api/digital-mailboxes/:provider/receive',
+    'POST /api/digital-mailboxes/:provider/send',
+    'DELETE /api/digital-mailboxes/:provider/send',
+    'POST /api/digital-mailboxes/:provider/sync',
     'POST /api/arkiv/facts/:id/revert',
     'POST /api/arkiv/findings/:id',
     'PATCH /api/inkorg/portals/:id',

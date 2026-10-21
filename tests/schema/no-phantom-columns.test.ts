@@ -285,7 +285,11 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // endpoint's TRANSACTION_DETAIL_COLUMNS instead of its own literal copy, the
 // copy that never had external_id. The shared list is checked against the
 // replayed schema in lib/transactions/__tests__/detail-columns.test.ts.
-const UNRESOLVED_CEILING = 436
+// 438 (2026-10-19): +2 for lib/digital-mailboxes/connections.ts, the one
+// store of the Kivra/Billo connection row: upsertConnection spreads and
+// updateConnection writes a typed ConnectionPatch that the connect, sync and
+// webhook paths each build for their own state change. Its reads select '*'.
+const UNRESOLVED_CEILING = 438
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

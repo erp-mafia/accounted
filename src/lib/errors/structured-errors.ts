@@ -2810,6 +2810,110 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Uppgifter hämtas bara för juridiska personer, inte för enskilda firmor.',
     message_en: 'Details are fetched for legal persons only, not for sole traders.',
   },
+  // Digital mailboxes (Kivra, Billo): /api/digital-mailboxes/* and
+  // POST /api/invoices/{id}/digital-mailbox/send (src/lib/digital-mailboxes).
+  DIGITAL_MAILBOX_UNKNOWN_PROVIDER: {
+    httpStatus: 404,
+    message_sv: 'Den digitala brevlådan finns inte. Välj Kivra eller Billo.',
+    message_en: 'Unknown digital mailbox provider. Use kivra or billo.',
+  },
+  DIGITAL_MAILBOX_NOT_CONFIGURED: {
+    httpStatus: 503,
+    message_sv: 'Den digitala brevlådan är inte aktiverad i den här miljön.',
+    message_en: 'This digital mailbox provider is not configured in this environment.',
+  },
+  DIGITAL_MAILBOX_SANDBOX: {
+    httpStatus: 403,
+    message_sv: 'Demoföretaget kan inte kopplas till en riktig digital brevlåda.',
+    message_en: 'The demo company cannot be connected to a real digital mailbox.',
+  },
+  DIGITAL_MAILBOX_ORG_NUMBER_MISSING: {
+    httpStatus: 400,
+    message_sv: 'Lägg in företagets namn och organisationsnummer under Inställningar först.',
+    message_en: 'Add the company name and organisation number under Settings first.',
+  },
+  DIGITAL_MAILBOX_SOLE_TRADER_UNSUPPORTED: {
+    httpStatus: 400,
+    message_sv: 'Kivra och Billo har ingen företagsbrevlåda för enskild firma. Dokument från din privata brevlåda kan du ladda upp eller dela till Accounted.',
+    message_en: 'Kivra and Billo have no business mailbox for a sole trader. Upload or share documents from your private mailbox instead.',
+  },
+  DIGITAL_MAILBOX_ADDRESS_MISSING: {
+    httpStatus: 400,
+    message_sv: 'Billo behöver företagets adress. Lägg in gatuadress, postnummer och ort under Inställningar.',
+    message_en: 'Billo needs the company address. Add street address, postal code and city under Settings.',
+  },
+  DIGITAL_MAILBOX_EMPLOYER_CONTACT_MISSING: {
+    httpStatus: 400,
+    message_sv: 'Kivra visar arbetsgivarens adress, e-post och telefonnummer på lönebeskedet. Lägg in dem under Inställningar och skicka igen.',
+    message_en: 'Kivra shows the employer address, email and phone number on the payslip. Add them under Settings and send again.',
+  },
+  DIGITAL_MAILBOX_BANKID_REQUIRED: {
+    httpStatus: 403,
+    message_sv: 'Billo behöver en företrädare som har loggat in med BankID. Logga in med BankID och försök igen.',
+    message_en: 'Billo needs a representative who has signed in with BankID. Sign in with BankID and try again.',
+  },
+  DIGITAL_MAILBOX_ALREADY_CONNECTED: {
+    httpStatus: 409,
+    message_sv: 'Brevlådan är redan kopplad till Accounted.',
+    message_en: 'The mailbox is already connected to Accounted.',
+  },
+  DIGITAL_MAILBOX_ALREADY_ENROLLED_ELSEWHERE: {
+    httpStatus: 409,
+    message_sv: 'Företagets Billo-brevlåda är redan kopplad till en annan tjänst. Koppla bort den där först.',
+    message_en: 'The company\'s Billo mailbox is already connected to another partner. Disconnect it there first.',
+  },
+  DIGITAL_MAILBOX_PROVIDER_FAILED: {
+    httpStatus: 502,
+    message_sv: 'Den digitala brevlådan svarade inte som väntat. Försök igen om en stund.',
+    message_en: 'The digital mailbox provider did not answer as expected. Try again shortly.',
+    retryable: true,
+  },
+  DIGITAL_MAILBOX_NOT_CONNECTED: {
+    httpStatus: 409,
+    message_sv: 'Brevlådan är inte kopplad ännu.',
+    message_en: 'The mailbox is not connected yet.',
+  },
+  DIGITAL_MAILBOX_INBOX_UNAVAILABLE: {
+    httpStatus: 503,
+    message_sv: 'Inkorgen är inte aktiverad i den här miljön, så brevlådan kan inte läsas in.',
+    message_en: 'The inbox is not enabled in this environment, so the mailbox cannot be read.',
+  },
+  DIGITAL_MAILBOX_SENDING_NOT_ACTIVE: {
+    httpStatus: 409,
+    message_sv: 'Aktivera utskick via den digitala brevlådan först.',
+    message_en: 'Activate sending through this digital mailbox first.',
+  },
+  DIGITAL_MAILBOX_INVOICE_NOT_SENDABLE: {
+    httpStatus: 409,
+    message_sv: 'Bara fakturor kan skickas till en digital brevlåda: inte kreditfakturor, offerter, proformafakturor eller följesedlar, och inte makulerade fakturor.',
+    message_en: 'Only invoices can be sent to a digital mailbox: not credit notes, quotes, proformas or delivery notes, and not cancelled invoices.',
+  },
+  DIGITAL_MAILBOX_CURRENCY_UNSUPPORTED: {
+    httpStatus: 422,
+    message_sv: 'Digitala brevlådor tar bara emot fakturor i svenska kronor.',
+    message_en: 'Digital mailboxes accept invoices in SEK only.',
+  },
+  DIGITAL_MAILBOX_RECIPIENT_UNIDENTIFIED: {
+    httpStatus: 422,
+    message_sv: 'Kunden saknar organisationsnummer (företag) eller personnummer (privatperson), så fakturan kan inte adresseras till en digital brevlåda.',
+    message_en: 'The customer has no organisation number (business) or personal identity number (private person), so the invoice cannot be addressed to a digital mailbox.',
+  },
+  DIGITAL_MAILBOX_RECIPIENT_NOT_REACHABLE: {
+    httpStatus: 422,
+    message_sv: 'Mottagaren har ingen brevlåda som tar emot från ert företag. Skicka fakturan på annat sätt.',
+    message_en: 'The recipient has no mailbox that accepts content from your company. Deliver the invoice another way.',
+  },
+  DIGITAL_MAILBOX_DOCUMENT_TOO_LARGE: {
+    httpStatus: 413,
+    message_sv: 'Fakturans PDF är för stor för den digitala brevlådan. Ta bort bilagor eller en stor logotyp och försök igen.',
+    message_en: 'The invoice PDF is too large for the digital mailbox. Remove attachments or a large logo and try again.',
+  },
+  DIGITAL_MAILBOX_SEND_FAILED: {
+    httpStatus: 502,
+    message_sv: 'Fakturan kunde inte levereras till den digitala brevlådan. Fakturan är utfärdad: försök skicka igen.',
+    message_en: 'The invoice could not be delivered to the digital mailbox. The invoice is issued: try sending again.',
+    retryable: true,
+  },
   PEPPOL_TRANSPORT_UNAVAILABLE: {
     httpStatus: 503,
     message_sv: 'Peppol-utskick är inte aktiverat i den här miljön. En avtalad Peppol-operatör måste vara konfigurerad.',

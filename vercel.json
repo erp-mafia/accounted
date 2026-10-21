@@ -155,6 +155,10 @@
       "schedule": "*/10 * * * *"
     },
     {
+      "path": "/api/digital-mailboxes/cron",
+      "schedule": "3-59/10 * * * *"
+    },
+    {
       "path": "/api/agent/categorize/cron",
       "schedule": "*/10 * * * *"
     },

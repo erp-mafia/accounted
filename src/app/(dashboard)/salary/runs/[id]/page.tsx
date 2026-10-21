@@ -52,6 +52,12 @@ import {
 } from '@/lib/salary/agi/reporting-period'
 import { runCalculationState } from '@/lib/salary/calculation-state'
 import { parseAmountInput, roundOre } from '@/lib/money'
+import { fetchActiveSendingProviders } from '@/lib/digital-mailboxes/sending-status'
+import {
+  payslipChannelOptions,
+  payslipSendRequest,
+  type PayslipSendChannel,
+} from '@/lib/salary/payslips/channel-options'
 import type { SalaryRunEmployee } from '@/types'
 
 /** Anchor of the AGI section, the target of a booked run's header action. */
@@ -107,6 +113,19 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     payment_due_date?: string | null
   } | null>(null)
   const [taxPaymentLoading, setTaxPaymentLoading] = useState(false)
+  // How the payslips can go out: the email link, plus each digital mailbox
+  // (Billo, Kivra) the company sends through, read once. A failed read
+  // leaves the email link alone, as before the mailboxes.
+  const [payslipChannels, setPayslipChannels] = useState<PayslipSendChannel[]>(['email'])
+  useEffect(() => {
+    let cancelled = false
+    void fetchActiveSendingProviders().then((providers) => {
+      if (!cancelled) setPayslipChannels(payslipChannelOptions(providers))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // Skatteverket's per-period AGI submission record: drives the AGI step on
   // the progress rail and the panel's state machine (underlag submitted /
@@ -680,10 +699,12 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     }
   }
 
-  async function handleSendPayslips() {
+  async function handleSendPayslips(channel: PayslipSendChannel) {
     setActionLoading('payslips-send')
     try {
-      const res = await fetch(`/api/salary/runs/${id}/payslips/send`, { method: 'POST' })
+      // A mailbox channel sends each payslip to the employee's Billo or
+      // Kivra where it reaches them, and the email link to the rest.
+      const res = await fetch(`/api/salary/runs/${id}/payslips/send`, payslipSendRequest(channel))
       if (res.ok) {
         const { data } = await res.json()
         await loadRun()
@@ -1010,7 +1031,8 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
         onPreview={handlePreview}
         onRevert={() => handleAction('revert')}
         onUnapprove={handleUnapprove}
-        onSendPayslips={handleSendPayslips}
+        payslipChannels={payslipChannels}
+        onSendPayslips={(channel) => void handleSendPayslips(channel)}
         onDownloadPayslips={handleBulkPayslipDownload}
         onDownloadAgi={handleDownloadAgi}
         onDelete={handleDelete}

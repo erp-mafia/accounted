@@ -47,9 +47,9 @@ describe('the canonical intake sources', () => {
     }
   })
 
-  it('mark only the doors that deliver today as live', () => {
+  it('mark only the doors that are built as live (Billo and Kivra are, whether a deployment carries them or not)', () => {
     const planned = INTAKE_SOURCE_IDS.filter((id) => !INTAKE_SOURCES[id].live)
-    expect(planned).toEqual(['billo', 'kivra', 'paypal', 'portal'])
+    expect(planned).toEqual(['paypal', 'portal'])
   })
 
   it('put the bank and ledger doors in their kinds', () => {

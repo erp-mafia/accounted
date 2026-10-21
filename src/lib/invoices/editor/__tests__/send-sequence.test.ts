@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
-import { buildSendBody, persistAndSend, type SendSequenceInput } from '@/lib/invoices/editor/send-sequence'
+import {
+  buildSendBody,
+  buildSendStepBody,
+  persistAndSend,
+  type SendSequenceInput,
+} from '@/lib/invoices/editor/send-sequence'
 
 interface Call {
   url: string
@@ -94,6 +99,55 @@ describe('persistAndSend', () => {
     ])
     expect(calls.some((c) => c.url.endsWith('/mark-sent'))).toBe(false)
     expect(result).toEqual({ ok: true, invoiceId: 'inv-1', invoiceNumber: '1043', partial: false, message: null })
+  })
+
+  it('sends to the customer’s Kivra or Billo mailbox with the provider, never a mark-sent or the email texts', async () => {
+    for (const channel of ['kivra', 'billo'] as const) {
+      const { fetchImpl, calls } = stubFetch([
+        { json: { data: { id: 'inv-1', invoice_number: '1043' } } },
+        { json: { data: { dispatch_id: 'd-1', provider: channel, issued: true, journal_entry_id: 'je-1' } } },
+      ])
+      const result = await persistAndSend(input({ channel, email: { email_subject: 'ignored' } }), fetchImpl)
+      expect(calls.map((c) => [c.method, c.url, c.body])).toEqual([
+        ['POST', '/api/invoices', { customer_id: 'c1', items: [] }],
+        ['POST', '/api/invoices/inv-1/digital-mailbox/send', { provider: channel }],
+      ])
+      expect(result).toEqual({ ok: true, invoiceId: 'inv-1', invoiceNumber: '1043', partial: false, message: null })
+    }
+  })
+
+  it('saves and finalizes an edited draft before the mailbox send', async () => {
+    const { fetchImpl, calls } = stubFetch([
+      { json: { data: { id: 'inv-9' } } },
+      { json: { data: { id: 'inv-9', invoice_number: '1050' } } },
+      { json: { data: { dispatch_id: 'd-1', provider: 'kivra', issued: true } } },
+    ])
+    const result = await persistAndSend(
+      input({ mode: 'edit', invoiceId: 'inv-9', invoiceNumber: null, channel: 'kivra' }),
+      fetchImpl,
+    )
+    expect(calls.map((c) => [c.method, c.url])).toEqual([
+      ['PATCH', '/api/invoices/inv-9'],
+      ['POST', '/api/invoices/inv-9/finalize'],
+      ['POST', '/api/invoices/inv-9/digital-mailbox/send'],
+    ])
+    expect(result).toMatchObject({ ok: true, invoiceId: 'inv-9', invoiceNumber: '1050' })
+  })
+
+  it('reports a mailbox refusal with the saved document, so the detail page takes over', async () => {
+    const refusal = {
+      error: {
+        code: 'DIGITAL_MAILBOX_RECIPIENT_NOT_REACHABLE',
+        message: 'Mottagaren har ingen brevlåda som tar emot från ert företag. Skicka fakturan på annat sätt.',
+        message_en: 'The recipient has no mailbox that accepts content from your company. Deliver the invoice another way.',
+      },
+    }
+    const { fetchImpl } = stubFetch([
+      { json: { data: { id: 'inv-1', invoice_number: '1043' } } },
+      { status: 422, json: refusal },
+    ])
+    const result = await persistAndSend(input({ channel: 'billo' }), fetchImpl)
+    expect(result).toEqual({ ok: false, stage: 'send', invoiceId: 'inv-1', status: 422, error: refusal })
   })
 
   it('saves an edited unnumbered faktura, finalizes it, then sends', async () => {
@@ -294,6 +348,20 @@ describe('buildSendBody', () => {
     expect(buildSendBody(undefined)).toBeNull()
     expect(buildSendBody({ additional_cc: [], email_subject: '  ', email_body: '' })).toBeNull()
     expect(buildSendBody({ email_body: 'Hej' })).toEqual({ email_body: 'Hej' })
+  })
+})
+
+describe('buildSendStepBody', () => {
+  it('carries the email texts on the email channel only', () => {
+    expect(buildSendStepBody('email', { email_subject: 'Ämne' })).toEqual({ email_subject: 'Ämne' })
+    expect(buildSendStepBody('email', undefined)).toBeNull()
+    expect(buildSendStepBody('manual', { email_subject: 'Ämne' })).toBeNull()
+    expect(buildSendStepBody('peppol', { email_subject: 'Ämne' })).toBeNull()
+  })
+
+  it('names the provider on a mailbox channel', () => {
+    expect(buildSendStepBody('kivra', { email_subject: 'Ämne' })).toEqual({ provider: 'kivra' })
+    expect(buildSendStepBody('billo', undefined)).toEqual({ provider: 'billo' })
   })
 })
 

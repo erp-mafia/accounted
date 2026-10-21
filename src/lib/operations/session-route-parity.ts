@@ -395,6 +395,15 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
     ['gnubok_record_customer_loss'],
     'served while CUSTOMER_LOSS_ENABLED is set',
   ),
+  'POST /api/invoices/:id/digital-mailbox/send': gap('P2', "send an invoice to the customer's Kivra or Billo mailbox"),
+  // Digital mailboxes (Kivra, Billo): connecting the company's own mailbox
+  // and the company as a sender. Billo's mailbox needs the admin's BankID
+  // personnummer, read from their login, which an API key has no login for.
+  'POST /api/digital-mailboxes/:provider/receive': gap('P3', 'connect a Kivra or Billo mailbox to the Inkorg'),
+  'DELETE /api/digital-mailboxes/:provider/receive': gap('P3', 'disconnect a Kivra or Billo mailbox'),
+  'POST /api/digital-mailboxes/:provider/send': gap('P3', 'activate sending through Kivra or Billo'),
+  'DELETE /api/digital-mailboxes/:provider/send': gap('P3', 'stop sending through Kivra or Billo'),
+  'POST /api/digital-mailboxes/:provider/sync': gap('P3', 'read a connected mailbox now; the cron reads it every 10 minutes'),
   'POST /api/invoices/:id/collection': covered(
     ['gnubok_send_invoice_to_collection'],
     'served while collections is switched on; attestations (no delivery record, an import, a customer answer, an unsynced bank) are a person\'s in the browser, and only a person approves the staged handover',
@@ -668,10 +677,13 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   // ── Machine endpoints: crons, webhooks, connector proxies ──────────
   'POST /api/peppol/daily-report/cron': machine(CRON),
   'POST /api/peppol/inbound/cron': machine(CRON),
+  'POST /api/digital-mailboxes/cron': machine(CRON),
   'POST /api/peppol/outbound/status/cron': machine(CRON),
   'POST /api/receipt-hunt/cron': machine(CRON),
   'POST /api/stripe/webhook': machine(WEBHOOK),
   'POST /api/webhooks/peppol/qvalia': machine(WEBHOOK),
+  'POST /api/webhooks/kivra': machine(WEBHOOK),
+  'POST /api/webhooks/billo': machine(WEBHOOK),
   'POST /api/extensions/woocommerce/callback': machine(WEBHOOK),
   'POST /api/connector/sync': machine('machine endpoint: self-hosted entitlement sync trigger (operator)'),
   'POST /api/connect/entitlements': machine(CONNECTOR),
@@ -847,5 +859,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
 /**
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
+ * 144 -> 150 (2026-10-19): the six digital mailbox doors (Kivra, Billo),
+ * public API to follow once the dashboard flow is proven in production.
  */
-export const GAP_CEILING = 144
+export const GAP_CEILING = 150
