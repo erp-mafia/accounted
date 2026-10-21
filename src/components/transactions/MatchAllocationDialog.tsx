@@ -20,7 +20,7 @@ import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate, cn, isValidExchangeRate, chunk } from '@/lib/utils'
-import { Search, X, Plus, Check, AlertTriangle, Link2, Loader2, ClipboardPaste, ChevronDown } from 'lucide-react'
+import { Search, X, Plus, Check, AlertTriangle, Link2, Loader2, ClipboardPaste, ChevronDown, FileUp } from 'lucide-react'
 import type { Invoice, Customer, SupplierInvoice, Supplier } from '@/types'
 import {
   PASTE_OPEN_INVOICES_MAX,
@@ -31,12 +31,16 @@ import {
 } from '@/lib/invoices/open-invoice-search'
 import {
   MAX_PASTED_REFERENCES,
+  beslutFileToPaste,
   parseInvoicePaste,
   planInvoicePaste,
   type InvoicePasteResult,
+  type ParsedInvoicePaste,
   type PasteSkip,
   type PasteSkipReason,
 } from '@/lib/invoices/invoice-number-paste'
+import { beslutFileIsForCompany, readBeslutFile } from '@/lib/invoices/rot-rut-beslut-file'
+import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { ID_READ_CHUNK, MAX_BANK_ROW_SPLIT } from '@/lib/reconciliation/limits'
 import type { TransactionWithInvoice } from './transaction-types'
 import type { BatchAllocationPrefill } from '@/lib/transactions/parts-read'
@@ -63,6 +67,8 @@ const PASTE_REASON_KEYS: Record<PasteSkipReason, string> = {
   same_invoice: 'paste_reason_same_invoice',
   conflicting_amounts: 'paste_reason_conflicting_amounts',
   unreadable: 'paste_reason_unreadable',
+  refused: 'paste_reason_refused',
+  no_invoice_number: 'paste_reason_no_invoice_number',
 }
 
 /**
@@ -218,6 +224,10 @@ export default function MatchAllocationDialog({
   const [pasting, setPasting] = useState(false)
   const [pasteResult, setPasteResult] = useState<(InvoicePasteResult<PasteLookupInvoice> & { capped: boolean }) | null>(null)
   const [pickedExpanded, setPickedExpanded] = useState(false)
+  // Skatteverket's beslutsfil feeds the same picking as a paste; its utförare
+  // is checked against the company's org number.
+  const beslutInputRef = useRef<HTMLInputElement>(null)
+  const { settings: companySettings, isLoading: settingsLoading } = useCompanySettings()
 
   useEffect(() => {
     const handle = setTimeout(() => setAppliedSearch(search.trim()), SEARCH_DEBOUNCE_MS)
@@ -483,15 +493,13 @@ export default function MatchAllocationDialog({
   }
 
   /**
-   * Resolve the pasted numbers against the company's invoices of the row's
-   * direction and pick what they name, at the pasted amount or else what each
-   * invoice owes (lib/invoices/invoice-number-paste). Every number not picked
-   * is listed with its reason.
+   * Resolve references against the company's invoices of the row's direction
+   * and pick what they name, at the reference's amount or else what each
+   * invoice owes (lib/invoices/invoice-number-paste). Every reference not
+   * picked is listed with its reason. A paste and a beslutsfil both end here.
    */
-  async function handleApplyPaste() {
+  async function pickReferences(parsed: ParsedInvoicePaste) {
     if (!company || !transaction) return
-    const parsed = parseInvoicePaste(pasteText)
-    if (parsed.references.length === 0 && parsed.unreadable.length === 0 && parsed.conflicting.length === 0) return
     setPasting(true)
     try {
       const pasteKind = kind === 'customer_invoice' ? 'customer' : 'supplier'
@@ -522,10 +530,42 @@ export default function MatchAllocationDialog({
     }
   }
 
-  /** The reason beside one number; ambiguous and same_invoice say how many and which. */
+  function handleApplyPaste() {
+    const parsed = parseInvoicePaste(pasteText)
+    if (parsed.references.length === 0 && parsed.unreadable.length === 0 && parsed.conflicting.length === 0) return
+    void pickReferences(parsed)
+  }
+
+  /**
+   * Skatteverket's beslutsfil, on the customer side: the invoices it names at
+   * the approved amounts (beslutFileToPaste). Read here in the browser, so
+   * the personnummer in it are never sent; a file for another utförare is
+   * refused, as the beslut import refuses it.
+   */
+  async function handleBeslutFile(file: File) {
+    if (!company) return
+    const beslut = readBeslutFile(await file.text().catch(() => ''))
+    if (!beslut) {
+      toast({ title: t('paste_beslut_invalid'), variant: 'destructive' })
+      return
+    }
+    if (!beslutFileIsForCompany(beslut, companySettings?.org_number ?? null)) {
+      toast({ title: t('paste_beslut_wrong_company'), variant: 'destructive' })
+      return
+    }
+    await pickReferences(beslutFileToPaste(beslut))
+  }
+
+  /**
+   * The reason beside one number; ambiguous and same_invoice say how many and
+   * which, an ärende without an invoice number what Skatteverket approved.
+   */
   function pasteReasonLabel(skip: PasteSkip): string {
     if (skip.reason === 'ambiguous') return t('paste_reason_ambiguous_row', { count: skip.count ?? 0 })
     if (skip.reason === 'same_invoice') return t('paste_reason_same_invoice_row', { earlier: skip.earlier ?? '' })
+    if (skip.reason === 'no_invoice_number') {
+      return t('paste_reason_no_invoice_number_row', { amount: formatCurrency(skip.amount ?? 0, 'SEK') })
+    }
     return t(PASTE_REASON_KEYS[skip.reason])
   }
 
@@ -857,19 +897,47 @@ export default function MatchAllocationDialog({
               <p className="text-xs text-muted-foreground">
                 {kind === 'customer_invoice' ? t('paste_hint_customer') : t('paste_hint_supplier')}
               </p>
-              <div className="flex justify-end gap-2">
-                <Button type="button" size="sm" variant="ghost" onClick={() => setPasteOpen(false)} disabled={pasting}>
-                  {t('cancel')}
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={handleApplyPaste}
-                  loading={pasting}
-                  disabled={!pasteText.trim() || submitting}
-                >
-                  {t('paste_apply')}
-                </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                {kind === 'customer_invoice' && (
+                  <>
+                    <input
+                      ref={beslutInputRef}
+                      type="file"
+                      accept=".json,application/json"
+                      className="hidden"
+                      onChange={(event) => {
+                        const file = event.target.files?.[0]
+                        event.target.value = ''
+                        if (file) void handleBeslutFile(file)
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => beslutInputRef.current?.click()}
+                      disabled={pasting || submitting || settingsLoading}
+                      title={t('paste_beslut_help')}
+                    >
+                      <FileUp className="mr-2 h-4 w-4" />
+                      {t('paste_beslut_file')}
+                    </Button>
+                  </>
+                )}
+                <div className="ml-auto flex gap-2">
+                  <Button type="button" size="sm" variant="ghost" onClick={() => setPasteOpen(false)} disabled={pasting}>
+                    {t('cancel')}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={handleApplyPaste}
+                    loading={pasting}
+                    disabled={!pasteText.trim() || submitting}
+                  >
+                    {t('paste_apply')}
+                  </Button>
+                </div>
               </div>
             </div>
           )}
