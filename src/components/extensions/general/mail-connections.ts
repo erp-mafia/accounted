@@ -19,6 +19,24 @@ export const MAIL_ROUTE_BASE = '/api/extensions/ext/mail'
 /** Kopplingar > Gmail: where a mailbox is connected, reconnected and disconnected. */
 export const MAIL_SETTINGS_HREF = '/settings/mail'
 
+/**
+ * Where a request to open Gmail goes: Accounted's own inbox, never a
+ * white-label brand's support address. Opening Gmail for a company is our
+ * operation (Google's test users and the connect allowlist), which a byrå
+ * cannot do for its clients.
+ */
+export const GMAIL_ACCESS_EMAIL = 'support@accounted.se'
+
+/**
+ * "Mejla oss": while Gmail is closed for a company (connect-gate.ts), the
+ * person asks us to open it by mail instead of meeting a dead end. The mail
+ * is written for them, the company named so we know which one to open, with
+ * a line for the Gmail address to add.
+ */
+export function gmailAccessMailto(to: string, subject: string, body: string): string {
+  return `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
+}
+
 /** Google's consent screen. The only place a connect may navigate to. */
 const GOOGLE_CONSENT_ORIGIN = 'https://accounts.google.com'
 

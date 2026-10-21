@@ -17,6 +17,7 @@ import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui
 import { useToast } from '@/components/ui/use-toast'
 import { copyInboxAddress, type AddressCopyState } from '@/components/extensions/general/inbox-address-copy'
 import { MAIL_SETTINGS_HREF, summarizeMailboxes } from '@/components/extensions/general/mail-connections'
+import { RequestGmailAccessButton } from '@/components/extensions/general/RequestGmailAccessButton'
 import { useMailConnections } from '@/components/extensions/general/use-mail-connections'
 import type { ConnectionSummary } from '@/lib/digital-mailboxes/connections'
 import { phoneToE164 } from '@/lib/digital-mailboxes/identifiers'
@@ -324,7 +325,13 @@ function GmailRow() {
   // A page that cannot connect anything is a dead end: then the row says so instead of linking there.
   // A failed read knows nothing about that, so it keeps the link.
   if (mail.view && !connected && !summary.available) {
-    return <MailboxRow door="mailbox" detail={mail.view?.configured === false ? tMail('not_configured') : tMail('connect_closed')} />
+    if (mail.view.configured === false) return <MailboxRow door="mailbox" detail={tMail('not_configured')} />
+    // Closed for this company: not a dead end, a mail to us that opens it.
+    return (
+      <MailboxRow door="mailbox" detail={tMail('request_access')}>
+        <RequestGmailAccessButton />
+      </MailboxRow>
+    )
   }
   return (
     <MailboxRow door="mailbox" detail={connected ? t('gmail_connected', { count: summary.active.length }) : undefined}>

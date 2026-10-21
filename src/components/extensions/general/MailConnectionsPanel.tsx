@@ -23,6 +23,7 @@ import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-exten
 import { useFormat } from '@/lib/hooks/use-format'
 import { cn } from '@/lib/utils'
 import { ReceiptHuntStatus } from './ReceiptHuntStatus'
+import { RequestGmailAccessButton } from './RequestGmailAccessButton'
 import {
   disconnectMailbox,
   reconnectReason,
@@ -200,8 +201,15 @@ export function MailConnectionsPanel({
           <SettingsRow label={t('none_label')} borderless>
             {summary.canConnect ? (
               <SettingsRowEnd>{connectButton(t('connect'))}</SettingsRowEnd>
+            ) : view.configured ? (
+              <>
+                <SettingsRowNote>{t('request_access')}</SettingsRowNote>
+                <SettingsRowEnd>
+                  <RequestGmailAccessButton />
+                </SettingsRowEnd>
+              </>
             ) : (
-              <SettingsRowNote>{view.configured ? t('connect_closed') : t('not_configured')}</SettingsRowNote>
+              <SettingsRowNote>{t('not_configured')}</SettingsRowNote>
             )}
           </SettingsRow>
         ) : (
