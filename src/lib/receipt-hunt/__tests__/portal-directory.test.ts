@@ -35,6 +35,23 @@ describe('lookupPortal', () => {
     expect(lookupPortal('SUPABASE PRO SUBSCRIPTION')).toBeNull()
   })
 
+  it('knows the Swedish and ads vendors whose invoice waits behind a login', () => {
+    // Bank texts as they read on production rows, 2026-10-20.
+    expect(lookupPortal('GOOGLE *ADS8555')?.vendor).toBe('Google Ads')
+    expect(lookupPortal('Kortköp 251226 CLOUDFLARE')?.vendor).toBe('Cloudflare')
+    expect(lookupPortal('AMAZON PRIME')?.vendor).toBe('Amazon')
+    expect(lookupPortal('AMZN Mktp FR NF0L50L24')?.vendor).toBe('Amazon')
+    expect(lookupPortal('HALLON')?.vendor).toBe('Hallon')
+    expect(lookupPortal('3 HI3G ACCESS AB')?.vendor).toBe('Tre')
+    expect(lookupPortal('TELENOR SVERIGE AB')?.vendor).toBe('Telenor')
+    expect(lookupPortal('TELIA SVERIGE AB')?.vendor).toBe('Telia')
+    expect(lookupPortal('TELE2 SV AB FÖRETAG ATTN')?.vendor).toBe('Tele2')
+  })
+
+  it('keeps an AWS bill on AWS, not on Amazon', () => {
+    expect(lookupPortal('AMAZON WEB SERVICES EMEA SARL')?.vendor).toBe('Amazon Web Services')
+  })
+
   it('says nothing about a supplier it does not know', () => {
     expect(lookupPortal('ALVIKS KOETT OCH FISK K3667')).toBeNull()
     expect(lookupPortal('RESTAURANG RIDD K3667 Kortköp/uttag')).toBeNull()
