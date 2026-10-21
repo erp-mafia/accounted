@@ -28,6 +28,7 @@ import {
   type ManualPayslipLineType,
 } from '@/lib/salary/manual-payslip-lines'
 import { TEXT_ROW_MAX_LENGTH, isTextRow } from '@/lib/salary/text-rows'
+import { isBenefitItemType } from '@/lib/salary/benefit-payments'
 import { isAllowedOverrideAccount, lineAccountOverride } from '@/lib/salary/line-account-override'
 import { LineAccountField } from '@/components/salary/LineAccountField'
 
@@ -39,7 +40,7 @@ const parseNumber = (s: string): number | undefined => parseDecimalInput(s) ?? u
 
 /**
  * One-off payslip line ("Lägg till rad"): milersättning, traktamente, bonus,
- * övertid, OB, a deduction, or a Textrad (words only, no amount). Convention
+ * övertid, OB, kostförmån, a deduction, or a Textrad (words only, no amount). Convention
  * 13: centered modal for create. The catalogue and the flags each type
  * carries live in lib/salary/manual-payslip-lines.ts; this dialog only
  * collects the numbers, or the text, and, on rows that post on their own
@@ -162,10 +163,13 @@ export function AddPayslipLineDialog({
     }
   }
 
+  // A benefit is added to the tax base, not to the payout.
   const hintKey =
     spec.sign === 'none'
       ? 'add_line_hint_text'
-      : spec.sign === 'deduction'
+      : isBenefitItemType(type)
+        ? 'add_line_hint_benefit'
+        : spec.sign === 'deduction'
         ? 'add_line_hint_deduction'
         : spec.sign === 'signed'
           ? 'add_line_hint_signed'
