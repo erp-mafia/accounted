@@ -6,7 +6,10 @@ import {
   syncInboundPeppolDocuments,
 } from '@/lib/invoices/peppol-inbound'
 import { deliverPeppolDocumentToInbox } from '@/lib/invoices/peppol-inbox-delivery'
-import { withdrawRevokedPeppolRegistrations } from '@/lib/invoices/peppol-registration'
+import {
+  registerGrantedPeppolReceivers,
+  withdrawRevokedPeppolRegistrations,
+} from '@/lib/invoices/peppol-registration'
 import { proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
 import {
   getPeppolTransport,
@@ -33,8 +36,10 @@ export const maxDuration = 300
  * are logged at warn and retried after the backoff.
  *
  * First, the identifier of every company whose access no longer allows
- * receiving is withdrawn from the SMP (revoking access only changes our row).
- * In its own try/catch: a failed withdrawal must never stop the inbound sync.
+ * receiving is withdrawn from the SMP (revoking access only changes our row),
+ * and the identifier of every company newly allowed to receive is published,
+ * a few per run (granting access only changes our row too). Each in its own
+ * try/catch: neither may ever stop the inbound sync.
  *
  * Truthful no-op when no access point is switched on in this environment.
  */
@@ -64,6 +69,23 @@ export const GET = withCronContext('cron.peppol_inbound', async (_request, ctx) 
   } catch (err) {
     ctx.log.error('peppol receiving withdrawal failed', err as Error, { alert: true })
     withdrawal = { failed: true }
+  }
+
+  let registration: Awaited<ReturnType<typeof registerGrantedPeppolReceivers>> | { failed: true }
+  try {
+    registration = await registerGrantedPeppolReceivers({ service, transport })
+    if (registration.registered.length > 0) {
+      ctx.log.info('peppol receiving registered for granted access', { companyIds: registration.registered })
+    }
+    if (registration.failed.length > 0) {
+      ctx.log.error('peppol receiving registration failed for granted access', {
+        alert: true,
+        failed: registration.failed,
+      })
+    }
+  } catch (err) {
+    ctx.log.error('peppol receiving registration failed', err as Error, { alert: true })
+    registration = { failed: true }
   }
 
   // Each delivered e-invoice is checked against the bank at once (match on
@@ -108,7 +130,7 @@ export const GET = withCronContext('cron.peppol_inbound', async (_request, ctx) 
       terminalReasons: terminalDocuments.map((d) => `${d.providerDocumentId}: ${d.reason}`),
     })
   }
-  return NextResponse.json({ data: { ...summary, reprocess, withdrawal } })
+  return NextResponse.json({ data: { ...summary, reprocess, withdrawal, registration } })
 })
 
 export const POST = GET

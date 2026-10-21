@@ -332,7 +332,8 @@ export type RegisterPeppolResult =
 export async function registerCompanyForPeppolReceiving(args: {
   service: SupabaseClient
   companyId: string
-  userId: string
+  /** Who asked; null when the inbound cron registers a grant nobody requested in-app. */
+  userId: string | null
   transport: PeppolTransport
   settings: ParticipantSettings
 }): Promise<RegisterPeppolResult> {
@@ -564,6 +565,115 @@ export async function withdrawRevokedPeppolRegistrations(args: {
       const result = await deregisterCompanyFromPeppolReceiving({ service, companyId, transport })
       if (result.ok) summary.withdrawn.push(companyId)
       else summary.failed.push({ companyId, reason: 'reason' in result && result.reason ? result.reason : result.code })
+    } catch (err) {
+      summary.failed.push({ companyId, reason: err instanceof Error ? err.message : String(err) })
+    }
+  }
+  return summary
+}
+
+/**
+ * Registrations per cron run: one call can take 50 s at the connector, and
+ * the inbound sync shares the run's 300 s.
+ */
+export const PEPPOL_GRANTED_REGISTRATIONS_PER_RUN = 3
+
+export interface RegisterGrantedPeppolSummary {
+  registered: string[]
+  failed: Array<{ companyId: string; reason: string }>
+  /** Granted but not registrable as it stands (sandbox, personnummer, no settings); checked again next run. */
+  skipped: Array<{ companyId: string; reason: string }>
+}
+
+/**
+ * Publish the identifier of every company the operators allowed to receive
+ * that has never been registered at this provider. The grant alone used to
+ * be half the job: until someone in the company pressed register, suppliers
+ * sending to its Peppol id got a delivery error. Only a company with no
+ * registration history here is attempted (a stale pending row, a crashed
+ * attempt, counts as none): a failure, a refusal or a withdrawal the company
+ * made itself is never retried on its own; the settings page shows it and
+ * offers the retry. Oldest request first, a few per run. Run by the inbound
+ * cron, the mirror of withdrawRevokedPeppolRegistrations.
+ */
+export async function registerGrantedPeppolReceivers(args: {
+  service: SupabaseClient
+  transport: PeppolTransport
+  limit?: number
+  now?: number
+}): Promise<RegisterGrantedPeppolSummary> {
+  const { service, transport } = args
+  const limit = args.limit ?? PEPPOL_GRANTED_REGISTRATIONS_PER_RUN
+  const now = args.now ?? Date.now()
+  const summary: RegisterGrantedPeppolSummary = { registered: [], failed: [], skipped: [] }
+  if (!transport.registerRecipient) return summary
+
+  const granted = await fetchAllRows<{ company_id: string; requested_by: string | null }>(({ from, to }) =>
+    service
+      .from('peppol_access')
+      .select('company_id, requested_by')
+      .eq('status', 'enabled')
+      .eq('receive_enabled', true)
+      .order('requested_at', { ascending: true, nullsFirst: false })
+      .order('company_id', { ascending: true })
+      .range(from, to),
+  )
+
+  const attempted = new Set<string>()
+  const ids = granted.map((row) => row.company_id)
+  for (let i = 0; i < ids.length; i += IN_CLAUSE_CHUNK) {
+    const { data, error } = await service
+      .from('peppol_registrations')
+      .select('company_id, status, updated_at')
+      .eq('provider', transport.provider)
+      .in('company_id', ids.slice(i, i + IN_CLAUSE_CHUNK))
+    if (error) throw new Error(`Failed to read Peppol registrations: ${error.message}`)
+    for (const row of (data ?? []) as Array<Pick<PeppolRegistrationRow, 'company_id' | 'status' | 'updated_at'>>) {
+      if (!isStalePeppolPending(row, now)) attempted.add(row.company_id)
+    }
+  }
+
+  const candidates = granted.filter((row) => !attempted.has(row.company_id))
+  const settingsByCompany = new Map<string, ParticipantSettings & { is_sandbox: boolean | null }>()
+  for (let i = 0; i < candidates.length; i += IN_CLAUSE_CHUNK) {
+    const { data, error } = await service
+      .from('company_settings')
+      .select('company_id, org_number, company_name, vat_number, city, country, entity_type, is_sandbox')
+      .in('company_id', candidates.slice(i, i + IN_CLAUSE_CHUNK).map((row) => row.company_id))
+    if (error) throw new Error(`Failed to read company settings: ${error.message}`)
+    for (const row of (data ?? []) as Array<ParticipantSettings & { company_id: string; is_sandbox: boolean | null }>) {
+      settingsByCompany.set(row.company_id, row)
+    }
+  }
+
+  for (const access of candidates) {
+    if (summary.registered.length + summary.failed.length >= limit) break
+    const companyId = access.company_id
+    const settings = settingsByCompany.get(companyId)
+    if (!settings) {
+      summary.skipped.push({ companyId, reason: 'INVOICE_SEND_COMPANY_SETTINGS_MISSING' })
+      continue
+    }
+    if (settings.is_sandbox) {
+      summary.skipped.push({ companyId, reason: 'PEPPOL_SANDBOX_NOT_ALLOWED' })
+      continue
+    }
+    const prepared = preparePeppolParticipant(settings)
+    if (!prepared.ok) {
+      summary.skipped.push({ companyId, reason: prepared.code })
+      continue
+    }
+    try {
+      const result = await registerCompanyForPeppolReceiving({
+        service, companyId, userId: access.requested_by, transport, settings,
+      })
+      if (result.ok) {
+        summary.registered.push(companyId)
+        continue
+      }
+      summary.failed.push({ companyId, reason: 'reason' in result && result.reason ? result.reason : result.code })
+      // The cap is the same answer for everyone after this one.
+      if (result.code === 'PEPPOL_REGISTRATION_CAP_REACHED') break
     } catch (err) {
       summary.failed.push({ companyId, reason: err instanceof Error ? err.message : String(err) })
     }
