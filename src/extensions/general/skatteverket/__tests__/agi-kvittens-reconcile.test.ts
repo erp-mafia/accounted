@@ -19,7 +19,7 @@ vi.mock('../lib/agi-client', () => ({
 }))
 
 vi.mock('../lib/resolve-auth', () => ({
-  resolveReadAuth: vi.fn(),
+  resolveUserReadAuth: vi.fn(),
 }))
 
 vi.mock('../lib/kvittens-notification', () => ({
@@ -38,12 +38,12 @@ import {
 } from '../lib/agi-kvittens-reconcile'
 import { SkatteverketAuthError } from '../lib/api-client'
 import { agiGetKvittenser } from '../lib/agi-client'
-import { resolveReadAuth } from '../lib/resolve-auth'
+import { resolveUserReadAuth } from '../lib/resolve-auth'
 import { sendKvittensNotification } from '../lib/kvittens-notification'
 import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
 
 const mockAgiGetKvittenser = vi.mocked(agiGetKvittenser)
-const mockResolveReadAuth = vi.mocked(resolveReadAuth)
+const mockResolveUserReadAuth = vi.mocked(resolveUserReadAuth)
 const mockSendKvittensNotification = vi.mocked(sendKvittensNotification)
 const mockCompleteTaxDeadline = vi.mocked(completeTaxDeadline)
 
@@ -164,7 +164,7 @@ describe('reconcileAgiDeclaration: claim semantics', () => {
     // The fixture kvittens is signed 2026-06-01T10:00Z; observe it the next
     // morning so it is a fresh receipt (the stale case has its own tests).
     vi.useFakeTimers({ now: new Date('2026-06-02T08:00:00Z'), toFake: ['Date'] })
-    mockResolveReadAuth.mockResolvedValue({
+    mockResolveUserReadAuth.mockResolvedValue({
       ok: true,
       auth: { mode: 'user' } as any,
       source: 'user',
@@ -332,7 +332,7 @@ describe('reconcileAgiDeclaration: claim semantics', () => {
 describe('late kvittens: recorded in full, announced only while it is news', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockResolveReadAuth.mockResolvedValue({
+    mockResolveUserReadAuth.mockResolvedValue({
       ok: true,
       auth: { mode: 'user' } as any,
       source: 'user',
@@ -477,7 +477,7 @@ describe('declarationKvittens: a correction is promoted on its own kvittens', ()
   beforeEach(() => {
     vi.clearAllMocks()
     vi.useFakeTimers({ now: new Date('2026-06-20T14:05:00Z'), toFake: ['Date'] })
-    mockResolveReadAuth.mockResolvedValue({
+    mockResolveUserReadAuth.mockResolvedValue({
       ok: true,
       auth: { mode: 'user' } as any,
       source: 'user',

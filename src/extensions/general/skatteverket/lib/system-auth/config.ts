@@ -46,13 +46,18 @@ export function getSystemClientId(): string | null {
 }
 
 /**
- * Default scopes for the system token. `obr` is Ombudshantering (confirmed
- * by Skatteverket 2026-09-01 when they added it to application id
- * arcimtechnologyab_gnubok_1); the other names are pending SKV's org-flow
- * docs. Override via env when they land.
+ * Default scopes for the system token: exactly the APIs the ombud path calls,
+ * under SKV's real scope names (the same ones the BankID flow requests, see
+ * src/lib/connect/upstreams/skatteverket-oauth.ts).
+ *   ska             Skattekonto (lasombud reads and the grant probe)
+ *   momsdeklaration Momsdeklaration (moms_ombud reads)
+ *   obr             Ombudshantering (confirmed by Skatteverket 2026-09-01)
+ * No AGI scope: AGI kvittens reads always run on a member's own token. Add a
+ * scope here only together with the system-mode read that needs it. Override
+ * via env.
  */
 export function getSystemScopes(): string[] {
-  const raw = process.env.SKATTEVERKET_SYSTEM_SCOPES ?? 'skattekonto agd:lasa momsdeklaration obr'
+  const raw = process.env.SKATTEVERKET_SYSTEM_SCOPES ?? 'ska momsdeklaration obr'
   return raw.split(/\s+/).filter(Boolean)
 }
 
