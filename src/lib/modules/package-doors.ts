@@ -397,10 +397,14 @@ const SUPPLIER_INVOICES_AND_PAYMENTS: PackageDoors = {
 const RECEIPTS_AND_DOCUMENTS: PackageDoors = {
   start: [
     'POST /api/extensions/ext/mail/oauth/start',
+    // A supplier portal is a new way in for underlag, as a connected mailbox is.
+    'POST /api/inkorg/portals',
   ],
   continue: [
     'POST /api/arkiv/facts/:id/revert',
     'POST /api/arkiv/findings/:id',
+    'PATCH /api/inkorg/portals/:id',
+    'DELETE /api/inkorg/portals/:id',
     'POST /api/extensions/ext/invoice-inbox/inbox/rotate',
     'DELETE /api/extensions/ext/invoice-inbox/items/:id',
     'POST /api/extensions/ext/invoice-inbox/items/:id/book-direct',

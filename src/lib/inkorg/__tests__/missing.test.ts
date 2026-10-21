@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { focusAfterChange } from '../focus'
 import {
   bandByMonth,
+  canAddPortal,
   dragCarriesFiles,
   looksLikeCardPurchase,
   MAX_MISSING_ACTIONS,
@@ -185,6 +186,32 @@ describe('next row: a purchase that got its underlag leaves and the next opens',
     expect(focusAfterChange(ids, ['a', 'c'], 'b')).toBe('c')
     expect(focusAfterChange(ids, ['a', 'b'], 'c')).toBe('b')
     expect(focusAfterChange(ids, [], 'a')).toBeNull()
+  })
+})
+
+describe('canAddPortal: the quiet "Fakturan finns i en portal"', () => {
+  it('is offered for a purchase from a supplier with no portal yet', () => {
+    expect(canAddPortal(purchase({ description: 'TELIA SVERIGE AB' }))).toBe(true)
+    expect(canAddPortal(purchase({ description: 'ELLEVIO AB AUTOGIRO', merchant_name: 'Ellevio' }))).toBe(true)
+  })
+
+  it('is not offered when a portal answers already, the directory or the company', () => {
+    expect(canAddPortal(purchase({ description: 'OPENAI  CHATGPT SUBSCR', portal: PORTAL }))).toBe(false)
+    expect(canAddPortal(purchase({ description: 'TELIA SVERIGE AB', portal: { ...PORTAL, vendor: 'Telia', id: 'p-telia' } }))).toBe(false)
+  })
+
+  it('is not offered for salary, tax or a purchase that names nobody', () => {
+    expect(canAddPortal(purchase({ description: 'Lön Juli Jakob' }))).toBe(false)
+    expect(canAddPortal(purchase({ description: 'Skatt lön Juni BG 0000050501055' }))).toBe(false)
+    expect(canAddPortal(purchase({ description: null, merchant_name: '  ' }))).toBe(false)
+  })
+
+  it('keeps the company portal and its id on the route', () => {
+    const telia = { vendor: 'Telia', url: 'https://minasidor.telia.se/foretag', note: null, id: 'p-telia' }
+    expect(underlagRoute(purchase({ description: 'TELIA SVERIGE AB', portal: telia }), CONTEXT)).toEqual({ kind: 'portal', ...telia })
+    expect(missingDecision(purchase({ description: 'TELIA SVERIGE AB', portal: telia }), CONTEXT, { clients: [] }).actions[0]).toBe(
+      'open_portal',
+    )
   })
 })
 

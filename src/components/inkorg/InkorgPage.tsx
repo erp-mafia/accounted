@@ -25,6 +25,8 @@ import { InkorgList } from './InkorgList'
 import { InkorgRail } from './InkorgRail'
 import { MissingFocusStage } from './MissingFocusStage'
 import { MissingUnderlagList } from './MissingUnderlagList'
+import { PortalLinkForm } from './PortalLinkForm'
+import { addPortal, changePortal, removePortal } from './company-portals-client'
 import { FocusStage, type FinePrintOpen } from './FocusStage'
 import { FetchWithAiButton } from './FetchWithAiButton'
 import { followCompanion } from './follow-companion'
@@ -151,7 +153,9 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
   // Saknar underlag works through bank purchases, not items: its own queue, newest first,
   // what needs a person before what is on its way (the order the view lists them in).
   const purchaseIds = useMemo(() => purchases.map((p) => p.id), [purchases])
-  const { expectations, onTheWay } = useExpectations(purchasesState === 'ready', purchaseIds)
+  // Bumped when the company adds, changes or removes a portal: which suppliers have one changed.
+  const [portalRevision, setPortalRevision] = useState(0)
+  const { expectations, onTheWay } = useExpectations(purchasesState === 'ready', purchaseIds, portalRevision)
   const missingParts = useMemo(() => splitMissing(orderMissing(purchases), onTheWay), [purchases, onTheWay])
   // What the rail and the heading count: the purchases that need a person now.
   const missingNeedCount = purchasesState === 'ready' ? missingParts.needsYou.length : null
@@ -168,6 +172,12 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
     [expectations, portal],
   )
   const portalUrl = portal ? (portals.find((row) => row.vendor === portal)?.url ?? null) : null
+  // A portal the company added itself (not the directory's): its page can change or remove it.
+  const companyPortal = useMemo(() => {
+    const own = portal ? missing.find((p) => p.portal?.id)?.portal : null
+    return own?.id ? { id: own.id, url: own.url } : null
+  }, [missing, portal])
+  const [editingPortal, setEditingPortal] = useState(false)
   const queueIds = useMemo(
     () => (view.kind === 'missing' ? missing.map((p) => p.id) : queue.map((i) => i.id)),
     [view.kind, missing, queue],
@@ -232,6 +242,7 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
     setView(next)
     setFocusId(null)
     setLastOpenedId(null)
+    setEditingPortal(false)
     // The view in the address, so a reload or a shared link opens it; no navigation, no server render.
     const url = new URL(window.location.href)
     if (next.kind === 'need') url.searchParams.delete('view')
@@ -419,6 +430,55 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
     onFiled: refresh,
   })
 
+  // "Fakturan finns i en portal": the purchase's supplier becomes a portal, read again so this
+  // purchase and every other one from the supplier lead with it, and Portaler lists it.
+  const portalLocale = locale === 'en' ? 'en' : 'sv'
+  const savePortal = useCallback(
+    async (purchaseId: string, url: string) => {
+      const answer = await addPortal(purchaseId, url, portalLocale)
+      if (!answer.ok) {
+        toast({ title: t('portal_save_failed'), description: answer.message || undefined, variant: 'destructive' })
+        return false
+      }
+      await refresh()
+      setPortalRevision((r) => r + 1)
+      toast({ title: t('portal_added', { vendor: answer.data.vendor_name }) })
+      return true
+    },
+    [portalLocale, refresh, t, toast],
+  )
+
+  const saveCompanyPortal = useCallback(
+    async (id: string, url: string) => {
+      const answer = await changePortal(id, url, portalLocale)
+      if (!answer.ok) {
+        toast({ title: t('portal_save_failed'), description: answer.message || undefined, variant: 'destructive' })
+        return false
+      }
+      await refresh()
+      setEditingPortal(false)
+      toast({ title: t('portal_updated', { vendor: answer.data.vendor_name }) })
+      return true
+    },
+    [portalLocale, refresh, t, toast],
+  )
+
+  const removeCompanyPortal = useCallback(
+    async (id: string, vendor: string) => {
+      const answer = await removePortal(id, portalLocale)
+      if (!answer.ok) {
+        toast({ title: t('portal_save_failed'), description: answer.message || undefined, variant: 'destructive' })
+        return
+      }
+      // Its purchases are plain Saknar underlag again: that is where they are now.
+      chooseView({ kind: 'missing' })
+      await refresh()
+      setPortalRevision((r) => r + 1)
+      toast({ title: t('portal_removed', { vendor }) })
+    },
+    [chooseView, portalLocale, refresh, t, toast],
+  )
+
   // The focus view's keys: J / K (or the arrows) step, Esc goes back.
   useEffect(() => {
     if (!focusId) return
@@ -529,6 +589,7 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
                       busy={busyId === purchase.id}
                       finishing={finishingId === purchase.id}
                       onFiles={(files) => void attach(purchase.id, files)}
+                      onAddPortal={(url) => savePortal(purchase.id, url)}
                     />
                   ) : null
                 }
@@ -560,8 +621,19 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
                 lead={viewLead}
                 aside={
                   portal && portalUrl ? (
-                    // The portal's two ways to the invoices, as each of its purchases offers them.
-                    <div className="flex shrink-0 flex-wrap gap-2">
+                    // The portal's two ways to the invoices, as each of its purchases offers them; a
+                    // portal the company added also has its quiet Ändra.
+                    <div className="flex shrink-0 flex-wrap items-center gap-2">
+                      {companyPortal && (
+                        <button
+                          type="button"
+                          onClick={() => setEditingPortal((open) => !open)}
+                          aria-expanded={editingPortal}
+                          className={cn(QUIET_LINK_CLASS, 'mr-2')}
+                        >
+                          {t('portal_edit')}
+                        </button>
+                      )}
                       <Button asChild variant="secondary" size="sm">
                         <a href={portalUrl} target="_blank" rel="noopener noreferrer">
                           {t('action_open_portal', { vendor: portal })}
@@ -575,6 +647,16 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
                   ) : undefined
                 }
               />
+              {portal && companyPortal && editingPortal && (
+                <PortalLinkForm
+                  key={companyPortal.id}
+                  className="-mt-2 mb-6 max-w-xl"
+                  initialUrl={companyPortal.url}
+                  onSave={(url) => saveCompanyPortal(companyPortal.id, url)}
+                  onCancel={() => setEditingPortal(false)}
+                  onRemove={() => removeCompanyPortal(companyPortal.id, portal)}
+                />
+              )}
               {view.kind === 'missing' ? (
                 <MissingUnderlagList
                   portal={portal ?? undefined}

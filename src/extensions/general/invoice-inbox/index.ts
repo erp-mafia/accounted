@@ -101,7 +101,8 @@ import { carriedPersonFields, keepPersonChoices } from '@/lib/documents/person-c
 import { mirrorCorrectedReadingToDocument } from '@/lib/documents/reading-correction'
 import { resolveInboxKind, type InboxKindSource } from '@/lib/documents/inbox-kind'
 import { resolveInboxCreditTarget } from '@/lib/supplier-invoices/credit-target'
-import { lookupPortal } from '@/lib/receipt-hunt/portal-directory'
+import { resolvePortal } from '@/lib/receipt-hunt/company-portals'
+import { readCompanyPortals } from '@/lib/receipt-hunt/company-portals-read'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
 import type { InvoiceExtractionResult } from '@/types'
@@ -2485,7 +2486,10 @@ export const invoiceInboxExtension: Extension = {
       path: '/purchases',
       handler: async (_request: Request, ctx: ExtensionContext) => {
         try {
-          const purchases = await fetchPurchasesWithoutUnderlag(ctx.supabase, ctx.companyId)
+          const [purchases, companyPortals] = await Promise.all([
+            fetchPurchasesWithoutUnderlag(ctx.supabase, ctx.companyId),
+            readCompanyPortals(ctx.supabase, ctx.companyId),
+          ])
           const logos = await vendorLogoUrls(
             purchases.map((p) => ({ key: p.id, name: p.merchant_name || p.description, texts: [p.description] })),
           )
@@ -2494,10 +2498,11 @@ export const invoiceInboxExtension: Extension = {
             data: {
               count: purchases.length,
               purchases: purchases.map((p) => {
-                // Where the invoice lives, when the supplier does not send one.
-                // lookupPortal answers null for salary and tax, which have no
-                // invoice to fetch: a link there would be worse than silence.
-                const portal = lookupPortal(p.merchant_name || p.description)
+                // Where the invoice lives, when the supplier does not send one:
+                // the company's own portal for the supplier first, then the
+                // directory. Null for salary and tax, which have no invoice to
+                // fetch: a link there would be worse than silence.
+                const portal = resolvePortal(companyPortals, p.merchant_name || p.description)
                 return {
                   id: p.id,
                   date: p.date,
@@ -2506,7 +2511,7 @@ export const invoiceInboxExtension: Extension = {
                   amount: p.amount,
                   currency: p.currency,
                   amount_sek: p.amount_sek,
-                  portal: portal ? { vendor: portal.vendor, url: portal.url, note: portal.note ?? null } : null,
+                  portal,
                   logo_url: logos.get(p.id) ?? null,
                 }
               }),

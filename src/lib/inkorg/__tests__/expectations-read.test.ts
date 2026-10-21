@@ -131,6 +131,33 @@ describe('loadExpectations', () => {
     expect(askedFor).toHaveLength(6)
   })
 
+  it("reads the company's portals once and lets them name a portal for a series that never had an underlag", async () => {
+    const dates = Array.from({ length: 6 }, (_, i) => addMonthsIso('2026-10-02', i - 5))
+    const { client, on, tablesRead } = fakeSupabase({
+      transactions: dates.map((date, i) => ({
+        id: `tx-${i}`,
+        date,
+        amount: -449,
+        currency: 'SEK',
+        amount_sek: null,
+        exchange_rate: null,
+        merchant_name: null,
+        description: 'TELIA SVERIGE AB',
+        document_id: null,
+      })),
+      company_portals: [{ id: 'p-telia', counterparty_key: 'telia sverige', vendor_name: 'Telia', url: 'https://minasidor.telia.se/foretag' }],
+    })
+    const [expectation, ...rest] = await loadExpectations(client, COMPANY, TODAY)
+    expect(rest).toEqual([])
+    expect(expectation).toMatchObject({
+      key: 'bank:telia sverige',
+      door: 'portal',
+      portal: { vendor: 'Telia', url: 'https://minasidor.telia.se/foretag' },
+    })
+    expect(tablesRead().filter((t) => t === 'company_portals')).toHaveLength(1)
+    expect(on('company_portals', 'eq')).toContainEqual(['company_id', COMPANY])
+  })
+
   it('reads no documents when no counterparty bills regularly', async () => {
     const { client, tablesRead } = fakeSupabase({
       transactions: [

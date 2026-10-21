@@ -19,7 +19,18 @@ describe('portalRows', () => {
       none,
     )
     expect(rows.map((r) => r.vendor)).toEqual(['OpenAI', 'Adobe'])
-    expect(rows[0]).toEqual({ vendor: 'OpenAI', url: OPENAI.url, missing: 2, needsYou: 2, status: 'missing' })
+    expect(rows[0]).toEqual({ vendor: 'OpenAI', url: OPENAI.url, logoUrl: null, missing: 2, needsYou: 2, status: 'missing' })
+  })
+
+  it("wears the supplier's stored icon off the first of its purchases that has one", () => {
+    const telia = { vendor: 'Telia', url: 'https://minasidor.telia.se/foretag', note: null, id: 'p-telia' }
+    const rows = portalRows(
+      [purchase('a', telia), { ...purchase('b', telia), logo_url: 'https://db.example/logos/telia.png' }],
+      none,
+    )
+    expect(rows).toEqual([
+      { vendor: 'Telia', url: telia.url, logoUrl: 'https://db.example/logos/telia.png', missing: 2, needsYou: 2, status: 'missing' },
+    ])
   })
 
   it('most purchases without underlag first, then by name, whatever order they came in', () => {

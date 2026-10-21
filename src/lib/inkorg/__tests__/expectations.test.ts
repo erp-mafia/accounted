@@ -221,6 +221,14 @@ describe('findPatterns', () => {
     expect(findPatterns(history({ transactions: portal }), TODAY).map((p) => p.key)).toEqual(['bank:hetzner online'])
   })
 
+  it('keeps a bank series that never had an underlag when the company added a portal for it', () => {
+    // A supplier the shared directory does not know, so only the company's portal keeps it.
+    const rows = monthly('2026-10', 6).map((date) => tx({ date, description: 'ELLEVIO AB AUTOGIRO' }))
+    expect(findPatterns(history({ transactions: rows }), TODAY)).toEqual([])
+    const ellevio = { id: 'p-ellevio', counterparty_key: 'ellevio', vendor_name: 'Ellevio', url: 'https://www.ellevio.se/foretag' }
+    expect(findPatterns(history({ transactions: rows }), TODAY, [ellevio]).map((p) => p.key)).toEqual(['bank:ellevio'])
+  })
+
   it('reads a yearly bill from two years, and only when the two amounts agree', () => {
     const agree = [tx({ date: '2024-11-02', amount: -1490, document_id: 'doc-a' }), tx({ date: '2025-11-03', amount: -1590, document_id: 'doc-b' })]
     const [pattern] = findPatterns(history({ transactions: agree }), TODAY)
@@ -323,6 +331,19 @@ describe('expectationsFrom', () => {
     expect(e.door).toBe('portal')
     expect(e.portal).toEqual({ vendor: 'Hetzner', url: 'https://accounts.hetzner.com/invoice' })
     expect(e.waitDays).toBeNull()
+  })
+
+  it("says portal for a supplier the company added a portal for, the company's link before the directory's", () => {
+    const rows = subscriptionRows(dates, { description: 'TELIA SVERIGE AB AUTOGIRO' })
+    const telia = { id: 'p-telia', counterparty_key: 'telia sverige', vendor_name: 'Telia', url: 'https://minasidor.telia.se/foretag' }
+    const [e] = expectationsFrom(findPatterns(history({ transactions: rows }), TODAY, [telia]), evidenceFor(docIds, 'upload'), [telia])
+    expect(e.door).toBe('portal')
+    expect(e.portal).toEqual({ vendor: 'Telia', url: 'https://minasidor.telia.se/foretag' })
+
+    const hetzner = { id: 'p-h', counterparty_key: 'hetzner online', vendor_name: 'Hetzner', url: 'https://accounts.hetzner.com/invoice/list' }
+    const own = subscriptionRows(dates, { description: 'HETZNER ONLINE GMBH' })
+    const [h] = expectationsFrom(findPatterns(history({ transactions: own }), TODAY, [hetzner]), evidenceFor(docIds, 'upload'), [hetzner])
+    expect(h.portal).toEqual({ vendor: 'Hetzner', url: 'https://accounts.hetzner.com/invoice/list' })
   })
 
   it('waits the default five days for a door that delivers by itself when no delay was ever measured', () => {

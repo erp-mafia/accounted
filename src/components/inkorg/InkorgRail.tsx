@@ -20,8 +20,9 @@ const SECTION_LABEL_CLASS = 'font-sans text-[11px] font-medium uppercase trackin
  * chip (the intake address, an upload, the API), then Portaler, one row per
  * supplier whose invoices wait behind a login, each opening Saknar underlag
  * for that supplier. The + beside Brevlådor opens Lägg till brevlåda;
- * Portaler has none, since a portal comes from the portal directory and not
- * from anything a company connects. On a phone the same rows are a strip of
+ * Portaler has none: a portal comes from the portal directory, or from a
+ * purchase whose invoice the person says is in a portal (its focus view),
+ * never from a form of its own. On a phone the same rows are a strip of
  * pills above the list.
  */
 export function InkorgRail({
@@ -106,7 +107,7 @@ export function InkorgRail({
             key={row.vendor}
             active={active === viewKey({ kind: 'missing', portal: row.vendor })}
             onClick={() => onView({ kind: 'missing', portal: row.vendor })}
-            icon={<BrandMark name={row.vendor} variant="mark" size={22} />}
+            icon={<BrandMark name={row.vendor} variant="mark" size={22} logoUrl={row.logoUrl} />}
             label={row.vendor}
             count={null}
             trailing={<PortalDot row={row} />}

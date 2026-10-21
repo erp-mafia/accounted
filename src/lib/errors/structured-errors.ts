@@ -5410,6 +5410,29 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kvittot hör inte ihop med fakturan, så det kopplades inte till bokföringen. Det ligger kvar i inkorgen.',
     message_en: 'The receipt does not belong with the invoice, so it was not linked to the booking. It stays in the inbox.',
   },
+  // A company's own supplier portal (POST/PATCH/DELETE /api/inkorg/portals).
+  INKORG_PORTAL_URL_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Länken går inte att använda. Klistra in adressen till sidan med fakturorna, med https.',
+    message_en: 'The link cannot be used. Paste the address of the page with the invoices, with https.',
+  },
+  INKORG_PORTAL_PURCHASE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Köpet kunde inte hittas.',
+    message_en: 'The purchase was not found.',
+  },
+  // The bank row names nobody ("INTERNET BET 4"), or it is salary, tax or a
+  // fee: no supplier, so no invoice behind a login.
+  INKORG_PORTAL_NO_SUPPLIER: {
+    httpStatus: 422,
+    message_sv: 'Köpet har ingen leverantör som kan ha en portal.',
+    message_en: 'This purchase has no supplier that could have a portal.',
+  },
+  INKORG_PORTAL_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Portalen finns inte längre. Ladda om sidan.',
+    message_en: 'The portal no longer exists. Reload the page.',
+  },
   // Book-direct on a foreign-currency underlag (crm#1146). The lines arrive as
   // bare numbers that are stored as SEK, so a receipt for 100 EUR used to post
   // as 100 kr. Refused only when a line carries the document's foreign total

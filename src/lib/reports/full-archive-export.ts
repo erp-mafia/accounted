@@ -1483,6 +1483,8 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   migration_job_chunks: 'encrypted provider replay snapshots and worker receipts; imported documents are archived in their registers',
   mcp_tasks: 'MCP task handles: transient tool-call state with a 1-hour TTL',
   notice_dismissals: 'per-user UI notice dismissal state, not räkenskapsinformation',
+  company_portals:
+    'links to the pages where suppliers keep their invoices (Inkorg navigation, never credentials); the invoices fetched from them are archived as documents',
   oauth_flows:
     'in-flight browser OAuth flow state (migration 20260907120000): state, origin, encrypted PKCE verifier and handoff; consumed by the callback, not räkenskapsinformation',
   notification_log: 'notification dedup log',

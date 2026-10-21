@@ -21,7 +21,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { resolveInboxAddress } from '@/lib/documents/inbox-address'
 import { fetchCandidateTransactions } from './hunt'
-import { lookupPortal } from './portal-directory'
+import { resolvePortal, type CompanyPortal } from './company-portals'
+import { readCompanyPortals } from './company-portals-read'
 import { FETCH_DATE_WINDOW_DAYS, canHaveEmailReceipt } from './select'
 
 export type AgentWorklistKind = 'verifikat' | 'transaction'
@@ -156,9 +157,13 @@ function shiftDate(isoDate: string, days: number): string {
  */
 export type NextStepKind = 'not_mail' | 'portal' | 'kivra' | 'paper' | 'mail'
 
-export function nextStepKind(descriptor: string | null): NextStepKind {
+/**
+ * `companyPortals` are the company's own (public.company_portals); without
+ * them only the portal directory says where an invoice waits behind a login.
+ */
+export function nextStepKind(descriptor: string | null, companyPortals: readonly CompanyPortal[] = []): NextStepKind {
   if (!canHaveEmailReceipt(descriptor)) return 'not_mail'
-  if (lookupPortal(descriptor)) return 'portal'
+  if (resolvePortal(companyPortals, descriptor)) return 'portal'
   if (KIVRA_DESCRIPTOR.test(descriptor ?? '')) return 'kivra'
   if (TIP_DESCRIPTOR.test(descriptor ?? '') || IN_PERSON_DESCRIPTOR.test(descriptor ?? '')) return 'paper'
   return 'mail'
@@ -169,8 +174,12 @@ export function nextStepKind(descriptor: string | null): NextStepKind {
  * one place, one action. Never mentions searching, agents or what failed. By
  * the time this is read, the reader only wants the errand.
  */
-function nextStep(descriptor: string | null, portal: AgentWorklistItem['portal']): string {
-  switch (nextStepKind(descriptor)) {
+function nextStep(
+  descriptor: string | null,
+  portal: AgentWorklistItem['portal'],
+  companyPortals: readonly CompanyPortal[],
+): string {
+  switch (nextStepKind(descriptor, companyPortals)) {
     case 'not_mail':
       return 'Hämtas inte ur mejlen: underlaget är lönespecifikationen, skattekontot eller kontoutdraget.'
     case 'portal':
@@ -189,18 +198,18 @@ function withSearchHints(
     AgentWorklistItem,
     'search_from' | 'search_to' | 'mail_searchable' | 'portal' | 'tip_possible' | 'next_step'
   >,
+  companyPortals: readonly CompanyPortal[],
 ): AgentWorklistItem {
   const descriptor = base.counterparty ?? base.description
-  const portal = lookupPortal(descriptor)
+  // The company's own portal for the supplier first, then the directory's.
+  const portal = resolvePortal(companyPortals, descriptor)
   const mailSearchable = canHaveEmailReceipt(descriptor)
   // A payment that settles an invoice opens the window earlier: the invoice was
   // mailed when it was issued, the payment happens on the due date. The window
   // never closes later, because a document dated well after the charge belongs
   // to the next period, not this purchase.
   const settlesInvoice = Boolean(base.invoice_number) || INVOICE_DESCRIPTOR.test(descriptor ?? '')
-  const portalHint = portal
-    ? { vendor: portal.vendor, url: portal.url, note: portal.note ?? null }
-    : null
+  const portalHint = portal ? { vendor: portal.vendor, url: portal.url, note: portal.note } : null
   return {
     ...base,
     search_from: shiftDate(base.date, -(settlesInvoice ? INVOICE_DAYS_BEFORE : FETCH_DATE_WINDOW_DAYS)),
@@ -208,7 +217,7 @@ function withSearchHints(
     mail_searchable: mailSearchable,
     portal: portalHint,
     tip_possible: TIP_DESCRIPTOR.test(descriptor ?? ''),
-    next_step: nextStep(descriptor, portalHint),
+    next_step: nextStep(descriptor, portalHint, companyPortals),
   }
 }
 
@@ -358,11 +367,12 @@ export async function resolveAgentWorklist(
   const offset = Math.max(0, Math.floor(opts.offset ?? 0))
   const since = opts.since ?? null
 
-  const [verifikatWindow, transactions, claimed, inboxAddress] = await Promise.all([
+  const [verifikatWindow, transactions, claimed, inboxAddress, companyPortals] = await Promise.all([
     fetchVerifikatWindow(supabase, companyId, since),
     fetchCandidateTransactions(supabase, companyId),
     fetchClaimedTargets(supabase, companyId),
     resolveInboxAddress(supabase, companyId),
+    readCompanyPortals(supabase, companyId),
   ])
 
   const verifikat = verifikatWindow.rows.filter(
@@ -392,7 +402,7 @@ export async function resolveAgentWorklist(
         counterparty: ctx?.counterparty ?? null,
         description: v.description,
         invoice_number: ctx?.invoice_number ?? null,
-      }),
+      }, companyPortals),
     })
   }
   for (const tx of transactions) {
@@ -412,7 +422,7 @@ export async function resolveAgentWorklist(
         counterparty: tx.merchant_name ?? null,
         description: tx.description ?? null,
         invoice_number: null,
-      }),
+      }, companyPortals),
     })
   }
 
