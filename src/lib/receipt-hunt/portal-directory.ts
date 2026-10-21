@@ -164,6 +164,74 @@ export const PORTAL_DIRECTORY: PortalEntry[] = [
     aliases: ['loopia'],
     url: 'https://customerzone.loopia.se',
   },
+  // Added 2026-10-20 from the vendors most often without underlag across
+  // production ledgers, each checked against the vendor's own help pages
+  // for whether the invoice is mailed, and each URL requested over HTTP.
+  {
+    vendor: 'Google Ads',
+    aliases: ['google ads'],
+    // Statements for card-paying advertisers are never mailed or emailed
+    // (support.google.com/google-ads/answer/1723045); only monthly invoicing
+    // is. Google's own help links this exact path.
+    url: 'https://ads.google.com/aw/billing/documents',
+    note: 'Månadsutdrag och fakturor ligger under Fakturering, Dokument.',
+  },
+  {
+    vendor: 'Amazon',
+    // 'amazon web' (AWS) is longer and wins over 'amazon'.
+    aliases: ['amazon', 'amzn', 'prime membership'],
+    // The VAT invoice is per order in Your Account, never mailed. amazon.se
+    // answers 503 to automated requests past the sign-in redirect, so no
+    // deeper path could be verified.
+    url: 'https://www.amazon.se/gp/css/order-history',
+    note: 'Fakturan hämtas per beställning under Dina beställningar. Kvitton för Prime finns under Mitt Amazon Prime.',
+  },
+  {
+    vendor: 'Cloudflare',
+    aliases: ['cloudflare'],
+    // Invoice emails are off until the customer turns them on
+    // (developers.cloudflare.com/billing/manage/invoices). The dashboard
+    // refuses automated requests (403); this is the link Cloudflare's docs use.
+    url: 'https://dash.cloudflare.com/?to=/:account/billing',
+    note: 'Fakturorna ligger under Billing, Invoices and documents.',
+  },
+  {
+    vendor: 'Hallon',
+    aliases: ['hallon'],
+    // A card customer is charged monthly and gets no invoice by mail; the
+    // documents are on Mina sidor (hallon.se/support/betalningar).
+    url: 'https://www.hallon.se/mina-sidor',
+    note: 'Fakturasammanfattning och specifikation under Betalningar. Mina sidor visar sex månader bakåt.',
+  },
+  // Telecoms: a PDF by email is something the customer orders; paper is the
+  // default, and autogiro with an SMS notice leaves the invoice only in the
+  // portal. The portal holds every invoice whichever way it is delivered.
+  {
+    vendor: 'Tre',
+    // Tre's company name on bank rows; 'tre' alone would match half the mailbox.
+    aliases: ['hi3g'],
+    url: 'https://www.tre.se/mitt3',
+    note: 'De 18 senaste fakturorna finns som PDF under Faktura i Mitt3.',
+  },
+  {
+    vendor: 'Telenor',
+    aliases: ['telenor'],
+    url: 'https://mittforetag.telenor.se/',
+    note: 'Fakturorna ligger under Faktura, Fakturaöversikt i Mitt Företag.',
+  },
+  {
+    vendor: 'Telia',
+    aliases: ['telia'],
+    url: 'https://mybusiness.telia.se/foretag/mybusiness',
+    note: 'Fakturorna ligger under Fakturor i MyBusiness.',
+  },
+  {
+    vendor: 'Tele2',
+    aliases: ['tele2'],
+    // PDF by email cannot be combined with autogiro (tele2.se/foretag/support/faktura/pdf-faktura).
+    url: 'https://www.tele2.se/logga-in/smaforetag',
+    note: 'Fakturorna ligger under Fakturor i Mitt Tele2 Företag. Bara administratörer ser dem.',
+  },
 ]
 
 /**
