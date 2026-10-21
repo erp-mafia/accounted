@@ -210,3 +210,14 @@ describe('disconnectMailbox', () => {
     await expect(disconnectMailbox('c1')).resolves.toEqual({ ok: false, reason: 'failed' })
   })
 })
+
+describe('gmailAccessMailto', () => {
+  it('writes the request to us, subject and body encoded for a mail program', async () => {
+    const { gmailAccessMailto } = await import('@/components/extensions/general/mail-connections')
+    const href = gmailAccessMailto('support@accounted.se', 'Gmail i Inkorgen: Åkeri & Söner AB', 'Hej!\n\nGmail-adress: \nFöretag: Åkeri & Söner AB (556677-8899)\n')
+    expect(href.startsWith('mailto:support@accounted.se?subject=')).toBe(true)
+    const url = new URL(href)
+    expect(url.searchParams.get('subject')).toBe('Gmail i Inkorgen: Åkeri & Söner AB')
+    expect(url.searchParams.get('body')).toBe('Hej!\n\nGmail-adress: \nFöretag: Åkeri & Söner AB (556677-8899)\n')
+  })
+})
