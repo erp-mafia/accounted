@@ -56,6 +56,13 @@ describe('summariseMissingUnderlag', () => {
     expect(summary.top).toEqual({ kind: 'kivra', count: 1 })
   })
 
+  it('reads a supplier the company pointed at its own portal as a portal errand', () => {
+    const rows = [{ description: 'ELLEVIO AB AUTOGIRO' }, { description: 'ELLEVIO AB AUTOGIRO' }, { description: 'ICA Maxi' }]
+    expect(summariseMissingUnderlag(3, rows).top?.kind).not.toBe('portal')
+    const ellevio = { id: 'p-ellevio', counterparty_key: 'ellevio', vendor_name: 'Ellevio', url: 'https://www.ellevio.se/foretag' }
+    expect(summariseMissingUnderlag(3, rows, [ellevio]).top).toEqual({ kind: 'portal', count: 2 })
+  })
+
   it('has nothing to say when there is no work, and never invents a row', () => {
     expect(summariseMissingUnderlag(0, [])).toEqual({ total: 0, sampled: 0, top: null })
     // A count with no page (an RPC that returned only the total) must not

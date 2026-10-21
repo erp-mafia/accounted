@@ -51,6 +51,18 @@ export interface ResolvedPortal {
 /** A key shorter than this names nobody ("ab", "se"): it would claim half the bank statement. */
 export const MIN_PORTAL_KEY_LENGTH = 3
 
+/**
+ * Words that say how money moved, never who was paid. A key made of these
+ * alone ("swish betalning") would claim every such row on the statement, so
+ * it names no supplier. Folded the way normalizeForMatch folds (no å, ä, ö).
+ */
+const PAYMENT_WORDS: ReadonlySet<string> = new Set([
+  'swish', 'betalning', 'betalningar', 'payment', 'payments', 'kort', 'kortbetalning', 'kortkop',
+  'inbetalning', 'utbetalning', 'insattning', 'uttag', 'transfer', 'overforing', 'bankgiro',
+  'plusgiro', 'giro', 'bg', 'pg', 'faktura', 'fakturor', 'avgift', 'avgifter', 'fee', 'fees',
+  'internet', 'via', 'mobil',
+])
+
 /** The longest supplier name a portal carries: the `?view=portal:` value takes no more (lib/inkorg/items.ts). */
 export const MAX_PORTAL_VENDOR_LENGTH = 80
 
@@ -66,6 +78,7 @@ export function portalKeyFor(descriptor: string | null | undefined): string | nu
   if (!text) return null
   const key = normalizeForMatch(text)
   if (key.length < MIN_PORTAL_KEY_LENGTH || !/\p{L}/u.test(key)) return null
+  if (key.split(' ').every((word) => PAYMENT_WORDS.has(word))) return null
   return key
 }
 
@@ -117,8 +130,9 @@ const DOTTED_HOST = /^[^.]+(?:\.[^.]+)+$/
 
 /**
  * The link to store, from what a person pasted, or a refusal:
- *   - https only. A link without a scheme gets https:// in front; any other
- *     scheme (http:, javascript:, data:, mailto:) is refused;
+ *   - https only. A link without a scheme gets https:// in front, an http://
+ *     link is moved to https://, and any other scheme (javascript:, data:,
+ *     mailto:) is refused;
  *   - no user name or password in it (user:pass@);
  *   - a host with a dot, and no whitespace anywhere;
  *   - the query string is dropped, since that is where one-time tokens and
@@ -135,6 +149,7 @@ export function normalizePortalUrl(input: string | null | undefined): PortalUrlR
   else {
     const scheme = SCHEME.exec(text)
     if (!scheme || HOST_AND_PORT.test(text)) text = `https://${text}`
+    else if (scheme[1].toLowerCase() === 'http') text = `https:${text.slice(scheme[0].length)}`
     else if (scheme[1].toLowerCase() !== 'https') return { ok: false }
   }
 

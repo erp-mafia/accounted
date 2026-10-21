@@ -32,6 +32,14 @@ describe('portalKeyFor', () => {
     expect(portalKeyFor('HETZNER ONLINE GMBH K3667')).toBe('hetzner online')
   })
 
+  it('names nobody from a row that only says how the money moved', () => {
+    expect(portalKeyFor('Swish betalning')).toBeNull()
+    expect(portalKeyFor('SWISH BETALNING 1234567890')).toBeNull()
+    expect(portalKeyFor('Kortbetalning')).toBeNull()
+    // A supplier named next to the rail is still a supplier.
+    expect(portalKeyFor('Swish betalning Frisörsalongen Ek')).not.toBeNull()
+  })
+
   it('names nobody when the fold leaves too little', () => {
     expect(portalKeyFor(null)).toBeNull()
     expect(portalKeyFor('   ')).toBeNull()
@@ -108,12 +116,17 @@ describe('normalizePortalUrl', () => {
     expect(normalizePortalUrl('HTTPS://Minasidor.Telia.SE/Foretag')).toEqual(ok('https://minasidor.telia.se/Foretag'))
   })
 
+  it('moves an http link to https', () => {
+    expect(normalizePortalUrl('http://minasidor.telia.se/foretag')).toEqual(ok('https://minasidor.telia.se/foretag'))
+    expect(normalizePortalUrl('HTTP://Ellevio.se?x=1')).toEqual(ok('https://ellevio.se'))
+    expect(normalizePortalUrl('http://user:pass@minasidor.telia.se')).toEqual({ ok: false })
+  })
+
   it('refuses every other scheme', () => {
     for (const bad of [
       'javascript:alert(1)',
       'JavaScript:alert(document.cookie)',
       'data:text/html,<script>alert(1)</script>',
-      'http://minasidor.telia.se',
       'ftp://files.example.se',
       'mailto:faktura@telia.se',
       'file:///etc/passwd',
