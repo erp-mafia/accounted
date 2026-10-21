@@ -115,7 +115,11 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
   const locale = useLocale()
   const searchParams = useSearchParams()
   const { toast } = useToast()
-  const companyId = useCompanyOptional()?.company?.id ?? null
+  const companyContext = useCompanyOptional()
+  const companyId = companyContext?.company?.id ?? null
+  // A viewer reads the portals but adds and changes none: useCanWrite's rule, which the
+  // routes and RLS enforce. Outside a provider (the sandbox) the server still decides.
+  const canWrite = !companyContext || (companyContext.role !== null && companyContext.role !== 'viewer')
   const { items, itemsState, purchases, purchasesState, refresh } = useInkorgData(companyId)
 
   const [view, setView] = useState<InkorgView>(() => parseViewKey(searchParams.get('view')))
@@ -589,7 +593,7 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
                       busy={busyId === purchase.id}
                       finishing={finishingId === purchase.id}
                       onFiles={(files) => void attach(purchase.id, files)}
-                      onAddPortal={(url) => savePortal(purchase.id, url)}
+                      onAddPortal={canWrite ? (url) => savePortal(purchase.id, url) : undefined}
                     />
                   ) : null
                 }
@@ -624,7 +628,7 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
                     // The portal's two ways to the invoices, as each of its purchases offers them; a
                     // portal the company added also has its quiet Ändra.
                     <div className="flex shrink-0 flex-wrap items-center gap-2">
-                      {companyPortal && (
+                      {companyPortal && canWrite && (
                         <button
                           type="button"
                           onClick={() => setEditingPortal((open) => !open)}
@@ -647,7 +651,7 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
                   ) : undefined
                 }
               />
-              {portal && companyPortal && editingPortal && (
+              {portal && companyPortal && canWrite && editingPortal && (
                 <PortalLinkForm
                   key={companyPortal.id}
                   className="-mt-2 mb-6 max-w-xl"

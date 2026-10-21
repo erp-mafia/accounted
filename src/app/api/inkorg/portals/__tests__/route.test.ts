@@ -81,7 +81,7 @@ describe('POST /api/inkorg/portals', () => {
   })
 
   it('returns 400 INKORG_PORTAL_URL_INVALID for a link the rule refuses, before reading anything', async () => {
-    for (const url of ['javascript:alert(1)', 'http://minasidor.telia.se', 'https://user:pass@minasidor.telia.se', 'localhost']) {
+    for (const url of ['javascript:alert(1)', 'ftp://minasidor.telia.se', 'https://user:pass@minasidor.telia.se', 'localhost']) {
       const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(
         await post({ transaction_id: TX_ID, url }),
       )
