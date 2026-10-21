@@ -33,6 +33,7 @@ vi.mock('../lib/system-auth/config', async (importOriginal) => {
 
 import {
   resolveReadAuth,
+  resolveUserReadAuth,
   hasVerifiedGrant,
   hasOmbudReadAccess,
   findCompanyTokenUser,
@@ -169,6 +170,30 @@ describe('resolveReadAuth', () => {
     const supabase = makeSupabase({ user_id: 'user-1', status: 'needs_reconsent' })
     const result = await resolveReadAuth(supabase, 'company-1', { requires: 'lasombud' })
     expect(result).toEqual({ ok: false, reason: 'needs_reconsent' })
+  })
+})
+
+describe('resolveUserReadAuth', () => {
+  it('ignores a verified ombud grant: reads no role covers stay on the member token', async () => {
+    mockMode.mockReturnValue('on')
+    mockConfigured.mockReturnValue(true)
+    mockGetConnection.mockResolvedValue(GRANTED_CONNECTION)
+
+    const supabase = makeSupabase({ user_id: 'user-1', status: 'active' })
+    const result = await resolveUserReadAuth(supabase, 'company-1', { userId: 'user-1' })
+
+    expect(result).toMatchObject({ ok: true, source: 'user', tokenUserId: 'user-1' })
+    if (result.ok) expect(result.auth).toMatchObject({ mode: 'user', userId: 'user-1', companyId: 'company-1' })
+    expect(mockGetConnection).not.toHaveBeenCalled()
+  })
+
+  it('no token row -> no_token, even with a verified ombud grant', async () => {
+    mockMode.mockReturnValue('on')
+    mockConfigured.mockReturnValue(true)
+    mockGetConnection.mockResolvedValue(GRANTED_CONNECTION)
+
+    const result = await resolveUserReadAuth(makeSupabase(null), 'company-1')
+    expect(result).toEqual({ ok: false, reason: 'no_token' })
   })
 })
 

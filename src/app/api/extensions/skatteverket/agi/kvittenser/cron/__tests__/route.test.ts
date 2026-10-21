@@ -56,7 +56,7 @@ vi.mock('@/extensions/general/skatteverket/lib/api-client', () => {
     // refusal into the gateway_refused outcome instead of letting it throw.
     isApigwClientRefusal: (err: unknown) =>
       err instanceof SkatteverketAuthError && err.detail === 'APIGW_CLIENT_REFUSED',
-    // resolve-auth's currentSkvEnvironment (grant-revoked path) reads this.
+    // resolve-auth's currentSkvEnvironment (the ombud grant lookup) reads this.
     getSkatteverketEnvironment: vi.fn().mockReturnValue('test'),
   }
 })
@@ -77,12 +77,13 @@ vi.mock('@/lib/entitlements/has-capability', () => ({
   hasCapability: vi.fn().mockResolvedValue(true),
 }))
 
-// The route's real connection-store hits the DB via its own service client;
-// mocking keeps the grant-revoked path deterministic. resolve-auth also
-// imports getConnection from here (only used when system auth mode is on,
-// which is off in tests), so export it too.
+// The real connection-store hits the DB via its own service client. The
+// route itself no longer touches it; resolve-auth reads the ombud grant from
+// here when system auth is on, and markGrantRevoked stays mocked so a test can
+// prove an AGI run never downgrades a grant.
 vi.mock('@/extensions/general/skatteverket/lib/connection-store', () => ({
   getConnection: vi.fn().mockResolvedValue(null),
+  keepRowsOnCurrentOrgNumber: vi.fn(async (rows: unknown[]) => rows),
   markGrantRevoked: vi.fn().mockResolvedValue(undefined),
 }))
 
@@ -100,7 +101,7 @@ import { verifyCronSecret } from '@/lib/auth/cron'
 import { agiGetKvittenser } from '@/extensions/general/skatteverket/lib/agi-client'
 import { SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api-client'
 import { markNeedsReconsent } from '@/extensions/general/skatteverket/lib/token-store'
-import { markGrantRevoked } from '@/extensions/general/skatteverket/lib/connection-store'
+import { getConnection, markGrantRevoked } from '@/extensions/general/skatteverket/lib/connection-store'
 import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
 import { sendKvittensNotification } from '@/extensions/general/skatteverket/lib/kvittens-notification'
 
@@ -108,6 +109,7 @@ const mockCreateClient = vi.mocked(createClient)
 const mockVerifyCronSecret = vi.mocked(verifyCronSecret)
 const mockAgiGetKvittenser = vi.mocked(agiGetKvittenser)
 const mockMarkNeedsReconsent = vi.mocked(markNeedsReconsent)
+const mockGetConnection = vi.mocked(getConnection)
 const mockMarkGrantRevoked = vi.mocked(markGrantRevoked)
 const mockCompleteTaxDeadline = vi.mocked(completeTaxDeadline)
 const mockSendKvittensNotification = vi.mocked(sendKvittensNotification)
@@ -218,7 +220,6 @@ describe('AGI kvittenser cron', () => {
 
     expect(body.signed).toBe(1)
     expect(body.errors).toBe(0)
-    expect(body.grantRevoked).toBe(0)
     expect(body.results[0].status).toBe('signed')
     // Tenant identifiers stay in internal log context only.
     expect(body.results[0]).not.toHaveProperty('companyId')
@@ -306,23 +307,56 @@ describe('AGI kvittenser cron', () => {
     expect(warnMessages.some(m => m.includes('sendKvittensNotification failed'))).toBe(true)
   })
 
-  it('counts grant_revoked in the run summary', async () => {
-    mockCreateClient.mockReturnValueOnce(stubHappyTables())
-    mockAgiGetKvittenser.mockRejectedValueOnce(
-      new SkatteverketAuthError('Ombud grant missing.', 'OMBUD_GRANT_MISSING'),
-    )
+  describe('with ombud reads switched on', () => {
+    const ENV_KEYS = ['SKATTEVERKET_SYSTEM_AUTH_MODE', 'SKATTEVERKET_SYSTEM_AUTH_MECHANISM'] as const
+    let saved: Record<string, string | undefined>
 
-    const res = await GET(makeRequest())
-    const body = await res.json()
+    beforeEach(() => {
+      saved = Object.fromEntries(ENV_KEYS.map(k => [k, process.env[k]]))
+      process.env.SKATTEVERKET_SYSTEM_AUTH_MODE = 'on'
+      process.env.SKATTEVERKET_SYSTEM_AUTH_MECHANISM = 'stub'
+      // The company granted Accounted the skattekonto lasombud role, nothing
+      // for arbetsgivardeklaration.
+      mockGetConnection.mockResolvedValue({
+        status: 'partial',
+        lasombud_status: 'granted',
+        moms_ombud_status: 'unknown',
+      } as any)
+    })
 
-    expect(body.processed).toBe(1)
-    expect(body.grantRevoked).toBe(1)
-    expect(body.errors).toBe(0)
-    expect(body.results[0]).toMatchObject({ status: 'grant_revoked', error: 'OMBUD_GRANT_MISSING' })
-    expect(mockMarkGrantRevoked).toHaveBeenCalledWith('comp-1', expect.any(String), 'lasombud', 'OMBUD_GRANT_MISSING')
+    afterEach(() => {
+      for (const k of ENV_KEYS) {
+        if (saved[k] === undefined) delete process.env[k]
+        else process.env[k] = saved[k]
+      }
+      mockGetConnection.mockResolvedValue(null)
+    })
 
-    const summaryLine = logSpy.mock.calls.map(c => String(c[0])).find(m => m.includes('Processed'))
-    expect(summaryLine).toContain('1 grants revoked')
+    it('reads the AGI kvittens on the member token, never on the lasombud grant', async () => {
+      mockCreateClient.mockReturnValueOnce(stubHappyTables())
+      mockAgiGetKvittenser.mockResolvedValueOnce({ ok: true, data: { kvittenser: [] } } as any)
+
+      const res = await GET(makeRequest())
+      const body = await res.json()
+
+      expect(body.results[0].status).toBe('still_pending')
+      expect(mockAgiGetKvittenser).toHaveBeenCalledTimes(1)
+      expect(mockAgiGetKvittenser.mock.calls[0][0]).toMatchObject({ mode: 'user', userId: 'user-1' })
+    })
+
+    it('an AGI refusal never revokes the skattekonto grant', async () => {
+      mockCreateClient.mockReturnValueOnce(stubHappyTables())
+      mockAgiGetKvittenser.mockRejectedValueOnce(
+        new SkatteverketAuthError('Ombud grant missing.', 'OMBUD_GRANT_MISSING'),
+      )
+
+      const res = await GET(makeRequest())
+      const body = await res.json()
+
+      expect(body.processed).toBe(1)
+      expect(body.results[0].status).toBe('error')
+      expect(mockMarkGrantRevoked).not.toHaveBeenCalled()
+    })
   })
 
   // Production since July (#973, #2226): the gateway refuses the APIGW client

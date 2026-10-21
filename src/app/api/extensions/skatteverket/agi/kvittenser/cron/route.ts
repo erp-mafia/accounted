@@ -4,8 +4,7 @@ import { createLogger } from '@/lib/logger'
 import { verifyCronSecret } from '@/lib/auth/cron'
 import { SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api-client'
 import { markNeedsReconsent, RECONSENT_ERROR_CODES } from '@/extensions/general/skatteverket/lib/token-store'
-import { currentSkvEnvironment, findCompanyTokenUser } from '@/extensions/general/skatteverket/lib/resolve-auth'
-import { markGrantRevoked } from '@/extensions/general/skatteverket/lib/connection-store'
+import { findCompanyTokenUser } from '@/extensions/general/skatteverket/lib/resolve-auth'
 import { reconcileAgiDeclaration, type SkvGatewayRoute } from '@/extensions/general/skatteverket/lib/agi-kvittens-reconcile'
 import { formatRedovisningsperiod } from '@/lib/skatteverket/format'
 import { hasCapability } from '@/lib/entitlements/has-capability'
@@ -102,7 +101,7 @@ export async function GET(request: Request) {
   type Result = {
     declarationId: string
     period: string
-    status: 'signed' | 'still_pending' | 'already_claimed' | 'no_token' | 'no_company_settings' | 'expired_token' | 'grant_revoked' | 'gateway_refused' | 'error'
+    status: 'signed' | 'still_pending' | 'already_claimed' | 'no_token' | 'no_company_settings' | 'expired_token' | 'gateway_refused' | 'error'
     error?: string
   }
   const results: Result[] = []
@@ -133,8 +132,8 @@ export async function GET(request: Request) {
     }
 
     try {
-      // The shared reconciler resolves auth (system grant → user token),
-      // fetches the kvittens, and on a hit promotes the declaration +
+      // The shared reconciler resolves a member's user token (AGI reads never
+      // run on ombud credentials), fetches the kvittens, and on a hit promotes the declaration +
       // stamps salary_runs / deadline / notification. Auth errors propagate
       // to the catch below, which owns the cron-specific side effects.
       const outcome = await reconcileAgiDeclaration(
@@ -172,15 +171,6 @@ export async function GET(request: Request) {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error'
 
-      if (err instanceof SkatteverketAuthError && err.code === 'OMBUD_GRANT_MISSING') {
-        // System-mode read rejected: the company withdrew the behorighet.
-        // Downgrade the connection row so the next run falls back to the
-        // user token (if any). Never touches skatteverket_tokens.
-        await markGrantRevoked(companyId, currentSkvEnvironment(), 'lasombud', err.code)
-        results.push({ declarationId, period, status: 'grant_revoked', error: err.code })
-        continue
-      }
-
       if (
         err instanceof SkatteverketAuthError &&
         (RECONSENT_ERROR_CODES as readonly string[]).includes(err.code)
@@ -208,7 +198,7 @@ export async function GET(request: Request) {
       // real failure and lands in the error path like any other.
       log.error('Reconciliation failed', { declarationId, companyId, period, message })
       // An access denial keeps its machine-readable code in the body (as the
-      // expired_token / grant_revoked rows do): the keyword heuristic in
+      // expired_token rows do): the keyword heuristic in
       // getErrorMessage misses the gateway wording and would collapse it
       // into "Något gick fel". The full guidance is in the error log above.
       const isAccessDenied = err instanceof SkatteverketAuthError && err.code === 'ACCESS_DENIED'
@@ -225,12 +215,11 @@ export async function GET(request: Request) {
   const stillPending = results.filter(r => r.status === 'still_pending').length
   const alreadyClaimed = results.filter(r => r.status === 'already_claimed').length
   const expired = results.filter(r => r.status === 'expired_token').length
-  const grantRevoked = results.filter(r => r.status === 'grant_revoked').length
   const errors = results.filter(r => r.status === 'error').length
   const gatewayRefused = refusedRoutes.size > 0
 
   console.log(
-    `[agi-kvittenser-cron] Processed ${results.length}: ${signed} signed, ${stillPending} still pending, ${alreadyClaimed} already claimed, ${expired} expired, ${grantRevoked} grants revoked, ${errors} errors${gatewayRefused ? ', stopped: gateway refused the APIGW client' : ''}`,
+    `[agi-kvittenser-cron] Processed ${results.length}: ${signed} signed, ${stillPending} still pending, ${alreadyClaimed} already claimed, ${expired} expired, ${errors} errors${gatewayRefused ? ', stopped: gateway refused the APIGW client' : ''}`,
   )
 
   return NextResponse.json(
@@ -240,7 +229,6 @@ export async function GET(request: Request) {
       stillPending,
       alreadyClaimed,
       expired,
-      grantRevoked,
       errors,
       gatewayRefused,
       results,

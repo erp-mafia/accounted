@@ -1,0 +1,1 @@
+[2026-10-20] AGI kvittens reads stay on a member's own token instead of getting a third ombud role now: AGI needs "Registreringsombud arbetsgivardeklaration", which Skatteverket has not approved for our system client yet; the role, migration and UI wait for that approval.

@@ -27,7 +27,7 @@ vi.mock('../lib/agi-client', () => ({
   agiSkapaGranskningsunderlag: vi.fn(),
   agiGetKvittenser: vi.fn(),
 }))
-vi.mock('../lib/resolve-auth', () => ({ resolveReadAuth: vi.fn() }))
+vi.mock('../lib/resolve-auth', () => ({ resolveUserReadAuth: vi.fn() }))
 vi.mock('../lib/kvittens-notification', () => ({
   sendKvittensNotification: vi.fn().mockResolvedValue(undefined),
 }))
@@ -46,7 +46,7 @@ import {
   agiPostUnderlag,
   agiSkapaGranskningsunderlag,
 } from '../lib/agi-client'
-import { resolveReadAuth } from '../lib/resolve-auth'
+import { resolveUserReadAuth } from '../lib/resolve-auth'
 import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
 
 type Row = Record<string, unknown>
@@ -282,7 +282,7 @@ beforeEach(() => {
     ok: true,
     data: { tillstand: 'LOCKED_FOR_SIGNING', link: 'https://skatteverket.se/sign', meddelande: null },
   } as never)
-  vi.mocked(resolveReadAuth).mockResolvedValue({
+  vi.mocked(resolveUserReadAuth).mockResolvedValue({
     ok: true,
     auth: { mode: 'user' },
     source: 'user',

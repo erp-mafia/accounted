@@ -7,7 +7,7 @@ import { agiGetKvittenser } from './agi-client'
 import { isApigwClientRefusal } from './api-client'
 import { auditUserIdFor } from './audit'
 import { skatteverketConnectorMode } from './connector-mode'
-import { resolveReadAuth } from './resolve-auth'
+import { resolveUserReadAuth } from './resolve-auth'
 import { sendKvittensNotification } from './kvittens-notification'
 import { recordAgiKvittenser } from './agi-kvittens-history'
 import type { SkatteverketAGIKvittens } from '../types'
@@ -191,15 +191,11 @@ export async function reconcileAgiDeclaration(
   const companyId = decl.company_id
   const period = formatRedovisningsperiod('monthly', decl.period_year, decl.period_month)
 
-  // Auth resolution prefers system credentials (verified lasombud grant)
-  // and falls back to the company's user token: kvittens polling is the
-  // canonical case for the hybrid model, since the user signed at SKV
-  // and their 65-minute session is usually long dead by the time the
-  // kvittens exists.
-  const resolved = await resolveReadAuth(supabase, companyId, {
-    requires: 'lasombud',
-    userId: opts.userId,
-  })
+  // Always a member's own token, never Accounted's ombud credentials: the
+  // AGI hantera API needs "Registreringsombud arbetsgivardeklaration", a
+  // role Accounted does not ask for yet. The lasombud grant covers
+  // Skattekonto only (see resolveUserReadAuth).
+  const resolved = await resolveUserReadAuth(supabase, companyId, { userId: opts.userId })
   if (!resolved.ok) {
     if (resolved.reason === 'needs_reconsent') {
       // A connection flagged needs_reconsent cannot heal on its own
