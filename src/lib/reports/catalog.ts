@@ -143,7 +143,10 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     labelKey: 'name_trial_balance',
     descKey: 'desc_trial_balance',
     category: 'interim',
-    params: 'fiscal',
+    // A saldobalans per månad or per any date inside the räkenskapsår, as in
+    // the systems people come from (crm#1350). generateTrialBalance has
+    // taken the range all along; only the report never asked for it.
+    params: 'fiscal-range',
     exports: ['xlsx'],
   },
   {

@@ -1,0 +1,1 @@
+[2026-10-21] Saldobalans takes the shared from/to range on the dashboard only (view, JSON, xlsx, drill-down), not in the v1 route or MCP tool: a range there costs tools/list budget and API docs and no caller has asked; generateTrialBalance already took it (crm#1350).

@@ -306,7 +306,7 @@ function FocusedView({
     case 'balansrapport':
       return <BalansrapportView periodId={periodId} dateRange={dateRange} drilldown={drilldown} />
     case 'trial-balance':
-      return <TrialBalanceView periodId={periodId} drilldown={drilldown} />
+      return <TrialBalanceView periodId={periodId} dateRange={dateRange} drilldown={drilldown} />
     case 'income-statement':
       return <IncomeStatementView periodId={periodId} dateRange={dateRange} dimensionFilter={dimensionFilter} drilldown={drilldown} />
     case 'balance-sheet':

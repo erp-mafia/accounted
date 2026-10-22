@@ -1,6 +1,7 @@
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
+import { parseReportDateRange } from '@/lib/reports/date-range'
 import {
   reportToWorkbook,
   textColumn,
@@ -38,8 +39,15 @@ export const GET = withRouteContext('report.trial_balance.xlsx', async (request,
     return NextResponse.json({ error: 'Räkenskapsperioden kunde inte läsas.' }, { status: 400 })
   }
 
+  // The same range as the report on screen (GET /api/reports/trial-balance).
+  const parsed = parseReportDateRange(searchParams, period)
+  if (!parsed.ok) {
+    return NextResponse.json({ error: parsed.error }, { status: 400 })
+  }
+  const range = parsed.range
+
   try {
-    const report = await generateTrialBalance(supabase, companyId, periodId, { closingEntry: 'include' })
+    const report = await generateTrialBalance(supabase, companyId, periodId, { closingEntry: 'include', ...range })
 
     const buffer = await reportToWorkbook<TrialBalanceRow>([
       {
@@ -70,7 +78,8 @@ export const GET = withRouteContext('report.trial_balance.xlsx', async (request,
       },
     ])
 
-    const filename = xlsxFilename('saldobalans', companyRow?.company_name ?? '', period.period_end)
+    // Named after the balansdag the UB columns stand on.
+    const filename = xlsxFilename('saldobalans', companyRow?.company_name ?? '', range.toDate ?? period.period_end)
     return fileResponse(new Uint8Array(buffer), { filename: filename, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   } catch (err) {
     return NextResponse.json(
