@@ -32,6 +32,7 @@ import {
   validatePersonnummer,
 } from '@/lib/salary/personnummer'
 import { revealStoredCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
+import { checkAccountingMethod } from '@/lib/company/accounting-method'
 
 /**
  * Shared invoice write-builder.
@@ -346,12 +347,17 @@ export async function buildInvoiceWriteData(params: {
     if (isZeroRatedInvoiceTreatment(vatRules.treatment)) {
       return { ok: false, code: 'INVOICE_CREATE_ACCRUAL_INVALID', details: { reason: 'vat_treatment', vatTreatment: vatRules.treatment } }
     }
-    const { data: methodSettings } = await supabase
-      .from('company_settings')
-      .select('accounting_method')
-      .eq('company_id', companyId)
-      .maybeSingle()
-    if ((methodSettings?.accounting_method || 'accrual') !== 'accrual') {
+    // Fail closed (accounted#58): an unreadable method must not let a
+    // kontantmetod company defer revenue it books only at payment.
+    const method = checkAccountingMethod(
+      await supabase
+        .from('company_settings')
+        .select('accounting_method')
+        .eq('company_id', companyId)
+        .maybeSingle(),
+    )
+    if (!method.ok) return { ok: false, code: method.code, details: method.details }
+    if (method.accountingMethod !== 'accrual') {
       return { ok: false, code: 'INVOICE_CREATE_ACCRUAL_INVALID', details: { reason: 'accounting_method' } }
     }
     // A period lying only in the invoice month credits 29xx and debits it

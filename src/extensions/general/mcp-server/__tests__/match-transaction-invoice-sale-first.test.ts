@@ -153,6 +153,9 @@ describe('gnubok_match_transaction_to_invoice: the sale first (defer_invoice_boo
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     mockPlanSale.mockResolvedValue(REQUIRED_PLAN)
     enqueueReads(enqueue, 400)
+    // A partial of a never-booked invoice reads the company's method: the
+    // kontantmetoden guard (crm#1364). Faktureringsmetoden stages it.
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
     enqueueStage(enqueue)
 
     await expect(run(supabase)).resolves.toMatchObject({ staged: true })

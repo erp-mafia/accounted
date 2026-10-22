@@ -78,8 +78,11 @@ export const SE_PURCHASE_CATEGORY_ACCOUNTS: Readonly<Record<PurchaseCategoryCode
   'expense.travel.meals': ['5831', '5832', '5830'],
   'expense.travel.other': ['5890'],
 
-  'expense.representation.client': ['6071', '6072', '6070'],
-  'expense.representation.staff': ['7631', '7632', '7630'],
+  // The usual account is the ej avdragsgill one: what lands here is nearly
+  // always a meal, not income-tax deductible since 2017 (IL 16 kap. 2 §), and
+  // the Inkorg's costAccountFor books the first account (accounted#86).
+  'expense.representation.client': ['6072', '6071', '6070'],
+  'expense.representation.staff': ['7632', '7631', '7630'],
 
   'expense.marketing.ads': ['5910', '5970'],
   'expense.marketing.print': ['5930'],

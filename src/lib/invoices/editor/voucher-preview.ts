@@ -58,15 +58,17 @@ export function proposeDraftSendLines(input: DraftVoucherInput): FormLine[] {
  * "Redan betald" confirm before anything exists: the payment account debit
  * against revenue and output VAT, from buildInvoiceCashLines, the generator
  * the payment at issue books with. [] under the same conditions as
- * proposeDraftSendLines.
+ * proposeDraftSendLines. `options.deferDeductionShare` as the payment passes
+ * it: true for a kontantmetod company (a ROT/RUT invoice's two steps).
  */
 export function proposeDraftCashLines(
   input: DraftVoucherInput,
   settlementAccountNumber: string,
+  options: { deferDeductionShare?: boolean } = {},
 ): Array<{ account_number: string; debit_amount: number; credit_amount: number }> {
   const invoice = draftInvoice(input)
   if (!invoice) return []
-  return buildInvoiceCashLines(invoice, input.entityType, undefined, settlementAccountNumber)
+  return buildInvoiceCashLines(invoice, input.entityType, undefined, settlementAccountNumber, undefined, undefined, options)
     .lines.filter((line) => roundOre(line.debit_amount) !== 0 || roundOre(line.credit_amount) !== 0)
     .map((line) => ({
       account_number: line.account_number,

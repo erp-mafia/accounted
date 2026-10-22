@@ -42,6 +42,7 @@ vi.mock('../vat-revenue-accounts', async (orig) => ({
 }))
 
 import {
+  findUnattributedEuSales,
   generatePeriodiskSammanstallning,
   normalizeVatNumber,
   reconcilePsAgainstVatDeclaration,
@@ -1170,5 +1171,73 @@ describe('the declaration\'s account-to-ruta mapping (crm#1336)', () => {
 
     expect(fetchedAccounts()).not.toContain('3308')
     expect(fetchedAccounts()).toEqual(expect.arrayContaining(['3108', '3107']))
+  })
+})
+
+describe('findUnattributedEuSales: the PS finding for any date range (crm#1362)', () => {
+  /**
+   * The reported shape: a bank-booked sale posted on the wrong account, then
+   * corrected with correctEntry() onto 3308. Only the correction carries a
+   * PS line; its original (status reversed) is fetched as the chain parent,
+   * and nothing in the invoice register points at either.
+   */
+  function bankSaleCorrection(id: string, voucherNumber: number, lines: LineFx[]) {
+    return {
+      ...entryOther(id, 'correction', lines),
+      voucher_series: 'A',
+      voucher_number: voucherNumber,
+      entry_date: '2026-07-22',
+      reverses_id: null,
+      correction_of_id: 'je-bank',
+    }
+  }
+
+  it('names a corrected bank-booked EU service sale over a helårsmoms range, with the PS severity', async () => {
+    results = [
+      { data: [bankSaleCorrection('je-a210', 210, [lineEU('3308', 1501.71)])], error: null },
+      { data: [], error: null }, // invoices by journal_entry_id
+      { data: [], error: null }, // invoice_payments
+      {
+        data: [{ id: 'je-bank', source_type: 'bank_transaction', source_id: 'tx-1', reverses_id: null, correction_of_id: null }],
+        error: null,
+      }, // journal_entries by id: the original, unexplained too
+    ]
+    rpcResults = [{ data: [sourceLine('je-a210')], error: null }]
+
+    const warnings = await findUnattributedEuSales(supabase, 'c1', '2025-10-01', '2026-09-30')
+
+    expect(warnings).toEqual([
+      expect.objectContaining({ code: 'UNATTRIBUTED_EU_SALE', level: 'warning', journalEntryId: 'je-a210', amount: 1501.71 }),
+    ])
+    expect(warnings[0].message).toContain('Verifikat A210 (2026-07-22)')
+    expect(warnings[0].message).toContain('konto 3308 (ruta 39)')
+    // The range is the caller's, not a PS month or quarter.
+    expect(supabase.rpc).toHaveBeenCalledWith('get_vat_ruta_source_lines', expect.objectContaining({
+      p_start: '2025-10-01',
+      p_end: '2026-09-30',
+    }))
+  })
+
+  it('an invoiced EU sale is no finding, and the invoices are never loaded', async () => {
+    results = [{ data: [entryEU('inv-de', [lineEU('3108', 10000)])], error: null }]
+
+    const warnings = await findUnattributedEuSales(supabase, 'c1', '2025-05-01', '2025-05-31')
+
+    expect(warnings).toEqual([])
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('an unattributed goods sale is an error, as it is in the report', async () => {
+    results = [
+      { data: [{ ...entryOther('je-man', 'manual', [lineEU('3108', 2500)]), voucher_series: 'A', voucher_number: 9 }], error: null },
+      { data: [], error: null },
+      { data: [], error: null },
+    ]
+    rpcResults = [{ data: [sourceLine('je-man')], error: null }]
+
+    const warnings = await findUnattributedEuSales(supabase, 'c1', '2025-05-01', '2025-05-31')
+
+    expect(warnings).toEqual([expect.objectContaining({ level: 'error', journalEntryId: 'je-man', amount: 2500 })])
   })
 })

@@ -84,7 +84,7 @@ export interface CategoryOption {
 
 // Shared category arrays
 export const EXPENSE_CATEGORIES: CategoryOption[] = [
-  { value: 'expense_representation', label: 'Representation', labelKey: 'expense_representation', account: '6071' },
+  { value: 'expense_representation', label: 'Representation', labelKey: 'expense_representation', account: '6072' },
   { value: 'expense_equipment', label: 'Utrustning', labelKey: 'expense_equipment', account: '5410' },
   { value: 'expense_software', label: 'Programvara', labelKey: 'expense_software', account: '5420' },
   { value: 'expense_consumables', label: 'Material', labelKey: 'expense_consumables', account: '5460' },

@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createQueuedMockSupabase } from '@/tests/helpers'
+import type { PendingOperation } from '@/types'
+import { createQueuedMockSupabase, makeCustomer } from '@/tests/helpers'
+import { eventBus } from '@/lib/events'
+import { commitPendingOperation } from '@/lib/pending-operations/commit'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 import { OPERATION_RISK_TIERS } from '@/lib/pending-operations/risk-tiers'
 import { tools, isDefaultCatalogTool } from '../server'
@@ -1060,5 +1063,102 @@ describe('gnubok_update_invoice: says why the VAT treatment is what it is (#2749
     expect(result.staged).toBe(true)
     expect(result.preview.vat_warnings).toBeUndefined()
     expect(result.message).not.toContain('WARNING')
+  })
+})
+
+describe('gnubok_update_invoice: discounted lines (#90)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+  })
+
+  // 3 x 333,33 = 999,99 gross; 12,5 % rabatt is 125,00, so the line nets
+  // 874,99. The preview used to show the gross 999,99 next to a subtotal
+  // that was already net.
+  const DISCOUNTED_ITEMS = [
+    { description: 'Konsultation', quantity: 3, unit: 'tim', unit_price: 333.33, discount_percent: 12.5, vat_rate: 25 },
+    { description: 'Material', quantity: 1, unit: 'st', unit_price: 1000, vat_rate: 25 },
+  ]
+
+  async function stageDiscounted() {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueItemsEdit(enqueue, CUSTOMER, null)
+    return (await tool().execute(
+      { invoice_id: INVOICE_ID, items: DISCOUNTED_ITEMS },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as StagedResult
+  }
+
+  it('shows each line_total net of its discount, summing to the subtotal', async () => {
+    const result = await stageDiscounted()
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.items?.map((item) => item.line_total)).toEqual([874.99, 1000])
+    expect(result.preview).toMatchObject({ subtotal: 1874.99, vat_amount: 468.75, total: 2343.74 })
+  })
+
+  it('previews the line_total that approval stores', async () => {
+    const result = await stageDiscounted()
+
+    // Approve exactly what was staged and capture the invoice_items insert.
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-invoice-2' } }) // claim pending -> committing
+    enqueue({
+      data: {
+        ...draftInvoice(),
+        invoice_date: '2026-07-01',
+        due_date: '2026-07-31',
+        delivery_date: null,
+        your_reference: null,
+        our_reference: null,
+        notes: null,
+        payment_link_url: null,
+        payment_link_auto: true,
+        ore_rounding: null,
+        default_dimensions: {},
+        deduction_personnummer_encrypted: null,
+        deduction_personnummer_last4: null,
+      },
+    })
+    enqueue({ data: makeCustomer({ id: CUSTOMER_ID }) }) // customers
+    enqueue({ data: { vat_registered: true } }) // company_settings (builder VAT gate)
+    enqueue({ data: [{ id: INVOICE_ID }] }) // invoices update (draft-guarded)
+    enqueue({ data: [] }) // invoice_items snapshot
+    enqueue({ data: null }) // invoice_items delete
+    enqueue({ data: null }) // invoice_items insert
+    enqueue({ data: null }) // pending_operations final status update
+
+    const committed = await commitPendingOperation(supabase as never, 'user-1', 'company-1', {
+      id: 'op-invoice-2',
+      user_id: 'user-1',
+      company_id: 'company-1',
+      operation_type: 'update_invoice',
+      status: 'pending',
+      title: 'Uppdatera fakturautkast',
+      params: { invoice_id: INVOICE_ID, changes: result.preview.changes },
+      preview_data: result.preview,
+      result_data: null,
+      actor_type: 'api_key',
+      actor_id: 'key-1',
+      actor_label: 'Test key',
+      risk_level: 'medium',
+      agent_metadata: null,
+      rejection_category: null,
+      rejection_reason: null,
+      created_at: '2026-07-27T00:00:00Z',
+      resolved_at: null,
+      updated_at: '2026-07-27T00:00:00Z',
+    } as PendingOperation)
+
+    expect(committed.status).toBe('committed')
+    const insertedRows = findCalls('invoice_items', 'insert')[0][0] as Array<{ line_total: number }>
+    expect(insertedRows.map((row) => row.line_total)).toEqual(result.preview.items?.map((item) => item.line_total))
+    expect(committed.data).toMatchObject({
+      subtotal: result.preview.subtotal,
+      vat_amount: result.preview.vat_amount,
+      total: result.preview.total,
+    })
   })
 })

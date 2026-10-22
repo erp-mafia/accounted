@@ -220,14 +220,15 @@ describe('gnubok_mark_invoice_as_paid: the preview follows the executor, not a p
     expect(result.next?.description).not.toMatch(/26\d\d/)
   })
 
-  it('a ROT cash entry names the 1513 share it debits', async () => {
+  it("a kontantmetod ROT cash entry books the customer's share only: Skatteverket's share waits for the payout", async () => {
     const { result, lines } = await stage(
       { accounting_method: 'cash' },
       sentInvoice({ deduction_total: 3750, remaining_amount: 8750 }),
       [{ ...ITEM, deduction_type: 'rot', deduction_amount: 3750 }],
     )
-    expect(lines.map((l) => l.account_number)).toContain('1513')
-    expect(result.next?.description).toMatch(/debit 1930, 1513 \/ credit/)
+    expect(lines.map((l) => l.account_number)).not.toContain('1513')
+    expect(lines.find((l) => l.account_number === '1930')?.debit_amount).toBe(8750)
+    expect(result.next?.description).toMatch(/debit 1930 \/ credit/)
   })
 })
 

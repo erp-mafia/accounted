@@ -22,6 +22,13 @@
  * the whole-kronor request (3740, see lib/invoices/rot-rut-receivable.ts),
  * recomputed here at booking so the voucher never trusts a stale preview.
  *
+ * Under kontantmetoden an invoice whose customer payment booked only the
+ * customer's share has its deduction share booked here, as försäljning and
+ * utgående moms for what Skatteverket paid on it, instead of a 1513 credit
+ * (lib/invoices/rot-rut-payout-recognition.ts). A partial beslut over several
+ * invoices recorded as one total cannot be split per invoice: refused with
+ * ROT_RUT_SETTLE_DEDUCTION_SPLIT_UNKNOWN (import the beslutsfil).
+ *
  * The journal entry IS the accounting record: engine failure blocks the whole
  * operation. Everything after the voucher is best-effort-with-loud-logging,
  * never an unbook (the voucher is immutable per BFL).
@@ -38,6 +45,7 @@ import { logMatchEvent } from '@/lib/invoices/match-log'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { roundOre } from '@/lib/money'
 import { getPayoutOreRounding } from '@/lib/invoices/rot-rut-receivable'
+import { getPayoutRecognition } from '@/lib/invoices/rot-rut-payout-recognition'
 import { createLogger } from '@/lib/logger'
 import { linkBasisColumns } from '@/lib/links/stamp'
 
@@ -85,6 +93,7 @@ export type SettleRotRutPayoutErrorCode =
   | 'ROT_RUT_SETTLE_AMOUNT_EXCEEDS'
   | 'ROT_RUT_SETTLE_SET_AMOUNT'
   | 'ROT_RUT_SETTLE_RACE'
+  | 'ROT_RUT_SETTLE_DEDUCTION_SPLIT_UNKNOWN'
   | 'ROT_RUT_MATCH_TX_LINK_FAILED'
 
 export type SettleRotRutPayoutOutcome =
@@ -342,6 +351,13 @@ export async function settleRotRutPayoutRequest(
   const oreRounding = fullyPaid
     ? await getPayoutOreRounding(supabase, companyId, payoutRequest, amount)
     : { rounding: 0, invoiceCount: 0 }
+  // Kontantmetoden's second step: the share the customer's payment left
+  // unbooked is försäljning and moms now, never a 1513 credit.
+  const recognition = await getPayoutRecognition(supabase, companyId, payoutRequest, amount, params.paymentDate)
+  if (!recognition.ok) {
+    if ('code' in recognition) return { ok: false, kind: 'code', code: recognition.code, details: recognition.details }
+    return { ok: false, kind: 'error', error: recognition.error, stage: 'fetch' }
+  }
 
   // The voucher is the accounting record: engine failure must block.
   let journalEntryId: string
@@ -359,6 +375,7 @@ export async function settleRotRutPayoutRequest(
         oreRounding: oreRounding.rounding,
         invoiceCount: oreRounding.invoiceCount,
         bankAccount: params.bankAccount,
+        recognition: recognition.recognition ?? undefined,
       },
       () => payoutPostingContext(params.transactionId),
     )
@@ -565,6 +582,15 @@ export async function settleRotRutPayoutRequestSet(
         : { rounding: 0, invoiceCount: 0 },
     ),
   )
+  // Same rule as the single path: kontantmetoden's second step per begäran.
+  const recognitions = await Promise.all(
+    legs.map((leg) => getPayoutRecognition(supabase, companyId, leg.request, leg.amount, params.paymentDate)),
+  )
+  for (const recognition of recognitions) {
+    if (recognition.ok) continue
+    if ('code' in recognition) return { ok: false, kind: 'code', code: recognition.code, details: recognition.details }
+    return { ok: false, kind: 'error', error: recognition.error, stage: 'fetch' }
+  }
 
   // The voucher is the accounting record: engine failure must block.
   let journalEntryId: string
@@ -583,6 +609,7 @@ export async function settleRotRutPayoutRequestSet(
           amount: leg.amount,
           oreRounding: oreRoundings[i].rounding,
           invoiceCount: oreRoundings[i].invoiceCount,
+          recognition: (recognitions[i].ok ? recognitions[i].recognition : null) ?? undefined,
         })),
       },
       () => payoutPostingContext(params.transactionId),

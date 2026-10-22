@@ -22,3 +22,13 @@ export function bankCoveredByOpenPayments(bankName: string | null | undefined): 
   if (!name) return true
   return !UNCOVERED_BANK_NEEDLES.some((needle) => name.includes(needle))
 }
+
+/**
+ * The banks the Enable Banking "Anslut ny bank" list offers a new connection
+ * to: all of them while Open Payments is closed to the company; once it is
+ * open, only the banks it does not reach, since a bank it reaches is
+ * connected through its Koppla bank (crm#1363). Undefined offers every bank.
+ */
+export function enableBankingOffers(openPaymentsAvailable: boolean): ((bank: { name: string }) => boolean) | undefined {
+  return openPaymentsAvailable ? (bank) => !bankCoveredByOpenPayments(bank.name) : undefined
+}

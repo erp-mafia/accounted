@@ -91,6 +91,19 @@ describe('gnubok_credit_invoice: staging preview (#2552)', () => {
 
     expect(result.preview.posts_journal_entry).toBe(true)
   })
+
+  // accounted#58: an unreadable method read as faktureringsmetoden and
+  // promised a reversal of a kontantmetod sale that never reached the ledger.
+  it('refuses to stage when the accounting method cannot be read', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: original() })
+    enqueue({ data: null, error: { code: '57014', message: 'statement timeout' } })
+
+    await expect(
+      tool().execute({ invoice_id: INVOICE_ID }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toMatchObject({ code: 'SETTINGS_ACCOUNTING_METHOD_UNREADABLE' })
+    expect(findCalls('pending_operations', 'insert')).toHaveLength(0)
+  })
 })
 
 // accounted#34: a self-billed original has invoice_number null by design; the

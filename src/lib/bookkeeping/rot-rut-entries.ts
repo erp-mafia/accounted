@@ -1,9 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { CreateJournalEntryInput, DeductionType, JournalEntry } from '@/types'
+import type { CreateJournalEntryInput, CreateJournalEntryLineInput, DeductionType, JournalEntry } from '@/types'
 import { ORE_ROUNDING_ACCOUNT, ORE_ROUNDING_SETTLEMENT_MAX, roundOre } from '@/lib/money'
 import { DEDUCTION_TYPE_LABELS } from '@/lib/bookkeeping/rot-rut-rules'
 import { postingPort } from '@/lib/posting/port'
 import { findFiscalPeriod } from './engine'
+import { installmentOutputVat } from './invoice-lines'
 import {
   rotRutPayoutBusinessEvent,
   rotRutReclaimBusinessEvent,
@@ -43,6 +44,17 @@ import {
  * depending on the outcome with the buyer): deliberately manual, never
  * guessed.
  *
+ * Kontantmetoden (bokslutsmetoden) books a ROT/RUT invoice in two steps
+ * (ML 2023:200 7 kap. 16 §; Skatteverket, "Så fungerar rotavdraget"): the
+ * customer's payment booked only the customer's share, so the payout is the
+ * moment Skatteverket's share is received. For those invoices a leg's
+ * `recognition` replaces the 1513 credit with the share's försäljning and
+ * utgående moms, for what Skatteverket paid:
+ *
+ *   Debit  19xx bank account                 [paid]
+ *   Credit 30xx Försäljning                  [paid, excl. moms]
+ *   Credit 26xx Utgående moms                [moms in paid]
+ *
  * Posting port (step 2f-2): the three generators here post through
  * lib/posting, which hands `input` to the engine unchanged and, while
  * POSTING_EVENTS is shadow or strict, records the business event first
@@ -65,6 +77,13 @@ export interface RotRutPayoutLeg {
   oreRounding?: number
   /** Invoices in the begäran: bounds oreRounding (< 1 kr each). Defaults to 1. */
   invoiceCount?: number
+  /**
+   * Kontantmetoden's second step (lib/invoices/rot-rut-payout-recognition.ts):
+   * the part of `amount` paid on invoices whose deduction share was never put
+   * on 1513, booked as that share's försäljning and utgående moms (`lines`,
+   * credits adding up to `amount`) instead of a 1513 credit. Omit for none.
+   */
+  recognition?: { amount: number; lines: CreateJournalEntryLineInput[] }
 }
 
 /**
@@ -125,6 +144,18 @@ export async function createRotRutPayoutSetEntry(
   if (badRounding) {
     throw new Error(`Invalid öre rounding ${badRounding.oreRounding} on begäran ${badRounding.requestName}`)
   }
+  // A recognised part is never more than the leg, and its lines carry it
+  // exactly: what is left of the leg (plus its öre) clears 1513.
+  for (const leg of legs) {
+    if (!leg.recognition) continue
+    const recognised = roundOre(leg.recognition.amount)
+    const linesTotal = roundOre(
+      leg.recognition.lines.reduce((sum, line) => sum + line.credit_amount - line.debit_amount, 0),
+    )
+    if (recognised < 0 || recognised > leg.amount || linesTotal !== recognised) {
+      throw new Error(`Invalid revenue recognition ${recognised} on begäran ${leg.requestName}`)
+    }
+  }
   const total = roundOre(legs.reduce((sum, leg) => sum + leg.amount, 0))
   const bankAccount = params.bankAccount ?? '1930'
   const description = payoutDescription(
@@ -153,25 +184,33 @@ export async function createRotRutPayoutSetEntry(
           credit_amount: 0,
           line_description: `Öresavrundning ${deductionLabel([leg])} (${leg.requestName})`,
         })),
-      ...legs.map((leg) => ({
-        account_number: '1513',
-        debit_amount: 0,
-        credit_amount: roundOre(leg.amount + leg.oreRounding),
-        // A single begäran keeps the voucher text on both legs (as before);
-        // a bundle names its own begäran on each 1513 leg.
-        line_description:
-          legs.length === 1
-            ? description
-            : payoutDescription(deductionLabel([leg]), [leg.requestName]),
-      })),
+      ...legs
+        .map((leg) => ({
+          account_number: '1513',
+          debit_amount: 0,
+          credit_amount: roundOre(leg.amount - roundOre(leg.recognition?.amount ?? 0) + leg.oreRounding),
+          // A single begäran keeps the voucher text on both legs (as before);
+          // a bundle names its own begäran on each 1513 leg.
+          line_description:
+            legs.length === 1
+              ? description
+              : payoutDescription(deductionLabel([leg]), [leg.requestName]),
+        }))
+        .filter((line) => line.credit_amount > 0),
+      ...legs.flatMap((leg) => leg.recognition?.lines ?? []),
     ],
   }
 
+  const recognisedVatSek = installmentOutputVat(legs.flatMap((leg) => leg.recognition?.lines ?? []))
   return postingPort.postJournalEntry({
     supabase,
     companyId,
     userId,
-    event: () => rotRutPayoutBusinessEvent({ paymentDate: params.paymentDate, amount: total }, posting?.()),
+    event: () =>
+      rotRutPayoutBusinessEvent(
+        { paymentDate: params.paymentDate, amount: total, recognisedVatSek },
+        posting?.(),
+      ),
     input,
   })
 }
@@ -193,6 +232,8 @@ export async function createRotRutPayoutEntry(
     invoiceCount?: number
     /** BAS 19xx account the payout landed on. Defaults to 1930. */
     bankAccount?: string
+    /** See RotRutPayoutLeg.recognition. */
+    recognition?: RotRutPayoutLeg['recognition']
   },
   posting?: () => RotRutPostingContext,
 ): Promise<JournalEntry> {
@@ -211,6 +252,7 @@ export async function createRotRutPayoutEntry(
           amount: params.amount,
           oreRounding: params.oreRounding,
           invoiceCount: params.invoiceCount,
+          recognition: params.recognition,
         },
       ],
     },

@@ -760,6 +760,8 @@ describe('gnubok_create_supplier_invoice_from_inbox: execute', () => {
     const result = (await tool.execute(
       {
         inbox_item_id: 'inbox-slp-2',
+        // A pension premium carries no VAT: the caller says exempt (accounted#58).
+        vat_treatment_override: 'exempt',
         line_overrides: [{ line_number: 1, account_number: '7412', apply_slp: true }],
       },
       'company-1', 'user-1', supabase,
@@ -1077,6 +1079,9 @@ describe('gnubok_create_supplier_invoice_from_inbox: due date default and total 
     vi.clearAllMocks()
   })
 
+  // A bank fee is an exempt financial service with no VAT on it: the caller
+  // states the treatment (EXEMPT), it cannot be read off the document (accounted#58).
+  const EXEMPT = { vat_treatment_override: 'exempt' }
   const bankFee = {
     supplier: { name: 'SEB', organizationNumber: '5020326735' },
     invoice: { invoiceNumber: 'AVG-2025-09', invoiceDate: '2025-09-17', dueDate: null, currency: 'SEK' },
@@ -1107,7 +1112,7 @@ describe('gnubok_create_supplier_invoice_from_inbox: due date default and total 
     })
     const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
     const result = (await tool.execute(
-      { inbox_item_id: 'inbox-seb' },
+      { inbox_item_id: 'inbox-seb', ...EXEMPT },
       'company-1', 'user-1', supabase,
     )) as { staged: boolean; preview: { due_date: string; due_date_source: string; total: number } }
 
@@ -1127,7 +1132,7 @@ describe('gnubok_create_supplier_invoice_from_inbox: due date default and total 
     })
     const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
     const result = (await tool.execute(
-      { inbox_item_id: 'inbox-seb', dry_run: true },
+      { inbox_item_id: 'inbox-seb', dry_run: true, ...EXEMPT },
       'company-1', 'user-1', supabase,
     )) as { preview: { due_date: string; due_date_source: string } }
 
@@ -1147,7 +1152,7 @@ describe('gnubok_create_supplier_invoice_from_inbox: due date default and total 
     expect(extracted.preview.due_date_source).toBe('extracted')
 
     const overridden = (await tool.execute(
-      { inbox_item_id: 'inbox-seb', dry_run: true, due_date_override: '2025-09-30' },
+      { inbox_item_id: 'inbox-seb', dry_run: true, due_date_override: '2025-09-30', ...EXEMPT },
       'company-1', 'user-1',
       makeMock({ inbox: inboxFor(bankFee) }),
     )) as { preview: { due_date: string; due_date_source: string } }

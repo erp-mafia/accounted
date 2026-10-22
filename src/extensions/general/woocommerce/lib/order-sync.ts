@@ -4,6 +4,7 @@ import type { WebshopOrderUpsert } from '@/lib/webshop-orders/types'
 import { createLogger, type Logger } from '@/lib/logger'
 import { roundOre as round } from '@/lib/money'
 import { resolveWindowStartMs } from '@/lib/feed-sync/cursor-window'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import type { WebshopOrderLineItem, WebshopVatBreakdownLine } from '@/types'
 import {
   listOrdersPage,
@@ -151,9 +152,16 @@ export function orderAmountUnparseable(order: Pick<WooOrder, 'total'>): boolean 
   return parseAmount(order.total) === null
 }
 
-/** Date part of a wc/v3 _gmt timestamp ("2026-08-01T12:34:56", no zone suffix). */
+/**
+ * The Swedish calendar day of a wc/v3 _gmt timestamp ("2026-10-31T23:30:00",
+ * UTC with no zone suffix). The order date becomes the verifikat date, its
+ * VAT period and its FX date: a sale at 00:30 on 1 November in Stockholm
+ * belongs to November, not to the UTC day before it (#58). An unparseable
+ * value keeps its own date part.
+ */
 function isoDateOfGmt(timestamp: string): string {
-  return timestamp.split('T')[0]
+  const ms = gmtToMs(timestamp)
+  return Number.isFinite(ms) ? todayIsoStockholm(new Date(ms)) : timestamp.split('T')[0]
 }
 
 /** wc/v3 _gmt timestamps lack a zone suffix; brand them UTC for timestamptz. */

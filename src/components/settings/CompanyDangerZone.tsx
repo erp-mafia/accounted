@@ -173,6 +173,9 @@ export function CompanyDangerZone({ deleteDoor, onDeleteDoorChange }: CompanyDan
           {deleteDoor === 'danger_zone' && (
             <p className="text-sm text-muted-foreground">{t('danger_dialog_bank_note')}</p>
           )}
+          {/* The delete ends the company's subscription (crm#1373), from
+              either door: a hidden company is never charged again. */}
+          <p className="text-sm text-muted-foreground">{t('danger_dialog_subscription_note')}</p>
           <div className="space-y-2">
             {/* data-ph-mask: the label interpolates the company name */}
             <Label data-ph-mask="" htmlFor="company-delete-confirm">

@@ -27,6 +27,7 @@ import type {
   CurrencyRevaluationResult,
   CreateJournalEntryLineInput,
 } from '@/types'
+import { requireAccountingMethod } from '@/lib/company/accounting-method'
 
 export const FX_CLOSING_RATE_UNAVAILABLE = 'FX_CLOSING_RATE_UNAVAILABLE' as const
 
@@ -143,6 +144,25 @@ export async function fetchFxExposureScope(
     .maybeSingle()
   if (error) return 'all'
   return fxExposureScope(data)
+}
+
+/**
+ * The exposure scope for the posting path. Unlike the preview's read above it
+ * fails closed (accounted#58): with the settings unreadable or missing, 'all'
+ * would revalue a kontantmetod or deferring company's unbooked rows and post
+ * a write-down of an account standing at zero.
+ */
+async function requireFxExposureScope(
+  supabase: SupabaseClient,
+  companyId: string
+): Promise<FxExposureScope> {
+  const read = await supabase
+    .from('company_settings')
+    .select('accounting_method, defer_invoice_booking')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  requireAccountingMethod(read)
+  return fxExposureScope(read.data as Parameters<typeof fxExposureScope>[0])
 }
 
 /**
@@ -267,7 +287,9 @@ export async function getOpenForeignCurrencyPayables(
 export async function previewCurrencyRevaluation(
   supabase: SupabaseClient,
   companyId: string,
-  closingDate: string
+  closingDate: string,
+  /** The posting path's fail-closed scope; the preview reads its own otherwise. */
+  options: { scope?: FxExposureScope } = {}
 ): Promise<CurrencyRevaluationPreviewWithExclusions> {
   const emptyPreview: CurrencyRevaluationPreviewWithExclusions = {
     items: [],
@@ -281,7 +303,7 @@ export async function previewCurrencyRevaluation(
     missingClosingRates: [],
   }
 
-  const scope = await fetchFxExposureScope(supabase, companyId)
+  const scope = options.scope ?? (await fetchFxExposureScope(supabase, companyId))
 
   const [receivables, payables] = await Promise.all([
     getOpenForeignCurrencyReceivables(supabase, companyId, closingDate),
@@ -613,7 +635,8 @@ export async function executeCurrencyRevaluation(
     throw new CurrencyRevaluationAlreadyExistsError()
   }
 
-  const preview = await previewCurrencyRevaluation(supabase, companyId, closingDate)
+  const scope = await requireFxExposureScope(supabase, companyId)
+  const preview = await previewCurrencyRevaluation(supabase, companyId, closingDate, { scope })
 
   // Refuse before anything is posted. Checked ahead of the empty-preview
   // shortcut on purpose: when every currency lacks a closing rate the item

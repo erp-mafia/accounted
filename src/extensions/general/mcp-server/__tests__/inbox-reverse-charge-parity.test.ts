@@ -42,6 +42,8 @@ vi.mock('@/lib/suggestion-log/inbox', () => ({
 }))
 
 import { tools } from '../server'
+import { toToolError } from '../tool-result'
+import { inferVatTreatment } from '@/lib/supplier-invoices/form-payload'
 import { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
 import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
 import {
@@ -76,7 +78,7 @@ const SWEDISH_EXTRACTION = {
 
 let db: ReturnType<typeof createTableMockSupabase>
 
-function setUp(supplierType: SupplierType, extracted: object = NO_VAT_EXTRACTION) {
+function setUp(supplierType: SupplierType, extracted: object = NO_VAT_EXTRACTION, vatRegistered = true) {
   db = createTableMockSupabase({
     pending_operations: { data: { id: 'op-1' } },
     invoice_inbox_items: {
@@ -100,7 +102,7 @@ function setUp(supplierType: SupplierType, extracted: object = NO_VAT_EXTRACTION
     },
     // Faktureringsmetoden, booked on issue: the approval posts the registration verifikat.
     company_settings: {
-      data: makeCompanySettings({ accounting_method: 'accrual', defer_invoice_booking: false, vat_registered: true }),
+      data: makeCompanySettings({ accounting_method: 'accrual', defer_invoice_booking: false, vat_registered: vatRegistered }),
     },
     companies: { data: { entity_type: 'aktiebolag' } },
     'rpc:get_next_arrival_number': { data: 42 },
@@ -271,7 +273,7 @@ describe('MCP inbox supplier invoice: a foreign supplier is omvänd skattskyldig
   })
 
   it('a stray reverse_charge param cannot pair the flag with another treatment', async () => {
-    setUp('swedish_business')
+    setUp('swedish_business', SWEDISH_EXTRACTION)
     const { params } = await mcpStage()
 
     const row = await mcpCommit({ ...params, reverse_charge: true })
@@ -280,8 +282,113 @@ describe('MCP inbox supplier invoice: a foreign supplier is omvänd skattskyldig
   })
 })
 
+/** A Swedish hotel's invoice: 1 000 kr plus 12 % moms. */
+const REDUCED_EXTRACTION = {
+  supplier: { name: 'Hotell AB', orgNumber: '5599887755', vatNumber: null },
+  invoice: { invoiceNumber: 'R-2026-10', invoiceDate: '2026-10-01', dueDate: '2026-10-31', currency: 'SEK' },
+  totals: { subtotal: 1000, vatAmount: 120, total: 1120 },
+  lineItems: [{ description: 'Logi, 2 nätter', quantity: 1, unitPrice: 1000, lineTotal: 1000, vatRate: 12, accountSuggestion: null }],
+}
+
+// accounted#58 P1.2, a Swedish supplier: the treatment was standard_25
+// whatever the document said. The line rates give it by the dashboard form's
+// rule (inferVatTreatment). A document with no VAT at all reads the same for
+// an exempt purchase and for omvänd betalningsskyldighet (byggtjänster,
+// ML 16 kap 13 §; fiktiv moms 2647/2614, swedish-vat skill 2.1), so it waits
+// for the caller's word instead of a guess.
+describe('MCP inbox supplier invoice: a Swedish supplier\'s treatment comes from the document or the caller (accounted#58)', () => {
+  it('refuses a document with no VAT and no stated treatment, names the retry, and stages nothing', async () => {
+    setUp('swedish_business')
+
+    const err = await inboxTool()
+      .execute({ inbox_item_id: ITEM_ID }, 'company-1', 'user-1', db.supabase as never)
+      .then(() => null, (e: unknown) => e as Error & { code?: string; remediation?: { tool?: string; args?: Record<string, unknown> } })
+
+    expect(err?.code).toBe('SI_CREATE_INVALID_INPUT')
+    expect(err?.message).toMatch(/vat_treatment_override/)
+    expect(err?.message).toMatch(/exempt/)
+    expect(err?.message).toMatch(/omvänd betalningsskyldighet/)
+    // The retry is named, the treatment is not guessed for the caller.
+    expect(err?.remediation).toEqual(expect.objectContaining({
+      tool: 'gnubok_create_supplier_invoice_from_inbox',
+      args: { inbox_item_id: ITEM_ID },
+    }))
+    expect(db.payloads('pending_operations', 'insert')).toHaveLength(0)
+    expect(toToolError(err).error).toMatchObject({
+      code: 'SI_CREATE_INVALID_INPUT',
+      retryable: false,
+      remediation: { tool: 'gnubok_create_supplier_invoice_from_inbox' },
+    })
+  })
+
+  it('a dry run is refused the same way', async () => {
+    setUp('swedish_business')
+
+    await expect(inboxTool().execute(
+      { inbox_item_id: ITEM_ID, dry_run: true },
+      'company-1',
+      'user-1',
+      db.supabase as never,
+    )).rejects.toMatchObject({ code: 'SI_CREATE_INVALID_INPUT' })
+  })
+
+  it('stated exempt, it stages and books the cost alone: no 2641, no fiktiv moms', async () => {
+    setUp('swedish_business')
+    const { params } = await mcpStage({ vat_treatment_override: 'exempt' })
+
+    expect(params).toMatchObject({ vat_treatment: 'exempt', vat_amount: 0, total: 1000 })
+    const row = await mcpCommit(params)
+    expect(row).toMatchObject({ vat_treatment: 'exempt', reverse_charge: false })
+    expect(registrationLines(row)).toEqual([
+      { account: '6540', debit: 1000, credit: 0 },
+      { account: '2440', debit: 0, credit: 1000 },
+    ])
+  })
+
+  it('a company outside the VAT register is not asked: exempt, as the dashboard form says', async () => {
+    setUp('swedish_business', NO_VAT_EXTRACTION, false)
+    const { params } = await mcpStage()
+
+    expect(params).toMatchObject({ vat_treatment: 'exempt', vat_amount: 0, total: 1000 })
+  })
+
+  it('a reduced rate on every line gives the reduced treatment, the dashboard form\'s rule', async () => {
+    setUp('swedish_business', REDUCED_EXTRACTION)
+    const { params } = await mcpStage()
+
+    expect(params.vat_treatment).toBe(inferVatTreatment([{ vat_rate: 0.12 }], false))
+    expect(params).toMatchObject({ vat_treatment: 'reduced_12', vat_amount: 120, total: 1120 })
+    const row = await mcpCommit(params)
+    expect(row).toMatchObject({ vat_treatment: 'reduced_12', reverse_charge: false })
+    expect(registrationLines(row)).toEqual([
+      { account: '6540', debit: 1000, credit: 0 },
+      { account: '2641', debit: 120, credit: 0 },
+      { account: '2440', debit: 0, credit: 1120 },
+    ])
+  })
+})
+
 // crm#1323: an EU supplier's goods are a gemenskapsinternt förvärv, reported
 // in ruta 20 on 4515 (swedish-vat skill 2.3), not ruta 21 on 4535.
+// #73: ML 2023:200 7 kap. 26 § puts an EU goods acquisition's moms in the
+// invoice's period whatever the method; EU services follow 7 kap. 16 §.
+describe('MCP inbox supplier invoice: kontantmetoden registers EU goods, not EU services (#73)', () => {
+  it.each([
+    ['eu_goods', true],
+    ['eu_services', false],
+  ] as const)('%s: the preview and the approval agree on the registration verifikat (%s)', async (kind, books) => {
+    setUp('eu_business')
+    db.setTable('company_settings', {
+      data: makeCompanySettings({ accounting_method: 'cash', defer_invoice_booking: false, vat_registered: true }),
+    })
+    const { result, params } = await mcpStage({ reverse_charge_kind: kind })
+    expect(result.preview.will_post_journal_entry).toBe(books)
+
+    await mcpCommit(params)
+    expect(createSupplierInvoiceRegistrationEntry).toHaveBeenCalledTimes(books ? 1 : 0)
+  })
+})
+
 describe('MCP inbox supplier invoice: EU goods or services (crm#1323)', () => {
   it('stages eu_goods, shows it to the approver, and commits the goods basis 4515/4598', async () => {
     setUp('eu_business')
@@ -411,7 +518,9 @@ const EXPECTED: Array<[SupplierType, Stated, { vat_treatment: string; reverse_ch
 describe('every door resolves the same treatment for the same supplier and the same stated intent', () => {
   describe.each(DOORS)('%s', (_door, run) => {
     it.each(EXPECTED)('%s, %s stated', async (supplierType, stated, expected) => {
-      setUp(supplierType)
+      // A Swedish supplier with nothing stated: its 25 % invoice. A document
+      // with no VAT waits for the caller's word at the MCP door (see above).
+      setUp(supplierType, supplierType === 'swedish_business' && stated === 'nothing' ? SWEDISH_EXTRACTION : NO_VAT_EXTRACTION)
       expect(await run(stated)).toEqual(expected)
     })
   })

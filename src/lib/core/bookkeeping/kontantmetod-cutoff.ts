@@ -73,6 +73,7 @@ import type {
 import { getRevenueAccount } from '@/lib/bookkeeping/invoice-entries'
 import {
   buildCreditNoteLines,
+  buildDeductionCarryLines,
   buildInvoiceRegistrationLines,
   headerToSekOrThrow,
   type InvoiceRegistrationLinesSource,
@@ -141,6 +142,8 @@ export const VILANDE_OUTPUT_VAT_ACCOUNTS: Partial<Record<VatTreatment, string>> 
 export const VILANDE_INPUT_VAT_ACCOUNT = '2648'
 
 export const RECEIVABLES_ACCOUNT = '1510'
+/** BAS 1513, Kundfordringar delad faktura: Skatteverket's ROT/RUT share. */
+const ROT_RUT_RECEIVABLE_ACCOUNT = '1513'
 export const PAYABLES_ACCOUNT = '2440'
 
 /**
@@ -738,6 +741,14 @@ export type KontantmetodCarryDoc =
       outstandingOwn: number
       /** What the customer owes in full: the total minus any ROT/RUT share. */
       customerShareOwn: number
+      /**
+       * Carry Skatteverket's share alone: a ROT/RUT invoice the customer paid
+       * in the year under kontantmetodens two steps (its payment booked only
+       * the customer's share), whose payout was still to come on period end
+       * (findDeductionShareCarries). The fordran on Skatteverket is booked on
+       * 1513 with the share's revenue and moms (buildDeductionCarryLines).
+       */
+      deductionShare?: boolean
     }
   | {
       side: 'supplier'
@@ -1261,6 +1272,19 @@ export function buildKontantmetodCarryLines(
   let currency: string
   let exchangeRate: number | null | undefined
 
+  if (doc.side === 'customer' && doc.deductionShare) {
+    // Skatteverket's share alone: the customer's share was booked at its
+    // payment in the year. Whole or not at all: nothing of it was received.
+    const lines = buildDeductionCarryLines(doc.invoice, entityType)
+    if (!lines) throw new Error('Skatteverkets andel kan inte delas av fakturans rader')
+    const anchorSek = roundOre(
+      lines
+        .filter((line) => line.account_number === ROT_RUT_RECEIVABLE_ACCOUNT)
+        .reduce((sum, line) => sum + line.debit_amount - line.credit_amount, 0),
+    )
+    return { lines, mode: 'full', anchorSek }
+  }
+
   if (doc.side === 'customer') {
     const invoice = doc.invoice
     full = doc.creditNote
@@ -1347,7 +1371,11 @@ export function kontantmetodCarryDescription(
   side: 'customer' | 'supplier',
   reference: string,
   creditNote: boolean,
+  deductionShare = false,
 ): string {
+  if (side === 'customer' && deductionShare) {
+    return `Kundfaktura ${reference}: Skatteverkets andel ej utbetald vid bokslut (kontantmetoden)`
+  }
   if (side === 'customer') {
     return creditNote
       ? `Kreditfaktura ${reference}: oreglerad vid bokslut (kontantmetoden)`
@@ -1390,7 +1418,9 @@ export function buildKontantmetodCarryPlan(
     reference: doc.reference,
     creditNote: doc.creditNote,
     mode: built.mode,
-    description: kontantmetodCarryDescription(doc.side, doc.reference, doc.creditNote),
+    description: kontantmetodCarryDescription(
+      doc.side, doc.reference, doc.creditNote, doc.side === 'customer' && !!doc.deductionShare,
+    ),
     notes: `Årsomföring kontantmetoden, BFL 5 kap 2 §, faktura ${doc.reference}`,
     lines: built.lines,
     total: built.anchorSek,
@@ -1790,6 +1820,8 @@ interface CarryCandidate {
   /** Customer share (customer) or signed total (supplier). */
   fullOwn: number
   row: Record<string, unknown>
+  /** See KontantmetodCarryDoc.deductionShare. */
+  deductionShare?: boolean
 }
 
 /**
@@ -1938,6 +1970,9 @@ export async function collectKontantmetodCutoff(
   const rotPartialManual: string[] = []
   const rotPartialManualInvoices: RotPartialManualInvoice[] = []
   const candidates: CarryCandidate[] = []
+  // Paid ROT/RUT invoices whose Skatteverket share may still be unbooked
+  // (kontantmetodens two steps), for findDeductionShareCarries.
+  const deductionShareRows: Array<{ row: Record<string, unknown>; reference: string; customerShareOwn: number }> = []
   for (const row of invoices) {
     // Credit notes reduce the receivable through their own negative totals;
     // they are already part of the invoice set, so no special casing beyond
@@ -1954,7 +1989,22 @@ export async function collectKontantmetodCutoff(
       undatedSettlements.push(reference || (row.id as string))
     }
     const outstanding = totalOwn === 0 ? 0 : roundOre(total * (outstandingOwn / totalOwn))
-    if (Math.abs(outstanding) < ORE_TOLERANCE) continue
+    if (Math.abs(outstanding) < ORE_TOLERANCE) {
+      // The customer paid their share by period end; Skatteverket's may still
+      // be a fordran kontantmetoden has not booked (findDeductionShareCarries).
+      if (
+        perInvoice &&
+        hasDeduction &&
+        totalOwn > 0 &&
+        !row.credited_invoice_id &&
+        row.status !== 'credited' &&
+        row.status !== 'written_off' &&
+        Math.abs(Number(row.deduction_reclaimed_total ?? 0)) < ORE_TOLERANCE
+      ) {
+        deductionShareRows.push({ row, reference, customerShareOwn })
+      }
+      continue
+    }
 
     // Never guess the treatment. Defaulting a 12 %/6 %/undantagen invoice to
     // 25 % would route it to the wrong moms account AND the wrong revenue
@@ -2140,7 +2190,19 @@ export async function collectKontantmetodCutoff(
     carryCandidates = carryCandidates.filter((c) => !withheld.has(`${c.side}:${c.id}`))
   }
 
-  const carries = perInvoice ? await loadCarryDocs(supabase, companyId, carryCandidates) : []
+  let deductionShareCandidates: CarryCandidate[] = []
+  if (perInvoice && deductionShareRows.length > 0) {
+    const found = await findDeductionShareCarries(supabase, companyId, periodStart, periodEnd, deductionShareRows)
+    deductionShareCandidates = found.carries
+    for (const manual of found.manual) {
+      rotPartialManual.push(manual.reference)
+      rotPartialManualInvoices.push(manual)
+    }
+  }
+
+  const carries = perInvoice
+    ? await loadCarryDocs(supabase, companyId, [...carryCandidates, ...deductionShareCandidates])
+    : []
 
   let paidBeforePosting: PaidBeforePosting[] = []
   let paidBeforePostingManual: PaidBeforePostingManual[] = []
@@ -2194,6 +2256,152 @@ export async function collectKontantmetodCutoff(
     paidBeforePostingManual,
     legacyCovered,
   }
+}
+
+/**
+ * Kontantmetodens two steps at the year end (BFL 5 kap 2 §; ML 2023:200
+ * 7 kap. 16 §: moms on fordringar unpaid at the beskattningsår's end belongs
+ * to its last period). A ROT/RUT invoice the customer paid in the year under
+ * the two steps booked only the customer's share (buildInvoiceCashLines with
+ * deferDeductionShare); Skatteverket's share is booked by its payout. When
+ * the payout had not come by period end, that share was a fordran on the day
+ * and is carried here, on 1513 with its revenue and moms
+ * (buildDeductionCarryLines), linked to the invoice so the year-2 payout
+ * clears 1513 like any fakturamodellen claim (rot-rut-payout-recognition
+ * reads the link).
+ *
+ * The same positive evidence as the payout's: live kontantmetod payment
+ * verifikat dated in the period, none of them with a 1513 line (one booked
+ * before the two steps already holds the share on 1513). Then by the
+ * invoice's begäran settled in the period:
+ *   - none: the whole share is carried;
+ *   - paid in full: the payout booked it, nothing to carry;
+ *   - paid in part: the refused rest is the customer's now, a kundfordran on
+ *     the day with its revenue and moms: listed for a manual carry
+ *     (rotPartialManual) with that rest as the open customer share.
+ */
+async function findDeductionShareCarries(
+  supabase: SupabaseClient,
+  companyId: string,
+  periodStart: string,
+  periodEnd: string,
+  rows: Array<{ row: Record<string, unknown>; reference: string; customerShareOwn: number }>,
+): Promise<{ carries: CarryCandidate[]; manual: RotPartialManualInvoice[] }> {
+  const fail = (what: string, message: string): never => {
+    throw new Error(`Kontantmetodens bokslutsavgränsning kunde inte läsa ${what}: ${message}`)
+  }
+  const ids = rows.map(({ row }) => row.id as string)
+  const vouchersByInvoice = new Map<string, string[]>()
+  type ItemRow = {
+    invoice_id: string
+    requested_amount: number | string
+    decided_amount: number | string | null
+    request: { status: string; decided_total: number | string | null; settlement_journal_entry_id: string | null } | null
+  }
+  const itemsByInvoice = new Map<string, ItemRow[]>()
+  for (const chunk of chunked(ids)) {
+    const [payments, items] = await Promise.all([
+      supabase
+        .from('invoice_payments')
+        .select('invoice_id, journal_entry_id')
+        .in('invoice_id', chunk)
+        .not('journal_entry_id', 'is', null),
+      supabase
+        .from('rot_rut_payout_request_items')
+        .select('invoice_id, requested_amount, decided_amount, request:rot_rut_payout_requests(status, decided_total, settlement_journal_entry_id)')
+        .in('invoice_id', chunk),
+    ])
+    if (payments.error) fail('betalningarna', payments.error.message)
+    if (items.error) fail('begäran om utbetalning', items.error.message)
+    for (const payment of (payments.data ?? []) as Array<{ invoice_id: string; journal_entry_id: string }>) {
+      vouchersByInvoice.set(payment.invoice_id, [...(vouchersByInvoice.get(payment.invoice_id) ?? []), payment.journal_entry_id])
+    }
+    for (const raw of (items.data ?? []) as Array<Record<string, unknown>>) {
+      const request = Array.isArray(raw.request) ? raw.request[0] : raw.request
+      const item = { ...raw, request: (request ?? null) } as ItemRow
+      itemsByInvoice.set(item.invoice_id, [...(itemsByInvoice.get(item.invoice_id) ?? []), item])
+    }
+  }
+
+  const settlementIds = [...itemsByInvoice.values()]
+    .flat()
+    .map((item) => item.request?.settlement_journal_entry_id)
+    .filter((id): id is string => !!id)
+  const entryIds = [...new Set([...[...vouchersByInvoice.values()].flat(), ...settlementIds])]
+  const live = new Map<string, { source_type: string | null; entry_date: string }>()
+  const with1513 = new Set<string>()
+  for (const chunk of chunked(entryIds)) {
+    const { data, error } = await supabase
+      .from('journal_entries')
+      .select('id, status, reversed_by_id, source_type, entry_date')
+      .eq('company_id', companyId)
+      .in('id', chunk)
+    if (error) fail('verifikaten', error.message)
+    for (const entry of (data ?? []) as Array<{ id: string; status: string; reversed_by_id: string | null; source_type: string | null; entry_date: string }>) {
+      if (entry.status === 'posted' && !entry.reversed_by_id) live.set(entry.id, entry)
+    }
+  }
+  const paymentIds = [...new Set([...vouchersByInvoice.values()].flat())].filter((id) => live.has(id))
+  for (const chunk of chunked(paymentIds)) {
+    const { data, error } = await supabase
+      .from('journal_entry_lines')
+      .select('journal_entry_id')
+      .in('journal_entry_id', chunk)
+      .eq('account_number', ROT_RUT_RECEIVABLE_ACCOUNT)
+    if (error) fail('verifikatraderna', error.message)
+    for (const line of (data ?? []) as Array<{ journal_entry_id: string }>) with1513.add(line.journal_entry_id)
+  }
+
+  const inPeriod = (date: string) => date >= periodStart && date <= periodEnd
+  const carries: CarryCandidate[] = []
+  const manual: RotPartialManualInvoice[] = []
+  for (const { row, reference, customerShareOwn } of rows) {
+    const id = row.id as string
+    const own = (vouchersByInvoice.get(id) ?? []).filter((voucherId) => live.has(voucherId))
+    if (!own.some((voucherId) => live.get(voucherId)!.source_type === CASH_ENTRY_SOURCE.customer)) continue
+    if (own.some((voucherId) => with1513.has(voucherId) || !inPeriod(live.get(voucherId)!.entry_date))) continue
+
+    const items = itemsByInvoice.get(id) ?? []
+    const settled = items.filter((item) => {
+      const voucherId = item.request?.settlement_journal_entry_id
+      if (!voucherId || ['cancelled', 'rejected'].includes(item.request?.status ?? '')) return false
+      const voucher = live.get(voucherId)
+      return !!voucher && inPeriod(voucher.entry_date)
+    })
+    if (settled.length === 0) {
+      carries.push({
+        side: 'customer',
+        id,
+        reference: reference || `utkast ${id.slice(0, 8)}`,
+        invoiceDate: row.invoice_date as string,
+        creditedInvoiceId: null,
+        creditNote: false,
+        outstandingOwn: 0,
+        fullOwn: customerShareOwn,
+        row,
+        deductionShare: true,
+      })
+      continue
+    }
+    if (settled.every((item) => item.request?.status === 'paid')) continue
+
+    // Paid in part in the period: the refused rest is the customer's.
+    const paid = settled.reduce<number | null>((sum, item) => {
+      if (sum === null) return null
+      const amount = item.decided_amount ?? (items.length === 1 ? item.request?.decided_total : null)
+      return amount == null ? null : roundOre(sum + Number(amount))
+    }, 0)
+    const deduction = Math.abs(Number(row.deduction_total ?? 0))
+    manual.push({
+      invoiceId: id,
+      reference: reference || id,
+      creditNote: false,
+      openCustomerShareSek: paid === null ? null : roundOre(Math.max(0, deduction - paid)),
+      openDeductionSek: 0,
+      openPartHasVat: Math.abs(Number(row.vat_amount ?? 0)) >= ORE_TOLERANCE,
+    })
+  }
+  return { carries, manual }
 }
 
 /**
@@ -2370,6 +2578,7 @@ async function loadCarryDocs(
         creditNote: c.creditNote,
         outstandingOwn: c.outstandingOwn,
         customerShareOwn: c.fullOwn,
+        ...(c.deductionShare ? { deductionShare: true } : {}),
       })
     } else {
       const row = supplierRows.get(c.id)

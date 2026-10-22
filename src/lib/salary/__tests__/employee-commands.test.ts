@@ -16,6 +16,7 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import { CreateEmployeeSchema, UpdateEmployeeSchema } from '@/lib/api/schemas'
 import { encryptPersonnummer } from '@/lib/salary/personnummer'
 import { eventBus } from '@/lib/events'
+import { EMPLOYEE_UPDATE_REQUEST_ONLY_KEYS } from '@/lib/salary/employee-update-rules'
 
 vi.mock('@/lib/company/context', () => ({
   getCompanyEntityType: vi.fn().mockResolvedValue('aktiebolag'),
@@ -76,11 +77,20 @@ beforeEach(() => {
 })
 
 describe('writable columns', () => {
-  it('are the keys of the request schemas, minus personnummer', () => {
-    const without = (shape: object) => Object.keys(shape).filter((key) => key !== 'personnummer').sort()
+  it('are the keys of the request schemas, minus personnummer and the request-only keys', () => {
+    const without = (shape: object) =>
+      Object.keys(shape)
+        .filter((key) => key !== 'personnummer' && !EMPLOYEE_UPDATE_REQUEST_ONLY_KEYS.has(key))
+        .sort()
 
     expect([...EMPLOYEE_CREATE_COLUMNS].sort()).toEqual(without(CreateEmployeeSchema.shape))
     expect([...EMPLOYEE_UPDATE_COLUMNS].sort()).toEqual(without(UpdateEmployeeSchema.shape))
+  })
+
+  it('never include a request-only key: the kollektivavtal confirmation is no column', () => {
+    expect(EMPLOYEE_UPDATE_REQUEST_ONLY_KEYS.has('sammaloneregeln_kollektivavtal_confirmed')).toBe(true)
+    expect(Object.keys(UpdateEmployeeSchema.shape)).toContain('sammaloneregeln_kollektivavtal_confirmed')
+    expect(EMPLOYEE_UPDATE_COLUMNS.has('sammaloneregeln_kollektivavtal_confirmed')).toBe(false)
   })
 
   it('never include the identity or tenancy columns', () => {

@@ -33,6 +33,13 @@ vi.mock('@/lib/invoices/rot-rut-receivable', () => ({
   getPayoutOreRounding: (...args: unknown[]) => mockGetPayoutOreRounding(...args),
 }))
 
+// Which invoices take kontantmetoden's second step is pinned by
+// rot-rut-payout-recognition.test.ts; here only that the writer gets it.
+const mockGetPayoutRecognition = vi.fn()
+vi.mock('@/lib/invoices/rot-rut-payout-recognition', () => ({
+  getPayoutRecognition: (...args: unknown[]) => mockGetPayoutRecognition(...args),
+}))
+
 import { settleRotRutPayoutRequest, settleRotRutPayoutRequestSet } from '../rot-rut-settle'
 
 const { supabase: mockSupabase, enqueue, reset, findCall, findCalls } = createQueuedMockSupabase()
@@ -61,6 +68,52 @@ beforeEach(() => {
   reset()
   mockCreatePayoutEntry.mockResolvedValue({ id: 'je-1' })
   mockGetPayoutOreRounding.mockResolvedValue({ rounding: 0, invoiceCount: 0 })
+  mockGetPayoutRecognition.mockResolvedValue({ ok: true, recognition: null })
+})
+
+describe('kontantmetoden: the payout books the deduction share it recognises', () => {
+  const recognition = {
+    amount: 3000,
+    lines: [
+      { account_number: '3001', debit_amount: 0, credit_amount: 2400, line_description: 'Försäljning faktura 1042, ROT-avdrag' },
+      { account_number: '2611', debit_amount: 0, credit_amount: 600, line_description: 'Utgående moms 25% faktura 1042, ROT-avdrag' },
+    ],
+    invoices: [{ invoiceId: 'inv-1', paid: 3000 }],
+  }
+
+  it('hands the recognition to the voucher writer for the payment date', async () => {
+    mockGetPayoutRecognition.mockResolvedValue({ ok: true, recognition })
+    enqueue({ data: makeRequestRow() })
+    enqueue({ data: { ...makeRequestRow(), status: 'paid', settlement_journal_entry_id: 'je-1' } })
+    enqueue({ data: [] }) // items for the decided_amount mirror
+    const outcome = await settleRotRutPayoutRequest(supabase, 'user-1', 'company-1', {
+      requestId: REQUEST_ID,
+      paymentDate: '2026-07-10',
+    })
+    expect(outcome.ok).toBe(true)
+    expect(mockGetPayoutRecognition).toHaveBeenCalledWith(supabase, 'company-1', expect.objectContaining({ id: REQUEST_ID }), 3000, '2026-07-10')
+    expect(mockCreatePayoutEntry.mock.calls[0][3]).toMatchObject({ amount: 3000, recognition })
+  })
+
+  it('refuses before booking when the per-invoice split is unknown', async () => {
+    mockGetPayoutRecognition.mockResolvedValue({
+      ok: false,
+      code: 'ROT_RUT_SETTLE_DEDUCTION_SPLIT_UNKNOWN',
+      details: { request_id: REQUEST_ID },
+    })
+    enqueue({ data: makeRequestRow() })
+    const outcome = await settleRotRutPayoutRequest(supabase, 'user-1', 'company-1', {
+      requestId: REQUEST_ID,
+      paymentDate: '2026-07-10',
+    })
+    expect(outcome).toEqual({
+      ok: false,
+      kind: 'code',
+      code: 'ROT_RUT_SETTLE_DEDUCTION_SPLIT_UNKNOWN',
+      details: { request_id: REQUEST_ID },
+    })
+    expect(mockCreatePayoutEntry).not.toHaveBeenCalled()
+  })
 })
 
 describe('settleRotRutPayoutRequest', () => {

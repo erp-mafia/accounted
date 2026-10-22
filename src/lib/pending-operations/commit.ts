@@ -55,7 +55,7 @@ import {
 } from '@/lib/invoices/issue-and-book-invoice'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { buildInvoiceMatchClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
-import { booksInvoicesOnIssue, cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
+import { cashPartialBlockReason, supplierInvoiceBooksOnRegistration } from '@/lib/bookkeeping/booking-mode'
 import { ensureManualCashAccount, resolveDefaultCashAccount } from '@/lib/cash-accounts/service'
 import { ingestTransactions } from '@/lib/transactions/ingest'
 import { findFiscalPeriod, getSwedishLocalDate, validateBalance } from '@/lib/bookkeeping/engine'
@@ -319,6 +319,7 @@ import type {
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { MATCHABLE_INVOICE_STATUSES, isMatchableInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { linkBasisColumns } from '@/lib/links/stamp'
+import { checkAccountingMethod, type AccountingMethodCheck } from '@/lib/company/accounting-method'
 
 const log = createLogger('pending-operations/commit')
 
@@ -398,19 +399,38 @@ export interface CommitOptions {
 
 /**
  * The company's booking context for invoice-shaped executors: accounting
- * method and entity type with the engine defaults when the settings row is
- * missing or the read fails (errors are deliberately ignored, as before).
+ * method and entity type. Fails closed (accounted#58): a missing row or a
+ * failed read refuses the op and hands it back to 'pending' (nothing was
+ * written), instead of booking a kontantmetod invoice's payment as a 1510
+ * clearing under a guessed faktureringsmetoden.
  */
 async function loadBookingContext(
   supabase: SupabaseClient,
   companyId: string
-): Promise<{ accountingMethod: AccountingMethod; entityType: EntityType }> {
-  const { data: settings } = await supabase
+): Promise<
+  | { ok: true; accountingMethod: AccountingMethod; entityType: EntityType }
+  | { ok: false; result: ExecutorResult }
+> {
+  const settingsRead = await supabase
     .from('company_settings').select('accounting_method, entity_type').eq('company_id', companyId).single()
+  const method = checkAccountingMethod(settingsRead)
+  if (!method.ok) return { ok: false, result: accountingMethodRefusal(method) }
 
   return {
-    accountingMethod: (settings?.accounting_method as AccountingMethod) || 'accrual',
-    entityType: await resolveCompanyEntityType(supabase, companyId, settings?.entity_type),
+    ok: true,
+    accountingMethod: method.accountingMethod,
+    entityType: await resolveCompanyEntityType(supabase, companyId, settingsRead.data?.entity_type),
+  }
+}
+
+/** An unreadable accounting method as an executor refusal: side-effect free, so the op stays pending. */
+function accountingMethodRefusal(method: Extract<AccountingMethodCheck, { ok: false }>): ExecutorResult {
+  const entry = getErrorEntry(method.code)
+  return {
+    error: entry?.message_sv ?? 'Företagets bokföringsmetod kunde inte läsas, så inget bokfördes.',
+    errorCode: method.code,
+    status: entry?.httpStatus ?? 503,
+    returnToPending: true,
   }
 }
 
@@ -2640,7 +2660,9 @@ async function commitMarkInvoicePaid(
     }
   }
 
-  const { accountingMethod, entityType } = await loadBookingContext(supabase, companyId)
+  const bookingContext = await loadBookingContext(supabase, companyId)
+  if (!bookingContext.ok) return bookingContext.result
+  const { accountingMethod, entityType } = bookingContext
 
   // Settle the full outstanding balance through settleInvoicePayment, the
   // write path the dashboard, v1 and the Stripe sync share: the sale first
@@ -3310,8 +3332,12 @@ async function commitMatchTransactionInvoice(
   // overpayment_account: where the user chose to book an excess of a krona
   // or more (2420, or 3740 under its cap). The plan re-checks it against the
   // amounts as they are now, and the builders book exactly what it allows.
+  // fee_account: the user named the shortfall a payment provider's fee
+  // withheld from its payout (6570, crm#1364); the plan re-checks it the same
+  // way and settles the invoice in full only while it is one.
   const matchPlan = await planTransactionInvoiceMatch(supabase, transaction, invoice, {
     overpaymentAccount: typeof params.overpayment_account === 'string' ? params.overpayment_account : undefined,
+    feeAccount: typeof params.fee_account === 'string' ? params.fee_account : undefined,
   })
   if (!matchPlan.ok) {
     return {
@@ -3320,7 +3346,9 @@ async function commitMatchTransactionInvoice(
       status: 400,
       // The amounts the stage-time refusal names, so an op staged before that
       // guard (or whose invoice changed since) is just as actionable here.
-      ...(matchPlan.code === 'MATCH_AMOUNT_EXCEEDS_REMAINING' || matchPlan.code === 'MATCH_OVERPAYMENT_ROUNDING_CAP'
+      ...(matchPlan.code === 'MATCH_AMOUNT_EXCEEDS_REMAINING' ||
+      matchPlan.code === 'MATCH_OVERPAYMENT_ROUNDING_CAP' ||
+      matchPlan.code === 'MATCH_PAYMENT_FEE_NOT_ALLOWED'
         ? { data: { currency: matchPlan.currency, ...matchPlan.details } }
         : {}),
     }
@@ -3341,8 +3369,20 @@ async function commitMatchTransactionInvoice(
       data: { staged_excess: params.overpayment_amount ?? null, current_excess: matchPlan.overpayment.amount },
     }
   }
+  // The same for the fee: the approver saw one amount on 6570.
+  if (matchPlan.fee && roundOre(Number(params.fee_amount)) !== matchPlan.fee.amount) {
+    return {
+      error:
+        getErrorEntry('MATCH_PAYMENT_FEE_CHANGED')?.message_sv ??
+        'Fakturans återstående belopp har ändrats sedan matchningen förbereddes.',
+      errorCode: 'MATCH_PAYMENT_FEE_CHANGED',
+      status: 409,
+      data: { staged_fee: params.fee_amount ?? null, current_fee: matchPlan.fee.amount },
+    }
+  }
   const { fx } = matchPlan
   const overpaymentAccount = matchPlan.overpayment?.account
+  const feeAccount = matchPlan.fee?.account
   const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = matchPlan.plan
   const paidAt = isFullyPaid ? paidAtFromDate(transaction.date) : null
 
@@ -3351,7 +3391,9 @@ async function commitMatchTransactionInvoice(
   // (BookkeepingDatabaseError on a failed cash_accounts lookup), and a throw
   // here must reject the op with NOTHING posted. Behavior-preserving on the
   // happy path: these are pure reads.
-  const { accountingMethod, entityType } = await loadBookingContext(supabase, companyId)
+  const bookingContext = await loadBookingContext(supabase, companyId)
+  if (!bookingContext.ok) return bookingContext.result
+  const { accountingMethod, entityType } = bookingContext
 
   // Route on invoice state, not the company's current setting. Mirror of
   // the match-invoice route fix: see that handler for the full rationale.
@@ -3461,6 +3503,7 @@ async function commitMatchTransactionInvoice(
       const je = await createInvoiceCashEntry(
         supabase, companyId, userId, invoice as Invoice, transaction.date, entityType, invoice.customer?.name,
         paymentAccount, transaction, overpaymentAccount, posting,
+        { deferDeductionShare: accountingMethod === 'cash', feeAccount },
       )
       journalEntryId = je?.id ?? null
     } else {
@@ -3494,6 +3537,7 @@ async function commitMatchTransactionInvoice(
         fx.required ? fx.paidInInvoiceCurrency : undefined,
         paymentAccount,
         overpaymentAccount,
+        feeAccount,
       )
       const input: CreateJournalEntryInput = {
         fiscal_period_id: fiscalPeriodId,
@@ -3694,6 +3738,7 @@ async function commitMatchTransactionInvoice(
       paid_amount: newPaidAmount,
       journal_entry_id: journalEntryId,
       ...(matchPlan.overpayment ? { overpayment: matchPlan.overpayment } : {}),
+      ...(matchPlan.fee ? { fee: matchPlan.fee } : {}),
       // The sale verifikat this match booked first (defer_invoice_booking).
       ...(postedIds.sale_journal_entry_id ? { sale_journal_entry_id: postedIds.sale_journal_entry_id } : {}),
     },
@@ -4800,11 +4845,17 @@ async function commitCreateSupplierInvoiceFromInbox(
 
   // Booking mode for the registration verifikat, and the VAT registration
   // the item rows depend on: read once, before an ankomstnummer is drawn.
-  const { data: settings } = await supabase
+  // Fail closed (accounted#58): an unreadable row used to mean "accrual,
+  // VAT-registered", so a kontantmetod company's invoice was booked at
+  // registration with moms it may not deduct.
+  const settingsRead = await supabase
     .from('company_settings')
     .select('accounting_method, defer_invoice_booking, vat_registered')
     .eq('company_id', companyId)
     .single()
+  const method = checkAccountingMethod(settingsRead)
+  if (!method.ok) return accountingMethodRefusal(method)
+  const settings = settingsRead.data
 
   // The treatment and the reverse-charge flag, resolved by the function the
   // dashboard and v1 doors use (accounted#58: this executor defaulted a
@@ -5086,7 +5137,13 @@ async function commitCreateSupplierInvoiceFromInbox(
 
   // #967: deferred companies register WITHOUT booking (same gate as
   // POST /api/supplier-invoices); ekonomi books later via the Bokför step.
-  if (booksInvoicesOnIssue(settings)) {
+  // Kontantmetoden books at payment, except an EU goods acquisition (ML
+  // 7 kap. 26 §, supplierInvoiceBookingMoment).
+  if (supplierInvoiceBooksOnRegistration(
+    settings,
+    { reverse_charge: reverseCharge, reverse_charge_kind: reverseChargeKind.kind },
+    supplier.supplier_type as string | null,
+  )) {
     try {
       const journalEntry = await createSupplierInvoiceRegistrationEntry(
         supabase,
@@ -6475,6 +6532,7 @@ async function commitCreateEmployee(
 
 async function commitUpdateEmployee(
   supabase: SupabaseClient,
+  userId: string,
   companyId: string,
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
@@ -6486,7 +6544,9 @@ async function commitUpdateEmployee(
 
   try {
     const { updateEmployee } = await import('@/lib/salary/employee-commands')
-    const result = await updateEmployee(supabase, { companyId, employeeId, patch })
+    // userId: the approver, to whom a kollektivavtal confirmation in the
+    // patch is attributed in audit_log (the credential is the actor scope).
+    const result = await updateEmployee(supabase, { companyId, employeeId, patch, userId })
     if (!result.ok) {
       const entry = getErrorEntry(result.code)
       const detailMessage =
@@ -7587,7 +7647,7 @@ async function commitPendingOperationInner(
         result = await commitCreateEmployee(supabase, userId, companyId, pendingOp.params)
         break
       case 'update_employee':
-        result = await commitUpdateEmployee(supabase, companyId, pendingOp.params)
+        result = await commitUpdateEmployee(supabase, userId, companyId, pendingOp.params)
         break
       case 'set_employee_opening_balances':
         result = await commitSetEmployeeOpeningBalances(supabase, userId, companyId, pendingOp.params)

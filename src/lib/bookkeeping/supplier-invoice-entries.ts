@@ -766,16 +766,24 @@ export async function createSupplierInvoiceCashEntry(
  * why this is a pure builder and not a second entry generator: the verifikat
  * and the expense_claims row come from the same writer as the Underlag pane.
  *
- * Reverse charge is intentionally not supported here. RC invoices are never
- * "I paid this at a kiosk" cases: they're EU/byggtjänster from registered
- * businesses with formal invoices, which always go through AP. The route
- * guards against this combo before calling us.
+ * Reverse charge (crm#1377): who paid does not change who owes the moms. A
+ * service bought from a seller abroad (an EU SaaS on the owner's own card) is
+ * still the company's purchase under omvänd skattskyldighet (ML 2023:200
+ * 6 kap. 33 §, 16 kap. 6 §), so the reverse-charge sets the registration
+ * verifikat books (fiktiv moms 2645|2647 D / 26x4 K, the 44xx|45xx / 4598
+ * basis pair, by the same groupReverseChargeByRate rule) replace the 2641
+ * line, and the liability is the net the person paid. Pass `supplierType`
+ * and the company's momskoder (`chartVatTreatments`, required for a
+ * reverse-charge invoice) for that. In the invoice currency like every other
+ * line, so the claims service converts the fiktiv moms at the claim rate
+ * together with its base.
  */
 export function buildSupplierInvoicePrivatelyPaidLines(
-  invoice: Pick<SupplierInvoice, 'default_dimensions' | 'vat_treatment'>,
+  invoice: Pick<SupplierInvoice, 'default_dimensions' | 'vat_treatment' | 'currency' | 'reverse_charge' | 'reverse_charge_kind'>,
   items: SupplierInvoiceItem[],
   liabilityAccount: string,
-  description: string
+  description: string,
+  options: { supplierType?: string | null; chartVatTreatments?: ChartVatTreatments } = {},
 ): ExpenseClaimLineInput[] {
   const lines: ExpenseClaimLineInput[] = []
   // Dimensions PR7: this IS the utlägg path, billable-expense-to-project
@@ -802,12 +810,39 @@ export function buildSupplierInvoicePrivatelyPaidLines(
     })
   }
 
-  // Ingående moms per rate group (mixed-rate kvitto support), by the same
-  // rule as the AP paths (groupVatByRate, inputVatLines) without the SEK
-  // conversion. Gated on the same vat_treatment contract: an exempt or
-  // export kvitto has no moms to lift off, so its gross belongs on the cost
-  // account.
-  if (itemsHaveVat(items, invoice.vat_treatment)) {
+  if (isSupplierInvoiceReverseCharge(invoice, options.supplierType)) {
+    // Omvänd skattskyldighet: the seller charged no moms, so there is no 2641;
+    // the buyer self-assesses per rate group exactly as the registration
+    // verifikat does (supplierInvoiceRowLines). Rate 1 keeps the amounts in
+    // the invoice currency, as the cost lines above.
+    const chart = options.chartVatTreatments
+    if (!chart) {
+      throw new Error('buildSupplierInvoicePrivatelyPaidLines: a reverse-charge invoice needs the company momskoder (fetchChartVatTreatments)')
+    }
+    const rcByRate = groupReverseChargeByRate(items, chart, (item) => item.account_number, invoice.currency, 1)
+    const kind = supplierInvoiceReverseChargeKind(
+      options.supplierType as 'eu_business' | 'non_eu_business' | 'swedish_business',
+      invoice.reverse_charge_kind,
+    )
+    for (const [rate, { base, basisBase }] of rcByRate) {
+      if (rate > 0 && base > 0) {
+        for (const l of generateReverseChargePurchaseLines({ base, rate, kind, basisBase })) {
+          lines.push({
+            account_number: l.account_number,
+            debit_amount: l.debit_amount,
+            credit_amount: l.credit_amount,
+            line_description: l.line_description,
+            dimensions: defaultDimensions,
+          })
+        }
+      }
+    }
+  } else if (itemsHaveVat(items, invoice.vat_treatment)) {
+    // Ingående moms per rate group (mixed-rate kvitto support), by the same
+    // rule as the AP paths (groupVatByRate, inputVatLines) without the SEK
+    // conversion. Gated on the same vat_treatment contract: an exempt or
+    // export kvitto has no moms to lift off, so its gross belongs on the cost
+    // account.
     const vatByRate = groupVatByRate(items, (vat) => vat, invoice.vat_treatment)
     lines.push(...inputVatLines(vatByRate, description, defaultDimensions))
   }
@@ -835,9 +870,9 @@ export function buildSupplierInvoicePrivatelyPaidLines(
   }
 
   // Credit: the person's liability, balance guarantee. Existing credits (the
-  // SLP 2514 leg, a discount bucket) are subtracted so the pair never inflates
-  // what the person is owed: same guarantee shape as the registration entry's
-  // 2440 line.
+  // SLP 2514 leg, the 26x4 and 4598 legs of a reverse charge, a discount
+  // bucket) are subtracted so the pairs never inflate what the person is
+  // owed: same guarantee shape as the registration entry's 2440 line.
   const totalDebits = lines.reduce((sum, l) => sum + l.debit_amount, 0)
   const totalCredits = lines.reduce((sum, l) => sum + l.credit_amount, 0)
   lines.push({

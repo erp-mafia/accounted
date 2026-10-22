@@ -256,7 +256,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
       'Bank transactions and their booking: categorization rules, suggestions, matching against invoices and bank reconciliation.',
     dependsOn: [],
     layer: 'foundation',
-    uses: ['deadlines', 'inbox'],
+    // vat: a reverse charge booked in bulk reads its box off the seller (vat/reverse-charge-box).
+    uses: ['deadlines', 'inbox', 'vat'],
     libFolders: ['transactions', 'rules', 'reconciliation'],
     operationPrefixes: ['transactions'],
     v1Segments: ['transactions', 'reconciliation'],

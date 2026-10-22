@@ -828,6 +828,18 @@ describe('tools/list payload size guard', () => {
     // 2026-10-19 (crm#1323): gnubok_create_supplier_invoice_from_inbox gains
     // reverse_charge_kind (EU goods, ruta 20) with a one-line description.
     // Measured 61 369 (full catalog 65 838). Ceiling unchanged.
+    // 2026-10-22 (crm#1364): gnubok_match_transaction_to_invoice gains
+    // fee_account (a payout net of the payment provider's fee) as a bare
+    // enum, paid for by dropping expected_journal_entry_id's description (the
+    // duplicate refusal's remediation names the id). Measured 61 396 (full
+    // catalog 65 865). Ceiling unchanged.
+    // 2026-10-22 (#31): gnubok_update_employee gains
+    // sammaloneregeln_kollektivavtal_confirmed, bare (no description: the
+    // EMPLOYEE_SAMMALONEREGELN_DEGREE_CHANGED refusal says when to send it),
+    // about +15. Landed with the rest of run t1021 (main 61 397, every
+    // component together 61 406): the "the XML holds personnummer" clause
+    // the same run added to gnubok_generate_rot_rut_file (#58) was dropped
+    // to pay for it. Measured 61 399 (full catalog 65 868). Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

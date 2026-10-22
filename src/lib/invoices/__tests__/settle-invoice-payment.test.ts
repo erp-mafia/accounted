@@ -558,6 +558,7 @@ describe('settleInvoicePayment', () => {
       undefined,
       undefined,
       expect.any(Function),
+      { deferDeductionShare: true },
     )
     expect(vi.mocked(createInvoicePaymentJournalEntry)).not.toHaveBeenCalled()
   })

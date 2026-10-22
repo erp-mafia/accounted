@@ -4,6 +4,7 @@ import { resolveTemplateAccountsForEntity } from './proposal-lines'
 import type { SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 import { accountHue, templateGroupHue, type TemplateHue } from './template-group-colors'
 import { getDefaultAccountForCategory, getDefaultVatTreatmentForCategory } from './category-mapping'
+import { groupForAccount } from './template-groups'
 import {
   DEFAULT_REVERSE_CHARGE_KIND,
   REVERSE_CHARGE_TREATMENT_KINDS,
@@ -480,6 +481,11 @@ export function categoryForAccount(
   preferred?: TransactionCategory | null,
 ): TransactionCategory {
   if (preferred && preferred !== 'uncategorized') return preferred
+  // Every representation account (avdragsgill or not) is the representation
+  // category, not only the category's default: with the default 6072 a 6071
+  // booking read as expense_other, and before it a 6072 one did, which also
+  // let it past the grant refusal of representation (accounted#86).
+  if (groupForAccount(account) === 'representation') return 'expense_representation'
   const candidates: TransactionCategory[] = [
     'expense_equipment', 'expense_software', 'expense_travel', 'expense_office', 'expense_marketing',
     'expense_professional_services', 'expense_representation', 'expense_consumables', 'expense_vehicle',

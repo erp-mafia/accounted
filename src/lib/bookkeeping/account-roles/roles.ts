@@ -39,6 +39,11 @@ export const ACCOUNT_ROLES = [
   'rounding',
   /** Advances received from customers: a liability to refund or offset against a later invoice. */
   'customer_advances',
+  /**
+   * Fees a bank or payment provider charges for moving money: bank charges,
+   * card acquiring, a payment provider's fee withheld from its payout.
+   */
+  'payment_fees',
   /** Exchange-rate gains on operating receivables and payables (not on financial items). */
   'operating_fx_gain',
   /** Exchange-rate losses on operating receivables and payables (not on financial items). */

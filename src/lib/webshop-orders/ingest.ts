@@ -2,6 +2,7 @@ import { chunk } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { roundOre as round } from '@/lib/money'
+import { addDaysIso } from '@/lib/dates/iso'
 import { createLogger } from '@/lib/logger'
 import type { Currency, WebshopOrder } from '@/types'
 import type {
@@ -138,9 +139,40 @@ function sameLineItems(
   )
 }
 
-function financialsDiffer(existing: ExistingRow, incoming: WebshopOrderUpsert): boolean {
+/**
+ * Whether a stored order or paid date is the UTC day of the instant the
+ * incoming Swedish day was read from. Rows synced before the syncs read the
+ * Swedish calendar day (#58) hold the UTC day, which lags it by exactly one
+ * for an order placed between midnight and 01:00/02:00 Stockholm time. That
+ * is our reading changing, not the store. (A store-side edit moving a date
+ * exactly one day later passes too; the verifikat keeps its own date.)
+ */
+function isUtcDayOfSameInstant(stored: string | null, incoming: string | null): boolean {
+  return stored !== null && incoming !== null && addDaysIso(stored, 1) === incoming
+}
+
+/**
+ * `frozen`: a booked row compares its dates with isUtcDayOfSameInstant, so a
+ * row booked on the UTC day is not flagged as changed in the store after
+ * booking. Its verifikat keeps the date it was booked with.
+ */
+function financialsDiffer(
+  existing: ExistingRow,
+  incoming: WebshopOrderUpsert,
+  { frozen = false }: { frozen?: boolean } = {},
+): boolean {
   for (const field of FINANCIAL_FIELDS) {
-    if ((existing[field] ?? null) !== (incoming[field] ?? null)) return true
+    const before = existing[field] ?? null
+    const after = incoming[field] ?? null
+    if (before === after) continue
+    if (
+      frozen &&
+      (field === 'order_date' || field === 'paid_date') &&
+      isUtcDayOfSameInstant(before as string | null, after as string | null)
+    ) {
+      continue
+    }
+    return true
   }
   return !sameVatBreakdown(existing.vat_breakdown, incoming.vat_breakdown)
 }
@@ -324,7 +356,7 @@ export async function upsertWebshopOrders(
       }
 
       if (isFrozen(existing)) {
-        const drifted = financialsDiffer(existing, incoming)
+        const drifted = financialsDiffer(existing, incoming, { frozen: true })
         const update: Record<string, unknown> = { ...safeFields(incoming) }
         if (drifted && !existing.remote_changed_after_freeze) {
           update.remote_changed_after_freeze = true

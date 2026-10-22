@@ -20,6 +20,7 @@ import {
   SettingsRow,
   SettingsSectionHeader,
   SettingsSelect,
+  SettingsTextarea,
 } from '@/components/settings/SettingsRows'
 import { useSettings } from '@/components/settings/useSettings'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -60,6 +61,11 @@ export function BookkeepingSettingsContent() {
     // a stale flag the user set in a mode where it had no effect.
     const deferInvoiceBooking =
       accountingMethod === 'accrual' && formData.get('defer_invoice_booking') === 'true'
+    // Only a changed method carries a reason: in a fiscal year that already
+    // has posted verifikat the save records it as a correction, and refuses
+    // the change without one.
+    const correctionReason = ((formData.get('accounting_method_correction_reason') as string | null) ?? '').trim()
+    const methodChanged = accountingMethod !== (settings?.accounting_method || 'accrual')
 
     const updates: Record<string, unknown> = {
       bookkeeping_locked_through: lockedThrough,
@@ -67,6 +73,7 @@ export function BookkeepingSettingsContent() {
       accounting_method: accountingMethod,
       default_voucher_series: defaultVoucherSeries,
       defer_invoice_booking: deferInvoiceBooking,
+      ...(methodChanged && correctionReason ? { accounting_method_correction_reason: correctionReason } : {}),
     }
 
     // Write-through: the booking engine resolves the series from the
@@ -134,6 +141,23 @@ export function BookkeepingSettingsContent() {
               <option value="cash">{t('method_cash')}</option>
             </SettingsSelect>
           </SettingsRow>
+          {/* A changed method asks why: mid-year it is saved as a correction
+              of a wrong setting, with the reason in the behandlingshistorik. */}
+          <SettingsReveal open={pickedMethod !== null && pickedMethod !== (settings.accounting_method || 'accrual')}>
+            <SettingsRow
+              label={t('method_correction_label')}
+              htmlFor="accounting_method_correction_reason"
+              help={t('method_correction_help')}
+              align="baseline"
+            >
+              <SettingsTextarea
+                id="accounting_method_correction_reason"
+                name="accounting_method_correction_reason"
+                maxLength={500}
+                placeholder={t('method_correction_placeholder')}
+              />
+            </SettingsRow>
+          </SettingsReveal>
           {/* #967: register/send without booking; ekonomi books in a separate
               explicit step. Only meaningful under faktureringsmetoden, so it
               sits indented under the method and folds away under kontant. */}

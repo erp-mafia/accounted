@@ -42,7 +42,7 @@ describe('parseSuppliersFile', () => {
     ])
     const result = await parseSuppliersFile(buffer, 'bad-iban.xlsx')
     expect(result.rows[0].is_valid).toBe(false)
-    expect(result.rows[0].validation_errors).toContain('Ogiltigt IBAN')
+    expect(result.rows[0].validation_errors).toContain('Ogiltigt IBAN "NOT-AN-IBAN" i kolumnen "IBAN"')
   })
 
   it('defaults currency to SEK when missing or invalid', async () => {
@@ -113,5 +113,23 @@ describe('parseSuppliersFile', () => {
     expect(result.detected_columns.confidence).toBe(0)
     expect(result.rows).toHaveLength(1)
     expect(result.rows[0].name).toBe('LEV-001')
+  })
+
+  // PH 204: a detected column whose every cell fails its field is the wrong
+  // column; the mapping step opens with it empty instead of a review step of
+  // rows that cannot be fixed.
+  it('unmaps a detected e-mail column that holds no e-mail address', async () => {
+    const buffer = buildXlsx([
+      ['Namn', 'Epost-kod', 'IBAN'],
+      ['Acme AB', '123 45', 'SE3550000000054910000003'],
+      ['Beta AB', '411 01', ''],
+    ])
+    const result = await parseSuppliersFile(buffer, 'lev.xlsx')
+
+    expect(result.detected_columns.email_col).toBeNull()
+    expect(result.detected_columns.iban_col).toBe(2)
+    expect(result.detected_columns.confidence).toBeLessThan(0.8)
+    expect(result.warnings.join(' ')).toContain('Kolumnen "Epost-kod" läses inte in som E-post')
+    expect(result.rows.every((r) => r.is_valid)).toBe(true)
   })
 })

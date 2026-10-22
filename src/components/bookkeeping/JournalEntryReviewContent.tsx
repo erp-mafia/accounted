@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import { CheckCircle2, Paperclip } from 'lucide-react'
 import { formatDate } from '@/lib/utils'
+import { fiscalYearShortName } from '@/lib/bookkeeping/suggest-fiscal-period'
 
 interface ReviewLine {
   account_number: string
@@ -46,7 +47,7 @@ export function JournalEntryReviewContent({
         <div className={`grid gap-4 text-sm ${hideDate && !voucherSeries ? 'grid-cols-1' : hideDate || !voucherSeries ? 'grid-cols-2' : 'grid-cols-3'}`}>
           <div>
             <span className="text-muted-foreground">Räkenskapsår</span>
-            <p className="font-medium">{periodName}</p>
+            <p className="font-medium">{fiscalYearShortName(periodName)}</p>
           </div>
           {!hideDate && (
             <div>

@@ -39,7 +39,6 @@ import {
 } from '@/lib/pending-operations/schemas/company-settings'
 import { defineOperation, type OperationContext, type OperationOutcome, type OperationWarning } from './types'
 import { filedVatPeriodsReopenedBy } from '@/lib/vat/filed-periods-reopened'
-import { todayIsoStockholm } from '@/lib/dates/iso'
 import { parseEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import { INVOICE_QR_MODES } from '@/types'
 import { maskPersonnummer } from '@/lib/salary/personnummer-format'
@@ -449,58 +448,17 @@ export const settingsUpdate = defineOperation({
 })
 
 const TaxProfileInput = z
-  .object(pickShape(S, TAX_PROFILE_FIELDS))
+  .object({
+    ...pickShape(S, TAX_PROFILE_FIELDS),
+    accounting_method_correction_reason: S.accounting_method_correction_reason.describe(
+      'Needed to change accounting_method in a fiscal year with posted verifikat: why the setting was wrong (a correction, recorded in the behandlingshistorik).',
+    ),
+  })
   .strict()
   .superRefine((value, ctx) => {
-    if (!atLeastOneField(value)) ctx.addIssue({ code: 'custom', message: AT_LEAST_ONE })
+    const { accounting_method_correction_reason: _reason, ...fields } = value
+    if (!atLeastOneField(fields)) ctx.addIssue({ code: 'custom', message: AT_LEAST_ONE })
   })
-
-/**
- * The accounting method (kontantmetoden or faktureringsmetoden) governs a
- * whole fiscal year: BFL 5 kap 2 § lets a small business book at payment,
- * but every receivable and payable unpaid at year-end is booked anyway, and
- * on the VAT side a move to bokslutsmetoden needs Skatteverket (ML 7 kap
- * 17 §). A switch in the middle of a year with bookings leaves the year kept
- * under two methods. Over the API an agent may therefore switch only while
- * the current fiscal year has no posted verifikat (the onboarding fix of a
- * wrong choice); later the change belongs to a person, at a year boundary.
- */
-async function refuseMidYearMethodChange(
-  ctx: OperationContext,
-  requested: string | null | undefined,
-): Promise<Extract<OperationOutcome<never>, { ok: false }> | null> {
-  if (requested === undefined || requested === null) return null
-  const { data: current } = await ctx.supabase
-    .from('company_settings')
-    .select('accounting_method')
-    .eq('company_id', ctx.companyId)
-    .maybeSingle()
-  if (((current?.accounting_method as string | null | undefined) ?? 'accrual') === requested) return null
-
-  const today = todayIsoStockholm()
-  const { data: period } = await ctx.supabase
-    .from('fiscal_periods')
-    .select('id, name, period_start, period_end')
-    .eq('company_id', ctx.companyId)
-    .lte('period_start', today)
-    .gte('period_end', today)
-    .maybeSingle()
-  if (!period) return null
-
-  const { count } = await ctx.supabase
-    .from('journal_entries')
-    .select('id', { count: 'exact', head: true })
-    .eq('company_id', ctx.companyId)
-    .eq('fiscal_period_id', period.id as string)
-    .eq('status', 'posted')
-  if (!count) return null
-  return {
-    ok: false,
-    code: 'ACCOUNTING_METHOD_CHANGE_MID_YEAR',
-    details: { fiscal_period_id: period.id, fiscal_year: period.name, posted_entries: count },
-    messageSv: `Bokföringsmetoden kan inte bytas mitt i räkenskapsåret ${String(period.name)}: det finns ${count} bokförda verifikationer. Byt inför nästa räkenskapsår i inställningarna.`,
-  }
-}
 
 export const settingsUpdateTaxProfile = defineOperation({
   id: 'settings.update-tax-profile',
@@ -513,7 +471,7 @@ export const settingsUpdateTaxProfile = defineOperation({
     description:
       'Patches the settings that decide how the books are kept and declared: VAT registration, VAT number and moms period, EU trade and periodisk sammanställning, F-skatt, preliminary tax, employer registration, fiscal year start month, accounting method (faktureringsmetoden/kontantmetoden), deferred invoice booking, share capital and the optional deadline reminders. Runs the settings page rules and, like it, regenerates the tax deadlines. Owner or admin only. Idempotent (mandatory Idempotency-Key). Dry-runnable.',
     useWhen:
-      'The company registered or deregistered for VAT or as an employer, Skatteverket changed its moms period, or the fiscal year or accounting method was changed with the authorities.',
+      'The company registered or deregistered for VAT or as an employer, Skatteverket changed its moms period, the fiscal year or accounting method was changed with the authorities, or an accounting method set wrong at onboarding is corrected.',
     doNotUseFor:
       'Invoice, contact or payment details (PATCH /settings), the bookkeeping lock (PATCH /settings/bookkeeping-lock), entity type or org number (fixed).',
     pitfalls: [
@@ -526,7 +484,7 @@ export const settingsUpdateTaxProfile = defineOperation({
       'aktiekapital and antal_aktier are set or cleared together.',
       'accounting_method=cash turns defer_invoice_booking off (deferred booking is accrual only).',
       'defer_invoice_booking=true: sent customer invoices and registered supplier invoices get no verifikat until they are booked with POST /invoices/{id}/book (or /invoices/bulk-book) and POST /supplier-invoices/{id}/book.',
-      'accounting_method can only change while the current fiscal year has no posted verifikat (409 ACCOUNTING_METHOD_CHANGE_MID_YEAR): the method governs the whole year (BFL 5 kap 2 §), and for VAT a move to bokslutsmetoden also needs Skatteverket (ML 7 kap 17 §).',
+      'accounting_method changes freely only while the current fiscal year has no posted verifikat. Later it is a correction of a wrong setting: send accounting_method_correction_reason (else 409 ACCOUNTING_METHOD_CHANGE_MID_YEAR); refused with 409 ACCOUNTING_METHOD_CHANGE_OPEN_INVOICES while an open invoice has no verifikat of its own. The method governs the whole year (BFL 5 kap 2 §); a real move to bokslutsmetoden needs Skatteverket first (ML 7 kap 17 §).',
     ],
     example: {
       request: { vat_registered: true, vat_number: 'SE556677889901', moms_period: 'quarterly' },
@@ -556,6 +514,7 @@ export const settingsUpdateTaxProfile = defineOperation({
     'SETTINGS_VAT_40M_REQUIRES_MONTHLY',
     'SETTINGS_PS_REQUIRES_VAT_AND_EU_TRADE',
     'ACCOUNTING_METHOD_CHANGE_MID_YEAR',
+    'ACCOUNTING_METHOD_CHANGE_OPEN_INVOICES',
   ],
   http: { method: 'PATCH', path: `${SETTINGS_PATH}/tax-profile` },
   mcp: {
@@ -567,8 +526,6 @@ export const settingsUpdateTaxProfile = defineOperation({
     stage: { pendingType: 'update_company_tax_profile', title: () => 'Ändra skatte- och momsuppgifter' },
   },
   run: async (ctx, input, { dryRun }) => {
-    const refused = await refuseMidYearMethodChange(ctx, input.accounting_method)
-    if (refused) return refused
     const outcome = await runSettingsWrite(ctx, input, dryRun)
     if (!outcome.ok || outcome.dryRun) return outcome
     return {

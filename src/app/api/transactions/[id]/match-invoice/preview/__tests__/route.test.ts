@@ -430,3 +430,123 @@ describe('GET /api/transactions/[id]/match-invoice/preview: a customer overpayme
     expect(body.error.code).toBe('MATCH_AMOUNT_EXCEEDS_REMAINING')
   })
 })
+
+// crm#1364: a SEK payout short of the invoice by the payment provider's fee.
+describe('GET /api/transactions/[id]/match-invoice/preview: a payment provider fee (crm#1364)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1', email: 'test@test.se' } } })
+  })
+
+  type Line = { account_number: string; debit_amount: number; credit_amount: number }
+  async function preview(searchParams: Record<string, string> = {}) {
+    const request = createMockRequest('/api/transactions/tx-1/match-invoice/preview', {
+      searchParams: { invoice_id: VALID_UUID, ...searchParams },
+    })
+    const response = await GET(request, createMockRouteParams({ id: 'tx-1' }))
+    return parseJsonResponse<{
+      entry_type: string
+      lines: Line[]
+      is_fully_paid: boolean
+      payment_fee: { fee: number; account: string | null; required: boolean } | null
+      error: { code: string; details?: Record<string, unknown> }
+    }>(response)
+  }
+  const rows = (lines: Line[]) => lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])
+
+  // 10 000 + 2 500 moms = 12 500, paid out as 12 262,50 (a 237,50 fee).
+  function enqueueMatch(amount: number, method: 'accrual' | 'cash') {
+    enqueue({ data: makeTransaction({ id: 'tx-1', amount, currency: 'SEK', date: '2026-10-21', invoice_id: null }), error: null })
+    enqueue({
+      data: makeInvoice({
+        id: VALID_UUID,
+        status: 'sent',
+        total: 12500,
+        remaining_amount: 12500,
+        paid_amount: 0,
+        journal_entry_id: method === 'accrual' ? 'je-sent' : null,
+      }),
+      error: null,
+    })
+    enqueue({ data: { accounting_method: method, entity_type: 'aktiebolag' }, error: null })
+    enqueue({ data: [], error: null }) // cash accounts -> 1930
+  }
+
+  it('faktureringsmetoden: previews the partial and offers the fee account', async () => {
+    enqueueMatch(12262.5, 'accrual')
+    const { status, body } = await preview()
+    expect(status).toBe(200)
+    expect(rows(body.lines)).toEqual([
+      ['1930', 12262.5, 0],
+      ['1510', 0, 12262.5],
+    ])
+    expect(body.is_fully_paid).toBe(false)
+    expect(body.payment_fee).toEqual({ fee: 237.5, account: null, required: false })
+  })
+
+  it('with fee_account 6570: 1510 cleared in full, the fee on 6570, invoice paid', async () => {
+    enqueueMatch(12262.5, 'accrual')
+    const { status, body } = await preview({ fee_account: '6570' })
+    expect(status).toBe(200)
+    expect(rows(body.lines)).toEqual([
+      ['1930', 12262.5, 0],
+      ['1510', 0, 12500],
+      ['6570', 237.5, 0],
+    ])
+    expect(body.is_fully_paid).toBe(true)
+    expect(body.payment_fee).toEqual({ fee: 237.5, account: '6570', required: false })
+  })
+
+  it('kontantmetoden: no rows until the fee is named, instead of refusing the partial', async () => {
+    enqueueMatch(12262.5, 'cash')
+    const { status, body } = await preview()
+    expect(status).toBe(200)
+    expect(body.lines).toEqual([])
+    expect(body.payment_fee).toEqual({ fee: 237.5, account: null, required: true })
+  })
+
+  it('kontantmetoden with fee_account: revenue and moms on the invoice, 1930 the payout, 6570 the fee', async () => {
+    enqueueMatch(12262.5, 'cash')
+    const { status, body } = await preview({ fee_account: '6570' })
+    expect(status).toBe(200)
+    expect(body.entry_type).toBe('cash')
+    expect(rows(body.lines)).toEqual([
+      ['1930', 12262.5, 0],
+      ['3001', 0, 10000],
+      ['2611', 0, 2500],
+      ['6570', 237.5, 0],
+    ])
+    expect(body.is_fully_paid).toBe(true)
+    // Still required: the dialog offers no partial to switch back to.
+    expect(body.payment_fee).toEqual({ fee: 237.5, account: '6570', required: true })
+  })
+
+  it('kontantmetoden: a gap too large for a fee is refused as the partial it is', async () => {
+    enqueueMatch(10000, 'cash')
+    const { status, body } = await preview()
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED')
+  })
+
+  it('refuses fee_account for a gap of a tenth or more, as the POST does', async () => {
+    enqueueMatch(10000, 'accrual')
+    const { status, body } = await preview({ fee_account: '6570' })
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('MATCH_PAYMENT_FEE_NOT_ALLOWED')
+  })
+
+  it('returns 400 for any other fee account', async () => {
+    const { status, body } = await preview({ fee_account: '6064' })
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details).toMatchObject({ field: 'fee_account' })
+  })
+
+  it('an exact payment carries no fee', async () => {
+    enqueueMatch(12500, 'accrual')
+    const { status, body } = await preview()
+    expect(status).toBe(200)
+    expect(body.payment_fee).toBeNull()
+  })
+})

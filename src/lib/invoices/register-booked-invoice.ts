@@ -44,8 +44,17 @@
  * books, one open item of an older history, so registrations never move the
  * register's coverage boundary.
  *
- * SEK only: a foreign-currency invoice needs its own amount and the rate the
- * old system used, which the verifikat alone does not give.
+ * A foreign-currency invoice (#90, crm#1336) registers against a verifikat
+ * whose 151x lines carry its currency and its amount in it, as the
+ * engine's own invoice verifikat do. The verifikat is then the record for
+ * both: the caller's total, stated in the invoice's currency, must be what
+ * 151x carries in it, and the rate is not the caller's but the one that
+ * gives the booked kronor back (rateGivingBack, the rule a migrated foreign
+ * invoice follows, crm#1039). The kronor columns are the verifikat's own,
+ * so the row behaves like any foreign invoice: a payment clears 151x at
+ * that rate, the revaluation measures from it, a kreditfaktura reverses the
+ * booked kronor. A verifikat in kronor only says neither the invoice's own
+ * amount nor its rate, and is refused.
  */
 
 import { z } from 'zod'
@@ -55,12 +64,15 @@ import { dbError } from '@/lib/errors/db-error'
 import { saneIsoDateSchema } from '@/lib/invariants/zod'
 import { createLogger } from '@/lib/logger'
 import { ORE_TOLERANCE, roundOre } from '@/lib/money'
+import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
+import { ledgerLineAmountIn } from '@/lib/bookkeeping/ledger-line-amount'
 import { ACCOUNT_RUTA } from '@/lib/reports/vat-declaration'
-import type { VatTreatment } from '@/types'
+import { FOREIGN_CURRENCIES, type VatTreatment } from '@/types'
 import { recordInvoicePaymentRow } from './invoice-payment-row'
 import { seriesNumberOf } from '@/lib/company/invoice-number-series'
 import { REGISTER_BOOKED_INVOICE_MODE } from './register-booked-invoice-mode'
 import {
+  rateGivingBack,
   refineRegistrationDatesAndAmounts,
   registeredAmountSchema,
   registrationVoucherLabel,
@@ -181,10 +193,11 @@ const commonShape = {
   invoice_date: saneIsoDateSchema,
   due_date: saneIsoDateSchema,
   journal_entry_id: z.string().uuid(),
+  /** In the invoice's currency, as are remaining_amount and the paid part. */
   total: registeredAmountSchema,
   /** The reskontra's own date: what the remaining balance is stated as of. */
   balance_as_of: saneIsoDateSchema.optional(),
-  /** The invoice's currency per the reskontra; anything but SEK is refused. */
+  /** The invoice's currency per the reskontra; SEK when left out. */
   currency: reskontraCurrencySchema.optional(),
 }
 
@@ -214,6 +227,9 @@ export interface BookedInvoiceVoucherLine {
   debit_amount: number | string | null
   credit_amount: number | string | null
   currency?: string | null
+  /** The line's amount in `currency` (a magnitude; the side is the debit/credit one). */
+  amount_in_currency?: number | string | null
+  exchange_rate?: number | string | null
   line_description?: string | null
 }
 
@@ -240,6 +256,48 @@ export function receivableForeignCurrency(lines: readonly BookedInvoiceVoucherLi
 /** Net credit of a verifikat line, to the öre. */
 const netCredit = (line: BookedInvoiceVoucherLine) =>
   roundOre((Number(line.credit_amount) || 0) - (Number(line.debit_amount) || 0))
+
+/**
+ * What the verifikat's 151x lines carry in `currency`: the net debit in it
+ * and the one rate they name (null when they name none or several). Null
+ * when a 151x line that moves kronor carries no amount in `currency`: the
+ * verifikat does not say what the invoice is in that currency.
+ */
+export function receivableInCurrency(
+  lines: readonly BookedInvoiceVoucherLine[],
+  currency: string,
+): { amount: number; statedRate: number | null } | null {
+  let amount = 0
+  const rates = new Set<number>()
+  for (const line of lines) {
+    if (!String(line.account_number).startsWith(AR_ACCOUNT_PREFIX)) continue
+    if (Math.abs(netCredit(line)) <= ORE_TOLERANCE) continue
+    const signed = ledgerLineAmountIn(line, currency)
+    if (signed === null) return null
+    amount = roundOre(amount + signed)
+    const rate = Number(line.exchange_rate)
+    if (line.exchange_rate != null && Number.isFinite(rate) && rate > 0) rates.add(rate)
+  }
+  return { amount, statedRate: rates.size === 1 ? [...rates][0] : null }
+}
+
+/**
+ * The output VAT the sale's lines carry in `currency`: the 261x-263x lines
+ * deriveInvoiceVatFromVoucher counts, or null when one of them carries no
+ * amount in it (the engine stamps the currency on 151x only).
+ */
+function outputVatInCurrency(lines: readonly BookedInvoiceVoucherLine[], currency: string): number | null {
+  let vat = 0
+  for (const line of lines) {
+    const account = String(line.account_number)
+    if (!OUTPUT_VAT_RATE_BY_PREFIX[account.slice(0, 3)] || PURCHASE_SIDE_VAT_DIGITS.has(account.charAt(3))) continue
+    if (Math.abs(netCredit(line)) <= ORE_TOLERANCE) continue
+    const signed = ledgerLineAmountIn(line, currency)
+    if (signed === null) return null
+    vat = roundOre(vat - signed)
+  }
+  return vat
+}
 
 export interface DerivedInvoiceVat {
   subtotal: number
@@ -381,6 +439,14 @@ export interface BookedInvoicePlan {
   customerName: string
   voucher: { journalEntryId: string; label: string; entryDate: string; description: string | null }
   status: 'sent' | 'partially_paid'
+  /** The invoice's own currency: total, subtotal, vatAmount and the paid and remaining parts are in it. */
+  currency: string
+  /** The rate that gives the booked kronor back; null for SEK. */
+  exchangeRate: number | null
+  /** What the verifikat books, in kronor; for SEK the same as the amounts above. */
+  totalSek: number
+  subtotalSek: number
+  vatAmountSek: number
   total: number
   subtotal: number
   vatAmount: number
@@ -457,7 +523,7 @@ export async function planBookedInvoiceRegistration(
     // Read with the entry, used only once the entry is known to be this company's.
     supabase
       .from('journal_entry_lines')
-      .select('account_number, debit_amount, credit_amount, currency, line_description')
+      .select('account_number, debit_amount, credit_amount, currency, amount_in_currency, exchange_rate, line_description')
       .eq('journal_entry_id', input.journal_entry_id),
     supabase
       .from('invoices')
@@ -482,11 +548,13 @@ export async function planBookedInvoiceRegistration(
       'The company uses kontantmetoden: an open invoice\'s revenue and VAT are booked when it is paid, so it cannot be linked to a verifikat. Registering open invoices is supported under faktureringsmetoden only, for now.',
     )
   }
-  if (input.currency && input.currency !== 'SEK') {
+  const currency = input.currency ?? 'SEK'
+  const inKronor = isLedgerCurrency(currency)
+  if (!inKronor && !(FOREIGN_CURRENCIES as readonly string[]).includes(currency)) {
     return refuse(
       'INVOICE_REGISTER_FOREIGN_CURRENCY',
-      `The invoice is in ${input.currency}: only SEK invoices can be registered this way for now. Leave it out of the register.`,
-      { currency: input.currency },
+      `The invoice is in ${currency}, which Accounted does not invoice in (SEK, ${FOREIGN_CURRENCIES.join(', ')}). Leave it out of the register.`,
+      { currency },
     )
   }
 
@@ -573,12 +641,20 @@ export async function planBookedInvoiceRegistration(
   }
 
   const lines = (linesRes.data ?? []) as BookedInvoiceVoucherLine[]
-  const currency = receivableForeignCurrency(lines)
-  if (currency) {
+  const voucherCurrency = receivableForeignCurrency(lines)
+  if (inKronor && voucherCurrency) {
     return refuse(
       'INVOICE_REGISTER_FOREIGN_CURRENCY',
-      `Verifikat ${label} books the receivable in ${currency}: only SEK invoices can be registered this way for now.`,
-      { currency },
+      `Verifikat ${label} books the receivable in ${voucherCurrency}: register it with currency ${voucherCurrency}, total and remaining_amount in ${voucherCurrency} as the reskontra lists them.`,
+      { currency: voucherCurrency },
+    )
+  }
+  const fx = inKronor ? null : receivableInCurrency(lines, currency)
+  if (!inKronor && !fx) {
+    return refuse(
+      'INVOICE_REGISTER_FOREIGN_CURRENCY',
+      `Verifikat ${label} books the receivable ${voucherCurrency ? `in ${voucherCurrency}` : 'in kronor only'}, not in ${currency}: it says neither the invoice's ${currency} amount nor its rate, so it cannot be registered as a ${currency} invoice.`,
+      { currency, voucher_currency: voucherCurrency ?? 'SEK' },
     )
   }
   const booked = receivableNetDebit(lines)
@@ -588,13 +664,33 @@ export async function planBookedInvoiceRegistration(
       `Verifikat ${label} has no net debit on 151x: it is not the verifikat of a customer invoice (a payment, or a sale booked under kontantmetoden).`,
     )
   }
-  if (Math.abs(booked - input.total) > ORE_TOLERANCE) {
+  if (!fx && Math.abs(booked - input.total) > ORE_TOLERANCE) {
     return refuse(
       'INVOICE_REGISTER_AMOUNT_MISMATCH',
       `Verifikat ${label} debits 151x by ${booked} but the invoice total is ${input.total} SEK.`,
       { booked_sek: booked, expected_sek: input.total },
     )
   }
+  // The verifikat is the record for the invoice's own amount too: a total
+  // the caller read elsewhere is checked against it, never taken over it.
+  if (fx && Math.abs(fx.amount - input.total) > ORE_TOLERANCE) {
+    return refuse(
+      'INVOICE_REGISTER_AMOUNT_MISMATCH',
+      `Verifikat ${label} debits 151x by ${fx.amount} ${currency} (${booked} SEK) but the invoice total is ${input.total} ${currency}.`,
+      { currency, booked_in_currency: fx.amount, expected_in_currency: input.total, booked_sek: booked },
+    )
+  }
+  const exchangeRate = fx ? rateGivingBack(input.total, booked, fx.statedRate) : null
+  if (fx && exchangeRate === null) {
+    return refuse(
+      'INVOICE_REGISTER_FOREIGN_CURRENCY',
+      `Verifikat ${label} books ${booked} SEK for ${input.total} ${currency}, which gives no exchange rate an invoice can carry.`,
+      { currency, booked_in_currency: fx.amount, booked_sek: booked },
+    )
+  }
+  // The sale in kronor, as the verifikat books it: for SEK the caller's
+  // total, which the check above holds to the booked amount.
+  const totalSek = fx ? booked : input.total
   const unsupported = (reason: UnsupportedVoucherShape | 'rot_rut') => refuse(
     'INVOICE_REGISTER_VOUCHER_UNSUPPORTED',
     `Verifikat ${label} ${UNSUPPORTED_SHAPE_TEXT[reason]}: such an invoice cannot be registered this way yet. Leave it out of the register and tell the user its amount stays a difference between the kundreskontra and 1510.`,
@@ -605,15 +701,23 @@ export async function planBookedInvoiceRegistration(
   if (lines.some((line) => String(line.account_number) === ROT_RUT_RECEIVABLE_ACCOUNT && Math.abs(netCredit(line)) > ORE_TOLERANCE)) {
     return unsupported('rot_rut')
   }
-  const derived = deriveInvoiceVatFromVoucher(lines, input.total)
+  const implausibleVat = () => refuse(
+    'INVOICE_REGISTER_VOUCHER_NOT_SALE',
+    `Verifikat ${label} books output VAT that does not fit a sale of ${totalSek} SEK.`,
+  )
+  const derived = deriveInvoiceVatFromVoucher(lines, totalSek)
   if (!derived.ok) {
     if (derived.reason !== 'implausible_vat') return unsupported(derived.reason)
-    return refuse(
-      'INVOICE_REGISTER_VOUCHER_NOT_SALE',
-      `Verifikat ${label} books output VAT that does not fit a sale of ${input.total} SEK.`,
-    )
+    return implausibleVat()
   }
   const vat = derived.vat
+  // The invoice's VAT in its own currency: what the VAT lines carry in it
+  // when they carry it, else the booked kronor at the invoice's rate. The
+  // kronor VAT (ML 17 kap. 29 §) is the verifikat's either way.
+  const vatAmount = exchangeRate === null || vat.vatAmount === 0
+    ? vat.vatAmount
+    : outputVatInCurrency(lines, currency) ?? roundOre(vat.vatAmount / exchangeRate)
+  if (vatAmount < 0 || vatAmount >= input.total) return implausibleVat()
 
   const remaining = roundOre(input.remaining_amount)
   const status = remaining < input.total - ORE_TOLERANCE ? 'partially_paid' : 'sent'
@@ -644,9 +748,14 @@ export async function planBookedInvoiceRegistration(
       customerName: customer.name ?? '',
       voucher: { journalEntryId: voucher.id, label, entryDate: voucher.entry_date, description: voucher.description },
       status,
+      currency,
+      exchangeRate,
+      totalSek,
+      subtotalSek: vat.subtotal,
+      vatAmountSek: vat.vatAmount,
       total: input.total,
-      subtotal: vat.subtotal,
-      vatAmount: vat.vatAmount,
+      subtotal: exchangeRate === null ? vat.subtotal : roundOre(input.total - vatAmount),
+      vatAmount,
       vatRate: vat.vatRate,
       vatTreatment: vat.vatTreatment,
       momsRuta: vat.momsRuta,
@@ -686,13 +795,16 @@ export async function registerBookedInvoice(
       due_date: input.due_date,
       status: plan.status,
       document_type: 'invoice',
-      currency: 'SEK',
+      currency: plan.currency,
+      // Null for SEK, the columns' default; else dated the day the verifikat booked that rate.
+      exchange_rate: plan.exchangeRate,
+      exchange_rate_date: plan.exchangeRate === null ? null : plan.voucher.entryDate,
       subtotal: plan.subtotal,
-      subtotal_sek: plan.subtotal,
+      subtotal_sek: plan.subtotalSek,
       vat_amount: plan.vatAmount,
-      vat_amount_sek: plan.vatAmount,
+      vat_amount_sek: plan.vatAmountSek,
       total: plan.total,
-      total_sek: plan.total,
+      total_sek: plan.totalSek,
       vat_rate: plan.vatRate,
       vat_treatment: plan.vatTreatment,
       moms_ruta: plan.momsRuta,
@@ -721,7 +833,7 @@ export async function registerBookedInvoice(
     const recorded = await recordInvoicePaymentRow(supabase, {
       userId,
       companyId,
-      invoice: { id: invoiceId, currency: 'SEK', exchange_rate: null, paid_amount: 0 },
+      invoice: { id: invoiceId, currency: plan.currency, exchange_rate: plan.exchangeRate, paid_amount: 0 },
       paymentDate: plan.paidAsOf,
       newPaidAmount: plan.paidAmount,
       journalEntryId: null,

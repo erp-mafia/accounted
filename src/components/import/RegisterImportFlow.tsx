@@ -221,6 +221,7 @@ export default function RegisterImportFlow({
           initial={columnsToMapping(parseResult.detected_columns, mappingKeys)}
           onConfirm={handleColumnMappingConfirm}
           onBack={() => setStep('upload')}
+          notices={parseResult.notices ?? legacyNotices(parseResult.warnings)}
         />
       )}
 

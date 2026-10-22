@@ -1234,30 +1234,131 @@ describe('POST /api/supplier-invoices', () => {
     expect(mockCreateSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
   })
 
-  it('rejects paid_with_private_funds combined with reverse_charge', async () => {
-    // The supplier is now read before this guard (see above).
-    setTable('suppliers', { data: makeSupplier({ id: VALID_UUID }) })
-
-    const request = createMockRequest('/api/supplier-invoices', {
-      method: 'POST',
-      body: {
-        supplier_id: VALID_UUID,
-        supplier_invoice_number: 'LF-RC',
-        invoice_date: '2024-06-01',
-        due_date: '2024-07-01',
-        paid_with_private_funds: true,
-        reverse_charge: true,
-        items: [{ description: 'Service', quantity: 1, unit_price: 5000, account_number: '6540', vat_rate: 0.25 }],
-      },
+  // crm#1377: an EU SaaS invoice paid on the owner's own card. The form sends
+  // reverse charge (line vat_rate 0, the self-assessed 25 % on
+  // reverse_charge_rate) with "Jag, privat" as payer; the service used to
+  // refuse the pair with SI_CREATE_INVALID_INPUT ("Ogiltig kombination av
+  // fakturafält"). Who paid does not change who reports the moms.
+  function reverseChargeUtlaggBody(overrides: Record<string, unknown> = {}) {
+    return privatelyPaidBody({
+      supplier_invoice_number: 'RC-UTLAGG-1',
+      currency: 'EUR',
+      exchange_rate: 11.123,
+      vat_treatment: 'reverse_charge',
+      reverse_charge: true,
+      reverse_charge_kind: 'eu_services',
+      items: [
+        { description: 'Saas', amount: 180, account_number: '4535', vat_rate: 0, reverse_charge_rate: 0.25 },
+      ],
+      ...overrides,
     })
-    const response = await POST(request)
+  }
+
+  it('crm#1377: a reverse-charge invoice paid privately books the utlägg with fiktiv moms instead of refusing', async () => {
+    stubRegistration({
+      supplier: makeSupplier({ id: VALID_UUID, supplier_type: 'eu_business' }),
+      // The inserted row as the service writes it: the builder reads its flags.
+      invoice: makeSupplierInvoice({
+        id: 'si-priv-rc',
+        status: 'paid',
+        currency: 'EUR',
+        exchange_rate: 11.123,
+        reverse_charge: true,
+        reverse_charge_kind: 'eu_services',
+        vat_treatment: 'reverse_charge',
+        subtotal: 180,
+        vat_amount: 0,
+        total: 180,
+      }),
+      arrival: 21,
+    })
+    setTable('companies', { data: { entity_type: 'aktiebolag' } })
+    setTable('chart_of_accounts', { data: [] })
+    mockRegisterExpenseClaim.mockResolvedValue(claimOk())
+
+    const response = await POST(createMockRequest('/api/supplier-invoices', { method: 'POST', body: reverseChargeUtlaggBody() }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    const insert = findCall('supplier_invoices', 'insert')?.[0] as Record<string, unknown>
+    // The seller charged no moms: the person is owed the net, and the invoice stays reverse charge.
+    expect(insert).toMatchObject({
+      status: 'paid',
+      paid_with_private_funds: true,
+      reverse_charge: true,
+      vat_treatment: 'reverse_charge',
+      total: 180,
+      vat_amount: 0,
+    })
+    const input = claimInput() as ClaimInput & { amount: number; vat_amount: number; currency: string }
+    expect(input).toMatchObject({ amount: 180, vat_amount: 0, currency: 'EUR' })
+    const byAccount = linesByAccount(input)
+    expect(byAccount['4535'].debit_amount).toBe(180)
+    // Fiktiv moms: ruta 30 (2614) and ruta 48 (2645), the same 25 % of the base.
+    expect(byAccount['2645'].debit_amount).toBe(45)
+    expect(byAccount['2614'].credit_amount).toBe(45)
+    // 4535 reports ruta 21 itself: no 4598 basis pair beside it, and no 2641.
+    expect(byAccount['4598']).toBeUndefined()
+    expect(byAccount['2641']).toBeUndefined()
+    expect(byAccount['2893'].credit_amount).toBe(180)
+    expect(mockCreateSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
+  })
+
+  it('a non-EU service paid privately on an ordinary cost account takes the ruta 22 basis pair', async () => {
+    stubRegistration({
+      supplier: makeSupplier({ id: VALID_UUID, supplier_type: 'non_eu_business' }),
+      invoice: makeSupplierInvoice({
+        id: 'si-priv-rc-2',
+        status: 'paid',
+        reverse_charge: true,
+        vat_treatment: 'reverse_charge',
+        subtotal: 1000,
+        vat_amount: 0,
+        total: 1000,
+      }),
+      arrival: 22,
+    })
+    setTable('companies', { data: { entity_type: 'aktiebolag' } })
+    setTable('chart_of_accounts', { data: [] })
+    mockRegisterExpenseClaim.mockResolvedValue(claimOk())
+
+    const response = await POST(createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: reverseChargeUtlaggBody({
+        currency: 'SEK',
+        exchange_rate: undefined,
+        reverse_charge_kind: undefined,
+        items: [{ description: 'Licens', amount: 1000, account_number: '5420', vat_rate: 0, reverse_charge_rate: 0.25 }],
+      }),
+    }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    const byAccount = linesByAccount(claimInput())
+    expect(byAccount['5420'].debit_amount).toBe(1000)
+    expect(byAccount['2645'].debit_amount).toBe(250)
+    expect(byAccount['2614'].credit_amount).toBe(250)
+    expect(byAccount['4531'].debit_amount).toBe(1000)
+    expect(byAccount['4598'].credit_amount).toBe(1000)
+    // The pairs net to zero: the person is owed what they paid.
+    expect(byAccount['2893'].credit_amount).toBe(1000)
+  })
+
+  it('a reverse-charge utlägg line still carrying a vat_rate is refused as before', async () => {
+    stubRegistration({ supplier: makeSupplier({ id: VALID_UUID, supplier_type: 'eu_business' }) })
+    setTable('companies', { data: { entity_type: 'aktiebolag' } })
+
+    const response = await POST(createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: reverseChargeUtlaggBody({
+        items: [{ description: 'Saas', amount: 180, account_number: '4535', vat_rate: 0.25 }],
+      }),
+    }))
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
     expect(status).toBe(400)
-    expect(body.error.code).toBe('SI_CREATE_INVALID_INPUT')
-    // Make sure we never touched the engine paths.
+    expect(body.error.code).toBe('VALIDATION_ERROR')
     expect(mockRegisterExpenseClaim).not.toHaveBeenCalled()
-    expect(mockCreateSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
   })
 })
 

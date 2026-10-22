@@ -7,6 +7,7 @@ import { ContextPicker } from '@/components/common/ContextPicker'
 import { STORAGE_KEY_PREFIX, ALL_YEARS_VALUE } from '@/components/common/fiscal-year-storage'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { prepareFiscalPeriods, resolveInitialFiscalScope } from '@/lib/reference-data/fiscal-scope'
+import { fiscalYearShortName } from '@/lib/bookkeeping/suggest-fiscal-period'
 import type { FiscalPeriod } from '@/types'
 
 interface FyPickerProps {
@@ -154,12 +155,14 @@ export function FyPicker({
     p.locked_at ? t('badge_locked').toLowerCase() : p.is_closed ? t('badge_closed').toLowerCase() : undefined
 
   const selected = value ? periods.find((p) => p.id === value) : null
-  // Real period names often already read "Räkenskapsår 2026"; only prefix
-  // the label when the name is a bare year/name so the chip never doubles up.
-  const chipLabel = (p: FiscalPeriod) =>
-    p.name.toLowerCase().includes(t('label').toLowerCase())
-      ? p.name
-      : `${t('label')} ${p.name}`
+  // The chip carries the label itself, so a generated name shows only its year
+  // ("Räkenskapsår 2026", "Fiscal year 2026", never "Fiscal year Räkenskapsår
+  // 2026" or "Räkenskapsår FY 2026", crm#1380). A hand-written name that
+  // already contains the label is shown as is, so the chip never doubles up.
+  const chipLabel = (p: FiscalPeriod) => {
+    const name = fiscalYearShortName(p.name)
+    return name.toLowerCase().includes(t('label').toLowerCase()) ? name : `${t('label')} ${name}`
+  }
   const triggerLabel = selected
     ? chipLabel(selected)
     : includeAllOption

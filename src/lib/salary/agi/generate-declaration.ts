@@ -30,7 +30,7 @@ import {
   AGIIncompleteDataError,
   AGIPayloadTooLargeError,
 } from './xml-generator'
-import type { AGIEmployeeData, AGICompanyData, AGITotals } from './xml-generator'
+import type { AGIEmployeeData, AGICompanyData, AGITotals, AGIUnderlag } from './xml-generator'
 import { agiReportingPeriod, formatAgiPeriodDashed } from './reporting-period'
 import { runDeviationWindow } from '../deviation-period'
 import { VAXA_STOD_AGI_FIELDS_RETIRED_FROM } from '../vaxa-stod'
@@ -169,9 +169,26 @@ function sumLineItemAmounts(
 // overrides included. The calculation engine already stores
 // avgifter_basis/avgifter_amount = 0 for these rows; a manual advanced-mode
 // override must not resurrect them, or the filing would claim social charges
-// on pay whose IU simultaneously asserts FK131 (not subject to them).
+// on pay whose IU simultaneously declares it in FK125 (underlag for the
+// recipient's egenavgifter, not the payer's arbetsgivaravgifter).
 function isFSkattRow(sre: SalaryRunEmployeeRow): boolean {
   return isFSkattStatus(sre.employee?.f_skatt_status)
+}
+
+/**
+ * A reviewer's avgiftsunderlag override of 0 kr (avancerat läge) on a
+ * payslip that is not an F-skatt payee's: the pay is no underlag for
+ * socialavgifter, so the IU declares it in the ej-underlag fields (FK131
+ * cash, FK132-FK134 benefits). The common case is ersättning to a person
+ * that stays under 1 000 kr in the year (SAL 2 kap. 14 §; Teknisk
+ * beskrivning 1.1.18.2 avsnitt 5.4), crm#1372: the override used to reach
+ * the booking only, while the IU still declared the pay in FK011/FK012 and
+ * Skatteverket charged avgifter on it. A partial override (above 0) has no
+ * field it could be declared in and keeps the filed underlag (see
+ * declaredAvgifterForRun).
+ */
+function declaresNoAvgiftUnderlag(sre: SalaryRunEmployeeRow): boolean {
+  return !isFSkattRow(sre) && sre.avgifter_basis_override === 0
 }
 
 /**
@@ -430,6 +447,27 @@ export async function generateAgiDeclaration(
         details: { missing_fields: ['benefit_values'], message: stale },
       }
     }
+    // An underlag of 0 with an avgift above 0 contradicts itself: the IU
+    // declares the pay as no underlag (Skatteverket charges nothing on it)
+    // while the booking and FK487 would carry the avgift. The override
+    // route refuses to save that pair; a row stored some other way is
+    // refused here rather than filed.
+    if (
+      declaresNoAvgiftUnderlag(sre) &&
+      (sre.avgifter_amount_override ?? sre.avgifter_amount) !== 0
+    ) {
+      return {
+        ok: false,
+        code: 'AGI_INCOMPLETE_DATA',
+        details: {
+          missing_fields: ['avgifter_amount_override'],
+          message:
+            `${who}: avgiftsunderlaget är justerat till 0 kr men arbetsgivaravgiften inte. ` +
+            'Ett underlag på 0 kr redovisas som ersättning som inte är underlag för socialavgifter (ruta 131-134), ' +
+            'så sätt även arbetsgivaravgiften till 0 kr i avancerat läge, eller rensa justeringen.',
+        },
+      }
+    }
     rowBenefits.push(resolution.benefits)
   }
 
@@ -442,26 +480,45 @@ export async function generateAgiDeclaration(
       const reduced = (type: BenefitItemType, historical: number): number =>
         reduction > 0 && taxableByType[type] !== undefined ? (taxableByType[type] as number) : historical
 
-      const benefitCar = reduced('benefit_car', sumLineItemAmounts(lineItems, ['benefit_car']))
+      // A benefit is declared when the payslip HAS it (its förmånsvärde as
+      // entered is above 0), at the value after the employee's payment: a
+      // benefit paid in full by nettolöneavdrag is still reported, as 0
+      // (Teknisk beskrivning 1.1.18.2 avsnitt 5.3; Skatteverket's guidance
+      // for rutor 012 and 013: "Om värdet blir noll (0) efter avdrag ska du
+      // fylla i en nolla (0)").
+      const grossCar = sumLineItemAmounts(lineItems, ['benefit_car'])
+      const grossHousing = sumLineItemAmounts(lineItems, ['benefit_housing'])
+      const benefitCar = reduced('benefit_car', grossCar)
       const benefitFuel = sumLineItemAmounts(lineItems, ['benefit_fuel'])
-      const benefitHousing = reduced('benefit_housing', sumLineItemAmounts(lineItems, ['benefit_housing']))
+      const benefitHousing = reduced('benefit_housing', grossHousing)
       // FK012 SkatteplOvrigaFormanerUlagAG carries every taxable benefit
       // except bil and drivmedel: kost, bike, wellness, "other" PLUS the
       // krona-amount for housing (FK041/FK043 carry only the flag).
       // Kostförmån has no field of its own in Skatteverket's schema (#81).
       const FK012_TYPES = ['benefit_meals', 'benefit_bike', 'benefit_wellness', 'benefit_other'] as const
+      const grossFk012Types = sumLineItemAmounts(lineItems, [...FK012_TYPES])
+      const grossOther = grossFk012Types + grossHousing
       const benefitOther =
         (reduction > 0
           ? FK012_TYPES.reduce((sum, type) => sum + (taxableByType[type] ?? 0), 0)
-          : sumLineItemAmounts(lineItems, [...FK012_TYPES])) + benefitHousing
+          : grossFk012Types) + benefitHousing
 
       // Default housing type: if the employee got a housing benefit line
       // item but no housing_benefit_type is set, treat as 'ej_smahus' (the
       // more common case). NULL with no benefit line item → no flag emitted.
+      // A housing benefit paid in full keeps its flag next to FK012 = 0
+      // (kontroll S_155 wants FK012 whenever FK041/FK043 is there).
       let housingBenefit: 'smahus' | 'ej_smahus' | undefined
-      if (benefitHousing > 0) {
+      if (grossHousing > 0) {
         housingBenefit = emp?.housing_benefit_type ?? 'ej_smahus'
       }
+
+      // FK050 / FK051 flag the TAX-FREE part only: the *_taxfree rows, which
+      // the line commands cap at the year's schablon. A *_taxable row is the
+      // excess (or a payment that does not qualify) and is already pay in
+      // gross_salary, so it sets no flag (Fältlista 1.1.18.1 FK050, FK051).
+      const mileageAllowancePaid = sumLineItemAmounts(lineItems, ['mileage_taxfree']) > 0
+      const traktamentePaid = sumLineItemAmounts(lineItems, ['traktamente_taxfree']) > 0
 
       const absenceEvents = absenceByEmployee.get(sre.employee_id)
 
@@ -472,24 +529,33 @@ export async function generateAgiDeclaration(
       const effectiveAvgifterBasis = isFSkatt
         ? 0
         : sre.avgifter_basis_override ?? sre.avgifter_basis
+      // F-skatt payees: inkomst av tjänst for a mottagare med F-skatt is
+      // underlag for egenavgifter, so cash goes to FK125 ONLY and benefits
+      // to FK126/FK127/FK128/FK123/FK124 (Fältlista 1.1.18.1 FK125; SAL
+      // 2 kap. 5 §, 3 kap. 8 §; #82: it used to go to FK131/FK132, which
+      // left it out of the recipient's egenavgifter). Payslips declared
+      // with no avgiftsunderlag get FK131 + FK132/FK133/FK134/FK137/FK138.
+      // Regular employees get FK011 + FK012/FK013/FK018/FK041/FK043.
+      const underlag: AGIUnderlag = isFSkatt
+        ? 'egenavgifter'
+        : declaresNoAvgiftUnderlag(sre)
+          ? 'ej_socialavgifter'
+          : 'arbetsgivaravgifter'
       return {
         personnummer: emp?.personnummer ?? '',
         specificationNumber: emp?.specification_number ?? 0,
         removed: Boolean(sre.removed_from_agi),
-        grossSalary: isFSkatt ? 0 : sre.gross_salary,
+        grossSalary: sre.gross_salary,
         taxWithheld: effectiveTax,
         avgifterBasis: effectiveAvgifterBasis,
-        fSkattPayment: isFSkatt ? sre.gross_salary : undefined,
-        // F-skatt payees: cash goes to FK131 ONLY (grossSalary is zeroed so
-        // FK011 is never emitted for the same payment) and benefits to the
-        // ej-UlagSA variants (FK132/FK133/FK134/FK137/FK138). Regular
-        // employees get FK011 + FK012/FK013/FK018/FK041/FK043.
-        benefitsExcludedFromSAUnderlag: isFSkatt ? true : undefined,
-        benefitCar: benefitCar > 0 ? benefitCar : undefined,
+        underlag,
+        benefitCar: grossCar > 0 ? benefitCar : undefined,
         benefitFuel: benefitFuel > 0 ? benefitFuel : undefined,
         housingBenefit,
-        benefitOther: benefitOther > 0 ? benefitOther : undefined,
+        benefitOther: grossOther > 0 ? benefitOther : undefined,
         benefitsAdjusted: Boolean(sre.benefits_adjusted),
+        mileageAllowancePaid,
+        traktamentePaid,
         sickDays: (sre.sick_days ?? 0) > 0 ? (sre.sick_days ?? 0) : undefined,
         vabDays: (sre.vab_days ?? 0) > 0 ? (sre.vab_days ?? 0) : undefined,
         parentalDays:
@@ -499,8 +565,9 @@ export async function generateAgiDeclaration(
     },
   )
     // Drop individuppgifter with nothing to report. An employee who took 0 kr
-    // and had no benefits, tax or absence this month is simply omitted (you
-    // only file an IU for a person who received something). This yields a clean
+    // and had no benefits, tax-free allowance, tax or absence this month is
+    // simply omitted (you only file an IU for a person who received
+    // something; a tax-free traktamente alone is reported, as FK051). This yields a clean
     // HU-only nolldeklaration for a full nollkörning, and omits zero-paid
     // employees in a mixed run. Borttag (removed) tombstones are always kept.
     .filter(
@@ -508,11 +575,12 @@ export async function generateAgiDeclaration(
         e.removed === true ||
         (e.grossSalary ?? 0) > 0 ||
         (e.taxWithheld ?? 0) > 0 ||
-        (e.fSkattPayment ?? 0) > 0 ||
-        (e.benefitCar ?? 0) > 0 ||
+        e.benefitCar !== undefined ||
         (e.benefitFuel ?? 0) > 0 ||
-        (e.benefitOther ?? 0) > 0 ||
+        e.benefitOther !== undefined ||
         e.housingBenefit !== undefined ||
+        e.mileageAllowancePaid === true ||
+        e.traktamentePaid === true ||
         (e.sickDays ?? 0) > 0 ||
         (e.vabDays ?? 0) > 0 ||
         (e.parentalDays ?? 0) > 0 ||
@@ -535,10 +603,12 @@ export async function generateAgiDeclaration(
   // computeDeclaredAvgifterWithOverrides). It drops the borttag tombstones
   // and zeroes F-skatt rows (overrides included) itself. Rows WITHOUT an
   // avgifter_amount_override run Skatteverket's underlag computation on the
-  // FILED basis (never basis overrides: those don't reach the IU fields, so
-  // Skatteverket computes from the filed underlag regardless, and letting
-  // them steer FK487 or the payment would file an FK487 contradicting the
-  // declaration's own IUs and underpay the skattekonto). Rows WITH an amount
+  // FILED basis (never a partial basis override: it doesn't reach the IU
+  // fields, so Skatteverket computes from the filed underlag regardless, and
+  // letting it steer FK487 or the payment would file an FK487 contradicting
+  // the declaration's own IUs and underpay the skattekonto). A basis
+  // override of 0 does reach the IU (declaresNoAvgiftUnderlag) and always
+  // comes with an amount override of 0, refused above otherwise. Rows WITH an amount
   // override (FoU-avdrag and other manual adjustments) contribute their
   // manual amounts per category instead: a manual adjustment on one employee
   // must not cost the colleagues their SKV-exact declared amounts. The

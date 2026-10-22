@@ -453,6 +453,9 @@ export async function settleInvoicePayment(
           undefined,
           undefined,
           posting,
+          // Bokslutsmetoden's two steps for a ROT/RUT invoice; a kontantfaktura
+          // under faktureringsmetoden reports the whole moms now.
+          { deferDeductionShare: accountingMethod === 'cash' },
         )
         journalEntryId = journalEntry?.id ?? null
       } else {

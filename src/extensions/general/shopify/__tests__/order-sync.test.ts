@@ -453,6 +453,37 @@ describe('mapOrderToWebshopRow', () => {
     expect(row.payment_method_title).toBeNull()
   })
 
+  it('dates an order on the Swedish day, not the UTC day (#58)', () => {
+    // Winter time: 23:30Z on 31 October is 00:30 on 1 November in Stockholm.
+    const [winter] = mapOrderToWebshopRow(connection, 's', makeOrder({
+      createdAt: '2026-10-31T23:30:00Z',
+      processedAt: '2026-10-31T23:31:00Z',
+    }))
+    expect(winter).toMatchObject({ order_date: '2026-11-01', paid_date: '2026-11-01' })
+    // Summer time: 22:30Z on 31 August is 00:30 on 1 September.
+    const [summer] = mapOrderToWebshopRow(connection, 's', makeOrder({
+      createdAt: '2026-08-31T22:30:00Z',
+      processedAt: '2026-08-31T22:31:00Z',
+    }))
+    expect(summer).toMatchObject({ order_date: '2026-09-01', paid_date: '2026-09-01' })
+    // 21:30Z is still 23:30 on 31 August there.
+    const [evening] = mapOrderToWebshopRow(connection, 's', makeOrder({
+      createdAt: '2026-08-31T21:30:00Z',
+      processedAt: '2026-08-31T21:31:00Z',
+    }))
+    expect(evening).toMatchObject({ order_date: '2026-08-31', paid_date: '2026-08-31' })
+  })
+
+  it('dates a refund on the Swedish day too (#58)', () => {
+    const [row] = mapRefundToWebshopRow(
+      connection,
+      's',
+      makeOrder(),
+      makeRefund({ createdAt: '2026-10-31T23:30:00Z' }),
+    )
+    expect(row).toMatchObject({ order_date: '2026-11-01', paid_date: '2026-11-01' })
+  })
+
   it('skips unpaid, test, zero-total and unparseable orders', () => {
     expect(
       mapOrderToWebshopRow(connection, 's', makeOrder({ displayFinancialStatus: 'PENDING' })),

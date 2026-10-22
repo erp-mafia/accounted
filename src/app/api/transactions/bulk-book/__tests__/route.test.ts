@@ -67,6 +67,17 @@ vi.mock('@/lib/transactions/booking-duplicate-detection', () => ({
 vi.mock('@/lib/processing-history/append', () => ({
   appendProcessingHistory: vi.fn().mockResolvedValue(undefined),
 }))
+// The company's VAT account classification, read by the importmoms guard
+// (lib/bookkeeping/import-vat-base.ts, tested there) only when a line can
+// carry importmoms: the BAS map alone here.
+vi.mock('@/lib/reports/vat-revenue-accounts', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/reports/vat-revenue-accounts')>()),
+  fetchDynamicVatAccounts: vi.fn(async () => ({
+    accounts: [], mappingByAccount: new Map(), explicitAccounts: new Set(),
+    rateByAccount: new Map(), staticRateByAccount: new Map(),
+    rcBasisRateByAccount: new Map(), unconfiguredRevenueAccounts: new Map(),
+  })),
+}))
 
 import { POST } from '../route'
 import { eventBus } from '@/lib/events/bus'
@@ -568,6 +579,43 @@ describe('POST /api/transactions/bulk-book: mixed-currency guard', () => {
     const { status, body } = await parseJsonResponse<{ data: { mode: string } }>(response)
     expect(status).toBe(200)
     expect(body.data.mode).toBe('create_new')
+  })
+
+  // #83: importmoms on 2615 with no ruta 50 line (a company's own mall puts
+  // its fiktiv moms there) is refused before the RPC, in the dry run too.
+  it('refuses manual_lines that book importmoms with no ruta 50 line, before the RPC', async () => {
+    enqueue({
+      data: [{ id: TX1, amount: -1000, currency: 'SEK', description: 'Leverantör', date: '2026-06-05' }],
+      error: null,
+    })
+    // chart_of_accounts allowlist.
+    enqueue({
+      data: [{ account_number: '1930' }, { account_number: '4548' }, { account_number: '2645' }, { account_number: '2615' }],
+      error: null,
+    })
+    // Dimension rules: none configured.
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/transactions/bulk-book', {
+      method: 'POST',
+      body: {
+        tx_ids: [TX1],
+        entry_description: 'Import',
+        manual_lines: [
+          { account_number: '4548', debit_amount: 1000, credit_amount: 0, currency: 'SEK' },
+          { account_number: '2645', debit_amount: 250, credit_amount: 0, currency: 'SEK' },
+          { account_number: '2615', debit_amount: 0, credit_amount: 250, currency: 'SEK' },
+          { account_number: '1930', debit_amount: 0, credit_amount: 1000, currency: 'SEK' },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({}))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string; details: Record<string, unknown> } }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('IMPORT_VAT_WITHOUT_BASE')
+    expect(body.error.details).toEqual({ import_vat_accounts: ['2615'] })
+    expect(body.error.message).toContain('4545, 4546 eller 4547')
+    expect(mockSupabase.rpc).not.toHaveBeenCalledWith('bulk_book_transactions', expect.anything())
   })
 
   it('treats NULL currency as SEK and still books', async () => {

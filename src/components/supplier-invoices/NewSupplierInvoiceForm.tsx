@@ -19,6 +19,7 @@ import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { SupplierInvoiceReviewContent } from '@/components/suppliers/SupplierInvoiceReviewContent'
 import { chartVatTreatmentsOf } from '@/lib/bookkeeping/vat-entries'
+import { supplierInvoiceBookingMoment } from '@/lib/bookkeeping/booking-mode'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
 import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
@@ -487,8 +488,15 @@ export default function NewSupplierInvoiceForm({
   // separate Bokför step gets the registration verifikat booked now, first,
   // by the settlement (lib/supplier-invoices/registration-first.ts), so the
   // form says what happens, not "when you choose Bokför".
+  // Under kontantmetoden an EU goods acquisition is booked at registration
+  // too (ML 7 kap. 26 §), by the rule create.ts posts by.
   const settlesNow = !!(settleWith && inboxItemId && watchedPayer === 'company')
-  const effectiveBookingMoment = settlesNow && bookingMoment === 'manual' ? 'issue' : bookingMoment
+  const invoiceBookingMomentHere = supplierInvoiceBookingMoment(
+    bookingMoment,
+    { reverse_charge: watchedReverseCharge, reverse_charge_kind: watchedReverseChargeKind },
+    suppliers.find((s) => s.id === watchedSupplierId)?.supplier_type,
+  )
+  const effectiveBookingMoment = settlesNow && invoiceBookingMomentHere === 'manual' ? 'issue' : invoiceBookingMomentHere
   const willBookAtRegistration = effectiveBookingMoment === 'issue' || watchedPaidPrivately
   const invoiceDateOutsidePeriod =
     periodsLoaded &&

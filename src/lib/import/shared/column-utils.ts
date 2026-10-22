@@ -9,8 +9,18 @@
  * number" become address line 2 in Visma and Spiris exports (#2548).
  */
 
+/**
+ * Lowercase a header into space-separated words. A camelCase or PascalCase
+ * header is split where its own words meet ("InvoicePostalCode" is "invoice
+ * postal code", "VATNumber" is "vat number"): read as one run, the Spiris
+ * customer export's "InvoicePostalCode" held "epost" and was taken as the
+ * e-mail column (PH 204). An all-caps or all-lowercase header has no such
+ * boundary and is left whole.
+ */
 export function normalize(header: string): string {
   return header
+    .replace(/(\p{Ll}|\d)(\p{Lu})/gu, '$1 $2')
+    .replace(/(\p{Lu}+)(\p{Lu}\p{Ll})/gu, '$1 $2')
     .toLowerCase()
     .trim()
     .replace(/[_\-./]/g, ' ')
@@ -30,6 +40,26 @@ const TIER_RANK: Record<MatchTier, number> = { exact: 3, word: 2, substring: 1 }
  * weakest, so a stronger match on another header wins).
  */
 const MIN_SUBSTRING_KEYWORD_LENGTH = 4
+
+/**
+ * True when a keyword of several words occurs in `haystack` touching a word
+ * boundary at its start or its end, so it is the head or the tail of a
+ * compound: 'e post' in "e postadress", 'adress 2' in "fakturaadress 2". A
+ * hit that starts and ends inside words straddles two unrelated words: 'e
+ * post' in "invoic(e post)al code".
+ */
+function containsAnchoredPhrase(haystack: string, needle: string): boolean {
+  let from = 0
+  for (;;) {
+    const idx = haystack.indexOf(needle, from)
+    if (idx === -1) return false
+    const endsAt = idx + needle.length
+    const startOk = idx === 0 || haystack[idx - 1] === ' '
+    const endOk = endsAt === haystack.length || haystack[endsAt] === ' '
+    if (startOk || endOk) return true
+    from = idx + 1
+  }
+}
 
 /** True when `needle` occurs in `haystack` bounded by spaces or string ends. */
 function containsWholeWord(haystack: string, needle: string): boolean {
@@ -54,11 +84,15 @@ export function matchTier(header: string, keywords: string[]): MatchTier | null 
   const normalized = normalize(header)
   if (normalized === '') return null
 
+  // The header with its word breaks removed, so "KundNummer", "Kund nummer"
+  // and "Post nr" are exactly 'kundnummer' and 'postnr'.
+  const joined = normalized.replace(/ /g, '')
+
   let best: MatchTier | null = null
   for (const raw of keywords) {
     const kw = normalize(raw)
     if (kw === '') continue
-    if (normalized === kw) return 'exact'
+    if (normalized === kw || joined === kw.replace(/ /g, '')) return 'exact'
     if (containsWholeWord(normalized, kw)) {
       best = 'word'
       continue
@@ -66,7 +100,7 @@ export function matchTier(header: string, keywords: string[]): MatchTier | null 
     if (
       best === null
       && kw.length >= MIN_SUBSTRING_KEYWORD_LENGTH
-      && normalized.includes(kw)
+      && (kw.includes(' ') ? containsAnchoredPhrase(normalized, kw) : normalized.includes(kw))
     ) {
       best = 'substring'
     }

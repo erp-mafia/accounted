@@ -30,6 +30,8 @@ import type { AnnotatedArticleRow } from '@/lib/import/articles/types'
 /** What the review step reads off every register's rows. */
 export interface ReviewRow {
   name: string
+  /** The row's line in the file (the header is line 1). */
+  row_index?: number
   is_valid: boolean
   validation_errors: string[]
   duplicate_match: { existing_name: string; matched_by: string } | null

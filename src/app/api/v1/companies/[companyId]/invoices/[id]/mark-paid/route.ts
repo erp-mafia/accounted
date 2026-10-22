@@ -46,6 +46,8 @@ import {
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { isMatchableInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
+import { requireAccountingMethod } from '@/lib/company/accounting-method'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import {
   clearsReceivable,
   planSaleBeforeSettlement,
@@ -260,16 +262,20 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const paymentDate = bodyPaymentDate || today
     const paidAt = paidAtFromDate(paymentDate)
 
-    // Fetch settings for accounting method + entity type.
-    const { data: settings } = await ctx.supabase
+    // Fetch settings for accounting method + entity type. Fail closed
+    // (accounted#58): an unreadable method or form refuses instead of
+    // defaulting to faktureringsmetoden or enskild firma.
+    const settingsRead = await ctx.supabase
       .from('company_settings')
       .select('accounting_method, entity_type')
       .eq('company_id', ctx.companyId!)
       .maybeSingle()
-    const accountingMethod =
-      (settings as { accounting_method?: string } | null)?.accounting_method ?? 'accrual'
-    const entityType = ((settings as { entity_type?: string } | null)?.entity_type ??
-      'enskild_firma') as EntityType
+    const accountingMethod = requireAccountingMethod(settingsRead)
+    const entityType: EntityType = await resolveCompanyEntityType(
+      ctx.supabase,
+      ctx.companyId!,
+      (settingsRead.data as { entity_type?: string } | null)?.entity_type,
+    )
 
     // The JE shape is driven by the invoice's actual booking state, not the
     // company's current accounting_method. An invoice that was booked at send

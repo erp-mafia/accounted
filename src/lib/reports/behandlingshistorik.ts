@@ -1627,6 +1627,7 @@ function guardBypassedEvent(
 ): RawBehandlingshistorikEvent | null {
   const state = (row.new_state ?? {}) as Record<string, unknown>
   const guard = str(state.guard)
+  if (guard === ACCOUNTING_METHOD_MID_YEAR_GUARD) return accountingMethodCorrectionEvent(row, state)
   const meta = guard ? GUARD_LABELS[guard] : undefined
   if (!meta) return null
 
@@ -1669,6 +1670,39 @@ function guardBypassedEvent(
     code: meta.code,
     event: meta.event,
     object,
+    details,
+  })
+}
+
+/**
+ * `new_state.guard` of an accounting method corrected in a fiscal year that
+ * already had posted verifikat (lib/company/accounting-method-change.ts).
+ */
+const ACCOUNTING_METHOD_MID_YEAR_GUARD = 'accounting_method_mid_year'
+
+/**
+ * The mid-year guard on the accounting method, passed with a stated reason:
+ * the change was recorded as a correction of a wrong setting. The trigger's
+ * own company_settings row shows the same change as a plain settings diff;
+ * this event carries why, and what the year already held.
+ */
+function accountingMethodCorrectionEvent(
+  row: AuditLogEntry,
+  state: Record<string, unknown>,
+): RawBehandlingshistorikEvent {
+  const details = [
+    `Redovisningsmetod: ${fmtValue(state.from, 'accounting_method')} → ${fmtValue(state.to, 'accounting_method')}`,
+    `Skäl: ${str(state.reason) ?? '(inget angivet)'}`,
+  ]
+  const posted = num(state.posted_entries)
+  if (posted !== null) details.push(`Bokförda verifikationer i räkenskapsåret vid rättelsen: ${posted}`)
+  const timed = num(state.method_timed_entries)
+  if (timed) details.push(`Varav bokförda av fakturaflödet enligt tidigare metod: ${timed} (oförändrade)`)
+  return auditEvent(row, {
+    category: 'installningar',
+    code: 'settings.accounting_method_corrected',
+    event: 'Redovisningsmetod rättad under räkenskapsåret',
+    object: str(state.fiscal_year),
     details,
   })
 }

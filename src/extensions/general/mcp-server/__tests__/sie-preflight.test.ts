@@ -56,6 +56,8 @@ const rpcCalls: Array<[string, unknown]> = []
 function mockSupabase(config: MockConfig = {}) {
   const makeChain = (table: string) => {
     const called: string[] = []
+    // PostgREST's max-rows: a read answers at most 1,000 rows, `.range()` picks the window.
+    let window: [number, number] = [0, 999]
     const chain: Record<string | symbol, unknown> = new Proxy(
       {},
       {
@@ -81,7 +83,7 @@ function mockSupabase(config: MockConfig = {}) {
                   })
                 }
               } else if (table === 'sie_account_mappings') {
-                resolve({ data: config.storedMappings ?? [], error: null })
+                resolve({ data: (config.storedMappings ?? []).slice(window[0], Math.min(window[1], window[0] + 999) + 1), error: null })
               } else if (table === 'journal_entries' && called.includes('maybeSingle')) {
                 resolve({ data: config.bookedIbEntry ?? null, error: null })
               } else if (table === 'journal_entries') {
@@ -101,8 +103,9 @@ function mockSupabase(config: MockConfig = {}) {
               }
             }
           }
-          return (..._args: unknown[]) => {
+          return (...args: unknown[]) => {
             called.push(String(prop))
+            if (prop === 'range') window = [Number(args[0]), Number(args[1])]
             return chain
           }
         },
@@ -166,6 +169,21 @@ describe('gnubok_sie_preflight', () => {
       const mappings = result.mappings as Array<Record<string, unknown>>
       expect(mappings.find((m) => m.sourceAccount === '9999')).toMatchObject({ targetAccount: '2999', targetName: 'OBS-konto' })
     }
+  })
+
+  // #58 (1000-row cap): the stored mappings were read unpaged, so a remembered
+  // mapping past PostgREST's first 1,000 rows fell back to a suggestion, and
+  // the agent passes these mappings on to gnubok_import_sie.
+  it('keeps a remembered mapping that sits past the first 1,000 stored rows', async () => {
+    const storedMappings = [
+      ...Array.from({ length: 1200 }, (_, i) => ({
+        source_account: String(100000 + i), source_name: null, target_account: '1930', confidence: 1, match_type: 'manual',
+      })),
+      { source_account: '3001', source_name: 'Försäljning', target_account: '3041', confidence: 1, match_type: 'manual' },
+    ]
+    const result = await run({ file_content: VALID_SIE }, { storedMappings })
+    const mappings = result.mappings as Array<Record<string, unknown>>
+    expect(mappings.find((m) => m.sourceAccount === '3001')).toMatchObject({ targetAccount: '3041', isOverride: true })
   })
 
   it('flags an org-number mismatch as another company\'s bookkeeping', async () => {

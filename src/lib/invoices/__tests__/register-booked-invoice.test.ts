@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createTableMockSupabase, type TableMockResult } from '@/tests/helpers'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { buildCreditNoteLines } from '@/lib/bookkeeping/invoice-lines'
+import { buildInvoicePaymentClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
+import { roundOre } from '@/lib/money'
 import { resolveOutstandingAsOf } from '@/lib/reports/reskontra-payments'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import type { VatTreatment } from '@/types'
@@ -11,6 +13,7 @@ import {
   RegisterBookedInvoiceParamsSchema,
   deriveInvoiceVatFromVoucher,
   planBookedInvoiceRegistration,
+  receivableInCurrency,
   receivableNetDebit,
   registerBookedInvoice,
   toRegisterBookedInvoiceParams,
@@ -18,6 +21,7 @@ import {
   type RegisterBookedInvoiceInput,
 } from '../register-booked-invoice'
 import { REGISTER_BOOKED_INVOICE_MODE, isRegisterBookedInvoiceParams } from '../register-booked-invoice-mode'
+import { rateGivingBack } from '../register-booked-rules'
 import { DOMESTIC_REVERSE_CHARGE_NOTICE, EU_REVERSE_CHARGE_NOTICE, EXPORT_NOTICE_SV } from '../vat-rules'
 
 // Automatic reminder sending is off product-wide (reminders-enabled.ts). The
@@ -338,6 +342,12 @@ describe('planBookedInvoiceRegistration', () => {
         customerName: 'Testkund AB',
         voucher: { journalEntryId: VOUCHER_ID, label: 'B45', entryDate: '2026-03-02', description: 'Kundfaktura 1023 Testkund AB' },
         status: 'sent',
+        // SEK: no rate, and the kronor are the invoice's own amounts.
+        currency: 'SEK',
+        exchangeRate: null,
+        totalSek: 12500,
+        subtotalSek: 10000,
+        vatAmountSek: 2500,
         total: 12500,
         subtotal: 10000,
         vatAmount: 2500,
@@ -513,6 +523,7 @@ describe('registerBookedInvoice', () => {
     const result = await registerBookedInvoice(supabase as never, COMPANY_ID, USER_ID, input(), { today: TODAY })
 
     expect(result).toMatchObject({ ok: true, invoiceId: 'new-invoice-id' })
+    // SEK: no rate (null, the columns' default), and the kronor columns are the amounts themselves.
     expect(findCall('invoices', 'insert')?.[0]).toEqual({
       user_id: USER_ID,
       company_id: COMPANY_ID,
@@ -523,6 +534,8 @@ describe('registerBookedInvoice', () => {
       status: 'sent',
       document_type: 'invoice',
       currency: 'SEK',
+      exchange_rate: null,
+      exchange_rate_date: null,
       subtotal: 10000,
       subtotal_sek: 10000,
       vat_amount: 2500,
@@ -633,6 +646,219 @@ describe('registerBookedInvoice', () => {
     const { supabase } = books({ laterInvoices: [{ error: { code: '23505', message: 'duplicate key value violates unique constraint' } }] })
     const result = await registerBookedInvoice(supabase as never, COMPANY_ID, USER_ID, input(), { today: TODAY })
     expect(!result.ok && result.code).toBe('INVOICE_REGISTER_NUMBER_TAKEN')
+  })
+})
+
+/**
+ * #90 (crm#1336): an invoice in another currency registers against a
+ * verifikat that books it in that currency. The verifikat is the record for
+ * the kronor and for the invoice's own amount; the rate is the one that
+ * gives the booked kronor back, never one the caller supplies.
+ */
+describe('a foreign-currency invoice', () => {
+  /** An EU service of 1 000 EUR at 11.4825, as the engine and create_voucher stamp it: 11 482.50 kr on 1510 and 3308. */
+  const EUR_SERVICE_LINES: BookedInvoiceVoucherLine[] = [
+    { account_number: '1510', debit_amount: 11482.5, credit_amount: 0, currency: 'EUR', amount_in_currency: 1000, exchange_rate: 11.4825 },
+    { account_number: '3308', debit_amount: 0, credit_amount: 11482.5, currency: 'EUR', amount_in_currency: 1000, exchange_rate: 11.4825 },
+  ]
+
+  /** 250 USD at 9.50895 with 25 % VAT, every line in dollars: 200 + 50 USD, 1 901.79 + 475.45 kr. */
+  const USD_TAXED_LINES: BookedInvoiceVoucherLine[] = [
+    { account_number: '1510', debit_amount: 2377.24, credit_amount: 0, currency: 'USD', amount_in_currency: 250, exchange_rate: 9.50895 },
+    { account_number: '3001', debit_amount: 0, credit_amount: 1901.79, currency: 'USD', amount_in_currency: 200, exchange_rate: 9.50895 },
+    { account_number: '2611', debit_amount: 0, credit_amount: 475.45, currency: 'USD', amount_in_currency: 50, exchange_rate: 9.50895 },
+  ]
+
+  const eur = (overrides: Partial<RegisterBookedInvoiceInput> = {}) =>
+    input({ currency: 'EUR', total: 1000, remaining_amount: 1000, ...overrides })
+
+  it('reads the rate and the kronor from the verifikat and keeps the invoice\'s own amounts', async () => {
+    const { supabase } = books({ lines: EUR_SERVICE_LINES })
+    const result = await planBookedInvoiceRegistration(supabase as never, COMPANY_ID, eur(), { today: TODAY })
+    expect(result.ok && result.plan).toMatchObject({
+      currency: 'EUR',
+      exchangeRate: 11.4825,
+      total: 1000,
+      subtotal: 1000,
+      vatAmount: 0,
+      totalSek: 11482.5,
+      subtotalSek: 11482.5,
+      vatAmountSek: 0,
+      vatTreatment: 'reverse_charge',
+      momsRuta: '39',
+      reverseChargeText: EU_REVERSE_CHARGE_NOTICE,
+      status: 'sent',
+      remainingAmount: 1000,
+    })
+  })
+
+  it('writes the row a native foreign invoice has: amounts in euro, kronor from the verifikat, the rate dated the verifikat', async () => {
+    const { supabase, calls, findCall } = books({ lines: EUR_SERVICE_LINES })
+    const result = await registerBookedInvoice(supabase as never, COMPANY_ID, USER_ID, eur(), { today: TODAY })
+
+    expect(result).toMatchObject({ ok: true, invoiceId: 'new-invoice-id' })
+    expect(findCall('invoices', 'insert')?.[0]).toEqual({
+      user_id: USER_ID,
+      company_id: COMPANY_ID,
+      customer_id: CUSTOMER_ID,
+      invoice_number: '1023',
+      invoice_date: '2026-03-02',
+      due_date: '2026-04-01',
+      status: 'sent',
+      document_type: 'invoice',
+      currency: 'EUR',
+      exchange_rate: 11.4825,
+      exchange_rate_date: VOUCHER.entry_date,
+      subtotal: 1000,
+      subtotal_sek: 11482.5,
+      vat_amount: 0,
+      vat_amount_sek: 0,
+      total: 1000,
+      total_sek: 11482.5,
+      vat_rate: 0,
+      vat_treatment: 'reverse_charge',
+      moms_ruta: '39',
+      reverse_charge_text: EU_REVERSE_CHARGE_NOTICE,
+      paid_amount: 0,
+      remaining_amount: 1000,
+      journal_entry_id: VOUCHER_ID,
+    })
+    const writes = calls.filter((call) => ['insert', 'update', 'upsert', 'delete'].includes(call.method))
+    expect(writes.map((call) => `${call.method} ${call.table}`)).toEqual(['insert invoices'])
+    expect(findCall('journal_entry_lines', 'select')?.[0]).toMatch(/amount_in_currency, exchange_rate/)
+  })
+
+  it('keeps the rate the verifikat names when it gives the kronor back, and the VAT its lines carry in dollars', async () => {
+    const { supabase } = books({ lines: USD_TAXED_LINES })
+    const result = await planBookedInvoiceRegistration(
+      supabase as never, COMPANY_ID, input({ currency: 'USD', total: 250, remaining_amount: 250 }), { today: TODAY },
+    )
+    expect(result.ok && result.plan).toMatchObject({
+      currency: 'USD',
+      exchangeRate: 9.50895,
+      total: 250,
+      subtotal: 200,
+      vatAmount: 50,
+      totalSek: 2377.24,
+      subtotalSek: 1901.79,
+      vatAmountSek: 475.45,
+      vatRate: 25,
+      vatTreatment: 'standard_25',
+    })
+  })
+
+  it('converts the VAT at the rate when only 151x carries the currency, as the engine books it', async () => {
+    const lines: BookedInvoiceVoucherLine[] = [
+      { account_number: '1510', debit_amount: 1425, credit_amount: 0, currency: 'EUR', amount_in_currency: 125, exchange_rate: 11.4 },
+      { account_number: '3001', debit_amount: 0, credit_amount: 1140, currency: 'SEK' },
+      { account_number: '2611', debit_amount: 0, credit_amount: 285, currency: 'SEK' },
+    ]
+    const { supabase } = books({ lines })
+    const result = await planBookedInvoiceRegistration(supabase as never, COMPANY_ID, eur({ total: 125, remaining_amount: 125 }), { today: TODAY })
+    expect(result.ok && result.plan).toMatchObject({ exchangeRate: 11.4, total: 125, subtotal: 100, vatAmount: 25, subtotalSek: 1140, vatAmountSek: 285 })
+  })
+
+  it('refuses a total the verifikat does not carry in that currency, naming both amounts', async () => {
+    const { supabase } = books({ lines: EUR_SERVICE_LINES })
+    const result = await planBookedInvoiceRegistration(supabase as never, COMPANY_ID, eur({ total: 1100, remaining_amount: 1100 }), { today: TODAY })
+    expect(!result.ok && result).toMatchObject({
+      code: 'INVOICE_REGISTER_AMOUNT_MISMATCH',
+      details: { currency: 'EUR', booked_in_currency: 1000, expected_in_currency: 1100, booked_sek: 11482.5 },
+    })
+    expect(!result.ok && result.message).toBe('Verifikat B45 debits 151x by 1000 EUR (11482.5 SEK) but the invoice total is 1100 EUR.')
+  })
+
+  it.each<[string, BookedInvoiceVoucherLine[], Partial<RegisterBookedInvoiceInput>, Record<string, unknown>]>([
+    ['a euro invoice against a verifikat in kronor only', SALE_LINES, { currency: 'EUR' }, { currency: 'EUR', voucher_currency: 'SEK' }],
+    ['a dollar invoice against a verifikat in euro', EUR_SERVICE_LINES, { currency: 'USD', total: 1000, remaining_amount: 1000 }, { currency: 'USD', voucher_currency: 'EUR' }],
+    ['a kronor invoice against a verifikat in euro', EUR_SERVICE_LINES, { total: 11482.5, remaining_amount: 11482.5 }, { currency: 'EUR' }],
+    ['a currency Accounted does not invoice in', EUR_SERVICE_LINES, { currency: 'PLN', total: 1000, remaining_amount: 1000 }, { currency: 'PLN' }],
+  ])('refuses %s', async (_label, lines, overrides, details) => {
+    const { supabase } = books({ lines })
+    const result = await planBookedInvoiceRegistration(supabase as never, COMPANY_ID, input(overrides), { today: TODAY })
+    expect(!result.ok && result).toMatchObject({ code: 'INVOICE_REGISTER_FOREIGN_CURRENCY', details })
+  })
+
+  it('tells the agent which currency to pass when it left the currency out', async () => {
+    const { supabase } = books({ lines: EUR_SERVICE_LINES })
+    const result = await planBookedInvoiceRegistration(supabase as never, COMPANY_ID, input({ total: 11482.5, remaining_amount: 11482.5 }), { today: TODAY })
+    expect(!result.ok && result.message).toMatch(/register it with currency EUR, total and remaining_amount in EUR/)
+  })
+
+  it('dates the part already paid in euro, at the invoice\'s rate', async () => {
+    const { supabase, findCall } = books({ lines: EUR_SERVICE_LINES })
+    const result = await registerBookedInvoice(
+      supabase as never, COMPANY_ID, USER_ID, eur({ remaining_amount: 400, balance_as_of: '2026-03-31' }), { today: TODAY },
+    )
+    expect(result).toMatchObject({ ok: true })
+    expect(findCall('invoices', 'insert')?.[0]).toMatchObject({ status: 'partially_paid', paid_amount: 600, remaining_amount: 400, total_sek: 11482.5 })
+    expect(findCall('invoice_payments', 'insert')?.[0]).toMatchObject({ amount: 600, currency: 'EUR', exchange_rate: 11.4825, payment_date: '2026-03-31', journal_entry_id: null })
+  })
+
+  it('behaves like a native foreign invoice: a euro payment clears 1510 by what the verifikat booked, the rest is kursdifferens', async () => {
+    const { supabase, findCall } = books({ lines: USD_TAXED_LINES })
+    await registerBookedInvoice(supabase as never, COMPANY_ID, USER_ID, input({ currency: 'USD', total: 250, remaining_amount: 250 }), { today: TODAY })
+    const row = findCall('invoices', 'insert')?.[0] as { currency: string; exchange_rate: number; total: number; total_sek: number }
+
+    // The revaluation and the reskontra value the open amount at the stored rate: the booked kronor.
+    expect(roundOre(row.total * row.exchange_rate)).toBe(2377.24)
+    const clearing = buildInvoicePaymentClearingLines(
+      { amount: 250, amount_sek: null, currency: 'USD', exchange_rate: 9.6 },
+      { currency: row.currency, exchange_rate: row.exchange_rate, remaining_amount: 250, total: row.total, paid_amount: 0 },
+      'Betalning faktura 1023',
+    )
+    expect(clearing).toMatchObject({ arSek: 2377.24, bankSek: 2400, fxDiffSek: -22.76 })
+  })
+
+  it('reverses the booked kronor on its treatment\'s accounts in a kreditfaktura', async () => {
+    const { supabase, findCall } = books({ lines: EUR_SERVICE_LINES })
+    await registerBookedInvoice(supabase as never, COMPANY_ID, USER_ID, eur(), { today: TODAY })
+    const row = findCall('invoices', 'insert')?.[0] as Record<string, number | string | null>
+    // What buildCreditNoteFields copies from the original: currency, rate and the negated header.
+    const creditNote = {
+      id: 'credit-note-id',
+      invoice_number: `KR-${row.invoice_number}`,
+      currency: row.currency as string,
+      exchange_rate: row.exchange_rate as number,
+      vat_treatment: row.vat_treatment as VatTreatment,
+      delivery_country: null,
+      subtotal: -(row.subtotal as number),
+      subtotal_sek: -(row.subtotal_sek as number),
+      vat_amount: -(row.vat_amount as number),
+      vat_amount_sek: -(row.vat_amount_sek as number),
+      total: -(row.total as number),
+      total_sek: -(row.total_sek as number),
+      items: [],
+    }
+    expect(buildCreditNoteLines(creditNote, 'aktiebolag', 'B45').map((line) => [line.account_number, line.debit_amount, line.credit_amount])).toEqual([
+      ['3308', 11482.5, 0],
+      ['1510', 0, 11482.5],
+    ])
+  })
+
+  it('reads the receivable in the currency from the line amounts, with their side from debit and credit', () => {
+    expect(receivableInCurrency(EUR_SERVICE_LINES, 'EUR')).toEqual({ amount: 1000, statedRate: 11.4825 })
+    // A stored negative figure: the side comes from the debit column.
+    expect(receivableInCurrency([{ ...EUR_SERVICE_LINES[0], amount_in_currency: -1000 }], 'EUR')).toEqual({ amount: 1000, statedRate: 11.4825 })
+    expect(receivableInCurrency(EUR_SERVICE_LINES, 'USD')).toBeNull()
+    expect(receivableInCurrency(SALE_LINES, 'EUR')).toBeNull()
+  })
+})
+
+describe('rateGivingBack', () => {
+  it('keeps a stated rate that gives the booked kronor back', () => {
+    expect(rateGivingBack(250, 2377.24, 9.50895)).toBe(9.50895)
+  })
+
+  it('takes the shortest rate that gives the kronor back when none is stated, or the stated one does not', () => {
+    expect(rateGivingBack(1000, 11482.5)).toBe(11.4825)
+    expect(rateGivingBack(250, 2377.24)).toBe(9.50896)
+    expect(rateGivingBack(250, 2377.24, 9.6)).toBe(9.50896)
+  })
+
+  it('has no rate for kronor that no positive rate below the column ceiling gives', () => {
+    expect(rateGivingBack(0.01, 5000)).toBeNull()
+    expect(rateGivingBack(100, 0)).toBeNull()
   })
 })
 

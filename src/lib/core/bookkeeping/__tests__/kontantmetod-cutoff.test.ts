@@ -2901,3 +2901,105 @@ describe('manual carries (KONTANTMETOD_CUTOFF_ROT_PARTIAL_MANUAL)', () => {
     }))
   })
 })
+
+// Kontantmetodens two steps for ROT/RUT (ML 2023:200 7 kap. 16 §;
+// Skatteverket, "Så fungerar rotavdraget"): the customer's payment booked
+// only the customer's share. Skatteverket's share not yet paid out on period
+// end is a fordran on the day and is carried, on 1513 with its revenue and
+// moms; one the payout already booked in the year is not.
+describe('collectKontantmetodCutoff: Skatteverket\'s share under the two steps', () => {
+  const rotRow = (over: TRow = {}): TRow => ({
+    id: 'inv-rot', company_id: 'co-1', invoice_number: 'F-ROT', invoice_date: '2026-09-01',
+    status: 'paid', currency: 'SEK', exchange_rate: null, subtotal: 10000, total: 12500,
+    vat_amount: 2500, vat_treatment: 'standard_25', document_type: 'invoice',
+    paid_amount: 8750, remaining_amount: 0, deduction_total: 3750, deduction_reclaimed_total: 0,
+    journal_entry_id: null,
+    items: [customerItem({
+      invoice_id: 'inv-rot', unit_price: 10000, line_total: 10000, vat_amount: 2500,
+      deduction_type: 'rot', deduction_amount: 3750,
+    })],
+    ...over,
+  })
+  const cashVoucher = (over: TRow = {}): TRow => ({
+    id: 'je-cash', company_id: 'co-1', status: 'posted', reversed_by_id: null,
+    source_type: 'invoice_cash_payment', entry_date: '2026-09-20', ...over,
+  })
+  const tables = (extra: Record<string, TRow[]> = {}): Record<string, TRow[]> => ({
+    ...cashTables(),
+    invoices: [rotRow()],
+    supplier_invoices: [],
+    invoice_payments: [{
+      id: 'ip-rot', invoice_id: 'inv-rot', amount: 8750, payment_date: '2026-09-20', journal_entry_id: 'je-cash',
+    }],
+    journal_entries: [cashVoucher()],
+    journal_entry_lines: [],
+    rot_rut_payout_request_items: [],
+    ...extra,
+  })
+  const payoutItem = (status: string, entryDate: string, decided: number | null = null): Record<string, TRow[]> => ({
+    rot_rut_payout_request_items: [{
+      invoice_id: 'inv-rot', requested_amount: 3750, decided_amount: decided,
+      request: { status, decided_total: decided, settlement_journal_entry_id: 'je-payout' },
+    }],
+    journal_entries: [
+      cashVoucher(),
+      { id: 'je-payout', company_id: 'co-1', status: 'posted', reversed_by_id: null, source_type: 'rot_rut_payout', entry_date: entryDate },
+    ],
+  })
+
+  it('carries the share alone when the payout had not come: 1513 against 3 000 revenue and 750 moms', async () => {
+    const result = await collectPerInvoice(tables())
+    expect(result.carries).toHaveLength(1)
+    const plan = buildKontantmetodCarryPlan(result.carries[0], 'aktiebolag')
+    expect(plan).toMatchObject({
+      side: 'customer',
+      invoiceId: 'inv-rot',
+      mode: 'full',
+      total: 3750,
+      description: 'Kundfaktura F-ROT: Skatteverkets andel ej utbetald vid bokslut (kontantmetoden)',
+    })
+    expect(plan.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['1513', 3750, 0],
+      ['3001', 0, 3000],
+      ['2611', 0, 750],
+    ])
+    expect(result.rotPartialManual).toEqual([])
+  })
+
+  it('carries the share when the payout came after period end, even if already booked', async () => {
+    const result = await collectPerInvoice(tables(payoutItem('paid', '2027-01-12')))
+    expect(result.carries.map((c) => c.invoice.id)).toEqual(['inv-rot'])
+  })
+
+  it('carries nothing when the payout in the year booked the share', async () => {
+    const result = await collectPerInvoice(tables(payoutItem('paid', '2026-10-10')))
+    expect(result.carries).toEqual([])
+    expect(result.rotPartialManual).toEqual([])
+  })
+
+  it('carries nothing for a payment booked before the two steps: its 1513 holds the share', async () => {
+    const result = await collectPerInvoice(tables({ journal_entry_lines: [{ journal_entry_id: 'je-cash', account_number: '1513' }] }))
+    expect(result.carries).toEqual([])
+  })
+
+  it('a claim approved in part in the year lists the refused rest as the customer\'s, for a manual carry', async () => {
+    const result = await collectPerInvoice(tables(payoutItem('partially_paid', '2026-10-10', 3000)))
+    expect(result.carries).toEqual([])
+    expect(result.rotPartialManual).toEqual(['F-ROT'])
+    const target = result.rotPartialManualInvoices[0]
+    expect(target).toEqual({
+      invoiceId: 'inv-rot',
+      reference: 'F-ROT',
+      creditNote: false,
+      openCustomerShareSek: 750,
+      openDeductionSek: 0,
+      openPartHasVat: true,
+    })
+    const plan = buildKontantmetodManualCarryPlan(target, [
+      { account_number: '1510', debit_amount: 750, credit_amount: 0 },
+      { account_number: '3001', debit_amount: 0, credit_amount: 600 },
+      { account_number: '2611', debit_amount: 0, credit_amount: 150 },
+    ])
+    expect(plan.total).toBe(750)
+  })
+})

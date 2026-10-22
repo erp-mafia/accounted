@@ -678,18 +678,19 @@ describe('proposePaymentLines: ROT/RUT-avdrag (fakturamodellen)', () => {
     expect(lines.find((l) => l.account_number === '3740')?.debit_amount).toBe('0.4')
   })
 
-  it('cash method: bank gets the customer share, 1513 the avdrag, revenue + moms in full', () => {
-    // The kontantmetoden 1513 line is per item, as createInvoiceCashEntry
-    // books it, so the item carries the ROT flag deduction_total was summed from.
+  it("cash method: bank gets the customer share, revenue + moms on the customer's share only", () => {
+    // Bokslutsmetoden's first step (ML 2023:200 7 kap. 16 §; Skatteverket,
+    // "Så fungerar rotavdraget"): the 3 750 kr avdrag (3 000 + 750 moms) is
+    // booked when Skatteverket pays, so no 1513 leg here.
     const lines = proposePaymentLines({
       invoice: { ...rotInvoice(), items: [makeItem({ deduction_type: 'rot' })] },
       accountingMethod: 'cash',
       entityType: 'aktiebolag',
     })
     expect(lines.find((l) => l.account_number === '1930')?.debit_amount).toBe('8750')
-    expect(lines.find((l) => l.account_number === '1513')?.debit_amount).toBe('3750')
-    expect(lines.find((l) => l.account_number === '3001')?.credit_amount).toBe('10000')
-    expect(lines.find((l) => l.account_number === '2611')?.credit_amount).toBe('2500')
+    expect(lines.find((l) => l.account_number === '1513')).toBeUndefined()
+    expect(lines.find((l) => l.account_number === '3001')?.credit_amount).toBe('7000')
+    expect(lines.find((l) => l.account_number === '2611')?.credit_amount).toBe('1750')
     const debits = lines.reduce((s, l) => s + (parseFloat(l.debit_amount) || 0), 0)
     const credits = lines.reduce((s, l) => s + (parseFloat(l.credit_amount) || 0), 0)
     expect(Math.round((debits - credits) * 100)).toBe(0)

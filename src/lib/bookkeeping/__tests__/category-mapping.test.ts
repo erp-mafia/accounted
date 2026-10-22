@@ -463,6 +463,18 @@ describe('representation VAT (reduced 12%, ML 13 kap 24-25 §§)', () => {
     expect(result.vat_lines).toHaveLength(1)
     expect(result.vat_lines[0].account_number).toBe('2641')
   })
+
+  // accounted#86: the category is a meal nearly always, and a meal is not
+  // income-tax deductible since 2017 (IL 16 kap. 2 §): 6072, not 6071.
+  it('books representation on 6072 Representation, ej avdragsgill, for every form', () => {
+    for (const form of ['enskild_firma', 'aktiebolag', 'ekonomisk_forening', 'ideell_forening'] as const) {
+      expect(getDefaultAccountForCategory('expense_representation', form)).toBe('6072')
+      expect(getCategoryAccountMapping('expense_representation', -500, true, form).debitAccount).toBe('6072')
+    }
+    expect(getExpenseAccountForCategory('expense_representation')).toBe('6072')
+    const tx = makeTransaction({ amount: -500 })
+    expect(buildMappingResultFromCategory('expense_representation', tx, true, 'aktiebolag').debit_account).toBe('6072')
+  })
 })
 
 describe('income account resolves by VAT treatment', () => {

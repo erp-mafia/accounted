@@ -13,6 +13,7 @@ import {
 } from './rot-rut-file'
 import { evaluateGronTeknikClaim, type GronTeknikInstallation } from './gron-teknik-claim'
 import { DEDUCTION_TYPE_LABELS, deductionKindsOf, type HusDeductionType } from '@/lib/bookkeeping/rot-rut-rules'
+import { uploadDocument } from '@/lib/core/documents/document-service'
 
 /**
  * Shared service behind the rot/rut payout-file API routes and the MCP tool
@@ -427,8 +428,10 @@ export type CreateRotRutRequestResult =
  * per-invoice blockers. The DB trigger enforce_single_active_rot_rut_request
  * stays the authoritative double-request guard (surfaced as INVOICE_CONFLICT).
  *
- * Document archiving is deliberately NOT done here: it needs the storage
- * bucket and differs per surface (the API route archives, best-effort).
+ * Archiving the file is a separate step (archiveRotRutPayoutFile), because
+ * the surfaces treat a failed archive differently: the web route returns the
+ * XML inline and archives best-effort, the MCP tool can deliver the file only
+ * through the archive.
  */
 export async function createRotRutPayoutRequest(
   supabase: SupabaseClient,
@@ -511,4 +514,34 @@ export async function createRotRutPayoutRequest(
   }
 
   return { ok: true, request: payoutRequest, file }
+}
+
+/**
+ * Archive a generated begäran file as räkenskapsinformation (7-year retention
+ * through the document WORM chain) and point the begäran at it, so the
+ * ROT/RUT page can download it again. Throws when the file cannot be stored.
+ * A failed pointer update does not throw: the file is archived either way,
+ * and `linked: false` says the begäran does not name it yet.
+ */
+export async function archiveRotRutPayoutFile(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  requestId: string,
+  file: { xml: string; file_name: string },
+): Promise<{ documentId: string; storagePath: string; linked: boolean }> {
+  const buffer = new TextEncoder().encode(file.xml).buffer as ArrayBuffer
+  const doc = await uploadDocument(
+    supabase,
+    userId,
+    companyId,
+    { name: file.file_name, buffer },
+    { upload_source: 'system' },
+  )
+  const { error } = await supabase
+    .from('rot_rut_payout_requests')
+    .update({ file_document_id: doc.id })
+    .eq('id', requestId)
+    .eq('company_id', companyId)
+  return { documentId: doc.id, storagePath: doc.storage_path, linked: !error }
 }

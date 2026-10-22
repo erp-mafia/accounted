@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
@@ -39,6 +40,7 @@ import EmployeeTaxCard, { type EmployeeTaxValue } from '@/components/salary/Empl
 import { jamkningPatch } from '@/lib/salary/jamkning-patch'
 import { extraTaxPatch } from '@/lib/salary/extra-tax'
 import { clearableField } from '@/lib/salary/clearable-field'
+import { SAMMALONEREGELN_KOLLEKTIVAVTAL_KEY, sammaloneregelnDegreeChange } from '@/lib/salary/employee-update-rules'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 
 const EMPLOYMENT_LABEL_KEYS: Record<string, string> = {
@@ -87,6 +89,10 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   const [personnelCategory, setPersonnelCategory] = useState('tjansteman')
   const [salaryType, setSalaryType] = useState('monthly')
   const [vacationRule, setVacationRule] = useState('procentregeln')
+  // The typed sysselsättningsgrad, watched so a change on a sammalöneregeln
+  // employee offers its two ways out before the save (semesterlagen 16 §).
+  const [degreeInput, setDegreeInput] = useState('')
+  const [kollektivavtalConfirmed, setKollektivavtalConfirmed] = useState(false)
   const [clearing, setClearing] = useState('')
   const [account, setAccount] = useState('')
   // Suppress the soft check-digit warning while the bank fields are focused.
@@ -108,6 +114,8 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
     setPersonnelCategory(data.personnel_category || 'tjansteman')
     setSalaryType(data.salary_type || 'monthly')
     setVacationRule(data.vacation_rule || 'procentregeln')
+    setDegreeInput(String(data.employment_degree ?? 100))
+    setKollektivavtalConfirmed(false)
     setClearing(data.clearing_number || '')
     setAccount(data.bank_account_number || '')
     setDimensions(data.default_dimensions ?? {})
@@ -136,6 +144,18 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
     })
   }
 
+  // The server's rule (lib/salary/employee-update-rules.ts) on the form's
+  // state: non-null while the save would change the sysselsättningsgrad of an
+  // employee who stays on sammalöneregeln.
+  function pendingSammaloneregelnChange() {
+    const typed = parseFloat(degreeInput)
+    if (!employee || !Number.isFinite(typed)) return null
+    return sammaloneregelnDegreeChange(
+      employee as unknown as Record<string, unknown>,
+      { employment_degree: typed, vacation_rule: vacationRule },
+    )
+  }
+
   function openEdit() {
     if (employee) syncFormState(employee)
     setIsEditOpen(true)
@@ -159,6 +179,18 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
         })
         return
       }
+    }
+
+    // Semesterlagen 16 § andra stycket 3-4: the server refuses this save
+    // unless the rule moves to procentregeln or a kollektivavtal is confirmed.
+    const sammaloneregelnChange = pendingSammaloneregelnChange()
+    if (sammaloneregelnChange && !kollektivavtalConfirmed) {
+      toast({
+        title: t('detail_update_failed'),
+        description: t('form_sammaloneregeln_degree_choice_required'),
+        variant: 'destructive',
+      })
+      return
     }
 
     setSaving(true)
@@ -218,6 +250,8 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       vacation_pay_rate: vacationPayRateFromPercentInput(form.get('vacation_pay_rate')),
       // Always sent: {} clears the employee's default dimensions.
       default_dimensions: dimensions,
+      // Only with a changed degree on sammalöneregeln: recorded in audit_log.
+      [SAMMALONEREGELN_KOLLEKTIVAVTAL_KEY]: sammaloneregelnChange && kollektivavtalConfirmed ? true : undefined,
     }
 
     // Include salary field matching the current salary_type
@@ -359,6 +393,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   // Under five workdays a week the paid days are taken as fewer days off
   // (25 paid days are 20 days off at four days a week, semesterlagen 12 a §).
   const vacationDaysOff = daysOffPerYear(employee.vacation_days_per_year, employee.workdays_per_week)
+  const sammaloneregelnChoice = pendingSammaloneregelnChange()
   const salaryValue =
     employee.salary_type === 'hourly'
       ? employee.hourly_rate != null
@@ -720,7 +755,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
                     )}
                     <div className="space-y-2">
                       <Label htmlFor="employment_degree">{t('form_employment_degree')}</Label>
-                      <Input id="employment_degree" name="employment_degree" type="number" defaultValue={employee.employment_degree} min="1" max="100" disabled={!canWrite} />
+                      <Input id="employment_degree" name="employment_degree" type="number" defaultValue={employee.employment_degree} min="1" max="100" onChange={(e) => setDegreeInput(e.target.value)} disabled={!canWrite} />
                       <p className="text-xs text-muted-foreground">{t('form_employment_degree_hint')}</p>
                     </div>
                     <div className="space-y-2">
@@ -787,6 +822,34 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
                         <p className="text-xs text-muted-foreground">
                           {t('form_vacation_semesterersattning_hint')}
                         </p>
+                      )}
+                      {sammaloneregelnChoice && (
+                        <div className="space-y-2">
+                          <AttnLine
+                            action={
+                              canWrite
+                                ? { label: t('form_sammaloneregeln_degree_switch'), onClick: () => setVacationRule('procentregeln') }
+                                : undefined
+                            }
+                          >
+                            {t('form_sammaloneregeln_degree_changed', {
+                              from: sammaloneregelnChoice.from,
+                              to: sammaloneregelnChoice.to,
+                            })}
+                          </AttnLine>
+                          <div className="flex items-start gap-2">
+                            <Checkbox
+                              id="sammaloneregeln_kollektivavtal"
+                              checked={kollektivavtalConfirmed}
+                              onCheckedChange={(checked) => setKollektivavtalConfirmed(checked === true)}
+                              disabled={!canWrite}
+                              className="mt-0.5"
+                            />
+                            <Label htmlFor="sammaloneregeln_kollektivavtal" className="text-xs font-normal leading-5 text-muted-foreground">
+                              {t('form_sammaloneregeln_kollektivavtal_confirm')}
+                            </Label>
+                          </div>
+                        </div>
                       )}
                     </div>
                     <div className="space-y-2">

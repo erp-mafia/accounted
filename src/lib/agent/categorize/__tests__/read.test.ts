@@ -176,7 +176,14 @@ describe('categoryForAccount', () => {
   })
   it('finds the category whose default account this is', () => {
     expect(categoryForAccount('5420')).toBe('expense_software')
+    expect(categoryForAccount('6072')).toBe('expense_representation')
+  })
+  // accounted#86: both representation accounts are representation, so the
+  // deductible 6071 (enklare förtäring) does not read as expense_other and
+  // slip past the grant refusal of representation.
+  it('reads every representation account as representation', () => {
     expect(categoryForAccount('6071')).toBe('expense_representation')
+    expect(categoryForAccount('6070', 'aktiebolag')).toBe('expense_representation')
   })
   it('falls back by account class', () => {
     expect(categoryForAccount('3990')).toBe('income_other')

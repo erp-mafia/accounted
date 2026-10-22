@@ -63,7 +63,8 @@ function propose(inv: Invoice) {
 }
 
 function booked(inv: Invoice): CreateJournalEntryLineInput[] {
-  return buildInvoiceCashLines(inv, 'aktiebolag').lines
+  // What a kontantmetod door books (settleInvoicePayment, the bank match).
+  return buildInvoiceCashLines(inv, 'aktiebolag', undefined, '1930', undefined, undefined, { deferDeductionShare: true }).lines
 }
 
 describe('proposePaymentLines (cash) proposes what createInvoiceCashEntry books', () => {
@@ -116,11 +117,12 @@ describe('proposePaymentLines (cash) proposes what createInvoiceCashEntry books'
     ])
   })
 
-  it('ROT: 1513 per item, bank gets the customer share', () => {
-    // 1 000 labor + 25 % = 1 250; ROT 30 % = 375.
+  it("ROT: bank gets the customer share, revenue and moms on that share only, no 1513", () => {
+    // 1 000 labor + 25 % = 1 250; ROT 30 % = 375 (300 + 75 moms) waits for the payout.
     const inv = invoice({ deduction_total: 375, items: [item({ deduction_type: 'rot' })] })
     expect(signature(propose(inv))).toEqual(signature(booked(inv)))
     expect(propose(inv).find((l) => l.account_number === '1930')?.debit_amount).toBe('875')
+    expect(propose(inv).some((l) => l.account_number === '1513')).toBe(false)
   })
 
   it('öresavrundning is the one addition: bank leg at "Att betala", 3740 the residual', () => {

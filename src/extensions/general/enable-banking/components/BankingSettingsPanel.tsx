@@ -23,7 +23,8 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { useBankLedgerSuggestionNotice } from '@/components/transactions/BankLedgerSuggestionNotice'
 import { useBankSwitchCampaign } from '@/components/bank-feed/use-bank-switch-campaign'
-import { bankCoveredByOpenPayments } from '@/lib/bank-feed/bank-coverage'
+import { useOpenPaymentsAvailability } from '@/components/bank-feed/use-open-payments-availability'
+import { bankCoveredByOpenPayments, enableBankingOffers } from '@/lib/bank-feed/bank-coverage'
 import {
   SettingsGroup,
   SettingsRow,
@@ -132,6 +133,14 @@ export default function BankingSettingsPanel() {
   const sunsetActive = Boolean(switchCampaign.progress?.campaign.passed && switchCampaign.progress.company)
   const sunsetFor = (connection: { bank_name: string | null }): SunsetPath | null =>
     sunsetActive ? (bankCoveredByOpenPayments(connection.bank_name) ? 'switch' : 'import') : null
+
+  // Where Open Payments reads the company's bank, a new connection goes
+  // through its Koppla bank (crm#1363): this list then offers only the banks
+  // Open Payments does not reach, the ones its "not reached" line sends here.
+  // A bank it reaches connected here instead lands on the feed that ends,
+  // and has to be switched again.
+  const openPayments = useOpenPaymentsAvailability()
+  const offeredBank = enableBankingOffers(openPayments.status === 'available')
 
   useEffect(() => {
     fetchConnections()
@@ -1064,6 +1073,7 @@ export default function BankingSettingsPanel() {
                 </p>
               )}
               <BankSelector
+                offered={offeredBank}
                 onConnect={(bank) => handleConnectBank(bank, psuType)}
                 onPsuTypeDetected={setPsuType}
                 isConnecting={isConnecting}

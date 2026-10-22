@@ -213,3 +213,100 @@ describe('buildInvoiceCashLines with an overpayment account (crm#253)', () => {
     }
   })
 })
+
+// crm#1364: the customer paid 1 234,56 by card, the payment provider paid out
+// 1 210,87 and kept 23,69. Revenue and moms are booked on what the customer
+// paid; the payout on 1930 and the fee on 6570, with no VAT.
+describe('buildInvoiceCashLines with a payment fee account (crm#1364)', () => {
+  it('6570: 1930 takes the payout, revenue and moms stay on the invoice, 6570 debits the fee', () => {
+    const { lines } = buildInvoiceCashLines(invoice(), 'aktiebolag', undefined, '1930', 1210.87, undefined, { feeAccount: '6570' })
+    expect(rows(lines)).toEqual([
+      ['1930', 1210.87, 0],
+      ['3001', 0, 987.65],
+      ['2611', 0, 246.91],
+      ['6570', 23.69, 0],
+    ])
+    expect(lines.some((l) => l.account_number.startsWith('264'))).toBe(false)
+    expect(balances(lines)).toBe(true)
+  })
+
+  it('without the account, or with a gap of a tenth or more, books the customer share as before', () => {
+    for (const [bank, account] of [[1210.87, undefined], [1100, '6570']] as const) {
+      const { lines } = buildInvoiceCashLines(invoice(), 'aktiebolag', undefined, '1930', bank, undefined, { feeAccount: account })
+      expect(rows(lines)[0]).toEqual(['1930', 1234.56, 0])
+      expect(lines.map((l) => l.account_number)).not.toContain('6570')
+      expect(balances(lines)).toBe(true)
+    }
+  })
+
+  it('createInvoiceCashEntry books the fee with the matched row', async () => {
+    vi.clearAllMocks()
+    const tx = { id: 'tx-1', cash_account_id: null, date: '2026-09-15', amount: 1210.87, currency: 'SEK' as const }
+    await createInvoiceCashEntry(
+      null as never, 'company-1', 'user-1', invoice(), '2026-09-15', 'aktiebolag', undefined, '1930', tx,
+      undefined, undefined, { feeAccount: '6570' },
+    )
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(rows(input.lines)).toContainEqual(['1930', 1210.87, 0])
+    expect(rows(input.lines)).toContainEqual(['6570', 23.69, 0])
+    expect(balances(input.lines)).toBe(true)
+  })
+})
+
+// crm#1364 with #73: a kontantmetod ROT invoice of 10 000 (8 000 + 2 000
+// moms) with a 3 000 deduction. The customer owes 7 000 and paid it by card;
+// the provider paid out 6 800 and kept 200. The fee is a shortfall of the
+// customer's payment only: it is measured against the customer share, and
+// Skatteverket's 3 000 (1513 in one step, the payout's second step in two)
+// is untouched.
+describe('buildInvoiceCashLines: a ROT invoice paid out net of a payment fee', () => {
+  const rot = () =>
+    invoice({
+      total: 10000,
+      subtotal: 8000,
+      vat_amount: 2000,
+      deduction_total: 3000,
+      items: [
+        item({ unit_price: 8000, line_total: 8000, vat_amount: 2000, deduction_type: 'rot', deduction_amount: 3000 }),
+      ],
+    })
+
+  it('two steps: the customer share books net of the fee, Skatteverket\'s share waits for the payout', () => {
+    const { lines } = buildInvoiceCashLines(rot(), 'aktiebolag', undefined, '1930', 6800, undefined, {
+      deferDeductionShare: true,
+      feeAccount: '6570',
+    })
+    expect(rows(lines)).toEqual([
+      ['1930', 6800, 0],
+      ['3001', 0, 5600],
+      ['2611', 0, 1400],
+      ['6570', 200, 0],
+    ])
+    expect(balances(lines)).toBe(true)
+  })
+
+  it('one step: 1513 keeps the whole deduction and the fee comes off the bank leg only', () => {
+    const { lines } = buildInvoiceCashLines(rot(), 'aktiebolag', undefined, '1930', 6800, undefined, {
+      feeAccount: '6570',
+    })
+    expect(rows(lines)).toEqual([
+      ['1930', 6800, 0],
+      ['1513', 3000, 0],
+      ['3001', 0, 8000],
+      ['2611', 0, 2000],
+      ['6570', 200, 0],
+    ])
+    expect(balances(lines)).toBe(true)
+  })
+
+  it('the fee cap is a tenth of the customer share, not of the gross invoice', () => {
+    // 700 short of 7 000 is a tenth: a partial payment, never a fee.
+    const { lines } = buildInvoiceCashLines(rot(), 'aktiebolag', undefined, '1930', 6300, undefined, {
+      deferDeductionShare: true,
+      feeAccount: '6570',
+    })
+    expect(rows(lines)[0]).toEqual(['1930', 7000, 0])
+    expect(lines.map((l) => l.account_number)).not.toContain('6570')
+    expect(balances(lines)).toBe(true)
+  })
+})

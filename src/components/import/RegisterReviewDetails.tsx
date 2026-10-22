@@ -139,17 +139,25 @@ export function RegisterRowDetails<R>({
   row,
   fields,
   colSpan,
+  errors = [],
 }: {
   row: R
   fields: Readonly<Record<string, ReviewField<R>>>
   /** From useExpandedRows; undefined while the row is folded. */
   colSpan: number | undefined
+  /** Why the row cannot be imported, each naming the file's column (PH 204). */
+  errors?: readonly string[]
 }) {
   if (colSpan === undefined) return null
   return (
     <tr className="border-b last:border-0">
       <td colSpan={colSpan} className="p-0">
         <RowFoldout>
+          {errors.length > 0 && (
+            <ul className="space-y-1 px-3 pt-2 text-[12.5px] leading-5 text-destructive">
+              {errors.map((e) => <li key={e}>{e}</li>)}
+            </ul>
+          )}
           <dl className="grid grid-cols-1 gap-x-6 gap-y-3 px-3 pb-4 pt-2 sm:grid-cols-2 lg:grid-cols-3">
             {Object.entries(fields).map(([key, field]) => {
               const value = field.value(row)

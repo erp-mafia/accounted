@@ -861,14 +861,19 @@ describe('new and split templates', () => {
     expect(t!.common).toBe(false)
   })
 
-  it('has representation_internal on 7631 with deductible VAT', () => {
-    // 7622 is Sjuk- och hälsovård, ej avdragsgill; personal representation
-    // is 7631, and its VAT is deductible on a base of up to 300 kr/person.
+  it('has representation_internal on 7632 with deductible VAT', () => {
+    // 7622 is Sjuk- och hälsovård, ej avdragsgill. A staff meal is not
+    // income-tax deductible since 2017 (IL 16 kap. 2 §), so it books on 7632
+    // Personalrepresentation, ej avdragsgill (accounted#86); its VAT stays
+    // deductible on a base of at most 300 kr excl. moms per person.
     const t = getTemplateById('representation_internal')
     expect(t).toBeDefined()
-    expect(t!.debit_account).toBe('7631')
+    expect(t!.debit_account).toBe('7632')
     expect(t!.vat_treatment).toBe('reduced_12')
     expect(t!.common).toBe(true)
+    expect(t!.special_rules_sv).toContain('underlag om högst 300 kr exkl. moms per person och tillfälle')
+    expect(t!.special_rules_sv).not.toMatch(/Momsavdrag på högst 300/)
+    expect(t!.deductibility_note_sv).toContain('7631')
   })
 
   it('routes Stripe fees to reverse charge, not to VAT-free bank fees', () => {
@@ -910,10 +915,58 @@ describe('new and split templates', () => {
     expect(t!.requires_review).toBe(true)
   })
 
-  it('representation_external has updated deductibility note with VAT cap', () => {
-    const t = getTemplateById('representation_external')
-    expect(t).toBeDefined()
-    expect(t!.deductibility_note_sv).toContain('46 kr/person')
+  // accounted#86: a meal at representation is not income-tax deductible since
+  // 2017 (IL 16 kap. 2 §), so the meal template books 6072, not 6071.
+  it('representation_external books a meal on 6072 Representation, ej avdragsgill', () => {
+    const t = getTemplateById('representation_external')!
+    expect(t.debit_account).toBe('6072')
+    expect(t.debit_account_ab).toBeUndefined()
+    for (const form of ['enskild_firma', 'aktiebolag', 'ekonomisk_forening', 'ideell_forening'] as const) {
+      const result = buildMappingResultFromTemplate(t, makeTransaction({ amount: -268.8 }), form)
+      expect(result.debit_account).toBe('6072')
+    }
+  })
+
+  // ML 13 kap. 24-25 §§: 300 kr is the VAT BASE per person and occasion. The
+  // old note said "Momsavdrag på högst 300 kr/person", the deduction itself.
+  it('representation_external says 300 kr is the VAT base, not the deduction', () => {
+    const note = getTemplateById('representation_external')!.deductibility_note_sv!
+    expect(note).toContain('underlag om högst 300 kr exkl. moms per person och tillfälle')
+    expect(note).not.toMatch(/Momsavdrag på högst 300/)
+    expect(note).toContain('36 kr')
+    expect(note).toContain('schablon 46 kr')
+    // Where the deductible kind still goes.
+    expect(note).toContain('Enklare förtäring')
+    expect(note).toContain('6071')
+  })
+
+  it('representation_external VAT: the whole 12 % moms under the cap, as the note says', () => {
+    // Two people, 240 kr excl. moms (120 kr each, under 300): 28.80 kr moms,
+    // all of it deductible. The template has no participant count, so above
+    // the cap the reviewer adjusts the moms line, which the note asks for.
+    const t = getTemplateById('representation_external')!
+    const result = buildMappingResultFromTemplate(t, makeTransaction({ amount: -268.8 }), 'enskild_firma')
+    expect(result.vat_lines).toEqual([
+      expect.objectContaining({ account_number: '2641', debit_amount: 28.8, credit_amount: 0 }),
+    ])
+    expect(t.requires_review).toBe(true)
+  })
+
+  // accounted#86: a gift is not a meal (6071 within 300 kr, usually 25 %
+  // moms), so gift words no longer propose a meal template: no suggestion
+  // beats a wrong one.
+  it.each(['Gåva', 'Present', 'Presentkort'])('no meal template matches a gift worded "%s"', (word) => {
+    const meals = ['representation_external', 'representation_internal']
+    const tx = makeTransaction({ amount: -450, description: word, merchant_name: 'Blomsterhandeln', mcc_code: null })
+    expect(findMatchingTemplates(tx).map((m) => m.template.id).filter((id) => meals.includes(id))).toEqual([])
+    for (const id of meals) {
+      expect(getTemplateById(id)!.keywords.filter((k) => /gåva|^present/i.test(k))).toEqual([])
+    }
+  })
+
+  it('still matches a customer lunch to the meal template', () => {
+    const tx = makeTransaction({ amount: -268.8, description: 'Kundlunch', merchant_name: 'Restaurang Exempel', mcc_code: null })
+    expect(findMatchingTemplates(tx).map((m) => m.template.id)).toContain('representation_external')
   })
 
   it('representation_external says syfte and deltagare can be written, not only uploaded (crm#1342)', () => {

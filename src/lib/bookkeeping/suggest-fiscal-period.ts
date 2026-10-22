@@ -53,6 +53,24 @@ export function isDerivedFiscalYearName(name: string): boolean {
 }
 
 /**
+ * The year part of a generated fiscal-year name, for a surface that already
+ * labels the value "Räkenskapsår" (the "Räkenskapsår:" line of a new
+ * verifikat, the Räkenskapsår settings list). The app generates three name
+ * shapes that all bake the noun in: "Räkenskapsår 2026" (create dialog, SIE
+ * import, onboarding), "Första räkenskapsåret 2026" (the onboarding first
+ * year) and "FY 2026" (the next year opened at year end), each with a
+ * "2025/2026" form for a year that straddles two calendar years. Shown under
+ * the label as is, they read "Räkenskapsår: Räkenskapsår 2026" (crm#1380), and
+ * in English the Swedish noun sits next to "Fiscal year". Those shapes give
+ * "2026" or "2025/2026"; a name the user wrote stays whole.
+ */
+export function fiscalYearShortName(name: string): string {
+  const trimmed = name.trim()
+  const generated = /^(?:Räkenskapsår|Första räkenskapsåret|FY) (\d{4}(?:\/\d{4})?)$/.exec(trimmed)
+  return generated ? generated[1] : trimmed
+}
+
+/**
  * Suggest a fiscal period for the create dialog, given the date the user is
  * trying to book and the company's existing periods. Three cases:
  *  - No periods yet → a calendar year around the entry date.

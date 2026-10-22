@@ -96,6 +96,11 @@ export function initAnalytics(): boolean {
     person_profiles: 'identified_only',
     persistence: 'memory',
     capture_exceptions: true,
+    // Masks these query parameters in $current_url and the initial-URL person
+    // properties: a sole trader's org number is the owner's personnummer
+    // (#58). The flag also masks ad click ids (gclid, fbclid, ...).
+    mask_personal_data_properties: true,
+    custom_personal_data_properties: ['org_number', 'personnummer', 'personal_number'],
     tracing_headers: tracingHosts(),
     session_recording: {
       maskAllInputs: true,

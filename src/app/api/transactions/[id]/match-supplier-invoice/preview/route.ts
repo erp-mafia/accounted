@@ -22,6 +22,7 @@ import { planSupplierBankMatch } from '@/lib/invoices/apply-supplier-payment'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { planRegistrationBeforeSettlement } from '@/lib/supplier-invoices/registration-first'
 import type { SupplierInvoice } from '@/types'
+import { requireAccountingMethod } from '@/lib/company/accounting-method'
 
 type PreviewLine = {
   account_number: string
@@ -81,13 +82,15 @@ export const GET = withRouteContext(
       return errorResponseFromCode('MATCH_INVOICE_NOT_FOUND', log, { requestId })
     }
 
-    const { data: settings } = await supabase
-      .from('company_settings')
-      .select('accounting_method')
-      .eq('company_id', companyId)
-      .single()
-
-    const accountingMethod = settings?.accounting_method || 'accrual'
+    // The preview shows the verifikat the match will post: an unreadable
+    // method refuses rather than show a shape it may not book (accounted#58).
+    const accountingMethod = requireAccountingMethod(
+      await supabase
+        .from('company_settings')
+        .select('accounting_method')
+        .eq('company_id', companyId)
+        .single(),
+    )
 
     // Same resolution as the POST handler: credit the cash account this
     // transaction is actually linked to, never the sticky

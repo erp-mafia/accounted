@@ -53,7 +53,7 @@ import { defaultVatRateForTreatment } from '@/lib/vat/supplier-invoice-line-chec
 import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { roundOre } from '@/lib/money'
 import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
-import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
+import { booksInvoicesOnIssue, supplierInvoiceBooksOnRegistration } from '@/lib/bookkeeping/booking-mode'
 import { foldSellerVatIntoCost, sellerVatAsCostNote, sellerVatIsCost } from '@/lib/bookkeeping/vat-registration'
 import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
 import {
@@ -79,6 +79,7 @@ import { resultAccounts } from '@/lib/suggestion-log/inbox-classify'
 import type { InboxChannelContext, InvoiceInboxItem, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { refuseWhenPairBooked } from './inbox-pair-guard'
+import { checkAccountingMethod } from '@/lib/company/accounting-method'
 
 export type ConvertInboxItemInput = z.infer<typeof CreateSupplierInvoiceSchema>
 
@@ -183,13 +184,17 @@ export async function convertInboxItemToSupplierInvoice(
     return { ok: false, code: 'SI_CREATE_ACCRUAL_REVERSE_CHARGE' }
   }
   // The accounting method (periodisering, booking on issue) and the VAT
-  // registration the lines depend on, read once.
-  const { data: settings } = await supabase
+  // registration the lines depend on, read once. Fail closed (accounted#58):
+  // an unreadable row used to mean "accrual, VAT-registered".
+  const settingsRead = await supabase
     .from('company_settings')
     .select('accounting_method, defer_invoice_booking, vat_registered')
     .eq('company_id', companyId)
     .single()
-  if (hasAccrualItems && (settings?.accounting_method || 'accrual') !== 'accrual') {
+  const method = checkAccountingMethod(settingsRead)
+  if (!method.ok) return { ok: false, code: method.code, details: method.details }
+  const settings = settingsRead.data
+  if (hasAccrualItems && method.accountingMethod !== 'accrual') {
     return {
       ok: false,
       code: 'SI_CREATE_INVALID_INPUT',
@@ -294,6 +299,14 @@ export async function convertInboxItemToSupplierInvoice(
       ? renderChannelContextNotes((item as { channel_context?: InboxChannelContext | null }).channel_context)
       : body.notes.trim() || null
 
+  // Whether confirming posts the registration verifikat: the dry run says
+  // what the commit below does.
+  const booksOnRegistration = supplierInvoiceBooksOnRegistration(
+    settings,
+    { reverse_charge: reverseCharge, reverse_charge_kind: reverseChargeKind.kind },
+    supplier.supplier_type as string | null,
+  )
+
   if (options.dryRun) {
     return {
       ok: true,
@@ -328,7 +341,7 @@ export async function convertInboxItemToSupplierInvoice(
               },
             }
           : {}),
-        would_create_registration_journal_entry: booksInvoicesOnIssue(settings),
+        would_create_registration_journal_entry: booksOnRegistration,
       },
     }
   }
@@ -448,7 +461,9 @@ export async function convertInboxItemToSupplierInvoice(
   let releaseFailed = false
 
   // #967: deferred companies register WITHOUT booking; ekonomi books later.
-  if (booksInvoicesOnIssue(settings)) {
+  // Kontantmetoden books at payment, except an EU goods acquisition (ML
+  // 7 kap. 26 §, supplierInvoiceBookingMoment).
+  if (booksOnRegistration) {
     try {
       const journalEntry = await createSupplierInvoiceRegistrationEntry(
         supabase,

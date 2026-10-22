@@ -92,10 +92,38 @@ export interface AGIAbsenceEvent {
   specifikationsnummer: number
 }
 
+/**
+ * What an IU's cash and benefits are underlag for, which picks the field
+ * family they are declared in (Bilaga Fältlista 1.1.18.1):
+ *
+ *  - 'arbetsgivaravgifter': the default. FK011 cash, FK012 övriga förmåner,
+ *    FK013 bil, FK018 drivmedel, housing flags FK041/FK043.
+ *  - 'egenavgifter': inkomst av tjänst for a mottagare med F-skatt. FK125
+ *    cash ("Det kan till exempel vara inkomst av tjänst för mottagare med
+ *    F-skatt"), FK126/FK127/FK128, housing flags FK123/FK124. The payer pays
+ *    no arbetsgivaravgifter on it (SAL 2 kap. 5 §) but it is underlag for
+ *    the recipient's egenavgifter (SAL 3 kap. 8 §).
+ *  - 'ej_socialavgifter': pay that is no underlag for socialavgifter. FK131
+ *    cash, FK132/FK133/FK134, housing flags FK137/FK138. The Fältlista text
+ *    for FK131 names "ersättning under 1 000 kronor" (SAL 2 kap. 14 §), pay to
+ *    an employee in another country's social insurance and pay to a juridisk
+ *    person with A-skatt; Teknisk beskrivning 1.1.18.2 avsnitt 5.4 puts
+ *    kontant ersättning "och eventuella förmåner, som totalt under året inte
+ *    uppgår till 1 000 kronor" in these fields, with FK001 = 0 when no tax
+ *    was withheld.
+ *
+ * Skatteverket computes the avgift from the UlagAG fields only (Bilaga
+ * Summering och beräkningsregler, AeIU = FK011 + FK012 + FK013 - FK019 plus
+ * the drivmedel term), so the family is what decides whether an amount
+ * carries arbetsgivaravgifter, whatever FK487 says.
+ */
+export type AGIUnderlag = 'arbetsgivaravgifter' | 'egenavgifter' | 'ej_socialavgifter'
+
 export interface AGIEmployeeData {
   personnummer: string       // Encrypted: decrypted for XML
   specificationNumber: number // FK570: MUST stay consistent per employee
-  grossSalary: number         // FK011 KontantErsattningUlagAG
+  /** Cash for work: FK011 KontantErsattningUlagAG, FK125 for 'egenavgifter', FK131 for 'ej_socialavgifter' (see `underlag`). */
+  grossSalary: number
   taxWithheld: number         // FK001 AvdrPrelSkatt
   avgifterBasis: number       // Retained for backwards compat; equals grossSalary for standard cases. Not emitted separately (FK011 already captures basis).
   /**
@@ -108,14 +136,26 @@ export interface AGIEmployeeData {
    */
   removed?: boolean
   /**
-   * FK048 FormanHarJusterats: set when any benefit value on this IU has
-   * been adjusted away from the standard schablon. Reflects
-   * salary_run_employees.benefits_adjusted.
+   * FK048 FormanHarJusterats: the employer has a decision from Skatteverket
+   * that adjusts a förmånsvärde for this payee (Fältlista 1.1.18.1 FK048;
+   * SAL 2 kap. 10 b-10 c §§), and the IU carries the adjusted value. Not a
+   * value the employer set below schablon on its own. Reflects
+   * salary_run_employees.benefits_adjusted. Emitted only next to a benefit
+   * amount kontroll S_017 accepts (FK012/FK013, FK126/FK127, FK132/FK133):
+   * Skatteverket rejects FK048 without one.
    */
   benefitsAdjusted?: boolean
-  fSkattPayment?: number      // FK131 KontantErsattningEjUlagSA
-  benefitCar?: number         // FK013 SkatteplBilformanUlagAG (amount, BELOPP7)
-  benefitFuel?: number        // FK018 DrivmVidBilformanUlagAG (amount, BELOPP7)
+  /** The field family for cash and benefits. Defaults to 'arbetsgivaravgifter'. */
+  underlag?: AGIUnderlag
+  /**
+   * FK013 SkatteplBilformanUlagAG (amount, BELOPP7), FK127 / FK133 per
+   * underlag. Undefined when there is no car benefit. A number is declared
+   * even at 0: a benefit the employee paid in full by nettolöneavdrag is
+   * still reported, with the value 0 (Teknisk beskrivning 1.1.18.2 avsnitt
+   * 5.3). The same holds for benefitOther.
+   */
+  benefitCar?: number
+  benefitFuel?: number        // FK018 DrivmVidBilformanUlagAG (amount, BELOPP7), FK128 / FK134 per underlag
   /**
    * Housing benefit indicator. FK041 (smahus) and FK043 (ej_smahus) are
    * boolean KRYSS flags in the XSD: they just signal that this kind of
@@ -131,18 +171,26 @@ export interface AGIEmployeeData {
    * carry only the flag). Kostförmån has no field of its own: Skatteverket's
    * XML schema (arbetsgivardeklaration_component_1.1.xsd) and Bilaga
    * Fältlista 1.1.18.1 define no KostformanUlagAG, so a file carrying one
-   * fails schema validation (#81).
+   * fails schema validation (#81). FK126 / FK132 per underlag. Undefined
+   * when there is no such benefit; a number is declared even at 0 (see
+   * benefitCar).
    */
   benefitOther?: number
   /**
-   * When true, benefit amounts and housing flags emit as the "ej underlag
-   * SA" variants (FK132/FK133/FK134/FK137/FK138) instead of the standard
-   * UlagAG variants (FK012/FK013/FK018/FK041/FK043). Set this for F-skatt
-   * holders and other payees whose benefits should not form basis for
-   * arbetsgivaravgifter. Defaults to false. FK131 (cash, ej UlagSA) is
-   * controlled separately via fSkattPayment.
+   * FK050 Bilersattning (KRYSS): skattefri bilersättning was paid this period
+   * for trips in tjänsten with a private car or a förmånsbil. The tax-free
+   * part is declared with this flag only, never with an amount; a payment
+   * above the schablon is lön and its excess goes in the cash field
+   * (Fältlista 1.1.18.1 FK050 and FK013). One flag per IU, whatever the
+   * underlag family.
    */
-  benefitsExcludedFromSAUnderlag?: boolean
+  mileageAllowancePaid?: boolean
+  /**
+   * FK051 Traktamente (KRYSS): skattefritt traktamente was paid this period
+   * for trips in tjänsten. Same rule as FK050: the tax-free part is the flag,
+   * the excess over the schablon is lön (Fältlista 1.1.18.1 FK051).
+   */
+  traktamentePaid?: boolean
   /** @deprecated Per-employee sick days are not reported via AGI (goes to Försäkringskassan separately). Kept for snapshot compatibility. */
   sickDays?: number
   /** @deprecated VAB is reported via top-level <Franvarouppgift> as per-event records (see absenceEvents), not as an IU day count. Kept for snapshot compatibility. */
@@ -343,6 +391,46 @@ function toIdentitet(raw: string): string {
   return candidate
 }
 
+/** [faltkod, XML element] of one IU field. */
+type AGIField = readonly [string, string]
+
+interface AGIUnderlagFields {
+  cash: AGIField
+  other: AGIField
+  car: AGIField
+  fuel: AGIField
+  housingSmahus: AGIField
+  housingEjSmahus: AGIField
+}
+
+/** Each underlag's field family, per Bilaga Fältlista 1.1.18.1 (see AGIUnderlag). */
+const UNDERLAG_FIELDS: Record<AGIUnderlag, AGIUnderlagFields> = {
+  arbetsgivaravgifter: {
+    cash: ['011', 'KontantErsattningUlagAG'],
+    other: ['012', 'SkatteplOvrigaFormanerUlagAG'],
+    car: ['013', 'SkatteplBilformanUlagAG'],
+    fuel: ['018', 'DrivmVidBilformanUlagAG'],
+    housingSmahus: ['041', 'BostadsformanSmahusUlagAG'],
+    housingEjSmahus: ['043', 'BostadsformanEjSmahusUlagAG'],
+  },
+  egenavgifter: {
+    cash: ['125', 'KontantErsattningUlagEA'],
+    other: ['126', 'SkatteplOvrigaFormanerUlagEA'],
+    car: ['127', 'SkatteplBilformanUlagEA'],
+    fuel: ['128', 'DrivmVidBilformanUlagEA'],
+    housingSmahus: ['123', 'BostadsformanSmahusUlagEA'],
+    housingEjSmahus: ['124', 'BostadsformanEjSmahusUlagEA'],
+  },
+  ej_socialavgifter: {
+    cash: ['131', 'KontantErsattningEjUlagSA'],
+    other: ['132', 'SkatteplOvrigaFormanerEjUlagSA'],
+    car: ['133', 'SkatteplBilformanEjUlagSA'],
+    fuel: ['134', 'DrivmVidBilformanEjUlagSA'],
+    housingSmahus: ['137', 'BostadsformanSmahusEjUlagSA'],
+    housingEjSmahus: ['138', 'BostadsformanEjSmahusEjUlagSA'],
+  },
+}
+
 /**
  * Generate AGI XML for a period.
  *
@@ -481,9 +569,14 @@ export function generateAGIXml(
       continue
     }
 
-    // FK011: Kontant ersättning, underlag arbetsgivaravgifter (= gross salary)
+    const fields = UNDERLAG_FIELDS[emp.underlag ?? 'arbetsgivaravgifter']
+    const emit = ([code, elem]: AGIField, value: string) =>
+      lines.push(`        <gem:${elem} faltkod="${code}">${value}</gem:${elem}>`)
+
+    // Cash for work: FK011 (underlag arbetsgivaravgifter), FK125 (underlag
+    // egenavgifter) or FK131 (ej underlag), never two for the same payment.
     if (emp.grossSalary > 0) {
-      lines.push(`        <gem:KontantErsattningUlagAG faltkod="011">${formatAmount(emp.grossSalary)}</gem:KontantErsattningUlagAG>`)
+      emit(fields.cash, formatAmount(emp.grossSalary))
     }
 
     // FK001: Avdragen preliminärskatt, on every IU that is not a borttag,
@@ -497,52 +590,58 @@ export function generateAGIXml(
     // ska noll (0) redovisas i beloppsfältet." (crm#1265)
     lines.push(`        <gem:AvdrPrelSkatt faltkod="001">${formatAmount(emp.taxWithheld)}</gem:AvdrPrelSkatt>`)
 
-    const exclSA = emp.benefitsExcludedFromSAUnderlag === true
-
-    // Car benefit AMOUNT: FK013 (UlagAG) or FK133 (ej UlagSA)
-    if (emp.benefitCar && emp.benefitCar > 0) {
-      const code = exclSA ? '133' : '013'
-      const elem = exclSA ? 'SkatteplBilformanEjUlagSA' : 'SkatteplBilformanUlagAG'
-      lines.push(`        <gem:${elem} faltkod="${code}">${formatAmount(emp.benefitCar)}</gem:${elem}>`)
+    // Car benefit AMOUNT: FK013 (UlagAG), FK127 (UlagEA) or FK133 (ej UlagSA).
+    // Declared at 0 too when the employee paid the whole benefit by
+    // nettolöneavdrag: "Har den anställda betalat hela förmånen genom
+    // nettolöneavdrag så att värdet blir noll (0) så ska det ändå redovisas"
+    // (Teknisk beskrivning 1.1.18.2 avsnitt 5.3).
+    const hasCar = typeof emp.benefitCar === 'number' && emp.benefitCar >= 0
+    if (hasCar) {
+      emit(fields.car, formatAmount(emp.benefitCar as number))
     }
 
-    // Fuel for car benefit AMOUNT: FK018 (UlagAG) or FK134 (ej UlagSA)
+    // Fuel for car benefit AMOUNT: FK018 (UlagAG), FK128 (UlagEA) or FK134 (ej UlagSA)
     if (emp.benefitFuel && emp.benefitFuel > 0) {
-      const code = exclSA ? '134' : '018'
-      const elem = exclSA ? 'DrivmVidBilformanEjUlagSA' : 'DrivmVidBilformanUlagAG'
-      lines.push(`        <gem:${elem} faltkod="${code}">${formatAmount(emp.benefitFuel)}</gem:${elem}>`)
+      emit(fields.fuel, formatAmount(emp.benefitFuel))
     }
 
     // Housing benefit FLAGS (KRYSS, no amount on this element). The
-    // krona-amount belongs in benefitOther (FK012/FK132).
-    //   FK041 BostadsformanSmahusUlagAG    | FK137 BostadsformanSmahusEjUlagSA
-    //   FK043 BostadsformanEjSmahusUlagAG  | FK138 BostadsformanEjSmahusEjUlagSA
+    // krona-amount belongs in benefitOther (FK012/FK126/FK132; kontroll
+    // S_156/S_157 require it next to the ej-UlagSA and UlagEA flags).
+    //   FK041 BostadsformanSmahusUlagAG    | FK123 ...UlagEA | FK137 BostadsformanSmahusEjUlagSA
+    //   FK043 BostadsformanEjSmahusUlagAG  | FK124 ...UlagEA | FK138 BostadsformanEjSmahusEjUlagSA
     if (emp.housingBenefit === 'smahus') {
-      const code = exclSA ? '137' : '041'
-      const elem = exclSA ? 'BostadsformanSmahusEjUlagSA' : 'BostadsformanSmahusUlagAG'
-      lines.push(`        <gem:${elem} faltkod="${code}">1</gem:${elem}>`)
+      emit(fields.housingSmahus, '1')
     } else if (emp.housingBenefit === 'ej_smahus') {
-      const code = exclSA ? '138' : '043'
-      const elem = exclSA ? 'BostadsformanEjSmahusEjUlagSA' : 'BostadsformanEjSmahusUlagAG'
-      lines.push(`        <gem:${elem} faltkod="${code}">1</gem:${elem}>`)
+      emit(fields.housingEjSmahus, '1')
     }
 
-    // Övriga skattepliktiga förmåner AMOUNT: FK012 (UlagAG) or FK132 (ej UlagSA).
-    // Includes meals, bike, wellness, "other", and the full housing krona-amount.
-    if (emp.benefitOther && emp.benefitOther > 0) {
-      const code = exclSA ? '132' : '012'
-      const elem = exclSA ? 'SkatteplOvrigaFormanerEjUlagSA' : 'SkatteplOvrigaFormanerUlagAG'
-      lines.push(`        <gem:${elem} faltkod="${code}">${formatAmount(emp.benefitOther)}</gem:${elem}>`)
+    // Övriga skattepliktiga förmåner AMOUNT: FK012 (UlagAG), FK126 (UlagEA)
+    // or FK132 (ej UlagSA). Includes meals, bike, wellness, "other", and the
+    // full housing krona-amount. Declared at 0 too, like the car benefit.
+    const hasOther = typeof emp.benefitOther === 'number' && emp.benefitOther >= 0
+    if (hasOther) {
+      emit(fields.other, formatAmount(emp.benefitOther as number))
     }
 
-    // FK131: Ersättning till mottagare med F-skattsedel (ej underlag SA)
-    if (emp.fSkattPayment && emp.fSkattPayment > 0) {
-      lines.push(`        <gem:KontantErsattningEjUlagSA faltkod="131">${formatAmount(emp.fSkattPayment)}</gem:KontantErsattningEjUlagSA>`)
-    }
-
-    // FK048: FormanHarJusterats (any benefit value adjusted away from schablon)
-    if (emp.benefitsAdjusted) {
+    // FK048 FormanHarJusterats: kontroll S_017 (Bilaga Kontroller 1.1.18.1)
+    // rejects it unless FK012, FK013, FK132, FK133, FK126 or FK127 is on the
+    // IU, i.e. an övriga-förmåner or bilförmån amount in any family. A flag
+    // with no such benefit this month has nothing to qualify and is dropped
+    // rather than failing the whole file (#82).
+    if (emp.benefitsAdjusted && (hasOther || hasCar)) {
       lines.push('        <gem:FormanHarJusterats faltkod="048">1</gem:FormanHarJusterats>')
+    }
+
+    // FK050 Bilersattning / FK051 Traktamente (KRYSS, "1 eller true om
+    // ikryssad, annars utelämnas fältet"): the only trace a tax-free
+    // milersättning or traktamente leaves in the AGI. Both are in kontroll
+    // S_167's list, so either flag alone makes a valid IU.
+    if (emp.mileageAllowancePaid) {
+      lines.push('        <gem:Bilersattning faltkod="050">1</gem:Bilersattning>')
+    }
+    if (emp.traktamentePaid) {
+      lines.push('        <gem:Traktamente faltkod="051">1</gem:Traktamente>')
     }
 
     // Sjuk/VAB/föräldra-dagar flows elsewhere:
@@ -623,8 +722,8 @@ export function generateAGIXml(
  * GDPR Art.25 (data minimisation): xml_content is the authoritative record
  * of what was filed. Storing the full per-benefit breakdown here would
  * duplicate sensitive financial detail with no incremental audit value, so
- * detailed benefit fields (car/fuel/housing/meals/other/fSkatt) are
- * deliberately omitted from the snapshot. Reconstruct them from
+ * detailed benefit fields (car/fuel/housing/meals/other) and their
+ * underlag family are deliberately omitted from the snapshot. Reconstruct them from
  * xml_content when needed.
  */
 export function buildIndividuppgifterSnapshot(

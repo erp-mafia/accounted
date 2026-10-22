@@ -35,6 +35,13 @@ vi.mock('@/lib/auth/require-write', async (importOriginal) => {
   }
 })
 
+// The accounting method correction record goes to audit_log with the service role.
+const auditInsert = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/supabase/server', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/supabase/server')>()
+  return { ...actual, createServiceClient: () => ({ from: () => ({ insert: auditInsert }) }) }
+})
+
 const deadlineMocks = vi.hoisted(() => ({
   regenerate: vi.fn().mockResolvedValue(undefined),
 }))
@@ -49,6 +56,23 @@ vi.mock('@/lib/tax/deadline-generator', async (importOriginal) => {
     regenerateTaxDeadlinesForUser: deadlineMocks.regenerate,
   }
 })
+
+// The company's Stripe customer (crm#1378). Called only for a company with a
+// subscription row whose identity columns moved.
+const stripeMocks = vi.hoisted(() => ({
+  update: vi.fn(),
+  listTaxIds: vi.fn(),
+  createTaxId: vi.fn(),
+}))
+vi.mock('@/lib/stripe/client', () => ({
+  getStripe: () => ({
+    customers: {
+      update: stripeMocks.update,
+      listTaxIds: stripeMocks.listTaxIds,
+      createTaxId: stripeMocks.createTaxId,
+    },
+  }),
+}))
 
 import { PUT } from '../route'
 import { regenerateTaxDeadlinesForUser } from '@/lib/tax/deadline-generator'
@@ -115,6 +139,86 @@ describe('PUT /api/settings', () => {
     expect(status).toBe(200)
     expect(body.data.company_name).toBe('New Name')
     expect(deadlineMocks.regenerate).not.toHaveBeenCalled()
+  })
+
+  // crm#1378: the identity reached the Stripe customer once, at checkout, so
+  // a company that changed its details kept getting renewal invoices made
+  // out to the old ones.
+  describe('the company identity on its Stripe customer', () => {
+    const IDENTITY = {
+      entity_type: 'aktiebolag',
+      company_name: 'Gamla Bolaget AB',
+      org_number: '5566778899',
+      address_line1: 'Storgatan 1',
+      address_line2: null,
+      postal_code: '111 22',
+      city: 'Stockholm',
+      country: 'SE',
+      vat_registered: true,
+      vat_number: 'SE556677889901',
+    }
+    const RENAMED = { ...IDENTITY, company_name: 'Nya Bolaget AB' }
+
+    beforeEach(() => {
+      stripeMocks.update.mockResolvedValue({})
+      stripeMocks.listTaxIds.mockResolvedValue({ data: [{ id: 'txi_1' }] })
+      stripeMocks.createTaxId.mockResolvedValue({})
+    })
+
+    function renameSave() {
+      enqueueMany([
+        { data: { ...IDENTITY, onboarding_complete: true } }, // fetch oldSettings
+        { data: { id: 's1', ...RENAMED } }, // update ... returning
+        { data: null, count: 5 }, // deadlines count
+        { data: { stripe_customer_id: 'cus_1' } }, // company_subscriptions
+        { data: { name: 'Nya Bolaget AB', org_number: '5566778899', entity_type: 'aktiebolag' } }, // companies
+        { data: RENAMED }, // company_settings, read for the identity
+      ])
+      return PUT(
+        createMockRequest('/api/settings', { method: 'PUT', body: { company_name: 'Nya Bolaget AB' } }),
+        { params: Promise.resolve({}) },
+      )
+    }
+
+    it('writes a changed company name onto the Stripe customer', async () => {
+      const { status } = await parseJsonResponse(await renameSave())
+
+      expect(status).toBe(200)
+      expect(stripeMocks.update).toHaveBeenCalledWith(
+        'cus_1',
+        expect.objectContaining({ name: 'Nya Bolaget AB', business_name: 'Nya Bolaget AB' }),
+      )
+      // The tax ID it already has is kept.
+      expect(stripeMocks.createTaxId).not.toHaveBeenCalled()
+    })
+
+    it('still saves when Stripe refuses the update', async () => {
+      stripeMocks.update.mockRejectedValue(new Error('stripe down'))
+
+      const { status, body } = await parseJsonResponse<{ data: { company_name: string } }>(await renameSave())
+
+      expect(status).toBe(200)
+      expect(body.data.company_name).toBe('Nya Bolaget AB')
+    })
+
+    it('leaves Stripe alone when no identity column changed', async () => {
+      enqueueMany([
+        { data: { ...IDENTITY, mileage_enabled: false } }, // fetch oldSettings
+        { data: { id: 's1', ...IDENTITY, mileage_enabled: true } }, // update ... returning
+        { data: null, count: 5 }, // deadlines count
+      ])
+
+      const { status } = await parseJsonResponse(
+        await PUT(
+          createMockRequest('/api/settings', { method: 'PUT', body: { mileage_enabled: true } }),
+          { params: Promise.resolve({}) },
+        ),
+      )
+
+      expect(status).toBe(200)
+      expect(findCall('company_subscriptions', 'select')).toBeUndefined()
+      expect(stripeMocks.update).not.toHaveBeenCalled()
+    })
   })
 
   it('stores voucher_series_labels with trimmed names and cleared letters stripped', async () => {
@@ -1424,5 +1528,74 @@ describe('PUT /api/settings: org number', () => {
   it('returns 400 for an org number that is not a string', async () => {
     const response = await put({ org_number: 5560125790 })
     expect(response.status).toBe(400)
+  })
+})
+
+// PH 187 / crm#1303: the accounting method rule is the service's, so the
+// settings page gets the same one as the API and MCP doors.
+describe('PUT /api/settings: accounting method mid-year', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    auditInsert.mockResolvedValue({ error: null })
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
+    requireWriteMock.mockResolvedValue({ ok: true })
+    isAdminMock.mockResolvedValue(true)
+  })
+
+  const put = (body: Record<string, unknown>) =>
+    PUT(createMockRequest('/api/settings', { method: 'PUT', body }), { params: Promise.resolve({}) })
+  const PERIOD = { data: { id: 'fp-2026', name: '2026', period_start: '2026-01-01', period_end: '2026-12-31' } }
+
+  it('refuses a switch in a fiscal year with posted verifikat when no reason is given', async () => {
+    enqueueMany([
+      { data: { id: 's1', accounting_method: 'accrual' } }, // oldSettings
+      PERIOD,                                                // current fiscal year
+      { data: null, count: 112 },                            // posted verifikat
+      { data: null, count: 0 },                              // open invoices without verifikat
+      { data: null, count: 0 },                              // open supplier invoices without verifikat
+    ])
+    const response = await put({ accounting_method: 'cash' })
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    expect(status).toBe(409)
+    expect(body.error).toContain('rättelse')
+    expect(findCall('company_settings', 'update')).toBeUndefined()
+    expect(auditInsert).not.toHaveBeenCalled()
+  })
+
+  it('saves a stated correction and records the reason in audit_log', async () => {
+    enqueueMany([
+      { data: { id: 's1', accounting_method: 'accrual' } },
+      PERIOD,
+      { data: null, count: 112 },
+      { data: null, count: 0 },
+      { data: null, count: 0 },
+      { data: [], count: 0 },                                // invoice-flow verifikat this year
+      { data: { id: 's1', accounting_method: 'cash' } },    // update ... returning
+      { data: null, count: 5 },                              // deadlines count
+    ])
+    const response = await put({ accounting_method: 'cash', accounting_method_correction_reason: 'Fel metod valdes vid inflyttningen' })
+    expect(response.status).toBe(200)
+    const update = findCall('company_settings', 'update')?.[0] as Record<string, unknown>
+    expect(update).toMatchObject({ accounting_method: 'cash', defer_invoice_booking: false })
+    expect(update).not.toHaveProperty('accounting_method_correction_reason')
+    expect(auditInsert).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'GUARD_BYPASSED',
+      user_id: 'user-1',
+      record_id: 's1',
+      new_state: expect.objectContaining({ guard: 'accounting_method_mid_year', from: 'accrual', to: 'cash' }),
+    }))
+  })
+
+  it('leaves an unchanged method alone: no fiscal year read, no record', async () => {
+    enqueueMany([
+      { data: { id: 's1', accounting_method: 'accrual' } },
+      { data: { id: 's1', accounting_method: 'accrual' } },
+      { data: null, count: 5 },
+    ])
+    const response = await put({ accounting_method: 'accrual', default_voucher_series: 'A' })
+    expect(response.status).toBe(200)
+    expect(findCall('fiscal_periods', 'select')).toBeUndefined()
+    expect(auditInsert).not.toHaveBeenCalled()
   })
 })

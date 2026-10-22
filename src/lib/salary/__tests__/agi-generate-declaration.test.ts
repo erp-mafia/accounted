@@ -1,10 +1,11 @@
 /**
- * Data-layer tests for generateAgiDeclaration (issue #315).
+ * Data-layer tests for generateAgiDeclaration (issue #315, #82).
  *
- * An F-skatt payee's cash compensation must reach the AGI as FK131
- * (KontantErsattningEjUlagSA) ONLY. Before the fix, grossSalary was passed
- * through unconditionally, so the same payment was double-reported as
- * FK011 (underlag arbetsgivaravgifter) AND FK131 in the same IU.
+ * An F-skatt payee's cash compensation must reach the AGI as FK125
+ * (KontantErsattningUlagEA, inkomst av tjänst for a mottagare med F-skatt)
+ * ONLY. Before #315 grossSalary was passed through unconditionally, so the
+ * same payment was double-reported as FK011 (underlag arbetsgivaravgifter)
+ * and a second field in the same IU; before #82 that second field was FK131.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { generateAgiDeclaration } from '../agi/generate-declaration'
@@ -345,8 +346,8 @@ describe('generateAgiDeclaration: a correction run starts its declaration unfile
   })
 })
 
-describe('generateAgiDeclaration: F-skatt payee (FK131 only, issue #315)', () => {
-  it('reports F-skatt cash on FK131 only, never FK011, with FK001 as 0, in a mixed roster', async () => {
+describe('generateAgiDeclaration: F-skatt payee (FK125 only, issue #315, #82)', () => {
+  it('reports F-skatt cash on FK125 only, never FK011 or FK131, with FK001 as 0, in a mixed roster', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     enqueueHappyPath(enqueueMany, [REGULAR_ROW, F_SKATT_ROW])
 
@@ -360,14 +361,15 @@ describe('generateAgiDeclaration: F-skatt payee (FK131 only, issue #315)', () =>
 
     const fSkattIu = iuBlockFor(result.xml, '198506159876')
     expect(fSkattIu).toContain(
-      '<gem:KontantErsattningEjUlagSA faltkod="131">15000</gem:KontantErsattningEjUlagSA>',
+      '<gem:KontantErsattningUlagEA faltkod="125">15000</gem:KontantErsattningUlagEA>',
     )
     expect(fSkattIu).not.toContain('faltkod="011"')
+    expect(fSkattIu).not.toContain('faltkod="131"')
     // No tax withheld still needs a skattefält (kontroll S_183, crm#1265).
     expect(fSkattIu).toContain('<gem:AvdrPrelSkatt faltkod="001">0</gem:AvdrPrelSkatt>')
   })
 
-  it('leaves the regular employee IU unchanged (FK011 + FK001, no FK131)', async () => {
+  it('leaves the regular employee IU unchanged (FK011 + FK001, no FK125 or FK131)', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     enqueueHappyPath(enqueueMany, [REGULAR_ROW, F_SKATT_ROW])
 
@@ -382,6 +384,7 @@ describe('generateAgiDeclaration: F-skatt payee (FK131 only, issue #315)', () =>
     )
     expect(regularIu).toContain('<gem:AvdrPrelSkatt faltkod="001">12000</gem:AvdrPrelSkatt>')
     expect(regularIu).not.toContain('faltkod="131"')
+    expect(regularIu).not.toContain('faltkod="125"')
   })
 
   it('excludes the F-skatt payment from FK487/avgifter totals', async () => {
@@ -415,7 +418,7 @@ describe('generateAgiDeclaration: F-skatt payee (FK131 only, issue #315)', () =>
 
     expect(result.employeeCount).toBe(1)
     expect(result.xml).toContain(
-      '<gem:KontantErsattningEjUlagSA faltkod="131">15000</gem:KontantErsattningEjUlagSA>',
+      '<gem:KontantErsattningUlagEA faltkod="125">15000</gem:KontantErsattningUlagEA>',
     )
     // Nothing on this declaration reports the payment as AG underlag.
     expect(result.xml).not.toContain('faltkod="011"')
@@ -490,7 +493,7 @@ describe('generateAgiDeclaration: avgifter overrides on an F-skatt row are ignor
   // Regression for the CodeRabbit finding on #1402: computed avgifter are
   // already 0 for f_skatt rows, but advanced-mode overrides used to coalesce
   // past that (override ?? computed) at three aggregation points, restoring
-  // social charges for pay whose IU simultaneously asserts FK131.
+  // social charges for pay whose IU simultaneously declares it in FK125.
   const REGULAR_OVERRIDE_ROW = {
     ...REGULAR_ROW,
     avgifter_basis_override: 30000,
@@ -522,12 +525,164 @@ describe('generateAgiDeclaration: avgifter overrides on an F-skatt row are ignor
       '<gem:SummaArbAvgSlf faltkod="487">9426</gem:SummaArbAvgSlf>',
     )
 
-    // The F-skatt IU itself is unchanged: FK131 with the payment, no FK011.
+    // The F-skatt IU itself is unchanged: FK125 with the payment, no FK011,
+    // and its basis override of 15 000 does not move it to FK131 either.
     const fSkattIu = iuBlockFor(result.xml, '198506159876')
     expect(fSkattIu).toContain(
-      '<gem:KontantErsattningEjUlagSA faltkod="131">15000</gem:KontantErsattningEjUlagSA>',
+      '<gem:KontantErsattningUlagEA faltkod="125">15000</gem:KontantErsattningUlagEA>',
     )
+    expect(fSkattIu).not.toContain('faltkod="131"')
     expect(fSkattIu).not.toContain('faltkod="011"')
+  })
+})
+
+describe('generateAgiDeclaration: an avgiftsunderlag override of 0 is declared as no underlag (crm#1372)', () => {
+  // SAL 2 kap. 14 §: ersättning to a person that stays under 1 000 kr in the
+  // year forms no underlag for arbetsgivaravgifter, and Teknisk beskrivning
+  // 1.1.18.2 avsnitt 5.4 declares it (benefits included) in FK131/FK132/FK133.
+  // The reviewer states it in avancerat läge with an underlag of 0 kr and an
+  // avgift of 0 kr. Before the fix the IU still declared the pay in
+  // FK011/FK012, so Skatteverket charged avgifter the booking never carried.
+  const MEALS_450 = { item_type: 'benefit_meals', amount: 450, quantity: 3 }
+  const TRAKTAMENTE = { item_type: 'traktamente_taxfree', amount: 600 }
+  const BENEFIT_ONLY_ROW = {
+    ...REGULAR_ROW,
+    monthly_salary: 0,
+    gross_salary: 0,
+    benefit_values: 450,
+    tax_withheld: 135,
+    tax_withheld_override: 0,
+    avgifter_basis: 450,
+    avgifter_amount: 141.39,
+    avgifter_basis_override: 0,
+    avgifter_amount_override: 0,
+    line_items: [{ item_type: 'hourly_salary', amount: 0 }, TRAKTAMENTE, MEALS_450],
+  }
+
+  async function generate(roster: unknown[]) {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueHappyPath(enqueueMany, roster)
+    return generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+  }
+
+  it('declares a kost-only payslip in FK132 with FK001 = 0 and no avgift anywhere', async () => {
+    const result = await generate([BENEFIT_ONLY_ROW])
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+
+    const iu = iuBlockFor(result.xml, '199001011234')
+    expect(iu).toContain('<gem:SkatteplOvrigaFormanerEjUlagSA faltkod="132">450</gem:SkatteplOvrigaFormanerEjUlagSA>')
+    expect(iu).toContain('<gem:AvdrPrelSkatt faltkod="001">0</gem:AvdrPrelSkatt>')
+    for (const fk of ['011', '012', '013', '018', '131']) {
+      expect(iu).not.toContain(`faltkod="${fk}"`)
+    }
+    // Nothing for Skatteverket to charge, and FK487 says the same.
+    expect(result.xml).not.toContain('faltkod="487"')
+    expect(result.xml).not.toContain('faltkod="497"')
+    expect(result.totals.totalAvgifterAmount).toBe(0)
+    expect(result.totals.totalAvgifterBasis).toBe(0)
+    // The booking and the run page read the same zero.
+    expect(declaredAvgifterForRun([BENEFIT_ONLY_ROW], {}).totalAmount).toBe(0)
+    expect(effectiveRunTotals([{ ...BENEFIT_ONLY_ROW, net_salary: 0, vacation_accrual: 0, vacation_accrual_avgifter: 0 }]).total_avgifter).toBe(0)
+  })
+
+  it('declares cash in FK131 only, never FK011, next to a regular colleague', async () => {
+    const result = await generate([
+      REGULAR_ROW,
+      {
+        ...REGULAR_ROW,
+        employee_id: '33333333-3333-4333-8333-333333333333',
+        monthly_salary: 800,
+        gross_salary: 800,
+        tax_withheld: 0,
+        avgifter_basis: 800,
+        avgifter_amount: 251.36,
+        avgifter_basis_override: 0,
+        avgifter_amount_override: 0,
+        employee: { ...REGULAR_ROW.employee, personnummer: 'emp3_encrypted', specification_number: 3 },
+      },
+    ])
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+
+    const iu = iuBlockFor(result.xml, '197703031234')
+    expect(iu).toContain('<gem:KontantErsattningEjUlagSA faltkod="131">800</gem:KontantErsattningEjUlagSA>')
+    expect(iu).not.toContain('faltkod="011"')
+    // The colleague is untouched and alone in the avgift.
+    expect(iuBlockFor(result.xml, '199001011234')).toContain(
+      '<gem:KontantErsattningUlagAG faltkod="011">40000</gem:KontantErsattningUlagAG>',
+    )
+    expect(result.totals.totalAvgifterBasis).toBe(40000)
+    expect(result.xml).toContain('<gem:SummaArbAvgSlf faltkod="487">12568</gem:SummaArbAvgSlf>')
+  })
+
+  it('refuses an underlag of 0 whose avgift is still charged, instead of filing both', async () => {
+    const result = await generate([{ ...BENEFIT_ONLY_ROW, avgifter_amount_override: null }])
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.code).toBe('AGI_INCOMPLETE_DATA')
+    const details = result.details as { missing_fields: string[]; message: string }
+    expect(details.missing_fields).toEqual(['avgifter_amount_override'])
+    expect(details.message).toContain('avgiftsunderlaget är justerat till 0 kr')
+  })
+
+  it('accepts an underlag of 0 without an amount override when the computed avgift is already 0', async () => {
+    // Born 1937 or earlier: sats 0, so there is no avgift to contradict.
+    const result = await generate([
+      { ...BENEFIT_ONLY_ROW, avgifter_amount: 0, avgifter_rate: 0, avgifter_category: 'exempt', avgifter_amount_override: null },
+    ])
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(iuBlockFor(result.xml, '199001011234')).toContain('faltkod="132">450<')
+  })
+
+  it('leaves a payslip without overrides on FK012, avgift included', async () => {
+    const result = await generate([
+      { ...BENEFIT_ONLY_ROW, tax_withheld_override: null, avgifter_basis_override: null, avgifter_amount_override: null },
+    ])
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const iu = iuBlockFor(result.xml, '199001011234')
+    expect(iu).toContain('<gem:SkatteplOvrigaFormanerUlagAG faltkod="012">450</gem:SkatteplOvrigaFormanerUlagAG>')
+    expect(iu).not.toContain('faltkod="132"')
+    expect(result.xml).toContain('<gem:SummaArbAvgSlf faltkod="487">141</gem:SummaArbAvgSlf>')
+  })
+})
+
+describe('generateAgiDeclaration: field family per payee kind (#82)', () => {
+  const MEALS = { item_type: 'benefit_meals', amount: 1200 }
+
+  async function generate(roster: unknown[]) {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueHappyPath(enqueueMany, roster)
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error('AGI refused')
+    return result
+  }
+
+  it('keeps an F-skatt payee on FK125/FK126 even with an avgiftsunderlag override of 0', async () => {
+    // Pay to a mottagare med F-skatt stays underlag for egenavgifter: the
+    // override speaks of arbetsgivaravgifter, which are 0 for the row anyway.
+    const result = await generate([
+      { ...F_SKATT_ROW, avgifter_basis_override: 0, avgifter_amount_override: 0, line_items: [MEALS] },
+    ])
+    const iu = iuBlockFor(result.xml, '198506159876')
+    expect(iu).toContain('<gem:KontantErsattningUlagEA faltkod="125">15000</gem:KontantErsattningUlagEA>')
+    expect(iu).toContain('<gem:SkatteplOvrigaFormanerUlagEA faltkod="126">1200</gem:SkatteplOvrigaFormanerUlagEA>')
+    expect(iu).not.toContain('faltkod="131"')
+    expect(iu).not.toContain('faltkod="132"')
+  })
+
+  it('files FK048 with the benefit it qualifies, and drops it from an IU without one', async () => {
+    const result = await generate([
+      { ...REGULAR_ROW, benefits_adjusted: true },
+      { ...F_SKATT_ROW, benefits_adjusted: true, line_items: [MEALS] },
+    ])
+    expect(iuBlockFor(result.xml, '199001011234')).not.toContain('faltkod="048"')
+    const fSkattIu = iuBlockFor(result.xml, '198506159876')
+    expect(fSkattIu).toContain('<gem:FormanHarJusterats faltkod="048">1</gem:FormanHarJusterats>')
+    expect(fSkattIu).toContain('faltkod="126">1200<')
   })
 })
 
@@ -796,11 +951,111 @@ describe('generateAgiDeclaration: utlägg repaid with the salary (#2331)', () =>
   })
 })
 
+describe('generateAgiDeclaration: tax-free milersättning and traktamente set FK050 / FK051', () => {
+  // Bilaga Fältlista 1.1.18.1: FK050 Bilersattning "om du har betalat ut
+  // ersättning för resor med privat bil i tjänsten", FK051 Traktamente "om du
+  // har betalat ut traktamentsersättning för resor i tjänsten"; in both "den
+  // överskjutande delen" above the schablon is lön. The tax-free rows are
+  // capped at the schablon; the *_taxable rows carry the excess and are
+  // already in gross_salary.
+  const FK050 = '<gem:Bilersattning faltkod="050">1</gem:Bilersattning>'
+  const FK051 = '<gem:Traktamente faltkod="051">1</gem:Traktamente>'
+  const reimbursement = (item_type: string, amount: number) => ({
+    item_type,
+    amount,
+    is_taxable: false,
+    is_avgift_basis: false,
+  })
+  const MILEAGE = reimbursement('mileage_taxfree', 2497.5)
+  const TRAKTAMENTE = reimbursement('traktamente_taxfree', 900)
+  const row = (lineItems: unknown[]) => ({
+    ...REGULAR_ROW,
+    line_items: [{ item_type: 'monthly_salary', amount: 40000 }, ...lineItems],
+  })
+
+  async function iuFor(roster: unknown[]): Promise<string> {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueHappyPath(enqueueMany, roster)
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return ''
+    return iuBlockFor(result.xml, '199001011234')
+  }
+
+  it('milersättning only: FK050, no FK051', async () => {
+    const iu = await iuFor([row([MILEAGE])])
+    expect(iu).toContain(FK050)
+    expect(iu).not.toContain('faltkod="051"')
+  })
+
+  it('traktamente only: FK051, no FK050', async () => {
+    const iu = await iuFor([row([TRAKTAMENTE])])
+    expect(iu).toContain(FK051)
+    expect(iu).not.toContain('faltkod="050"')
+  })
+
+  it('both: one FK050 and one FK051, whatever the number of rows', async () => {
+    const iu = await iuFor([row([MILEAGE, reimbursement('mileage_taxfree', 702.05), TRAKTAMENTE])])
+    expect(iu.split(FK050)).toHaveLength(2)
+    expect(iu.split(FK051)).toHaveLength(2)
+  })
+
+  it('neither: no flag, and the IU is otherwise unchanged', async () => {
+    const iu = await iuFor([row([])])
+    expect(iu).not.toContain('faltkod="050"')
+    expect(iu).not.toContain('faltkod="051"')
+    expect(iu).toContain('<gem:KontantErsattningUlagAG faltkod="011">40000</gem:KontantErsattningUlagAG>')
+  })
+
+  it('a taxable excess only: no flag, the excess is lön in FK011', async () => {
+    const withExcess = {
+      ...row([
+        { item_type: 'mileage_taxable', amount: 500, is_taxable: true, is_avgift_basis: true },
+        { item_type: 'traktamente_taxable', amount: 300, is_taxable: true, is_avgift_basis: true },
+      ]),
+      gross_salary: 40800,
+      avgifter_basis: 40800,
+      avgifter_amount: roundOre(40800 * 0.3142),
+    }
+    const iu = await iuFor([withExcess])
+    expect(iu).not.toContain('faltkod="050"')
+    expect(iu).not.toContain('faltkod="051"')
+    expect(iu).toContain('<gem:KontantErsattningUlagAG faltkod="011">40800</gem:KontantErsattningUlagAG>')
+  })
+
+  it('a tax-free row reversed to a net 0 kr pays nothing and sets no flag', async () => {
+    const iu = await iuFor([row([MILEAGE, reimbursement('mileage_taxfree', -2497.5)])])
+    expect(iu).not.toContain('faltkod="050"')
+  })
+
+  it('an utlägg repaid with the salary is no bilersättning or traktamente', async () => {
+    const iu = await iuFor([row([{ ...reimbursement('expense_reimbursement', 1234.5), source_expense_claim_id: 'claim-1' }])])
+    expect(iu).not.toContain('faltkod="050"')
+    expect(iu).not.toContain('faltkod="051"')
+  })
+
+  it('files an IU for a person paid only a tax-free traktamente this month', async () => {
+    const travelOnly = {
+      ...REGULAR_ROW,
+      monthly_salary: null,
+      gross_salary: 0,
+      tax_withheld: 0,
+      avgifter_basis: 0,
+      avgifter_amount: 0,
+      line_items: [TRAKTAMENTE],
+    }
+    const iu = await iuFor([travelOnly])
+    expect(iu).toContain(FK051)
+    expect(iu).toContain('<gem:AvdrPrelSkatt faltkod="001">0</gem:AvdrPrelSkatt>')
+    expect(iu).not.toContain('faltkod="011"')
+  })
+})
+
 describe('generateAgiDeclaration: kostförmån is declared in FK012 (#81)', () => {
   // Skatteverket's XML schema (arbetsgivardeklaration_component_1.1.xsd) and
   // Bilaga Fältlista 1.1.18.1 define no kostförmån field: FK012 "Övriga
   // skattepliktiga förmåner" carries every benefit except bil and drivmedel,
-  // kost included (FK132 when the benefit is no underlag for SA). The
+  // kost included (FK126 for an F-skatt payee, FK132 when no underlag). The
   // generator used to emit KostformanUlagAG faltkod 015, which no schema has.
   const MEALS = { item_type: 'benefit_meals', amount: 1200 }
   const BIKE = { item_type: 'benefit_bike', amount: 300 }
@@ -840,10 +1095,11 @@ describe('generateAgiDeclaration: kostförmån is declared in FK012 (#81)', () =
     expect(iu).not.toContain('faltkod="015"')
   })
 
-  it("declares an F-skatt payee's kost in FK132, never FK139", async () => {
+  it("declares an F-skatt payee's kost in FK126, never FK132 or FK139 (#82)", async () => {
     const result = await generate([{ ...F_SKATT_ROW, line_items: [MEALS] }])
     const iu = iuBlockFor(result.xml, '198506159876')
-    expect(iu).toContain('<gem:SkatteplOvrigaFormanerEjUlagSA faltkod="132">1200</gem:SkatteplOvrigaFormanerEjUlagSA>')
+    expect(iu).toContain('<gem:SkatteplOvrigaFormanerUlagEA faltkod="126">1200</gem:SkatteplOvrigaFormanerUlagEA>')
+    expect(iu).not.toContain('faltkod="132"')
     expect(iu).not.toContain('faltkod="139"')
     expect(iu).not.toContain('Kostforman')
   })
@@ -1006,13 +1262,54 @@ describe('generateAgiDeclaration: an employee payment for a benefit reduces the 
     expect(iu).toContain('<gem:SkatteplBilformanUlagAG faltkod="013">6664</gem:SkatteplBilformanUlagAG>')
   })
 
-  it('payment equal to the benefit: no FK013 at all, the salary stays on FK011', async () => {
+  it('payment equal to the benefit: FK013 is still declared, as 0, and the salary stays on FK011', async () => {
+    // Teknisk beskrivning 1.1.18.2 avsnitt 5.3: "Har den anställda betalat
+    // hela förmånen genom nettolöneavdrag så att värdet blir noll (0) så ska
+    // det ändå redovisas ... ska fältet för bilförmån (SkatteplBilformanUlagAG,
+    // FK013) finnas med i filen med värde 0."
     const result = await generate([row([CAR, payment(-6664)], 0)])
     expect(result.ok).toBe(true)
     if (!result.ok) return
     const iu = iuBlockFor(result.xml, '199001011234')
-    expect(iu).not.toContain('faltkod="013"')
+    expect(iu).toContain('<gem:SkatteplBilformanUlagAG faltkod="013">0</gem:SkatteplBilformanUlagAG>')
     expect(iu).toContain('<gem:KontantErsattningUlagAG faltkod="011">48000</gem:KontantErsattningUlagAG>')
+    expect(iu).not.toContain('faltkod="012"')
+  })
+
+  it('a kostförmån paid in full: FK012 is declared as 0', async () => {
+    const result = await generate([row([{ item_type: 'benefit_meals', amount: 2480 }, payment(-2480)], 0)])
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const iu = iuBlockFor(result.xml, '199001011234')
+    expect(iu).toContain('<gem:SkatteplOvrigaFormanerUlagAG faltkod="012">0</gem:SkatteplOvrigaFormanerUlagAG>')
+    expect(iu).not.toContain('faltkod="013"')
+  })
+
+  it('a bostadsförmån paid in full keeps its flag next to FK012 = 0 (kontroll S_155)', async () => {
+    const result = await generate([row([{ item_type: 'benefit_housing', amount: 5000 }, payment(-5000)], 0)])
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const iu = iuBlockFor(result.xml, '199001011234')
+    expect(iu).toContain('<gem:BostadsformanEjSmahusUlagAG faltkod="043">1</gem:BostadsformanEjSmahusUlagAG>')
+    expect(iu).toContain('<gem:SkatteplOvrigaFormanerUlagAG faltkod="012">0</gem:SkatteplOvrigaFormanerUlagAG>')
+  })
+
+  it('a benefit paid in full is reported even when nothing else was paid that month', async () => {
+    const benefitOnly = {
+      ...row([CAR, payment(-6664)], 0),
+      monthly_salary: null,
+      gross_salary: 0,
+      tax_withheld: 0,
+      avgifter_basis: 0,
+      avgifter_amount: 0,
+      line_items: [CAR, payment(-6664)],
+    }
+    const result = await generate([benefitOnly])
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const iu = iuBlockFor(result.xml, '199001011234')
+    expect(iu).toContain('<gem:SkatteplBilformanUlagAG faltkod="013">0</gem:SkatteplBilformanUlagAG>')
+    expect(iu).toContain('<gem:AvdrPrelSkatt faltkod="001">0</gem:AvdrPrelSkatt>')
   })
 
   it('partial payment: FK013 carries benefit minus payment', async () => {
@@ -1140,7 +1437,7 @@ describe('generateAgiDeclaration: text rows never reach the declaration', () => 
     const iu = iuBlockFor(withText.xml, '199001011234')
     expect(iu).toContain('<gem:KontantErsattningUlagAG faltkod="011">40000</gem:KontantErsattningUlagAG>')
     expect(iu).toContain('<gem:SkatteplBilformanUlagAG faltkod="013">2000</gem:SkatteplBilformanUlagAG>')
-    expect(withText.xml).toContain('faltkod="131">15000<')
+    expect(withText.xml).toContain('faltkod="125">15000<')
     expect(withText.xml).not.toContain('Grundlön enligt avtal')
     expect(withText.rest.employeeCount).toBe(2)
   })

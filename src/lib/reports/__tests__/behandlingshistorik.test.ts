@@ -440,6 +440,40 @@ describe('auditRowToEvent: bypassed guards (issue #2366)', () => {
     expect(ev.details[3]).toBe('Kontrollen kunde inte köras om vid bokföringstillfället.')
   })
 
+  it('renders an accounting method corrected mid-year with its reason (PH 187)', () => {
+    const ev = auditRowToEvent(
+      auditRow({
+        action: 'GUARD_BYPASSED',
+        table_name: 'company_settings',
+        record_id: 'settings-1',
+        old_state: { accounting_method: 'accrual' },
+        new_state: {
+          guard: 'accounting_method_mid_year',
+          from: 'accrual',
+          to: 'cash',
+          reason: 'Fel metod valdes vid inflyttningen',
+          fiscal_period_id: 'fp-2026',
+          fiscal_year: 'Räkenskapsår 2026',
+          posted_entries: 112,
+          method_timed_entries: 1,
+        },
+      }),
+      ctxWithEntries([]),
+    )!
+    expect(ev).toMatchObject({
+      category: 'installningar',
+      code: 'settings.accounting_method_corrected',
+      event: 'Redovisningsmetod rättad under räkenskapsåret',
+      object: 'Räkenskapsår 2026',
+    })
+    expect(ev.details).toEqual([
+      'Redovisningsmetod: Faktureringsmetoden → Kontantmetoden',
+      'Skäl: Fel metod valdes vid inflyttningen',
+      'Bokförda verifikationer i räkenskapsåret vid rättelsen: 112',
+      'Varav bokförda av fakturaflödet enligt tidigare metod: 1 (oförändrade)',
+    ])
+  })
+
   it('drops a row whose guard is unknown to this version rather than half-labelling it', () => {
     expect(auditRowToEvent(bypassRow({ guard: 'some_future_guard' }), ctxWithEntries([]))).toBeNull()
   })

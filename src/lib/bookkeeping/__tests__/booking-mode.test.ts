@@ -3,6 +3,8 @@ import {
   booksInvoicesOnIssue,
   issueBooksDocument,
   invoiceBookingMoment,
+  supplierInvoiceBookingMoment,
+  supplierInvoiceBooksOnRegistration,
   cashPartialBlockReason,
   cashProRataUnsupportedReason,
   creditNoteNeedsJournalEntry,
@@ -63,6 +65,50 @@ describe('invoiceBookingMoment', () => {
 
   it('books at the explicit Bokför step when booking is deferred', () => {
     expect(invoiceBookingMoment({ accounting_method: 'accrual', defer_invoice_booking: true })).toBe('manual')
+  })
+})
+
+// ML 2023:200 7 kap. 26 and 40 §§: the moms of an EU goods acquisition belongs
+// to the period the invoice is issued in, whatever the buyer's method; 7 kap.
+// 16 § lets reverse charge wait for the payment only for services from abroad
+// and domestic reverse charge (16 kap. 6, 8-16 §§), not 16 kap. 17 §.
+describe('supplierInvoiceBookingMoment (#73)', () => {
+  const euGoods = { reverse_charge: true, reverse_charge_kind: 'eu_goods' }
+  const euServices = { reverse_charge: true, reverse_charge_kind: 'eu_services' }
+
+  it('books an EU goods acquisition at registration under kontantmetoden', () => {
+    expect(supplierInvoiceBookingMoment('payment', euGoods, 'eu_business')).toBe('issue')
+    expect(supplierInvoiceBooksOnRegistration({ accounting_method: 'cash' }, euGoods, 'eu_business')).toBe(true)
+    // The defer flag never wins under kontantmetoden (invoiceBookingMoment), here neither.
+    expect(
+      supplierInvoiceBooksOnRegistration({ accounting_method: 'cash', defer_invoice_booking: true }, euGoods, 'eu_business'),
+    ).toBe(true)
+  })
+
+  it('keeps every other kontantmetoden supplier invoice at payment', () => {
+    const cash = { accounting_method: 'cash' }
+    // EU services (16 kap. 9 §) and services from outside the EU follow 7 kap. 16 §.
+    expect(supplierInvoiceBooksOnRegistration(cash, euServices, 'eu_business')).toBe(false)
+    expect(supplierInvoiceBooksOnRegistration(cash, { reverse_charge: true, reverse_charge_kind: null }, 'eu_business')).toBe(false)
+    expect(supplierInvoiceBooksOnRegistration(cash, { reverse_charge: true }, 'non_eu_business')).toBe(false)
+    // Domestic reverse charge (byggtjänster, 16 kap. 13 §) and plain domestic purchases.
+    expect(supplierInvoiceBooksOnRegistration(cash, { reverse_charge: true }, 'swedish_business')).toBe(false)
+    expect(supplierInvoiceBooksOnRegistration(cash, { reverse_charge: false }, 'swedish_business')).toBe(false)
+    // The goods word means nothing without reverse charge or from a supplier outside the EU.
+    expect(supplierInvoiceBooksOnRegistration(cash, { ...euGoods, reverse_charge: false }, 'eu_business')).toBe(false)
+    expect(supplierInvoiceBooksOnRegistration(cash, euGoods, 'swedish_business')).toBe(false)
+    expect(supplierInvoiceBooksOnRegistration(cash, euGoods, 'non_eu_business')).toBe(false)
+  })
+
+  it('leaves faktureringsmetoden and deferred booking as they were', () => {
+    expect(supplierInvoiceBookingMoment('issue', euServices, 'eu_business')).toBe('issue')
+    expect(supplierInvoiceBookingMoment('manual', euGoods, 'eu_business')).toBe('manual')
+    expect(supplierInvoiceBooksOnRegistration({ accounting_method: 'accrual' }, euGoods, 'eu_business')).toBe(true)
+    expect(supplierInvoiceBooksOnRegistration({ accounting_method: 'accrual' }, { reverse_charge: false }, 'swedish_business')).toBe(true)
+    expect(
+      supplierInvoiceBooksOnRegistration({ accounting_method: 'accrual', defer_invoice_booking: true }, euGoods, 'eu_business'),
+    ).toBe(false)
+    expect(supplierInvoiceBooksOnRegistration(null, euGoods, 'eu_business')).toBe(true)
   })
 })
 

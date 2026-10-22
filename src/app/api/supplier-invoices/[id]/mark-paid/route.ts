@@ -37,6 +37,7 @@ import {
   bookRegistrationBeforeSettlement,
   planRegistrationBeforeSettlement,
 } from '@/lib/supplier-invoices/registration-first'
+import { requireAccountingMethod } from '@/lib/company/accounting-method'
 
 export const POST = withRouteContext(
   'supplier_invoice.mark_paid',
@@ -145,13 +146,16 @@ export const POST = withRouteContext(
       }
     }
 
-    const { data: settings } = await supabase
+    const settingsRead = await supabase
       .from('company_settings')
       .select('accounting_method, last_supplier_payment_account')
       .eq('company_id', companyId)
       .single()
+    const settings = settingsRead.data
 
-    const accountingMethod = settings?.accounting_method || 'accrual'
+    // Fail closed (accounted#58): an unreadable method refuses instead of
+    // clearing 2440 for a kontantmetod invoice that was never booked.
+    const accountingMethod = requireAccountingMethod(settingsRead)
     const paymentAccount = body.payment_account || undefined
 
     // Route on the supplier invoice's actual booking state, not the current

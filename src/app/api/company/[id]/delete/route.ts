@@ -7,6 +7,8 @@ import { eventBus } from '@/lib/events'
 import { createLogger } from '@/lib/logger'
 import { getMailSearchService } from '@/lib/mail-search/service'
 import { getActiveCompanyId } from '@/lib/company/active-company'
+import { getStripe } from '@/lib/stripe/client'
+import { endCompanySubscriptions, readCompanyStripeRef } from '@/lib/stripe/company-subscription'
 
 const log = createLogger('api/company/delete')
 
@@ -30,6 +32,8 @@ const DeleteCompanySchema = z.object({
  *    name is accepted (see step 3) — accepting alternates would weaken the
  *    confirmation gate on an irreversible action.
  *  - Already-archived companies return 404 (treated as not found).
+ *  - The company's Stripe subscription ends first (crm#1373); if Stripe
+ *    cannot be reached the company is not archived (502).
  *
  * Response: { data: { companyId, archivedAt, nextCompanyId } }. nextCompanyId
  * is the company the user lands in now (the same resolution the middleware
@@ -119,6 +123,29 @@ export async function POST(
     return NextResponse.json(
       { error: 'Företagsnamnet stämmer inte överens.' },
       { status: 400 }
+    )
+  }
+
+  // 3b. End the company's Stripe subscription (crm#1373). Once the company
+  // is hidden nobody can open its billing page or the portal, yet the
+  // subscription went on charging every period: an owner who deleted the
+  // wrong company and subscribed on the right one paid for both. Ended
+  // before the archive and fail closed: a company that would keep being
+  // charged is not hidden. A failure after this point leaves the company
+  // visible and unsubscribed, which a retry of the delete completes.
+  try {
+    const stripeRef = await readCompanyStripeRef(service, companyId)
+    if (stripeRef) {
+      const ended = await endCompanySubscriptions(getStripe(), companyId, stripeRef)
+      if (ended.length > 0) {
+        log.info('Ended the company subscription before archive', { companyId, subscriptionIds: ended })
+      }
+    }
+  } catch (err) {
+    log.error('Failed to end the company subscription before archive', err, { companyId })
+    return NextResponse.json(
+      { error: 'Kunde inte avsluta företagets abonnemang. Försök igen om en stund.' },
+      { status: 502 }
     )
   }
 

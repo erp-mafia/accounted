@@ -6,7 +6,7 @@ import type {
   CompanyInformationDto,
   AmountType, PartyDto, PostalAddress,
 } from '../dto';
-import { creditNoteTypeCode } from '../dto';
+import { creditNoteTypeCode, salesDocumentNumber } from '../dto';
 import { roundOre } from '@/lib/money';
 
 // Field names follow WINT's v1 swagger exactly (PascalCase). Amounts arrive as
@@ -105,6 +105,17 @@ function isWintInvoicePaid(raw: Record<string, unknown>): boolean {
   return total != null && total > 0 && leftToPay != null && leftToPay <= 0;
 }
 
+/**
+ * WINT's invoice number (`SerialNumber`), or undefined when the invoice has
+ * none yet. The swagger types it nullable int64 on the detail form (Invoice)
+ * but plain int64 on the list form (InvoiceListItem), where a missing number
+ * would arrive as the int64 default 0; neither null nor 0 is a löpnummer.
+ */
+function wintSerialNumber(raw: Record<string, unknown>): number | undefined {
+  const serial = num(raw['SerialNumber']);
+  return serial != null && serial > 0 ? serial : undefined;
+}
+
 export function mapWintToSalesInvoice(raw: Record<string, unknown>): SalesInvoiceDto {
   const currency = (raw['Currency'] as string) || 'SEK';
   const total = num(raw['TotalAmount']) ?? 0;
@@ -121,6 +132,8 @@ export function mapWintToSalesInvoice(raw: Record<string, unknown>): SalesInvoic
   // negative total is the signal.
   const invoiceTypeCode = creditNoteTypeCode(false, total);
   const wintStatus = deriveWintInvoiceStatus(raw);
+  const status: InvoiceStatusCode =
+    invoiceTypeCode && wintStatus !== 'cancelled' && wintStatus !== 'draft' ? 'credited' : wintStatus;
 
   const rows = (raw['Rows'] as Record<string, unknown>[] | undefined) ?? [];
   const lines: SalesInvoiceLineDto[] = rows.map((row, idx) => {
@@ -157,7 +170,9 @@ export function mapWintToSalesInvoice(raw: Record<string, unknown>): SalesInvoic
 
   return {
     id: String(raw['Id'] ?? ''),
-    invoiceNumber: String(raw['SerialNumber'] ?? raw['Id'] ?? ''),
+    // WINT's own number; an unnumbered draft gets none, never WINT's record
+    // id (dto.ts salesDocumentNumber, issue #51).
+    invoiceNumber: salesDocumentNumber(wintSerialNumber(raw), raw['Id'], status),
     // WINT's list item has no separate invoice-date field: PostingDate is the
     // date the invoice was posted/issued.
     issueDate: dateOnly(raw['PostingDate']) ?? '',
@@ -165,7 +180,7 @@ export function mapWintToSalesInvoice(raw: Record<string, unknown>): SalesInvoic
     deliveryDate: dateOnly(raw['DeliveryDate']),
     invoiceTypeCode,
     currencyCode: currency,
-    status: invoiceTypeCode && wintStatus !== 'cancelled' && wintStatus !== 'draft' ? 'credited' : wintStatus,
+    status,
     supplier: buildParty(''),
     customer: buildParty(
       (raw['CustomerName'] ?? '') as string,

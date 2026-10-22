@@ -19,6 +19,7 @@ import { CheckCircle2, AlertTriangle } from 'lucide-react'
 import type { LineDimensions } from '@/components/bookkeeping/payment-line-dimensions'
 import type { PaymentLinePayload, PaymentPreviewLine } from '@/components/bookkeeping/payment-preview-lines'
 import { ORE_ROUNDING_ACCOUNT, parseDecimalInput } from '@/lib/money'
+import { PAYMENT_FEE_ACCOUNT } from '@/lib/bookkeeping/payment-fee'
 import type { TransactionWithInvoice } from './transaction-types'
 
 interface DuplicateCandidate {
@@ -77,6 +78,15 @@ interface MatchPreview {
    * empty, since the route books the match only with an account named).
    */
   overpayment?: { excess: number; accounts: string[]; account: string | null } | null
+  /**
+   * Customer match only: a SEK payment a krona or more short of what the
+   * invoice still owes, by less than a tenth: possibly a payment provider's
+   * fee taken from its payout (crm#1364). `account` is the fee account the
+   * preview was asked for, null until the user names it. `required`: the
+   * payment cannot be booked as a partial instead (kontantmetoden, never
+   * booked), so without the fee there are no rows.
+   */
+  payment_fee?: { fee: number; account: string | null; required: boolean } | null
 }
 
 export interface ConfirmOpts {
@@ -91,6 +101,10 @@ export interface ConfirmOpts {
   // route books exactly that or refuses (MATCH_OVERPAYMENT_CHANGED).
   overpayment_account?: string
   overpayment_amount?: number
+  // The payment provider's fee the preview booked on 6570: the route books
+  // exactly that or refuses (MATCH_PAYMENT_FEE_CHANGED).
+  fee_account?: string
+  fee_amount?: number
 }
 
 interface InvoiceMatchDialogProps {
@@ -180,8 +194,12 @@ export default function InvoiceMatchDialog({
   const [overpaymentAccount, setOverpaymentAccount] = useState<string | null>(null)
   // A pick belongs to one transaction and invoice: never carry it to another,
   // where it would book that match's excess without the user choosing.
+  // The fee account the user named for a payout short of the invoice: never
+  // preselected either, since it settles the invoice in full.
+  const [feeAccount, setFeeAccount] = useState<string | null>(null)
   useEffect(() => {
     setOverpaymentAccount(null)
+    setFeeAccount(null)
   }, [transactionId, invoiceId])
 
   useEffect(() => {
@@ -191,12 +209,14 @@ export default function InvoiceMatchDialog({
       stopEditing()
       setManualRate('')
       setOverpaymentAccount(null)
+      setFeeAccount(null)
       return
     }
     let cancelled = false
     const previewUrl = isCustomerInvoice && invoiceId
       ? `/api/transactions/${transactionId}/match-invoice/preview?invoice_id=${invoiceId}` +
-        (overpaymentAccount ? `&overpayment_account=${overpaymentAccount}` : '')
+        (overpaymentAccount ? `&overpayment_account=${overpaymentAccount}` : '') +
+        (feeAccount ? `&fee_account=${feeAccount}` : '')
       : isSupplierInvoice && supplierInvoiceId
         ? `/api/transactions/${transactionId}/match-supplier-invoice/preview?supplier_invoice_id=${supplierInvoiceId}`
         : null
@@ -256,6 +276,7 @@ export default function InvoiceMatchDialog({
     targetBlocked,
     uiLocale,
     overpaymentAccount,
+    feeAccount,
     stopEditing,
   ])
 
@@ -322,11 +343,15 @@ export default function InvoiceMatchDialog({
     const overpaymentPayload = placed?.account
       ? { overpayment_account: placed.account, overpayment_amount: placed.excess }
       : {}
+    // The fee account and the fee the preview booked them with.
+    const fee = isCustomerInvoice ? preview?.payment_fee : null
+    const feePayload = fee?.account ? { fee_account: fee.account, fee_amount: fee.fee } : {}
     onConfirm({
       ...(opts ?? {}),
       ...(linesPayload ? { lines: linesPayload } : {}),
       ...manualRatePayload,
       ...overpaymentPayload,
+      ...feePayload,
     })
   }
 
@@ -334,6 +359,10 @@ export default function InvoiceMatchDialog({
   // preview has no rows and the route would refuse the match.
   const customerOverpayment = isCustomerInvoice ? (preview?.overpayment ?? null) : null
   const overpaymentUnplaced = !!customerOverpayment && !customerOverpayment.account
+  // A payout short of the invoice by what could be the payment provider's
+  // fee; unplaced while the match books nothing without it.
+  const customerFee = isCustomerInvoice ? (preview?.payment_fee ?? null) : null
+  const feeUnplaced = !!customerFee && customerFee.required && !customerFee.account
 
   const matchTitle = isSupplierInvoice ? t('title_supplier') : t('title_customer')
   const matchDescription = targetBlocked
@@ -579,6 +608,59 @@ export default function InvoiceMatchDialog({
                               {isRounding
                                 ? t('customer_overpayment_hint_3740')
                                 : t('customer_overpayment_hint_2420')}
+                            </span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+              }
+
+              // The payout is short of the invoice by what could be the
+              // payment provider's fee (crm#1364): ask whether it is, instead
+              // of warning about a partial the user may not mean.
+              if (customerFee) {
+                const options = customerFee.required ? [PAYMENT_FEE_ACCOUNT] : [null, PAYMENT_FEE_ACCOUNT]
+                return (
+                  <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5 text-attn" />
+                      <div className="text-sm space-y-1">
+                        <p className="font-medium">
+                          {t('payment_fee_title', { amount: formatCurrency(customerFee.fee, 'SEK') })}
+                        </p>
+                        <p className="text-muted-foreground">{t('payment_fee_description')}</p>
+                        {customerFee.required && (
+                          <p className="text-muted-foreground">{t('payment_fee_required_note')}</p>
+                        )}
+                      </div>
+                    </div>
+                    <div
+                      role="radiogroup"
+                      aria-label={t('payment_fee_choose')}
+                      className="grid gap-2 sm:grid-cols-2"
+                    >
+                      {options.map((account) => {
+                        const selected = feeAccount === account
+                        return (
+                          <button
+                            key={account ?? 'partial'}
+                            type="button"
+                            role="radio"
+                            aria-checked={selected}
+                            onClick={() => setFeeAccount(account)}
+                            disabled={isConfirming}
+                            className={cn(
+                              'rounded-lg border p-3 text-left text-sm transition-colors',
+                              selected ? 'border-foreground bg-secondary' : 'border-border hover:bg-secondary/60',
+                            )}
+                          >
+                            <span className="block font-medium">
+                              {account ? t('payment_fee_option_fee') : t('payment_fee_option_partial')}
+                            </span>
+                            <span className="block text-muted-foreground">
+                              {account ? t('payment_fee_hint_fee') : t('payment_fee_hint_partial')}
                             </span>
                           </button>
                         )
@@ -845,8 +927,8 @@ export default function InvoiceMatchDialog({
             {!targetBlocked && (preview || (previewFailure && !invoiceRateMissing)) && (
               <PaymentPreviewLinesCard
                 editor={editor}
-                lines={preview && !overpaymentUnplaced ? preview.lines : null}
-                canEdit={!!preview && !overpaymentUnplaced}
+                lines={preview && !overpaymentUnplaced && !feeUnplaced ? preview.lines : null}
+                canEdit={!!preview && !overpaymentUnplaced && !feeUnplaced}
                 disabled={isConfirming}
               >
                 {/* Prefer the route's own structured message (resolved through
@@ -864,6 +946,9 @@ export default function InvoiceMatchDialog({
                 )}
                 {overpaymentUnplaced && (
                   <p className="text-sm text-muted-foreground">{t('customer_overpayment_choose_first')}</p>
+                )}
+                {feeUnplaced && (
+                  <p className="text-sm text-muted-foreground">{t('payment_fee_choose_first')}</p>
                 )}
               </PaymentPreviewLinesCard>
             )}
@@ -914,7 +999,10 @@ export default function InvoiceMatchDialog({
               // A customer overpayment books only on the account the user
               // picked, and only once the preview shows that account's rows.
               (!!customerOverpayment &&
-                (!customerOverpayment.account || customerOverpayment.account !== overpaymentAccount))
+                (!customerOverpayment.account || customerOverpayment.account !== overpaymentAccount)) ||
+              // The fee books only once the preview shows the user's choice,
+              // and a required one only once it is named.
+              (!!customerFee && (feeUnplaced || (customerFee.account ?? null) !== feeAccount))
             }
           >
             {isConfirming ? t('confirming') : t('confirm_match')}

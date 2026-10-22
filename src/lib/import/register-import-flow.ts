@@ -67,3 +67,23 @@ export function countMatchedRows(
 ): number {
   return rows.filter((r) => r.duplicate_match !== null || !!r.confirmed_duplicate_of).length
 }
+
+/**
+ * The review step's sentence about rows it cannot import: how many, and the
+ * first problem with its line in the file. The parser's errors name the column
+ * and the value, so a wrong column reads as one on the page instead of behind
+ * a hover on every red row (PH 204). Null when every row is valid.
+ */
+export function invalidRowsNoticeParams(
+  rows: readonly { is_valid: boolean; validation_errors: readonly string[]; row_index?: number }[],
+): { count: number; row: number; error: string } | null {
+  const invalid = rows.filter((r) => !r.is_valid)
+  if (invalid.length === 0) return null
+  const first = invalid[0]
+  return {
+    count: invalid.length,
+    // The header is line 1, so the first data row is line 2.
+    row: first.row_index ?? rows.indexOf(first) + 2,
+    error: first.validation_errors[0] ?? '',
+  }
+}

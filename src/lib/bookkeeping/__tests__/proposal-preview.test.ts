@@ -141,7 +141,7 @@ describe('category bookings', () => {
   it('balances 12 % amounts whose moms is an exact half öre (net by subtraction)', () => {
     const tx = sek(-102.06)
     const lines = shown(tx, buildMappingResultFromCategory('expense_representation', tx, true, 'enskild_firma'))
-    expect(shape(lines)).toEqual(rows([['debet', '6071', 91.12], ['debet', '2641', 10.94], ['kredit', '1930', 102.06, 's']]))
+    expect(shape(lines)).toEqual(rows([['debet', '6072', 91.12], ['debet', '2641', 10.94], ['kredit', '1930', 102.06, 's']]))
   })
 
   it('books a refund to a customer with the revenue and utgående moms debited', () => {

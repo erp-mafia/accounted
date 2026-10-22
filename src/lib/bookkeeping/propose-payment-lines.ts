@@ -339,8 +339,12 @@ function proposeCashLines(
   entityType: EntityType,
   roundingDelta = 0,
 ): FormLine[] {
+  // Kontantmetoden only reaches here: a ROT/RUT invoice books its first step.
   const build = (knownBankSek?: number) =>
-    buildInvoiceCashLines(invoice, entityType, invoice.customer_name ?? undefined, paymentAccount, knownBankSek)
+    buildInvoiceCashLines(
+      invoice, entityType, invoice.customer_name ?? undefined, paymentAccount, knownBankSek, undefined,
+      { deferDeductionShare: true },
+    )
   let { lines } = build()
   if (roundingDelta !== 0) {
     // The builder's first line is the settlement debit: the customer share.

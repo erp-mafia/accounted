@@ -180,6 +180,26 @@ describe('POST /api/import/sie/parse', () => {
     expect(body.validation.warnings.some((w) => w.includes('felaktigt teckenkodad'))).toBe(false)
   })
 
+  // #58 (1000-row cap): the preview read the stored mappings unpaged, so past
+  // PostgREST's first 1,000 rows a remembered mapping fell back to a
+  // suggestion, and the dashboard sends the previewed mappings to execute.
+  it('keeps a remembered mapping that sits past the first 1,000 stored rows', async () => {
+    reset()
+    const filler = Array.from({ length: 1000 }, (_, i) => ({
+      source_account: String(100000 + i), source_name: null, target_account: '1930', confidence: 1, match_type: 'manual',
+    }))
+    enqueue({ data: filler }) // stored mappings, first page (full)
+    enqueue({ data: [{ source_account: '4056', source_name: null, target_account: '4010', confidence: 1, match_type: 'manual' }] })
+    enqueue({ data: [] }) // company chart
+    enqueue({ data: { id: 'p-2024' } }) // containing fiscal period
+
+    const response = await POST(fileRequest(CLEAN_SIE), emptyParams)
+    const body = (await response.json()) as { mappings: Array<{ sourceAccount: string; targetAccount: string; isOverride: boolean }> }
+
+    expect(response.status).toBe(200)
+    expect(body.mappings.find((m) => m.sourceAccount === '4056')).toMatchObject({ targetAccount: '4010', isOverride: true })
+  })
+
   // Queue order after the stored-mappings select from beforeEach:
   //   chart_of_accounts page (fetchAllRows), fiscal_periods containing,
   //   fiscal_periods overlapping, journal_entries (only when replaceable).

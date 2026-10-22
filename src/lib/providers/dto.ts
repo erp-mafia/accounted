@@ -181,6 +181,37 @@ export function creditNoteTypeCode(
 
 export type InvoiceStatusCode = 'draft' | 'sent' | 'booked' | 'paid' | 'overdue' | 'cancelled' | 'credited';
 
+/** The number a provider states for a document, trimmed; '' when it states none. */
+export function statedDocumentNumber(value: unknown): string {
+  return value == null ? '' : String(value).trim();
+}
+
+/**
+ * The invoice number of a provider's sales document, the one rule every
+ * sales mapper that keeps a record id beside the number shares (Bokio,
+ * Briox, WINT).
+ *
+ * A provider numbers a document when it is issued, so a draft may have none
+ * (Bokio: "generated at the time of publishing"; WINT: `SerialNumber` is
+ * nullable). The provider's record id is not an invoice number: substituting
+ * it put a UUID in "Fakturanummer" on every unnumbered Bokio draft
+ * (crm#1084), and a Briox or WINT id is an integer that reads as a number in
+ * the company's own series, which must stay one unbroken löpnummer run
+ * (ML 2023:200 17 kap. 24 § p. 2). Empty becomes NULL at the insert, which
+ * invoices_sent_requires_number allows for draft and cancelled; the record
+ * id stays on the DTO's `id`.
+ *
+ * Every other status requires a number, so an issued document that arrives
+ * without one keeps the record id: refused at the insert, it would not be
+ * imported at all.
+ */
+export function salesDocumentNumber(stated: unknown, recordId: unknown, status: InvoiceStatusCode): string {
+  const number = statedDocumentNumber(stated);
+  if (number) return number;
+  if (status === 'draft' || status === 'cancelled') return '';
+  return recordId == null ? '' : String(recordId);
+}
+
 export interface LegalMonetaryTotalDto {
   /**
    * Sum of the line amounts, excluding VAT.

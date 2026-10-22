@@ -69,7 +69,8 @@ const ACCOUNT_NAMES: Record<string, string> = {
   '5990': 'Konferens',
 
   // Other external expenses (6xxx)
-  '6071': 'Representation',
+  '6071': 'Representation, avdragsgill',
+  '6072': 'Representation, ej avdragsgill',
   '6110': 'Kontorsförbrukning',
   '6200': 'Telefon & internet',
   '6211': 'Mobiltelefon',
@@ -86,7 +87,6 @@ const ACCOUNT_NAMES: Record<string, string> = {
   '7210': 'Löner tjänstemän',
   '7410': 'Pensionsförsäkring',
   '7610': 'Utbildning',
-  '7622': 'Intern representation',
   '7960': 'Valutakursförluster',
   '8310': 'Ränteintäkter',
   '8410': 'Räntekostnader',

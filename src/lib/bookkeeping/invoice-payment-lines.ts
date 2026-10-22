@@ -63,6 +63,7 @@ import { resolveSekAmount } from './currency-utils'
 import { coerceDimensionsBag } from './dimension-resolver'
 import { fxDifferenceLine, oreRoundingLine, oreSettlementResidual } from './ore-rounding'
 import { overpaymentAllowed, overpaymentExcess, overpaymentLine } from './overpayment'
+import { paymentFeeAllowed, paymentFeeLine, paymentFeeShortfall } from './payment-fee'
 
 const TWO_DP = (n: number): number => Math.round(n * 100) / 100
 
@@ -183,6 +184,14 @@ export interface PaymentClearingLines {
    * AR leg is the FULL remaining and the excess is credited to that account.
    */
   overpaymentSek: number
+  /**
+   * A payment provider's fee (SEK) booked on the caller's fee account:
+   * remainingSek − bankSek when that is a krona or more, under the fee cap,
+   * and the caller named an account allowed to take it (payment-fee.ts), else
+   * 0. When non-zero the AR leg is the FULL remaining and the fee is debited
+   * to that account (crm#1364).
+   */
+  feeSek: number
   lines: CreateJournalEntryLineInput[]
 }
 
@@ -249,6 +258,13 @@ export interface PaymentClearingLines {
  *   under its cap: see overpayment.ts), 1510 is credited the full remaining
  *   and the excess goes to that account. Without it the caller must have
  *   refused the overshoot (planInvoicePayment does) before building.
+ *
+ * # feeAccount
+ *   Pure SEK only, the mirror: when the bank moved a krona or more BELOW the
+ *   remaining (a payment provider's payout net of its fee) and this names an
+ *   account allowed to take the shortfall (6570 under its cap: see
+ *   payment-fee.ts), 1510 is credited the full remaining and the fee is
+ *   debited to that account. Without it the shortfall stays a partial.
  */
 export function buildInvoicePaymentClearingLines(
   tx: PaymentClearingTx,
@@ -265,6 +281,7 @@ export function buildInvoicePaymentClearingLines(
    */
   paymentAccount = '1930',
   overpaymentAccount?: string,
+  feeAccount?: string,
 ): PaymentClearingLines {
   // Bank-leg: actual SEK that hit the bank. resolveSekAmount returns the
   // raw amount for SEK txs and amount * exchange_rate for foreign txs
@@ -287,6 +304,7 @@ export function buildInvoicePaymentClearingLines(
   let fxDiffSek: number
   let oreRoundingSek = 0
   let overpaymentSek = 0
+  let feeSek = 0
 
   if (pureSek) {
     // A whole-krona bank settlement of an öre-bearing SEK invoice leaves a
@@ -295,12 +313,16 @@ export function buildInvoicePaymentClearingLines(
     const remainingSek = TWO_DP(invoice.remaining_amount ?? invoice.total - (invoice.paid_amount ?? 0))
     const oreDiff = oreSettlementResidual(remainingSek, bankSek)
     const excess = overpaymentExcess(remainingSek, bankSek)
+    const shortfall = paymentFeeShortfall(remainingSek, bankSek)
     if (oreDiff !== 0) {
       arSek = remainingSek
       oreRoundingSek = oreDiff
     } else if (excess !== 0 && overpaymentAccount && overpaymentAllowed(overpaymentAccount, excess)) {
       arSek = remainingSek
       overpaymentSek = excess
+    } else if (shortfall !== 0 && feeAccount && paymentFeeAllowed(feeAccount, shortfall, remainingSek)) {
+      arSek = remainingSek
+      feeSek = shortfall
     } else {
       arSek = bankSek
     }
@@ -382,8 +404,11 @@ export function buildInvoicePaymentClearingLines(
   if (overpaymentSek !== 0) {
     lines.push(overpaymentLine(overpaymentSek, overpaymentAccount!))
   }
+  if (feeSek !== 0) {
+    lines.push(paymentFeeLine(feeSek, feeAccount!))
+  }
 
-  return { bankSek, arSek, fxDiffSek, oreRoundingSek, overpaymentSek, lines }
+  return { bankSek, arSek, fxDiffSek, oreRoundingSek, overpaymentSek, feeSek, lines }
 }
 
 /**
@@ -420,6 +445,7 @@ export function buildInvoiceMatchClearingLines(
   paidInInvoiceCurrency: number | undefined,
   paymentAccount: string,
   overpaymentAccount?: string,
+  feeAccount?: string,
 ): { description: string; lines: CreateJournalEntryLineInput[] } {
   const description = invoiceMatchPaymentDescription(invoice)
   const { lines } = buildInvoicePaymentClearingLines(
@@ -429,6 +455,7 @@ export function buildInvoiceMatchClearingLines(
     paidInInvoiceCurrency,
     paymentAccount,
     overpaymentAccount,
+    feeAccount,
   )
   const bag = coerceDimensionsBag(invoice.default_dimensions)
   if (bag) {

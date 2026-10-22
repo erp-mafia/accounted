@@ -32,6 +32,7 @@ import { DIMENSION_RULE_POLICY } from '@/lib/bookkeeping/dimension-rule-policy'
 import { countCalendarMonths, invoiceMonthOnlyAccrualRows } from '@/lib/bookkeeping/accruals/compute'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { CUSTOMER_ADVANCE_ACCOUNT } from '@/lib/bookkeeping/overpayment'
+import { PAYMENT_FEE_ACCOUNT } from '@/lib/bookkeeping/payment-fee'
 import {
   isAccruedCostAccount,
   periodEndsBeforeInvoiceMonth,
@@ -2773,17 +2774,26 @@ export const MatchInvoiceSchema = matchInvoiceFields.refine(forceNamesCandidate,
  * customer's excess of a krona or more is booked (lib/bookkeeping/
  * overpayment.ts) and the excess the dialog showed, which the route books or
  * refuses with MATCH_OVERPAYMENT_CHANGED, as the agent match does at approval
- * (crm#1045). Not on the v1 body: that route does not book an overpayment.
+ * (crm#1045). The mirror for a payout short of the invoice by the payment
+ * provider's fee: fee_account and the fee the dialog showed
+ * (lib/bookkeeping/payment-fee.ts, MATCH_PAYMENT_FEE_CHANGED, crm#1364).
+ * Not on the v1 body: that route books neither.
  */
 export const DashboardMatchInvoiceSchema = matchInvoiceFields
   .extend({
     overpayment_account: z.enum([CUSTOMER_ADVANCE_ACCOUNT, ORE_ROUNDING_ACCOUNT]).optional(),
     overpayment_amount: z.number().positive().optional(),
+    fee_account: z.enum([PAYMENT_FEE_ACCOUNT]).optional(),
+    fee_amount: z.number().positive().optional(),
   })
   .refine(forceNamesCandidate, FORCE_NAMES_CANDIDATE_ISSUE)
   .refine((v) => (v.overpayment_account === undefined) === (v.overpayment_amount === undefined), {
     message: 'overpayment_account and overpayment_amount are sent together',
     path: ['overpayment_amount'],
+  })
+  .refine((v) => (v.fee_account === undefined) === (v.fee_amount === undefined), {
+    message: 'fee_account and fee_amount are sent together',
+    path: ['fee_amount'],
   })
 
 /**
@@ -3350,6 +3360,15 @@ export const UpdateSettingsSchema = z.object({
   ),
   invoice_payment_accounts: InvoicePaymentAccountsSchema.optional(),
   accounting_method: AccountingMethodSchema.optional(),
+  // Not a column: why accounting_method changes in a fiscal year that already
+  // has posted verifikat (a correction, lib/company/accounting-method-change.ts).
+  // Recorded in audit_log, never written to company_settings.
+  accounting_method_correction_reason: z
+    .string()
+    .trim()
+    .min(10, 'Skälet ska vara minst 10 tecken')
+    .max(500, 'Skälet får vara max 500 tecken')
+    .optional(),
   // #967: register/send invoices without booking; booking is a separate step.
   defer_invoice_booking: z.boolean().optional(),
   invoice_prefix: z.string().nullable().optional(),
@@ -4450,6 +4469,11 @@ const EmployeeSchemaPatchBase = EmployeeSchemaBase.extend({
   // the employee unchanged (crm#1133). NOT NULL in the database: null is
   // refused.
   is_active: z.boolean(),
+  // Request only, never a column (lib/salary/employee-update-rules.ts,
+  // SAMMALONEREGELN_KOLLEKTIVAVTAL_KEY): true confirms that a central
+  // kollektivavtal keeps sammalöneregeln although employment_degree changes
+  // (semesterlagen 2 a §, 16 § andra stycket 3-4). Recorded in audit_log.
+  sammaloneregeln_kollektivavtal_confirmed: z.boolean(),
 })
 
 export const UpdateEmployeeSchema = EmployeeSchemaPatchBase.partial().superRefine((data, ctx) => {
@@ -5094,6 +5118,18 @@ export const SalaryEmployeeOverrideSchema = z
     {
       message: 'Ange en anledning till justeringen (krävs av BFL för manuella skattejusteringar)',
       path: ['reason'],
+    },
+  )
+  // An avgiftsunderlag of 0 kr declares the pay in the AGI as no underlag
+  // for socialavgifter (FK131-FK134, e.g. under 1 000 kr in the year, SAL
+  // 2 kap. 14 §), so Skatteverket charges no avgift on it: an avgift above
+  // 0 next to it would be booked and filed in FK487 for nothing (crm#1372).
+  .refine(
+    (data) => data.avgifter_basis_override !== 0 || data.avgifter_amount_override === 0,
+    {
+      message:
+        'Avgiftsunderlag 0 kr betyder att ersättningen inte är underlag för arbetsgivaravgifter. Sätt även arbetsgivaravgifterna till 0 kr.',
+      path: ['avgifter_amount_override'],
     },
   )
 

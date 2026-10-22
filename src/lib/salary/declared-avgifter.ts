@@ -311,9 +311,12 @@ export interface DeclaredAvgifterRunRow {
  *  - F-skatt rows contribute nothing, overrides included (isFSkattStatus);
  *  - a row with an avgifter_amount_override contributes that manual amount
  *    (with its override-coalesced basis);
- *  - every other row computes from the FILED basis: an
+ *  - every other row computes from the FILED basis: a partial
  *    avgifter_basis_override never reaches the IU fields, so Skatteverket
- *    computes from the filed underlag regardless.
+ *    computes from the filed underlag regardless. (A basis override of 0
+ *    does reach the IU, as pay that is no underlag for socialavgifter,
+ *    FK131-FK134, and is only saved or filed together with an amount
+ *    override of 0: crm#1372.)
  */
 export function declaredAvgifterForRun(
   rows: DeclaredAvgifterRunRow[],

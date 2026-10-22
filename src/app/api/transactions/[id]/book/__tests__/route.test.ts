@@ -86,6 +86,19 @@ async function useRealGuard() {
   mockAssertBookable.mockImplementation(actual.assertTransactionBookable)
 }
 
+// The company's VAT account classification, read by the importmoms guard
+// only when a line can carry importmoms (#83). BAS map only by default.
+const mockFetchDynamicVatAccounts = vi.fn()
+vi.mock('@/lib/reports/vat-revenue-accounts', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/reports/vat-revenue-accounts')>()),
+  fetchDynamicVatAccounts: (...args: unknown[]) => mockFetchDynamicVatAccounts(...args),
+}))
+const noCompanyVatClassification = () => ({
+  accounts: [], mappingByAccount: new Map(), explicitAccounts: new Set(),
+  rateByAccount: new Map(), staticRateByAccount: new Map(),
+  rcBasisRateByAccount: new Map(), unconfiguredRevenueAccounts: new Map(),
+})
+
 import { POST } from '../route'
 import { recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
 
@@ -118,6 +131,7 @@ describe('POST /api/transactions/[id]/book', () => {
     mockAppendProcessingHistory.mockResolvedValue('evt-1')
     mockReverseOrphanedJournalEntry.mockResolvedValue(undefined)
     mockAssertBookable.mockResolvedValue({ ok: true })
+    mockFetchDynamicVatAccounts.mockResolvedValue(noCompanyVatClassification())
   })
 
   it('returns 401 when not authenticated', async () => {
@@ -541,6 +555,60 @@ describe('POST /api/transactions/[id]/book', () => {
     expect(body.error.code).toBe('TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT')
     expect(body.error.details.accountNumber).toBe('1931')
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  // #83: a company's own mall put the fiktiv moms on 2615 (importmoms, ruta
+  // 60) beside a cost account outside ruta 50, so the verifikat fed ruta 60
+  // with no base and Skatteverket refused the declaration (FK006).
+  it('returns 400 IMPORT_VAT_WITHOUT_BASE for importmoms with no ruta 50 line, before any draft', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: -1000, journal_entry_id: null })
+    enqueue({ data: tx, error: null }) // fetch transaction
+
+    const request = createMockRequest('/api/transactions/tx-1/book', {
+      method: 'POST',
+      body: {
+        ...validBody,
+        lines: [
+          { account_number: '4548', debit_amount: 1000, credit_amount: 0 },
+          { account_number: '2645', debit_amount: 250, credit_amount: 0 },
+          { account_number: '2615', debit_amount: 0, credit_amount: 250 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; details: { import_vat_accounts: string[] } }
+    }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('IMPORT_VAT_WITHOUT_BASE')
+    expect(body.error.details.import_vat_accounts).toEqual(['2615'])
+    expect(body.error.message).toContain('4545, 4546 eller 4547')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockFetchDynamicVatAccounts).toHaveBeenCalledWith(expect.anything(), 'company-1')
+  })
+
+  it('books importmoms carried by its base on 4545', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: -1000, journal_entry_id: null })
+    enqueue({ data: tx, error: null }) // fetch transaction
+    mockCreateJournalEntry.mockResolvedValue(makeJournalEntry({ id: 'je-new' }))
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // link update
+
+    const lines = [
+      { account_number: '4545', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '2645', debit_amount: 250, credit_amount: 0 },
+      { account_number: '2615', debit_amount: 0, credit_amount: 250 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+    ]
+    const request = createMockRequest('/api/transactions/tx-1/book', {
+      method: 'POST',
+      body: { ...validBody, lines },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+
+    expect(response.status).toBe(200)
+    expect(mockCreateJournalEntry.mock.calls[0][3].lines).toEqual(lines)
   })
 
   it('re-points a stranded row onto the live sibling when its single bank line is that ledger (#1643 round 4)', async () => {

@@ -6,6 +6,18 @@ vi.mock('@/lib/operations/inbox-pair-guard', () => ({
   refuseWhenPairBooked: (...args: unknown[]) => refuseWhenPairBookedMock(...args),
 }))
 
+// The company's VAT account classification, read by the importmoms guard
+// (lib/bookkeeping/import-vat-base.ts, tested there) only when a line can
+// carry importmoms: the BAS map alone here.
+vi.mock('@/lib/reports/vat-revenue-accounts', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/reports/vat-revenue-accounts')>()),
+  fetchDynamicVatAccounts: vi.fn(async () => ({
+    accounts: [], mappingByAccount: new Map(), explicitAccounts: new Set(),
+    rateByAccount: new Map(), staticRateByAccount: new Map(),
+    rcBasisRateByAccount: new Map(), unconfiguredRevenueAccounts: new Map(),
+  })),
+}))
+
 import { invoiceInboxExtension } from '@/extensions/general/invoice-inbox'
 import {
   createQueuedMockSupabase,
@@ -203,6 +215,33 @@ describe('POST /items/:id/book-direct', () => {
     expect(body.error.message).toContain('A66')
     expect(body.error.details).toMatchObject({ sibling_item_id: 'item-receipt', journal_entry_id: 'je-66' })
     expect(refuseWhenPairBookedMock).toHaveBeenCalledWith(supabase, 'company-1', 'item-1')
+    expect(createJournalEntryMock).not.toHaveBeenCalled()
+    expect(linkToJournalEntryMock).not.toHaveBeenCalled()
+  })
+
+  // #83: a company's own mall with its fiktiv moms on 2615 beside an EU
+  // purchase on 4515 booked importmoms with no ruta 50 line.
+  it('refuses importmoms with no ruta 50 line before anything is posted', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ id: 'item-1', document_id: 'doc-1' }) })
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: {
+        ...VALID_BODY,
+        lines: [
+          { account_number: '4515', debit_amount: 1000, credit_amount: 0 },
+          { account_number: '2645', debit_amount: 250, credit_amount: 0 },
+          { account_number: '2615', debit_amount: 0, credit_amount: 250 },
+          { account_number: '2820', debit_amount: 0, credit_amount: 1000 },
+        ],
+      },
+      searchParams: { _id: 'item-1' },
+    })
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string; details: Record<string, unknown> } }>(await route.handler(request, buildCtx(supabase)))
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('IMPORT_VAT_WITHOUT_BASE')
+    expect(body.error.details).toEqual({ import_vat_accounts: ['2615'] })
+    expect(body.error.message).toContain('2614, 2624 eller 2634')
     expect(createJournalEntryMock).not.toHaveBeenCalled()
     expect(linkToJournalEntryMock).not.toHaveBeenCalled()
   })

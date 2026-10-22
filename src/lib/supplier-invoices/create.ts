@@ -27,6 +27,7 @@ import {
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { buildSupplierDescription } from '@/lib/bookkeeping/supplier-invoice-description'
 import { registerExpenseClaim } from '@/lib/expenses/expense-claims-service'
+import { fetchChartVatTreatments } from '@/lib/bookkeeping/chart-vat-treatments'
 import { ownerFallbackName, resolveExpenseLiabilityAccount } from '@/lib/expenses/payer'
 import {
   ACCRUAL_RELEASE_FAILED_WARNING,
@@ -36,7 +37,7 @@ import { assertAccruedCostLinesBookable } from '@/lib/bookkeeping/accruals/accru
 import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
-import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
+import { supplierInvoiceBooksOnRegistration } from '@/lib/bookkeeping/booking-mode'
 import { sellerVatIsCost } from '@/lib/bookkeeping/vat-registration'
 import { supplierInvoiceStornoBusinessEvent } from '@/lib/bookkeeping/supplier-invoice-business-events'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -62,6 +63,7 @@ import {
 import { assessRegisteredPayee, payeeAlertWarning } from '@/lib/payments/payee-registration'
 import type { Logger } from '@/lib/logger'
 import { rejectSupersededInboxConversions } from '@/lib/pending-operations/supersede'
+import { checkAccountingMethod } from '@/lib/company/accounting-method'
 import type { Currency, EntityType, SupplierInvoice, SupplierInvoiceItem, SupplierInvoiceReverseChargeKind } from '@/types'
 import { loadEntryLines, recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
 import { passed, warned, type DecisionCheck } from '@/lib/suggestion-log/checks'
@@ -365,13 +367,6 @@ export async function createSupplierInvoice(
   )
   if (!reverseChargeKind.ok) return reverseChargeKind
 
-  if (paidPrivately && reverseCharge) {
-    // RC invoices come from registered businesses with formal invoices and
-    // go through normal AP. "Privately paid" only makes sense for
-    // out-of-pocket kvitton.
-    return invalid('paid_with_private_funds is not supported with reverse_charge')
-  }
-
   const hasAccrualItems = body.items.some(
     (item) => item.accrual_period_start && item.accrual_period_end,
   )
@@ -387,16 +382,25 @@ export async function createSupplierInvoice(
     return invalid('periodisering is not supported with paid_with_private_funds')
   }
 
-  const { data: settings } = await supabase
+  const settingsRead = await supabase
     .from('company_settings')
     .select('accounting_method, defer_invoice_booking, vat_registered')
     .eq('company_id', companyId)
     .maybeSingle()
-  const companySettings = settings as
+  // Fail closed (accounted#58): the method decides whether the registration
+  // books now, and vat_registered whether 2641 may be booked. A failed read
+  // used to mean "accrual, VAT-registered": a kontantmetod company's
+  // invoice was booked at registration with moms it may not deduct.
+  const method = checkAccountingMethod(settingsRead)
+  if (!method.ok) {
+    log.error('supplier invoice create refused: accounting method unavailable', method.error)
+    return { ok: false, code: method.code, details: method.details }
+  }
+  const companySettings = settingsRead.data as
     | { accounting_method?: string | null; defer_invoice_booking?: boolean | null; vat_registered?: boolean | null }
     | null
 
-  if (hasAccrualItems && (companySettings?.accounting_method || 'accrual') !== 'accrual') {
+  if (hasAccrualItems && method.accountingMethod !== 'accrual') {
     // Kontantmetoden recognises the cost at payment; periodisering only
     // exists under faktureringsmetoden. Reject loudly instead of silently
     // dropping the periods.
@@ -485,11 +489,17 @@ export async function createSupplierInvoice(
   const vatAmount = roundOre(items.reduce((sum, i) => sum + i.vat_amount, 0))
   const total = supplierInvoicePayableTotal(subtotal, vatAmount, reverseCharge)
 
-  // A verifikat dated invoice_date is posted now when the company books at
-  // registration or a person paid (the utlägg verifikat). Answer a locked
-  // date with a structured PERIOD_LOCKED instead of the trigger's generic
-  // error. The triggers stay authoritative; this is for the caller.
-  const booksOnRegistration = booksInvoicesOnIssue(companySettings)
+  // A verifikat dated invoice_date is posted now when the invoice books at
+  // registration (faktureringsmetoden, or an EU goods acquisition under
+  // kontantmetoden: supplierInvoiceBooksOnRegistration) or a person paid (the
+  // utlägg verifikat). Answer a locked date with a structured PERIOD_LOCKED
+  // instead of the trigger's generic error. The triggers stay authoritative;
+  // this is for the caller.
+  const booksOnRegistration = supplierInvoiceBooksOnRegistration(
+    companySettings,
+    { reverse_charge: reverseCharge, reverse_charge_kind: reverseChargeKind.kind },
+    supplier.supplier_type as string | null,
+  )
   if (booksOnRegistration || paidPrivately) {
     const lockVerdict = await checkPeriodLock(supabase, companyId, body.invoice_date)
     if (lockVerdict.locked) {
@@ -634,11 +644,12 @@ export async function createSupplierInvoice(
     }
   }
 
-  // Representation (BAS 6070-6079): ingående moms is only deductible up to
-  // 300 SEK base/person per ML 8 kap. 1 §, and the income-tax deduction was
-  // abolished in 2017 (IL 16 kap. 2 §). The engine debits 2641 for the full
-  // VAT; a non-blocking warning lets the user adjust. Every registration
-  // path books that VAT, so every path warns.
+  // Representation (BAS 6070-6079): ingående moms is deductible on a base of
+  // at most 300 SEK excl. moms per person and occasion (ML 2023:200 13 kap.
+  // 24-25 §§; 300 is the base, not the deduction), and a meal lost its
+  // income-tax deduction in 2017 (IL 16 kap. 2 §). The engine debits 2641 for
+  // the full VAT; a non-blocking warning lets the user adjust. Every
+  // registration path books that VAT, so every path warns.
   const warnings: SupplierInvoiceWarning[] = []
   // Only an invoice someone will pay: a privately paid one is settled here.
   if (payeeAssessment.alert && !paidPrivately) warnings.push(payeeAlertWarning(payeeAssessment.alert))
@@ -646,15 +657,16 @@ export async function createSupplierInvoice(
     warnings.push({
       code: 'REPRESENTATION_VAT_CAP',
       message_sv:
-        'Representation (konto 6070-6079): ingående moms är endast avdragsgill ' +
-        'upp till 300 kr/person (ML 8 kap. 1 §) och kostnaden är inte ' +
-        'inkomstskattemässigt avdragsgill (IL 16 kap. 2 §). Justera bokföringen ' +
-        'manuellt om beloppet överstiger gränsen.',
+        'Representation (konto 6070-6079): ingående moms är avdragsgill på ett ' +
+        'underlag om högst 300 kr exkl. moms per person och tillfälle ' +
+        '(ML 13 kap. 24-25 §§), och en måltid är inte avdragsgill vid ' +
+        'inkomstbeskattningen (IL 16 kap. 2 §). Justera momsraden manuellt om ' +
+        'underlaget överstiger gränsen.',
       message_en:
-        'Representation (accounts 6070-6079): input VAT is only deductible up to ' +
-        'SEK 300 per person (ML 8 kap. 1 §) and the cost is not deductible for ' +
-        'income tax (IL 16 kap. 2 §). Adjust the booking by hand if the amount ' +
-        'exceeds the cap.',
+        'Representation (accounts 6070-6079): input VAT is deductible on a base ' +
+        'of at most SEK 300 excl. VAT per person and occasion (ML 13 kap. ' +
+        '24-25 §§), and a meal is not deductible for income tax (IL 16 kap. 2 §). ' +
+        'Adjust the VAT line by hand if the base exceeds the cap.',
     })
   }
 
@@ -760,11 +772,19 @@ export async function createSupplierInvoice(
         claimant_name: payer === 'owner' ? body.claimant_name?.trim() || ownerFallbackName(entityType) : undefined,
         document_id: documentId ?? undefined,
         inbox_item_id: inboxItem?.id,
+        // A reverse-charge invoice paid by a person (an EU SaaS on the
+        // owner's card, crm#1377) books the same fiktiv moms and basis pair
+        // as its registration verifikat would: who paid does not change who
+        // reports the moms.
         lines: buildSupplierInvoicePrivatelyPaidLines(
           invoice as SupplierInvoice,
           items as unknown as SupplierInvoiceItem[],
           liabilityAccount,
           claimDescription,
+          {
+            supplierType: supplier.supplier_type as string,
+            chartVatTreatments: reverseCharge ? await fetchChartVatTreatments(supabase, companyId) : undefined,
+          },
         ),
       })
     } catch (err) {
@@ -849,7 +869,8 @@ export async function createSupplierInvoice(
     // Faktureringsmetoden: the registration verifikat (debit expense +
     // 2641 / credit 2440) is posted with the row. Kontantmetoden books at
     // payment and defer_invoice_booking (#967) books through the explicit
-    // Bokför step, so neither posts here.
+    // Bokför step, so neither posts here; an EU goods acquisition under
+    // kontantmetoden does (ML 7 kap. 26 §, supplierInvoiceBookingMoment).
     let entryId: string | null = null
     try {
       const journalEntry = await createSupplierInvoiceRegistrationEntry(

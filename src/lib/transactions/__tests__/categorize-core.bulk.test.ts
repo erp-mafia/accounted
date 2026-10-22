@@ -289,8 +289,13 @@ describe('bulkBookMatchedInboxItems: skip classification (never errors)', () => 
 describe('bulkBookMatchedInboxItems: booking', () => {
   it('books a matched, unbooked item against its transaction', async () => {
     const supabase = queuedSupabase([
-      // 1. inbox item fetch → bookable
-      { data: { id: 'i1', matched_transaction_id: 'tx-1', created_journal_entry_id: null, created_supplier_invoice_id: null } },
+      // 1. inbox item fetch → bookable; its reading names an EU seller
+      {
+        data: {
+          id: 'i1', matched_transaction_id: 'tx-1', created_journal_entry_id: null, created_supplier_invoice_id: null,
+          extracted_data: { supplier: { vatNumber: 'DE123456789' } },
+        },
+      },
       // 2. transactions fetch (categorize core)
       { data: { id: 'tx-1', date: '2026-06-01', amount: -700.28, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
       // 3. company_settings
@@ -323,8 +328,8 @@ describe('bulkBookMatchedInboxItems: booking', () => {
       undefined,
       // company_settings.vat_registered as loaded: this settings row has none.
       null,
-      // No reverse-charge kind in bulk: the EU-services basis default applies.
-      undefined,
+      // The box the item's own seller gives: an EU service, ruta 21.
+      'eu_services',
     )
   })
 
@@ -433,6 +438,114 @@ describe('bulkBookMatchedInboxItems: booking', () => {
     expect(skipped).toEqual([{ item_id: 'i1', reason: 'not_matched' }])
     expect(booked).toEqual([{ item_id: 'i2', transaction_id: 'tx-2', journal_entry_id: 'je-1' }])
     expect(mockCreateJE).toHaveBeenCalledTimes(1)
+  })
+})
+
+// #58 "Bulk doors carry no box": under reverse charge each item books the box
+// its own seller and the shared category give (swedish-vat skill 2.1-2.3:
+// ruta 21 EU services, 22 services from outside the EU, 20 EU goods), and an
+// item whose box cannot be told is left out with the reason, never booked in
+// ruta 21 by default.
+describe('bulkBookMatchedInboxItems: the reverse-charge box per item', () => {
+  /** The categorize chain of one booked item after its inbox row (see the booking tests above). */
+  function bookedChain(txId: string) {
+    return [
+      { data: { id: txId, date: '2026-10-01', amount: -500, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
+      { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
+      { data: [] }, // resolveSettlementAccount: no enabled cash accounts -> 1930
+      { data: [{ id: 'fp-1' }] },
+      { data: [{ id: txId }], error: null },
+      { data: { document_id: null } }, // propagation: tx pin lookup
+      { data: [] }, // propagation: matched inbox items
+    ]
+  }
+  function item(id: string, txId: string, supplier: Record<string, string | null> | null, extra: Record<string, unknown> = {}) {
+    return {
+      data: {
+        id, matched_transaction_id: txId, created_journal_entry_id: null, created_supplier_invoice_id: null,
+        extracted_data: supplier ? { supplier } : null,
+        ...extra,
+      },
+    }
+  }
+  /** The reverse-charge kind each buildMappingResultFromCategory call received (its 8th argument). */
+  const kindsBooked = () => mockMapping.mock.calls.map((call) => call[7])
+
+  it('books a service from a US seller in ruta 22 (non_eu_services)', async () => {
+    const supabase = queuedSupabase([
+      item('i1', 'tx-1', { vatNumber: null, address: '1 Example Ave, Austin, TX 78701' }),
+      ...bookedChain('tx-1'),
+    ])
+    const { booked, skipped } = await bulkBookMatchedInboxItems(supabase, 'u1', 'c1', {
+      item_ids: ['i1'], category: 'expense_software', vat_treatment: 'reverse_charge',
+    })
+    expect(skipped).toEqual([])
+    expect(booked).toHaveLength(1)
+    expect(kindsBooked()).toEqual(['non_eu_services'])
+  })
+
+  it('books goods from an EU seller in ruta 20 (eu_goods)', async () => {
+    const supabase = queuedSupabase([item('i1', 'tx-1', { vatNumber: 'DE123456789' }), ...bookedChain('tx-1')])
+    const { booked } = await bulkBookMatchedInboxItems(supabase, 'u1', 'c1', {
+      item_ids: ['i1'], category: 'expense_equipment', vat_treatment: 'reverse_charge',
+    })
+    expect(booked).toHaveLength(1)
+    expect(kindsBooked()).toEqual(['eu_goods'])
+  })
+
+  it('skips an item whose seller country cannot be read, with the reason, and books nothing', async () => {
+    const supabase = queuedSupabase([item('i1', 'tx-1', { vatNumber: null, address: null })])
+    const { booked, skipped } = await bulkBookMatchedInboxItems(supabase, 'u1', 'c1', {
+      item_ids: ['i1'], category: 'expense_software', vat_treatment: 'reverse_charge',
+    })
+    expect(booked).toEqual([])
+    expect(skipped).toEqual([{ item_id: 'i1', reason: 'reverse_charge_box_unknown', detail: expect.stringMatching(/land går inte att läsa/) }])
+    expect(mockCreateJE).not.toHaveBeenCalled()
+    expect(mockMapping).not.toHaveBeenCalled()
+  })
+
+  it("reads a matched supplier card's foreign type when the reading names no country", async () => {
+    const supabase = queuedSupabase([
+      item('i1', 'tx-1', { vatNumber: null }, { matched_supplier_id: 'sup-1' }),
+      { data: { supplier_type: 'non_eu_business' } },
+      ...bookedChain('tx-1'),
+    ])
+    const { booked } = await bulkBookMatchedInboxItems(supabase, 'u1', 'c1', {
+      item_ids: ['i1'], category: 'expense_software', vat_treatment: 'reverse_charge',
+    })
+    expect(booked).toHaveLength(1)
+    expect(kindsBooked()).toEqual(['non_eu_services'])
+  })
+
+  it('books each item of a mixed run in its own box and leaves out the one it cannot place', async () => {
+    const supabase = queuedSupabase([
+      item('i-eu', 'tx-1', { vatNumber: 'IE1234567T' }),
+      ...bookedChain('tx-1'),
+      item('i-us', 'tx-2', { vatNumber: null, iban: null, address: '1 Example Ave, Austin, TX 78701' }),
+      ...bookedChain('tx-2'),
+      item('i-unknown', 'tx-3', null),
+      item('i-se', 'tx-4', { orgNumber: '556677-8899' }),
+    ])
+    const { booked, skipped } = await bulkBookMatchedInboxItems(supabase, 'u1', 'c1', {
+      item_ids: ['i-eu', 'i-us', 'i-unknown', 'i-se'], category: 'expense_software', vat_treatment: 'reverse_charge',
+    })
+    expect(booked.map((b) => b.item_id)).toEqual(['i-eu', 'i-us'])
+    expect(kindsBooked()).toEqual(['eu_services', 'non_eu_services'])
+    expect(skipped.map((s) => [s.item_id, s.reason])).toEqual([
+      ['i-unknown', 'reverse_charge_box_unknown'],
+      ['i-se', 'reverse_charge_box_unknown'],
+    ])
+    expect(skipped[1].detail).toMatch(/Säljaren är svensk/)
+  })
+
+  it('reads no box for a treatment other than reverse charge', async () => {
+    const supabase = queuedSupabase([item('i1', 'tx-1', null), ...bookedChain('tx-1')])
+    const { booked, skipped } = await bulkBookMatchedInboxItems(supabase, 'u1', 'c1', {
+      item_ids: ['i1'], category: 'expense_software', vat_treatment: 'standard_25',
+    })
+    expect(skipped).toEqual([])
+    expect(booked).toHaveLength(1)
+    expect(kindsBooked()).toEqual([undefined])
   })
 })
 

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { aliasPatterns, postgrestFilterValue, type RuleMode, type RuleRow } from './model'
 
 /**
@@ -39,25 +40,37 @@ function fromLegacyRow(row: Record<string, unknown>): RuleRow {
   } as unknown as RuleRow
 }
 
+/**
+ * Every rule of the company, paged: one company holds more than PostgREST's
+ * 1,000-row page, and the list ended at an arbitrary 1,000. id breaks the
+ * occurrence_count/updated_at ties so the pages never overlap or skip.
+ */
 export async function listRules(supabase: SupabaseClient, companyId: string): Promise<RuleRow[]> {
-  const { data, error } = await supabase
-    .from('categorization_templates')
-    .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, corrections, confidence, last_seen_date, source, mode, paused_at, created_at, updated_at')
-    .eq('company_id', companyId)
-    .order('occurrence_count', { ascending: false })
-    .order('updated_at', { ascending: false })
-  if (error && error.code === UNDEFINED_COLUMN) {
-    const legacy = await supabase
-      .from('categorization_templates')
-      .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, confidence, last_seen_date, source, is_active, created_at, updated_at')
-      .eq('company_id', companyId)
-      .order('occurrence_count', { ascending: false })
-      .order('updated_at', { ascending: false })
-    if (legacy.error) throw legacy.error
-    return (legacy.data ?? []).map((row) => fromLegacyRow(row as Record<string, unknown>))
+  try {
+    return await fetchAllRows<RuleRow>(({ from, to }) =>
+      supabase
+        .from('categorization_templates')
+        .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, corrections, confidence, last_seen_date, source, mode, paused_at, created_at, updated_at')
+        .eq('company_id', companyId)
+        .order('occurrence_count', { ascending: false })
+        .order('updated_at', { ascending: false })
+        .order('id')
+        .range(from, to),
+    )
+  } catch (error) {
+    if ((error as { code?: string }).code !== UNDEFINED_COLUMN) throw error
+    const legacy = await fetchAllRows<Record<string, unknown>>(({ from, to }) =>
+      supabase
+        .from('categorization_templates')
+        .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, confidence, last_seen_date, source, is_active, created_at, updated_at')
+        .eq('company_id', companyId)
+        .order('occurrence_count', { ascending: false })
+        .order('updated_at', { ascending: false })
+        .order('id')
+        .range(from, to),
+    )
+    return legacy.map(fromLegacyRow)
   }
-  if (error) throw error
-  return (data ?? []) as unknown as RuleRow[]
 }
 
 export async function getRule(supabase: SupabaseClient, companyId: string, id: string): Promise<RuleRow | null> {

@@ -13,7 +13,7 @@
  * where the invoice line named its own). The engine wrappers that book these
  * lines stay in ./invoice-entries.
  */
-import { buildCurrencyMetadata, resolveSekAmountOrNull } from './currency-utils'
+import { buildCurrencyMetadata, isLedgerCurrency, resolveSekAmountOrNull } from './currency-utils'
 import { resolveBookingAccount } from './accruals/account-suggestions'
 import {
   coerceDimensionsBag,
@@ -28,6 +28,7 @@ import { creditNatural } from './line-side'
 import { InvoiceFxRateMissingError, getOutputVatAccount, getRevenueAccount } from './invoice-accounts'
 import { oreRoundingLine, oreSettlementResidual } from './ore-rounding'
 import { overpaymentAllowed, overpaymentExcess, overpaymentLine } from './overpayment'
+import { paymentFeeAllowed, paymentFeeLine, paymentFeeShortfall } from './payment-fee'
 import { equalOre, roundOre, sumOre } from '@/lib/money'
 import { cashProRataUnsupportedReason, type CashProRataUnsupportedReason } from './booking-mode'
 import type {
@@ -299,6 +300,44 @@ export function generatePerRateLines(
 }
 
 /**
+ * Each item's skattereduktion in the invoice currency (0 for an item without
+ * one), as generateRotRutLines books it.
+ *
+ * The amounts the invoice stores (invoice_items.deduction_amount, computed
+ * server-side by computeLineDeductions when it was saved, never taken from
+ * the client): the figures its header, its PDF and the Skatteverket claim
+ * carry, so 1513 and the 1510 share follow them exactly. An invoice saved
+ * before the whole-krona rule keeps booking the öre amounts it was issued
+ * with, and a kreditfaktura (buildCreditNoteItem copies the original's
+ * amounts) reverses exactly what the original booked. Rows never saved
+ * (the editor's draft voucher preview) carry none and get what saving
+ * would store.
+ */
+function lineDeductionAmounts(
+  items: InvoiceItem[],
+  currency: string | null | undefined,
+  side: 'debit' | 'credit',
+): number[] {
+  const stored = items.every((item) => !item.deduction_type || item.deduction_amount != null)
+  return stored
+    ? items.map((item) => Number(item.deduction_amount ?? 0))
+    : computeLineDeductions(
+        items.map((item) => ({
+          unit_price: side === 'credit' ? Math.abs(item.unit_price) : item.unit_price,
+          quantity: side === 'credit' ? Math.abs(item.quantity) : item.quantity,
+          // The deduction base is the NET line total (rabatt reduces what the
+          // customer pays).
+          discount_percent: item.discount_percent ?? 0,
+          deduction_type: item.deduction_type ?? null,
+          // Grön teknik's rate follows the installation type.
+          work_type: item.work_type,
+          vat_rate: item.vat_rate,
+        })),
+        { currency },
+      )
+}
+
+/**
  * Generate skattereduktion (ROT/RUT-avdrag, grön teknik) debit lines from
  * invoice items.
  *
@@ -334,32 +373,7 @@ export function generateRotRutLines(
 
   let totalSek = 0
 
-  // The amounts the invoice stores (invoice_items.deduction_amount, computed
-  // server-side by computeLineDeductions when it was saved, never taken from
-  // the client): the figures its header, its PDF and the Skatteverket claim
-  // carry, so 1513 and the 1510 share follow them exactly. An invoice saved
-  // before the whole-krona rule keeps booking the öre amounts it was issued
-  // with, and a kreditfaktura (buildCreditNoteItem copies the original's
-  // amounts) reverses exactly what the original booked. Rows never saved
-  // (the editor's draft voucher preview) carry none and get what saving
-  // would store.
-  const stored = items.every((item) => !item.deduction_type || item.deduction_amount != null)
-  const amounts = stored
-    ? items.map((item) => Number(item.deduction_amount ?? 0))
-    : computeLineDeductions(
-        items.map((item) => ({
-          unit_price: side === 'credit' ? Math.abs(item.unit_price) : item.unit_price,
-          quantity: side === 'credit' ? Math.abs(item.quantity) : item.quantity,
-          // The deduction base is the NET line total (rabatt reduces what the
-          // customer pays).
-          discount_percent: item.discount_percent ?? 0,
-          deduction_type: item.deduction_type ?? null,
-          // Grön teknik's rate follows the installation type.
-          work_type: item.work_type,
-          vat_rate: item.vat_rate,
-        })),
-        { currency },
-      )
+  const amounts = lineDeductionAmounts(items, currency, side)
 
   for (const [index, item] of items.entries()) {
     if (!item.deduction_type) continue
@@ -383,6 +397,197 @@ export function generateRotRutLines(
   }
 
   return { lines, totalSek: Math.round(totalSek * 100) / 100 }
+}
+
+/**
+ * Skatteverket's share of a ROT/RUT or grön teknik invoice, taken off the
+ * invoice's own lines for bokslutsmetodens two steps.
+ *
+ * Bokslutsmetoden reports moms when payment is received (ML 2023:200 7 kap.
+ * 16 §), and the skattereduktion is the part of the price Skatteverket pays,
+ * so it is received only when the payout arrives. Skatteverket ("Så fungerar
+ * rotavdraget", Momsmetoder): a company with bokslutsmetoden reports the moms
+ * in two steps, moms on what the customer paid when the customer pays, and
+ * "momsen på rotavdraget" when the payout from Skatteverket has arrived. The
+ * försäljning behind that moms (its beskattningsunderlag, ruta 05) waits
+ * with it.
+ *
+ * Each deduction line's share is its deduction (kronor, exactly as the 1513
+ * leg books it) split at the line's own momssats: moms = deduction * sats /
+ * (100 + sats) rounded to the öre, revenue the rest, as Skatteverket computes
+ * the moms on the deduction (3 750 kr at 25 % holds 750 kr moms).
+ * customerItems are the items with that share taken out, deductionItems one
+ * item per deduction line holding only the share. The per-rate builder books
+ * both exactly as it books the whole invoice, so per account the two add up,
+ * to the öre, to the faktureringsmetod registration
+ * (buildInvoiceRegistrationLines). A kreditfaktura's rows carry the credit's
+ * sign, and so do both halves.
+ *
+ * Null when the invoice books in one step: no deduction, a foreign currency
+ * (the deduction is a kronor amount; ROT/RUT is never invoiced in another
+ * currency), or a deduction line without its own momssats or with a
+ * deduction above the line's price (data the split cannot honour).
+ */
+export interface DeductionShareSplit {
+  customerItems: InvoiceItem[]
+  deductionItems: InvoiceItem[]
+  /** The deduction in kronor (a magnitude): what the payout covers in full. */
+  deductionSek: number
+}
+
+/** The revenue and moms inside a deduction (a magnitude) at a momssats. */
+function deductionShareParts(amount: number, vatRate: number): { revenue: number; vat: number } {
+  const vat = roundOre((amount * vatRate) / (100 + vatRate))
+  return { revenue: roundOre(amount - vat), vat }
+}
+
+/** The item holding only `amount` (a magnitude) of a deduction line's price. */
+function deductionShareItem(item: InvoiceItem, amount: number, sign: 1 | -1): InvoiceItem {
+  const { revenue, vat } = deductionShareParts(amount, item.vat_rate)
+  return {
+    ...item,
+    quantity: sign,
+    unit_price: revenue,
+    discount_percent: 0,
+    line_total: sign * revenue,
+    vat_amount: sign * vat,
+    deduction_amount: amount,
+  }
+}
+
+/** The sign of an item's price: a kreditfaktura's rows are negative. */
+function itemSign(item: InvoiceItem): 1 | -1 {
+  return Number(item.line_total ?? 0) + Number(item.vat_amount ?? 0) < 0 ? -1 : 1
+}
+
+export function splitDeductionShare(
+  items: InvoiceItem[] | undefined,
+  currency: string | null | undefined,
+): DeductionShareSplit | null {
+  if (!items || items.length === 0) return null
+  if (!isLedgerCurrency(currency)) return null
+  const net = items.reduce((sum, item) => sum + Number(item.line_total ?? 0) + Number(item.vat_amount ?? 0), 0)
+  const amounts = lineDeductionAmounts(items, currency, net < 0 ? 'credit' : 'debit')
+
+  const customerItems: InvoiceItem[] = []
+  const deductionItems: InvoiceItem[] = []
+  let deductionSek = 0
+  for (const [index, item] of items.entries()) {
+    const amount = item.deduction_type ? roundOre(Math.abs(Number(amounts[index] ?? 0))) : 0
+    if (!(amount > 0)) {
+      customerItems.push(item)
+      continue
+    }
+    if (item.line_type === 'text' || typeof item.vat_rate !== 'number' || !Number.isFinite(item.vat_rate)) {
+      return null
+    }
+    const sign = itemSign(item)
+    const gross = Math.abs(Number(item.line_total ?? 0) + Number(item.vat_amount ?? 0))
+    if (amount > roundOre(gross)) return null
+    const share = deductionShareItem(item, amount, sign)
+    deductionItems.push(share)
+    customerItems.push({
+      ...item,
+      line_total: roundOre(Number(item.line_total) - share.line_total),
+      vat_amount: roundOre(Number(item.vat_amount ?? 0) - share.vat_amount),
+      deduction_type: null,
+      deduction_amount: 0,
+    })
+    deductionSek = roundOre(deductionSek + amount)
+  }
+  if (deductionItems.length === 0) return null
+  return { customerItems, deductionItems, deductionSek }
+}
+
+/**
+ * The deduction items scaled to what Skatteverket paid (`paidSek`, a
+ * magnitude): its beslut can approve less than the deduction (delvis
+ * beviljad). The paid kronor are spread over the lines in proportion to
+ * their deduction, the öre left by rounding on the largest, and each line
+ * splits its part at its own momssats. The whole deduction or more returns
+ * the items as they are.
+ */
+export function scaleDeductionItems(deductionItems: InvoiceItem[], paidSek: number): InvoiceItem[] {
+  const amounts = deductionItems.map((item) => roundOre(Number(item.deduction_amount ?? 0)))
+  const total = sumOre(amounts)
+  const paid = roundOre(Math.max(0, paidSek))
+  if (paid >= total) return deductionItems
+  const shares = amounts.map((amount) => (total > 0 ? roundOre((amount * paid) / total) : 0))
+  const residual = roundOre(paid - sumOre(shares))
+  if (residual !== 0 && shares.length > 0) {
+    let largest = 0
+    amounts.forEach((amount, i) => {
+      if (amount > amounts[largest]) largest = i
+    })
+    shares[largest] = roundOre(shares[largest] + residual)
+  }
+  return deductionItems
+    .map((item, i) => (shares[i] > 0 ? deductionShareItem(item, shares[i], itemSign(item)) : null))
+    .filter((item): item is InvoiceItem => item !== null)
+}
+
+/** 'ROT-avdrag', 'RUT-avdrag', 'skattereduktion grön teknik', or 'skattereduktion' for a mix. */
+function deductionNoun(items: InvoiceItem[]): string {
+  const types = new Set(items.map((item) => item.deduction_type).filter((type) => !!type))
+  if (types.size === 1) {
+    const [only] = [...types]
+    return DEDUCTION_TYPE_LABELS[only as keyof typeof DEDUCTION_TYPE_LABELS]?.noun ?? 'skattereduktion'
+  }
+  return 'skattereduktion'
+}
+
+/**
+ * The försäljning and utgående moms of Skatteverket's share (the second
+ * step of splitDeductionShare), for the share it paid (`paidSek`; omitted:
+ * the whole deduction). Credit lines on the invoice's own revenue and moms
+ * accounts and dimensions, exactly the part the kontantmetod payment entry
+ * left out. Null when the invoice books in one step.
+ */
+export function buildDeductionRecognitionLines(
+  invoice: InvoiceCashLinesSource,
+  entityType: EntityType,
+  paidSek?: number,
+): { lines: CreateJournalEntryLineInput[]; totalSek: number } | null {
+  const split = splitDeductionShare(invoice.items, invoice.currency)
+  if (!split) return null
+  const items = paidSek == null ? split.deductionItems : scaleDeductionItems(split.deductionItems, paidSek)
+  if (items.length === 0) return { lines: [], totalSek: 0 }
+  const label = deductionNoun(split.deductionItems)
+  const lines = generatePerRateLines(
+    items, invoice.vat_treatment, entityType, invoiceTag(invoice), 'SEK', null,
+    {
+      defaultDimensions: coerceDimensionsBag(invoice.default_dimensions),
+      goodsDeliveryCountry: invoice.delivery_country,
+    },
+  )
+    .filter((line) => line.debit_amount !== 0 || line.credit_amount !== 0)
+    .map((line) => ({ ...line, line_description: `${line.line_description}, ${label}` }))
+  const totalSek = roundOre(lines.reduce((sum, line) => sum + line.credit_amount - line.debit_amount, 0))
+  return { lines, totalSek }
+}
+
+/**
+ * The year-end carry of Skatteverket's share alone, for a kontantmetod
+ * invoice the customer paid in the year while the payout was still to come
+ * (BFL 5 kap 2 §; ML 2023:200 7 kap. 16 §: moms on fordringar unpaid at the
+ * beskattningsår's end belongs to its last period): the 1513 fordran per
+ * deduction line against the share's försäljning and moms. Together with
+ * the payment entry it is the faktureringsmetod registration less the 1510
+ * the customer already paid, so the payout after it clears 1513 like any
+ * fakturamodellen claim. Null when the invoice books in one step.
+ */
+export function buildDeductionCarryLines(
+  invoice: InvoiceCashLinesSource,
+  entityType: EntityType,
+): CreateJournalEntryLineInput[] | null {
+  const recognition = buildDeductionRecognitionLines(invoice, entityType)
+  if (!recognition || recognition.totalSek <= 0 || !invoice.items) return null
+  const receivable = generateRotRutLines(
+    invoice.items, invoiceTag(invoice), invoice.currency, invoice.exchange_rate,
+    coerceDimensionsBag(invoice.default_dimensions),
+  )
+  if (!equalOre(receivable.totalSek, recognition.totalSek)) return null
+  return [...receivable.lines, ...recognition.lines]
 }
 
 /**
@@ -534,12 +739,18 @@ export function buildInvoiceRegistrationLines(
  *
  * options.deferAccruals: as on buildInvoiceRegistrationLines (default true;
  * the kontantmetoden year-end carry passes false).
+ *
+ * options.deductionUnbooked: the original is a kontantmetod ROT/RUT invoice
+ * whose payment booked only the customer's share and whose payout has not
+ * booked Skatteverket's (isDeductionShareUnbooked). The credit then reverses
+ * what the ledger holds, the customer's share, back onto 1510 with no 1513
+ * leg: the share's revenue, moms and fordran were never booked.
  */
 export function buildCreditNoteLines(
   creditNote: InvoiceRegistrationLinesSource,
   entityType: EntityType,
   originalVoucherRef?: string,
-  options: { deferAccruals?: boolean } = {},
+  options: { deferAccruals?: boolean; deductionUnbooked?: boolean } = {},
 ): CreateJournalEntryLineInput[] {
   const lines: CreateJournalEntryLineInput[] = []
   const tag = invoiceTag(creditNote)
@@ -547,14 +758,16 @@ export function buildCreditNoteLines(
   // Dimensions PR7: the credit note's bag (copied from the original at credit
   // time) so the reversal nets against the same dimension cells in reports.
   const defaultDimensions = coerceDimensionsBag(creditNote.default_dimensions)
+  const split = options.deductionUnbooked ? splitDeductionShare(creditNote.items, creditNote.currency) : null
+  const creditItems = split ? split.customerItems : creditNote.items
 
   // Revenue + VAT lines per rate group, each on its natural side for the
   // credit note's signed amounts: the other side of the original's.
   const reversalLines: CreateJournalEntryLineInput[] = []
 
-  if (creditNote.items && creditNote.items.length > 0) {
+  if (creditItems && creditItems.length > 0) {
     const perRateLines = generatePerRateLines(
-      creditNote.items, creditNote.vat_treatment, entityType, tag,
+      creditItems, creditNote.vat_treatment, entityType, tag,
       creditNote.currency, creditNote.exchange_rate,
       // Credit-note items carry the original's accrual fields so the reversal
       // hits the same 29xx interim account; the original's schedule is
@@ -602,8 +815,11 @@ export function buildCreditNoteLines(
   lines.push(...reversalLines)
 
   // ROT/RUT reverses the exact receivable split used by the original invoice:
-  // 1510 for the customer portion and 1513 for the Skatteverket portion.
-  const rotRut = creditNote.items && creditNote.items.length > 0
+  // 1510 for the customer portion and 1513 for the Skatteverket portion
+  // (none when the share was never booked).
+  const rotRut = split
+    ? { lines: [] as CreateJournalEntryLineInput[], totalSek: 0 }
+    : creditNote.items && creditNote.items.length > 0
     ? generateRotRutLines(
         creditNote.items,
         tag,
@@ -731,11 +947,12 @@ function cashRecognitionLines(
  * recognised at payment.
  *
  *   Debit  1930 Företagskonto       [customer share, or the bank amount]
- *   Debit  1513 Skatteverket        [ROT/RUT deduction]  (if applicable)
+ *   Debit  1513 Skatteverket        [ROT/RUT deduction]  (one step only)
  *   Credit 30xx Försäljning         [subtotal per rate]
  *   Credit 26xx Utgående moms       [vat per rate]  (if applicable)
  *   Dr/Cr  3740 Öresavrundning      [bank vs share gap]  (if applicable)
  *   Credit 2420/3740 Överbetalning  [bank above share]   (if applicable)
+ *   Debit  6570 Avgift betaltjänst  [bank below share]   (if applicable)
  *
  * `knownBankSek`: the SEK that actually arrived (invoiceCashBankSek), when
  * the payment is matched to a bank row. On a SEK invoice a gap under one
@@ -749,6 +966,24 @@ function cashRecognitionLines(
  * customer share and this names an account allowed to take the excess
  * (overpayment.ts), 1930 takes what arrived and that account the excess.
  * Revenue and moms stay on the invoice amounts.
+ *
+ * `options.feeAccount`: when the row brought a krona or more BELOW the
+ * customer share and this names an account allowed to take the shortfall as
+ * the payment provider's fee (payment-fee.ts), 1930 takes what arrived (the
+ * payout) and that account the fee. Revenue and moms stay on the invoice
+ * amounts: the customer paid them in full (crm#1364). On a ROT/RUT invoice
+ * the fee is measured against the customer share only: it is a shortfall of
+ * the customer's payment, and Skatteverket's share (1513, or the second step
+ * below) is untouched.
+ *
+ * `options.deferDeductionShare` (kontantmetoden, i.e. bokslutsmetoden, only):
+ * a ROT/RUT or grön teknik invoice books its first step only, the försäljning
+ * and moms of what the customer pays, with no 1513 leg; Skatteverket's share
+ * is booked when its payout arrives (splitDeductionShare,
+ * buildDeductionRecognitionLines), or by the year-end carry while it is
+ * still to come. Off, the deduction is a 1513 fordran booked here with the
+ * full revenue and moms: right for a kontantfaktura under
+ * faktureringsmetoden, which reports the whole moms at issue.
  */
 export function buildInvoiceCashLines(
   invoice: InvoiceCashLinesSource,
@@ -757,6 +992,7 @@ export function buildInvoiceCashLines(
   settlementAccountNumber: string = '1930',
   knownBankSek?: number,
   overpaymentAccount?: string,
+  options: { deferDeductionShare?: boolean; feeAccount?: string } = {},
 ): { description: string; lines: CreateJournalEntryLineInput[] } {
   const lines: CreateJournalEntryLineInput[] = []
   const isForeign = invoice.currency !== 'SEK'
@@ -765,16 +1001,26 @@ export function buildInvoiceCashLines(
   // producer path for cash-method companies: same merge rules as issuance.
   const defaultDimensions = coerceDimensionsBag(invoice.default_dimensions)
 
+  // Bokslutsmetoden's first step: the customer's share only.
+  const split = options.deferDeductionShare ? splitDeductionShare(invoice.items, invoice.currency) : null
+
   // Credit lines: revenue + VAT per rate group (compute first to guarantee balance)
-  const creditLines = cashRecognitionLines(invoice, entityType, tag, defaultDimensions)
+  const creditLines = cashRecognitionLines(
+    split ? { ...invoice, items: split.customerItems } : invoice,
+    entityType, tag, defaultDimensions,
+  )
 
   // ROT/RUT-avdrag debit lines (1513 Skatteverket). On cash method the
   // bank account (1930) receives only the post-deduction amount in real
   // life; the rest comes from Skatteverket later. We model that by
-  // splitting the debit: 1930 = total - deduction, 1513 = deduction.
-  const rotRut = invoice.items && invoice.items.length > 0
-    ? generateRotRutLines(invoice.items, tag, invoice.currency, invoice.exchange_rate, defaultDimensions)
-    : { lines: [], totalSek: 0 }
+  // splitting the debit: 1930 = total - deduction, 1513 = deduction. Under
+  // the two steps nothing goes on 1513: the deduction is a fordran
+  // kontantmetoden does not book until the payout (or the year end).
+  const rotRut = split
+    ? { lines: [] as CreateJournalEntryLineInput[], totalSek: split.deductionSek }
+    : invoice.items && invoice.items.length > 0
+      ? generateRotRutLines(invoice.items, tag, invoice.currency, invoice.exchange_rate, defaultDimensions)
+      : { lines: [], totalSek: 0 }
 
   // Debit: Företagskonto, balance guarantee: debit = sum of credit lines
   // minus the ROT/RUT total which goes to 1513 instead.
@@ -789,7 +1035,11 @@ export function buildInvoiceCashLines(
   const excess = knowsBank ? overpaymentExcess(customerShare, knownBankSek) : 0
   const overpayment =
     excess !== 0 && overpaymentAccount && overpaymentAllowed(overpaymentAccount, excess) ? excess : 0
-  const bankAmount = roundOre(customerShare - oreGap + overpayment)
+  const { feeAccount } = options
+  const shortfall = knowsBank ? paymentFeeShortfall(customerShare, knownBankSek) : 0
+  const fee =
+    shortfall !== 0 && feeAccount && paymentFeeAllowed(feeAccount, shortfall, customerShare) ? shortfall : 0
+  const bankAmount = roundOre(customerShare - oreGap + overpayment - fee)
   lines.push({
     account_number: settlementAccountNumber,
     debit_amount: bankAmount,
@@ -805,6 +1055,9 @@ export function buildInvoiceCashLines(
   }
   if (overpayment !== 0) {
     lines.push({ ...overpaymentLine(overpayment, overpaymentAccount!), dimensions: defaultDimensions })
+  }
+  if (fee !== 0) {
+    lines.push({ ...paymentFeeLine(fee, feeAccount!), dimensions: defaultDimensions })
   }
 
   return {

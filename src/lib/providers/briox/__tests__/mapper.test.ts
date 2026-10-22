@@ -119,6 +119,58 @@ describe('Briox mapper: paid-status consistency', () => {
   });
 });
 
+/**
+ * Briox's record id is not an invoice number (issue #51, the rule Bokio got in
+ * crm#1084): an unnumbered draft or cancelled document imports with no
+ * number, the id stays on `id`, and a stated number is kept as stated.
+ */
+describe('Briox mapper: invoice number', () => {
+  const unbooked = { booked: false, invoice_number: null };
+
+  it('sales: a numbered invoice keeps its number', () => {
+    const dto = mapBrioxToSalesInvoice(salesRaw());
+    expect(dto.invoiceNumber).toBe('1001');
+    expect(dto.id).toBe('7');
+  });
+
+  it('sales: an unnumbered draft gets no number, the Briox id stays the reference', () => {
+    const dto = mapBrioxToSalesInvoice(salesRaw(unbooked));
+    expect(dto.status).toBe('draft');
+    expect(dto.invoiceNumber).toBe('');
+    expect(dto.id).toBe('7');
+    expect(mapBrioxToSalesInvoice(salesRaw({ booked: false, invoice_number: '  ' })).invoiceNumber).toBe('');
+    const { invoice_number: _omitted, ...withoutNumber } = salesRaw({ booked: false });
+    expect(mapBrioxToSalesInvoice(withoutNumber).invoiceNumber).toBe('');
+  });
+
+  it('sales: an unnumbered cancelled document gets no number either', () => {
+    const dto = mapBrioxToSalesInvoice(salesRaw({ ...unbooked, status: 'cancelled' }));
+    expect(dto.status).toBe('cancelled');
+    expect(dto.invoiceNumber).toBe('');
+  });
+
+  it('sales: a stated number is trimmed and stringified', () => {
+    expect(mapBrioxToSalesInvoice(salesRaw({ invoice_number: ' 1042 ' })).invoiceNumber).toBe('1042');
+    expect(mapBrioxToSalesInvoice(salesRaw({ invoice_number: 1042 })).invoiceNumber).toBe('1042');
+  });
+
+  it('sales: an issued invoice without a number keeps the id, which the insert could not store with none', () => {
+    const dto = mapBrioxToSalesInvoice(salesRaw({ invoice_number: null }));
+    expect(dto.status).toBe('booked');
+    expect(dto.invoiceNumber).toBe('7');
+  });
+
+  it('supplier: a numbered invoice keeps the supplier number', () => {
+    expect(mapBrioxToSupplierInvoice(supplierRaw()).invoiceNumber).toBe('L-55');
+  });
+
+  it('supplier: an invoice without a number gets none, never the Briox id', () => {
+    const dto = mapBrioxToSupplierInvoice(supplierRaw({ invoice_number: null }));
+    expect(dto.invoiceNumber).toBe('');
+    expect(dto.id).toBe('9');
+  });
+});
+
 describe('Briox mapper: line mapping', () => {
   it('maps invoice rows to lines with stringified account numbers', () => {
     const dto = mapBrioxToSalesInvoice(salesRaw({

@@ -67,6 +67,7 @@ import {
 import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
 import { createLogger } from '@/lib/logger'
+import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 import {
   firstRunDateOnOrAfter,
   getStockholmDateHour,
@@ -235,7 +236,7 @@ export interface ExecuteScheduleOptions {
  * warning the schedule shows.
  *
  * Idempotency: caller must check schedule.last_run_at >= today before calling
- * to prevent double-spawn on cron retries within the same UTC day.
+ * to prevent double-spawn on cron retries within the same Stockholm day.
  */
 export async function executeRecurringSchedule(
   supabase: SupabaseClient,
@@ -324,14 +325,12 @@ export async function executeRecurringSchedule(
   const uniqueRates = new Set(items.map(lineRate))
   const isMixedRate = uniqueRates.size > 1
 
-  // 3. Dates: invoice_date = today (UTC), due_date = +payment_terms_days.
-  const yyyy = today.getUTCFullYear().toString().padStart(4, '0')
-  const mm = (today.getUTCMonth() + 1).toString().padStart(2, '0')
-  const dd = today.getUTCDate().toString().padStart(2, '0')
-  const invoiceDate = `${yyyy}-${mm}-${dd}`
-  const due = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()))
-  due.setUTCDate(due.getUTCDate() + schedule.payment_terms_days)
-  const dueDate = due.toISOString().slice(0, 10)
+  // 3. Dates: invoice_date = Stockholm's calendar day of `today` (the real
+  //    instant of the run), due_date = +payment_terms_days. The UTC day lags
+  //    it until 01:00/02:00, so a run at 00:30 on the 1st would date the
+  //    invoice, its verifikat and {månad} in the previous month (#58).
+  const invoiceDate = todayIsoStockholm(today)
+  const dueDate = addDaysIso(invoiceDate, schedule.payment_terms_days)
 
   // Placeholders ({månad}, {år}, {periodstart} ...) resolve against the
   // invoice date and the schedule's current period; month names follow the

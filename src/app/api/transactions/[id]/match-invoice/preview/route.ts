@@ -29,6 +29,15 @@
  * or more goes, as the POST takes it. Without it such a match previews no
  * rows and `overpayment` names the excess and the accounts that may take it,
  * since the POST refuses it until the user picks one (crm#1045).
+ *
+ * `fee_account` (optional, 6570): the mirror for a SEK payment a krona or more
+ * SHORT of what the invoice owes, by less than the fee cap: the payment
+ * provider's fee withheld from its payout (crm#1364). `payment_fee` names the
+ * shortfall and the account the preview was asked for (null until the user
+ * names it). Without the account the match is a partial payment, except on a
+ * kontantmetod invoice that was never booked: the POST refuses that partial,
+ * so the preview shows no rows and `payment_fee.required` until the user
+ * names the fee.
  */
 import { NextResponse } from 'next/server'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
@@ -44,7 +53,12 @@ import {
   OVERPAYMENT_ACCOUNTS,
   overpaymentAllowed,
 } from '@/lib/bookkeeping/overpayment'
-import { ORE_ROUNDING_ACCOUNT } from '@/lib/money'
+import {
+  PAYMENT_FEE_ACCOUNT,
+  paymentFeeAllowed,
+  paymentFeeShortfall,
+} from '@/lib/bookkeeping/payment-fee'
+import { ORE_ROUNDING_ACCOUNT, roundOre } from '@/lib/money'
 import { planMatchPayment } from '@/lib/invoices/match-payment-plan'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
@@ -53,6 +67,7 @@ import { planSaleBeforeSettlement } from '@/lib/invoices/sale-first'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import type { CreateJournalEntryLineInput, Currency, EntityType, Invoice } from '@/types'
 import { z } from 'zod'
+import { requireAccountingMethod } from '@/lib/company/accounting-method'
 
 type PreviewLine = {
   account_number: string
@@ -66,6 +81,7 @@ type PreviewLine = {
 const QuerySchema = z.object({
   invoice_id: z.string().uuid(),
   overpayment_account: z.enum([CUSTOMER_ADVANCE_ACCOUNT, ORE_ROUNDING_ACCOUNT]).optional(),
+  fee_account: z.enum([PAYMENT_FEE_ACCOUNT]).optional(),
 })
 
 export const GET = withRouteContext(
@@ -78,9 +94,12 @@ export const GET = withRouteContext(
     const parsed = QuerySchema.safeParse({
       invoice_id: url.searchParams.get('invoice_id'),
       overpayment_account: url.searchParams.get('overpayment_account') ?? undefined,
+      fee_account: url.searchParams.get('fee_account') ?? undefined,
     })
     if (!parsed.success) {
-      const field = parsed.error.issues[0]?.path[0] === 'overpayment_account' ? 'overpayment_account' : 'invoice_id'
+      const issueField = parsed.error.issues[0]?.path[0]
+      const field =
+        issueField === 'overpayment_account' || issueField === 'fee_account' ? issueField : 'invoice_id'
       return errorResponseFromCode('VALIDATION_ERROR', log, {
         requestId,
         details: {
@@ -88,11 +107,13 @@ export const GET = withRouteContext(
           message:
             field === 'invoice_id'
               ? 'invoice_id must be a UUID'
-              : `overpayment_account must be ${CUSTOMER_ADVANCE_ACCOUNT} or ${ORE_ROUNDING_ACCOUNT}`,
+              : field === 'fee_account'
+                ? `fee_account must be ${PAYMENT_FEE_ACCOUNT}`
+                : `overpayment_account must be ${CUSTOMER_ADVANCE_ACCOUNT} or ${ORE_ROUNDING_ACCOUNT}`,
         },
       })
     }
-    const { invoice_id, overpayment_account } = parsed.data
+    const { invoice_id, overpayment_account, fee_account } = parsed.data
 
     // Data minimization (GDPR Art.5(1)(c)): amount_sek + exchange_rate are
     // pulled because buildInvoicePaymentClearingLines needs them for the
@@ -121,14 +142,16 @@ export const GET = withRouteContext(
       return errorResponseFromCode('MATCH_INVOICE_NOT_FOUND', log, { requestId })
     }
 
-    const { data: settings } = await supabase
+    const settingsRead = await supabase
       .from('company_settings')
       .select('accounting_method, entity_type')
       .eq('company_id', companyId)
       .single()
 
-    const accountingMethod = settings?.accounting_method || 'accrual'
-    const entityType: EntityType = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
+    // The preview shows the verifikat the match will post: an unreadable
+    // method refuses rather than show a shape it may not book (accounted#58).
+    const accountingMethod = requireAccountingMethod(settingsRead)
+    const entityType: EntityType = await resolveCompanyEntityType(supabase, companyId, settingsRead.data?.entity_type)
 
     // Same resolution as the POST handler: debit the cash account this
     // transaction is actually linked to, never a hardcoded 1930, so the
@@ -258,7 +281,11 @@ export const GET = withRouteContext(
     const pureSek = transaction.currency === 'SEK' && invoice.currency === 'SEK'
     const payment = fxRateUnavailable
       ? null
-      : planMatchPayment(invoice, paidAmount, { pureSek, overpaymentAccount: overpayment_account })
+      : planMatchPayment(invoice, paidAmount, {
+          pureSek,
+          overpaymentAccount: overpayment_account,
+          feeAccount: fee_account,
+        })
     // The excess of a SEK customer who paid a krona or more too much and has
     // not named its account yet: nothing is bookable until they do.
     let unplacedExcess: number | null = null
@@ -277,27 +304,53 @@ export const GET = withRouteContext(
           ? { excess: payment.overpayment.amount, account: payment.overpayment.account }
           : null
 
+    // A SEK payment short of the remaining amount by what could be the
+    // payment provider's fee, before the user named it one (crm#1364): the
+    // dialog offers the fee account.
+    let unplacedFee: number | null = null
+    if (payment?.ok && !payment.plan.isFullyPaid && pureSek && !fee_account) {
+      const remaining = roundOre(invoice.remaining_amount ?? invoice.total - (invoice.paid_amount || 0))
+      const shortfall = paymentFeeShortfall(remaining, paidAmount)
+      if (shortfall > 0 && paymentFeeAllowed(PAYMENT_FEE_ACCOUNT, shortfall, remaining)) unplacedFee = shortfall
+    }
+
     const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
-    const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash' && isFullyPaid
 
     // The POST handler rejects cash-method partials and part-paid completions
     // for never-booked invoices, so refuse to preview lines it will never
     // book. Skipped while the FX rate is unresolved: the dialog must still
     // render to collect a manual rate, and the POST recomputes the real check.
-    if (!fxRateUnavailable) {
-      const cashBlock = cashPartialBlockReason({
+    // A partial short by what could be the provider's fee is not refused: the
+    // fee account settles it in full, so the dialog asks for it first.
+    const blockWhen = (paysRemainingInFull: boolean) =>
+      cashPartialBlockReason({
         invoiceAlreadyBooked,
         accountingMethod,
         priorPaidAmount: (invoice as { paid_amount?: number | null }).paid_amount,
-        paysRemainingInFull: isFullyPaid,
+        paysRemainingInFull,
       })
-      if (cashBlock) {
+    // The payment could not be booked as the partial it is without the fee.
+    const partialRefused = !fxRateUnavailable && blockWhen(false) !== null && blockWhen(true) === null
+    let feeRequired = false
+    if (!fxRateUnavailable) {
+      const cashBlock = blockWhen(isFullyPaid)
+      if (cashBlock && unplacedFee !== null && partialRefused) {
+        feeRequired = true
+      } else if (cashBlock) {
         return errorResponseFromCode('INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED', log, {
           requestId,
           details: { reason: cashBlock },
         })
       }
     }
+    const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash' && (isFullyPaid || feeRequired)
+    const feeAccount = payment?.ok ? payment.fee?.account : undefined
+    const paymentFee =
+      payment?.ok && payment.fee
+        ? { fee: payment.fee.amount, account: payment.fee.account, required: partialRefused }
+        : unplacedFee !== null
+          ? { fee: unplacedFee, account: null, required: feeRequired }
+          : null
 
     // The POST books a deferring company's unbooked invoice first, through
     // the Bokför step: its dry run is every check that booking runs, and the
@@ -320,13 +373,14 @@ export const GET = withRouteContext(
     let booked: CreateJournalEntryLineInput[]
 
     if (useCashEntry) entryType = 'cash'
-    if (unplacedExcess !== null) {
+    if (unplacedExcess !== null || feeRequired) {
       booked = []
     } else if (useCashEntry) {
       booked = buildInvoiceCashLines(
         inv, entityType, inv.customer?.name ?? undefined, paymentAccount,
         invoiceCashBankSek(transaction),
         overpayment?.account ?? undefined,
+        { deferDeductionShare: accountingMethod === 'cash', feeAccount },
       ).lines
     } else {
       booked = buildInvoiceMatchClearingLines(
@@ -351,6 +405,7 @@ export const GET = withRouteContext(
           : undefined,
         paymentAccount,
         overpayment?.account ?? undefined,
+        feeAccount,
       ).lines
     }
 
@@ -384,6 +439,11 @@ export const GET = withRouteContext(
         accounts: OVERPAYMENT_ACCOUNTS.filter((account) => overpaymentAllowed(account, overpayment.excess)),
         account: overpayment.account,
       },
+      // A SEK payment short by what could be the payment provider's fee: the
+      // fee and the account named (null until then); `required` when the
+      // match cannot be booked as a partial payment instead (kontantmetoden,
+      // never booked): with no account named there are no rows above.
+      payment_fee: paymentFee,
     })
   },
 )

@@ -194,6 +194,42 @@ describe('commitPendingOperation: mark_invoice_paid state + invoice.paid', () =>
     })
   })
 
+  // accounted#58: the executor used to ignore the settings read's error and
+  // book as faktureringsmetoden, so a never-booked kontantmetod invoice got a
+  // 1510 clearing and its revenue and moms were never booked.
+  it('refuses an unreadable accounting method and hands the op back to pending', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        id: 'inv-1',
+        invoice_number: '2026001',
+        status: 'sent',
+        total: 525,
+        remaining_amount: 525,
+        paid_amount: null,
+        document_type: 'invoice',
+        journal_entry_id: null,
+        customer: { name: 'Test AB' },
+      },
+      error: null,
+    }) // invoice fetch
+    enqueue({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }) // settings
+    enqueue({ data: null, error: null }) // dispatcher: back to pending
+
+    const op = makePendingOp({ params: { invoice_id: 'inv-1', payment_date: '2026-03-30' } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.code).toBe('SETTINGS_ACCOUNTING_METHOD_UNREADABLE')
+    expect(result.operation_status).toBe('pending')
+    expect(settleInvoicePayment).not.toHaveBeenCalled()
+    expect(mockCreatePaymentEntry).not.toHaveBeenCalled()
+    expect(mockCreateCashEntry).not.toHaveBeenCalled()
+    expect(findCalls('invoice_payments', 'insert')).toHaveLength(0)
+    expect(findCalls('pending_operations', 'update').at(-1)?.[0]).toEqual({ status: 'pending' })
+  })
+
   // No partial-payment counterpart here: this executor always settles the full
   // remaining balance (no custom amount param), so newStatus is always 'paid'.
   // The partial case is pinned on the surfaces that can produce it, e.g.

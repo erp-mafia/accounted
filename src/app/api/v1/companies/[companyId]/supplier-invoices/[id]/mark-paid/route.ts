@@ -65,6 +65,7 @@ import {
   planRegistrationBeforeSettlement,
   type RegistrationFirstRefusal,
 } from '@/lib/supplier-invoices/registration-first'
+import { requireAccountingMethod } from '@/lib/company/accounting-method'
 
 const SI_PAID_RESPONSE_COLUMNS =
   'id, supplier_id, arrival_number, supplier_invoice_number, status, currency, total, paid_amount, remaining_amount, paid_at, payment_journal_entry_id, registration_journal_entry_id'
@@ -339,12 +340,15 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // Settings fetch hoisted ahead of the dry-run branch so the FX-required
     // check below fires in both preview and commit modes (and so dry-run can
     // surface the requirement before a caller learns it the hard way).
-    const { data: settings } = await ctx.supabase
-      .from('company_settings')
-      .select('accounting_method')
-      .eq('company_id', ctx.companyId!)
-      .maybeSingle()
-    const accountingMethod = (settings as { accounting_method?: string } | null)?.accounting_method ?? 'accrual'
+    // Fail closed (accounted#58): an unreadable method refuses instead of
+    // clearing 2440 for a kontantmetod invoice that was never booked.
+    const accountingMethod = requireAccountingMethod(
+      await ctx.supabase
+        .from('company_settings')
+        .select('accounting_method')
+        .eq('company_id', ctx.companyId!)
+        .maybeSingle(),
+    )
 
     // Route on the supplier invoice's actual booking state: if 2440 was
     // posted at receipt, payment must clear 2440 regardless of the current

@@ -26,6 +26,19 @@ vi.mock('@/lib/company/active-company', () => ({
   getActiveCompanyId: vi.fn(),
 }))
 
+// The company's Stripe subscription (crm#1373): its own unit is
+// lib/stripe/__tests__/company-subscription.test.ts. By default the company
+// never reached checkout, so Stripe is never asked.
+const { stripeClient, subscriptionMocks } = vi.hoisted(() => ({
+  stripeClient: { stripe: true },
+  subscriptionMocks: { readRef: vi.fn(), end: vi.fn() },
+}))
+vi.mock('@/lib/stripe/client', () => ({ getStripe: () => stripeClient }))
+vi.mock('@/lib/stripe/company-subscription', () => ({
+  readCompanyStripeRef: (...args: unknown[]) => subscriptionMocks.readRef(...args),
+  endCompanySubscriptions: (...args: unknown[]) => subscriptionMocks.end(...args),
+}))
+
 import { createServiceClient } from '@/lib/supabase/server'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { getActiveCompanyId } from '@/lib/company/active-company'
@@ -113,6 +126,8 @@ beforeEach(() => {
   eventBus.clear()
   delete mailService.endCompanyGrants
   mockGetActiveCompanyId.mockResolvedValue('c2')
+  subscriptionMocks.readRef.mockResolvedValue(null)
+  subscriptionMocks.end.mockResolvedValue([])
 })
 
 describe('POST /api/company/[id]/delete', () => {
@@ -400,6 +415,96 @@ describe('POST /api/company/[id]/delete', () => {
     expect(insertSpy).toHaveBeenCalledWith(
       expect.objectContaining({ table_name: 'zettle_connections' }),
     )
+  })
+})
+
+/**
+ * crm#1373: a deleted company's subscription went on charging every period,
+ * out of everyone's reach. The delete ends it first, and fails closed.
+ */
+describe('POST /api/company/[id]/delete: the company subscription', () => {
+  const REF = { customerId: 'cus_1', subscriptionId: 'sub_monthly' }
+
+  function archiveRequest() {
+    return createMockRequest('/api/company/c1/delete', {
+      method: 'POST',
+      body: { confirm_name: 'Acme AB' },
+    })
+  }
+
+  function ownerOfAcme() {
+    mockAuth('user-1')
+    return mockService({
+      companies: [{ data: { id: 'c1', name: 'Acme AB', archived_at: null }, error: null }],
+      company_members: [{ data: { role: 'owner' }, error: null }],
+    })
+  }
+
+  it('ends the subscription before the company is archived', async () => {
+    subscriptionMocks.readRef.mockResolvedValue(REF)
+    subscriptionMocks.end.mockResolvedValue(['sub_monthly'])
+    const { updateSpies } = ownerOfAcme()
+
+    const { status } = await parseJsonResponse(await POST(archiveRequest(), createMockRouteParams({ id: 'c1' })))
+
+    expect(status).toBe(200)
+    expect(subscriptionMocks.end).toHaveBeenCalledWith(stripeClient, 'c1', REF)
+    expect(subscriptionMocks.end.mock.invocationCallOrder[0]).toBeLessThan(
+      updateSpies.companies.mock.invocationCallOrder[0],
+    )
+  })
+
+  it('does not archive (502) when Stripe cannot end the subscription', async () => {
+    subscriptionMocks.readRef.mockResolvedValue(REF)
+    subscriptionMocks.end.mockRejectedValue(new Error('stripe down'))
+    const emitted: unknown[] = []
+    eventBus.on('company.deleted', (payload) => {
+      emitted.push(payload)
+    })
+    const { updateSpies } = ownerOfAcme()
+
+    const { status, body } = await parseJsonResponse<{ error: string }>(
+      await POST(archiveRequest(), createMockRouteParams({ id: 'c1' })),
+    )
+
+    expect(status).toBe(502)
+    expect(body.error).toContain('abonnemang')
+    expect(updateSpies.companies).not.toHaveBeenCalled()
+    expect(emitted).toHaveLength(0)
+  })
+
+  it('does not archive when the subscription row cannot be read', async () => {
+    subscriptionMocks.readRef.mockRejectedValue(new Error('db down'))
+    const { updateSpies } = ownerOfAcme()
+
+    const { status } = await parseJsonResponse(await POST(archiveRequest(), createMockRouteParams({ id: 'c1' })))
+
+    expect(status).toBe(502)
+    expect(updateSpies.companies).not.toHaveBeenCalled()
+  })
+
+  it('asks Stripe nothing for a company that never reached checkout', async () => {
+    const { updateSpies } = ownerOfAcme()
+
+    const { status } = await parseJsonResponse(await POST(archiveRequest(), createMockRouteParams({ id: 'c1' })))
+
+    expect(status).toBe(200)
+    expect(subscriptionMocks.end).not.toHaveBeenCalled()
+    expect(updateSpies.companies).toHaveBeenCalled()
+  })
+
+  it('ends nothing for someone who may not archive the company', async () => {
+    mockAuth('user-1')
+    mockService({
+      companies: [{ data: { id: 'c1', name: 'Acme AB', archived_at: null }, error: null }],
+      company_members: [{ data: { role: 'member' }, error: null }],
+    })
+
+    const { status } = await parseJsonResponse(await POST(archiveRequest(), createMockRouteParams({ id: 'c1' })))
+
+    expect(status).toBe(403)
+    expect(subscriptionMocks.readRef).not.toHaveBeenCalled()
+    expect(subscriptionMocks.end).not.toHaveBeenCalled()
   })
 })
 

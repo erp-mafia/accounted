@@ -11,6 +11,7 @@ import {
   resolveCompanyEntityType,
   resultClosingAccounts,
 } from '@/lib/company/entity-type'
+import { requireAccountingMethod } from '@/lib/company/accounting-method'
 import { NextResponse, after } from 'next/server'
 import {
   TASKS_EXTENSION_ID,
@@ -131,7 +132,13 @@ import {
   zodFieldIssues,
   type FieldIssue,
 } from '@/lib/errors/refusal'
-import { creditBooksOriginalFirst, creditNoteNeedsJournalEntry, invoiceBookingMoment } from '@/lib/bookkeeping/booking-mode'
+import {
+  cashPartialBlockReason,
+  creditBooksOriginalFirst,
+  creditNoteNeedsJournalEntry,
+  invoiceBookingMoment,
+  supplierInvoiceBookingMoment,
+} from '@/lib/bookkeeping/booking-mode'
 import {
   assertCanManageServiceAccounts,
   getServiceAccount,
@@ -407,6 +414,7 @@ import { resolveInboxPurchaseCategories } from '@/lib/categories/inbox-purchase-
 import { keepPersonChoices } from '@/lib/documents/person-corrections'
 import { CreditSupplierInvoiceInputSchema, creditSupplierInvoice } from '@/lib/supplier-invoices/credit'
 import { resolveSupplierInvoiceReverseCharge, resolveSupplierInvoiceReverseChargeKind } from '@/lib/supplier-invoices/create'
+import { inferVatTreatment } from '@/lib/supplier-invoices/form-payload'
 import { OperationError, throwOutcomeFailure } from '@/lib/operations/errors'
 import { requireCompanyAdmin } from '@/lib/operations/access'
 import { createSupplier } from '@/lib/suppliers/create-supplier'
@@ -472,8 +480,9 @@ import {
   type MatchableInvoice,
 } from '@/lib/invoices/invoice-matching'
 import { sanitizeDeliveryRecipientStatuses } from '@/lib/invoices/delivery-recipient-statuses'
-import { listRotRutCandidates, createRotRutPayoutRequest } from '@/lib/invoices/rot-rut-service'
+import { listRotRutCandidates, createRotRutPayoutRequest, archiveRotRutPayoutFile } from '@/lib/invoices/rot-rut-service'
 import { getPayoutOreRounding } from '@/lib/invoices/rot-rut-receivable'
+import { getPayoutRecognition } from '@/lib/invoices/rot-rut-payout-recognition'
 import { importRotRutBeslutFile } from '@/lib/invoices/rot-rut-beslut-import'
 import { computeRefusedShares } from '@/lib/invoices/rot-rut-refused-shares'
 import {
@@ -588,6 +597,14 @@ import {
   OVERPAYMENT_ROUNDING_MAX,
   isOverpaymentAccount,
 } from '@/lib/bookkeeping/overpayment'
+import {
+  PAYMENT_FEE_ACCOUNT,
+  PAYMENT_FEE_MAX_PERCENT,
+  isPaymentFeeAccount,
+  paymentFeeAllowed,
+  paymentFeeShortfall,
+} from '@/lib/bookkeeping/payment-fee'
+import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import { getEmailService } from '@/lib/email/service'
 import { hasCapability, capabilityBlockedError } from '@/lib/entitlements/has-capability'
 import { CAPABILITY, MCP_TOOL_CAPABILITY_MAP } from '@/lib/entitlements/keys'
@@ -1197,29 +1214,134 @@ function roundingCapRefusal(
 }
 
 /**
+ * fee_account named for a shortfall that cannot be a payment provider's fee:
+ * a cross-currency match, or a gap of PAYMENT_FEE_MAX_PERCENT or more of the
+ * remaining amount (crm#1364). That is a partial payment, so it stays one.
+ */
+function paymentFeeRefusal(
+  outcome: Extract<MatchPaymentPlanResult, { code: 'MATCH_PAYMENT_FEE_NOT_ALLOWED' }>,
+): Error {
+  const amount = (n: number) => `${AGENT_AMOUNT_FORMAT.format(n)} ${outcome.currency}`
+  const { transaction_amount: paid, remaining_amount: remaining, shortfall, reason } = outcome.details
+  const why =
+    reason === 'currency'
+      ? 'a fee is booked only when the transaction and the invoice are both in SEK'
+      : `a fee is under ${PAYMENT_FEE_MAX_PERCENT}% of the remaining amount, so a gap that size is a partial payment`
+  return codedRefusal(
+    'MATCH_PAYMENT_FEE_NOT_ALLOWED',
+    `Not staged: the transaction (${amount(paid)}) is ${amount(shortfall)} short of the invoice's remaining amount (${amount(remaining)}) and ${why}. ` +
+      'Call again without fee_account to book it as a partial payment, or check the payout with the user.',
+    { description: 'Do not retry with fee_account: call again without it, or ask the user what the gap is.' },
+  )
+}
+
+/**
+ * A kontantmetod invoice that was never booked settles only in one payment of
+ * its whole amount (cashPartialBlockReason): the approval refuses anything
+ * else with INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED, so staging refuses it
+ * first. When the gap could be a payment provider's fee withheld from its
+ * payout (crm#1364), the refusal names fee_account, which settles the invoice
+ * in full.
+ */
+function cashPartialRefusal(details: {
+  currency: string
+  paid: number
+  remaining: number
+  reason: 'partial_payment' | 'previously_partially_paid'
+  feeShaped: boolean
+}): Error {
+  const amount = (n: number) => `${AGENT_AMOUNT_FORMAT.format(n)} ${details.currency}`
+  const shortfall = roundOre(details.remaining - details.paid)
+  const state =
+    details.reason === 'partial_payment'
+      ? `the transaction (${amount(details.paid)}) does not settle the remaining ${amount(details.remaining)}`
+      : 'the invoice is already part-paid'
+  const manual = 'book the payment as its own verifikat with gnubok_create_voucher.'
+  const route = details.feeShaped
+    ? `If the ${amount(shortfall)} gap is a fee a payment provider (Stripe, PayPal, Klarna, SumUp) withheld from its payout, ` +
+      `call again with fee_account: "${PAYMENT_FEE_ACCOUNT}": the invoice settles in full, revenue and VAT on the full amount ` +
+      `and the fee on ${PAYMENT_FEE_ACCOUNT} (no VAT). Otherwise ${manual}`
+    : `Do not retry unchanged: ${manual}`
+  return codedRefusal(
+    'INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED',
+    `Not staged: under the cash method an invoice that was never booked settles only in one payment of its whole amount, and ${state}. ${route}`,
+    {
+      description: details.feeShaped
+        ? `Ask the user whether the gap is the payment provider's fee; if so call again with fee_account "${PAYMENT_FEE_ACCOUNT}".`
+        : 'Do not retry this match unchanged: book the payment with gnubok_create_voucher.',
+    },
+  )
+}
+
+/**
  * Stage-time twin of the commit executor's payment plan for a
  * transaction-to-invoice match: the same planTransactionInvoiceMatch call
  * (FX resolution, pure-SEK öre absorption, the remaining amount after earlier
  * partial payments), throwing the refusal the approval would answer with, so
  * no doomed op is staged (crm#253). The executor re-runs the plan as the hard
  * gate. A rate that is not available yet fails open: it can be published
- * before approval. Returns the excess the verifikat will book on the named
- * overpayment account, or null.
+ * before approval. Returns the plan (with the excess or the fee the verifikat
+ * will book on the named account), or null when the rate is not out yet.
  */
 async function refuseUnpayableMatch(
   supabase: SupabaseClient,
   transaction: MatchTransactionAmounts,
   invoice: MatchInvoiceAmounts & { status: string },
-  overpaymentAccount?: string,
-): Promise<{ account: string; amount: number } | null> {
-  const matchPlan = await planTransactionInvoiceMatch(supabase, transaction, invoice, { overpaymentAccount })
-  if (matchPlan.ok) return matchPlan.overpayment
+  accounts: { overpaymentAccount?: string; feeAccount?: string },
+): Promise<Extract<MatchPaymentPlanResult, { ok: true }> | null> {
+  const matchPlan = await planTransactionInvoiceMatch(supabase, transaction, invoice, accounts)
+  if (matchPlan.ok) return matchPlan
   if (matchPlan.code === 'MATCH_INVOICE_FX_RATE_UNAVAILABLE') return null
   if (matchPlan.code === 'MATCH_AMOUNT_EXCEEDS_REMAINING') {
     throw overpaymentRefusal(matchPlan, { invoiceStatus: invoice.status, transactionDate: transaction.date })
   }
   if (matchPlan.code === 'MATCH_OVERPAYMENT_ROUNDING_CAP') throw roundingCapRefusal(matchPlan)
+  if (matchPlan.code === 'MATCH_PAYMENT_FEE_NOT_ALLOWED') throw paymentFeeRefusal(matchPlan)
   throw registryError(matchPlan.code)
+}
+
+/**
+ * The stage-time twin of the executor's kontantmetoden guard: a never-booked
+ * invoice on a cash-method company settles only in one payment of its whole
+ * amount. The company's method is read only when the plan would be refused
+ * under it (a partial, or completing an invoice already part-paid), so a
+ * plain settlement costs no read.
+ */
+async function refuseCashPartialMatch(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoice: MatchInvoiceAmounts & { journal_entry_id?: string | null },
+  plan: Extract<MatchPaymentPlanResult, { ok: true }>,
+): Promise<void> {
+  const block = (accountingMethod: string) =>
+    cashPartialBlockReason({
+      invoiceAlreadyBooked: !!invoice.journal_entry_id,
+      accountingMethod,
+      priorPaidAmount: invoice.paid_amount,
+      paysRemainingInFull: plan.plan.isFullyPaid,
+    })
+  if (!block('cash')) return
+  const settingsRead = await supabase
+    .from('company_settings')
+    .select('accounting_method')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  // Fail closed (accounted#58): a failed read refuses the staging instead of
+  // passing a kontantmetod partial as faktureringsmetoden.
+  const reason = block(requireAccountingMethod(settingsRead))
+  if (!reason) return
+  const remaining = roundOre(invoice.remaining_amount ?? invoice.total - (invoice.paid_amount || 0))
+  // Pure SEK as the plan decides it: the same currency on both sides (no FX
+  // step), and that currency the ledger's.
+  const pureSek = !plan.fx.required && isLedgerCurrency(invoice.currency)
+  const fee = pureSek && reason === 'partial_payment' ? paymentFeeShortfall(remaining, plan.paidAmount) : 0
+  throw cashPartialRefusal({
+    currency: invoice.currency,
+    paid: plan.paidAmount,
+    remaining,
+    reason,
+    feeShaped: fee > 0 && paymentFeeAllowed(PAYMENT_FEE_ACCOUNT, fee, remaining),
+  })
 }
 
 /** The approval-card line naming where an overpayment is booked. */
@@ -1228,6 +1350,15 @@ function overpaymentStageNote(overpayment: { account: string; amount: number }):
   return overpayment.account === CUSTOMER_ADVANCE_ACCOUNT
     ? `Överskottet ${amount} bokförs på 2420 Förskott från kunder, en skuld till kunden som återbetalas eller kvittas mot en senare faktura.`
     : `Överskottet ${amount} bokförs som kronutjämning på 3740.`
+}
+
+/** The approval-card line naming the payment provider's fee and where it is booked. */
+function paymentFeeStageNote(fee: { account: string; amount: number }): string {
+  const amount = `${fee.amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kr`
+  return (
+    `Mellanskillnaden ${amount} är betaltjänstens avgift och bokförs på ${fee.account} Bankkostnader, utan moms (betaltjänst). ` +
+    'Fakturan blir betald i sin helhet. Bokför inte samma avgift igen från betaltjänstens faktura.'
+  )
 }
 
 export interface McpTool {
@@ -13276,8 +13407,13 @@ export const tools: McpTool[] = [
         // No description: the tools/list budget has no headroom, and the
         // MATCH_AMOUNT_EXCEEDS_REMAINING refusal teaches when to pass it.
         overpayment_account: { type: 'string', enum: ['2420', '3740'] },
+        // The mirror (crm#1364): a payout short of the invoice by the
+        // provider's fee. INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED teaches it.
+        fee_account: { type: 'string', enum: [PAYMENT_FEE_ACCOUNT] },
         force: { type: 'boolean', description: 'Override a MATCH_INVOICE_POSSIBLE_DUPLICATE refusal.' },
-        expected_journal_entry_id: { type: 'string', description: 'With force: the id the refusal named.' },
+        // No description: paid for fee_account below the tools/list ceiling;
+        // the refusal's remediation names the id to pass with force.
+        expected_journal_entry_id: { type: 'string' },
       },
       required: ['transaction_id', 'invoice_id'],
     },
@@ -13306,6 +13442,10 @@ export const tools: McpTool[] = [
         throw codedError('VALIDATION_ERROR', 'overpayment_account must be "2420" or "3740"')
       }
       const overpaymentAccount = args.overpayment_account as string | undefined
+      if (args.fee_account !== undefined && !isPaymentFeeAccount(args.fee_account)) {
+        throw codedError('VALIDATION_ERROR', `fee_account must be "${PAYMENT_FEE_ACCOUNT}"`)
+      }
+      const feeAccount = args.fee_account as string | undefined
 
       // Validate both exist and are matchable. amount_sek / exchange_rate feed
       // the duplicate guard: it compares this bank line against SEK ledger legs,
@@ -13368,8 +13508,12 @@ export const tools: McpTool[] = [
       // Overpayment guard at stage time (crm#253): a match the approval would
       // reject is refused here, with the amounts and the routes that do book
       // it, instead of being staged and failing at approval. With
-      // overpayment_account the excess is booked in the same verifikat.
-      const overpayment = await refuseUnpayableMatch(supabase, transaction, invoice, overpaymentAccount)
+      // overpayment_account the excess is booked in the same verifikat, with
+      // fee_account a payment provider's fee that left the payout short.
+      const matchPlan = await refuseUnpayableMatch(supabase, transaction, invoice, { overpaymentAccount, feeAccount })
+      if (matchPlan) await refuseCashPartialMatch(supabase, companyId, invoice, matchPlan)
+      const overpayment = matchPlan?.overpayment ?? null
+      const fee = matchPlan?.fee ?? null
 
       // A deferring company's unbooked invoice (defer_invoice_booking) gets
       // its sale booked first on approval, by the Bokför step: its dry run
@@ -13389,7 +13533,11 @@ export const tools: McpTool[] = [
           : duplicateCheckFailed
             ? DUPLICATE_CHECK_FAILED_NOTE
             : null
-      const complianceNote = [duplicateNote, overpayment ? overpaymentStageNote(overpayment) : null]
+      const complianceNote = [
+        duplicateNote,
+        overpayment ? overpaymentStageNote(overpayment) : null,
+        fee ? paymentFeeStageNote(fee) : null,
+      ]
         .filter((note): note is string => note !== null)
         .join(' ')
 
@@ -13410,6 +13558,7 @@ export const tools: McpTool[] = [
           ...(overpayment
             ? { overpayment_account: overpayment.account, overpayment_amount: overpayment.amount }
             : {}),
+          ...(fee ? { fee_account: fee.account, fee_amount: fee.amount } : {}),
         },
         preview: {
           transaction_description: txDesc,
@@ -13427,6 +13576,7 @@ export const tools: McpTool[] = [
           ...(overpayment
             ? { overpayment_amount: overpayment.amount, overpayment_account: overpayment.account }
             : {}),
+          ...(fee ? { fee_amount: fee.amount, fee_account: fee.account } : {}),
           // The sale verifikat approval books first (defer_invoice_booking).
           ...saleFirstPreview(salePlan),
         },
@@ -13464,7 +13614,7 @@ export const tools: McpTool[] = [
           description: "Inbox item UUIDs to book: the user's selection in the Underlag view.",
         },
         category: { type: 'string', description: 'Shared transaction category applied to every item', enum: [...VALID_CATEGORIES] },
-        vat_treatment: { type: 'string', description: 'Shared VAT treatment. Set reverse_charge for foreign services (omvänd skattskyldighet) where the seller did NOT charge VAT: typical for USD/EUR SaaS subscriptions like Cursor/Anysphere. Defaults to standard_25.', enum: [...VALID_VAT_TREATMENTS] },
+        vat_treatment: { type: 'string', description: "Shared VAT treatment. reverse_charge: a foreign seller that charged no VAT; each item's box (ruta 20/21/22) follows its seller country and the category, unclear ones are skipped. Defaults to standard_25.", enum: [...VALID_VAT_TREATMENTS] },
         vat_amount: { type: 'number', exclusiveMinimum: 0, description: "The underlag's exact moms override, in the transaction's currency (booked in SEK); only valid with a rate-based vat_treatment. Rarely needed in bulk: all items share one value." },
         notes: { type: 'string', description: 'Audit-trail note appended to every verifikation. Keep under 200 chars.' },
         allow_duplicate: { type: 'boolean', description: 'Override the per-item duplicate-booking guard (default false). Set true only after the user confirms these bank lines are genuinely separate events.' },
@@ -13767,7 +13917,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_register_booked_invoice',
     keywords: ['reskontra', 'kundreskontra', 'importera reskontra', 'öppna poster', 'bokförd faktura', 'befintlig faktura', 'historisk faktura', 'systembyte', 'sie', 'kundfaktura', 'open items'],
     title: 'Register Booked Invoice (Kundreskontra)',
-    description: 'Stage registering an already-booked customer invoice (e.g. from SIE) in the kundreskontra: own number, linked to its verifikat, nothing posted. SEK, faktureringsmetoden only; cannot be undone. Approval counts the verifikat as backed: attach the invoice PDF in the same session.',
+    description: 'Stage registering an already-booked customer invoice (e.g. from SIE) in the kundreskontra: own number, linked to its verifikat, nothing posted. Faktureringsmetoden only; cannot be undone. Approval counts the verifikat as backed: attach the invoice PDF in the same session.',
     catalogVisibility: 'search',
     inputSchema: {
       type: 'object',
@@ -13786,10 +13936,10 @@ export const tools: McpTool[] = [
           type: 'string',
           description: 'The posted verifikat that booked this invoice: it debits 151x by the total. Find it with gnubok_query_journal (accounts ["1510"], text = the invoice number). Never the opening balance: an invoice only in #IB needs the SIE of its own year imported first.',
         },
-        total: { type: 'number', description: 'Invoice total incl. VAT, SEK' },
-        remaining_amount: { type: 'number', description: 'Kvarvarande saldo per the reskontra, SEK (default: total). Below the total it stands for the old payments, dated balance_as_of: never also link their verifikat.' },
+        total: { type: 'number', description: 'Invoice total incl. VAT, in currency' },
+        remaining_amount: { type: 'number', description: 'Kvarvarande saldo per the reskontra, in currency (default: total). Below the total it stands for the old payments, dated balance_as_of: never also link their verifikat.' },
         balance_as_of: { type: 'string', description: 'YYYY-MM-DD: the reskontra\'s date, which remaining_amount is stated as of. Required when remaining_amount is below the total.' },
-        currency: { type: 'string', description: 'The invoice\'s currency per the reskontra (ISO 4217, default SEK). Only SEK registers: skip other currencies.' },
+        currency: { type: 'string', description: 'The invoice\'s currency per the reskontra (ISO 4217, default SEK). Other than SEK: the verifikat\'s 151x line must carry it and its amount; the rate is read from the verifikat.' },
         ...STAGING_ARGS_PROPERTIES,
       },
       required: ['customer_id', 'invoice_number', 'invoice_date', 'due_date', 'journal_entry_id', 'total'],
@@ -13812,7 +13962,7 @@ export const tools: McpTool[] = [
         companyId,
         userId,
         type: 'create_invoice',
-        title: `Registrera bokförd faktura ${params.invoice_number}: ${plan.customerName} ${plan.total} SEK${remainingNote} (verifikat ${plan.voucher.label})`,
+        title: `Registrera bokförd faktura ${params.invoice_number}: ${plan.customerName} ${plan.total} ${plan.currency}${remainingNote} (verifikat ${plan.voucher.label})`,
         params,
         preview: {
           mode: params.mode,
@@ -13820,7 +13970,9 @@ export const tools: McpTool[] = [
           invoice_number: params.invoice_number,
           invoice_date: params.invoice_date,
           due_date: params.due_date,
-          currency: 'SEK',
+          currency: plan.currency,
+          // A foreign invoice: the rate read from its verifikat and the kronor it books.
+          ...(plan.exchangeRate === null ? {} : { exchange_rate: plan.exchangeRate, total_sek: plan.totalSek, vat_amount_sek: plan.vatAmountSek }),
           subtotal: plan.subtotal,
           vat_amount: plan.vatAmount,
           total: plan.total,
@@ -14302,7 +14454,7 @@ export const tools: McpTool[] = [
           // proposal the approval would reject lands in stage_failures with
           // the amounts and the routes that book it, instead of being staged.
           const source = proposalSources.get(p.transaction_id)
-          if (source) await refuseUnpayableMatch(supabase, source.tx, source.invoice)
+          if (source) await refuseUnpayableMatch(supabase, source.tx, source.invoice, {})
           // The single-match tool's sale-first plan (defer_invoice_booking):
           // a proposal whose sale the Bokför step would refuse lands in
           // stage_failures with that code instead of being staged.
@@ -15949,7 +16101,7 @@ export const tools: McpTool[] = [
       properties: {
         inbox_item_id: { type: 'string' },
         supplier_id_override: { type: 'string', description: 'Force this supplier UUID instead of the matched/extracted one' },
-        vat_treatment_override: { type: 'string', enum: ['standard_25', 'reduced_12', 'reduced_6', 'reverse_charge', 'export', 'exempt'], description: 'Default follows supplier type' },
+        vat_treatment_override: { type: 'string', enum: ['standard_25', 'reduced_12', 'reduced_6', 'reverse_charge', 'export', 'exempt'], description: 'Default: supplier type, else line VAT' },
         reverse_charge_kind: { type: 'string', enum: [...SUPPLIER_INVOICE_REVERSE_CHARGE_KINDS], description: 'EU supplier, reverse charge: goods ruta 20 (4515); omitted = services, ruta 21' },
         invoice_date_override: { type: 'string', description: 'Override extracted invoice date (YYYY-MM-DD). Use when OCR misses the date.' },
         due_date_override: { type: 'string', description: 'Override extracted due date (YYYY-MM-DD)' },
@@ -16272,19 +16424,40 @@ export const tools: McpTool[] = [
       // (accounted#58). The override is the caller's explicit word, as the
       // reverse_charge flag is on those doors. Without one an EU or non-EU
       // supplier is omvänd skattskyldighet (ML 16 kap 6 §, swedish-vat skill
-      // 2.1-2.3), any other takes the extracted treatment, else standard_25.
+      // 2.1-2.3), any other takes the extracted treatment, else the one the
+      // line rates give by the dashboard form's rule (inferVatTreatment).
       // Only the treatment is staged (the flag follows from it, and the
       // grant door refuses a param it does not know); the executor resolves
       // it the same way.
       const supplierType = (resolvedSupplier.supplier_type as string | null | undefined) ?? null
       const vatTreatmentOverride = args.vat_treatment_override as string | undefined
-      const extractedTreatment = invoiceExt?.vatTreatment
-      const { reverseCharge, vatTreatment } = resolveSupplierInvoiceReverseCharge(
+      const extractedTreatment =
+        typeof invoiceExt?.vatTreatment === 'string' && invoiceExt.vatTreatment ? invoiceExt.vatTreatment : undefined
+      // The document's own VAT figure, as OCR'd or agent-supplied. Never the
+      // VAT that is booked (that is derived from the lines below); read to
+      // tell whether the document shows any VAT, to test a gross reading of
+      // the lines and to show the approver what the seller charged under
+      // reverse charge.
+      const extractedVatHeader = roundOre(Number(totalsExt?.vat ?? totalsExt?.vatAmount) || 0)
+      // A line at a Swedish rate gives the treatment as on the dashboard. VAT
+      // at no Swedish rate (foreign VAT, or a total the lines lack) keeps
+      // standard_25: the foreign VAT is cost below and a VAT total the lines
+      // lack is reconciled below. No VAT anywhere is null: exempt, a seller
+      // outside the VAT register, domestic omvänd betalningsskyldighet
+      // (byggtjänster, ML 16 kap 13 §) and a seller abroad look the same.
+      const lineRates = lineItemsExt.map((li) => ({ vat_rate: normalizeVatRateToDecimal(li.vat_rate ?? li.vatRate) }))
+      const lineTreatment: string | null = lineRates.some((li) => li.vat_rate > 0)
+        ? inferVatTreatment(lineRates, false)
+        : extractedVatHeader !== 0 || lineItemsExt.some((li) => normalizeVatRateToFraction(li.vat_rate ?? li.vatRate) > 0)
+          ? 'standard_25'
+          : null
+      const { reverseCharge, vatTreatment: resolvedTreatment } = resolveSupplierInvoiceReverseCharge(
         supplierType,
         vatTreatmentOverride
           ? { reverse_charge: vatTreatmentOverride === 'reverse_charge', vat_treatment: vatTreatmentOverride }
-          : { vat_treatment: typeof extractedTreatment === 'string' && extractedTreatment ? extractedTreatment : undefined },
+          : { vat_treatment: extractedTreatment ?? lineTreatment ?? undefined },
       )
+      const treatmentUnstated = !reverseCharge && !vatTreatmentOverride && !extractedTreatment && lineTreatment === null
       // An override that turns omvänd skattskyldighet off for a foreign
       // supplier is right only where the purchase falls outside it (an exempt
       // financial or insurance service, passenger transport, a seller that
@@ -16316,9 +16489,9 @@ export const tools: McpTool[] = [
       // stays in the payable (lib/bookkeeping/vat-registration.ts), whatever
       // the treatment label says, reverse charge aside.
       // The same row says whether confirming posts the registration verifikat
-      // at all: the executor gates it on booksInvoicesOnIssue, so the preview
-      // reads the booking moment from the same two columns (feedback seq
-      // 930807: the preview promised a verifikat to a deferring company).
+      // at all: the executor gates it on supplierInvoiceBooksOnRegistration,
+      // so the preview reads the booking moment from the same columns (feedback
+      // seq 930807: the preview promised a verifikat to a deferring company).
       const { data: vatSettings } = await supabase
         .from('company_settings')
         .select('vat_registered, accounting_method, defer_invoice_booking')
@@ -16330,7 +16503,38 @@ export const tools: McpTool[] = [
         defer_invoice_booking?: boolean | null
       } | null
       const vatIsCost = sellerVatIsCost(companySettings?.vat_registered, reverseCharge)
-      const bookingMoment = invoiceBookingMoment(companySettings)
+      // Kontantmetoden books an EU goods acquisition at registration (ML
+      // 7 kap. 26 §): the executor's per-invoice rule, read the same way.
+      const bookingMoment = supplierInvoiceBookingMoment(
+        invoiceBookingMoment(companySettings),
+        { reverse_charge: reverseCharge, reverse_charge_kind: reverseChargeKind.kind },
+        supplierType,
+      )
+      // A Swedish supplier's document with no VAT on it and no word from the
+      // caller: standard_25 was a guess, and so would exempt be (the
+      // dashboard form's default, where a person sees the reverse charge
+      // switch). Omvänd betalningsskyldighet books fiktiv moms (2647/2614,
+      // swedish-vat skill 2.1), so the caller reads the underlag and says.
+      // A company outside the VAT register has none to self-assess (that
+      // rule applies between VAT-registered businesses): exempt, as the form.
+      if (treatmentUnstated && !vatIsCost) {
+        throw Object.assign(
+          new Error(
+            'The underlag shows no VAT (every line 0 %, no VAT total) and the supplier is not typed EU or non-EU, so its VAT treatment cannot be read from it. '
+            + 'Retry with vat_treatment_override from the underlag: exempt (undantagen omsättning, a seller not registered for VAT, a purchase taxed abroad) '
+            + 'or reverse_charge (the invoice says omvänd betalningsskyldighet, e.g. byggtjänster). A seller outside Sweden: correct the supplier type instead.',
+          ),
+          {
+            code: 'SI_CREATE_INVALID_INPUT',
+            remediation: {
+              description: 'Read the underlag, then retry gnubok_create_supplier_invoice_from_inbox with vat_treatment_override.',
+              tool: 'gnubok_create_supplier_invoice_from_inbox',
+              args: { inbox_item_id: inboxItemId, ...(supplierIdOverride ? { supplier_id_override: supplierIdOverride } : {}) },
+            },
+          },
+        )
+      }
+      const vatTreatment = treatmentUnstated ? 'exempt' : resolvedTreatment
       // Exempt (undantagen omsättning, ML 10 kap) and export purchases carry
       // no Swedish moms either, so nothing on them is deductible ingående
       // moms (issue #2553). The executor zeroes the same fields; staging
@@ -16526,12 +16730,6 @@ export const tools: McpTool[] = [
           ...(dimensions && Object.keys(dimensions).length > 0 ? { dimensions } : {}),
         }
       })
-
-      // The document's own VAT figure, as OCR'd or agent-supplied. Never the
-      // VAT that is booked (that is derived from the lines below); read to
-      // test a gross reading of the lines and to show the approver what the
-      // seller charged under reverse charge.
-      const extractedVatHeader = roundOre(Number(totalsExt?.vat ?? totalsExt?.vatAmount) || 0)
 
       // Under reverse charge, and under exempt / export, no line carries
       // deductible seller VAT: the executor zeroes the item rows too, so the
@@ -16820,8 +17018,8 @@ export const tools: McpTool[] = [
         // Echoed for every non-exact dimension resolution (resolve-don't-
         // select) so the agent can verify what a name attached to.
         ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
-        // What confirming does, from the same settings the executor gates the
-        // registration verifikat on (booksInvoicesOnIssue).
+        // What confirming does, from the same rule the executor gates the
+        // registration verifikat on (supplierInvoiceBooksOnRegistration).
         will_post_journal_entry: bookingMoment === 'issue',
         will: bookingMoment === 'issue'
           ? 'register supplier invoice (status=registered), attach the inbox document, post a registration journal entry on confirm: leverantörsskuld (2440) credited and the cost/VAT split debited per the per-line VAT rules'
@@ -19692,6 +19890,8 @@ export const tools: McpTool[] = [
         postal_code: { type: ['string', 'null'] },
         city: { type: ['string', 'null'] },
         is_active: { type: 'boolean', description: 'false deactivates (row kept), true reactivates' },
+        // The refusal (EMPLOYEE_SAMMALONEREGELN_DEGREE_CHANGED) explains it.
+        sammaloneregeln_kollektivavtal_confirmed: { type: 'boolean' },
         vaxa_stod_eligible: { type: 'boolean', description: 'Never lowers avgifter: from 2026 the AGI declares them in full and the company applies to Skatteverket for the refund; runs in the window note the expected amount' },
         vaxa_stod_start: { type: ['string', 'null'] },
         vaxa_stod_end: { type: ['string', 'null'] },
@@ -20519,7 +20719,7 @@ export const tools: McpTool[] = [
     keywords: ['rotavdrag', 'rutavdrag', 'husarbete', 'utbetalningsfil'],
     title: 'Generate Rot/Rut Payout File',
     description:
-      'Begäran om utbetalning for rot/rut (Skatteverket husavdrag): XML file from paid deduction invoices, uploaded manually on skatteverket.se (no API exists). Call with list_only=true first to see eligible invoices and blockers. Generating records an active begäran per invoice.',
+      'Begäran om utbetalning for rot/rut (Skatteverket husavdrag) from paid deduction invoices. Call list_only=true first for eligible invoices and blockers. Generating records an active begäran per invoice and returns download_url (1 h) for the user.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -20555,7 +20755,8 @@ export const tools: McpTool[] = [
         generated: { type: 'boolean' },
         request_id: { type: ['string', 'null'] },
         file_name: { type: ['string', 'null'] },
-        xml: { type: ['string', 'null'], description: 'File content: save as UTF-8 .xml and upload on skatteverket.se' },
+        file_document_id: { type: ['string', 'null'] },
+        download_url: { type: ['string', 'null'] },
         requested_total: { type: 'number' },
         other_type_counts: { type: 'object', description: 'Grön teknik invoices, counted not listed' },
         arenden: { type: 'array', items: { type: 'object' } },
@@ -20592,7 +20793,8 @@ export const tools: McpTool[] = [
           generated: false,
           request_id: null,
           file_name: null,
-          xml: null,
+          file_document_id: null,
+          download_url: null,
           requested_total: candidates.eligible.reduce((sum, e) => sum + e.begart_belopp, 0),
           other_type_counts: candidates.other_type_counts,
           warnings: [],
@@ -20611,7 +20813,8 @@ export const tools: McpTool[] = [
           generated: false,
           request_id: null,
           file_name: null,
-          xml: null,
+          file_document_id: null,
+          download_url: null,
           requested_total: 0,
           other_type_counts: candidates.other_type_counts,
           warnings: ['Inga fakturor är redo att begäras. Se blocked för orsaker per faktura.'],
@@ -20636,18 +20839,55 @@ export const tools: McpTool[] = [
         )
       }
 
+      // The file names every buyer by full personnummer (Kopare, as
+      // Skatteverket's schema requires), and personnummer never reaches the
+      // model (arenden carries the last four). The agent only has to get the
+      // file to the user, who uploads it: archive it as räkenskapsinformation
+      // like the web route and hand back a signed link. Unlike the web route
+      // the archive is not best-effort here, since it is the only way the
+      // file leaves the server: a failed archive undoes the begäran, so the
+      // same call can run again.
+      const requestId = result.request.id as string
+      let archived: Awaited<ReturnType<typeof archiveRotRutPayoutFile>>
+      try {
+        archived = await archiveRotRutPayoutFile(supabase, userId, companyId, requestId, {
+          xml: result.file.xml!,
+          file_name: result.file.file_name,
+        })
+      } catch (archiveError) {
+        const { error: undoError } = await supabase
+          .from('rot_rut_payout_requests')
+          .delete()
+          .eq('id', requestId)
+          .eq('company_id', companyId)
+        if (undoError) log.error('rot/rut begäran left without its file after a failed archive', { requestId, undoError })
+        throw archiveError
+      }
+
+      const warnings = [...result.file.warnings]
+      if (!archived.linked) log.error('rot/rut file archived but not linked to its begäran', { requestId, documentId: archived.documentId })
+      // One hour, as gnubok_audit_package: long enough to save the file.
+      const SIGNED_URL_TTL_SECONDS = 3600
+      const { data: signed, error: signError } = await supabase.storage
+        .from('documents')
+        .createSignedUrl(archived.storagePath, SIGNED_URL_TTL_SECONDS)
+      if (signError || !signed) {
+        warnings.push('Filen är arkiverad men länken kunde inte skapas: hämta en ny med gnubok_get_document_content (file_document_id) eller med Hämta fil under Fakturor > Begär utbetalning.')
+      }
+
       return {
         deduction_type: type,
         eligible: candidates.eligible,
         blocked: candidates.blocked,
         generated: true,
-        request_id: result.request.id as string,
+        request_id: requestId,
         file_name: result.file.file_name,
-        xml: result.file.xml,
+        file_document_id: archived.documentId,
+        download_url: signed && !signError ? toSameOriginStorageUrl(signed.signedUrl) : null,
         requested_total: result.file.requested_total,
         arenden: result.file.arenden,
         other_type_counts: candidates.other_type_counts,
-        warnings: result.file.warnings,
+        warnings,
         upload_url: uploadUrl,
       }
     },
@@ -20928,6 +21168,18 @@ export const tools: McpTool[] = [
         }),
       )
       const oreRoundingTotal = roundOre(oreRoundings.reduce((sum, x) => sum + x, 0))
+      // Kontantmetoden: the deduction share the customer's payment left
+      // unbooked is booked as försäljning and moms, not 1513. The commit
+      // recomputes it and refuses an unknown per-invoice split, so refuse here.
+      const recognitions = await Promise.all(
+        ordered.map((r) => getPayoutRecognition(supabase, companyId, r, expectedRotRutPayoutAmount(r), transaction.date)),
+      )
+      const recognised = recognitions.map((result) => {
+        if (result.ok) return result.recognition?.amount ?? 0
+        if ('code' in result) throw registryError(result.code)
+        throw dbError(result.error)
+      })
+      const recognisedTotal = roundOre(recognised.reduce((sum, x) => sum + x, 0))
 
       return stage({
         supabase,
@@ -20949,12 +21201,14 @@ export const tools: McpTool[] = [
             status: r.status,
             expected_payout: expectedRotRutPayoutAmount(r),
             ore_rounding: oreRoundings[i],
+            recognised_as_sales: recognised[i],
           })),
           ore_rounding_total: oreRoundingTotal,
+          recognised_as_sales_total: recognisedTotal,
         },
         actor,
         next: {
-          description: `After approval the transfer is booked debit 19xx / credit 1513 (one leg per begäran)${oreRoundingTotal > 0 ? `, plus debit 3740 Öresavrundning ${oreRoundingTotal} kr so 1513 clears the öre the whole-kronor begäran left` : ''}, every begäran is marked paid and the row is linked. Verify with gnubok_list_rot_rut_payout_requests.`,
+          description: `After approval the transfer is booked debit 19xx / credit 1513 (one leg per begäran)${oreRoundingTotal > 0 ? `, plus debit 3740 Öresavrundning ${oreRoundingTotal} kr so 1513 clears the öre the whole-kronor begäran left` : ''}${recognisedTotal > 0 ? `; under kontantmetoden ${recognisedTotal} kr of it, Skatteverket's share the customer payments left unbooked, is credited to revenue and output VAT instead of 1513` : ''}, every begäran is marked paid and the row is linked. Verify with gnubok_list_rot_rut_payout_requests.`,
           tool: 'gnubok_list_rot_rut_payout_requests',
         },
         dateForPeriodCheck: transaction.date,
@@ -22546,7 +22800,7 @@ export const tools: McpTool[] = [
       // The booked-ness fields decide whether approval will post a verifikat:
       // the preview must say which, so the agent never promises "nothing is
       // booked" for a paid kontantmetod invoice (issue #2552).
-      const [{ data: inv }, { data: settings }] = await Promise.all([
+      const [{ data: inv }, settingsRead] = await Promise.all([
         supabase
           .from('invoices')
           .select('id, invoice_number, external_invoice_number, document_type, status, invoice_date, total, currency, credited_invoice_id, deduction_reclaimed_total, journal_entry_id, paid_at, paid_amount, customer:customers(name)')
@@ -22557,6 +22811,7 @@ export const tools: McpTool[] = [
           .eq('company_id', companyId)
           .maybeSingle(),
       ])
+      const settings = settingsRead.data
 
       if (!inv) throw codedRefusal('NOT_FOUND', 'Invoice not found')
       // The guard list every credit door runs: a credit note cannot be
@@ -22568,10 +22823,9 @@ export const tools: McpTool[] = [
       // refusal above already turned away an original with no number at all.
       const originalReference = creditNoteOriginalReference(inv) as string
 
-      const postsJournalEntry = creditNoteNeedsJournalEntry(
-        (settings as { accounting_method?: string | null } | null)?.accounting_method || 'accrual',
-        inv,
-      )
+      // Fail closed (accounted#58): the preview must not promise a reversal
+      // (or none) from a guessed faktureringsmetoden.
+      const postsJournalEntry = creditNoteNeedsJournalEntry(requireAccountingMethod(settingsRead), inv)
       // accounted#45: a deferred original that was never booked is booked
       // first, on its own date; a lock there refuses the credit at commit,
       // so refuse it here already.
@@ -23017,7 +23271,11 @@ export const tools: McpTool[] = [
                   quantity: item.quantity,
                   unit: item.unit,
                   unit_price: item.unit_price,
-                  line_total: roundOre(item.quantity * item.unit_price),
+                  // What approval stores (buildInvoiceWriteData): net of the
+                  // line discount, and 0 on a text row.
+                  line_total: item.line_type === 'text'
+                    ? 0
+                    : computeLineNet(item.quantity, item.unit_price, item.discount_percent),
                   vat_rate: item.line_type === 'text' ? 0 : (item.vat_rate ?? defaultVatRate),
                   revenue_account: item.revenue_account ?? null,
                   article_id: item.article_id ?? null,
@@ -23249,7 +23507,7 @@ export const tools: McpTool[] = [
       const { getMappingStats, isSystemAccount } = await import('@/lib/import/account-mapper')
       const { suggestSIEMappings } = await import('@/lib/import/sie-preview-mappings')
       const { scanSieForCp1252Artifacts, formatSieArtifactWarning } = await import('@/lib/import/sie-artifact-scan')
-      const { generateImportPreview, checkDuplicateImport, checkDuplicatePeriodImport } = await import('@/lib/import/sie-import')
+      const { generateImportPreview, checkDuplicateImport, checkDuplicatePeriodImport, loadMappings } = await import('@/lib/import/sie-import')
       const { BAS_REFERENCE } = await import('@/lib/bookkeeping/bas-data')
 
       let parsed
@@ -23350,17 +23608,14 @@ export const tools: McpTool[] = [
             : null
 
       const bookkeepingAccounts = parsed.accounts.filter((a) => !isSystemAccount(a.number))
-      const { data: storedMappings } = await supabase
-        .from('sie_account_mappings')
-        .select('*')
-        .eq('company_id', companyId)
+      const storedMappings = await loadMappings(supabase, companyId)
       // The dashboard upload's own decision (#3312), so the mappings an agent
       // passes on to gnubok_import_sie are the ones the job accepts: class 9
       // amounts to 2999, also over a stored class 9 mapping.
       const { mappings, unusedAccounts } = suggestSIEMappings(
         parsed,
         BAS_REFERENCE,
-        (storedMappings as import('@/lib/import/types').SIEAccountMappingRecord[]) || undefined,
+        storedMappings,
         bookkeepingAccounts
       )
       const mappingStats = getMappingStats(mappings)

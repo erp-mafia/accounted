@@ -26,6 +26,12 @@ import { legacyKontantmetodVandningWarning } from '@/lib/core/bookkeeping/kontan
  *   case, basis booked but fiktiv moms missing. Less common but equally
  *   broken.
  *
+ * - Skatteverket's formal pair checks FK001-FK006 by presence: one side of
+ *   a pair (sales 05-08 / 10-12, reverse charge 20-24 / 30-32, import 50 /
+ *   60-62) files an amount and the other none, whatever the sign. The
+ *   proportional checks only see positive sides; a credit or correction that
+ *   moved one half leaves a negative side the declaration is refused for.
+ *
  * - Mismatch between output RC VAT (ruta 30-32) and the offsetting input
  *   VAT on 2645/2647. The 2614/2645 (or 2647) pair must net to zero in the
  *   buyer's input deduction, so a shortfall means one half of the pair was
@@ -288,6 +294,62 @@ function importPairPresenceFinding(
 }
 
 /**
+ * Whether a ruta files an amount: Skatteverket's formal checks FK001-FK006
+ * read "om belopp anges", any amount the declaration files, negative
+ * included (Tjänstebeskrivning API Momsdeklaration, 4.1.1.5). Read on whole
+ * kronor as filed (buildFiledAmounts drops the öre), so 0.80 kr is no amount.
+ */
+function filesAmount(amount: number): boolean {
+  return Math.trunc(amount) !== 0
+}
+
+/** The filed whole-krona amounts of the rutor that carry one, e.g. "ruta 30 -1 000 kr". */
+function filedRutorText(rutor: VatDeclarationRutor, keys: ReadonlyArray<keyof VatDeclarationRutor>): string {
+  return keys
+    .filter((key) => filesAmount(rutor[key]))
+    .map((key) => `ruta ${key.slice(4)} ${Math.trunc(rutor[key]).toLocaleString('sv-SE')} kr`)
+    .join(', ')
+}
+
+const SALES_BASE_RUTOR = ['ruta05', 'ruta06', 'ruta07', 'ruta08'] as const
+const SALES_OUTPUT_RUTOR = ['ruta10', 'ruta11', 'ruta12'] as const
+const RC_BASIS_RUTOR = ['ruta20', 'ruta21', 'ruta22', 'ruta23', 'ruta24'] as const
+const RC_OUTPUT_RUTOR = ['ruta30', 'ruta31', 'ruta32'] as const
+
+/**
+ * One pair of FK001-FK004 as Skatteverket checks it: one side files an
+ * amount, the other files none, whatever the sign. Reached only when the
+ * existing check for the same direction stays silent, which in practice means
+ * a negative side (a credit or correction that moved only one half of a sale
+ * or a reverse-charge purchase), two rutor of one side that net to zero, or a
+ * counterpart of öre only, which files as 0. `rule` names the check,
+ * `filed` and `empty` the two sides, `cause` the likely cause and its fix.
+ */
+function pairPresenceFinding(
+  code: 'TAXABLE_SALES_WITHOUT_OUTPUT' | 'OUTPUT_VAT_WITHOUT_SALES_BASE' | 'RC_OUTPUT_MISSING' | 'RC_BASIS_MISSING',
+  rule: 'FK001' | 'FK002' | 'FK003' | 'FK004',
+  filed: { label: string; rutor: string; text: string },
+  empty: { label: string; rutor: string },
+  cause: string,
+  rutor: Array<keyof VatDeclarationRutor>,
+): VatDeclarationCheck {
+  return {
+    code,
+    status: 'ERROR',
+    message:
+      `${filed.label} (ruta ${filed.rutor}) har belopp (${filed.text}), men ${empty.label} ` +
+      `(ruta ${empty.rutor}) är tomma. Då tar Skatteverket inte emot deklarationen (kontroll ${rule}): ` +
+      `finns ett belopp i någon av rutorna ${filed.rutor} måste det finnas ett i någon av rutorna ` +
+      `${empty.rutor}. ${cause}`,
+    detail:
+      `Skatteverkets formella kontroll ${rule} prövar om ett belopp anges, oavsett tecken, i hela ` +
+      'kronor så som deklarationen lämnas (Tjänstebeskrivning API Momsdeklaration, avsnitt 4.1.1.5). ' +
+      'Öretal faller bort, så ett belopp under en krona räknas inte.',
+    rutor,
+  }
+}
+
+/**
  * The two BAS accounts that carry the deductible input half of an omvänd-
  * skattskyldighet purchase, per BAS 2026:
  *
@@ -362,6 +424,18 @@ export function runVatDeclarationChecks(
   // that without hiding a genuinely missing voucher.
   const rcTolerance = Math.max(1, expectedRcBasis * 0.005)
 
+  // FK001-FK004 by presence, as Skatteverket reads them (pairPresenceFinding).
+  // The proportional and binary checks below only ever see a POSITIVE side;
+  // each is followed by a presence fallback for the same direction, the
+  // mechanism the import pair got for FK005/FK006 (crm#1348).
+  const anyFiled = (keys: ReadonlyArray<keyof VatDeclarationRutor>) => keys.some((key) => filesAmount(rutor[key]))
+  const salesBaseFiled = anyFiled(SALES_BASE_RUTOR)
+  const salesOutputFiled = anyFiled(SALES_OUTPUT_RUTOR)
+  const rcBasisFiled = anyFiled(RC_BASIS_RUTOR)
+  const rcOutputFiled = anyFiled(RC_OUTPUT_RUTOR)
+  const rcRutor: Array<keyof VatDeclarationRutor> = [...RC_BASIS_RUTOR, ...RC_OUTPUT_RUTOR]
+  const salesRutor: Array<keyof VatDeclarationRutor> = [...SALES_BASE_RUTOR, ...SALES_OUTPUT_RUTOR]
+
   // FK004 mirror: output RC VAT exists, basis missing or too low.
   if (rcOutput > eps && rcBasis + rcTolerance < expectedRcBasis) {
     const shortfall = Math.round(expectedRcBasis - rcBasis)
@@ -383,6 +457,19 @@ export function runVatDeclarationChecks(
         'basbelopp på 44xx/45xx-konton.',
       rutor: ['ruta20', 'ruta21', 'ruta22', 'ruta23', 'ruta24', 'ruta30', 'ruta31', 'ruta32'],
     })
+  } else if (rcOutputFiled && !rcBasisFiled) {
+    findings.push(pairPresenceFinding(
+      'RC_BASIS_MISSING',
+      'FK004',
+      { label: 'Utgående moms på inköp', rutor: '30-32', text: filedRutorText(rutor, RC_OUTPUT_RUTOR) },
+      { label: 'rutorna för inköp med omvänd betalningsskyldighet', rutor: '20-24' },
+      rcOutput < 0
+        ? 'Negativ fiktiv moms utan underlag uppstår när den fiktiva momsen på 2614/2624/2634 ' +
+          'krediteras eller rättas utan att underlaget på 44xx/45xx följer med. Rätta underlag och ' +
+          'fiktiv moms i samma verifikation, i den period där inköpet redovisades.'
+        : 'Kontrollera att varje inköp med fiktiv moms på 2614/2624/2634 har sitt underlag på 44xx/45xx.',
+      rcRutor,
+    ))
   }
 
   // Mirror: more basis than the output VAT accounts for, fiktiv moms missing
@@ -405,6 +492,24 @@ export function runVatDeclarationChecks(
         'basbeloppet ska bort med rättelse eller storno.',
       rutor: ['ruta20', 'ruta21', 'ruta22', 'ruta23', 'ruta24', 'ruta30', 'ruta31', 'ruta32'],
     })
+  } else if (rcBasisFiled && !rcOutputFiled) {
+    // FK003 by presence. A presence finding here also keeps the per-voucher
+    // gap fold on its blocking tier (vat-filing-gate.ts refuses the downgrade
+    // beside an RC_OUTPUT_MISSING), which is right: the rutor are refused.
+    findings.push(pairPresenceFinding(
+      'RC_OUTPUT_MISSING',
+      'FK003',
+      { label: 'Inköpen med omvänd betalningsskyldighet', rutor: '20-24', text: filedRutorText(rutor, RC_BASIS_RUTOR) },
+      { label: 'rutorna för utgående moms på inköp', rutor: '30-32' },
+      rcBasis < 0
+        ? 'Ett negativt underlag uppstår när ett tidigare inköp med omvänd skattskyldighet krediteras ' +
+          'eller flyttas från 44xx/45xx till ett annat konto utan att den fiktiva momsen på ' +
+          '2614/2624/2634 och 2645/2647 rättas i samma verifikation. Var inköpet rätt bokfört, återför ' +
+          'rättelsen med storno. Var köpet aldrig omvänd skattskyldighet, rätta hela inköpet, underlag ' +
+          'och fiktiv moms, i den period där det redovisades och lämna en rättad momsdeklaration för den perioden.'
+        : 'Kontrollera att fiktiv moms är bokförd på 2614/2624/2634 för varje inköp med omvänd skattskyldighet.',
+      rcRutor,
+    ))
   }
 
   // The fiktiv-moms pair must net to zero in the buyer's input deduction when
@@ -493,6 +598,24 @@ export function runVatDeclarationChecks(
         'momsfri ruta (35/36/39/40) om de inte är momspliktiga.',
       rutor: ['ruta05', 'ruta06', 'ruta07', 'ruta08', 'ruta10', 'ruta11', 'ruta12'],
     })
+  } else if (salesBaseFiled && !salesOutputFiled) {
+    // FK001 by presence. Still binary, so the reasons the sales pair is not
+    // proportional (above) do not apply: it fires only where Skatteverket's
+    // own check refuses the declaration.
+    findings.push(pairPresenceFinding(
+      'TAXABLE_SALES_WITHOUT_OUTPUT',
+      'FK001',
+      { label: 'Den momspliktiga försäljningen', rutor: '05-08', text: filedRutorText(rutor, SALES_BASE_RUTOR) },
+      { label: 'rutorna för utgående moms', rutor: '10-12' },
+      taxableSalesBase < 0
+        ? 'Negativ försäljning utan utgående moms uppstår när en tidigare försäljning krediteras eller ' +
+          'flyttas från försäljningskontot utan att momsen på 2611/2621/2631 följer med, till exempel ' +
+          'en kreditfaktura bokförd utan moms. Rätta försäljning och moms i samma verifikation, i den ' +
+          'period där försäljningen redovisades.'
+        : 'Kontrollera att utgående moms är bokförd på 2611/2621/2631, eller flytta intäkterna till rätt ' +
+          'momsfri ruta (35/36/39/40/42) om de inte är momspliktiga.',
+      salesRutor,
+    ))
   }
 
   // Mirror: output VAT without taxable sales base. Output VAT booked
@@ -511,6 +634,21 @@ export function runVatDeclarationChecks(
         'inställd i kontoplanen.',
       rutor: ['ruta05', 'ruta06', 'ruta07', 'ruta08', 'ruta10', 'ruta11', 'ruta12'],
     })
+  } else if (salesOutputFiled && !salesBaseFiled) {
+    findings.push(pairPresenceFinding(
+      'OUTPUT_VAT_WITHOUT_SALES_BASE',
+      'FK002',
+      { label: 'Den utgående momsen', rutor: '10-12', text: filedRutorText(rutor, SALES_OUTPUT_RUTOR) },
+      { label: 'rutorna för momspliktig försäljning', rutor: '05-08' },
+      taxableSalesOutput < 0
+        ? 'Negativ utgående moms utan försäljning uppstår när momsen på 2611/2621/2631 krediteras eller ' +
+          'rättas utan att försäljningen på intäktskontot följer med, eller när en kreditfaktura bokförs ' +
+          'på ett intäktskonto som inte redovisas i ruta 05. Rätta försäljning och moms i samma ' +
+          'verifikation, eller ange momskod på intäktskontot i Kontoplanen.'
+        : 'Kontrollera att momspliktiga intäktskonton är bokförda för varje momsrad och att kontots ' +
+          '"Standard moms" är rätt inställd i kontoplanen.',
+      salesRutor,
+    ))
   }
 
   // Proportional tightening of the sales pair, WARNING tier only. The binary
@@ -591,11 +729,9 @@ export function runVatDeclarationChecks(
   // Momsdeklaration, 4.1.1.5). A period whose only import line is negative,
   // an earlier import moved off 4545/4546/4547 or credited without its
   // importmoms, read as clean here and was refused at filing (crm#1348).
-  // Presence is read on whole kronor as filed (buildFiledAmounts drops the
-  // öre), so 0.80 kr is no amount here either.
-  const filesAmount = (amount: number) => Math.trunc(amount) !== 0
+  // Presence is read on whole kronor as filed (filesAmount).
   const importBaseFiled = filesAmount(rutor.ruta50)
-  const importOutputFiled = [rutor.ruta60, rutor.ruta61, rutor.ruta62].some(filesAmount)
+  const importOutputFiled = anyFiled(['ruta60', 'ruta61', 'ruta62'])
 
   // Rule 5: import base larger than the output importmoms accounts for, i.e.
   // some imports were booked on 4545/4546/4547 without their 26x5 moms.

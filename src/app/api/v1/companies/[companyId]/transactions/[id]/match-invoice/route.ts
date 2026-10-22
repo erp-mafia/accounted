@@ -76,6 +76,7 @@ import {
   SALE_FIRST_NOT_REQUIRED,
 } from '@/lib/invoices/sale-first'
 import { v1OutcomeResponse } from '@/lib/operations/v1'
+import { requireAccountingMethod } from '@/lib/company/accounting-method'
 
 const MatchInvoiceResponse = z.object({
   success: z.boolean(),
@@ -451,13 +452,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // Every refusal that can be decided from the request and the current state
     // runs from here down to the storno, the dashboard route's order, so a
     // refused match never reverses the transaction's prior verifikat.
-    const { data: settings } = await ctx.supabase
+    const settingsRead = await ctx.supabase
       .from('company_settings')
       .select('accounting_method, entity_type')
       .eq('company_id', ctx.companyId!)
       .single()
-    const accountingMethod = settings?.accounting_method || 'accrual'
-    const entityType: EntityType = await resolveCompanyEntityType(ctx.supabase, ctx.companyId!, settings?.entity_type)
+    // Fail closed (accounted#58), before the storno below.
+    const accountingMethod = requireAccountingMethod(settingsRead)
+    const entityType: EntityType = await resolveCompanyEntityType(ctx.supabase, ctx.companyId!, settingsRead.data?.entity_type)
 
     // Debit the cash account THIS transaction actually belongs to, never a
     // hardcoded 1930: cash_account_id -> cash_accounts.ledger_account is the
@@ -650,6 +652,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           transaction,
           undefined,
           posting,
+          { deferDeductionShare: accountingMethod === 'cash' },
         )
         journalEntryId = je?.id ?? null
       } else {

@@ -12,7 +12,9 @@
  * back to avoid orphaning a half-baked AP balance.
  *
  * Under kontantmetoden no JE is posted at registration; recognition is
- * deferred to :mark-paid.
+ * deferred to :mark-paid. An EU goods acquisition (reverse_charge_kind
+ * eu_goods) is the exception: ML 7 kap. 26 § puts its moms in the invoice's
+ * period, so it is registered as under faktureringsmetoden.
  *
  * `arrival_number` (ankomstnummer) is an internal counter; it does NOT carry
  * the BFL/ML 17 kap löpnummer obligation that customer invoices do. The
@@ -357,7 +359,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/supplier-invoices',
   summary: 'Register a new supplier invoice.',
   description:
-    'Creates a supplier invoice in `registered` status and posts the registration journal entry under faktureringsmetoden (Debit expense + Debit 2641 Ingående moms / Credit 2440 Leverantörsskulder). Under kontantmetoden no JE is posted at this stage. Under defer_invoice_booking (faktureringsmetoden, Registrera men bokför inte) no JE is posted either: book it afterwards with POST /supplier-invoices/{id}/book. Idempotent (mandatory Idempotency-Key). Dry-runnable.',
+    'Creates a supplier invoice in `registered` status and posts the registration journal entry under faktureringsmetoden (Debit expense + Debit 2641 Ingående moms / Credit 2440 Leverantörsskulder). Under kontantmetoden no JE is posted at this stage, except for an EU goods acquisition (reverse_charge_kind eu_goods): ML 2023:200 7 kap. 26 § puts its reverse-charge moms in the period the invoice is issued whatever the accounting method, so it is booked on the invoice date like under faktureringsmetoden and its payment clears 2440. Under defer_invoice_booking (faktureringsmetoden, Registrera men bokför inte) no JE is posted either: book it afterwards with POST /supplier-invoices/{id}/book. Idempotent (mandatory Idempotency-Key). Dry-runnable.',
   useWhen:
     'You\'re registering an incoming leverantörsfaktura. Use dry-run first to validate VAT calculations + period-lock state before committing.',
   doNotUseFor:
@@ -373,7 +375,7 @@ registerEndpoint({
     'Project/cost-center tagging: pass default_dimensions ({"6":"P001"} = project, {"1":"KS01"} = kostnadsställe) for the whole invoice and/or items[].dimensions per line (per-line wins per key). The registration JE lines are tagged accordingly. When the company has the dimension registry enabled, unknown or archived codes are rejected with 400 DIMENSION_VALIDATION_FAILED — list valid codes via GET /dimensions.',
     'Tjänstepension invoices (Avanza etc.): set items[].apply_slp=true on the 741x premium line and the registration JE also books särskild löneskatt (debit 7533 / credit 2514 at 24.26% of the line amount) beyond the payable: 2440 stays at the invoice total. apply_slp on a non-741x account returns 400 SI_CREATE_SLP_INVALID_ACCOUNT.',
     'Underlag: upload the invoice PDF with POST /documents first and pass its id as document_id. The document is stored on the invoice and linked to the registration verifikat. A document that is missing, belongs to another company, or is already linked returns 400 SI_CREATE_INVALID_INPUT.',
-    'Paid privately (eget utlägg): set paid_with_private_funds=true. The invoice is registered as paid and one verifikat books the expense against the payer: the owner (2893 AB, 2018 EF; claimant_name names them) or an employee (employee_id, 2820). payment_date is the out-of-pocket date (defaults to invoice_date). inbox_item_id takes the underlag from an inbox item and is only accepted on this path. Not combinable with reverse charge or periodisering.',
+    'Paid privately (eget utlägg): set paid_with_private_funds=true. The invoice is registered as paid and one verifikat books the expense against the payer: the owner (2893 AB, 2018 EF; claimant_name names them) or an employee (employee_id, 2820). payment_date is the out-of-pocket date (defaults to invoice_date). inbox_item_id takes the underlag from an inbox item and is only accepted on this path. With reverse charge the verifikat also books the fiktiv moms and basis pair the registration would, and the payer is owed the net. Not combinable with periodisering.',
     'Reverse charge from a supplier in another EU country books the basis pair as services (4535/4598, momsdeklaration ruta 21) unless reverse_charge_kind says "eu_goods" (4515/4598, ruta 20); the fiktiv moms on 2645/2614 is the same. reverse_charge_kind on an invoice without reverse charge, or from a supplier that is not eu_business, returns 400 SI_CREATE_INVALID_INPUT.',
     'Periodisering: items[].accrual_period_start + accrual_period_end (and optionally accrual_balance_account, defaulting from the cost account to a 17xx förutbetald kostnad) spread the cost over the period under faktureringsmetoden. Refused under kontantmetoden and with reverse charge. A 29xx accrual_balance_account (e.g. 2990) books an upplupen kostnad: a period wholly before the invoice month (a period reaching that month returns 400 VALIDATION_ERROR: split the line), each month booked on its last day (debit cost / credit 29xx) right after the registration, which debits 29xx on the invoice date. A month that is locked, closed, on or before the company lock date or without a fiscal year refuses the whole registration with 400 SI_ACCRUED_COST_PERIOD_LOCKED (details.blocked); nothing is written.',
     'A company that is not VAT-registered cannot book input VAT: a line with vat_rate or vat_amount above 0 returns 400 SI_CREATE_INVALID_INPUT, and an omitted vat_rate defaults to 0. items[].vat_amount overrides line_total × vat_rate (partial deduction, rounding on the supplier\'s side).',

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   computeSuggestedPeriod,
   fiscalYearName,
+  fiscalYearShortName,
   isDerivedFiscalYearName,
   suggestSeedDate,
   resolveCurrentPeriodId,
@@ -48,6 +49,31 @@ describe('isDerivedFiscalYearName', () => {
     expect(isDerivedFiscalYearName('2025')).toBe(false)
     expect(isDerivedFiscalYearName('Fiscal year 2025')).toBe(false)
     expect(isDerivedFiscalYearName('')).toBe(false)
+  })
+})
+
+describe('fiscalYearShortName', () => {
+  it('drops the noun from a generated name shown under a Räkenskapsår label (crm#1380)', () => {
+    // The "Räkenskapsår:" line of a new verifikat read "Räkenskapsår: Räkenskapsår 2026".
+    expect(fiscalYearShortName('Räkenskapsår 2026')).toBe('2026')
+    expect(fiscalYearShortName(fiscalYearName('2025-07-01', '2026-06-30'))).toBe('2025/2026')
+    expect(fiscalYearShortName('  Räkenskapsår 2026  ')).toBe('2026')
+  })
+
+  it('covers the onboarding first year and the year opened at year end', () => {
+    expect(fiscalYearShortName('Första räkenskapsåret 2026')).toBe('2026')
+    expect(fiscalYearShortName('Första räkenskapsåret 2025/2026')).toBe('2025/2026')
+    expect(fiscalYearShortName('FY 2027')).toBe('2027')
+    expect(fiscalYearShortName('FY 2026/2027')).toBe('2026/2027')
+  })
+
+  it('keeps a name the user wrote whole', () => {
+    expect(fiscalYearShortName('Räkenskapsår 2025 (förlängt)')).toBe('Räkenskapsår 2025 (förlängt)')
+    expect(fiscalYearShortName('Räkenskapsår 2024-2025')).toBe('Räkenskapsår 2024-2025')
+    expect(fiscalYearShortName('Första året')).toBe('Första året')
+    expect(fiscalYearShortName('Fiscal year 2025')).toBe('Fiscal year 2025')
+    expect(fiscalYearShortName('2025')).toBe('2025')
+    expect(fiscalYearShortName('')).toBe('')
   })
 })
 

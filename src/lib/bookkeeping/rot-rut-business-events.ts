@@ -18,7 +18,8 @@ import type { BusinessEventDraft } from '@/lib/posting/types'
  * invoice is its subject; it moves the deduction between two of the
  * company's own receivable accounts and names no party. Amounts are kronor
  * magnitudes (1513 is a kronor account): the payout as it reached the bank,
- * the refused share, the deduction moved. No moms: none of them books any.
+ * the refused share, the deduction moved. No moms, except a kontantmetod
+ * payout that books the second step of a ROT/RUT invoice (its 26xx lines).
  * The lines come from lib/bookkeeping/rot-rut-entries.ts, rule source
  * se.rot-rut-lines.
  */
@@ -43,11 +44,16 @@ function evidenceOf(context: RotRutPostingContext) {
   }
 }
 
-/** Skatteverket's payout of one or several begäran, dated the payment, the kronor that reached the bank. */
+/**
+ * Skatteverket's payout of one or several begäran, dated the payment, the
+ * kronor that reached the bank. Under kontantmetoden it can also be the
+ * second step of a ROT/RUT invoice: the moms it books (recognisedVatSek).
+ */
 export function rotRutPayoutBusinessEvent(
-  payout: { paymentDate: string; amount: number },
+  payout: { paymentDate: string; amount: number; recognisedVatSek?: number },
   context: RotRutPostingContext = {},
 ): BusinessEventDraft {
+  const vat = Math.abs(payout.recognisedVatSek ?? 0)
   return {
     kind: 'se.rot_rut.payout_received',
     category: null,
@@ -55,7 +61,7 @@ export function rotRutPayoutBusinessEvent(
     currency: 'SEK',
     amount: Math.abs(payout.amount),
     amountSek: Math.abs(payout.amount),
-    taxAmounts: [],
+    taxAmounts: vat > 0 ? [{ tax: 'vat', treatment: null, amount_sek: vat }] : [],
     ...evidenceOf(context),
     mappingVersion: mappingVersion('rotRut'),
     jurisdiction: 'SE',

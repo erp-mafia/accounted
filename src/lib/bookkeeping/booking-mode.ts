@@ -1,4 +1,5 @@
 import { ORE_TOLERANCE } from '@/lib/money'
+import { supplierInvoiceReverseChargeKind } from './vat-entries'
 
 /**
  * #967 "Registrera men bokför inte": whether issuing an invoice (registering
@@ -61,6 +62,58 @@ export function invoiceBookingMoment(
 ): InvoiceBookingMoment {
   if (booksInvoicesOnIssue(settings)) return 'issue'
   return settings?.accounting_method === 'cash' ? 'payment' : 'manual'
+}
+
+/**
+ * When THIS supplier invoice's registration verifikat is posted, from the
+ * company's moment (invoiceBookingMoment): the same, except that a
+ * unionsinternt förvärv av varor is booked at registration under
+ * kontantmetoden too.
+ *
+ * ML 2023:200 7 kap. 26 and 40 §§ put the output and the input moms of an
+ * EU goods acquisition in the period in which the invoice is issued, at the
+ * latest the period holding the 15th of the month after the acquisition,
+ * whatever method the buyer uses: 7 kap. 16 § lets the buyer report reverse
+ * charge at payment only under 16 kap. 6 and 8-16 §§ (services from abroad,
+ * domestic reverse charge), not 16 kap. 17 § (the EU goods acquisition). The
+ * invoice is booked whole, dated on the invoice date and linked through
+ * registration_journal_entry_id, the faktureringsmetod shape the kontantmetod
+ * year-end carry already uses: every payment, credit and cut-off door routes
+ * on that link, so the payment clears 2440 and nothing is booked twice. BFL
+ * 5 kap. 2 § only allows a kontantmetod company to wait for the payment; it
+ * never requires it. EU services keep the company's moment.
+ */
+export function supplierInvoiceBookingMoment(
+  companyMoment: InvoiceBookingMoment,
+  invoice: { reverse_charge?: boolean | null; reverse_charge_kind?: string | null },
+  supplierType: string | null | undefined,
+): InvoiceBookingMoment {
+  if (companyMoment === 'payment' && isEuGoodsAcquisition(invoice, supplierType)) return 'issue'
+  return companyMoment
+}
+
+/** Whether registering this supplier invoice posts its verifikat now (supplierInvoiceBookingMoment). */
+export function supplierInvoiceBooksOnRegistration(
+  settings: Parameters<typeof booksInvoicesOnIssue>[0],
+  invoice: { reverse_charge?: boolean | null; reverse_charge_kind?: string | null },
+  supplierType: string | null | undefined,
+): boolean {
+  return supplierInvoiceBookingMoment(invoiceBookingMoment(settings), invoice, supplierType) === 'issue'
+}
+
+/**
+ * A unionsinternt förvärv av varor (ruta 20): the kind the invoice's reverse
+ * charge books, by the rule every builder of its lines reads.
+ */
+function isEuGoodsAcquisition(
+  invoice: { reverse_charge?: boolean | null; reverse_charge_kind?: string | null },
+  supplierType: string | null | undefined,
+): boolean {
+  return (
+    invoice.reverse_charge === true &&
+    supplierType === 'eu_business' &&
+    supplierInvoiceReverseChargeKind(supplierType, invoice.reverse_charge_kind) === 'eu_goods'
+  )
 }
 
 /**

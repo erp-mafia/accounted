@@ -39,7 +39,7 @@
 import { z } from 'zod'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
 import type { CoreEvent } from '@/lib/events/types'
-import type { AccountingMethod, SupplierInvoice, SupplierInvoiceItem } from '@/types'
+import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { eventBus } from '@/lib/events'
 import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
 import { supplierInvoiceStornoBusinessEvent } from '@/lib/bookkeeping/supplier-invoice-business-events'
@@ -66,6 +66,7 @@ import {
 import { compareCreditToInvoice, creditAmount, creditNoteFromReading } from './credit-target'
 import { rejectSupersededInboxConversions } from '@/lib/pending-operations/supersede'
 import { linkBasisColumns } from '@/lib/links/stamp'
+import { checkAccountingMethod } from '@/lib/company/accounting-method'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -381,13 +382,17 @@ export async function creditSupplierInvoice(
     }
   }
 
-  const { data: settings } = await supabase
-    .from('company_settings')
-    .select('accounting_method')
-    .eq('company_id', companyId)
-    .maybeSingle()
-  const accountingMethod = ((settings as { accounting_method?: string } | null)?.accounting_method ??
-    'accrual') as AccountingMethod
+  // Fail closed (accounted#58): read as faktureringsmetoden, an unpaid
+  // kontantmetod original would get a reversal of a cost never booked.
+  const method = checkAccountingMethod(
+    await supabase
+      .from('company_settings')
+      .select('accounting_method')
+      .eq('company_id', companyId)
+      .maybeSingle(),
+  )
+  if (!method.ok) return { ok: false, code: method.code, details: method.details }
+  const { accountingMethod } = method
   // Kontantmetoden skips only while the original is still UNPAID: nothing
   // reached the ledger. A paid original was booked by its payment verifikat
   // (expense + 2641), and leaving that un-reversed overstates both.

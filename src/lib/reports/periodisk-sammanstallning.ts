@@ -386,37 +386,23 @@ function unattributedWarnings(
   return warnings
 }
 
-interface Accumulator {
-  country: string
-  vatNumber: string
-  customerId: string | null
-  customerName: string | null
-  services: number
-  goods: number
-  triangulation: number
-  blocking: boolean
-  /** True once we've seen any non-zero posting, even if it later nets to zero. */
-  sawActivity: boolean
+/**
+ * The ledger side of the PS for [start, end]: the company's PS accounts, the
+ * posted verifikat on them and the register invoices that explain each one.
+ */
+interface PsLedger {
+  accountBuckets: Map<string, PsBucket>
+  psAccounts: string[]
+  entries: RawEntry[]
+  invoiceIdsByEntry: Map<string, string[]>
 }
 
-export async function generatePeriodiskSammanstallning(
+async function loadPsLedger(
   supabase: SupabaseClient,
   companyId: string,
-  periodType: PsPeriodType,
-  year: number,
-  period: number,
-): Promise<PeriodiskSammanstallningReport> {
-  if (periodType !== 'monthly' && periodType !== 'quarterly') {
-    throw new Error(`Invalid PS periodType: ${periodType}`)
-  }
-  if (periodType === 'monthly' && (period < 1 || period > 12)) {
-    throw new Error(`Invalid monthly period: ${period}`)
-  }
-  if (periodType === 'quarterly' && (period < 1 || period > 4)) {
-    throw new Error(`Invalid quarterly period: ${period}`)
-  }
-
-  const { start, end } = calculatePeriodDates(periodType, year, period)
+  start: string,
+  end: string,
+): Promise<PsLedger> {
   const accountBuckets = await resolvePsAccountBuckets(supabase, companyId)
   const psAccounts = Array.from(accountBuckets.keys())
 
@@ -458,9 +444,102 @@ export async function generatePeriodiskSammanstallning(
   // account-based momsdeklaration kept showing them in ruta 39.
   // Every invoice each entry resolves to. The engine's own entries name one
   // (source_id); a linked entry may name several when one inbetalning settled
-  // several invoices. All of them are loaded so the loop below can tell "two
+  // several invoices. All of them are kept so the report can tell "two
   // invoices, one customer" from "two customers on one posting".
   const invoiceIdsByEntry = await getInvoicesExplainingJournalEntries(supabase, companyId, entries)
+
+  return { accountBuckets, psAccounts, entries, invoiceIdsByEntry }
+}
+
+/**
+ * A manual, imported or bank-booked verifikat no register invoice points at:
+ * there is no buyer to file it under (see the header). The engine's own
+ * entries never qualify: an engine entry whose invoice is gone is a data
+ * defect, reported as CUSTOMER_NOT_FOUND.
+ */
+function hasNoBuyer(entry: RawEntry, ledger: PsLedger): boolean {
+  return !ledger.invoiceIdsByEntry.get(entry.id) && !INVOICE_SOURCED_ENTRY_TYPES.has(entry.source_type ?? '')
+}
+
+/**
+ * What the PS cannot file but the declaration counts (crm#1336). A chain
+ * that nets to zero is in neither figure, so the declaration is asked only
+ * when an amount is left; it decides which verifikat count (the posted
+ * bokslut zeroing 3308 is no sale).
+ */
+async function declaredUnattributedWarnings(
+  supabase: SupabaseClient,
+  companyId: string,
+  start: string,
+  end: string,
+  ledger: PsLedger,
+  unattributed: Array<FlatLine & { bucket: PsBucket }>,
+): Promise<PsWarning[]> {
+  if (unattributed.length === 0) return []
+  const byId = new Map(ledger.entries.map((entry) => [entry.id, entry]))
+  if (unattributedWarnings(unattributed, byId).length === 0) return []
+  const declared = await fetchDeclaredEntryIds(supabase, companyId, start, end, ledger.psAccounts)
+  return unattributedWarnings(unattributed.filter((line) => declared.has(line.entry.id)), byId)
+}
+
+/**
+ * The UNATTRIBUTED_EU_SALE findings of the PS for any date range: the EU
+ * sales the momsdeklaration counts in rutor 35, 38 and 39 that no invoice
+ * names a buyer for, with the PS's own severity (error on 35/38, warning on
+ * 39). The VAT close check reads them for its momsperiod, a helårsmoms year
+ * included, so "can I close" and the PS never disagree (crm#1362).
+ */
+export async function findUnattributedEuSales(
+  supabase: SupabaseClient,
+  companyId: string,
+  start: string,
+  end: string,
+): Promise<PsWarning[]> {
+  const ledger = await loadPsLedger(supabase, companyId, start, end)
+  const unattributed: Array<FlatLine & { bucket: PsBucket }> = []
+  for (const entry of ledger.entries) {
+    if (!hasNoBuyer(entry, ledger)) continue
+    for (const line of entry.journal_entry_lines ?? []) {
+      const bucket = ledger.accountBuckets.get(line.account_number)
+      if (bucket) unattributed.push({ ...line, entry, bucket })
+    }
+  }
+  return declaredUnattributedWarnings(supabase, companyId, start, end, ledger, unattributed)
+}
+
+interface Accumulator {
+  country: string
+  vatNumber: string
+  customerId: string | null
+  customerName: string | null
+  services: number
+  goods: number
+  triangulation: number
+  blocking: boolean
+  /** True once we've seen any non-zero posting, even if it later nets to zero. */
+  sawActivity: boolean
+}
+
+export async function generatePeriodiskSammanstallning(
+  supabase: SupabaseClient,
+  companyId: string,
+  periodType: PsPeriodType,
+  year: number,
+  period: number,
+): Promise<PeriodiskSammanstallningReport> {
+  if (periodType !== 'monthly' && periodType !== 'quarterly') {
+    throw new Error(`Invalid PS periodType: ${periodType}`)
+  }
+  if (periodType === 'monthly' && (period < 1 || period > 12)) {
+    throw new Error(`Invalid monthly period: ${period}`)
+  }
+  if (periodType === 'quarterly' && (period < 1 || period > 4)) {
+    throw new Error(`Invalid quarterly period: ${period}`)
+  }
+
+  const { start, end } = calculatePeriodDates(periodType, year, period)
+  const ledger = await loadPsLedger(supabase, companyId, start, end)
+  const { accountBuckets, entries, invoiceIdsByEntry } = ledger
 
   const allInvoiceIds = new Set<string>()
   for (const ids of invoiceIdsByEntry.values()) for (const id of ids) allInvoiceIds.add(id)
@@ -510,12 +589,9 @@ export async function generatePeriodiskSammanstallning(
     const bucket = accountBuckets.get(line.account_number)
     if (!bucket) continue
     const invoiceIds = invoiceIdsByEntry.get(line.entry.id)
-    // A manual, imported or bank-booked posting no register invoice points
-    // at cannot be filed (see the header); it is reported below instead. The
-    // engine's own entries never take this exit: an engine entry whose
-    // invoice is gone is a data defect and falls through to
-    // CUSTOMER_NOT_FOUND below.
-    if (!invoiceIds && !INVOICE_SOURCED_ENTRY_TYPES.has(line.entry.source_type ?? '')) {
+    // No buyer to file it under: reported below instead. An engine entry
+    // whose invoice is gone falls through to CUSTOMER_NOT_FOUND below.
+    if (hasNoBuyer(line.entry, ledger)) {
       unattributed.push({ ...line, bucket })
       continue
     }
@@ -660,17 +736,7 @@ export async function generatePeriodiskSammanstallning(
     )
   }
 
-  // What the PS cannot file but the declaration counts (crm#1336). A chain
-  // that nets to zero is in neither figure, so the declaration is asked only
-  // when an amount is left; it decides which verifikat count (the posted
-  // bokslut zeroing 3308 is no sale).
-  if (unattributed.length > 0) {
-    const byId = new Map(entries.map((entry) => [entry.id, entry]))
-    if (unattributedWarnings(unattributed, byId).length > 0) {
-      const declared = await fetchDeclaredEntryIds(supabase, companyId, start, end, psAccounts)
-      warnings.push(...unattributedWarnings(unattributed.filter((line) => declared.has(line.entry.id)), byId))
-    }
-  }
+  warnings.push(...(await declaredUnattributedWarnings(supabase, companyId, start, end, ledger, unattributed)))
 
   // Goods-sold-with-quarterly-period: blocking under SFL 35 kap. 2 §.
   // Companies selling goods intra-EU must file PS monthly; a quarterly filing

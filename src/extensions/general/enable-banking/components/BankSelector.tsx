@@ -25,6 +25,8 @@ const POPULAR_SWEDISH_BANKS = [
 ]
 
 interface BankSelectorProps {
+  /** The banks this door offers; every bank when absent. */
+  offered?: (bank: Bank) => boolean
   onConnect: (bank: Bank) => void
   onPsuTypeDetected?: (psuType: 'personal' | 'business') => void
   isConnecting?: boolean
@@ -120,6 +122,7 @@ function BankRow({ bank, isConnecting, connectingBankName, onConnect }: {
 }
 
 export function BankSelector({
+  offered,
   onConnect,
   onPsuTypeDetected,
   isConnecting = false,
@@ -159,7 +162,7 @@ export function BankSelector({
       '',
       `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`
     )
-    const match = matchBankByName(banks, requested)
+    const match = matchBankByName(offered ? banks.filter(offered) : banks, requested)
     if (match) {
       onConnect(match)
     } else {
@@ -201,7 +204,8 @@ export function BankSelector({
   // eslint-disable-next-line react-hooks/exhaustive-deps -- onPsuTypeDetected is a stable setter, only run on mount
   }, [onPsuTypeDetected])
 
-  const filteredBanks = banks.filter((bank) => bankMatchesQuery(bank, searchQuery))
+  const offeredBanks = offered ? banks.filter(offered) : banks
+  const filteredBanks = offeredBanks.filter((bank) => bankMatchesQuery(bank, searchQuery))
   const aliasHint = searchAliasHint(filteredBanks, searchQuery)
 
   const showPopular = !isSandbox && !searchQuery

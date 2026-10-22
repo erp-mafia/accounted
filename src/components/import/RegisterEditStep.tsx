@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl'
 import { ImportNotices } from '@/components/import/ImportNotices'
 import { PossibleDuplicateChoice } from '@/components/import/PossibleDuplicateChoice'
 import { makeNotice, type ImportNotice } from '@/lib/import/notices'
-import { countMatchedRows } from '@/lib/import/register-import-flow'
+import { countMatchedRows, invalidRowsNoticeParams } from '@/lib/import/register-import-flow'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
@@ -73,7 +73,8 @@ export default function RegisterEditStep({
     [rows, possibleDuplicate],
   )
   const newCount = rows.length - matchedCount
-  const hasErrors = useMemo(() => rows.some((r) => !r.is_valid), [rows])
+  const invalidNotice = useMemo(() => invalidRowsNoticeParams(rows), [rows])
+  const hasErrors = invalidNotice !== null
   const canContinue = rows.length > 0 && !hasErrors && !isLoading
 
   const updateRow = useCallback((id: string, updates: Partial<ReviewRow>) => {
@@ -92,7 +93,7 @@ export default function RegisterEditStep({
   // One notice block, so the page carries at most one ochre sentence
   // (ImportNotices, design convention 6).
   const allNotices: ImportNotice[] = [
-    ...(hasErrors ? [makeNotice('rows_invalid', 'action')] : []),
+    ...(invalidNotice ? [makeNotice('rows_invalid', 'action', invalidNotice)] : []),
     ...(possibleDuplicate && possibleDuplicateCount > 0
       ? [makeNotice(`possible_duplicate_${possibleDuplicate.party}s`, 'action', { count: possibleDuplicateCount })]
       : []),
@@ -171,9 +172,12 @@ export default function RegisterEditStep({
                     <td className="px-3 py-1.5">
                       <div className="flex items-center gap-1.5">
                         {!row.is_valid && (
+                          // The errors carry the file's values, and replays record
+                          // attributes as-is: the title stays generic and the
+                          // errors show in the unfolded row and the notice.
                           <span
                             className="text-destructive shrink-0"
-                            title={row.validation_errors.join(', ')}
+                            title={t('row_invalid_hint')}
                           >
                             <AlertTriangle className="h-3.5 w-3.5" />
                           </span>
@@ -231,6 +235,7 @@ export default function RegisterEditStep({
                     row={row}
                     fields={config.reviewFields}
                     colSpan={expanded.get(row.id)}
+                    errors={row.validation_errors}
                   />,
                 ]
               })}

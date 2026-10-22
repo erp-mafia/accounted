@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import SIEJobProgress from '@/components/import/SIEJobProgress'
 import { ImportWizardRail } from '@/components/import/ImportWizardRail'
+import { useOpenPaymentsAvailability } from '@/components/bank-feed/use-open-payments-availability'
 import { uploadSIEFile } from '@/lib/import/sie-job-client'
 import { describeImportResponseFailure, formatImportFailure } from '@/lib/import/import-failure'
 import { legacyNotices, type ImportNotice } from '@/lib/import/notices'
@@ -1697,6 +1698,13 @@ export default function ImportPage() {
     const qs = params.toString()
     router.replace(qs ? `/import?${qs}` : '/import', { scroll: false })
   }
+  // Where Open Payments reads the company's bank, connecting it is Koppla
+  // bank on the bank settings page (crm#1363): the PSD2 choice goes there
+  // rather than to the earlier provider's bank list.
+  const openPayments = useOpenPaymentsAvailability()
+  useEffect(() => {
+    if (mode === 'psd2' && openPayments.status === 'available') router.replace('/settings/banking')
+  }, [mode, openPayments.status, router])
   // Extensions are active if compiled in: no runtime toggle check needed
   const hasBankingExtension = ENABLED_EXTENSION_IDS.has('enable-banking')
   const hasMigrationExtension = ENABLED_EXTENSION_IDS.has('arcim-migration')

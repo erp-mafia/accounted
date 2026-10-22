@@ -176,6 +176,48 @@ describe('computeDeduction: base is labor cost INCLUDING VAT (HUSFL 6-9 §§)', 
   })
 })
 
+describe('computeDeduction: an exact half öre rounds up, whatever the float product says (#90)', () => {
+  // In integer öre: a share is exact, and a remainder of 50 hundredths of an
+  // öre is a tie that rounds up (roundOre's rule, as computeLineVat's moms).
+  const halfUp = (oreTimesPercent: number): number => Math.floor((oreTimesPercent + 50) / 100)
+
+  it('ROT 30 %: 1 000,28 kr + 25 % moms = 1 250,35 kr deducts 375,11, not 375,10', () => {
+    // 1250.35 * 0.3 is 375.10499999999996 in binary floating point.
+    expect(computeDeduction({ unit_price: 1000.28, quantity: 1, deduction_type: 'rot', vat_rate: 25 })).toBe(375.11)
+  })
+
+  it('RUT 50 %: 1 000,28 kr + 25 % moms = 1 250,35 kr deducts 625,18, not 625,17', () => {
+    expect(computeDeduction({ unit_price: 1000.28, quantity: 1, deduction_type: 'rut', vat_rate: 25 })).toBe(625.18)
+  })
+
+  it('keeps that öre on a foreign-currency invoice, where the line amounts are the claim', () => {
+    const rot: ItemForDeduction = { unit_price: 1000.28, quantity: 1, deduction_type: 'rot', vat_rate: 25 }
+    expect(computeLineDeductions([rot], { currency: 'EUR' })).toEqual([375.11])
+  })
+
+  it('a SEK claim follows the öre-rounded line: 640,995 kr becomes 641,00 and claims 641 kr', () => {
+    // 1 025,59 + 256,40 moms = 1 281,99 kr; RUT 50 % is exactly 640,995.
+    // The file check still holds: PrisForArbete 1 282, begärt 641, betalt 641.
+    const rut: ItemForDeduction = { unit_price: 1025.59, quantity: 1, deduction_type: 'rut', vat_rate: 25 }
+    expect(computeDeduction(rut)).toBe(641)
+    expect(computeLineDeductions([rut], { currency: 'SEK' })).toEqual([641])
+  })
+
+  it('equals the exact share on every öre amount up to 200 kr, with and without moms', () => {
+    const mismatches: string[] = []
+    for (let netOre = 1; netOre <= 20_000; netOre++) {
+      for (const vatRate of [0, 25]) {
+        const inclVatOre = netOre + halfUp(netOre * vatRate)
+        for (const [deductionType, percent] of [['rot', 30], ['rut', 50]] as const) {
+          const got = computeDeduction({ unit_price: netOre / 100, quantity: 1, deduction_type: deductionType, vat_rate: vatRate })
+          if (got !== halfUp(inclVatOre * percent) / 100) mismatches.push(`${deductionType} ${netOre / 100} @ ${vatRate}: ${got}`)
+        }
+      }
+    }
+    expect(mismatches).toEqual([])
+  })
+})
+
 describe('computeInvoiceDeductionTotal', () => {
   it('sums on the inkl.-moms base when rates are present', () => {
     const items: ItemForDeduction[] = [

@@ -1,6 +1,5 @@
 /** Submit durable SIE work and return its operation id before ledger writes. */
 import { readSIERequestFile } from '@/lib/import/sie-intake'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { z } from 'zod'
 import { accepted } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
@@ -16,7 +15,7 @@ import { submitSIEJob, SIEJobValidationError } from '@/lib/import/sie-jobs'
 import { runSIEWorker } from '@/lib/import/sie-job-worker'
 import { suggestSIEMappings } from '@/lib/import/sie-preview-mappings'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
-import type { SIEAccountMappingRecord } from '@/lib/import/types'
+import { loadMappings } from '@/lib/import/sie-import'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { SIEJobOptionsSchema } from '@/lib/api/schemas'
 import { apiKeyArrivalActor } from '@/lib/intake/arrivals'
@@ -170,13 +169,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // upload makes (#3312): class 9 amounts to 2999, unused definitions kept.
     // (This route used to pass [] as mappings, which the import's
     // mapping-coverage guard rejects for any real file.)
-    const storedMappings = await fetchAllRows<SIEAccountMappingRecord>(({from,to}) => ctx.supabase
-      .from('sie_account_mappings').select('*').eq('company_id',ctx.companyId).order('source_account').range(from,to))
-    const { mappings } = suggestSIEMappings(
-      parsed,
-      BAS_REFERENCE,
-      (storedMappings as SIEAccountMappingRecord[]) || undefined,
-    )
+    const storedMappings = await loadMappings(ctx.supabase, ctx.companyId!)
+    const { mappings } = suggestSIEMappings(parsed, BAS_REFERENCE, storedMappings)
 
     // Reject unmappable files with a clean 400 before starting the operation
     // row, mirroring the dashboard route: the alternative is a permanently

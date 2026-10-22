@@ -229,6 +229,9 @@ describe('gnubok_match_transaction_to_invoice: overpayment guard at stage time',
   it('still stages a partial payment, measured against the remaining after earlier payments', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueueReads(enqueue, 300, { status: 'partially_paid', total: 1000, paid_amount: 600, remaining_amount: 400 })
+    // A partial of a never-booked invoice reads the company's method: the
+    // kontantmetoden guard (crm#1364). Faktureringsmetoden stages it.
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
     enqueueStage(enqueue)
 
     await expect(run(supabase)).resolves.toMatchObject({ staged: true })

@@ -39,6 +39,12 @@ vi.mock('@/lib/invoices/rot-rut-receivable', () => ({
   getPayoutOreRounding: (...args: unknown[]) => mockGetPayoutOreRounding(...args),
 }))
 
+// Kontantmetoden's second step has its own tests (rot-rut-payout-recognition.test.ts):
+// here no invoice takes it, so the payout clears 1513 as before.
+vi.mock('@/lib/invoices/rot-rut-payout-recognition', () => ({
+  getPayoutRecognition: vi.fn().mockResolvedValue({ ok: true, recognition: null }),
+}))
+
 import { GET as eligibleGET } from '../eligible/route'
 import { POST as payoutFilePOST } from '../payout-file/route'
 import { GET as requestsGET } from '../payout-requests/route'

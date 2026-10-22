@@ -920,6 +920,21 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
       'The bank ledger is on the wrong side of the voucher: a withdrawal must credit the bank ledger, a deposit must debit it.',
     thrown_message_sv: true,
   },
+  // Importmoms (rutor 60-62) on a bank-row, inbox or bulk booking with no
+  // line in ruta 50 (#83, lib/bookkeeping/import-vat-base.ts). The door
+  // names the accounts; this is the fallback for an envelope without them.
+  IMPORT_VAT_WITHOUT_BASE: {
+    httpStatus: 400,
+    message_sv:
+      'Verifikationen har importmoms (2615/2625/2635, ruta 60-62) men inget beskattningsunderlag i ruta 50. Bokför underlaget på 4545, 4546 eller 4547, eller den utgående momsen på 2614, 2624 eller 2634 om köpet är omvänd skattskyldighet.',
+    message_en:
+      'The voucher carries import VAT (2615/2625/2635, boxes 60-62) but no taxable amount in box 50. Book the taxable amount on 4545, 4546 or 4547, or the output VAT on 2614, 2624 or 2634 if the purchase is reverse charge.',
+    thrown_message_sv: true,
+    remediation: {
+      description:
+        'Import of goods: add the beskattningsunderlag on 4545/4546/4547 in the same voucher. Reverse charge (EU goods, services from abroad): book the self-assessed output VAT on 2614/2624/2634, not 2615/2625/2635.',
+    },
+  },
   TRANSACTION_BOOK_POSSIBLE_DUPLICATE: {
     httpStatus: 409,
     message_sv:
@@ -1305,6 +1320,20 @@ const MATCH_INVOICE: Record<string, StructuredErrorEntry> = {
     message_en:
       'The invoice remaining amount changed after the match was staged, so the excess differs from the one shown for approval. Stage the match again.',
   },
+  MATCH_PAYMENT_FEE_NOT_ALLOWED: {
+    httpStatus: 400,
+    message_sv:
+      'Mellanskillnaden kan inte bokas som betaltjänstens avgift: det går bara när både betalningen och fakturan är i kronor och avgiften är under 10 % av fakturans återstående belopp. Matcha utan avgift som en delbetalning, eller kontrollera utbetalningen.',
+    message_en:
+      'The shortfall cannot be booked as the payment provider\'s fee: that works only when the payment and the invoice are both in SEK and the fee is under 10% of the invoice remaining amount. Match without the fee as a partial payment, or check the payout.',
+  },
+  MATCH_PAYMENT_FEE_CHANGED: {
+    httpStatus: 409,
+    message_sv:
+      'Fakturans återstående belopp har ändrats sedan matchningen förbereddes, så avgiften blir en annan än den som visades. Förbered matchningen igen.',
+    message_en:
+      'The invoice remaining amount changed after the match was staged, so the fee differs from the one shown for approval. Stage the match again.',
+  },
 }
 
 const LINK_TX_JE: Record<string, StructuredErrorEntry> = {
@@ -1686,6 +1715,13 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
       'Beloppet stämmer inte med summan av de valda begäran. Skatteverket betalar ut exakt beslutade belopp, så flera begäran kan bara bokföras tillsammans när transaktionen motsvarar summan till öret.',
     message_en:
       'The amount does not equal the sum of the selected requests. Skatteverket pays exactly the decided amounts, so several requests can only be booked together when the transaction equals their sum to the öre.',
+  },
+  ROT_RUT_SETTLE_DEDUCTION_SPLIT_UNKNOWN: {
+    httpStatus: 400,
+    message_sv:
+      'Utbetalningen kan inte delas upp per faktura. Under kontantmetoden bokförs Skatteverkets andel som försäljning och moms per faktura, så beslutet måste ange godkänt belopp för varje faktura. Importera beslutsfilen från Skatteverket och försök igen.',
+    message_en:
+      'The payout cannot be split per invoice. Under the cash method Skatteverket\'s share is booked as sales and VAT per invoice, so the decision must state the approved amount for each invoice. Import the decision file from Skatteverket and try again.',
   },
   ROT_RUT_SETTLE_RACE: {
     httpStatus: 409,
@@ -6359,6 +6395,20 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'En anställd med samma personnummer finns redan.',
     message_en: 'An employee with that personnummer already exists.',
   },
+  // Semesterlagen 16 § andra stycket 3-4 (lib/salary/employee-update-rules.ts):
+  // a changed employment_degree moves a sammalöneregeln employee to
+  // procentregeln unless a central kollektivavtal deviates (2 a §).
+  EMPLOYEE_SAMMALONEREGELN_DEGREE_CHANGED: {
+    httpStatus: 400,
+    message_sv:
+      'Sysselsättningsgraden ändras för en anställd med sammalöneregeln. Enligt semesterlagen 16 § andra stycket 3-4 beräknas semesterlönen då enligt procentregeln: byt semesterregel till procentregeln i samma ändring, eller bekräfta att ett centralt kollektivavtal tillåter sammalöneregeln (semesterlagen 2 a §).',
+    message_en:
+      'The employment degree changes for an employee on sammalöneregeln. Semesterlagen 16 § second paragraph points 3-4 then calculates holiday pay under procentregeln: set vacation_rule to procentregeln in the same update, or send sammaloneregeln_kollektivavtal_confirmed: true if a central kollektivavtal keeps sammalöneregeln (semesterlagen 2 a §).',
+    remediation: {
+      description:
+        'Resend the same update with vacation_rule: "procentregeln", or with sammaloneregeln_kollektivavtal_confirmed: true when a central kollektivavtal applies. The confirmation is recorded in the audit log with who gave it.',
+    },
+  },
   // A production deployment without PERSONNUMMER_ENCRYPTION_KEY: every
   // employee create (and every decrypt-on-read) throws before touching the
   // database. Deliberately not INTERNAL_ERROR: it is a configuration gap, not
@@ -7300,10 +7350,12 @@ const INVOICE_REGISTER_BOOKED: Record<string, StructuredErrorEntry> = {
   },
   INVOICE_REGISTER_FOREIGN_CURRENCY: {
     httpStatus: 400,
-    message_sv: 'Fakturan är i utländsk valuta. Än så länge kan bara fakturor i SEK registreras på det här sättet.',
-    message_en: 'The invoice is in a foreign currency. Only SEK invoices can be registered this way for now.',
+    message_sv:
+      'Fakturans valuta stämmer inte med verifikationen. En faktura i utländsk valuta registreras mot en verifikation som bokför kundfordran (151x) i samma valuta med beloppet i valutan, och kursen hämtas därifrån. En verifikation i kronor anger varken fakturans belopp i valutan eller kursen.',
+    message_en:
+      'The invoice\'s currency does not match its verifikat. A foreign-currency invoice registers against a verifikat that books the receivable (151x) in that currency with the amount in it, and the rate is read from there. A verifikat in kronor only states neither the invoice\'s own amount nor its rate.',
     remediation: {
-      description: 'Leave this invoice out of the register and tell the user that invoices in other currencies cannot be registered yet.',
+      description: 'Pass currency as the verifikat\'s 151x line states it, with total and remaining_amount in that currency. A verifikat booked in kronor only cannot take a foreign-currency invoice: leave it out of the register and tell the user its amount stays a difference between the kundreskontra and 1510.',
     },
   },
 }
@@ -8343,8 +8395,13 @@ const DIMENSION: Record<string, StructuredErrorEntry> = {
   },
   ACCOUNTING_METHOD_CHANGE_MID_YEAR: {
     httpStatus: 409,
-    message_sv: 'Bokföringsmetoden kan inte bytas mitt i ett räkenskapsår som har bokförda verifikationer.',
-    message_en: 'The accounting method cannot change in the middle of a fiscal year that has posted vouchers: it governs the whole year. A person changes it in the settings before the next fiscal year.',
+    message_sv: 'Bokföringsmetoden kan inte bytas mitt i ett räkenskapsår som har bokförda verifikationer, utom som en rättelse med angivet skäl.',
+    message_en: 'The accounting method cannot change in the middle of a fiscal year that has posted vouchers: it governs the whole year. Change it before the next fiscal year, or, if the setting was wrong from the start, send accounting_method_correction_reason to record the change as a correction.',
+  },
+  ACCOUNTING_METHOD_CHANGE_OPEN_INVOICES: {
+    httpStatus: 409,
+    message_sv: 'Bokföringsmetoden kan inte rättas medan obetalda fakturor saknar egen verifikation.',
+    message_en: 'The accounting method cannot be corrected while open customer or supplier invoices have no verifikat of their own: after the switch their payment would book the sale or purchase twice, or never. Book them, or link them to the verifikat that booked them, first.',
   },
   BOOKKEEPING_LOCK_REOPENS_FILED_VAT: {
     httpStatus: 409,
@@ -8903,6 +8960,22 @@ const COMPANY_SETTINGS: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Periodisk sammanställning kräver momsregistrering och EU-handel.',
     message_en: 'periodisk_sammanstallning_enabled requires vat_registered and vat_has_eu_trade.',
+  },
+  // A booking path could not read the company's accounting method
+  // (lib/company/accounting-method.ts). It refuses instead of guessing
+  // faktureringsmetoden: a kontantmetod invoice's payment would then book no
+  // revenue and no moms (accounted#58).
+  SETTINGS_ACCOUNTING_METHOD_UNREADABLE: {
+    httpStatus: 503,
+    message_sv: 'Företagets bokföringsmetod kunde inte läsas, så inget bokfördes. Försök igen om en stund.',
+    message_en: 'The company\'s accounting method could not be read, so nothing was booked or previewed. Retry the same request after a short backoff.',
+    retryable: true,
+  },
+  SETTINGS_ACCOUNTING_METHOD_MISSING: {
+    httpStatus: 409,
+    message_sv: 'Företagets bokföringsmetod saknas i inställningarna, så inget bokfördes. Välj bokföringsmetod under Inställningar → Bokföring.',
+    message_en: 'The company has no readable accounting method (company_settings.accounting_method), so nothing was booked or previewed. Set it under Inställningar → Bokföring (Settings → Bookkeeping), then retry.',
+    remediation: { description: 'Set the company\'s accounting method (accrual or cash) in the company settings, then retry.' },
   },
 }
 

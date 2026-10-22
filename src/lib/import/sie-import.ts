@@ -17,6 +17,7 @@ import type {
   SIEImport,
   SIETransactionLine,
   SIEObjectBalance,
+  SIEAccountMappingRecord,
 } from './types'
 import type { CreateJournalEntryInput, CreateJournalEntryLineInput } from '@/types'
 import type { SIEPreparedEntry } from './sie-job-contract'
@@ -1408,27 +1409,28 @@ export async function saveMappings(
 }
 
 /**
- * Load existing account mappings for a user
+ * The company's remembered account mappings: the one reader of
+ * sie_account_mappings that every SIE entry uses (the file upload's preview,
+ * execute without supplied mappings, the v1 API, the MCP preflight and the
+ * provider migration's /sie-data step).
+ *
+ * Paged, because a company that imported a provider's full chart holds more
+ * than PostgREST's 1,000-row page (up to 3,515 in production). An unpaged read
+ * returned an arbitrary 1,000, so a remembered non-identity mapping fell back
+ * to a suggestion in the preview, and the dashboard sends the previewed
+ * mappings to execute. Ordered by source_account, unique per company
+ * (UNIQUE (company_id, source_account)), so the pages never overlap or skip.
  */
-export async function loadMappings(supabase: SupabaseClient, companyId: string): Promise<Map<string, AccountMapping>> {
-  const { data } = await supabase
-    .from('sie_account_mappings')
-    .select('*')
-    .eq('company_id', companyId)
-
-  const map = new Map<string, AccountMapping>()
-
-  for (const record of data || []) {
-    map.set(record.source_account, {
-      sourceAccount: record.source_account,
-      sourceName: record.source_name || '',
-      targetAccount: record.target_account,
-      targetName: '', // Will be filled in by the mapper
-      confidence: record.confidence,
-      matchType: record.match_type,
-      isOverride: true,
-    })
-  }
-
-  return map
+export async function loadMappings(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<SIEAccountMappingRecord[]> {
+  return fetchAllRows<SIEAccountMappingRecord>(({ from, to }) =>
+    supabase
+      .from('sie_account_mappings')
+      .select('*')
+      .eq('company_id', companyId)
+      .order('source_account')
+      .range(from, to),
+  )
 }

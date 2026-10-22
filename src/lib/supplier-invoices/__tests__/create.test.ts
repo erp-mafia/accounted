@@ -107,6 +107,31 @@ describe('createSupplierInvoice dry run', () => {
     expectNothingWritten()
   })
 
+  // accounted#58: an unreadable settings row used to mean "accrual,
+  // VAT-registered", so a kontantmetod company's invoice was booked at
+  // registration with ingående moms it may not deduct.
+  it('refuses when the accounting method cannot be read, and writes nothing', async () => {
+    setTable('company_settings', { data: null, error: { code: '57014', message: 'statement timeout' } })
+
+    const result = await createSupplierInvoice(ctx(), body())
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'SETTINGS_ACCOUNTING_METHOD_UNREADABLE',
+      details: { reason: 'read_failed' },
+    })
+    expectNothingWritten()
+  })
+
+  it('refuses when the settings row is missing, and writes nothing', async () => {
+    setTable('company_settings', { data: null })
+
+    const result = await createSupplierInvoice(ctx(), body())
+
+    expect(result).toMatchObject({ ok: false, code: 'SETTINGS_ACCOUNTING_METHOD_MISSING' })
+    expectNothingWritten()
+  })
+
   it('would not create a registration verifikat when booking is deferred (#967)', async () => {
     setTable('company_settings', { data: { accounting_method: 'accrual', defer_invoice_booking: true } })
 
@@ -131,6 +156,54 @@ describe('createSupplierInvoice dry run', () => {
       would_create_registration_journal_entry: true,
     })
     expectNothingWritten()
+  })
+
+  // #73: ML 2023:200 7 kap. 26 och 40 §§ put an EU goods acquisition's
+  // reverse-charge moms in the invoice's period whatever the method.
+  describe('an EU goods acquisition under kontantmetoden', () => {
+    const euGoods = (overrides: Partial<CreateSupplierInvoiceInput> = {}) =>
+      body({
+        reverse_charge: true,
+        reverse_charge_kind: 'eu_goods',
+        items: [{ description: 'Varor', amount: 1000, account_number: '4010', vat_rate: 0 }],
+        ...overrides,
+      } as Partial<CreateSupplierInvoiceInput>)
+
+    beforeEach(() => {
+      setTable('suppliers', { data: makeSupplier({ id: SUPPLIER_ID, supplier_type: 'eu_business' }) })
+    })
+
+    it('would create the registration verifikat on the invoice date', async () => {
+      setTable('company_settings', { data: { accounting_method: 'cash', vat_registered: true } })
+
+      const result = await createSupplierInvoice(ctx(), euGoods(), { dryRun: true })
+
+      if (!result.ok || !result.dryRun) throw new Error('expected a dry-run preview')
+      expect(result.preview).toMatchObject({ reverse_charge: true, reverse_charge_kind: 'eu_goods', total: 1000 })
+      expect(result.preview.would_create_registration_journal_entry).toBe(true)
+      expectNothingWritten()
+    })
+
+    it('keeps an EU service purchase for the payment (7 kap. 16 § andra stycket)', async () => {
+      setTable('company_settings', { data: { accounting_method: 'cash', vat_registered: true } })
+
+      const result = await createSupplierInvoice(ctx(), euGoods({ reverse_charge_kind: 'eu_services' }), { dryRun: true })
+
+      if (!result.ok || !result.dryRun) throw new Error('expected a dry-run preview')
+      expect(result.preview.would_create_registration_journal_entry).toBe(false)
+      expectNothingWritten()
+    })
+
+    it('refuses an invoice date in a locked period, as it now books there', async () => {
+      setTable('company_settings', {
+        data: { accounting_method: 'cash', bookkeeping_locked_through: '2024-12-31' },
+      })
+
+      const result = await createSupplierInvoice(ctx(), euGoods(), { dryRun: true })
+
+      expect(result).toMatchObject({ ok: false, code: 'PERIOD_LOCKED' })
+      expectNothingWritten()
+    })
   })
 
   it('surfaces the same PERIOD_LOCKED refusal a live commit would', async () => {

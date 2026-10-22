@@ -270,6 +270,25 @@ describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: tax/avgifter overr
     expect(findCalls('salary_runs', 'update')).toHaveLength(0)
   })
 
+  it('refuses an avgiftsunderlag of 0 without an avgift of 0 (crm#1372) and writes nothing', async () => {
+    // Underlag 0 declares the pay in the AGI as no underlag (FK131-FK134), so
+    // Skatteverket charges nothing: a booked avgift next to it is for nothing.
+    for (const avgifter_amount_override of [null, 141.39, undefined]) {
+      const { findCalls } = authed()
+      const response = await PATCH(
+        createMockRequest('/api/salary/runs/run-1/employees/emp-1', {
+          method: 'PATCH',
+          body: { avgifter_basis_override: 0, avgifter_amount_override, reason: 'Under 1 000 kr i år' },
+        }),
+        createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+      )
+      const { status, body } = await parseJsonResponse<{ error: string }>(response)
+      expect(status).toBe(400)
+      expect(JSON.stringify(body)).toContain('Sätt även arbetsgivaravgifterna till 0 kr')
+      expect(findCalls('salary_run_employees', 'update')).toHaveLength(0)
+    }
+  })
+
   it('refreshes the stored run totals from the effective per-employee figures', async () => {
     const { enqueueMany, findCalls } = authed()
     enqueueMany([

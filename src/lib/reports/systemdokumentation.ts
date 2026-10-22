@@ -35,6 +35,7 @@ import {
   CORRECTION_AND_LOCK_RULES,
   INVOICE_NUMBER_RULES,
   KONTANTMETOD_CUTOFF_RULES,
+  KONTANTMETOD_EU_GOODS_RULE,
   SIE_IMPORT_RULES,
   SUPPLIER_INVOICE_ROUNDING_RULES,
   SUPPLIER_PAYMENT_RULES,
@@ -307,7 +308,7 @@ export function buildSystemdokumentation(facts: SystemdokumentationFacts): Syste
     { rubrik: 'Öresavrundning, införande', text: SUPPLIER_INVOICE_ROUNDING_RULES.historik },
     { rubrik: 'Bokslut enligt kontantmetoden', text: KONTANTMETOD_CUTOFF_RULES },
     { rubrik: 'Leverantörsbetalningens belopp', text: `${SUPPLIER_PAYMENT_RULES.bankmatchning} ${SUPPLIER_PAYMENT_RULES.andring} ${SUPPLIER_PAYMENT_RULES.historik}` },
-    { rubrik: 'Moms', text: 'Momssats väljs per rad och byts inte automatiskt efter datum. Utgående moms bokförs på 2611, 2621 och 2631 efter sats, ingående på 2641. Omvänd skattskyldighet vid inköp bokför beräknad utgående moms på 2614, 2624 eller 2634 och ingående på 2645 (utland) eller 2647 (inrikes). Förvärv av varor från EU och importmoms skapas inte automatiskt från leverantörsfakturor utan bokförs manuellt.' },
+    { rubrik: 'Moms', text: 'Momssats väljs per rad och byts inte automatiskt efter datum. Utgående moms bokförs på 2611, 2621 och 2631 efter sats, ingående på 2641. Omvänd skattskyldighet vid inköp bokför beräknad utgående moms på 2614, 2624 eller 2634 och ingående på 2645 (utland) eller 2647 (inrikes). Förvärv av varor från ett annat EU-land bokförs från leverantörsfakturan med omvänd skattskyldighet och beskattningsunderlaget i ruta 20. Importmoms skapas inte automatiskt från leverantörsfakturor utan bokförs manuellt.' },
     { rubrik: 'Bankavstämning', text: 'Banktransaktioner matchas mot bokförda verifikationer på belopp och datum, referens, datumintervall och sannolikhet. Förslag med mycket hög säkerhet kopplas automatiskt mot redan bokförda verifikationer; inga nya verifikationer skapas då.' },
     { rubrik: 'Maskinell och automatisk bokföring', text: 'Förslag från maskinella hjälpmedel (kategorisering av banktransaktioner, avläsning av underlag) bokförs först när en användare har godkänt dem. Utan godkännande per verifikation bokför: schemalagda periodiseringsposter, återkommande fakturor med automatiskt utskick och API-nycklar med skrivbehörighet. Varje verifikation registreras i behandlingshistoriken med tidpunkt, sätt och utförare.' },
     { rubrik: 'Valutor', text: 'Belopp i utländsk valuta räknas om med Riksbankens kurs; valutaomvärdering bokförs som egen verifikation.' },
@@ -315,6 +316,9 @@ export function buildSystemdokumentation(facts: SystemdokumentationFacts): Syste
   ]
   const collections = facts.collections ?? null
   if (collections) behandlingsregler.push({ rubrik: 'Påminnelser och inkasso', text: collectionsRuleText(collections) })
+  if (s?.accounting_method === 'cash') {
+    behandlingsregler.push({ rubrik: 'Varor från annat EU-land, kontantmetoden', text: KONTANTMETOD_EU_GOODS_RULE })
+  }
   if ((switched.switches.cashPartialPayments && s?.accounting_method === 'cash') || switched.vouchers.cashPartialPayments) {
     behandlingsregler.push({ rubrik: 'Delbetalningar, kontantmetoden', text: CASH_PARTIAL_PAYMENT_RULE })
   }
