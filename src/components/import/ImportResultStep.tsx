@@ -1,5 +1,6 @@
 'use client'
 
+import type { ReactNode } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
@@ -23,6 +24,9 @@ import { resolveNotices } from '@/lib/import/notices'
 import { ImportNotices } from '@/components/import/ImportNotices'
 import type { TheaterModel } from '@/lib/import/theater-model'
 
+/** The lead of a skipped-voucher line: its count and kind, set apart. */
+const strong = (chunks: ReactNode) => <span className="font-medium">{chunks}</span>
+
 interface ImportResultStepProps {
   result: ImportResult
   onNewImport: () => void
@@ -42,6 +46,7 @@ export default function ImportResultStep({
   theaterModel = null,
 }: ImportResultStepProps) {
   const t = useTranslations('import')
+  const tStep = useTranslations('import.sie_result')
   const { dialogProps, confirm } = useDestructiveConfirm()
   const { isSandbox } = useCompany()
   const hasBanking = ENABLED_EXTENSION_IDS.has('enable-banking')
@@ -157,11 +162,11 @@ export default function ImportResultStep({
               !result.success && 'text-destructive',
             )}
           >
-            {result.success ? 'Import genomförd' : 'Import misslyckades'}
+            {result.success ? tStep('success_title') : tStep('failed_title')}
           </h2>
           {!result.success && (
             <p className="mt-1 text-[13px] text-muted-foreground">
-              Det uppstod fel under importen. Läs felmeddelanden nedan för att förstå vad som gick snett och hur du kan åtgärda det.
+              {tStep('failed_description')}
             </p>
           )}
         </div>
@@ -173,34 +178,32 @@ export default function ImportResultStep({
         <DefList>
           {!showReveal && (
             <>
-              <DefRow label="Verifikationer skapade" labelWidth={180}>
+              <DefRow label={tStep('vouchers_created')} labelWidth={180}>
                 {result.journalEntriesCreated}
               </DefRow>
               <DefRow label={t('result_accounts_created')} labelWidth={180}>
                 {result.accountsCreated ?? 0}
                 {result.accountsRenamed !== undefined && result.accountsRenamed > 0 && (
                   <span className="block text-[12.5px] text-muted-foreground">
-                    {result.accountsRenamed === 1
-                      ? '1 konto fick sitt namn från källsystemet'
-                      : `${result.accountsRenamed} konton fick sina namn från källsystemet`}
+                    {tStep('accounts_renamed', { count: result.accountsRenamed })}
                   </span>
                 )}
               </DefRow>
-              <DefRow label="Räkenskapsår" labelWidth={180}>
-                {result.fiscalPeriodId ? 'Skapat' : 'Befintligt'}
+              <DefRow label={tStep('fiscal_year')} labelWidth={180}>
+                {result.fiscalPeriodId ? tStep('fiscal_year_created') : tStep('fiscal_year_existing')}
               </DefRow>
-              <DefRow label="Ingående balanser" labelWidth={180}>
+              <DefRow label={tStep('opening_balances')} labelWidth={180}>
                 {result.openingBalanceEntryId
-                  ? 'Importerade'
+                  ? tStep('opening_balances_imported')
                   : result.details?.openingBalanceSkipped === 'prior_activity'
-                    ? 'Härledda'
-                    : 'Inga'}
+                    ? tStep('opening_balances_derived')
+                    : tStep('opening_balances_none')}
                 {/* The file's #IB was deliberately not booked: the company
                     already has posted entries, so this year's IB is the prior
                     year's UB. Said here, not as a warning (#2462). */}
                 {!result.openingBalanceEntryId && result.details?.openingBalanceSkipped === 'prior_activity' && (
                   <span className="block text-[12.5px] text-muted-foreground">
-                    Från föregående års utgående balans, eftersom bolaget redan har bokförda verifikationer.
+                    {tStep('opening_balances_derived_hint')}
                   </span>
                 )}
               </DefRow>
@@ -215,9 +218,7 @@ export default function ImportResultStep({
                 <span className="inline-flex items-center gap-2">
                   {t('result_ib_resync_label', { name: result.nextPeriodIBResync.nextPeriodName })}
                   <HelpPopover className="shrink-0">
-                    Eftersom du importerade ett tidigare räkenskapsår uppdaterades ingående balanser för{' '}
-                    {result.nextPeriodIBResync.nextPeriodName} automatiskt (gammal IB makulerad, ny IB
-                    skapad från utgående balans).
+                    {tStep('ib_resync_help', { name: result.nextPeriodIBResync.nextPeriodName })}
                   </HelpPopover>
                 </span>
               }
@@ -234,18 +235,21 @@ export default function ImportResultStep({
                 <span className="inline-flex items-center gap-2">
                   {t('result_dimensions_label')}
                   <HelpPopover className="shrink-0">
-                    Filen innehöll kostnadsställen/projekt: {result.dimensionsImported.taggedLines}{' '}
-                    taggade rader importerades
-                    {result.dimensionsImported.values > 0 && (
-                      <> och {result.dimensionsImported.values} nya värden lades till i registret</>
-                    )}
-                    .{' '}
+                    {tStep('dimensions_help', {
+                      lines: result.dimensionsImported.taggedLines,
+                      values: result.dimensionsImported.values,
+                    })}
                     {result.dimensionsImported.toggleEnabled && (
-                      <>Dimensioner aktiverades automatiskt för företaget: du hittar registret under{' '}
-                      <Link href="/dimensions" className="underline underline-offset-4">
-                        Kostnadsställen &amp; projekt
-                      </Link>
-                      .</>
+                      <>
+                        {' '}
+                        {tStep.rich('dimensions_enabled', {
+                          link: (chunks) => (
+                            <Link href="/dimensions" className="underline underline-offset-4">
+                              {chunks}
+                            </Link>
+                          ),
+                        })}
+                      </>
                     )}
                   </HelpPopover>
                 </span>
@@ -265,28 +269,16 @@ export default function ImportResultStep({
                   <HelpPopover className="shrink-0">
                     <div className="space-y-2">
                       {skipped.empty > 0 && (
-                        <p>
-                          <span className="font-medium">{skipped.empty} tomma verifikationer.</span>{' '}
-                          Platshållare utan bokföringsrader: vanligt i Fortnox och Visma. Påverkar inte din bokföring.
-                        </p>
+                        <p>{tStep.rich('skipped_empty', { count: skipped.empty, b: strong })}</p>
                       )}
                       {skipped.unbalanced > 0 && (
-                        <p>
-                          <span className="font-medium">{skipped.unbalanced} obalanserade verifikationer.</span>{' '}
-                          Debet och kredit stämmer inte överens i källsystemet. Saldon har justerats automatiskt.
-                        </p>
+                        <p>{tStep.rich('skipped_unbalanced', { count: skipped.unbalanced, b: strong })}</p>
                       )}
                       {skipped.singleLine > 0 && (
-                        <p>
-                          <span className="font-medium">{skipped.singleLine} enradsverifikationer.</span>{' '}
-                          Verifikationer med bara en rad (t.ex. periodiseringar). Kräver minst två rader för dubbelbokning.
-                        </p>
+                        <p>{tStep.rich('skipped_single_line', { count: skipped.singleLine, b: strong })}</p>
                       )}
                       {skipped.unmapped > 0 && (
-                        <p>
-                          <span className="font-medium">{skipped.unmapped} verifikationer med ej kopplade konton.</span>{' '}
-                          Innehåller konton som inte kunde kopplas till din kontoplan.
-                        </p>
+                        <p>{tStep.rich('skipped_unmapped', { count: skipped.unmapped, b: strong })}</p>
                       )}
                     </div>
                   </HelpPopover>
@@ -344,8 +336,7 @@ export default function ImportResultStep({
         <AttnLine
           trailing={
             <HelpPopover className="ml-2 inline-flex align-middle">
-              Nästa räkenskapsår är låst eller stängt. Lås upp perioden och kör importen igen om du
-              vill att ingående balanser ska uppdateras automatiskt.
+              {tStep('ib_resync_skipped_help')}
             </HelpPopover>
           }
         >
@@ -357,15 +348,15 @@ export default function ImportResultStep({
       {hasErrors && (
         <div className="space-y-2">
           <p className="flex items-center gap-2 text-[13px] font-medium text-destructive">
-            Fel ({result.errors.length})
+            {tStep('errors', { count: result.errors.length })}
             {!result.success && (
               <HelpPopover className="shrink-0">
                 <div className="space-y-1">
-                  <p className="font-medium">Vad kan du göra?</p>
+                  <p className="font-medium">{tStep('what_to_do')}</p>
                   <ul className="list-disc list-inside space-y-1">
-                    <li>Kontrollera att SIE-filen exporterades korrekt från källsystemet</li>
-                    <li>Prova att exportera filen igen och ladda upp på nytt</li>
-                    <li>Om felet kvarstår, kontakta support med felmeddelandet ovan</li>
+                    <li>{tStep('what_to_do_check_export')}</li>
+                    <li>{tStep('what_to_do_export_again')}</li>
+                    <li>{tStep('what_to_do_contact_support')}</li>
                   </ul>
                 </div>
               </HelpPopover>
@@ -385,13 +376,11 @@ export default function ImportResultStep({
           <AttnLine
             trailing={
               <HelpPopover className="ml-2 inline-flex align-middle">
-                Följande räkenskapsår saknar omföring av årets resultat till eget kapital.
-                Senare års balansräkning visar en differens på beloppet tills omföringen
-                bokförs (konto 8999 mot eget kapital, t.ex. 2099) i respektive år.
+                {tStep('untransferred_help')}
               </HelpPopover>
             }
           >
-            Årets resultat är inte omfört
+            {tStep('untransferred_title')}
           </AttnLine>
           <DefList>
             {untransferred.map((u) => (
@@ -445,12 +434,12 @@ export default function ImportResultStep({
         <div className="flex flex-col gap-2 sm:flex-row">
           <Button variant="outline" onClick={onNewImport}>
             <RotateCcw className="mr-2 h-4 w-4" />
-            Ny import
+            {tStep('new_import')}
           </Button>
           {result.success && result.importId && onUndo && (
             <Button variant="outline" className="text-destructive hover:text-destructive" onClick={handleUndoClick}>
               <Undo2 className="mr-2 h-4 w-4" />
-              Ångra import
+              {tStep('undo_import')}
             </Button>
           )}
         </div>
@@ -459,13 +448,13 @@ export default function ImportResultStep({
             <>
               <Button variant="outline" asChild>
                 <Link href="/bookkeeping">
-                  Visa bokföring
+                  {tStep('view_bookkeeping')}
                   <ExternalLink className="ml-2 h-4 w-4" />
                 </Link>
               </Button>
               <Button asChild>
                 <Link href="/reports">
-                  Visa rapporter
+                  {tStep('view_reports')}
                   <ExternalLink className="ml-2 h-4 w-4" />
                 </Link>
               </Button>

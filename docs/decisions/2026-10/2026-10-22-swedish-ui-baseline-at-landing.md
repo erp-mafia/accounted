@@ -1,0 +1,1 @@
+[2026-10-22] The swedish-ui-literal baseline is main's count when the ratchet lands: rebased onto main, vocabulary.ts goes 126 to 127 for the webshop-order approval sentence (!739), written in that file's existing Swedish pattern; translating the file is the follow-up, not part of this MR.

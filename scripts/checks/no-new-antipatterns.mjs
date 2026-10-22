@@ -227,6 +227,13 @@
  *      allowed for good, with their reason, in PERMANENT_ALLOWLIST.
  *      Implementation, the classified surface and rationale in
  *      posting-port-bypass.mjs.
+ *   27. swedish-ui-literal: Swedish text written into a UI file (JSX text,
+ *      a placeholder, a toast title, a label map) instead of a message key,
+ *      so it renders in Swedish under the English locale (crm#1356). Per-file
+ *      count ratchet, same rules as 22: a file's count may only go down, a
+ *      new file may not introduce one. Surfaces that stay Swedish by rule are
+ *      listed with their reason in SWEDISH_BY_DESIGN. Implementation and
+ *      rationale in swedish-ui-literal.mjs.
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -284,6 +291,7 @@ import {
   PERMANENT_ALLOWLIST,
   POSTING_PORT_BYPASS_HINT,
 } from './posting-port-bypass.mjs'
+import { findSwedishUiLiterals, SWEDISH_UI_LITERAL_HINT } from './swedish-ui-literal.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const SOURCE_ROOT = path.join(ROOT, 'src')
@@ -1301,6 +1309,7 @@ const current = {
   scriptInitCondition: findScriptInitConditionFindings(ROOT).findings,
   jurisdictionWelds: findJurisdictionWelds(SOURCE_ROOT),
   postingPort: findPostingPortBypasses(ROOT),
+  swedishUiLiterals: findSwedishUiLiterals(SOURCE_ROOT),
 }
 
 const dialogOverflowFiles = [...new Set(current.dialogOverflowRisk.map((f) => f.file))].sort()
@@ -1312,6 +1321,7 @@ const kernelImportEdges = current.jurisdictionWelds.kernelImports
 const kernelImportEdgeCount = Object.values(kernelImportEdges).reduce((n, mods) => n + mods.length, 0)
 const postingBypassEdges = current.postingPort.bypasses
 const postingBypassEdgeCount = countEdges(postingBypassEdges)
+const swedishUiLiteralCounts = countByFile(current.swedishUiLiterals)
 
 const isUpdate = process.argv.includes('--update')
 
@@ -1385,6 +1395,10 @@ if (isUpdate) {
       count: countEdges(postingBypassFiles),
       files: postingBypassFiles,
     },
+    swedishUiLiteral: {
+      count: current.swedishUiLiterals.length,
+      files: swedishUiLiteralCounts,
+    },
   }
   // The jurisdiction-weld ratchets may only be raised with a decision file
   // (docs/decisions/YYYY-MM/): say so loudly when this re-baseline raises any of them. A ratchet
@@ -1404,6 +1418,11 @@ if (isUpdate) {
     ...(previous.kernelImports
       ? compareFileEdges(previous.kernelImports.files ?? {}, kernelImportEdges).added.map(
           (e) => `kernel-import ${e.file} -> ${e.module}`,
+        )
+      : []),
+    ...(previous.swedishUiLiteral
+      ? compareFileCounts(previous.swedishUiLiteral.files ?? {}, swedishUiLiteralCounts).grown.map(
+          (g) => `swedish-ui-literal ${g.file}: ${g.baseline} -> ${g.current}`,
         )
       : []),
   ]
@@ -2169,6 +2188,25 @@ const stalePermanentAllowlist = Object.entries(PERMANENT_ALLOWLIST).flatMap(([fi
   names.filter((n) => !(current.postingPort.allowlisted[file] ?? []).includes(n)).map((n) => `${file}: ${n}`),
 )
 
+// 1l. swedish-ui-literal: per-file ratchet from swedish-ui-literal.mjs. A
+// file above its baseline count is a new Swedish string that skipped the
+// message catalogue. A missing baseline key counts as empty, so the guard
+// fails closed.
+const swedishUiLiteralRatchet = compareFileCounts(baseline.swedishUiLiteral?.files ?? {}, swedishUiLiteralCounts)
+if (swedishUiLiteralRatchet.grown.length) {
+  failed = true
+  console.error(
+    `\n✗ swedish-ui-literal: ${swedishUiLiteralRatchet.grown.length} file(s) gained Swedish text written ` +
+      'straight into the UI instead of a message key:',
+  )
+  for (const g of swedishUiLiteralRatchet.grown) {
+    console.error(`    ${g.file}: ${g.current} (baseline ${g.baseline})`)
+    printSites(current.swedishUiLiterals, g.file, g.baseline)
+  }
+  SWEDISH_UI_LITERAL_HINT.forEach((l, i) => console.error(`  ${i === 0 ? '→' : ' '} ${l}`))
+  console.error(NEVER_RAISE)
+}
+
 // 2. naive-ore-round: count may not increase.
 if (current.naiveOreRound > baseline.naiveOreRound.count) {
   failed = true
@@ -2191,6 +2229,7 @@ if (
   sekLiteralRatchet.shrunk.length ||
   kernelImportRatchet.removed.length ||
   postingBypassRatchet.removed.length ||
+  swedishUiLiteralRatchet.shrunk.length ||
   current.naiveOreRound < baseline.naiveOreRound.count ||
   current.literalLegalForm.length < literalLegalFormBaseline
 ) {
@@ -2206,6 +2245,10 @@ if (
     )
   if (kernelImportRatchet.removed.length)
     console.log(`    kernel-import: -${kernelImportRatchet.removed.length} import edge(s)`)
+  if (swedishUiLiteralRatchet.shrunk.length)
+    console.log(
+      `    swedish-ui-literal: -${shrunkBy(swedishUiLiteralRatchet)} site(s) in ${swedishUiLiteralRatchet.shrunk.length} file(s)`,
+    )
   if (postingBypassRatchet.removed.length) {
     console.log(
       `    posting-port-bypass: -${postingBypassRatchet.removed.length} edge(s), now through the posting port or gone:`,
@@ -2284,5 +2327,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, hand-written-sie-extensions: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, static-init-import: 0, lazy-init-reach: ${current.lazyInitEntries.length}/${lazyInitBaseline?.count ?? 'no baseline'}, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, client-server-only: ${current.clientServerOnly.length}, consent-token-access: 0, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), unsigned-provider-names: ${current.unsignedProviderNames.skipped ? 'skipped' : current.unsignedProviderNames.findings.length}, table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), functiondef-patch: ${functiondefPatchFiles.length}/${functiondefPatchBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s), utc-today: ${current.utcToday.length} in ${UTC_TODAY_ALLOWED.size} allowlisted file(s), bas-account-literal: ${current.jurisdictionWelds.basAccountLiteral.length} in ${Object.keys(basLiteralCounts).length} file(s), sek-literal: ${current.jurisdictionWelds.sekLiteral.length} in ${Object.keys(sekLiteralCounts).length} file(s), kernel-import: ${kernelImportEdgeCount} edge(s), posting-port-bypass: ${postingBypassEdgeCount}/${countEdges(postingBypassBaseline)} baselined edge(s) + ${countEdges(current.postingPort.allowlisted)} permanent, decision-log: 0, script-init-condition: 0).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, hand-written-sie-extensions: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, static-init-import: 0, lazy-init-reach: ${current.lazyInitEntries.length}/${lazyInitBaseline?.count ?? 'no baseline'}, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, client-server-only: ${current.clientServerOnly.length}, consent-token-access: 0, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), unsigned-provider-names: ${current.unsignedProviderNames.skipped ? 'skipped' : current.unsignedProviderNames.findings.length}, table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), functiondef-patch: ${functiondefPatchFiles.length}/${functiondefPatchBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s), utc-today: ${current.utcToday.length} in ${UTC_TODAY_ALLOWED.size} allowlisted file(s), bas-account-literal: ${current.jurisdictionWelds.basAccountLiteral.length} in ${Object.keys(basLiteralCounts).length} file(s), sek-literal: ${current.jurisdictionWelds.sekLiteral.length} in ${Object.keys(sekLiteralCounts).length} file(s), kernel-import: ${kernelImportEdgeCount} edge(s), posting-port-bypass: ${postingBypassEdgeCount}/${countEdges(postingBypassBaseline)} baselined edge(s) + ${countEdges(current.postingPort.allowlisted)} permanent, swedish-ui-literal: ${current.swedishUiLiterals.length} in ${Object.keys(swedishUiLiteralCounts).length} file(s), decision-log: 0, script-init-condition: 0).`,
 )

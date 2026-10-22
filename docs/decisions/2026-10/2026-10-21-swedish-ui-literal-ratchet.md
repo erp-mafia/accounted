@@ -1,0 +1,1 @@
+[2026-10-21] Swedish text in UI files is stopped by a per-file check:guards ratchet (swedish-ui-literal) plus a full translation of the SIE import path, not a one-off sweep of every screen: the class needs a signal at authoring time; the 184 files left are a list that can only shrink (crm#1356).

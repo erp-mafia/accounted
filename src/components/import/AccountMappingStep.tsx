@@ -39,7 +39,6 @@ import { AttnLine } from '@/components/ui/attn-line'
 import type { ImportNotice } from '@/lib/import/notices'
 import { isAccountNumber } from '@/lib/invariants/account-number'
 import type { BASAccount } from '@/types'
-import { getAccountClassName } from '@/lib/bookkeeping/account-descriptions'
 import {
   defaultRateForVatTreatment,
   vatTreatmentsForAccountClass,
@@ -157,6 +156,8 @@ export default function AccountMappingStep({
   onBack,
 }: AccountMappingStepProps) {
   const t = useTranslations('chart_of_accounts')
+  const tStep = useTranslations('chart_of_accounts.mapping_step')
+  const tCommon = useTranslations('common')
   const [searchTerm, setSearchTerm] = useState('')
   // Default to showing unmapped accounts first (most actionable)
   const [filter, setFilter] = useState<FilterType>(() => {
@@ -262,12 +263,16 @@ export default function AccountMappingStep({
 
   // Group BAS accounts by class for the dropdown, and index the same accounts
   // by number so a closed picker can name its selection without the list.
+  // The class headings are the chart of accounts page's own (class_1 to 8).
   const { accountsByClass, accountByNumber } = useMemo(() => {
     const groups: { [key: string]: BASAccount[] } = {}
     const byNumber = new Map<string, BASAccount>()
     for (const account of basAccounts) {
       if (!isAccountNumber(account.account_number)) continue
-      const className = getAccountClassName(account.account_class)
+      const cls = account.account_class
+      const className = `${cls}xxx - ${
+        cls >= 1 && cls <= 8 ? t(`class_${cls as 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8}`) : tStep('class_other')
+      }`
       if (!groups[className]) {
         groups[className] = []
       }
@@ -275,15 +280,14 @@ export default function AccountMappingStep({
       byNumber.set(account.account_number, account)
     }
     return { accountsByClass: groups, accountByNumber: byNumber }
-  }, [basAccounts])
+  }, [basAccounts, t, tStep])
 
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
           <CardDescription>
-            Varje konto i SIE-filen kopplas till ett konto i din kontoplan.
-            De flesta matchas automatiskt: granska de osäkra nedan.{' '}
+            {tStep('intro')}{' '}
             {t('mapping_new_accounts_note')}
           </CardDescription>
         </CardHeader>
@@ -321,7 +325,7 @@ export default function AccountMappingStep({
               onClick={() => handleFilterChange('unmapped')}
             >
               <XCircle className="h-3 w-3 mr-1" />
-              {stats.unmapped} ej mappade
+              {tStep('filter_unmapped_count', { count: stats.unmapped })}
             </Badge>
             <Badge
               variant={filter === 'new_account' ? 'default' : stats.newAccounts > 0 ? 'secondary' : 'outline'}
@@ -337,7 +341,7 @@ export default function AccountMappingStep({
               onClick={() => handleFilterChange('low_confidence')}
             >
               <AlertCircle className="h-3 w-3 mr-1" />
-              {stats.lowConfidence} osäkra
+              {tStep('filter_low_confidence_count', { count: stats.lowConfidence })}
             </Badge>
             <Badge
               variant={filter === 'manual' ? 'default' : 'outline'}
@@ -345,14 +349,14 @@ export default function AccountMappingStep({
               onClick={() => handleFilterChange('manual')}
             >
               <CheckCircle className="h-3 w-3 mr-1" />
-              {stats.manual} manuellt satta
+              {tStep('filter_manual_count', { count: stats.manual })}
             </Badge>
             <Badge
               variant={filter === 'all' ? 'default' : 'outline'}
               className="cursor-pointer"
               onClick={() => handleFilterChange('all')}
             >
-              Visa alla ({mappings.length})
+              {tStep('filter_all_count', { count: mappings.length })}
             </Badge>
           </div>
 
@@ -451,7 +455,7 @@ export default function AccountMappingStep({
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
-                placeholder="Sök konto..."
+                placeholder={tStep('search_placeholder')}
                 value={searchTerm}
                 onChange={(e) => handleSearchChange(e.target.value)}
                 className="pl-9"
@@ -463,12 +467,12 @@ export default function AccountMappingStep({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">Visa alla</SelectItem>
-                <SelectItem value="unmapped">Ej mappade</SelectItem>
+                <SelectItem value="all">{tStep('filter_all')}</SelectItem>
+                <SelectItem value="unmapped">{tStep('filter_unmapped')}</SelectItem>
                 <SelectItem value="new_account">{t('new_account_filter', { count: stats.newAccounts })}</SelectItem>
                 <SelectItem value="vat_review">{t('vat_review_filter', { count: stats.vatReview })}</SelectItem>
-                <SelectItem value="low_confidence">Osäkra</SelectItem>
-                <SelectItem value="manual">Manuellt satta</SelectItem>
+                <SelectItem value="low_confidence">{tStep('filter_low_confidence')}</SelectItem>
+                <SelectItem value="manual">{tStep('filter_manual')}</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -484,12 +488,12 @@ export default function AccountMappingStep({
             <Table className="table-fixed text-[13px] [&_td]:px-3 [&_th]:px-3">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-20">Källkonto</TableHead>
-                  <TableHead className="w-40">Källnamn</TableHead>
+                  <TableHead className="w-20">{tStep('col_source_account')}</TableHead>
+                  <TableHead className="w-40">{tStep('col_source_name')}</TableHead>
                   <TableHead className="w-8 !px-0" aria-hidden="true"></TableHead>
-                  <TableHead className="w-56">Målkonto</TableHead>
+                  <TableHead className="w-56">{tStep('col_target_account')}</TableHead>
                   <TableHead className="w-72">{t('vat_treatment_column')}</TableHead>
-                  <TableHead className="w-24">Konfidens</TableHead>
+                  <TableHead className="w-24">{tStep('col_confidence')}</TableHead>
                   <TableHead className="sticky right-0 z-20 w-28 min-w-28 border-l border-border bg-background text-right">
                     <span className="inline-flex items-center gap-1">
                       {t('vat_treatment_confirm')}
@@ -693,7 +697,7 @@ export default function AccountMappingStep({
                 {paginatedMappings.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
-                      Inga konton matchar filtret
+                      {tStep('no_matches')}
                     </TableCell>
                   </TableRow>
                 )}
@@ -705,7 +709,11 @@ export default function AccountMappingStep({
           {totalPages > 1 && (
             <div className="flex items-center justify-between">
               <p className="text-sm text-muted-foreground">
-                Visar {((currentPage - 1) * PAGE_SIZE) + 1}-{Math.min(currentPage * PAGE_SIZE, filteredMappings.length)} av {filteredMappings.length}
+                {tStep('showing_range', {
+                  from: ((currentPage - 1) * PAGE_SIZE) + 1,
+                  to: Math.min(currentPage * PAGE_SIZE, filteredMappings.length),
+                  total: filteredMappings.length,
+                })}
               </p>
               <div className="flex gap-2">
                 <Button
@@ -714,10 +722,10 @@ export default function AccountMappingStep({
                   onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
                   disabled={currentPage === 1}
                 >
-                  Föregående
+                  {tStep('previous')}
                 </Button>
                 <div className="flex items-center gap-1 px-2">
-                  <span className="text-sm">Sida {currentPage} av {totalPages}</span>
+                  <span className="text-sm">{tStep('page_of', { page: currentPage, total: totalPages })}</span>
                 </div>
                 <Button
                   variant="outline"
@@ -725,7 +733,7 @@ export default function AccountMappingStep({
                   onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
                   disabled={currentPage === totalPages}
                 >
-                  Nästa
+                  {tStep('next')}
                 </Button>
               </div>
             </div>
@@ -736,7 +744,7 @@ export default function AccountMappingStep({
       {/* Actions */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onBack}>
-          Tillbaka
+          {tCommon('back')}
         </Button>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           {stats.vatReview > 0 && stats.unmapped === 0 && (
@@ -750,10 +758,10 @@ export default function AccountMappingStep({
           )}
           <Button onClick={onContinue} disabled={!canContinue}>
             {canContinue
-              ? 'Fortsätt till granskning'
+              ? tStep('continue_to_review')
               : stats.unmapped > 0
-                ? `${stats.unmapped} konton saknar mappning`
-                : `${stats.vatReview} momskoder återstår att bekräfta`}
+                ? tStep('unmapped_remaining', { count: stats.unmapped })
+                : tStep('vat_review_remaining', { count: stats.vatReview })}
             <ArrowRight className="ml-2 h-4 w-4" />
           </Button>
         </div>
@@ -772,12 +780,13 @@ export default function AccountMappingStep({
 function createdOptionsFor(
   mapping: AccountMapping,
   knownTargets: ReadonlySet<string>,
+  unnamed: (number: string) => string,
 ): Array<{ value: string; name: string }> {
   const options: Array<{ value: string; name: string }> = []
   if (!knownTargets.has(mapping.sourceAccount) && isValidBASRange(mapping.sourceAccount)) {
     options.push({
       value: mapping.sourceAccount,
-      name: mapping.sourceName || `Konto ${mapping.sourceAccount}`,
+      name: mapping.sourceName || unnamed(mapping.sourceAccount),
     })
   }
   if (
@@ -787,7 +796,7 @@ function createdOptionsFor(
   ) {
     options.push({
       value: mapping.targetAccount,
-      name: mapping.targetName || `Konto ${mapping.targetAccount}`,
+      name: mapping.targetName || unnamed(mapping.targetAccount),
     })
   }
   return options
@@ -821,6 +830,7 @@ function TargetAccountSelect({
   accountByNumber: ReadonlyMap<string, BASAccount>
   onMappingChange: AccountMappingStepProps['onMappingChange']
 }) {
+  const tStep = useTranslations('chart_of_accounts.mapping_step')
   const [open, setOpen] = useState(false)
   // Set on open, cleared once the content has left the screen. Radix keeps a
   // closing Select's content mounted for its fade-out, and the fade shows the
@@ -850,7 +860,7 @@ function TargetAccountSelect({
       }}
     >
       <SelectTrigger className={!mapping.targetAccount ? 'border-destructive' : ''}>
-        <SelectValue placeholder="Välj konto..." />
+        <SelectValue placeholder={tStep('select_account')} />
       </SelectTrigger>
       <SelectContent
         className="max-h-80"
@@ -897,9 +907,10 @@ export function TargetAccountOptions({
   selectedOnly: boolean
 }) {
   const t = useTranslations('chart_of_accounts')
-  const created = createdOptionsFor(mapping, knownTargets)
+  const tStep = useTranslations('chart_of_accounts.mapping_step')
+  const created = createdOptionsFor(mapping, knownTargets, (number) => tStep('account_fallback', { number }))
 
-  const noneItem = <SelectItem value="none">-- Välj konto --</SelectItem>
+  const noneItem = <SelectItem value="none">{tStep('no_account_option')}</SelectItem>
   const createdItem = (option: { value: string; name: string }) => (
     <SelectItem key={option.value} value={option.value}>
       <span className="font-mono mr-2">{option.value}</span>
@@ -974,18 +985,19 @@ function ConfidenceBadge({
   matchType: string  // Keep for potential future use
   isOverride: boolean
 }) {
+  const tStep = useTranslations('chart_of_accounts.mapping_step')
   if (isOverride) {
-    return <Badge variant="default">Manuell</Badge>
+    return <Badge variant="default">{tStep('confidence_manual')}</Badge>
   }
 
   if (confidence >= 0.9) {
-    return <span className="text-xs text-muted-foreground">Exakt</span>
+    return <span className="text-xs text-muted-foreground">{tStep('confidence_exact')}</span>
   }
 
   if (confidence >= 0.7) {
-    return <Badge variant="secondary">Trolig</Badge>
+    return <Badge variant="secondary">{tStep('confidence_likely')}</Badge>
   }
 
-  return <Badge variant="outline">Osäker</Badge>
+  return <Badge variant="outline">{tStep('confidence_uncertain')}</Badge>
 }
 
