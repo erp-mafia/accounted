@@ -64,12 +64,12 @@ export const CAPABILITY = {
   /**
    * Reminders, debt collection and invoice delivery through a provider the
    * company activates itself (lib/collections; the provider is described at
-   * runtime by the Connect catalogue, never named here). PAID-PLAN ONLY: in
-   * PAID_CAPABILITIES, so the Stripe subscription sync and operator grants
-   * write it, but listed in PAID_PLAN_ONLY_CAPABILITIES, so a trial never
-   * includes it. The grant gates START paths only (activation, handover,
-   * delivery, the daily batch): a lapsed plan never stops the duties toward a
-   * case already open at the provider (lib/collections/flags.ts).
+   * runtime by the Connect catalogue, never named here). In
+   * PAID_CAPABILITIES like every other paid service: the Stripe subscription
+   * sync, operator grants and, since the founder decision of 2026-10-22, the
+   * trial write it. The grant gates START paths only (activation, handover,
+   * delivery, the daily batch): a lapsed plan or trial never stops the duties
+   * toward a case already open at the provider (lib/collections/flags.ts).
    */
   collections: 'collections',
 } as const
@@ -105,24 +105,25 @@ export const PAID_CAPABILITIES: readonly CapabilityKey[] = [
   // 2026-09-10 (issue #2494): the key is kept and granted so the gate can
   // be re-armed by env, but nothing withholds extra users today.
   CAPABILITY.multi_user,
-  // Paid plan only: Stripe-synced and operator-granted, never trial-seeded
-  // (PAID_PLAN_ONLY_CAPABILITIES below).
+  // Trial-seeded since 2026-10-22 (founder decision; paid plan only before).
   CAPABILITY.collections,
 ] as const
 
 /**
  * Paid capabilities a trial never includes: only a paying subscription (the
  * Stripe sync) or an operator grant (manual, comp, a byrå team agreement)
- * unlocks them. Founder decision 2026-10-04 for collections: handing a
- * customer's claim to a debt collector is not something to try out.
+ * unlocks them. Empty since 2026-10-22: collections was the only one (founder
+ * decision 2026-10-04) and is now part of the trial (founder decision
+ * 2026-10-22, migration 20261022120000); a lapsed trial still finishes the
+ * cases it opened.
  */
-export const PAID_PLAN_ONLY_CAPABILITIES: readonly CapabilityKey[] = [CAPABILITY.collections] as const
+export const PAID_PLAN_ONLY_CAPABILITIES: readonly CapabilityKey[] = [] as const
 
 /**
  * What the company-creation trial seeds: PAID_CAPABILITIES minus the paid-plan
  * only keys. The VALUES list in seed_trial_capability_grants() (latest body in
- * supabase/migrations/20260909100300_seed_trial_capability_grants_zettle.sql)
- * must match this list; tests/pg/trial-suppression-byra.pg.test.ts pins it.
+ * supabase/migrations/20261022120000_collections_in_trial.sql) must match this
+ * list; tests/pg/trial-suppression-byra.pg.test.ts pins it.
  */
 export const TRIAL_CAPABILITIES: readonly CapabilityKey[] = PAID_CAPABILITIES.filter(
   (key) => !PAID_PLAN_ONLY_CAPABILITIES.includes(key),

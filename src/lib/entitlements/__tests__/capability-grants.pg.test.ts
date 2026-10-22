@@ -219,7 +219,7 @@ describe('trial grant seeding trigger (20260629120000, widened 20260818170000)',
       [companyId],
     )
     // Every trial key, compared against the constant itself so the trigger's
-    // hardcoded list (20260629120000, widened 20260818170000) can never drift
+    // hardcoded list (20260629120000, widened 20260818170000 and since) can never drift
     // from TRIAL_CAPABILITIES (PAID_CAPABILITIES minus the paid-plan-only
     // keys) again without this test failing.
     expect(rows.map((r) => r.capability_key)).toEqual([...TRIAL_CAPABILITIES].sort())

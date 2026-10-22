@@ -13,7 +13,7 @@ import { TRIAL_CAPABILITIES } from '@/lib/entitlements/keys'
 // The trigger is AFTER INSERT ON companies and reads NEW.team_id, so plain
 // inserts through the pool exercise it on every creation path.
 
-// Full trial set (20260909100300); must stay in step with
+// Full trial set (20261022120000); must stay in step with
 // lib/entitlements/keys.ts TRIAL_CAPABILITIES (PAID_CAPABILITIES minus the
 // paid-plan-only keys, which a trial never includes). Sorted: trialGrantKeys()
 // orders by capability_key.
@@ -62,16 +62,17 @@ async function trialGrantKeys(companyId: string): Promise<string[]> {
 }
 
 describe('trial suppression for byrå-team companies', () => {
-  it('the trial seed covers the full nine-key trial set', () => {
+  it('the trial seed covers the full ten-key trial set', () => {
     // Guard against the seed list drifting from lib/entitlements/keys.ts:
     // if TRIAL_CAPABILITIES grows, the migration VALUES list (and this test)
     // must grow with it. multi_user joined at 20260901081417; zettle_sync
-    // at 20260909100300. collections (20261012030000) is paid-plan only and
-    // never joins it.
+    // at 20260909100300; collections at 20261022120000 (paid-plan only from
+    // 20261012030000 until then).
     expect(TRIAL_KEYS).toEqual(
       [
         'ai',
         'bank_sync',
+        'collections',
         'email_send',
         'multi_user',
         'shopify_sync',

@@ -95,13 +95,11 @@ describe('CONNECTOR_CAPABILITIES', () => {
 })
 
 describe('PAID_PLAN_ONLY_CAPABILITIES and TRIAL_CAPABILITIES', () => {
-  it('keeps collections paid but out of every trial', async () => {
+  it('puts collections in the trial like every other paid key (founder decision 2026-10-22)', async () => {
     const { PAID_CAPABILITIES, PAID_PLAN_ONLY_CAPABILITIES, TRIAL_CAPABILITIES } = await import('../keys')
-    expect(PAID_PLAN_ONLY_CAPABILITIES).toEqual(['collections'])
-    for (const key of PAID_PLAN_ONLY_CAPABILITIES) {
-      expect(PAID_CAPABILITIES, key).toContain(key)
-      expect(TRIAL_CAPABILITIES, key).not.toContain(key)
-    }
+    expect(PAID_PLAN_ONLY_CAPABILITIES).toEqual([])
+    expect(PAID_CAPABILITIES).toContain('collections')
+    expect(TRIAL_CAPABILITIES).toContain('collections')
   })
 
   it('makes the trial set exactly the paid set minus the paid-plan-only keys, in order', async () => {
