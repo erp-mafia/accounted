@@ -77,6 +77,9 @@ interface RunHeaderProps {
   onSendPayslips: (channel: PayslipSendChannel) => void
   onDownloadPayslips: () => void
   onDownloadAgi: () => void
+  // Fora's monthly file for the run's payment month (lib/salary/fora). Null
+  // when nobody on the run has a Fora code: the company does not report to Fora.
+  onOpenForaReport: (() => void) | null
   onDelete: () => void
   onCorrect: () => void
   // Draft-only: payment_date is frozen once the run leaves draft (it becomes
@@ -99,6 +102,7 @@ export function RunHeader({
   onSendPayslips,
   onDownloadPayslips,
   onDownloadAgi,
+  onOpenForaReport,
   onDelete,
   onCorrect,
   onUpdatePaymentDate,
@@ -131,6 +135,8 @@ export function RunHeader({
   const showUnapprove = canWrite && run.status === 'approved'
   const showDownloadPayslips = payslipsAvailable && canWrite
   const showDownloadAgi = canWrite && run.status === 'booked'
+  // A read, so not gated on canWrite; approved is the first status whose pay counts.
+  const showForaReport = !!onOpenForaReport && payslipsAvailable
   const showDelete = canWrite && run.status === 'draft'
   const showCorrect = canWrite && run.status === 'booked'
   const hasMenu =
@@ -140,6 +146,7 @@ export function RunHeader({
     showUnapprove ||
     showDownloadPayslips ||
     showDownloadAgi ||
+    showForaReport ||
     showDelete ||
     showCorrect
   const menuBusy =
@@ -337,6 +344,12 @@ export function RunHeader({
                   <DropdownMenuItem onSelect={onDownloadAgi} disabled={busy}>
                     <Download className="h-4 w-4" />
                     {t('action_download_agi')}
+                  </DropdownMenuItem>
+                )}
+                {showForaReport && (
+                  <DropdownMenuItem onSelect={() => onOpenForaReport?.()} disabled={busy}>
+                    <Download className="h-4 w-4" />
+                    {t('action_fora_report', { period: formatAgiPeriodDashed(agiPeriod) })}
                   </DropdownMenuItem>
                 )}
                 {(showRevert || showUnapprove) && (

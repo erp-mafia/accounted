@@ -23,6 +23,8 @@
  *     free-text bank data stays editable in unrelated ways.
  *   - sammalöneregeln after a changed employment degree: only when the patch
  *     changes employment_degree (semesterlagen 16 § andra stycket 3-4).
+ *   - Fora code (with its start date, employees only): only when the patch
+ *     names the code, its date or employment_type (lib/salary/fora/markup.ts).
  * The EF-owner rule is not here: it needs the company's entity type, and the
  * enforce_ef_no_owner_employee trigger backs it on every path.
  */
@@ -30,6 +32,7 @@
 import { touchesJamkning, validateJamkning, type JamkningFields } from '@/lib/salary/jamkning-rules'
 import { touchesExtraTax, validateExtraTax, type ExtraTaxFields } from '@/lib/salary/extra-tax'
 import { validateEmployeeBankAccount } from '@/lib/payments/bank-account'
+import { touchesForaMarkup, validateForaMarkup } from '@/lib/salary/fora/markup'
 
 export interface EmployeeUpdateIssue {
   field: string
@@ -109,7 +112,7 @@ export function vacationDaysBelowMinimum(rule: unknown, days: unknown): boolean 
 
 /**
  * Every issue with the row an update would store, in a stable order (salary,
- * tax table, Växa-stöd, jämkning, extra tax, bank, sammalöneregeln). Empty
+ * tax table, Växa-stöd, jämkning, extra tax, bank, Fora code, sammalöneregeln). Empty
  * when the update may be written.
  * Keys whose value is undefined count as absent, per the sparse contract.
  */
@@ -164,6 +167,10 @@ export function validateEmployeeUpdate(
       merged.bank_account_number as string | null | undefined,
     )
     for (const issue of bankIssues) issues.push({ field: issue.field, message: issue.message })
+  }
+
+  if (touchesForaMarkup(sent)) {
+    for (const issue of validateForaMarkup(merged)) issues.push(issue)
   }
 
   if (sammaloneregelnDegreeChange(existing, sent) && options.sammaloneregelnKollektivavtal !== true) {

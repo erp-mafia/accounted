@@ -42,6 +42,7 @@ import { RunKpiCards } from '@/components/salary/run/RunKpiCards'
 import { RunEmployeesTable } from '@/components/salary/run/RunEmployeesTable'
 import { RunCalculationDetails } from '@/components/salary/run/RunCalculationDetails'
 import { RunJournalPreview, type PreviewData } from '@/components/salary/run/RunJournalPreview'
+import { ForaReportDialog } from '@/components/salary/run/ForaReportDialog'
 import { formatRunAmount, periodLabelOf, type RunDetail } from '@/components/salary/run/types'
 import { isPaymentDateAhead, needsFuturePayoutConfirm } from '@/lib/salary/payout-date'
 import { formatDate } from '@/lib/utils'
@@ -92,6 +93,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   const [preview, setPreview] = useState<PreviewData | null>(null)
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
+  const [foraOpen, setForaOpen] = useState(false)
   // Non-null while the "Godkänn ändå?" dialog is open: holds the missing
   // bank-detail reasons returned by the approve route (overridable block).
   const [approveOverride, setApproveOverride] = useState<string[] | null>(null)
@@ -887,6 +889,9 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
 
   const periodLabel = periodLabelOf(run)
   const employees = (run.employees || []) as SalaryRunEmployee[]
+  // The company reports to Fora when someone on the run has a Fora code.
+  const reportsToFora = employees.some((sre) => !!sre.employee?.fora_fok_id)
+  const paymentPeriod = agiReportingPeriod(run)
 
   // Open utlägg per employee that are not already on a payslip line of this
   // run (#2331). The server re-checks against every run when adding.
@@ -1035,6 +1040,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
         onSendPayslips={(channel) => void handleSendPayslips(channel)}
         onDownloadPayslips={handleBulkPayslipDownload}
         onDownloadAgi={handleDownloadAgi}
+        onOpenForaReport={reportsToFora ? () => setForaOpen(true) : null}
         onDelete={handleDelete}
         onCorrect={handleCorrect}
         onUpdatePaymentDate={handleUpdatePaymentDate}
@@ -1198,6 +1204,16 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
       </Dialog>
 
       <DestructiveConfirmDialog {...dialogProps} />
+
+      {/* Fora's month is the payment month, like the AGI's. */}
+      {foraOpen && (
+        <ForaReportDialog
+          open={foraOpen}
+          onOpenChange={setForaOpen}
+          year={paymentPeriod.periodYear}
+          month={paymentPeriod.periodMonth}
+        />
+      )}
     </div>
   )
 }

@@ -6710,6 +6710,15 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_en:
       'Another salary run is already declared for the same reporting period (payout month). One employer declaration per month must cover every payment made that month: merge the runs or correct the existing declaration.',
   },
+  // Fora's monthly file (lib/salary/fora): details.issues names each blocker.
+  FORA_REPORT_INCOMPLETE: {
+    httpStatus: 400,
+    message_sv:
+      'Fora-filen kan inte skapas ännu. Åtgärda det som står i listan (organisationsnummer, adress för samordningsnummer eller Fora-kod på de anställda) och försök igen.',
+    message_en:
+      'The Fora file cannot be created yet. Fix what details.issues lists (organisation number, an address for a samordningsnummer, or a Fora code on the employees) and try again.',
+    retryable: false,
+  },
   AGI_INCOMPLETE_DATA: {
     httpStatus: 400,
     message_sv: 'AGI-data ofullständig: kontrollera att företaget har organisationsnummer, kontaktnamn, telefon och e-post.',

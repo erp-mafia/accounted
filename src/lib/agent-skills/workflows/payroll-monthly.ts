@@ -181,6 +181,7 @@ In the user's language, short groups:
 - \`gnubok_correct_salary_run\` (staged, high risk: rättelsekörning of a booked run)
 - \`gnubok_list_salary_payment_files\` (read: which bank payment files were generated; the file itself is downloaded on the salary run page)
 - \`gnubok_generate_agi\`, \`gnubok_agi_submit\` (staged; filing needs BankID), \`gnubok_agi_status\` (read)
+- \`gnubok_get_fora_report\` (read, via \`gnubok_call_tool\`: what the monthly Fora file says for a payment month, for arbetare with a Fora code \`fora_fok_id\` on the employee; the file itself is downloaded on the salary run page and uploaded on Fora's Mina sidor by the last day of the following month)
 - \`gnubok_close_vacation_year\` (staged, high risk, yearly)
 - \`gnubok_list_pending_operations\`, \`gnubok_approve_pending_operation\` (approval)
 `

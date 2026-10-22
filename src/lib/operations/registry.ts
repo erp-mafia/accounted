@@ -81,6 +81,7 @@ import {
   employeesWorkedDaysUpsert,
 } from './salary-employee-setup'
 import { salaryRunsPaymentFilesList } from './salary-payment-files'
+import { salaryForaReportGet } from './salary-fora-report'
 import {
   invoicesBook,
   invoicesBulkBook,
@@ -302,6 +303,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   salaryRunsMarkPaid,
   // salary-payment-files (MCP only, metadata only: no door builds or hands over a file)
   salaryRunsPaymentFilesList,
+  // salary-fora-report (v1 + MCP, summary only: the file is the salary run page's download)
+  salaryForaReportGet,
   // salary-employee-setup (MCP only: the v1 doors are the hand-written employee routes)
   employeesWorkedDaysList,
   employeesWorkedDaysUpsert,
