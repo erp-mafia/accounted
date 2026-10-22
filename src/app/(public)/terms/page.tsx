@@ -151,6 +151,30 @@ export default function TermsPage() {
           Tjänsten. Kundens data raderas inte under uppsägningstiden eller den
           arkiveringsperiod som anges i avsnitt 8.
         </p>
+        <p>
+          6.4. Abonnemanget omfattar de volymer som anges på prissidan, till exempel antal
+          underlag som Leverantören läser av med AI, skickade e-fakturor, betalningar via
+          banken och anslutna bankkonton. Användning utöver det som ingår debiteras enligt
+          prissidan.
+        </p>
+        <p>
+          6.5. Gränserna i abonnemanget är mjuka. Leverantören meddelar Kunden innan en
+          gräns nås, och avgift för användning utöver det som ingår debiteras först efter
+          att Kunden har godkänt den.
+        </p>
+        <p>
+          6.6. Underlag som Kundens egen AI-agent läser av och skickar till Tjänsten som
+          strukturerade uppgifter via API eller MCP omfattas inte av avgiften för avläsning.
+        </p>
+        <p>
+          6.7. Priser anges exklusive mervärdesskatt. Ett befintligt abonnemang behåller
+          sitt pris tills Leverantören meddelar en ändring enligt punkt 6.2.
+        </p>
+        <p>
+          6.8. Punkterna 6.4 till 6.6 gäller för Kunder som registrerar sig från och med
+          den 22 oktober 2026. För Kunder som registrerade sig tidigare gäller de först
+          efter meddelande enligt punkt 14.1.
+        </p>
       </LegalSection>
 
       <LegalSection title="7. Immateriella rättigheter">
