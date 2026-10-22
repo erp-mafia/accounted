@@ -696,6 +696,17 @@ export interface MappedInvoice {
   rowsUnaccounted?: boolean
 }
 
+/**
+ * The payment terms the source stated, when they are whole days 0-365 (the
+ * range the customer and supplier forms accept), else the 30-day default. A
+ * stated 0 is betalning direkt and stays 0 (#2070): `|| 30` made it 30. A
+ * provider mapper that read a non-numeric code hands over NaN, which is not
+ * a term either.
+ */
+function paymentTermsDays(days: number | undefined): number {
+  return days !== undefined && Number.isInteger(days) && days >= 0 && days <= 365 ? days : 30
+}
+
 // ── Public mappers ──────────────────────────────────────────────────
 
 export function mapCustomer(dto: CustomerDto, userId: string, companyId: string): Record<string, unknown> {
@@ -739,7 +750,7 @@ export function mapCustomer(dto: CustomerDto, userId: string, companyId: string)
     personal_number: identity.personal_number,
     vat_number: dto.vatNumber || null,
     vat_number_validated: false,
-    default_payment_terms: dto.defaultPaymentTermsDays || 30,
+    default_payment_terms: paymentTermsDays(dto.defaultPaymentTermsDays),
     notes: dto.note || null,
   }
 }
@@ -779,7 +790,7 @@ export function mapSupplier(dto: SupplierDto, userId: string, companyId: string)
     iban: null,
     bic: null,
     default_expense_account: null,
-    default_payment_terms: dto.defaultPaymentTermsDays || 30,
+    default_payment_terms: paymentTermsDays(dto.defaultPaymentTermsDays),
     default_currency: 'SEK',
     notes: dto.note || null,
   }

@@ -66,6 +66,7 @@ vi.mock('../lib/insert-fallback', () => ({
 
 import { executeMigration } from '../lib/migration-orchestrator'
 import {
+  fetchCustomersDirect,
   fetchSuppliersDirect,
   fetchSalesInvoicesDirect,
   fetchSupplierInvoicesDirect,
@@ -75,6 +76,7 @@ import {
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { SalesInvoiceDto, SupplierDto, SupplierInvoiceDto } from '@/lib/providers/dto'
 
+const mListCustomers = fetchCustomersDirect as Mock
 const mListSales = fetchSalesInvoicesDirect as Mock
 const mHydrateSales = hydrateSalesInvoices as Mock
 const mListSupplier = fetchSupplierInvoicesDirect as Mock
@@ -255,6 +257,21 @@ describe('executeMigration: hydration budget and scope', () => {
       baseOptions({ importSalesInvoices: true, deadlineMs: Date.now() + 20_000 }),
     )
     expect(mHydrateSales.mock.calls[0][4]).toBe(0)
+  })
+
+  it('gives the customer detail pass (Fortnox terms, crm#1245) its share of the deadline', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-08T12:00:00Z'))
+    mListCustomers.mockResolvedValue([])
+
+    // 100 s left, the fixed insert reserve held back: 100 000 - 30 000.
+    await executeMigration(baseOptions({ importCustomers: true, deadlineMs: Date.now() + 100_000 }))
+    expect(mListCustomers.mock.calls[0][3]).toEqual({ detailBudgetMs: 70_000 })
+
+    // No deadline: the provider default applies.
+    mListCustomers.mockClear()
+    await executeMigration(baseOptions({ importCustomers: true }))
+    expect(mListCustomers.mock.calls[0][3]).toEqual({ detailBudgetMs: undefined })
   })
 
   it('skips the detail request for a supplier invoice whose (supplier, number) pair is already in the database', async () => {

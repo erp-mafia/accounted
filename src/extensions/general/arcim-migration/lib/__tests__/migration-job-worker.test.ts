@@ -9,11 +9,15 @@ import { mapBokioToSalesInvoice, mapBokioToSupplierInvoice } from '@/lib/provide
 import { mapFortnoxToSupplierInvoice } from '@/lib/providers/fortnox/mapper'
 import { enrichBokioSupplierInvoice } from '@/lib/providers/bokio/supplier-evidence'
 import { encryptCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
-const mocks = vi.hoisted(() => ({ resolve: vi.fn(), page: vi.fn(), hydrate: vi.fn(), probe: vi.fn(), link: vi.fn(), reconcile: vi.fn(), warn: vi.fn() }))
+const mocks = vi.hoisted(() => ({ resolve: vi.fn(), page: vi.fn(), hydrate: vi.fn(), probe: vi.fn(), link: vi.fn(), reconcile: vi.fn(), warn: vi.fn(),
+  // A provider whose customer list carries the terms: the pass hands the list form back untouched.
+  hydrateCustomers: vi.fn(async (_provider: string, _token: string, _company: unknown, customers: unknown[], _budgetMs?: number) =>
+    ({ customers, unhydratedIds: new Set<string>(), hydration: {} })) }))
 vi.mock('@/lib/logger', () => ({ createLogger: () => ({ info: vi.fn(), warn: mocks.warn, error: vi.fn() }) }))
 vi.mock('@/lib/auth/api-keys', () => ({ createServiceClientNoCookies: vi.fn() }))
 vi.mock('@/lib/providers/resolve-consent', () => ({ resolveConsent: mocks.resolve }))
 vi.mock('@/lib/providers/provider-data-fetcher', () => ({ fetchMigrationPage: mocks.page, hydrateSalesInvoices: mocks.hydrate, hydrateSupplierInvoices: mocks.hydrate,
+  hydrateCustomers: mocks.hydrateCustomers,
   fetchCompanyInfoDirect: mocks.probe }))
 vi.mock('@/lib/invoices/link-migrated-registration-vouchers', () => ({ linkMigratedRegistrationVouchers: mocks.link }))
 vi.mock('@/lib/invoices/bulk-reconcile-supplier-vouchers', () => ({ reconcileSupplierInvoiceVouchers: mocks.reconcile }))
@@ -430,6 +434,51 @@ it('recognizes the consent resolver’s structured authorization errors', async 
  * retry it five times over about four minutes and then park the whole job at
  * discovery, so not even the registers Fortnox did hand out were imported.
  */
+describe('Fortnox customers take their terms from the detail form (crm#1245)', () => {
+  const listed = (id: string) => ({ id, customerNumber: id, active: true, party: { name: `Listed ${id}` }, _raw: { CustomerNumber: id } })
+  const detailed = (id: string) => ({ ...listed(id), party: { name: `Detailed ${id}` }, defaultPaymentTermsDays: 10 })
+  const committed = (db: ReturnType<typeof database>) => db.rpc.mock.calls
+    .filter(([name]) => name === 'commit_provider_migration_records')
+    .flatMap(([, args]) => args.p_records as Record<string, unknown>[])
+  beforeEach(() => {
+    mocks.resolve.mockResolvedValue({ accessToken: 'token', consent: { provider: 'fortnox', org_number: '556000-0000' } })
+  })
+
+  it('imports a listed customer from its detail form', async () => {
+    const db = database({ provider: 'fortnox', phase: 'import', resources: ['customers'] })
+    db.rows.push({ id: 'c1', source_id: '1001', resource: 'customers', state: 'pending', ...sealMigrationPayload(listed('1001')) })
+    mocks.hydrateCustomers.mockResolvedValueOnce({ customers: [detailed('1001')], unhydratedIds: new Set(), hydration: {} })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(mocks.hydrateCustomers).toHaveBeenCalledWith('fortnox', 'token', undefined, [listed('1001')], expect.any(Number))
+    expect(committed(db)).toEqual([expect.objectContaining({ id: 'c1', row: { name: 'Detailed 1001' } })])
+    expect(db.rows.map(row => row.state)).toEqual(['done'])
+  })
+
+  it('still imports the customer from its list form when the detail cannot be read', async () => {
+    const db = database({ provider: 'fortnox', phase: 'import', resources: ['customers'] })
+    db.rows.push({ id: 'c1', source_id: '1001', resource: 'customers', state: 'pending', ...sealMigrationPayload(listed('1001')) })
+    mocks.hydrateCustomers.mockResolvedValueOnce({ customers: [listed('1001')], unhydratedIds: new Set(['1001']),
+      hydration: { needed: 1, hydrated: 0, failed: 1, skippedForBudget: 0 } })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(committed(db)).toEqual([expect.objectContaining({ id: 'c1', row: { name: 'Listed 1001' } })])
+    expect(db.rows.map(row => row.state)).toEqual(['done'])
+  })
+
+  it('leaves the customer pending when only the invocation time runs out', async () => {
+    vi.useFakeTimers()
+    const db = database({ provider: 'fortnox', phase: 'import', resources: ['customers'] })
+    db.rows.push({ id: 'c1', source_id: '1001', resource: 'customers', state: 'pending', ...sealMigrationPayload(listed('1001')) })
+    mocks.hydrateCustomers.mockImplementationOnce(async (...args) => {
+      expect(args[4]).toBeLessThan(15000)
+      return { customers: [listed('1001')], unhydratedIds: new Set(['1001']), hydration: { abortedBy: 'budget' } }
+    })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id, budgetMs: 15000 })
+    expect(committed(db)).toEqual([])
+    expect(db.rows.map(row => row.state)).toEqual(['pending'])
+    expect(db.job.state).toBe('queued')
+  })
+})
+
 describe('a register the provider refuses', () => {
   const fortnoxError = (status: number, code: number, message: string) =>
     new FortnoxApiError(`Fortnox API error: ${status}`, status, JSON.stringify({ ErrorInformation: { error: 1, message, code } }))

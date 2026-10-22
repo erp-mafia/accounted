@@ -511,7 +511,11 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
     if (options.importCustomers !== false) {
       emitProgress(options, { status: 'importing', currentStep: 'Importerar kunder...', progress: 20 })
       try {
-        const customers = await fetchCustomersDirect(provider, accessToken, providerCompanyId)
+        // Fortnox customers are read one by one for the terms their list
+        // form leaves out (crm#1245); that pass takes its share of the run.
+        const customers = await fetchCustomersDirect(provider, accessToken, providerCompanyId, {
+          detailBudgetMs: hydrationBudgetMs(options, 0),
+        })
         // Rows, not a resolved promise: see ProviderRunState.grantProven.
         if (customers.length > 0) runState.grantProven = true
 

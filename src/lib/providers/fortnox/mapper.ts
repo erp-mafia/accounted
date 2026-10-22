@@ -60,6 +60,20 @@ function nonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
+/**
+ * Days of a Fortnox terms-of-payment code. The field holds the code of an
+ * entry in the company's register (/3/termsofpayments), and Fortnox's own
+ * codes are the day count itself ("0", "10", "30"). Any other code ("K", a
+ * custom one) does not say its days, so it is left unknown rather than read
+ * as a number: Number("K") is NaN.
+ */
+function termsOfPaymentDays(code: unknown): number | undefined {
+  const text = typeof code === 'number' ? String(code) : typeof code === 'string' ? code.trim() : '';
+  if (!/^\d{1,3}$/.test(text)) return undefined;
+  const days = Number(text);
+  return days <= 365 ? days : undefined;
+}
+
 function providerEmailAddresses(
   raw: Record<string, unknown>,
   field: string,
@@ -454,7 +468,7 @@ export function mapFortnoxToCustomer(raw: Record<string, unknown>): CustomerDto 
     invoiceEmailBccAddresses: providerEmailAddresses(raw, 'EmailInvoiceBCC'),
     active: raw['Active'] !== false,
     vatNumber: raw['VATNumber'] as string | undefined,
-    defaultPaymentTermsDays: raw['TermsOfPayment'] != null ? Number(raw['TermsOfPayment']) : undefined,
+    defaultPaymentTermsDays: termsOfPaymentDays(raw['TermsOfPayment']),
     note: raw['Comments'] as string | undefined,
     updatedAt: raw['@LastModified'] as string | undefined,
     _raw: raw,
@@ -474,7 +488,7 @@ export function mapFortnoxToSupplier(raw: Record<string, unknown>): SupplierDto 
     bankAccount: raw['BankAccountNumber'] as string | undefined,
     bankGiro: raw['BG'] as string | undefined,
     plusGiro: raw['PG'] as string | undefined,
-    defaultPaymentTermsDays: raw['TermsOfPayment'] != null ? Number(raw['TermsOfPayment']) : undefined,
+    defaultPaymentTermsDays: termsOfPaymentDays(raw['TermsOfPayment']),
     note: raw['Comments'] as string | undefined,
     updatedAt: raw['@LastModified'] as string | undefined,
     _raw: raw,
