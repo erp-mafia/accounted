@@ -50,10 +50,12 @@ import { SLP_RATE, isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { roundOre, parseAmountInput } from '@/lib/money'
 import {
   buildSupplierInvoicePayload,
+  reverseChargeKindMissing,
   type SupplierInvoiceFormData,
   type SupplierInvoiceLineItem,
 } from '@/lib/supplier-invoices/form-payload'
 import { plantedRowTouched, snapshotPlantedRow } from '@/lib/supplier-invoices/planted-rows'
+import { rememberedReverseChargeKind } from '@/lib/supplier-invoices/remembered-kind'
 import { VatRateCell, RcRateSelect, AmountCell } from '@/components/supplier-invoices/supplier-invoice-cells'
 import { useSupplierInvoiceData } from '@/components/supplier-invoices/use-supplier-invoice-data'
 import { useInboxPrefill, type InboxItemData } from '@/components/supplier-invoices/use-inbox-prefill'
@@ -292,6 +294,7 @@ export default function NewSupplierInvoiceForm({
   const [forvalOpen, setForvalOpen] = useState(false)
   const supplierInputRef = useRef<HTMLInputElement | null>(null)
   const entryInputRef = useRef<HTMLInputElement | null>(null)
+  const reverseChargeKindRef = useRef<HTMLButtonElement | null>(null)
   const [entryResetKey, setEntryResetKey] = useState(0)
   const amountInputRefs = useRef<Record<number, HTMLInputElement | null>>({})
   const [pendingAmountFocus, setPendingAmountFocus] = useState<number | null>(null)
@@ -307,7 +310,7 @@ export default function NewSupplierInvoiceForm({
       currency: 'SEK',
       exchange_rate: '',
       reverse_charge: false,
-      reverse_charge_kind: 'eu_services',
+      reverse_charge_kind: '',
       payment_reference: '',
       notes: '',
       payer: settleWith && inboxItemId ? 'company' : 'unpaid',
@@ -395,6 +398,10 @@ export default function NewSupplierInvoiceForm({
   // (ruta 21): the form asks which, and sends it only then (crm#1323).
   const euSupplier = suppliers.find((s) => s.id === watchedSupplierId)?.supplier_type === 'eu_business'
   const asksReverseChargeKind = watchedReverseCharge && euSupplier
+  const reverseChargeKindUnanswered = reverseChargeKindMissing(
+    { reverse_charge: watchedReverseCharge, reverse_charge_kind: watchedReverseChargeKind },
+    euSupplier,
+  )
   // Watched values used to decide whether the AI-filled indicator should
   // still be visible. Once the user edits a field, its value no longer
   // matches what the extractor wrote, and the dot fades out.
@@ -493,7 +500,7 @@ export default function NewSupplierInvoiceForm({
   const settlesNow = !!(settleWith && inboxItemId && watchedPayer === 'company')
   const invoiceBookingMomentHere = supplierInvoiceBookingMoment(
     bookingMoment,
-    { reverse_charge: watchedReverseCharge, reverse_charge_kind: watchedReverseChargeKind },
+    { reverse_charge: watchedReverseCharge, reverse_charge_kind: watchedReverseChargeKind || null },
     suppliers.find((s) => s.id === watchedSupplierId)?.supplier_type,
   )
   const effectiveBookingMoment = settlesNow && invoiceBookingMomentHere === 'manual' ? 'issue' : invoiceBookingMomentHere
@@ -639,9 +646,27 @@ export default function NewSupplierInvoiceForm({
     if (supplier.supplier_type === 'eu_business' || supplier.supplier_type === 'non_eu_business') {
       setValue('reverse_charge', true)
     }
-    // Goods or services is a word about this purchase, never carried over
-    // from the previous supplier: back to services, the default.
-    setValue('reverse_charge_kind', 'eu_services')
+    // Goods or services is never carried over from the previous supplier: it
+    // starts unanswered, and an EU supplier's own latest answer fills it (a
+    // supplier usually sells one or the other). Without one it stays empty
+    // and registration asks: a silent "services" booked EU goods in ruta 21
+    // (crm#1323). Best-effort: on any miss the question stays open.
+    setValue('reverse_charge_kind', '')
+    let cancelled = false
+    if (supplier.supplier_type === 'eu_business') {
+      ;(async () => {
+        try {
+          const res = await fetch(`/api/supplier-invoices?supplier_id=${encodeURIComponent(supplier.id)}`)
+          if (!res.ok) return
+          const json = await res.json()
+          if (cancelled || getValues('reverse_charge_kind')) return
+          const kind = rememberedReverseChargeKind(Array.isArray(json?.data) ? json.data : [])
+          if (kind) setValue('reverse_charge_kind', kind)
+        } catch {
+          // Prefill is best-effort; the question stays open.
+        }
+      })()
+    }
 
     // No supplier default: fall back to the company's own booking history for
     // this counterparty (the same tiered matcher the booking flows use). Fills
@@ -650,7 +675,6 @@ export default function NewSupplierInvoiceForm({
     // private/balance-sheet templates like 2013 or 1630 out). Best-effort: on
     // any miss the rows simply stay blank, exactly as before.
     if (!supplier.default_expense_account && supplier.name?.trim()) {
-      let cancelled = false
       ;(async () => {
         try {
           const res = await fetch(
@@ -669,9 +693,8 @@ export default function NewSupplierInvoiceForm({
           // Prefill is best-effort; the rows stay blank.
         }
       })()
-      return () => { cancelled = true }
     }
-    return undefined
+    return () => { cancelled = true }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watchedSupplierId, suppliers])
 
@@ -1471,10 +1494,12 @@ export default function NewSupplierInvoiceForm({
   const effectiveInboxItemId = inboxItemId ?? uploadedInboxItemId
 
   function focusMissingField(
-    field: 'supplier' | 'invoice_number' | 'rows' | 'row_account',
+    field: 'supplier' | 'invoice_number' | 'rows' | 'row_account' | 'reverse_charge_kind',
     rowIndex?: number,
   ) {
-    if (field === 'supplier') {
+    if (field === 'reverse_charge_kind') {
+      reverseChargeKindRef.current?.focus()
+    } else if (field === 'supplier') {
       // Focusing the supplier combobox opens its list.
       supplierInputRef.current?.focus()
     } else if (field === 'invoice_number') {
@@ -1521,6 +1546,7 @@ export default function NewSupplierInvoiceForm({
     onExpenseRegistered: () => router.refresh(),
     onMissingField: focusMissingField,
     settleTransactionId: inboxItemId ? (settleWith?.transactionId ?? null) : null,
+    euSupplier,
   })
 
   async function discardUploadedDocument() {
@@ -1557,7 +1583,7 @@ export default function NewSupplierInvoiceForm({
   // Next-step line (the page's ONLY ochre line): same predicates and order as
   // the submit-time checks in useSupplierInvoiceSubmit, so the always-enabled
   // primary's focus routing and this line always agree.
-  type MissingField = 'supplier' | 'invoice_number' | 'rows' | 'row_account'
+  type MissingField = 'supplier' | 'invoice_number' | 'rows' | 'row_account' | 'reverse_charge_kind'
   const nextStep = ((): { field: MissingField; rowIndex?: number; label: string } | null => {
     if (!watchedSupplierId) {
       return { field: 'supplier', label: t('next_step_supplier') }
@@ -1576,8 +1602,36 @@ export default function NewSupplierInvoiceForm({
         label: t('next_step_row_account', { row: rowMissingAccount + 1 }),
       }
     }
+    if (reverseChargeKindUnanswered) {
+      return { field: 'reverse_charge_kind', label: t('next_step_reverse_charge_kind') }
+    }
     return null
   })()
+  const reverseChargeKindRow = (
+    <div className="flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]">
+      <span>
+        {t('reverse_charge_kind_label')}
+        <span className="block text-xs text-muted-foreground">
+          {t('reverse_charge_kind_help')}
+        </span>
+      </span>
+      <Controller
+        name="reverse_charge_kind"
+        control={control}
+        render={({ field }) => (
+          <Select value={field.value} onValueChange={field.onChange}>
+            <SelectTrigger ref={reverseChargeKindRef} className="h-8 w-28" aria-label={t('reverse_charge_kind_label')}>
+              <SelectValue placeholder={t('reverse_charge_kind_placeholder')} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="eu_services">{t('reverse_charge_kind_services')}</SelectItem>
+              <SelectItem value="eu_goods">{t('reverse_charge_kind_goods')}</SelectItem>
+            </SelectContent>
+          </Select>
+        )}
+      />
+    </div>
+  )
   const forvalChips: string[] = [
     willBookAtRegistration
       ? t('forval_books_at_registration')
@@ -1587,7 +1641,7 @@ export default function NewSupplierInvoiceForm({
   ]
   if (watchedReverseCharge) {
     forvalChips.push(
-      asksReverseChargeKind
+      asksReverseChargeKind && watchedReverseChargeKind
         ? t(watchedReverseChargeKind === 'eu_goods' ? 'reverse_charge_chip_goods' : 'reverse_charge_chip_services')
         : t('reverse_charge_label'),
     )
@@ -2319,6 +2373,11 @@ export default function NewSupplierInvoiceForm({
                 {forvalOpen ? `${t('forval_toggle_close')} ▴` : `${t('forval_toggle_open')} ▾`}
               </button>
             </div>
+            {/* Goods or services stays in plain view for an EU supplier:
+                behind Ändra förval it was missed (crm#1323). */}
+            {asksReverseChargeKind && !forvalOpen && (
+              <div className="mt-4 border-t border-border">{reverseChargeKindRow}</div>
+            )}
             {forvalOpen && (
               <div className="mt-4 border-t border-border">
                 <div className="flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]">
@@ -2336,31 +2395,7 @@ export default function NewSupplierInvoiceForm({
                     )}
                   />
                 </div>
-                {asksReverseChargeKind && (
-                  <div className="flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]">
-                    <span>
-                      {t('reverse_charge_kind_label')}
-                      <span className="block text-xs text-muted-foreground">
-                        {t('reverse_charge_kind_help')}
-                      </span>
-                    </span>
-                    <Controller
-                      name="reverse_charge_kind"
-                      control={control}
-                      render={({ field }) => (
-                        <Select value={field.value} onValueChange={field.onChange}>
-                          <SelectTrigger className="h-8 w-28" aria-label={t('reverse_charge_kind_label')}>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="eu_services">{t('reverse_charge_kind_services')}</SelectItem>
-                            <SelectItem value="eu_goods">{t('reverse_charge_kind_goods')}</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      )}
-                    />
-                  </div>
-                )}
+                {asksReverseChargeKind && reverseChargeKindRow}
                 <div className="flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]">
                   <span>{t('currency_label')}</span>
                   <Controller
@@ -2579,7 +2614,7 @@ export default function NewSupplierInvoiceForm({
               currency={pendingData.currency}
               exchangeRate={pendingData.exchange_rate || undefined}
               reverseCharge={pendingData.reverse_charge}
-              reverseChargeKind={pendingData.reverse_charge && euSupplier ? pendingData.reverse_charge_kind : undefined}
+              reverseChargeKind={pendingData.reverse_charge && euSupplier ? pendingData.reverse_charge_kind || undefined : undefined}
               paymentReference={pendingData.payment_reference || undefined}
               items={pendingData.items}
               oreRounding={oreRounding}
