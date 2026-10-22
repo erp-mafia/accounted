@@ -65,7 +65,7 @@ export function AnalyticsConsentRow() {
   return (
     <SettingsRow label={t('analytics_consent_label')} help={t('analytics_consent_help')}>
       <Switch
-        checked={granted === true}
+        checked={granted !== false}
         disabled={!loaded || saving}
         aria-label={t('analytics_consent_label')}
         onCheckedChange={(next) => void change(next)}

@@ -47,7 +47,7 @@ export const LEGAL_DOCUMENTS: Record<LegalDocumentKey, LegalDocument> = {
   privacy: {
     key: 'privacy',
     path: '/privacy',
-    updatedAt: '2026-10-21',
+    updatedAt: '2026-10-22',
     acceptanceVersion: null,
   },
   dpa: {

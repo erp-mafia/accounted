@@ -39,7 +39,8 @@ export default function AnalyticsIdentify({
   /** Server-computed HMAC of userId (lib/analytics/identity-hash.ts). Null
    *  when POSTHOG_SECRET_API_KEY is unset, which is normal off hosted. */
   identityHash?: string | null
-  /** user_preferences.analytics_consent === true. Anything else keeps PostHog off. */
+  /** False only when the person switched analytics off (user_preferences.analytics_consent = false).
+   *  Founder decision 2026-10-22: on by default, opt-out in Inställningar, Konto. */
   analyticsConsent: boolean
 }) {
   const { userId, email, fullName, role } = user

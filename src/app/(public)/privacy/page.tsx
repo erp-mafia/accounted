@@ -155,13 +155,13 @@ export default function PrivacyPolicyPage() {
           felläget är övermaskering, aldrig att dina uppgifter syns.
         </p>
         <p>
-          Produktanalys, sessionsinspelning och enkäter startar först när du har godkänt dem i appen,
-          och du kan när som helst stänga av dem under Inställningar. Rättslig grund: samtycke (art.
-          6.1 a, och 9 kap. 28 § lagen om elektronisk kommunikation). Supportärenden som du själv
-          skickar fungerar även utan samtycke; de skickas då med e-post till supporten och inget
-          sparas på din enhet. Analysen använder inga kakor; när du har samtyckt sparas två små
-          tekniska värden lokalt: vilka enkäter du redan sett, och ett slumpmässigt ärende-ID som gör
-          att du hittar tillbaka till ditt supportärende i samma webbläsare.
+          Produktanalys, sessionsinspelning och enkäter är påslagna när du är inloggad, och du kan
+          när som helst stänga av dem under Inställningar, Konto. Rättslig grund: berättigat
+          intresse (art. 6.1 f), vårt intresse av att se var tjänsten krånglar och förbättra den.
+          Stänger du av analysen skickas supportärenden du själv skriver med e-post till supporten.
+          Analysen använder inga kakor; två små tekniska värden sparas lokalt: vilka enkäter du
+          redan sett, och ett slumpmässigt ärende-ID som gör att du hittar tillbaka till ditt
+          supportärende i samma webbläsare.
         </p>
         <p>
           Oavsett ditt val skickar vår server felrapporter och några händelser om hur arkivet används
