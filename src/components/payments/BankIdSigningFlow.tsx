@@ -28,6 +28,7 @@ import {
   pollSigning,
   providerCodeText,
   restartSigning,
+  signingOfRefusedStart,
   fetchCompanyVerification,
   startCompanyVerification,
   startSigning,
@@ -190,6 +191,8 @@ export function BankIdSigningFlow({
   const [verificationUrl, setVerificationUrl] = useState<string | null>(null)
   /** Set while the flow was reopened by a return from the bank's own page; cleared by the next start. */
   const [returned, setReturned] = useState<PaymentSigningReturn | null>(resume)
+  /** A refused start that left its payments where no start can reach them (crm#1357): the sentence that says where, in place of the start buttons. */
+  const [stopped, setStopped] = useState<string | null>(null)
   const sentToBank = useRef(false)
   // The bank's step, when it signs in several: which one, since when, and
   // which ones this signing has been through (a new one means a new QR).
@@ -293,15 +296,30 @@ export function BankIdSigningFlow({
       const view = pendingBatchId
         ? await client.restart({ batchId: pendingBatchId, method: chosen, personalNumber: typedNumber, psuAuthoriserId: typedAuthoriser })
         : await client.start({ orderIds: orders.map((o) => o.id), method: chosen, personalNumber: typedNumber, psuAuthoriserId: typedAuthoriser })
-      if (!sentToBank.current) {
-        sentToBank.current = true
-        onSentToBank?.()
-      }
+      markSentToBank()
       setSigning(view)
       adoptMethod(chosen, view)
       setStage(signingFinished(view) ? 'done' : 'signing')
     } catch (error) {
       const code = error instanceof PaymentsClientError ? error.code : null
+      // The start moved the payments before it was refused (crm#1357): the
+      // same start would only be refused again, as changed in the meantime.
+      // A signing still waiting at the bank is signed again from here; one
+      // that stopped (an unknown outcome, a refused payment) keeps its
+      // sentence on screen instead of the start buttons. The list behind
+      // reloads on close either way.
+      const left = signingOfRefusedStart(error)
+      if (left) {
+        markSentToBank()
+        setSigning(left)
+        if (left.status === 'created') {
+          setStage('signing')
+          toast({ title: t('signing_start_failed_title'), description: refusalSentence(error), variant: 'destructive' })
+        } else {
+          setStopped(refusalSentence(error))
+        }
+        return
+      }
       const overCap = allowanceRefusalOf(error)
       if (overCap) setAllowance(overCap)
       else if (code === 'PAYMENT_COMPANY_VERIFICATION_REQUIRED') {
@@ -310,16 +328,24 @@ export function BankIdSigningFlow({
         if (client.verification !== false) fetchCompanyVerification({ refresh: true }).then(setVerification, () => setVerification(null))
       }
       else if (code === 'PAYMENT_SIGNING_REDIRECT_UNSUPPORTED') setRefusal('redirect')
-      else {
-        // The bank's own refusal code, as a sentence when we know it.
-        const details = error instanceof PaymentsClientError ? (error.body as { error?: { details?: { provider_code?: string } } } | null)?.error?.details : null
-        const known = providerCodeText(t, details?.provider_code)
-        if (known) toast({ title: t('signing_start_failed_title'), description: known, variant: 'destructive' })
-        else fail(t('signing_start_failed_title'), error)
-      }
+      else toast({ title: t('signing_start_failed_title'), description: refusalSentence(error), variant: 'destructive' })
     } finally {
       setBusy(false)
     }
+  }
+
+  /** The first time payments reached the bank, or may have, whatever it answered: the parent reloads its list on close. */
+  function markSentToBank() {
+    if (sentToBank.current) return
+    sentToBank.current = true
+    onSentToBank?.()
+  }
+
+  /** A refused start in words: the bank's own refusal code as a sentence when we know it, else the server's. */
+  function refusalSentence(error: unknown): string {
+    const body = error instanceof PaymentsClientError ? error.body : null
+    const details = (body as { error?: { details?: { provider_code?: string } } } | null)?.error?.details
+    return providerCodeText(t, details?.provider_code) ?? getErrorMessage(body, { locale })
   }
 
   async function restart(chosen: SigningMethod) {
@@ -507,6 +533,16 @@ export function BankIdSigningFlow({
       <span>{t('sign_at_bank', { bank: bankName })}</span>
     </p>
   ) : null
+
+  if (stage === 'method' && stopped) {
+    return (
+      <div className="space-y-4">
+        {bankLine}
+        <AttnLine>{stopped}</AttnLine>
+        <DialogFooter>{closeButton}</DialogFooter>
+      </div>
+    )
+  }
 
   if (stage === 'method') {
     const disabled = busy || orders.length === 0 || (needsPersonalNumber && !typedNumber)

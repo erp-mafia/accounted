@@ -292,6 +292,20 @@ export function allowanceRefusalOf(error: unknown): BankPaymentsAllowanceRefusal
   }
 }
 
+/**
+ * The signing a refused start left its payments in (details.signing), when
+ * the start moved them and they did not go back to approved: held with an
+ * unknown outcome, refused by the bank, or waiting unsigned at the bank. The
+ * same start can then only be refused again (crm#1357). Null for any other
+ * refusal, after which the same start may be tried again.
+ */
+export function signingOfRefusedStart(error: unknown): SigningView | null {
+  if (!(error instanceof PaymentsClientError)) return null
+  const signing = (error.body as { error?: { details?: { signing?: Partial<SigningView> | null } } } | null)?.error?.details?.signing
+  if (!signing || typeof signing.batch_id !== 'string' || typeof signing.status !== 'string' || !Array.isArray(signing.orders)) return null
+  return signing as SigningView
+}
+
 /** Begär fler betalningar (POST /api/payments/allowance-requests): support is mailed, a founder answers. */
 export function requestMoreBankPayments(input: { monthlyPaymentsWanted: number; message: string | null }): Promise<{ request_id: string; created_at: string }> {
   return send<{ request_id: string; created_at: string }>('/api/payments/allowance-requests', {
