@@ -53,7 +53,7 @@ export const LEGAL_DOCUMENTS: Record<LegalDocumentKey, LegalDocument> = {
   dpa: {
     key: 'dpa',
     path: '/dpa',
-    updatedAt: '2026-10-21',
+    updatedAt: '2026-10-22',
     acceptanceVersion: '2026-10-21',
   },
   // Part of the DPA (its point 6), kept on its own page so it can change

@@ -11,6 +11,14 @@ import { LegalAcceptanceDialog } from './LegalAcceptanceDialog'
 const UNGATED_PATH_PREFIXES = ['/import', ACCOUNT_DELETION_PATH]
 
 /**
+ * Founder decision 2026-10-22: no acceptance prompt in front of the app. The
+ * dialog, the accept route and the records stay so it can come back; while
+ * this is false nothing is shown, and /dpa must not claim acceptances are
+ * recorded (pinned in app/(public)/privacy/__tests__).
+ */
+const PROMPT_ENABLED = false
+
+/**
  * Puts the acceptance prompt in front of a signed-in person who has not
  * accepted every document at its current version (lib/legal/documents.ts):
  * a new signup by any route (password, BankID, OAuth, invite) and everyone
@@ -36,7 +44,7 @@ export function LegalAcceptanceGate({
   isSandbox?: boolean
   isAnonymous?: boolean
 }) {
-  if (isSelfHosted() || isSandbox || isAnonymous) return null
+  if (!PROMPT_ENABLED || isSelfHosted() || isSandbox || isAnonymous) return null
   if (state.pending.length === 0) return null
   if (UNGATED_PATH_PREFIXES.some((prefix) => pathname.startsWith(prefix))) return null
   return (
