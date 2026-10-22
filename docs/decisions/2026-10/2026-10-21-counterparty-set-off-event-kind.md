@@ -1,0 +1,1 @@
+[2026-10-21] New business event kind counterparty.set_off for source_type counterparty_setoff: a set-off settles a sale and a purchase in one act, so neither sale.payment_received nor purchase.paid fits; subject is the customer invoice, party the counterparty (crm#1367).

@@ -11,6 +11,7 @@
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { isPersonPayer, type PayerChoice } from '@/lib/expenses/payer'
 import { supplierInvoiceEditorAmounts } from './editor-amounts'
+import type { StatedRateVat } from '@/lib/vat/document-vat'
 import type { SupplierInvoiceReverseChargeKind, VatTreatment } from '@/types'
 
 export interface SupplierInvoiceLineItem {
@@ -58,6 +59,12 @@ export interface SupplierInvoiceFormData {
   claimant_name: string
   /** employees.id for payer 'employee'. */
   employee_id: string
+  /**
+   * Självfaktura (crm#1367): the company issues the invoice in the
+   * supplier's name; the number comes from the company's series, so
+   * supplier_invoice_number is not sent. Optional: older callers omit it.
+   */
+  is_self_billed?: boolean
   items: SupplierInvoiceLineItem[]
 }
 
@@ -118,6 +125,28 @@ export interface BuildSupplierInvoicePayloadOptions {
   canUseAccrual: boolean
   /** The supplier is in another EU country: its reverse charge says goods or services. */
   euSupplier: boolean
+  /**
+   * The invoice's own moms (the Moms field) as its VAT per rate
+   * (statedVatFromInvoiceField). Sent as vat_breakdown when the lines take
+   * it, so the registration books the moms the invoice states (crm#1367).
+   */
+  statedVat?: StatedRateVat[] | null
+}
+
+/**
+ * The Moms field as the invoice's VAT per rate: only when every line that
+ * charges moms charges the same rate, so the one figure belongs to one rate.
+ * Null under reverse charge (no moms is invoiced) and without a figure.
+ */
+export function statedVatFromInvoiceField(
+  items: ReadonlyArray<Pick<SupplierInvoiceLineItem, 'vat_rate' | 'amount'>>,
+  vat: number | null,
+  reverseCharge: boolean,
+): StatedRateVat[] | null {
+  if (reverseCharge || vat == null) return null
+  const rates = new Set(items.filter((item) => (item.amount || 0) !== 0 && item.vat_rate > 0).map((item) => item.vat_rate))
+  if (rates.size !== 1) return null
+  return [{ rate: rates.values().next().value!, vatAmount: vat }]
 }
 
 export function buildSupplierInvoicePayload(
@@ -126,7 +155,10 @@ export function buildSupplierInvoicePayload(
 ) {
   const { inboxItemId, uploadedDocumentId, oreRounding, defaultDims, canUseAccrual, euSupplier } = opts
   const vatTreatment = inferVatTreatment(data.items, data.reverse_charge)
-  const { roundingItem } = supplierInvoiceEditorAmounts(data.items, data.currency, data.reverse_charge, oreRounding)
+  const statedVat = data.reverse_charge ? null : opts.statedVat ?? null
+  const { roundingItem, statedVatAccepted } = supplierInvoiceEditorAmounts(
+    data.items, data.currency, data.reverse_charge, oreRounding, statedVat,
+  )
   const items: SupplierInvoiceLineItem[] = roundingItem ? [...data.items, roundingItem] : data.items
   const paidByPerson = isPersonPayer(data.payer)
   // When paid privately, due_date is irrelevant: but the API still requires
@@ -134,12 +166,16 @@ export function buildSupplierInvoicePayload(
   const dueDate = paidByPerson && !data.due_date
     ? data.invoice_date
     : data.due_date
+  const selfBilled = data.is_self_billed === true
   return {
     supplier_id: data.supplier_id,
-    ...(!inboxItemId && uploadedDocumentId ? { document_id: uploadedDocumentId } : {}),
-    supplier_invoice_number: data.supplier_invoice_number,
+    // A self-billing invoice is our own document: no upload, and its number
+    // is drawn from the company's series at registration.
+    ...(!inboxItemId && uploadedDocumentId && !selfBilled ? { document_id: uploadedDocumentId } : {}),
+    ...(selfBilled ? { is_self_billed: true as const } : { supplier_invoice_number: data.supplier_invoice_number }),
     invoice_date: data.invoice_date,
-    due_date: dueDate,
+    // Empty: the server takes invoice_date + the supplier's payment terms.
+    due_date: dueDate || undefined,
     delivery_date: data.delivery_date || undefined,
     currency: data.currency,
     exchange_rate: data.exchange_rate ? parseFloat(data.exchange_rate) : undefined,
@@ -163,6 +199,11 @@ export function buildSupplierInvoicePayload(
     // Invoice-level default dimensions (kostnadsställe/projekt): only sent
     // when the user actually picked something.
     ...(Object.keys(defaultDims).length > 0 ? { default_dimensions: defaultDims } : {}),
+    // The moms the invoice states, when the lines take it (the editor showed
+    // it as the booked moms); otherwise the server books the VAT on the sum.
+    ...(statedVat && statedVatAccepted
+      ? { vat_breakdown: statedVat.map((entry) => ({ vat_rate: entry.rate, vat_amount: entry.vatAmount })) }
+      : {}),
     items: items.map((item) => ({
       description: item.description,
       amount: item.amount,

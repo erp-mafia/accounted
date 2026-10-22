@@ -14,6 +14,7 @@ import {
   type SupplierInvoiceBookingItem,
 } from '@/lib/bookkeeping/supplier-invoice-registration-lines'
 import { supplierInvoiceEditorAmounts } from '@/lib/supplier-invoices/editor-amounts'
+import type { StatedRateVat } from '@/lib/vat/document-vat'
 import { inferVatTreatment } from '@/lib/supplier-invoices/form-payload'
 import { roundOre } from '@/lib/money'
 import { itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
@@ -77,6 +78,8 @@ interface SupplierInvoiceReviewContentProps {
   chartVatTreatments: ChartVatTreatments
   /** The invoice's default dimensions bag (kostnadsställe/projekt), when picked. */
   defaultDimensions?: Record<string, string>
+  /** The invoice's own moms per rate, as the payload sends it (vat_breakdown). */
+  statedVat?: StatedRateVat[] | null
 }
 
 interface JournalPreviewLine {
@@ -139,10 +142,11 @@ export function SupplierInvoiceReviewContent({
   bookingMoment,
   chartVatTreatments,
   defaultDimensions,
+  statedVat,
 }: SupplierInvoiceReviewContentProps) {
   const t = useTranslations('supplier_invoice_editor')
   const { itemTotals, subtotal, totalVat, total, figures, roundingItem } = supplierInvoiceEditorAmounts(
-    items, currency, reverseCharge, oreRounding,
+    items, currency, reverseCharge, oreRounding, statedVat,
   )
   const parsedRate = exchangeRate ? parseFloat(exchangeRate) : NaN
   const fxRate = currency !== 'SEK' && Number.isFinite(parsedRate) && parsedRate > 0 ? parsedRate : 1

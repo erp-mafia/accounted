@@ -49,10 +49,12 @@ import {
   supplierInvoiceSekAmounts,
 } from '@/lib/currency/supplier-invoice-rate'
 import { roundOre } from '@/lib/money'
+import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import {
   defaultVatRateForTreatment,
   treatmentDeductsInputVat,
 } from '@/lib/vat/supplier-invoice-line-checks'
+import { allocateDocumentVat, type DocumentRateVat } from '@/lib/vat/document-vat'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { parseEntityType } from '@/lib/company/entity-type'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -70,6 +72,12 @@ import { passed, warned, type DecisionCheck } from '@/lib/suggestion-log/checks'
 import { resultAccounts } from '@/lib/suggestion-log/inbox-classify'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { refuseWhenPairBooked } from '@/lib/operations/inbox-pair-guard'
+import { resolveSupplierInvoiceDueDate } from '@/lib/supplier-invoices/due-date'
+import { buildSelfBillingSnapshot, type SelfBillingSnapshot } from '@/lib/supplier-invoices/self-billing/snapshot'
+import {
+  archiveSelfBillingDocument,
+  SELF_BILL_DOCUMENT_ARCHIVE_FAILED_WARNING,
+} from '@/lib/supplier-invoices/self-billing/archive'
 
 export type CreateSupplierInvoiceInput = z.infer<typeof CreateSupplierInvoiceSchema>
 
@@ -118,7 +126,12 @@ export interface CreateSupplierInvoiceFailure {
 
 export interface CreateSupplierInvoicePreview {
   supplier_id: string
-  supplier_invoice_number: string
+  /** The supplier's number; null on a self-billing invoice, whose number the series assigns at registration. */
+  supplier_invoice_number: string | null
+  is_self_billed: boolean
+  /** Always null in a preview: assigned from the series when the invoice is registered. */
+  self_billing_number: null
+  self_billing_agreement_ref: string | null
   invoice_date: string
   due_date: string
   delivery_date: string | null
@@ -142,6 +155,8 @@ export interface CreateSupplierInvoicePreview {
   notes: string | null
   default_dimensions: Record<string, string>
   items: ComputedSupplierInvoiceItem[]
+  /** VAT per rate as booked: the document's own figure or the VAT on the summed base. */
+  vat_by_rate: DocumentRateVat[]
   would_create_registration_journal_entry: boolean
 }
 
@@ -255,6 +270,28 @@ export function supplierInvoicePayableTotal(subtotal: number, vatAmount: number,
 }
 
 /**
+ * Why a self-billing invoice cannot be issued from this body, or null. What
+ * the document cannot lawfully carry yet is refused rather than half-made:
+ * reverse charge (the buyer's momsreg.nr and the notation, ML 17 kap 24 §
+ * p.4 and 14), another currency (the VAT in SEK, 17 kap 29 §), a treatment
+ * without Swedish VAT (an exemption reference, p.13), and an underlag or a
+ * private payment (a self-billing invoice is our document and a payable).
+ */
+export function selfBillingUnsupportedReason(
+  body: Pick<CreateSupplierInvoiceInput, 'currency' | 'document_id' | 'inbox_item_id' | 'paid_with_private_funds'>,
+  reverseCharge: boolean,
+  vatTreatment: string,
+): 'reverse_charge' | 'currency' | 'vat_treatment' | 'document_id' | 'inbox_item_id' | 'paid_with_private_funds' | null {
+  if (reverseCharge) return 'reverse_charge'
+  if (body.currency && !isLedgerCurrency(body.currency)) return 'currency'
+  if (!treatmentDeductsInputVat(vatTreatment)) return 'vat_treatment'
+  if (body.document_id) return 'document_id'
+  if (body.inbox_item_id) return 'inbox_item_id'
+  if (body.paid_with_private_funds) return 'paid_with_private_funds'
+  return null
+}
+
+/**
  * Register a supplier invoice. With `dryRun` every check runs and the result
  * is the row that would be written, but no ankomstnummer is drawn and nothing
  * is written.
@@ -283,6 +320,14 @@ export async function createSupplierInvoice(
     )
   ) {
     return { ok: false, code: 'SI_CREATE_SLP_ACCRUAL' }
+  }
+
+  // A självfaktura is our own document and a payable: refused with an
+  // underlag, an inbox item or a private payment before any of them is read
+  // (the treatment rules follow once the supplier is known).
+  if (body.is_self_billed) {
+    const early = selfBillingUnsupportedReason(body, false, 'standard_25')
+    if (early) return { ok: false, code: 'SI_SELF_BILL_UNSUPPORTED', details: { reason: early } }
   }
 
   // A privately paid inbox document: the item's document is the underlag
@@ -367,6 +412,23 @@ export async function createSupplierInvoice(
   )
   if (!reverseChargeKind.ok) return reverseChargeKind
 
+  // Självfaktura (crm#1367): we issue the document, so it can only be one we
+  // can make lawfully today. The agreement it is issued under comes from the
+  // body or the supplier card; without one there is no self-billing (ML
+  // 2023:200 17 kap 15 § p.1).
+  const selfBilled = body.is_self_billed === true
+  let selfBillingAgreementRef: string | null = null
+  if (selfBilled) {
+    const unsupported = selfBillingUnsupportedReason(body, reverseCharge, vatTreatment)
+    if (unsupported) return { ok: false, code: 'SI_SELF_BILL_UNSUPPORTED', details: { reason: unsupported } }
+    selfBillingAgreementRef =
+      body.self_billing_agreement_ref?.trim() || (supplier.self_billing_agreement_ref as string | null)?.trim() || null
+    if (!selfBillingAgreementRef) {
+      return { ok: false, code: 'SI_SELF_BILL_AGREEMENT_MISSING', details: { supplier_id: body.supplier_id } }
+    }
+  }
+  const dueDate = resolveSupplierInvoiceDueDate(body.due_date, body.invoice_date, supplier.default_payment_terms)
+
   const hasAccrualItems = body.items.some(
     (item) => item.accrual_period_start && item.accrual_period_end,
   )
@@ -430,7 +492,8 @@ export async function createSupplierInvoice(
       ? roundOre(item.amount)
       : roundOre((item.quantity ?? 1) * (item.unit_price ?? 0))
     // A manual VAT override (partial deduction, foreign-currency rounding,
-    // supplier-side POS rounding) wins over line_total × rate.
+    // supplier-side POS rounding) wins; the other lines get their share of
+    // the document's VAT per rate below (allocateDocumentVat).
     const vatAmount = item.vat_amount != null ? roundOre(item.vat_amount) : roundOre(lineTotal * vatRate)
     const hasAccrual = Boolean(item.accrual_period_start && item.accrual_period_end)
     return {
@@ -485,9 +548,51 @@ export async function createSupplierInvoice(
     }
   }
 
+  // VAT per rate as the document has it: the VAT on the summed base, or the
+  // figure the caller read off the document (vat_breakdown), spread back onto
+  // the lines so they sum to it. Per-line rounding drifted an öre or more from
+  // the document on multi-line invoices (crm#1367).
+  const documentVat = allocateDocumentVat(
+    items.map((item, index) => ({
+      lineTotal: item.line_total,
+      rate: item.vat_rate,
+      overrideVat: body.items[index].vat_amount ?? null,
+    })),
+    body.vat_breakdown?.map((entry) => ({ rate: entry.vat_rate, vatAmount: entry.vat_amount })) ?? null,
+  )
+  if (!documentVat.ok) {
+    return { ok: false, code: documentVat.code, details: documentVat.details }
+  }
+  documentVat.lineVat.forEach((lineVat, index) => {
+    items[index].vat_amount = lineVat
+  })
+
   const subtotal = roundOre(items.reduce((sum, i) => sum + i.line_total, 0))
   const vatAmount = roundOre(items.reduce((sum, i) => sum + i.vat_amount, 0))
   const total = supplierInvoicePayableTotal(subtotal, vatAmount, reverseCharge)
+
+  // The parties as they are today, frozen on the row; checked before an
+  // ankomstnummer or a self-billing number is drawn.
+  let selfBillingSnapshot: SelfBillingSnapshot | null = null
+  if (selfBilled && selfBillingAgreementRef) {
+    const { data: buyer, error: buyerError } = await supabase
+      .from('company_settings')
+      .select('company_name, org_number, vat_number, address_line1, address_line2, postal_code, city, country, self_billing_acceptance_text')
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (buyerError || !buyer) {
+      log.error('self-billing: company settings read failed', (buyerError as Error | null) ?? new Error('no settings row'))
+      return { ok: false, code: 'SI_CREATE_FAILED', details: { step: 'self_billing_company' } }
+    }
+    const built = buildSelfBillingSnapshot({
+      supplier: supplier as Parameters<typeof buildSelfBillingSnapshot>[0]['supplier'],
+      company: buyer as Parameters<typeof buildSelfBillingSnapshot>[0]['company'],
+      agreementRef: selfBillingAgreementRef,
+      chargesVat: items.some((item) => item.vat_rate > 0 || item.vat_amount !== 0),
+    })
+    if (!built.ok) return { ok: false, code: 'SI_SELF_BILL_PARTY_INCOMPLETE', details: { missing: built.missing } }
+    selfBillingSnapshot = built.snapshot
+  }
 
   // A verifikat dated invoice_date is posted now when the invoice books at
   // registration (faktureringsmetoden, or an EU goods acquisition under
@@ -580,9 +685,12 @@ export async function createSupplierInvoice(
       dryRun: true,
       preview: {
         supplier_id: body.supplier_id,
-        supplier_invoice_number: body.supplier_invoice_number,
+        supplier_invoice_number: selfBilled ? null : (body.supplier_invoice_number ?? null),
+        is_self_billed: selfBilled,
+        self_billing_number: null,
+        self_billing_agreement_ref: selfBillingAgreementRef,
         invoice_date: body.invoice_date,
-        due_date: body.due_date,
+        due_date: dueDate,
         delivery_date: body.delivery_date ?? null,
         status: paidPrivately ? 'paid' : 'registered',
         currency: fx.rate.currency,
@@ -604,6 +712,7 @@ export async function createSupplierInvoice(
         notes: body.notes ?? null,
         default_dimensions: body.default_dimensions ?? {},
         items,
+        vat_by_rate: documentVat.byRate,
         would_create_registration_journal_entry: booksOnRegistration || paidPrivately,
       },
     }
@@ -678,9 +787,14 @@ export async function createSupplierInvoice(
       supplier_id: body.supplier_id,
       document_id: documentId,
       arrival_number: arrivalNum,
-      supplier_invoice_number: body.supplier_invoice_number,
+      // A self-billing invoice's number is drawn from the series by the
+      // insert trigger (assign_self_billing_number), never supplied.
+      supplier_invoice_number: selfBilled ? null : body.supplier_invoice_number,
+      is_self_billed: selfBilled,
+      self_billing_agreement_ref: selfBillingAgreementRef,
+      self_billing_snapshot: selfBillingSnapshot,
       invoice_date: body.invoice_date,
-      due_date: body.due_date,
+      due_date: dueDate,
       delivery_date: body.delivery_date || null,
       status: paidPrivately ? 'paid' : 'registered',
       currency: fx.rate.currency,
@@ -973,10 +1087,35 @@ export async function createSupplierInvoice(
     }
   }
 
+  // The self-billing invoice's document: made from the stored row (its
+  // number came from the insert) and archived as the verifikat's underlag.
+  let selfBillingDocumentId: string | null = null
+  if (selfBilled && selfBillingSnapshot) {
+    selfBillingDocumentId = await archiveSelfBillingDocument(ctx, {
+      supplierInvoiceId: invoiceId,
+      invoice: {
+        supplier_invoice_number: invoice.supplier_invoice_number as string | null,
+        invoice_date: invoice.invoice_date as string,
+        due_date: invoice.due_date as string,
+        delivery_date: (invoice.delivery_date as string | null) ?? null,
+        currency: invoice.currency as string,
+        subtotal,
+        vat_amount: vatAmount,
+        total,
+        is_credit_note: false,
+      },
+      items,
+      snapshot: selfBillingSnapshot,
+      journalEntryId: registrationJournalEntryId,
+    })
+    if (!selfBillingDocumentId) warnings.push({ ...SELF_BILL_DOCUMENT_ARCHIVE_FAILED_WARNING })
+  }
+
   const registered = {
     ...invoice,
     registration_journal_entry_id: registrationJournalEntryId,
     payment_journal_entry_id: paymentJournalEntryId ?? invoice.payment_journal_entry_id ?? null,
+    ...(selfBillingDocumentId ? { document_id: selfBillingDocumentId } : {}),
   } as SupplierInvoice & Record<string, unknown>
 
   try {
@@ -1012,9 +1151,9 @@ export async function createSupplierInvoice(
       fields: {
         supplier_name: (supplier.name as string | null) ?? null,
         supplier_org_number: (supplier.org_number as string | null) ?? null,
-        invoice_number: body.supplier_invoice_number,
+        invoice_number: body.supplier_invoice_number ?? null,
         invoice_date: body.invoice_date,
-        due_date: body.due_date,
+        due_date: dueDate,
         payment_reference: body.payment_reference ?? null,
         currency: (invoice.currency as string | null) ?? null,
         total,
@@ -1053,7 +1192,9 @@ async function duplicateOrInsertFailure(
   const isDuplicateNumber =
     pgErr?.code === '23505' && (pgErr.message || '').includes('idx_supplier_invoices_company_supplier_number')
 
-  if (!isDuplicateNumber) {
+  // A self-billing invoice brings no number of its own: a clash on the
+  // series-assigned one is a failure, not a duplicate of the caller's.
+  if (!isDuplicateNumber || !body.supplier_invoice_number) {
     log.error('supplier invoice insert failed', invoiceError as Error, { pgCode: pgErr?.code })
     return {
       ok: false,

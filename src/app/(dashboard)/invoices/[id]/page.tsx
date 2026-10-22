@@ -289,6 +289,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       journal_entry_id: string | null
       voucher_series: string | null
       voucher_number: number | null
+      // Settled by kvittning against a supplier invoice (invoice_payments.source 'setoff').
+      setoff?: boolean
     }>
   >([])
   // Posted payment vouchers keyed on this invoice, for the case where the
@@ -649,7 +651,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         supabase
           .from('invoice_payments')
           .select(
-            'id, payment_date, amount, currency, journal_entry_id, journal_entries(voucher_series, voucher_number)',
+            'id, payment_date, amount, currency, journal_entry_id, source, journal_entries(voucher_series, voucher_number)',
           )
           .eq('invoice_id', id)
           .order('payment_date', { ascending: true }),
@@ -701,6 +703,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         amount: number
         currency: string
         journal_entry_id: string | null
+        source: string | null
         journal_entries: { voucher_series: string | null; voucher_number: number | null } | null
       }
       setPayments(
@@ -712,6 +715,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           journal_entry_id: p.journal_entry_id,
           voucher_series: p.journal_entries?.voucher_series ?? null,
           voucher_number: p.journal_entries?.voucher_number ?? null,
+          setoff: p.source === 'setoff',
         })),
       )
     }
@@ -3212,6 +3216,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                       {p.amount != null && (
                         <span className="tabular-nums">{formatCurrency(p.amount, p.currency)}</span>
                       )}
+                      {'setoff' in p && p.setoff ? (
+                        <span className="text-xs text-muted-foreground">{t('payment_status_setoff')}</span>
+                      ) : null}
                       {p.journal_entry_id && voucherLabel ? (
                         <Link
                           href={`/bookkeeping/${p.journal_entry_id}`}

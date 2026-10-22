@@ -25,11 +25,12 @@ import { STANDARD_VOUCHER_SERIES_MAP } from '@/lib/bookkeeping/voucher-series-re
 // re-states the whole map in a new migration (20260907160200 added
 // rot_rut_reclaim, 20261011203200 pos_daily_sales, 20261015001100
 // rot_rut_reclassification, 20261021120100 collection_settlement,
-// 20261021120900 customer_loss), and re-applying an older one here would
+// 20261021120900 customer_loss, 20261022130300 counterparty_setoff), and
+// re-applying an older one here would
 // reset the default to a shorter map for every test that follows.
 const MIGRATION_PATH = join(
   process.cwd(),
-  'supabase/migrations/20261021120900_voucher_series_default_customer_loss.sql',
+  'supabase/migrations/20261022130300_voucher_series_default_counterparty_setoff.sql',
 )
 
 type SeriesMap = Record<string, string>

@@ -22,6 +22,10 @@ import {
 } from '@/lib/invoices/migrated-deduction-reversal'
 import { releaseSettlementAfterReversal } from '@/lib/collections/settlement-reversal'
 import { assertCustomerLossReversible, syncCustomerLossAfterReversal } from '@/lib/customer-loss/reversal'
+import {
+  assertCounterpartySetoffReversible,
+  syncCounterpartySetoffAfterReversal,
+} from '@/lib/invoices/counterparty-setoff/reversal'
 
 export const REVERSAL_HOOKS: readonly ReversalHook[] = Object.freeze<ReversalHook[]>([
   // A reversed payment voucher puts the linked invoice or supplier invoice
@@ -89,5 +93,17 @@ export const REVERSAL_HOOKS: readonly ReversalHook[] = Object.freeze<ReversalHoo
         id: storno.id,
         entry_date: storno.entry_date,
       }),
+  },
+  // A kvittning voucher: refused while one of its invoices has been credited
+  // or written off since (checked before a voucher number is spent); once
+  // reversed, both invoices get the set-off amount back and their payment
+  // rows go (lib/invoices/counterparty-setoff/reversal.ts).
+  {
+    id: 'counterparty-setoff',
+    module: 'invoicing',
+    sourceTypes: ['counterparty_setoff'],
+    beforeReversal: ({ supabase, companyId, entry }) => assertCounterpartySetoffReversible(supabase, companyId, entry.id),
+    afterReversal: ({ supabase, companyId, userId, entry, storno }) =>
+      syncCounterpartySetoffAfterReversal(supabase, companyId, userId, entry.id, { id: storno.id }),
   },
 ])

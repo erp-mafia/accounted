@@ -3,6 +3,7 @@ import {
   commitAssetDepreciation,
   commitAssetDisposal,
   commitBulkBooking,
+  commitCounterpartySetoff,
   commitEntry,
   commitExpensePayoutBatch,
   commitInvoiceVoucherLink,
@@ -121,6 +122,8 @@ function sqlPostingDoor(fn: SqlPostingFunction): SqlPostingDoors[SqlPostingFunct
       return commitAssetDepreciation
     case 'commit_asset_disposal':
       return commitAssetDisposal
+    case 'book_counterparty_setoff':
+      return commitCounterpartySetoff
     default: {
       const unknown: never = fn
       throw new Error(`no engine wrapper for SQL posting function ${String(unknown)}`)

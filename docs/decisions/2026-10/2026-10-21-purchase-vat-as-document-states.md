@@ -1,0 +1,1 @@
+[2026-10-21] Supplier invoices and received self-bills book VAT per rate as the document does: on the summed base, or the stated vat_breakdown within half an öre per line, spread at most 1 öre per line so items sum to it. Invoices we issue keep computeLineVat. EN 16931 BR-CO-17 (crm#1367).

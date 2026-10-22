@@ -26,6 +26,7 @@ import { cashAccountSeriesOverride } from '@/lib/bookkeeping/cash-account-vouche
 import { CASH_PARTIAL_FIRST_DESCRIPTION } from '@/lib/bookkeeping/invoice-lines'
 import { readCollectionsEnv } from '@/lib/collections/flags'
 import { customerLossEnabled } from '@/lib/env/customer-loss-switch'
+import { counterpartySetoffEnabled } from '@/lib/env/counterparty-setoff-switch'
 import { cashPartialPaymentsEnabled } from '@/lib/env/cash-partial-payments-switch'
 import { API_KEY_SCOPES } from '@/lib/auth/scope-catalog'
 import {
@@ -33,6 +34,7 @@ import {
   BEHANDLINGSHISTORIK_RULES,
   CASH_PARTIAL_PAYMENT_RULE,
   CORRECTION_AND_LOCK_RULES,
+  COUNTERPARTY_SETOFF_RULE,
   INVOICE_NUMBER_RULES,
   KONTANTMETOD_CUTOFF_RULES,
   KONTANTMETOD_EU_GOODS_RULE,
@@ -130,15 +132,15 @@ export interface SystemdokumentationCollections {
  * described after the switch is turned off.
  */
 export interface SystemdokumentationSwitchedRules {
-  /** CASH_PARTIAL_PAYMENTS_ENABLED, COLLECTIONS_ENABLED, CUSTOMER_LOSS_ENABLED. */
-  switches: { cashPartialPayments: boolean; collections: boolean; customerLoss: boolean }
-  /** Pro-rata part payment vouchers, collections payout vouchers, kundförlust vouchers. */
-  vouchers: { cashPartialPayments: boolean; collectionSettlement: boolean; customerLoss: boolean }
+  /** CASH_PARTIAL_PAYMENTS_ENABLED, COLLECTIONS_ENABLED, CUSTOMER_LOSS_ENABLED, COUNTERPARTY_SETOFF_ENABLED. */
+  switches: { cashPartialPayments: boolean; collections: boolean; customerLoss: boolean; counterpartySetoff?: boolean }
+  /** Pro-rata part payment vouchers, collections payout vouchers, kundförlust vouchers, kvittning vouchers. */
+  vouchers: { cashPartialPayments: boolean; collectionSettlement: boolean; customerLoss: boolean; counterpartySetoff?: boolean }
 }
 
 const NO_SWITCHED_RULES: SystemdokumentationSwitchedRules = {
-  switches: { cashPartialPayments: false, collections: false, customerLoss: false },
-  vouchers: { cashPartialPayments: false, collectionSettlement: false, customerLoss: false },
+  switches: { cashPartialPayments: false, collections: false, customerLoss: false, counterpartySetoff: false },
+  vouchers: { cashPartialPayments: false, collectionSettlement: false, customerLoss: false, counterpartySetoff: false },
 }
 
 /** Everything the pure builder needs; the loader fills it from the database. */
@@ -195,6 +197,7 @@ export const SOURCE_TYPE_LABELS_SV: Readonly<Record<JournalEntrySourceType, stri
   rot_rut_payout: 'ROT/RUT-utbetalning från Skatteverket',
   rot_rut_reclaim: 'ROT/RUT-återkrav',
   customer_loss: 'Kundförlust (befarad, konstaterad, återvunnen)',
+  counterparty_setoff: 'Kvittning kund-/leverantörsfaktura',
   rot_rut_reclassification: 'Omföring av ROT/RUT-avdrag på migrerad faktura',
   supplier_invoice_registered: 'Leverantörsfaktura',
   supplier_credit_note: 'Kreditfaktura från leverantör',
@@ -273,6 +276,7 @@ export function buildSystemdokumentation(facts: SystemdokumentationFacts): Syste
   const switchedSourceTypes: Partial<Record<JournalEntrySourceType, boolean>> = {
     collection_settlement: switched.switches.collections || switched.vouchers.collectionSettlement,
     customer_loss: switched.switches.customerLoss || switched.vouchers.customerLoss,
+    counterparty_setoff: Boolean(switched.switches.counterpartySetoff || switched.vouchers.counterpartySetoff),
   }
   const sourceTypes = (Object.keys(STANDARD_VOUCHER_SERIES_MAP) as JournalEntrySourceType[]).filter(
     (sourceType) => switchedSourceTypes[sourceType] !== false,
@@ -321,6 +325,9 @@ export function buildSystemdokumentation(facts: SystemdokumentationFacts): Syste
   }
   if ((switched.switches.cashPartialPayments && s?.accounting_method === 'cash') || switched.vouchers.cashPartialPayments) {
     behandlingsregler.push({ rubrik: 'Delbetalningar, kontantmetoden', text: CASH_PARTIAL_PAYMENT_RULE })
+  }
+  if (switched.switches.counterpartySetoff || switched.vouchers.counterpartySetoff) {
+    behandlingsregler.push({ rubrik: 'Kvittning', text: COUNTERPARTY_SETOFF_RULE })
   }
   if (s?.auto_lock_period_days != null) {
     behandlingsregler.push({ rubrik: 'Automatisk låsning', text: `Låsdatumet flyttas fram automatiskt ${s.auto_lock_period_days} dagar efter varje momsperiods slut.` })
@@ -535,7 +542,7 @@ export async function loadSystemdokumentationFacts(
 
   // Vouchers only a switched rule writes (drafts are no vouchers). Required:
   // leaving a used series out would be a wrong document, not a degraded one.
-  const [settlementVouchers, customerLossVouchers, cashPartialVouchers] = await Promise.all([
+  const [settlementVouchers, customerLossVouchers, cashPartialVouchers, setoffVouchers] = await Promise.all([
     required<{ id: string }>('verifikationer', supabase.from('journal_entries').select('id').eq('company_id', companyId).eq('source_type', 'collection_settlement').neq('status', 'draft').limit(1)),
     required<{ id: string }>('verifikationer', supabase.from('journal_entries').select('id').eq('company_id', companyId).eq('source_type', 'customer_loss').neq('status', 'draft').limit(1)),
     required<{ id: string }>(
@@ -549,17 +556,20 @@ export async function loadSystemdokumentationFacts(
         .neq('status', 'draft')
         .limit(1),
     ),
+    required<{ id: string }>('verifikationer', supabase.from('journal_entries').select('id').eq('company_id', companyId).eq('source_type', 'counterparty_setoff').neq('status', 'draft').limit(1)),
   ])
   const switchedRules: SystemdokumentationSwitchedRules = {
     switches: {
       cashPartialPayments: cashPartialPaymentsEnabled(),
       collections: readCollectionsEnv().enabled,
       customerLoss: customerLossEnabled(),
+      counterpartySetoff: counterpartySetoffEnabled(),
     },
     vouchers: {
       cashPartialPayments: cashPartialVouchers.length > 0,
       collectionSettlement: settlementVouchers.length > 0,
       customerLoss: customerLossVouchers.length > 0,
+      counterpartySetoff: setoffVouchers.length > 0,
     },
   }
 

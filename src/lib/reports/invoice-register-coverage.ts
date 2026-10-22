@@ -75,6 +75,7 @@ export const INVOICE_ENGINE_SOURCE_TYPES = [
   'rot_rut_payout',
   'rot_rut_reclaim',
   'customer_loss',
+  'counterparty_setoff',
   'rot_rut_reclassification',
   'storno',
   'correction',

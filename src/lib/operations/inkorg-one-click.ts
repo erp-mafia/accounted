@@ -234,6 +234,8 @@ export interface OneClickInvoiceBody {
   reverse_charge_kind?: 'eu_services'
   vat_treatment?: 'reverse_charge'
   payment_reference?: string
+  /** The document's VAT per rate, booked as stated (lib/vat/document-vat.ts). */
+  vat_breakdown?: Array<{ vat_rate: number; vat_amount: number }>
   items: OneClickInvoiceItem[]
 }
 
@@ -534,6 +536,9 @@ function invoiceOf(
 
   const total = finite(reading.totals?.total)
   const items: OneClickInvoiceItem[] = []
+  // The VAT of each item: the document's own figure for its rate (one item
+  // per rate), else net x rate.
+  const itemVat: number[] = []
   if (vat.kind === 'reverse_charge') {
     if (total === null || !(total > 0)) return { ok: false, reason: 'no_amount' }
     items.push({ description, amount: roundOre(total), account_number: costAccount, vat_rate: 0, reverse_charge_rate: vat.rate })
@@ -544,12 +549,15 @@ function invoiceOf(
     for (const group of groups) {
       const base = group.base ?? (total !== null ? roundOre(total - group.amount) : null)
       if (base === null || !(base > 0)) return { ok: false, reason: 'no_amount' }
-      // The registration books net × rate per line: the document's VAT has to be that, to the öre.
+      // The registration books the document's VAT for the rate (vat_breakdown),
+      // which must be the net x rate within the öre a seller's rounding allows.
       if (Math.abs(roundOre(base * group.rate) - group.amount) > 0.01) return { ok: false, reason: 'amount_mismatch' }
       items.push({ description, amount: roundOre(base), account_number: costAccount, vat_rate: group.rate })
+      itemVat.push(group.amount)
     }
   }
-  const registeredTotal = sumOre(items.map((item) => item.amount + (vat.kind === 'reverse_charge' ? 0 : roundOre(item.amount * item.vat_rate))))
+  const vatOf = (index: number) => itemVat[index] ?? roundOre(items[index].amount * items[index].vat_rate)
+  const registeredTotal = sumOre(items.map((item, index) => item.amount + (vat.kind === 'reverse_charge' ? 0 : vatOf(index))))
   if (total !== null && Math.abs(registeredTotal - total) > 0.01) return { ok: false, reason: 'amount_mismatch' }
 
   const invoice: OneClickInvoiceBody = {
@@ -562,12 +570,15 @@ function invoiceOf(
     ...(vat.kind === 'reverse_charge' ? { vat_treatment: 'reverse_charge' as const } : {}),
     ...(vat.kind === 'reverse_charge' && vat.rcKind === 'eu_services' ? { reverse_charge_kind: 'eu_services' as const } : {}),
     ...(emptyString(reading.invoice?.paymentReference) ? { payment_reference: emptyString(reading.invoice?.paymentReference) } : {}),
+    ...(itemVat.length > 0
+      ? { vat_breakdown: items.map((item, index) => ({ vat_rate: item.vat_rate, vat_amount: itemVat[index] })) }
+      : {}),
     items,
   }
 
   // The registration verifikat, in kronor.
   const net = sumOre(items.map((item) => inKronor(item.amount, rate)))
-  const vatSek = vat.kind === 'input' || vat.kind === 'cost' ? sumOre(items.map((item) => inKronor(roundOre(item.amount * item.vat_rate), rate))) : 0
+  const vatSek = vat.kind === 'input' || vat.kind === 'cost' ? sumOre(items.map((_item, index) => inKronor(vatOf(index), rate))) : 0
   const lines: OneClickLine[] =
     vat.kind === 'input'
       ? [line(costAccount, net, 0, description), line(INPUT_VAT_ACCOUNT, vatSek, 0, description), line(PAYABLE_ACCOUNT, 0, net + vatSek, description)]

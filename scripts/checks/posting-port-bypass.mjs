@@ -76,6 +76,7 @@ export const POSTING_SURFACE = {
     'commitExpensePayoutBatch', // create_expense_payout_batch
     'commitInvoiceVoucherLink', // link_invoice_to_voucher
     'commitSupplierInvoiceVoucherLink', // link_supplier_invoice_to_voucher
+    'commitCounterpartySetoff', // book_counterparty_setoff
     // The SIE import job's writers (import_sie_chunk, undo_sie_*_chunk). The
     // job records one event through recordEvent; see PERMANENT_ALLOWLIST.
     'commitSIEImportChunk',

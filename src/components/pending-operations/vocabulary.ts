@@ -52,6 +52,14 @@ export function operationLabel(
   return labelKey ? t(labelKey) : humanizeOperationType(operationType)
 }
 
+// Consequence sentences that are message keys in the "pending" namespace
+// rather than literals in singleActionWarnings below: every new one, so it
+// follows the user's language (swedish-ui-literal guard). Resolved by
+// singleActionWarning when the caller passes its translator.
+export const SINGLE_ACTION_WARNING_KEYS: Readonly<Record<string, string>> = {
+  book_counterparty_setoff: 'warning_book_counterparty_setoff',
+}
+
 // Full-sentence warning for the single-op confirmation dialog AND the inline
 // list-view warning when risk is medium/high. The list-view truncates beyond
 // one line; the dialog shows it in full. Order roughly low → high risk so
@@ -194,7 +202,11 @@ const REGISTER_BOOKED_SENTENCES: Record<RegisterBookedLedger, string> = {
  * a create_invoice or create_supplier_invoice_from_inbox staged as the
  * registration of an already-booked invoice posts nothing (crm#1094).
  */
-export function singleActionWarning(operationType: string, params?: Record<string, unknown> | null): string {
+export function singleActionWarning(
+  operationType: string,
+  params?: Record<string, unknown> | null,
+  t?: (key: string) => string,
+): string {
   if (operationType === 'convert_invoice' && params?.target === 'order') {
     return 'Genom att klicka godkänn så skapas en kundorder (utkast, OR-nummer) från proforman eller offerten. Ingen faktura skapas och inget bokförs; fakturan skapas senare från kundordern.'
   }
@@ -211,6 +223,8 @@ export function singleActionWarning(operationType: string, params?: Record<strin
   if (operationType === 'create_grant' && params?.operation_type === 'create_supplier_invoice_from_inbox') {
     return SUPPLIER_INVOICE_GRANT_SENTENCE
   }
+  const key = SINGLE_ACTION_WARNING_KEYS[operationType]
+  if (key && t) return t(key)
   return singleActionWarnings[operationType] ?? ''
 }
 
@@ -229,15 +243,18 @@ const SUPPLIER_INVOICE_GRANT_SENTENCE =
  * but it keeps its pending type's 'medium' tier so a whole reskontra can be
  * approved at once (risk-tiers.ts), and such an approval opens no dialog.
  */
-export function rowConsentSentence(op: {
-  operation_type: string
-  status: string
-  risk_level?: string | null
-  params?: Record<string, unknown> | null
-}): string {
+export function rowConsentSentence(
+  op: {
+    operation_type: string
+    status: string
+    risk_level?: string | null
+    params?: Record<string, unknown> | null
+  },
+  t?: (key: string) => string,
+): string {
   if (op.status !== 'pending') return ''
   const registration = registerBookedLedgerOf(op.operation_type, op.params) !== null
-  return op.risk_level === 'high' || registration ? singleActionWarning(op.operation_type, op.params) : ''
+  return op.risk_level === 'high' || registration ? singleActionWarning(op.operation_type, op.params, t) : ''
 }
 
 /**

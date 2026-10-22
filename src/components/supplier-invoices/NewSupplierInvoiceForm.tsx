@@ -50,6 +50,7 @@ import { SLP_RATE, isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { roundOre, parseAmountInput } from '@/lib/money'
 import {
   buildSupplierInvoicePayload,
+  statedVatFromInvoiceField,
   reverseChargeKindMissing,
   type SupplierInvoiceFormData,
   type SupplierInvoiceLineItem,
@@ -58,6 +59,8 @@ import { plantedRowTouched, snapshotPlantedRow } from '@/lib/supplier-invoices/p
 import { rememberedReverseChargeKind } from '@/lib/supplier-invoices/remembered-kind'
 import { VatRateCell, RcRateSelect, AmountCell } from '@/components/supplier-invoices/supplier-invoice-cells'
 import { useSupplierInvoiceData } from '@/components/supplier-invoices/use-supplier-invoice-data'
+import { useCompanySettings } from '@/lib/reference-data/hooks'
+import { isInvoiceTypeEnabled } from '@/lib/invoices/invoice-type-toggles'
 import { useInboxPrefill, type InboxItemData } from '@/components/supplier-invoices/use-inbox-prefill'
 import { accrualThresholdSek } from '@/components/bookkeeping/accrual-k2-hint'
 import { regionOfCountry, sellerCountry, supplierTypeForRegion } from '@/lib/vat/seller-country'
@@ -231,6 +234,7 @@ export default function NewSupplierInvoiceForm({
     periods,
     periodsLoaded,
   } = useSupplierInvoiceData()
+  const { settings: companySettingsRow } = useCompanySettings()
 
   /** The start of the fiscal year a date is booked in, when the periods are known. */
   const fiscalYearStartOf = (date: string | null | undefined): string | null =>
@@ -316,6 +320,7 @@ export default function NewSupplierInvoiceForm({
       payer: settleWith && inboxItemId ? 'company' : 'unpaid',
       claimant_name: '',
       employee_id: '',
+      is_self_billed: false,
       // The table starts empty: the ghost entry row (never part of form
       // state) is the only way rows are born, so no silent prefilled expense
       // account can ever reach a verifikat unnoticed.
@@ -376,6 +381,7 @@ export default function NewSupplierInvoiceForm({
   // person's liability, an open claim on Hem) instead of a 2440 payable.
   const watchedPaidPrivately = isPersonPayer(watchedPayer)
   const watchedReverseCharge = watch('reverse_charge')
+  const watchedSelfBilled = watch('is_self_billed') === true
   // An icke momsregistrerad company books the gross as the cost, and a
   // reverse-charge invoice carries no moms: the Moms field only exists
   // where an invoice moms can be booked.
@@ -1165,13 +1171,16 @@ export default function NewSupplierInvoiceForm({
   // Öresavrundning follows the invoice until the person flips the switch:
   // a Fakturabelopp that is the rows' exact total rounded to whole kronor
   // turns it on, so the 3740 line books the difference with its sign.
+  // The Moms field is the invoice's own VAT: on a single-rate invoice it is
+  // what the registration books when the lines take it (crm#1367).
+  const statedVat = statedVatFromInvoiceField(watchedItems || [], enteredFakturaVat, watchedReverseCharge)
   const exactAmounts = supplierInvoiceEditorAmounts(
-    watchedItems || [], watchedCurrency || 'SEK', watchedReverseCharge, false,
+    watchedItems || [], watchedCurrency || 'SEK', watchedReverseCharge, false, statedVat,
   )
   const oreRounding =
     oreRoundingChoice ?? isWholeKronaRoundingOf(exactAmounts.total, enteredFakturaTotal, watchedCurrency || 'SEK')
   const { itemTotals, subtotal, totalVat, figures } = oreRounding
-    ? supplierInvoiceEditorAmounts(watchedItems || [], watchedCurrency || 'SEK', watchedReverseCharge, true)
+    ? supplierInvoiceEditorAmounts(watchedItems || [], watchedCurrency || 'SEK', watchedReverseCharge, true, statedVat)
     : exactAmounts
 
   // Total-first fill: a single row whose amount is still empty, or still the
@@ -1484,6 +1493,7 @@ export default function NewSupplierInvoiceForm({
       defaultDims,
       canUseAccrual,
       euSupplier,
+      statedVat,
     })
   }
 
@@ -1579,6 +1589,20 @@ export default function NewSupplierInvoiceForm({
   const selectedSupplier = suppliers.find((s) => s.id === watchedSupplierId)
   const supplierHasGiro = Boolean(selectedSupplier?.bankgiro || selectedSupplier?.plusgiro)
   const underlagFile = documentFiles[0]
+  // Självfaktura (crm#1367): offered for a supplier the company has a
+  // self-billing agreement with, on a fresh invoice (not one read from an
+  // underlag), while the company shows självfakturor at all.
+  const selfBillingOffered =
+    !inboxItemId &&
+    !settleWith &&
+    isInvoiceTypeEnabled(companySettingsRow, 'self_billing_enabled') &&
+    Boolean(selectedSupplier?.self_billing_agreement_ref)
+  const selfBilled = selfBillingOffered && watchedSelfBilled
+  // A supplier without an agreement (or an underlag-driven invoice) takes no
+  // självfaktura: drop a choice made for another supplier.
+  useEffect(() => {
+    if (!selfBillingOffered && watchedSelfBilled) setValue('is_self_billed', false)
+  }, [selfBillingOffered, watchedSelfBilled, setValue])
 
   // Next-step line (the page's ONLY ochre line): same predicates and order as
   // the submit-time checks in useSupplierInvoiceSubmit, so the always-enabled
@@ -1588,7 +1612,7 @@ export default function NewSupplierInvoiceForm({
     if (!watchedSupplierId) {
       return { field: 'supplier', label: t('next_step_supplier') }
     }
-    if (!(watchedInvoiceNumber || '').trim()) {
+    if (!selfBilled && !(watchedInvoiceNumber || '').trim()) {
       return { field: 'invoice_number', label: t('next_step_invoice_number') }
     }
     if (!watchedItems || watchedItems.length === 0) {
@@ -1712,6 +1736,13 @@ export default function NewSupplierInvoiceForm({
               <div className="flex items-center gap-3 rounded-lg border border-border px-4 py-3 text-[13px] text-muted-foreground">
                 <FileText className="h-4 w-4 shrink-0" />
                 {t('underlag_caption_inbox')}
+              </div>
+            ) : selfBilled ? (
+              // Our own document: the server refuses an uploaded underlag on a
+              // självfaktura, so none is offered (crm#1367).
+              <div className="flex items-center gap-3 rounded-lg border border-border px-4 py-3 text-[13px] text-muted-foreground">
+                <FileText className="h-4 w-4 shrink-0" />
+                {t('underlag_caption_self_billed')}
               </div>
             ) : underlagFile ? (
               <div className="flex items-center justify-between gap-3 rounded-lg border border-border px-4 py-3">
@@ -1847,6 +1878,32 @@ export default function NewSupplierInvoiceForm({
                 {t('org_number_prefix', { number: selectedSupplier.org_number })}
               </p>
             )}
+            {selfBillingOffered && (
+              <div className="mt-3 flex items-start justify-between gap-4 rounded-lg border border-border px-4 py-3">
+                <div className="min-w-0">
+                  <Label htmlFor="si-self-billed" className="text-sm font-medium">
+                    {t('self_billing_toggle_label')}
+                  </Label>
+                  <p className="mt-0.5 text-[12.5px] text-muted-foreground">
+                    {t('self_billing_toggle_help', { agreement: selectedSupplier?.self_billing_agreement_ref ?? '' })}
+                  </p>
+                </div>
+                <Switch
+                  id="si-self-billed"
+                  checked={watchedSelfBilled}
+                  onCheckedChange={(next) => {
+                    setValue('is_self_billed', next, { shouldDirty: true })
+                    if (next) {
+                      // What a självfaktura can carry today: SEK, Swedish VAT,
+                      // paid by the company (the server refuses anything else).
+                      setValue('currency', 'SEK', { shouldDirty: true })
+                      setValue('reverse_charge', false, { shouldDirty: true })
+                      setValue('payer', 'unpaid', { shouldDirty: true })
+                    }
+                  }}
+                />
+              </div>
+            )}
           </section>
 
           {/* ── Fakturauppgifter ─────────────────────────────────── */}
@@ -1864,22 +1921,26 @@ export default function NewSupplierInvoiceForm({
                   </Label>
                   <AiFilledIndicator active={aiFlags.invoiceNumber} label="AI-fyllt" />
                 </div>
-                {(() => {
-                  const { ref: rhfRef, ...rest } = register('supplier_invoice_number')
-                  return (
-                    <Input
-                      id="si-invoice-number"
-                      placeholder={t('supplier_invoice_number_placeholder')}
-                      autoComplete="off"
-                      className={cn('h-9', settledFields.has('supplier_invoice_number') && 'prefill-settle')}
-                      {...rest}
-                      ref={(el) => {
-                        rhfRef(el)
-                        invoiceNumberInputRef.current = el
-                      }}
-                    />
-                  )
-                })()}
+                {selfBilled ? (
+                  <p className="flex h-9 items-center text-sm text-muted-foreground">{t('self_billing_number_note')}</p>
+                ) : (
+                  (() => {
+                    const { ref: rhfRef, ...rest } = register('supplier_invoice_number')
+                    return (
+                      <Input
+                        id="si-invoice-number"
+                        placeholder={t('supplier_invoice_number_placeholder')}
+                        autoComplete="off"
+                        className={cn('h-9', settledFields.has('supplier_invoice_number') && 'prefill-settle')}
+                        {...rest}
+                        ref={(el) => {
+                          rhfRef(el)
+                          invoiceNumberInputRef.current = el
+                        }}
+                      />
+                    )
+                  })()
+                )}
                 {duplicateWarning && (
                   <p className="text-xs text-destructive" data-ph-mask="">
                     {t('duplicate_warning_line', { number: duplicateWarning.number })}
@@ -1925,6 +1986,7 @@ export default function NewSupplierInvoiceForm({
                     value={field.value}
                     onChange={field.onChange}
                     accountingMethod={accountingMethod}
+                    disabled={selfBilled}
                     labelClassName="text-xs font-normal text-muted-foreground"
                   />
                 )}
@@ -2391,7 +2453,12 @@ export default function NewSupplierInvoiceForm({
                     name="reverse_charge"
                     control={control}
                     render={({ field }) => (
-                      <Switch id="reverse_charge" checked={field.value} onCheckedChange={field.onChange} />
+                      <Switch
+                        id="reverse_charge"
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                        disabled={selfBilled}
+                      />
                     )}
                   />
                 </div>
@@ -2402,7 +2469,7 @@ export default function NewSupplierInvoiceForm({
                     name="currency"
                     control={control}
                     render={({ field }) => (
-                      <Select value={field.value} onValueChange={field.onChange}>
+                      <Select value={field.value} onValueChange={field.onChange} disabled={selfBilled}>
                         <SelectTrigger className="h-8 w-28">
                           <SelectValue />
                         </SelectTrigger>
@@ -2621,6 +2688,7 @@ export default function NewSupplierInvoiceForm({
               bookingMoment={effectiveBookingMoment}
               chartVatTreatments={chartVatTreatmentsOf(accounts)}
               defaultDimensions={defaultDims}
+              statedVat={statedVatFromInvoiceField(pendingData.items, enteredFakturaVat, pendingData.reverse_charge)}
             />
           </ConfirmationDialog>
         )

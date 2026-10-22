@@ -826,6 +826,12 @@ export default function SupplierInvoicesPage() {
                           <span className="text-muted-foreground">{t('number_missing')}</span>
                         )}
                       </Link>
+                      {/* A självfaktura: the number is the company's own (crm#1367). */}
+                      {inv.is_self_billed && (
+                        <Badge variant="outline" className="ml-2 font-normal">
+                          {t('badge_self_billed')}
+                        </Badge>
+                      )}
                     </td>
                     <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground sm:table-cell')}>
                       {formatDate(inv.due_date)}

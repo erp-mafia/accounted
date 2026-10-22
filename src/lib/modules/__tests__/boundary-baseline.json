@@ -86,6 +86,7 @@
       "lib/composition/reversal-hooks.ts -> lib/bookkeeping/payment-sync",
       "lib/composition/reversal-hooks.ts -> lib/collections/settlement-reversal",
       "lib/composition/reversal-hooks.ts -> lib/customer-loss/reversal",
+      "lib/composition/reversal-hooks.ts -> lib/invoices/counterparty-setoff/reversal",
       "lib/composition/reversal-hooks.ts -> lib/invoices/migrated-deduction-reversal",
       "lib/composition/reversal-hooks.ts -> lib/invoices/rot-rut-reclaim-reversal",
       "lib/composition/unbooked-bank-lines.ts -> lib/transactions/unbooked"

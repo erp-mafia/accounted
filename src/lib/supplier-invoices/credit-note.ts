@@ -57,6 +57,12 @@ export interface SupplierCreditNoteContext {
   supplierCreditNoteNumber?: string | null
   /** The supplier's credit note document: the underlag the row points at. */
   documentId?: string | null
+  /**
+   * Crediting a self-billing invoice (crm#1367): the credit note is ours too,
+   * numbered from the same series by the insert trigger, under the original's
+   * agreement, with a snapshot that names the invoice it credits.
+   */
+  selfBilling?: { agreementRef: string; snapshot: Record<string, unknown> } | null
 }
 
 /**
@@ -91,7 +97,16 @@ export function buildSupplierCreditNoteRow(
     company_id: ctx.companyId,
     supplier_id: original.supplier_id,
     arrival_number: ctx.arrivalNumber,
-    supplier_invoice_number: supplierCreditNoteNumber(original.supplier_invoice_number, ctx.supplierCreditNoteNumber),
+    supplier_invoice_number: ctx.selfBilling
+      ? null
+      : supplierCreditNoteNumber(original.supplier_invoice_number, ctx.supplierCreditNoteNumber),
+    ...(ctx.selfBilling
+      ? {
+          is_self_billed: true,
+          self_billing_agreement_ref: ctx.selfBilling.agreementRef,
+          self_billing_snapshot: ctx.selfBilling.snapshot,
+        }
+      : {}),
     invoice_date: ctx.date,
     due_date: ctx.date,
     status: SUPPLIER_CREDIT_NOTE_STATUS,

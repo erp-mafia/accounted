@@ -97,6 +97,27 @@ describe('gnubok_list_invoices: overdue follows the due date (crm#1084)', () => 
     vi.useRealTimers()
   })
 
+  // crm#1367: a received self-billed sale has invoice_number null by design,
+  // so without these two fields it listed like an unsent draft.
+  it('returns the customer\'s number and the self-billed flag on a received self-bill', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        invoiceRow({ id: 'inv-sb', invoice_number: null, external_invoice_number: 'S2441', is_self_billed: true, status: 'paid', remaining_amount: 0 }),
+        invoiceRow({ id: 'inv-own' }),
+      ],
+      count: 2,
+    })
+
+    const result = (await listInvoices.execute({}, 'company-1', 'user-1', supabase as never)) as ListResult
+
+    const columns = String(findCall('invoices', 'select')?.[0])
+    expect(columns).toContain('external_invoice_number')
+    expect(columns).toContain('is_self_billed')
+    expect(result.invoices[0]).toMatchObject({ id: 'inv-sb', invoice_number: null, external_invoice_number: 'S2441', is_self_billed: true })
+    expect(result.invoices[1]).toMatchObject({ id: 'inv-own', invoice_number: '2026024', external_invoice_number: null, is_self_billed: false })
+  })
+
   it('status=overdue filters on the due date and the open remainder, never the stored status', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-10-13T08:00:00Z'))

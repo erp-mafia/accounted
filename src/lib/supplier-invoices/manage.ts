@@ -85,13 +85,16 @@ export async function deleteSupplierInvoice(
 
   const { data: existing } = await supabase
     .from('supplier_invoices')
-    .select('status, registration_journal_entry_id, is_credit_note, arrival_number, supplier_invoice_number, total, currency')
+    .select('status, registration_journal_entry_id, is_credit_note, is_self_billed, arrival_number, supplier_invoice_number, total, currency')
     .eq('id', supplierInvoiceId)
     .eq('company_id', companyId)
     .single()
   if (!existing) return NOT_FOUND
 
   if (existing.is_credit_note) return { ok: false, code: 'SI_DELETE_CREDIT_NOTE' }
+  // An issued self-billing invoice holds a number of our own series and a
+  // document the seller may have: correct it with a credit note (crm#1367).
+  if (existing.is_self_billed) return { ok: false, code: 'SI_DELETE_SELF_BILLED' }
 
   if (!(DELETABLE_STATUSES as readonly string[]).includes(existing.status as string)) {
     return { ok: false, code: 'SI_DELETE_INVALID_STATUS', details: { currentStatus: existing.status } }

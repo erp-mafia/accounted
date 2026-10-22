@@ -79,6 +79,9 @@ const RISK_TIERS = {
   // the web UI only.
   collections_daily_batch: 'high',
   record_customer_loss: 'high',
+  // Kvittning books a verifikat and lowers a customer and a supplier invoice;
+  // undone only by a storno of that verifikat.
+  book_counterparty_setoff: 'high',
   delete_supplier_invoice: 'medium',
   uncredit_supplier_invoice: 'high',
   update_supplier_invoice_item_account: 'high',

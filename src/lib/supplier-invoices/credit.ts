@@ -67,6 +67,8 @@ import { compareCreditToInvoice, creditAmount, creditNoteFromReading } from './c
 import { rejectSupersededInboxConversions } from '@/lib/pending-operations/supersede'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { checkAccountingMethod } from '@/lib/company/accounting-method'
+import { creditNoteSelfBillingSnapshot, type SelfBillingSnapshot } from './self-billing/snapshot'
+import { archiveSelfBillingDocument, SELF_BILL_DOCUMENT_ARCHIVE_FAILED_WARNING } from './self-billing/archive'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -115,6 +117,7 @@ const ORIGINAL_COLUMNS = `
   vat_treatment, reverse_charge, reverse_charge_kind, remaining_amount,
   registration_journal_entry_id, payment_journal_entry_id, paid_at, paid_amount,
   is_credit_note, credited_invoice_id, arrival_number, default_dimensions,
+  is_self_billed, self_billing_agreement_ref, self_billing_snapshot,
   supplier:suppliers(id, name, supplier_type),
   items:supplier_invoice_items(*)
 `
@@ -271,6 +274,29 @@ export async function creditSupplierInvoice(
   const supplier = pickSupplier(original.supplier)
   const originalItems = original.items ?? []
 
+  // A self-billing invoice is credited by our own credit note: its number
+  // comes from the same series and Accounted makes the document, so a
+  // supplier's number, document or inbox item has no place here (crm#1367).
+  let selfBilling: { agreementRef: string; snapshot: SelfBillingSnapshot } | null = null
+  if (original.is_self_billed) {
+    if (input.supplier_credit_note_number || input.document_id || input.inbox_item_id) {
+      return { ok: false, code: 'SI_SELF_BILL_UNSUPPORTED', details: { reason: 'credit_input' } }
+    }
+    const snapshot = original.supplier_invoice_number
+      ? creditNoteSelfBillingSnapshot(original.self_billing_snapshot, {
+          number: original.supplier_invoice_number,
+          invoice_date: original.invoice_date,
+        })
+      : null
+    if (!snapshot || !original.self_billing_agreement_ref) {
+      log.error('credit: the self-billing invoice has no readable snapshot', new Error('self_billing_snapshot'), {
+        supplierInvoiceId,
+      })
+      return { ok: false, code: 'SI_CREDIT_FAILED', details: { step: 'self_billing_snapshot' } }
+    }
+    selfBilling = { agreementRef: original.self_billing_agreement_ref, snapshot }
+  }
+
   // The credit note in the inbox, when the credit comes from one.
   let item: InboxItemRow | null = null
   if (input.inbox_item_id) {
@@ -340,10 +366,13 @@ export async function creditSupplierInvoice(
       },
     }
   }
-  const creditNumber = supplierCreditNoteNumber(
-    original.supplier_invoice_number,
-    input.supplier_credit_note_number ?? reading?.creditNoteNumber ?? null,
-  )
+  // A self-billing credit note's number is drawn from the series on insert.
+  const creditNumber = selfBilling
+    ? null
+    : supplierCreditNoteNumber(
+        original.supplier_invoice_number,
+        input.supplier_credit_note_number ?? reading?.creditNoteNumber ?? null,
+      )
 
   // The document: given, else the inbox item's. It becomes the credit
   // verifikat's underlag, so one already on another verifikat is refused.
@@ -439,6 +468,7 @@ export async function creditSupplierInvoice(
           is_credit_note: true,
           credited_invoice_id: original.id,
           document_id: documentId,
+          is_self_billed: selfBilling !== null,
           items: creditItemsFor('(new)', originalItems).map(({ supplier_invoice_id: _drop, ...rest }) => rest),
         },
         original_id: original.id,
@@ -473,6 +503,7 @@ export async function creditSupplierInvoice(
         date: creditDate,
         supplierCreditNoteNumber: creditNumber,
         documentId,
+        selfBilling,
       }),
     )
     .select()
@@ -635,6 +666,34 @@ export async function creditSupplierInvoice(
         message_en:
           'The invoice was credited, but the credit note document could not be attached to the verifikat. Attach it under Bookkeeping.',
       })
+    }
+  }
+
+  // A self-billing credit note's document: made from the stored row (its
+  // number came from the insert) and archived as the credit verifikat's
+  // underlag, or anchored at payment when no verifikat was posted.
+  if (selfBilling) {
+    const archivedId = await archiveSelfBillingDocument(ctx, {
+      supplierInvoiceId: creditNote.id,
+      invoice: {
+        supplier_invoice_number: creditNote.supplier_invoice_number,
+        invoice_date: creditNote.invoice_date,
+        due_date: creditNote.due_date,
+        delivery_date: creditNote.delivery_date ?? null,
+        currency: creditNote.currency,
+        subtotal: creditNote.subtotal,
+        vat_amount: creditNote.vat_amount,
+        total: creditNote.total,
+        is_credit_note: true,
+      },
+      items: creditItemsFor(creditNote.id, originalItems),
+      snapshot: selfBilling.snapshot,
+      journalEntryId,
+    })
+    if (archivedId) {
+      creditNote.document_id = archivedId
+    } else {
+      warnings.push({ ...SELF_BILL_DOCUMENT_ARCHIVE_FAILED_WARNING })
     }
   }
 

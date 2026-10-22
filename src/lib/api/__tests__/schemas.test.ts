@@ -1227,6 +1227,49 @@ describe('CreateSupplierInvoiceSchema', () => {
   })
 })
 
+// crm#1367: a received document's VAT, per rate and per line.
+describe('CreateSupplierInvoiceSchema: the document\'s VAT', () => {
+  it('accepts a vat_breakdown with one entry per rate', () => {
+    const result = CreateSupplierInvoiceSchema.safeParse(
+      validSupplierInvoice({ vat_breakdown: [{ vat_rate: 0.25, vat_amount: 1250 }] }),
+    )
+    expect(result.success).toBe(true)
+  })
+
+  it('refuses a rate stated twice, and a percent rate', () => {
+    expect(CreateSupplierInvoiceSchema.safeParse(validSupplierInvoice({
+      vat_breakdown: [{ vat_rate: 0.25, vat_amount: 1250 }, { vat_rate: 0.25, vat_amount: 1 }],
+    })).success).toBe(false)
+    expect(CreateSupplierInvoiceSchema.safeParse(validSupplierInvoice({
+      vat_breakdown: [{ vat_rate: 25, vat_amount: 1250 }],
+    })).success).toBe(false)
+  })
+
+  it.each([
+    ['reverse charge', { reverse_charge: true }],
+    ['exempt', { vat_treatment: 'exempt' }],
+    ['export', { vat_treatment: 'export' }],
+  ])('refuses a vat_breakdown under %s', (_label, overrides) => {
+    const result = CreateSupplierInvoiceSchema.safeParse(validSupplierInvoice({
+      ...overrides,
+      items: [validSupplierInvoiceItem({ vat_rate: 0 })],
+      vat_breakdown: [{ vat_rate: 0.25, vat_amount: 1250 }],
+    }))
+    expect(result.success).toBe(false)
+    expect(result.error?.issues.some((i) => i.path.join('.') === 'vat_breakdown')).toBe(true)
+  })
+
+  it('lets a negative line carry its negative VAT, never the opposite sign', () => {
+    const negative = validSupplierInvoiceItem({ amount: -2107.7, vat_rate: 0.25 })
+    // -2 107,70 x 25 % = -526,925, -526,92 rounded; an öre of rounding either way.
+    expect(CreateSupplierInvoiceItemSchema.safeParse({ ...negative, vat_amount: -526.93 }).success).toBe(true)
+    expect(CreateSupplierInvoiceItemSchema.safeParse({ ...negative, vat_amount: -526.94 }).success).toBe(false)
+    expect(CreateSupplierInvoiceItemSchema.safeParse({ ...negative, vat_amount: 526.92 }).success).toBe(false)
+    expect(CreateSupplierInvoiceItemSchema.safeParse({ ...validSupplierInvoiceItem(), vat_amount: -1 }).success).toBe(false)
+    expect(CreateSupplierInvoiceItemSchema.safeParse({ ...validSupplierInvoiceItem(), vat_amount: 0 }).success).toBe(true)
+  })
+})
+
 describe('CreateSupplierInvoiceItemSchema', () => {
   it('accepts valid item', () => {
     const result = CreateSupplierInvoiceItemSchema.safeParse(validSupplierInvoiceItem())

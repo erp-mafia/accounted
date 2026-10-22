@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `363`;
+exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `366`;
 
 exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-keys 1`] = `
 [
@@ -150,11 +150,13 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "GET /api/v1/companies/:companyId/salary/settings",
   "GET /api/v1/companies/:companyId/service-accounts",
   "GET /api/v1/companies/:companyId/service-accounts/:id",
+  "GET /api/v1/companies/:companyId/setoffs/counterparty",
   "GET /api/v1/companies/:companyId/settings",
   "GET /api/v1/companies/:companyId/skatteverket/vat-declarations",
   "GET /api/v1/companies/:companyId/supplier-invoices",
   "GET /api/v1/companies/:companyId/supplier-invoices/:id",
   "GET /api/v1/companies/:companyId/supplier-invoices/:id/attestations",
+  "GET /api/v1/companies/:companyId/supplier-invoices/:id/self-billing-pdf",
   "GET /api/v1/companies/:companyId/supplier-invoices/attest-policy",
   "GET /api/v1/companies/:companyId/supplier-payment-batches",
   "GET /api/v1/companies/:companyId/supplier-payment-batches/:id",
@@ -322,6 +324,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/service-accounts/:id/keys",
   "POST /api/v1/companies/:companyId/service-accounts/:id/keys/:keyId/revoke",
   "POST /api/v1/companies/:companyId/service-accounts/:id/revoke",
+  "POST /api/v1/companies/:companyId/setoffs",
   "POST /api/v1/companies/:companyId/skattekonto/sync",
   "POST /api/v1/companies/:companyId/skatteverket/agi/validate-huvuduppgift",
   "POST /api/v1/companies/:companyId/skatteverket/agi/validate-individuppgift",
@@ -379,14 +382,14 @@ exports[`v1 spec snapshot > matches the recorded module catalogue > endpoint-mod
   "expenses": 5,
   "import": 7,
   "inbox": 11,
-  "invoicing": 28,
+  "invoicing": 30,
   "ledger": 110,
   "payments": 20,
   "payroll": 52,
   "platform": 29,
   "pos": 9,
   "skatteverket": 4,
-  "supplier-invoices": 22,
+  "supplier-invoices": 23,
   "transactions": 31,
   "vat": 1,
   "webshop": 3,

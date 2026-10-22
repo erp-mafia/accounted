@@ -306,6 +306,7 @@ describe('dimension rule policy per source type', () => {
     'rot_rut_payout',
     'rot_rut_reclaim',
     'customer_loss',
+    'counterparty_setoff',
     'rot_rut_reclassification',
     'expense_payout',
     'stripe_payout',

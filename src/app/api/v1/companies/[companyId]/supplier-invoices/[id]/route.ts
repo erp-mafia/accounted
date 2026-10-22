@@ -30,6 +30,7 @@ import {
   findChangedVerifikatFields,
   findLockedVerifikatFields,
 } from '@/lib/supplier-invoices/lifecycle'
+import { selfBilledLockedFields } from '@/lib/supplier-invoices/self-billing/edit-guard'
 
 // V1-only strict variant. The shared `UpdateSupplierInvoiceSchema` is also
 // consumed by the dashboard, where unknown keys are silently stripped, fine
@@ -41,7 +42,7 @@ import {
 const V1PatchSupplierInvoiceSchema = UpdateSupplierInvoiceSchema.strict()
 
 const SI_DETAIL_COLUMNS =
-  'id, supplier_id, arrival_number, supplier_invoice_number, invoice_date, due_date, received_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, reverse_charge, reverse_charge_kind, payment_reference, paid_at, paid_amount, remaining_amount, is_credit_note, credited_invoice_id, registration_journal_entry_id, payment_journal_entry_id, transaction_id, document_id, notes, default_dimensions, reversed_at, approved_at, bank_entered_at, created_at, updated_at'
+  'id, supplier_id, arrival_number, supplier_invoice_number, invoice_date, due_date, received_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, reverse_charge, reverse_charge_kind, payment_reference, paid_at, paid_amount, remaining_amount, is_credit_note, credited_invoice_id, is_self_billed, self_billing_number, self_billing_agreement_ref, registration_journal_entry_id, payment_journal_entry_id, transaction_id, document_id, notes, default_dimensions, reversed_at, approved_at, bank_entered_at, created_at, updated_at'
 
 const SI_ITEM_COLUMNS =
   'id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount, reverse_charge_rate, apply_slp, dimensions'
@@ -77,6 +78,11 @@ const SupplierInvoiceDetail = z.object({
   remaining_amount: z.number(),
   is_credit_note: z.boolean(),
   credited_invoice_id: z.string().uuid().nullable(),
+  // A self-billing invoice we issued in the supplier's name (crm#1367): its
+  // supplier_invoice_number is ours, from the series (self_billing_number).
+  is_self_billed: z.boolean(),
+  self_billing_number: z.number().int().nullable(),
+  self_billing_agreement_ref: z.string().nullable(),
   registration_journal_entry_id: z.string().uuid().nullable(),
   payment_journal_entry_id: z.string().uuid().nullable(),
   notes: z.string().nullable(),
@@ -105,6 +111,7 @@ registerEndpoint({
     'Listing supplier invoices (use the list endpoint). Customer-invoice lookups (different resource).',
   pitfalls: [
     'Credit notes return is_credit_note=true and a credited_invoice_id pointing at the original.',
+    'A self-billing invoice (is_self_billed=true) is one the company issued in the supplier\'s name: supplier_invoice_number is the company\'s own series number and the document is GET .../self-billing-pdf.',
     'registration_journal_entry_id and payment_journal_entry_id let you trace the SI to its bokföring rows; they are null when no JE has been posted (e.g. on a kontantmetoden SI before payment).',
     'status does not say whether an invoice is attested (an attested invoice past its due date is overdue): read approved_at, which kontantmetoden companies leave null (no attest step there). bank_entered_at is set while a payment entered at the bank by hand has not landed; it clears itself when a payment is recorded on the invoice.',
   ],
@@ -280,6 +287,18 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       return v1ErrorResponseFromCode('SI_NOT_DRAFT', ctx.log, {
         requestId: ctx.requestId,
         details: { current_status: (existing as { status: string }).status },
+      })
+    }
+
+    // An issued self-billing invoice keeps its number and date (crm#1367).
+    const selfBilledFields = selfBilledLockedFields(
+      body,
+      existing as { is_self_billed: boolean | null; supplier_invoice_number: string | null; invoice_date: string | null },
+    )
+    if (selfBilledFields.length > 0) {
+      return v1ErrorResponseFromCode('SI_SELF_BILL_IMMUTABLE', ctx.log, {
+        requestId: ctx.requestId,
+        details: { fields: selfBilledFields },
       })
     }
 

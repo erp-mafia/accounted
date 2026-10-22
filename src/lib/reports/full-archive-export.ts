@@ -1268,6 +1268,10 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // Kundförlust decisions: why a receivable was reserved, written off or
   // recovered, on whose decision and with which evidence (BFL 5 kap 6 §).
   { name: 'invoice_write_offs', file: 'invoice_write_offs.json', orderBy: 'decided_at' },
+  // Kvittningar: which customer invoice was set off against which supplier
+  // invoice of the same counterparty, for how much, by whom, and whether the
+  // set-off was reversed (BFL 5 kap 7 §).
+  { name: 'counterparty_setoffs', file: 'counterparty_setoffs.json', orderBy: 'created_at' },
   { name: 'mapping_rules', file: 'mapping_rules.json' },
   { name: 'categorization_templates', file: 'categorization_templates.json' },
   { name: 'booking_template_library', file: 'booking_template_library.json' },

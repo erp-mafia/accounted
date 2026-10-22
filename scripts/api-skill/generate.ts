@@ -76,14 +76,15 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'invoices.md',
     title: 'Invoices (AR)',
-    members: ['invoices', 'collections'],
+    members: ['invoices', 'collections', 'setoffs'],
     blurb:
       'Accounts receivable invoices: draft -> send -> paid/credited; the F-series number is ' +
       'assigned at send, not create. Supplier bills you receive are a different resource: see ' +
       'suppliers.md. Customer and article registers: customers.md. Collections: overdue invoices ' +
       'handed to the collections provider the company activated (the handover and escalations are ' +
       'staged for a person to approve in Accounted), the case on each invoice, and booking what the ' +
-      'provider collected and paid out.',
+      'provider collected and paid out. Setting a customer invoice off against a supplier invoice ' +
+      'of the same counterparty: setoffs.',
   },
   {
     file: 'customers.md',

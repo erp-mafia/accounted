@@ -87,6 +87,11 @@ const SupplierInvoiceSummary = z.object({
   paid_amount: z.number(),
   remaining_amount: z.number(),
   is_credit_note: z.boolean(),
+  // A self-billing invoice the company issued in the supplier's name
+  // (crm#1367): supplier_invoice_number is from the company's own series.
+  is_self_billed: z.boolean(),
+  self_billing_number: z.number().int().nullable(),
+  self_billing_agreement_ref: z.string().nullable(),
   paid_at: z.string().nullable(),
   // Attest time. The status cannot tell: an attested invoice past its due
   // date reads 'overdue', like one nobody attested (crm#1229).
@@ -102,7 +107,7 @@ const SupplierInvoicesListResponse = listEnvelope(SupplierInvoiceSummary)
 
 // Explicit projection.
 const SI_SUMMARY_COLUMNS =
-  'id, supplier_id, arrival_number, supplier_invoice_number, invoice_date, due_date, status, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, is_credit_note, paid_at, approved_at, bank_entered_at, created_at'
+  'id, supplier_id, arrival_number, supplier_invoice_number, invoice_date, due_date, status, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, is_credit_note, is_self_billed, self_billing_number, self_billing_agreement_ref, paid_at, approved_at, bank_entered_at, created_at'
 
 const SUPPLIER_NAME_ONLY_COLUMNS = 'id, name'
 
@@ -255,6 +260,9 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       paid_amount: number
       remaining_amount: number
       is_credit_note: boolean
+      is_self_billed: boolean | null
+      self_billing_number: number | null
+      self_billing_agreement_ref: string | null
       paid_at: string | null
       approved_at: string | null
       bank_entered_at: string | null
@@ -302,6 +310,9 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
         paid_amount: r.paid_amount,
         remaining_amount: r.remaining_amount,
         is_credit_note: r.is_credit_note,
+        is_self_billed: r.is_self_billed === true,
+        self_billing_number: r.self_billing_number ?? null,
+        self_billing_agreement_ref: r.self_billing_agreement_ref ?? null,
         paid_at: r.paid_at,
         approved_at: r.approved_at,
         bank_entered_at: r.bank_entered_at,
@@ -330,7 +341,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
 // straight to createSupplierInvoiceRegistrationEntry, which reads the bag off
 // the row — dropping the column here silently untags the registration JE.
 const SI_RESPONSE_COLUMNS =
-  'id, supplier_id, arrival_number, supplier_invoice_number, invoice_date, due_date, received_date, delivery_date, status, currency, exchange_rate, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, reverse_charge, reverse_charge_kind, payment_reference, paid_amount, remaining_amount, is_credit_note, credited_invoice_id, registration_journal_entry_id, payment_journal_entry_id, notes, default_dimensions, created_at, updated_at'
+  'id, supplier_id, arrival_number, supplier_invoice_number, invoice_date, due_date, received_date, delivery_date, status, currency, exchange_rate, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, reverse_charge, reverse_charge_kind, payment_reference, paid_amount, remaining_amount, is_credit_note, credited_invoice_id, is_self_billed, self_billing_number, self_billing_agreement_ref, document_id, registration_journal_entry_id, payment_journal_entry_id, notes, default_dimensions, created_at, updated_at'
 
 const SI_ITEMS_RESPONSE_COLUMNS =
   'id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount, reverse_charge_rate, apply_slp, dimensions'
@@ -349,6 +360,11 @@ const SupplierInvoiceCreated = z.object({
   total: z.number(),
   remaining_amount: z.number(),
   is_credit_note: z.boolean(),
+  is_self_billed: z.boolean(),
+  self_billing_number: z.number().int().nullable(),
+  self_billing_agreement_ref: z.string().nullable(),
+  // The self-billing invoice's document, archived at registration.
+  document_id: z.string().uuid().nullable(),
   registration_journal_entry_id: z.string().uuid().nullable(),
   created_at: z.string(),
 })
@@ -379,6 +395,9 @@ registerEndpoint({
     'Reverse charge from a supplier in another EU country books the basis pair as services (4535/4598, momsdeklaration ruta 21) unless reverse_charge_kind says "eu_goods" (4515/4598, ruta 20); the fiktiv moms on 2645/2614 is the same. reverse_charge_kind on an invoice without reverse charge, or from a supplier that is not eu_business, returns 400 SI_CREATE_INVALID_INPUT.',
     'Periodisering: items[].accrual_period_start + accrual_period_end (and optionally accrual_balance_account, defaulting from the cost account to a 17xx förutbetald kostnad) spread the cost over the period under faktureringsmetoden. Refused under kontantmetoden and with reverse charge. A 29xx accrual_balance_account (e.g. 2990) books an upplupen kostnad: a period wholly before the invoice month (a period reaching that month returns 400 VALIDATION_ERROR: split the line), each month booked on its last day (debit cost / credit 29xx) right after the registration, which debits 29xx on the invoice date. A month that is locked, closed, on or before the company lock date or without a fiscal year refuses the whole registration with 400 SI_ACCRUED_COST_PERIOD_LOCKED (details.blocked); nothing is written.',
     'A company that is not VAT-registered cannot book input VAT: a line with vat_rate or vat_amount above 0 returns 400 SI_CREATE_INVALID_INPUT, and an omitted vat_rate defaults to 0. items[].vat_amount overrides line_total × vat_rate (partial deduction, rounding on the supplier\'s side).',
+    'VAT is booked per rate the way the invoice states it: on the summed base of each rate (not rounded line by line), or the per-rate figure in vat_breakdown ([{ vat_rate: 0.25, vat_amount: 3864.11 }]) when it lies within half an öre per line of that. The figure is spread over the lines (items[].vat_amount in the response, at most one öre from each line\'s own rounding) so they sum to it. A figure further off, a rate the lines do not carry or leave out, or a rate with an items[].vat_amount override returns 400 VAT_BREAKDOWN_MISMATCH.',
+    'due_date is optional: omitted, it is invoice_date plus the supplier\'s default_payment_terms (30 days when unset).',
+    'Självfaktura (self-billing, ML 17 kap 15 §): set is_self_billed=true and omit supplier_invoice_number. The company issues the invoice in the supplier\'s name: the number comes from the company\'s own series (company_settings.self_billing_prefix, SF-001, SF-002, ...), and the document (with "Självfakturering", the agreement and the acceptance clause) is archived as the underlag; download it with GET /supplier-invoices/{id}/self-billing-pdf. The agreement is self_billing_agreement_ref, defaulting to the supplier\'s; none gives 400 SI_SELF_BILL_AGREEMENT_MISSING. A supplier or company card missing a name, address, the seller\'s VAT number or the buyer\'s org number gives 400 SI_SELF_BILL_PARTY_INCOMPLETE. SEK only, standard Swedish VAT only, no reverse charge, no document_id, inbox_item_id or paid_with_private_funds: 400 SI_SELF_BILL_UNSUPPORTED (details.reason).',
   ],
   example: {
     request: {

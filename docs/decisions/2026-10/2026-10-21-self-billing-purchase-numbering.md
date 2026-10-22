@@ -1,0 +1,1 @@
+[2026-10-21] Självfakturor on the purchase side take their number from a BEFORE INSERT trigger on a company counter floored at MAX+1, not an RPC called before the insert: a failed insert then burns no number of a statutory series. SEK and Swedish VAT only for now (crm#1367).

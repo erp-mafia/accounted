@@ -12,6 +12,7 @@ import {
   resolveUnsettledStatus,
 } from '@/lib/supplier-invoices/lifecycle'
 import { deleteSupplierInvoice } from '@/lib/supplier-invoices/manage'
+import { selfBilledLockedFields } from '@/lib/supplier-invoices/self-billing/edit-guard'
 import { sessionFailureResponse } from '@/lib/operations/session'
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
@@ -66,7 +67,7 @@ export const PUT = withRouteContext<{ params: Promise<{ id: string }> }>(
   const { data: existing } = await supabase
     .from('supplier_invoices')
     .select(
-      'status, due_date, remaining_amount, is_credit_note, approved_at, invoice_date, supplier_invoice_number, registration_journal_entry_id',
+      'status, due_date, remaining_amount, is_credit_note, is_self_billed, approved_at, invoice_date, supplier_invoice_number, registration_journal_entry_id',
     )
     .eq('id', id)
     .eq('company_id', companyId)
@@ -86,6 +87,13 @@ export const PUT = withRouteContext<{ params: Promise<{ id: string }> }>(
   const validation = await validateBody(request, UpdateSupplierInvoiceSchema)
   if (!validation.success) return validation.response
   const body = validation.data
+
+  // An issued self-billing invoice keeps its number and date: they are on the
+  // document the seller has (crm#1367).
+  const selfBilledFields = selfBilledLockedFields(body, existing)
+  if (selfBilledFields.length > 0) {
+    return errorResponseFromCode('SI_SELF_BILL_IMMUTABLE', log, { requestId, details: { fields: selfBilledFields } })
+  }
 
   // A posted registration verifikat carries the invoice date (as entry_date)
   // and the invoice number (in the description). Rewriting either here would

@@ -202,7 +202,14 @@ export async function buildSupplierInvoiceRegistrationEntryInput(
   // those months cannot take its entry (every door reaches this point).
   await assertAccruedCostLinesBookable(supabase, companyId, invoice.invoice_date, items)
 
-  const desc = buildSupplierDescription('Leverantörsfaktura', invoice.supplier_invoice_number, supplierName, `(ankomstnr ${invoice.arrival_number})`)
+  // A self-billing invoice is ours, issued in the supplier's name (crm#1367):
+  // the verifikat says so, under the number from our series.
+  const desc = buildSupplierDescription(
+    invoice.is_self_billed ? 'Självfaktura' : 'Leverantörsfaktura',
+    invoice.supplier_invoice_number,
+    supplierName,
+    `(ankomstnr ${invoice.arrival_number})`,
+  )
   // The same pure builder the review dialog previews before the invoice
   // exists (crm#1190): the cost, moms and reverse-charge rows, and 2440 by
   // their balance.

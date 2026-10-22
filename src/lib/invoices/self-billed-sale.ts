@@ -21,8 +21,8 @@ import { getVatRules, getPermittedVatRates } from '@/lib/invoices/vat-rules'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { eventBus } from '@/lib/events'
-import { roundOre } from '@/lib/money'
-import { computeLineNet } from '@/lib/bookkeeping/invoice-line-amounts'
+import { selfBilledSaleAmounts } from '@/lib/invoices/self-billed-amounts'
+import type { DocumentVatMismatch } from '@/lib/vat/document-vat'
 import { createLogger } from '@/lib/logger'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import type { EntityType, Invoice } from '@/types'
@@ -48,6 +48,11 @@ export interface SelfBilledSaleInput {
   currency: string
   notes?: string | null
   items: SelfBilledSaleItemInput[]
+  /**
+   * The VAT per rate the customer's document states, rates in percent like
+   * the items. Omitted: the VAT on the summed base per rate.
+   */
+  vat_breakdown?: Array<{ vat_rate: number; vat_amount: number }> | null
 }
 
 export type SelfBilledSaleFailure =
@@ -57,6 +62,7 @@ export type SelfBilledSaleFailure =
   | { code: 'insert_failed'; stage?: string; pgCode?: string; pgMessage?: string }
   | { code: 'items_failed'; pgCode?: string; pgMessage?: string }
   | { code: 'no_fiscal_period' }
+  | { code: 'vat_breakdown_mismatch'; details: DocumentVatMismatch['details'] }
 
 interface SelfBilledCustomer {
   id: string
@@ -141,10 +147,7 @@ export async function resolveSelfBilledSaleDraft(
   )
   const allowedRates = new Set(permittedRates.map((r) => r.rate))
 
-  const items: SelfBilledSaleComputedItem[] = []
-  let vatAmount = 0
-  for (let i = 0; i < input.items.length; i++) {
-    const item = input.items[i]
+  for (const item of input.items) {
     const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
     if (!allowedRates.has(itemRate)) {
       return {
@@ -157,24 +160,26 @@ export async function resolveSelfBilledSaleDraft(
         },
       }
     }
-    // Whole-öre line net, the rule buildInvoiceWriteData applies.
-    const lineTotal = computeLineNet(item.quantity, item.unit_price)
-    const lineVat = roundOre((lineTotal * itemRate) / 100)
-    vatAmount = roundOre(vatAmount + lineVat)
-    items.push({
-      sort_order: i,
-      description: item.description,
-      quantity: item.quantity,
-      unit: item.unit,
-      unit_price: item.unit_price,
-      line_total: lineTotal,
-      vat_rate: itemRate,
-      vat_amount: lineVat,
-    })
   }
 
-  const subtotal = roundOre(items.reduce((sum, item) => sum + item.line_total, 0))
-  const total = roundOre(subtotal + vatAmount)
+  // Whole-öre line nets, and the customer's document's VAT per rate: on the
+  // summed base, or the figure the document states (vat_breakdown), spread
+  // over the lines. Per-line rounding left the receivable an öre or more off
+  // the document on every multi-line self-bill (crm#1367). The editor's
+  // Summering computes the same figures (lib/invoices/self-billed-amounts.ts).
+  const amounts = selfBilledSaleAmounts(input.items, vatRules.rate, input.vat_breakdown)
+  if (!amounts.ok) {
+    return { ok: false, failure: { code: 'vat_breakdown_mismatch', details: amounts.details } }
+  }
+  const items: SelfBilledSaleComputedItem[] = input.items.map((item, i) => ({
+    sort_order: i,
+    description: item.description,
+    quantity: item.quantity,
+    unit: item.unit,
+    unit_price: item.unit_price,
+    ...amounts.lines[i],
+  }))
+  const { subtotal, vatAmount, total } = amounts
 
   const uniqueRates = new Set(input.items.map((item) => item.vat_rate ?? vatRules.rate))
   const isMixedRate = uniqueRates.size > 1

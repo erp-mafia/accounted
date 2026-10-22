@@ -4,6 +4,7 @@ import type {
   commitAssetDepreciation,
   commitAssetDisposal,
   commitBulkBooking,
+  commitCounterpartySetoff,
   commitExpensePayoutBatch,
   commitInvoiceVoucherLink,
   commitMatchBatchAllocation,
@@ -237,11 +238,11 @@ export interface RecordSqlPostingEventsRequest {
  * The SQL posting functions, each with the engine wrapper that is its one
  * application door (lib/bookkeeping/engine.ts). Each numbers a verifikat in
  * SQL through commit_journal_entry, in one transaction with its own writes:
- * the first six draft and commit theirs (their events come from
- * recordEventsForSql and travel in the wrapper's own arguments, as
- * `businessEvents`); commit_asset_depreciation and commit_asset_disposal
- * commit a draft made through draftJournalEntry, which linked its event
- * already.
+ * the first six and book_counterparty_setoff draft and commit theirs (their
+ * events come from recordEventsForSql and travel in the wrapper's own
+ * arguments, as `businessEvents`); commit_asset_depreciation and
+ * commit_asset_disposal commit a draft made through draftJournalEntry, which
+ * linked its event already.
  */
 export interface SqlPostingDoors {
   bulk_book_transactions: typeof commitBulkBooking
@@ -252,6 +253,7 @@ export interface SqlPostingDoors {
   commit_opening_balance_replacement: typeof replaceOpeningBalanceEntry
   commit_asset_depreciation: typeof commitAssetDepreciation
   commit_asset_disposal: typeof commitAssetDisposal
+  book_counterparty_setoff: typeof commitCounterpartySetoff
 }
 
 /** A SQL posting function by its database name. */

@@ -102,6 +102,7 @@ import {
 } from '@/lib/bookkeeping/rot-rut-rules'
 import { UNDECRYPTABLE_PERSONAL_NUMBER_MASK } from '@/lib/customers/mask-personal-number'
 import { roundOre } from '@/lib/money'
+import { selfBilledSaleAmounts } from '@/lib/invoices/self-billed-amounts'
 import { isFiscalYear } from '@/lib/invariants'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import AccrualPeriodControl from '@/components/bookkeeping/AccrualPeriodControl'
@@ -1926,23 +1927,43 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     rates: (watchItems ?? []).filter((item) => item?.line_type !== 'text').map((item) => item?.vat_rate),
   })
 
+  // A received self-bill books the customer's document VAT per rate, on the
+  // summed base and spread over the lines, from the five fields the
+  // self-billed endpoint takes (crm#1367): Summering shows those figures, so
+  // the screen is what registering it books.
+  const selfBilledFigures = mode === 'self_billed'
+    ? selfBilledSaleAmounts(
+        watchItems.map((item) => ({
+          quantity: item.quantity || 0,
+          unit_price: item.unit_price || 0,
+          vat_rate: item.vat_rate,
+        })),
+        vatRules?.rate ?? 25,
+      )
+    : null
+
   // Calculate per-item VAT. When not VAT-registered every rate is forced to 0
   // so vatAmount stays 0 and total === subtotal.
   const vatByRate = new Map<number, { base: number; vat: number }>()
   let vatAmount = 0
-  for (const item of watchItems) {
-    const rate = vatRegistered ? (item.vat_rate ?? (vatRules?.rate || 25)) : 0
-    const lineTotal = computeLineNet(item.quantity || 0, item.unit_price || 0, item.discount_percent)
-    const lineVat = computeLineVat(lineTotal, rate)
-    vatAmount += lineVat
-    // Summering groups the priced lines; a text row has no rate of its own.
-    if (item.line_type === 'text') continue
-    const existing = vatByRate.get(rate) || { base: 0, vat: 0 }
-    existing.base = Math.round((existing.base + lineTotal) * 100) / 100
-    existing.vat = Math.round((existing.vat + lineVat) * 100) / 100
-    vatByRate.set(rate, existing)
+  if (selfBilledFigures?.ok) {
+    vatAmount = selfBilledFigures.vatAmount
+    for (const group of selfBilledFigures.byRate) vatByRate.set(group.rate, { base: group.base, vat: group.vat })
+  } else {
+    for (const item of watchItems) {
+      const rate = vatRegistered ? (item.vat_rate ?? (vatRules?.rate || 25)) : 0
+      const lineTotal = computeLineNet(item.quantity || 0, item.unit_price || 0, item.discount_percent)
+      const lineVat = computeLineVat(lineTotal, rate)
+      vatAmount += lineVat
+      // Summering groups the priced lines; a text row has no rate of its own.
+      if (item.line_type === 'text') continue
+      const existing = vatByRate.get(rate) || { base: 0, vat: 0 }
+      existing.base = roundOre(existing.base + lineTotal)
+      existing.vat = roundOre(existing.vat + lineVat)
+      vatByRate.set(rate, existing)
+    }
   }
-  const total = subtotal + vatAmount
+  const total = selfBilledFigures?.ok ? selfBilledFigures.total : subtotal + vatAmount
   // Summering's VAT lines: a 0 % rate says why (omvänd skattskyldighet,
   // export, momsfri) with the treatment the write path derives; a seller
   // that is not VAT registered shows none (lib/invoices/editor/summary-vat).

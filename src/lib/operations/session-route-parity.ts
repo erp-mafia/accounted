@@ -408,6 +408,10 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/digital-mailboxes/:provider/send': gap('P3', 'activate sending through Kivra or Billo'),
   'DELETE /api/digital-mailboxes/:provider/send': gap('P3', 'stop sending through Kivra or Billo'),
   'POST /api/digital-mailboxes/:provider/sync': gap('P3', 'read a connected mailbox now; the cron reads it every 10 minutes'),
+  'POST /api/parties/:id/setoffs': covered(
+    [`POST ${V}/setoffs`, 'gnubok_book_counterparty_setoff'],
+    'served while COUNTERPARTY_SETOFF_ENABLED is set',
+  ),
   'POST /api/invoices/:id/collection': covered(
     ['POST /api/v1/companies/:companyId/invoices/:id/collection', 'gnubok_send_invoice_to_collection'],
     'served while collections is switched on; attestations (no delivery record, an import, a customer answer, an unsynced bank) are a person\'s in the browser, and only a person approves the staged handover (REST: stage=true only, STAGE_REQUIRED otherwise)',

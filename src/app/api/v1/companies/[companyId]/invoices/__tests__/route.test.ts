@@ -85,6 +85,7 @@ function makeFlexibleSupabase(
   byTable: Record<string, { data?: unknown; error?: unknown }>,
   inserts: InsertCapture[] = [],
   filters: Array<{ table: string; method: string; args: unknown[] }> = [],
+  selects: Array<{ table: string; columns: string }> = [],
 ) {
   const buildChain = (table: string, columns: string | null): unknown => {
     const handler: ProxyHandler<object> = {
@@ -96,8 +97,10 @@ function makeFlexibleSupabase(
           }
         }
         if (prop === 'select') {
-          return (requested?: unknown) =>
-            buildChain(table, typeof requested === 'string' ? requested : columns)
+          return (requested?: unknown) => {
+            if (typeof requested === 'string') selects.push({ table, columns: requested })
+            return buildChain(table, typeof requested === 'string' ? requested : columns)
+          }
         }
         if (prop === 'insert') {
           return (payload: unknown) => {
@@ -188,6 +191,42 @@ describe('GET /api/v1/companies/:companyId/invoices', () => {
     // Default response shape MUST NOT include the full customer object.
     expect(body.data[0].customer).toBeUndefined()
     expect(body.meta.request_id).toMatch(/^req_/)
+  })
+
+  // crm#1367: a received self-billed sale has invoice_number null by design;
+  // without the customer's number it listed like an unsent draft.
+  it('returns external_invoice_number and is_self_billed on every row', async () => {
+    const selects: Array<{ table: string; columns: string }> = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          invoices: {
+            data: [
+              { ...SAMPLE_INVOICE, id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', invoice_number: null, external_invoice_number: 'S2441', is_self_billed: true, status: 'paid', remaining_amount: 0 },
+              SAMPLE_INVOICE,
+            ],
+            error: null,
+          },
+        },
+        [],
+        [],
+        selects,
+      ),
+    )
+
+    const res = await listInvoices(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices`),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    const invoiceSelect = selects.find((s) => s.table === 'invoices')?.columns ?? ''
+    expect(invoiceSelect).toContain('external_invoice_number')
+    expect(invoiceSelect).toContain('is_self_billed')
+    expect(body.data[0]).toMatchObject({ invoice_number: null, external_invoice_number: 'S2441', is_self_billed: true })
+    expect(body.data[1]).toMatchObject({ invoice_number: '2026-0042', external_invoice_number: null, is_self_billed: false })
   })
 
   it('embeds the full customer when ?expand=customer is requested', async () => {

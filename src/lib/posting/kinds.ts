@@ -51,6 +51,7 @@ export const BUSINESS_EVENT_KINDS = [
   'se.tax_account.booked',
   'payroll.vacation_liability_adjusted',
   'sale.customer_loss',
+  'counterparty.set_off',
 ] as const
 
 export type BusinessEventKind = (typeof BUSINESS_EVENT_KINDS)[number]
@@ -121,6 +122,9 @@ export const KIND_BY_SOURCE_TYPE: Readonly<Record<JournalEntrySourceType, Busine
   collection_settlement: 'sale.payout_settled',
   // A kundförlust decision: befarad, its reversal, konstaterad or recovered.
   customer_loss: 'sale.customer_loss',
+  // Kvittning: a customer invoice and a supplier invoice of the same
+  // counterparty settled against each other (lib/invoices/counterparty-setoff).
+  counterparty_setoff: 'counterparty.set_off',
 })
 
 export function isBusinessEventKind(value: unknown): value is BusinessEventKind {
