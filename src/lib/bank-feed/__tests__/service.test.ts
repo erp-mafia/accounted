@@ -599,6 +599,31 @@ describe('pollBankFeedConsent', () => {
     expect(await pollBankFeedConsent({ ...ctx, supabase: again.supabase }, { connectionId: CONNECTION })).toMatchObject({ ok: false })
     expect(connect.revokeConsent).toHaveBeenCalledTimes(1)
   })
+
+  it('hands over the Enable Banking row reading Svea\'s chosen account when the second consent is valid, even with the switch\'s row lost on the way', async () => {
+    mocks.connect.mockReturnValue(fakeConnect({ pollConsentSigning: vi.fn().mockResolvedValue({ state: 'valid', challenge: null, failureCode: null, scaStatus: 'finalised', consentStatus: 'valid', validUntil: '2027-03-29' }) }))
+    const chosen = [{ uid: 'ACC003', enabled: true, ledger_account: '1930' }]
+    const second = row({ bic: 'SVEASESS', session_id: 'consent-2', consent_attempt: { method: 'qr', state: 'pending', listing_only: false, selection: { listing_only: false, accounts: chosen, replace_connection_id: EB_ROW, extended_history_days: 365 } } })
+    const stored = [{ uid: 'ACC003', currency: 'SEK', enabled: true, iban: 'SE8050000000052131234567' }]
+    mocks.serviceRpc.mockResolvedValue({ data: { connection_id: CONNECTION, accounts: stored, superseded: [], already_finalized: false }, error: null })
+    mocks.readConfig.mockResolvedValue({ token: 'tok', connection: { id: CONNECTION, status: 'pending_selection', session_id: 'consent-2', bank_name: 'Svea Bank', accounts_data: stored, aggregator: 'open_payments' } })
+    mocks.saveSelection.mockResolvedValue({ status: 'active', accounts: stored })
+    // The row as finalize left it from an attempt written before the fix: no replace_connection_id kept.
+    const finalized = { ...second, status: 'pending_selection', accounts_data: stored, consent_attempt: { selection: { listing_only: false } } }
+    const { supabase, rpc } = stub({
+      bank_connections: [
+        { data: second, error: null },
+        { data: finalized, error: null },
+        { data: [{ id: EB_ROW, aggregator: 'enable_banking', accounts_data: [{ uid: 'eb-1', currency: 'SEK', enabled: true, iban: 'SE8050000000052131234567' }] }], error: null },
+        { data: { ...finalized, status: 'active' }, error: null },
+      ],
+      cash_accounts: [{ data: [], error: null }],
+      'rpc:supersede_enable_banking_connection': [{ data: { superseded: [{ id: EB_ROW, session_id: 'eb-sess' }] }, error: null }],
+      ...orgAnswers(),
+    })
+    expect(await pollBankFeedConsent({ ...ctx, supabase }, { connectionId: CONNECTION })).toMatchObject({ ok: true, data: { state: 'valid', status: 'active' } })
+    expect(rpc).toHaveBeenCalledWith('supersede_enable_banking_connection', { p_company_id: 'co-1', p_user_id: 'user-1', p_new: CONNECTION, p_old: EB_ROW })
+  })
 })
 
 describe('the sparbank behind a connection', () => {
@@ -827,7 +852,12 @@ describe('selectBankFeedAccounts', () => {
     mocks.runSync.mockResolvedValue({ ok: true, connection_id: CONNECTION, bank: 'Swedbank', imported: 120, duplicates: 3, from_date: '2024-09-12', to_date: '2026-10-12', last_synced_at: 'x' })
     const pending = row({ status: 'pending_selection', accounts_data: stored, consent_attempt: { selection: { replace_connection_id: EB_ROW, extended_history_days: 760, listing_only: false } } })
     const { supabase, rpc } = stub({
-      bank_connections: [{ data: pending, error: null }, { data: { ...pending, status: 'active' }, error: null }, { data: { ...pending, status: 'active', last_synced_at: 'x' }, error: null }],
+      bank_connections: [
+        { data: pending, error: null },
+        { data: [{ id: EB_ROW, aggregator: 'enable_banking', accounts_data: [] }], error: null },
+        { data: { ...pending, status: 'active' }, error: null },
+        { data: { ...pending, status: 'active', last_synced_at: 'x' }, error: null },
+      ],
       cash_accounts: [{ data: [{ id: 'cash-1', iban: 'SE8050000000052131234567', currency: 'SEK', ledger_account: '1930' }], error: null }],
       'rpc:supersede_enable_banking_connection': [{ data: { superseded: [{ id: EB_ROW, session_id: 'eb-sess' }], moved_transactions: 12, released_cash_accounts: 0 }, error: null }],
     })
@@ -844,6 +874,80 @@ describe('selectBankFeedAccounts', () => {
     expect(rpc).toHaveBeenCalledWith('supersede_enable_banking_connection', { p_company_id: 'co-1', p_user_id: 'user-1', p_new: CONNECTION, p_old: EB_ROW })
     expect(mocks.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'bank_connection.superseded', payload: expect.objectContaining({ connectionId: EB_ROW }) }))
     expect(mocks.runSync).toHaveBeenCalledWith(supabase, expect.objectContaining({ connectionId: CONNECTION, trigger: 'initial', signer }))
+  })
+
+  it('takes over the Enable Banking row reading the same account when the connection came through a door that named no switch, and keeps one still reading another account', async () => {
+    const EB_OTHER = '8e6c1a2b-9c0d-4e8f-8a1b-2c3d4e5f6a7b'
+    mocks.connect.mockReturnValue(fakeConnect())
+    mocks.readConfig.mockResolvedValue({ token: 'tok', connection: { id: CONNECTION, status: 'pending_selection', session_id: 'consent-1', bank_name: 'Swedbank', accounts_data: stored, aggregator: 'open_payments' } })
+    mocks.saveSelection.mockResolvedValue({ status: 'active', accounts: stored })
+    mocks.runSync.mockResolvedValue({ ok: true, connection_id: CONNECTION, bank: 'Swedbank', imported: 0, duplicates: 4, from_date: '2024-09-12', to_date: '2026-10-12', last_synced_at: 'x' })
+    // Koppla bank (or a flow started over): no replace_connection_id anywhere on the attempt.
+    const pending = row({ status: 'pending_selection', accounts_data: stored, consent_attempt: { selection: { extended_history_days: 760, listing_only: false } } })
+    const { supabase, rpc, calls } = stub({
+      bank_connections: [
+        { data: pending, error: null },
+        {
+          data: [
+            // The same account at Enable Banking, its IBAN written with spaces.
+            { id: EB_ROW, aggregator: 'enable_banking', accounts_data: [{ uid: 'eb-1', currency: 'SEK', enabled: true, iban: 'SE80 5000 0000 0521 3123 4567' }] },
+            // An account the new connection does not read: its feed stays.
+            { id: EB_OTHER, aggregator: 'enable_banking', accounts_data: [{ uid: 'eb-2', currency: 'SEK', enabled: true, iban: 'SE4550000000058398257466' }] },
+          ],
+          error: null,
+        },
+        { data: { ...pending, status: 'active' }, error: null },
+      ],
+      cash_accounts: [{ data: [{ id: 'cash-1', iban: 'SE8050000000052131234567', currency: 'SEK', ledger_account: '1930' }], error: null }],
+      'rpc:supersede_enable_banking_connection': [{ data: { superseded: [{ id: EB_ROW, session_id: 'eb-sess' }], moved_transactions: 40, released_cash_accounts: 0 }, error: null }],
+    })
+    const result = await selectBankFeedAccounts({ ...ctx, supabase }, {
+      connectionId: CONNECTION,
+      accounts: [{ uid: 'ACC003', enabled: true, ledgerAccount: '1930' }, { uid: 'ACC001', enabled: false, ledgerAccount: null }],
+      signer, now: NOW,
+    })
+    expect(result).toMatchObject({ ok: true, data: { connection: { status: 'active' } } })
+    const handovers = rpc.mock.calls.filter(([name]) => name === 'supersede_enable_banking_connection')
+    expect(handovers).toEqual([['supersede_enable_banking_connection', { p_company_id: 'co-1', p_user_id: 'user-1', p_new: CONNECTION, p_old: EB_ROW }]])
+    expect(mocks.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'bank_connection.superseded', payload: expect.objectContaining({ connectionId: EB_ROW, supersededById: CONNECTION }) }))
+    // The company's other live rows: never this connection itself, never a revoked or superseded one.
+    expect(calls).toContainEqual({ table: 'bank_connections', method: 'neq', args: ['id', CONNECTION] })
+    expect(calls).toContainEqual({ table: 'bank_connections', method: 'is', args: ['superseded_by', null] })
+  })
+
+  it('an active connection saved again takes over a live Enable Banking row it now reads, without a first import', async () => {
+    mocks.connect.mockReturnValue(fakeConnect())
+    mocks.readConfig.mockResolvedValue({ token: 'tok', connection: { id: CONNECTION, status: 'active', session_id: 'consent-1', bank_name: 'Swedbank', accounts_data: stored, aggregator: 'open_payments' } })
+    mocks.saveSelection.mockResolvedValue({ status: 'active', accounts: stored })
+    const active = row({ status: 'active', accounts_data: stored, consent_attempt: { selection: { extended_history_days: 760, listing_only: false } } })
+    const { supabase, rpc } = stub({
+      bank_connections: [
+        { data: active, error: null },
+        { data: [{ id: EB_ROW, aggregator: 'enable_banking', accounts_data: [{ uid: 'eb-1', currency: 'SEK', enabled: true, iban: 'SE8050000000052131234567' }] }], error: null },
+        { data: active, error: null },
+      ],
+      cash_accounts: [{ data: [], error: null }],
+      'rpc:supersede_enable_banking_connection': [{ data: { superseded: [{ id: EB_ROW, session_id: null }] }, error: null }],
+    })
+    expect(await selectBankFeedAccounts({ ...ctx, supabase }, { connectionId: CONNECTION, accounts: [{ uid: 'ACC003', enabled: true, ledgerAccount: '1930' }] })).toMatchObject({ ok: true, data: { sync: null, sync_pending: false } })
+    expect(rpc).toHaveBeenCalledWith('supersede_enable_banking_connection', { p_company_id: 'co-1', p_user_id: 'user-1', p_new: CONNECTION, p_old: EB_ROW })
+    expect(mocks.runSync).not.toHaveBeenCalled()
+  })
+
+  it('keeps the selection when the live rows cannot be read: the row a switch named is still handed over, nothing else', async () => {
+    mocks.connect.mockReturnValue(fakeConnect())
+    mocks.readConfig.mockResolvedValue({ token: 'tok', connection: { id: CONNECTION, status: 'pending_selection', session_id: 'consent-1', bank_name: 'Swedbank', accounts_data: stored, aggregator: 'open_payments' } })
+    mocks.saveSelection.mockResolvedValue({ status: 'active', accounts: stored })
+    mocks.runSync.mockResolvedValue({ ok: true, connection_id: CONNECTION, bank: 'Swedbank', imported: 1, duplicates: 0, from_date: '2024-09-12', to_date: '2026-10-12', last_synced_at: 'x' })
+    const pending = row({ status: 'pending_selection', accounts_data: stored, consent_attempt: { selection: { replace_connection_id: EB_ROW, extended_history_days: 760, listing_only: false } } })
+    const { supabase, rpc } = stub({
+      bank_connections: [{ data: pending, error: null }, { data: null, error: { message: 'read failed' } }, { data: { ...pending, status: 'active' }, error: null }],
+      cash_accounts: [{ data: [], error: null }],
+      'rpc:supersede_enable_banking_connection': [{ data: { superseded: [{ id: EB_ROW, session_id: null }] }, error: null }],
+    })
+    expect(await selectBankFeedAccounts({ ...ctx, supabase }, { connectionId: CONNECTION, accounts: [{ uid: 'ACC003', enabled: true, ledgerAccount: '1930' }], signer, now: NOW })).toMatchObject({ ok: true })
+    const handovers = rpc.mock.calls.filter(([name]) => name === 'supersede_enable_banking_connection')
+    expect(handovers).toEqual([['supersede_enable_banking_connection', expect.objectContaining({ p_old: EB_ROW })]])
   })
 
   it('refuses a consent still signing, an unknown account, a non-bank ledger and nothing selected', async () => {
@@ -876,6 +980,20 @@ describe('selectBankFeedAccounts', () => {
       consent_attempt: expect.objectContaining({ listing_only: false, listing_consent_id: 'consent-1', selection: expect.objectContaining({ listing_only: false, accounts: [{ uid: 'ACC003', enabled: true, ledger_account: '1930' }, { uid: 'ACC001', enabled: false, ledger_account: null }] }) }),
     })
     expect(mocks.saveSelection).not.toHaveBeenCalled()
+  })
+
+  it('for Svea keeps the switch\'s Enable Banking row and the history window on the second consent where finalize reads them, at the top of the attempt', async () => {
+    const connect = fakeConnect({ createConsent: vi.fn().mockResolvedValue({ consentId: 'consent-2', consentStatus: 'received', validUntil: '2027-04-10' }) })
+    mocks.connect.mockReturnValue(connect)
+    // The listing consent's row after finalize: the facts live under selection only.
+    const listing = row({ status: 'pending_selection', bic: 'SVEASESS', accounts_data: stored, consent_attempt: { selection: { listing_only: true, extended_history_days: 365, replace_connection_id: EB_ROW } } })
+    const { supabase, payload } = stub({ bank_connections: [{ data: listing, error: null }, { data: null, error: null }, { data: null, error: null }], ...orgAnswers() })
+    expect(await selectBankFeedAccounts({ ...ctx, supabase }, { connectionId: CONNECTION, accounts: [{ uid: 'ACC003', enabled: true, ledgerAccount: '1930' }], method: 'qr', signer, now: NOW })).toMatchObject({ ok: true })
+    // finalize_open_payments_consent rebuilds the attempt from its top-level
+    // replace_connection_id, extended_history_days and listing_only.
+    expect(payload('bank_connections', 'update')[0]).toMatchObject({
+      consent_attempt: expect.objectContaining({ replace_connection_id: EB_ROW, extended_history_days: 365, listing_only: false, selection: expect.objectContaining({ replace_connection_id: EB_ROW }) }),
+    })
   })
 
   it('for Svea creates the second consent even when ending the listing consent fails (already ended)', async () => {
