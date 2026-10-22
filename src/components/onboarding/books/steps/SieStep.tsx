@@ -559,8 +559,6 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
             file: { current: fileIdx + 1, total: ordered.length },
           }}
           onApi={(api) => { apiRef.current = api }}
-          groupLabels={{ tillgangar: t('grp_assets'), skulder: t('grp_liabilities'), intakter: t('grp_revenue'), kostnader: t('grp_costs') }}
-          reviewLabel={t('grp_review')}
         />
       ) : null}
       {phase === 'imported' && !importError && sieFirst && reg === 'card' ? (

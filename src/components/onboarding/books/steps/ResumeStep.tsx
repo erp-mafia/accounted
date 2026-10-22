@@ -126,8 +126,6 @@ export function ResumeStep({ ctx, importId }: { ctx: BooksCtx; importId: string 
           hold={!error ? t('sie_hold_open') : null}
           progress={{ phase: error ? 'failed' : jobPhase ?? 'checking', written: tick, total, prepared }}
           onApi={setApi}
-          groupLabels={{ tillgangar: t('grp_assets'), skulder: t('grp_liabilities'), intakter: t('grp_revenue'), kostnader: t('grp_costs') }}
-          reviewLabel={t('grp_review')}
         />
       ) : null}
       {error ? (

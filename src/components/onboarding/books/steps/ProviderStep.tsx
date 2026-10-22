@@ -523,8 +523,6 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
             prepared,
           } : undefined}
           onApi={(api) => { apiRef.current = api }}
-          groupLabels={{ tillgangar: t('grp_assets'), skulder: t('grp_liabilities'), intakter: t('grp_revenue'), kostnader: t('grp_costs') }}
-          reviewLabel={t('grp_review')}
         />
       ) : null}
 

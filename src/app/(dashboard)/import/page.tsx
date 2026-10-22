@@ -10,7 +10,7 @@ import { parseCsvDataEntity, type CsvDataEntity } from '@/lib/import/register-im
 import { fetchAccounts } from '@/lib/reference-data/fetchers'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useSearchParams, useRouter } from 'next/navigation'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -668,14 +668,6 @@ function SkattekontoImportWizard({ onBack }: { onBack: () => void }) {
 // SIE Import Wizard (unchanged, extracted into component)
 // ============================================================
 
-const SIE_STEP_LABELS: Record<ImportWizardStep, string> = {
-  upload: 'Ladda upp',
-  preview: 'Förhandsgranskning',
-  mapping: 'Kontomappning',
-  review: 'Bekräfta',
-  result: 'Resultat',
-}
-
 function SIEImportWizard({
   onBack,
   onOpenManualOpeningBalances,
@@ -718,6 +710,9 @@ function SIEImportWizard({
   const [replaceExisting,setReplaceExisting] = useState(false)
   const [storagePath,setStoragePath] = useState<string|null>(null)
   const jobT = useTranslations('import.sie_job')
+  const flowT = useTranslations('import.sie_flow')
+  const locale = useLocale() === 'en' ? 'en' : 'sv'
+  const stepLabel = (s: ImportWizardStep) => flowT(`step_${s}`)
   const [, setSieAccounts] = useState<{ number: string; name: string }[]>([])
   const [isCreatingAccounts, setIsCreatingAccounts] = useState(false)
 
@@ -781,7 +776,7 @@ function SIEImportWizard({
 
       if (!res.ok) {
         const code = data?.error?.code as string | undefined
-        const message = getErrorMessage(data)
+        const message = getErrorMessage(data, { locale })
         const details = (data?.error?.details ?? {}) as {
           importId?: string
           errors?: string[]
@@ -795,7 +790,7 @@ function SIEImportWizard({
             setDuplicateImportId(details.importId)
           }
           toast({
-            title: isPeriod ? 'Överlappande räkenskapsår' : 'Filen har redan importerats',
+            title: isPeriod ? flowT('duplicate_period_title') : flowT('duplicate_file_title'),
             description: message,
             variant: 'destructive',
           })
@@ -805,14 +800,14 @@ function SIEImportWizard({
           setValidationErrors(details.errors || [])
           setValidationWarnings(details.warnings || [])
           toast({
-            title: 'Valideringsfel i SIE-filen',
-            description: `${(details.errors || []).length} fel hittades som måste åtgärdas.`,
+            title: flowT('validation_title'),
+            description: flowT('validation_description', { count: (details.errors || []).length }),
             variant: 'destructive',
           })
         } else {
           setErrorType('parse')
           setError(message)
-          toast({ title: 'Kunde inte läsa filen', description: message, variant: 'destructive' })
+          toast({ title: flowT('parse_failed_title'), description: message, variant: 'destructive' })
         }
         return
       }
@@ -834,9 +829,14 @@ function SIEImportWizard({
       setIssues(data.parsed.issues)
       setSieAccounts(data.parsed.accounts)
 
-      const accounts = await fetchAccounts(false).catch(() => {
-        throw new Error('Kunde inte hämta kontoplanen för momsgranskning.')
-      })
+      const accounts = await fetchAccounts(false).catch(() => null)
+      if (!accounts) {
+        const message = flowT('chart_load_failed')
+        setErrorType('parse')
+        setError(message)
+        toast({ title: flowT('error_title'), description: message, variant: 'destructive' })
+        return
+      }
       setBasAccounts(accounts)
       setMappings(enrichAccountMappingsWithVat(data.mappings, accounts))
       // These are another file's mappings, so the chart the last one carried
@@ -849,30 +849,33 @@ function SIEImportWizard({
       setStep('preview')
 
       toast({
-        title: 'Fil analyserad',
-        description: `${data.parsed.stats.totalAccounts} konton och ${data.parsed.stats.totalVouchers} verifikationer hittades`,
+        title: flowT('parsed_title'),
+        description: flowT('parsed_description', {
+          accounts: data.parsed.stats.totalAccounts,
+          vouchers: data.parsed.stats.totalVouchers,
+        }),
       })
     } catch (err) {
       const isNetworkError = err instanceof TypeError && (err.message === 'Failed to fetch' || err.message.includes('NetworkError'))
       const message = isNetworkError
-        ? 'Kunde inte nå servern. Kontrollera din internetanslutning och försök igen.'
-        : getErrorMessage(err)
+        ? flowT('network_error')
+        : getErrorMessage(err, { locale })
       setErrorType(isNetworkError ? 'network' : 'parse')
       setError(message)
-      toast({ title: isNetworkError ? 'Anslutningsfel' : 'Ett fel uppstod', description: message, variant: 'destructive' })
+      toast({ title: isNetworkError ? flowT('network_error_title') : flowT('error_title'), description: message, variant: 'destructive' })
     } finally {
       setIsLoading(false)
     }
-  }, [toast])
+  }, [toast, flowT, locale])
 
   const handleUndo = useCallback(async (importId:string) => {
     const response = await fetch('/api/import/sie/'+importId+'/action',{
       method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'undo'}),
     })
     const body = await response.json()
-    if (!response.ok) {setError(getErrorMessage(body));return}
+    if (!response.ok) {setError(getErrorMessage(body, { locale }));return}
     showJob(importId)
-  },[showJob])
+  },[showJob, locale])
 
   const handleReplace = useCallback(async (_importId:string) => {
     setReplaceExisting(true)
@@ -993,27 +996,27 @@ function SIEImportWizard({
         notices: legacyNotices(
           [
             err instanceof Error
-              ? getErrorMessage(err)
-              : 'Kontoplanen kunde inte läsas in. Kontrollera att filen finns kvar och försök igen.',
+              ? getErrorMessage(err, { locale })
+              : flowT('source_chart_read_failed'),
           ],
           'action',
         ),
       }))
     }
-  }, [])
+  }, [flowT, locale])
 
   const confirmVatReview = useCallback(() => {
     if (effectiveMappings.some((mapping) =>
       mapping.requiresVatTreatmentReview && !mapping.vatTreatmentReviewed
     )) {
-      setError('Granska momshanteringen för alla markerade konton innan du fortsätter.')
+      setError(flowT('vat_review_incomplete'))
       return
     }
     setStep('review')
     setError(null)
     setValidationErrors([])
     setValidationWarnings([])
-  }, [effectiveMappings])
+  }, [effectiveMappings, flowT])
 
   const missingAccounts = effectiveMappings
     .filter((m) => !m.targetAccount && isValidBASRange(m.sourceAccount))
@@ -1034,19 +1037,21 @@ function SIEImportWizard({
       const data = await res.json()
 
       if (!res.ok) {
-        toast({ title: 'Kunde inte skapa konton', description: getErrorMessage(data), variant: 'destructive' })
+        toast({ title: flowT('create_accounts_failed'), description: getErrorMessage(data, { locale }), variant: 'destructive' })
         return
       }
 
-      toast({ title: 'Konton skapade', description: `${data.created} nya konton har lagts till i din kontoplan` })
+      toast({ title: flowT('accounts_created_title'), description: flowT('accounts_created_description', { count: data.created }) })
 
       const createdSet = new Set(missingAccounts.map(a => a.number))
       // New accounts exist now: refresh every cached chart (pickers app-wide)
       // and re-read the full chart for the VAT review below.
       await invalidateReferenceData('ref:accounts')
-      const accounts = await fetchAccounts(false).catch(() => {
-        throw new Error('Kunde inte hämta kontoplanen för momsgranskning.')
-      })
+      const accounts = await fetchAccounts(false).catch(() => null)
+      if (!accounts) {
+        toast({ title: flowT('create_accounts_failed'), description: flowT('chart_load_failed'), variant: 'destructive' })
+        return
+      }
       setBasAccounts(accounts)
       setMappings(prev => {
         let updated = prev.map(m =>
@@ -1084,21 +1089,26 @@ function SIEImportWizard({
         }
       })
     } catch (err) {
-      toast({ title: 'Kunde inte skapa konton', description: err instanceof Error ? getErrorMessage(err) : 'Försök igen.', variant: 'destructive' })
+      toast({ title: flowT('create_accounts_failed'), description: err instanceof Error ? getErrorMessage(err, { locale }) : flowT('try_again'), variant: 'destructive' })
     } finally {
       setIsCreatingAccounts(false)
     }
-  }, [missingAccounts, toast])
+  }, [missingAccounts, toast, flowT, locale])
 
   const handleExecuteImport = useCallback(async (options: ImportExecuteOptions) => {
-    if (!file) { setError('No file selected'); return }
+    if (!file) { setError(flowT('no_file')); return }
+    if (!storagePath) {
+      const message = flowT('reupload_required')
+      setError(message)
+      toast({ title: flowT('import_aborted'), description: message, variant: 'destructive' })
+      return
+    }
 
     setIsLoading(true)
     setError(null)
 
     try {
       const formData = new FormData()
-      if (!storagePath) throw new Error('SIE-filen måste laddas upp igen.')
       formData.append('storagePath',storagePath)
       formData.append('filename',file.name)
       formData.append('mappings', JSON.stringify(effectiveMappings))
@@ -1114,21 +1124,21 @@ function SIEImportWizard({
         // The theater's last narration line is not the failing step.
         const failure = describeImportResponseFailure({ status: res.status, body: data })
         setError(formatImportFailure(failure))
-        toast({ title: 'Import avbröts', description: failure.message, variant: 'destructive' })
+        toast({ title: flowT('import_aborted'), description: failure.message, variant: 'destructive' })
         return
       }
       showJob(data.data.importId)
     } catch (err) {
       const isNetworkError = err instanceof TypeError && (err.message === 'Failed to fetch' || err.message.includes('NetworkError'))
       const msg = isNetworkError
-        ? 'Tappade anslutningen till servern under importen. Kontrollera din internetanslutning och se om importen genomfördes under Bokföring.'
-        : getErrorMessage(err)
+        ? flowT('connection_lost')
+        : getErrorMessage(err, { locale })
       setError(msg)
-      toast({ title: 'Import avbröts', description: msg, variant: 'destructive' })
+      toast({ title: flowT('import_aborted'), description: msg, variant: 'destructive' })
     } finally {
       setIsLoading(false)
     }
-  }, [file, effectiveMappings, leavesOutUnused, storagePath, replaceExisting, duplicateImportId, showJob, toast])
+  }, [file, effectiveMappings, leavesOutUnused, storagePath, replaceExisting, duplicateImportId, showJob, toast, flowT, locale])
 
   const goToStep = (targetStep: ImportWizardStep) => { setStep(targetStep); setError(null); setValidationErrors([]); setValidationWarnings([]) }
   const goBack = () => { const i = sieSteps.indexOf(step); if (i > 0) setStep(sieSteps[i - 1]) }
@@ -1149,14 +1159,14 @@ function SIEImportWizard({
   // A running job has no steps to show; the back crumb stays.
   if (jobId) return (
     <div className="space-y-6">
-      <ImportWizardRail steps={[]} current={null} label={(s: ImportWizardStep) => SIE_STEP_LABELS[s]} onBack={onBack} />
+      <ImportWizardRail steps={[]} current={null} label={stepLabel} onBack={onBack} />
       <SIEJobProgress key={jobId} importId={jobId} onCompleted={handleJobCompleted} onUndone={handleNewImport}/>
     </div>
   )
 
   return (
     <div className="space-y-6">
-      <ImportWizardRail steps={sieSteps} current={step} label={(s) => SIE_STEP_LABELS[s]} onBack={onBack} />
+      <ImportWizardRail steps={sieSteps} current={step} label={stepLabel} onBack={onBack} />
 
       {step === 'upload' && <SIEUploadStep onFileSelect={handleFileSelect} isLoading={isLoading} error={error} errorType={errorType} validationErrors={validationErrors} validationWarnings={validationWarnings} duplicateImportId={duplicateImportId} onReplace={handleReplace} isReplacing={isReplacing} />}
       {step === 'preview' && effectivePreview && (

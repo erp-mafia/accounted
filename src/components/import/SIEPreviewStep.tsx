@@ -49,6 +49,8 @@ export default function SIEPreviewStep({
   onlyUsedAccounts,
 }: SIEPreviewStepProps) {
   const t = useTranslations('import')
+  const tStep = useTranslations('import.preview_step')
+  const tCommon = useTranslations('common')
   const tNotice = useTranslations('import_notices')
   const errors = issues.filter((i) => i.severity === 'error')
   const warnings = issues.filter((i) => i.severity === 'warning')
@@ -101,7 +103,7 @@ export default function SIEPreviewStep({
           credit: formatCurrency(preview.trialBalance.totalCredit),
         })}
       </p>
-      <p className="mt-2">Summan av alla debetsaldon i ingående balans, inte ett enskilt kontosaldo.</p>
+      <p className="mt-2">{tStep('ib_help')}</p>
     </>
   )
   // What the chart row folds away: the full sentence, the accounts that are
@@ -111,7 +113,7 @@ export default function SIEPreviewStep({
       <p>
         {chart
           ? t('chart_summary', { toCreate: chart.toCreate, existing: chart.existing })
-          : 'Hur väl kunde kontona i filen matchas mot din kontoplan'}
+          : tStep('chart_help_fallback')}
       </p>
       {chart && chart.sample.length > 0 && (
         <div className="space-y-1">
@@ -130,7 +132,10 @@ export default function SIEPreviewStep({
       )}
       {preview.excludedSystemAccounts.length > 0 && (
         <p>
-          {preview.excludedSystemAccounts.length} internt systemkonto från källsystemet exkluderades ({preview.excludedSystemAccounts.map((a) => a.number).join(', ')}), inte bokföringskonton
+          {tStep('excluded_system_accounts', {
+            count: preview.excludedSystemAccounts.length,
+            accounts: preview.excludedSystemAccounts.map((a) => a.number).join(', '),
+          })}
         </p>
       )}
       {Boolean(preview.archivedOnlyAccounts?.length) && (
@@ -254,15 +259,15 @@ export default function SIEPreviewStep({
       {errors.length > 0 && (
         <div className="space-y-2">
           <p className="flex items-center gap-2 text-[13px] font-medium text-destructive">
-            Tolkningsfel ({errors.length})
+            {tStep('parse_errors', { count: errors.length })}
             <HelpPopover className="shrink-0">
-              Dessa fel hittades under tolkningen av SIE-filen och kan påverka importresultatet.
+              {tStep('parse_errors_help')}
             </HelpPopover>
           </p>
           <ul className="max-h-48 space-y-1 overflow-y-auto text-[13px] text-destructive">
             {errors.map((issue, i) => (
               <li key={`error-${i}`}>
-                <span className="font-mono text-[11px] opacity-70">Rad {issue.line}</span>{' '}
+                <span className="font-mono text-[11px] opacity-70">{tStep('line', { line: issue.line })}</span>{' '}
                 {issue.message}
               </li>
             ))}
@@ -278,29 +283,17 @@ export default function SIEPreviewStep({
             trailing={
               <HelpPopover className="ml-2 inline-flex align-middle">
                 <div className="space-y-2">
-                  <p>
-                    Vanligaste orsaken är att föregående års resultat aldrig fördes över till
-                    eget kapital i det gamla programmet. SpeedLedger parkerar det till exempel på
-                    egna 9xxx-konton (9030/9031 Obokat resultat), och då summerar inte filens
-                    ingående balanser till noll: differensen är det oförda resultatet. En annan
-                    orsak är en ofullständig export, till exempel att skulder saknas.
-                  </p>
-                  <p>
-                    Rätta i källsystemet och ladda upp filen på nytt, eller lägg in de ingående
-                    balanserna för hand i guiden Ingående balanser, där du kan rätta raderna
-                    själv innan de bokförs (den här filen importeras då inte). Fortsätter du ändå
-                    bokförs differensen på konto 2099 (Årets resultat), vilket nästan alltid blir
-                    fel.
-                  </p>
+                  <p>{tStep('imbalance_cause')}</p>
+                  <p>{tStep('imbalance_fix')}</p>
                 </div>
               </HelpPopover>
             }
           >
-            Ingående balanser balanserar inte ({formatCurrency(Math.abs(ibDiff))})
+            {tStep('imbalance_title', { amount: formatCurrency(Math.abs(ibDiff)) })}
           </AttnLine>
           {onOpenManualOpeningBalances && (
             <Button type="button" variant="outline" size="sm" onClick={onOpenManualOpeningBalances}>
-              Lägg in ingående balanser för hand
+              {tStep('manual_opening_balances')}
               <ArrowRight className="ml-2 h-4 w-4" />
             </Button>
           )}
@@ -311,7 +304,7 @@ export default function SIEPreviewStep({
               className="mt-0.5"
             />
             <span className="text-muted-foreground">
-              Jag förstår att differensen bokförs på 2099 och vill fortsätta ändå.
+              {tStep('imbalance_ack')}
             </span>
           </label>
         </div>
@@ -403,7 +396,7 @@ export default function SIEPreviewStep({
                     ))}
                     {missingAccounts.length > 10 && (
                       <div className="text-muted-foreground">
-                        ... och {missingAccounts.length - 10} till
+                        {tStep('missing_more', { count: missingAccounts.length - 10 })}
                       </div>
                     )}
                   </div>
@@ -414,7 +407,7 @@ export default function SIEPreviewStep({
             {t('sie_preview_missing_accounts', { count: missingAccounts.length })}
           </AttnLine>
           <Button size="sm" onClick={onCreateAccounts} loading={isCreatingAccounts}>
-            {isCreatingAccounts ? <>Skapar konton...</> : <>Skapa {missingAccounts.length} konton</>}
+            {isCreatingAccounts ? tStep('creating_accounts') : tStep('create_accounts', { count: missingAccounts.length })}
           </Button>
         </div>
       )}
@@ -423,15 +416,15 @@ export default function SIEPreviewStep({
       {warnings.length > 0 && (
         <div className="space-y-2">
           <p className="flex items-center gap-2 text-[13px] font-medium text-attn">
-            Varningar ({warnings.length})
+            {tStep('warnings', { count: warnings.length })}
             <HelpPopover className="shrink-0">
-              Dessa varningar blockerar inte importen men bör granskas.
+              {tStep('warnings_help')}
             </HelpPopover>
           </p>
           <ul className="max-h-48 space-y-1 overflow-y-auto text-[13px] text-muted-foreground">
             {warnings.map((issue, i) => (
               <li key={`warning-${i}`}>
-                <span className="font-mono text-[11px] opacity-70">Rad {issue.line}</span>{' '}
+                <span className="font-mono text-[11px] opacity-70">{tStep('line', { line: issue.line })}</span>{' '}
                 {issue.message}
               </li>
             ))}
@@ -442,12 +435,12 @@ export default function SIEPreviewStep({
       {/* Actions */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onBack}>
-          Tillbaka
+          {tCommon('back')}
         </Button>
         <Button onClick={onContinue} disabled={blockContinue}>
           {preview.mappingStatus.lowConfidence > 0 || preview.mappingStatus.unmapped > 0
-            ? 'Granska mappningar'
-            : 'Fortsätt'}
+            ? tStep('review_mappings')
+            : tStep('continue')}
           <ArrowRight className="ml-2 h-4 w-4" />
         </Button>
       </div>
