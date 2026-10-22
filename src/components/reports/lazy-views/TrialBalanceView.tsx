@@ -15,7 +15,9 @@ import {
   ReportEmptyState,
   ReportErrorCard,
   ReportLoadingCard,
+  reportQuery,
 } from '@/components/reports/report-view-shared'
+import type { DateRangeValue } from '@/components/common/ReportDateRange'
 import { useReportData } from '@/lib/hooks/use-report-data'
 import { formatAmount } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
@@ -29,13 +31,25 @@ const TrialBalanceChart = dynamic(
   { ssr: false, loading: () => <Skeleton className="h-64 w-full" /> },
 )
 
-export default function TrialBalanceView({ periodId, drilldown }: { periodId: string; drilldown: AccountDrilldown }) {
+export default function TrialBalanceView({
+  periodId,
+  dateRange,
+  drilldown,
+}: {
+  periodId: string
+  dateRange: DateRangeValue
+  drilldown: AccountDrilldown
+}) {
+  // The date range inside the räkenskapsår, as every other ranged report:
+  // IB is the balance the day before fromDate, Förändring the activity in
+  // the range, UB the balance at toDate.
+  const reportQs = reportQuery(periodId, dateRange)
   const { data, loading, error } = useReportData<{
     rows: TrialBalanceRow[]
     totalDebit: number
     totalCredit: number
     isBalanced: boolean
-  }>(`/api/reports/trial-balance?period_id=${periodId}`, 'Kunde inte hämta saldobalans')
+  }>(`/api/reports/trial-balance?${reportQs}`, 'Kunde inte hämta saldobalans')
   const [viewMode, setViewMode] = useState<'simplified' | 'detailed'>('simplified')
 
   if (loading) {
@@ -79,7 +93,7 @@ export default function TrialBalanceView({ periodId, drilldown }: { periodId: st
 
   return (
     <div className="space-y-4">
-      <ReportExportMenu items={[{ format: 'xlsx', href: `/api/reports/trial-balance/xlsx?period_id=${periodId}` }]} />
+      <ReportExportMenu items={[{ format: 'xlsx', href: `/api/reports/trial-balance/xlsx?${reportQs}` }]} />
       <TrialBalanceChart rows={data.rows} />
       <Card>
         <CardHeader>
@@ -122,6 +136,7 @@ export default function TrialBalanceView({ periodId, drilldown }: { periodId: st
                       key={row.account_number}
                       row={row}
                       periodId={periodId}
+                      dateRange={dateRange}
                       drilldown={drilldown}
                       getNetBalance={getNetBalance}
                       formatSigned={formatSigned}
@@ -148,6 +163,7 @@ export default function TrialBalanceView({ periodId, drilldown }: { periodId: st
                       key={row.account_number}
                       row={row}
                       periodId={periodId}
+                      dateRange={dateRange}
                       drilldown={drilldown}
                     />
                   ))}
@@ -180,11 +196,15 @@ export default function TrialBalanceView({ periodId, drilldown }: { periodId: st
 }
 
 // Lazy fetcher for a TB account's source lines. Memoised at the row level so
-// repeated toggling never refetches.
-function makeTrialBalanceFetcher(accountNumber: string, periodId: string): ReportSourceFetcher {
+// repeated toggling never refetches. The lines are the row's Förändring: the
+// same date range as the report, so an expanded row adds up to its own cell.
+function makeTrialBalanceFetcher(accountNumber: string, periodId: string, dateRange: DateRangeValue): ReportSourceFetcher {
+  const params = new URLSearchParams({ fiscal_period_id: periodId })
+  if (dateRange.fromDate) params.set('from_date', dateRange.fromDate)
+  if (dateRange.toDate) params.set('to_date', dateRange.toDate)
   return async () => {
     const res = await fetch(
-      `/api/reports/trial-balance/account/${encodeURIComponent(accountNumber)}/sources?fiscal_period_id=${encodeURIComponent(periodId)}`
+      `/api/reports/trial-balance/account/${encodeURIComponent(accountNumber)}/sources?${params.toString()}`
     )
     const json = await res.json()
     if (!res.ok) throw new Error(json.error || 'Kunde inte hämta verifikat')
@@ -196,19 +216,22 @@ function makeTrialBalanceFetcher(accountNumber: string, periodId: string): Repor
 function TrialBalanceSimplifiedRow({
   row,
   periodId,
+  dateRange,
   drilldown,
   getNetBalance,
   formatSigned,
 }: {
   row: TrialBalanceRow
   periodId: string
+  dateRange: DateRangeValue
   drilldown: AccountDrilldown
   getNetBalance: (row: TrialBalanceRow, type: 'opening' | 'period' | 'closing') => number
   formatSigned: (amount: number) => string
 }) {
+  const { fromDate, toDate } = dateRange
   const fetcher = React.useMemo(
-    () => makeTrialBalanceFetcher(row.account_number, periodId),
-    [row.account_number, periodId]
+    () => makeTrialBalanceFetcher(row.account_number, periodId, { fromDate, toDate }),
+    [row.account_number, periodId, fromDate, toDate]
   )
   const { toggle, panel } = useReportRowExpansion(fetcher, `tb-${row.account_number}`)
 
@@ -252,15 +275,18 @@ function TrialBalanceSimplifiedRow({
 function TrialBalanceDetailedRow({
   row,
   periodId,
+  dateRange,
   drilldown,
 }: {
   row: TrialBalanceRow
   periodId: string
+  dateRange: DateRangeValue
   drilldown: AccountDrilldown
 }) {
+  const { fromDate, toDate } = dateRange
   const fetcher = React.useMemo(
-    () => makeTrialBalanceFetcher(row.account_number, periodId),
-    [row.account_number, periodId]
+    () => makeTrialBalanceFetcher(row.account_number, periodId, { fromDate, toDate }),
+    [row.account_number, periodId, fromDate, toDate]
   )
   const { toggle, panel } = useReportRowExpansion(fetcher, `tb-det-${row.account_number}`)
 

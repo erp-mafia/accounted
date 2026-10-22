@@ -407,3 +407,87 @@ describe('GET /api/reports/trial-balance/account/[accountNumber]/sources', () =>
     expect(body.data.next_cursor).toBe(`${lines[499].date}|${lines[499].voucher_number}`)
   })
 })
+
+describe('GET /api/reports/trial-balance/account/[accountNumber]/sources with a date range', () => {
+  const PERIOD = { period_start: '2026-01-01', period_end: '2026-12-31' }
+
+  /**
+   * Wraps buildSupabase with the fiscal_periods read the range needs and
+   * records the date filters put on the journal_entries side.
+   */
+  function withPeriod(base: SupabaseShape, period: typeof PERIOD | null, entryFilters: unknown[][]): SupabaseShape {
+    const inner = base.from as unknown as (table: string) => Record<string, unknown>
+    return {
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === 'fiscal_periods') {
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            maybeSingle: vi.fn().mockResolvedValue({ data: period, error: null }),
+          }
+        }
+        const chain = inner(table)
+        if (table === 'journal_entries') {
+          chain.gte = vi.fn((...args: unknown[]) => {
+            entryFilters.push(['gte', ...args])
+            return chain
+          })
+          chain.lte = vi.fn((...args: unknown[]) => {
+            entryFilters.push(['lte', ...args])
+            return chain
+          })
+        }
+        return chain
+      }),
+    }
+  }
+
+  const ACCOUNT = { account_number: '1931', account_name: 'Betalkonto' }
+
+  it('limits the lines to the report range', async () => {
+    const entryFilters: unknown[][] = []
+    authOk(withPeriod(buildSupabase(ACCOUNT, { data: [], error: null }), PERIOD, entryFilters))
+
+    const req = createMockRequest('/api/reports/trial-balance/account/1931/sources', {
+      searchParams: { fiscal_period_id: 'period-1', from_date: '2026-06-01', to_date: '2026-06-30' },
+    })
+    const res = await GET(req, createMockRouteParams({ accountNumber: '1931' }))
+    expect(res.status).toBe(200)
+    expect(entryFilters).toContainEqual(['gte', 'entry_date', '2026-06-01'])
+    expect(entryFilters).toContainEqual(['lte', 'entry_date', '2026-06-30'])
+  })
+
+  it('puts no date filter on the lines without a range', async () => {
+    const entryFilters: unknown[][] = []
+    authOk(withPeriod(buildSupabase(ACCOUNT, { data: [], error: null }), PERIOD, entryFilters))
+
+    const req = createMockRequest('/api/reports/trial-balance/account/1931/sources', {
+      searchParams: { fiscal_period_id: 'period-1' },
+    })
+    const res = await GET(req, createMockRouteParams({ accountNumber: '1931' }))
+    expect(res.status).toBe(200)
+    expect(entryFilters).toEqual([])
+  })
+
+  it('returns 400 when the range reaches outside the räkenskapsår', async () => {
+    const entryFilters: unknown[][] = []
+    authOk(withPeriod(buildSupabase(ACCOUNT, { data: [], error: null }), PERIOD, entryFilters))
+
+    const req = createMockRequest('/api/reports/trial-balance/account/1931/sources', {
+      searchParams: { fiscal_period_id: 'period-1', from_date: '2025-12-01' },
+    })
+    const res = await GET(req, createMockRouteParams({ accountNumber: '1931' }))
+    expect(res.status).toBe(400)
+  })
+
+  it('returns 404 when the räkenskapsår is not the company\'s', async () => {
+    const entryFilters: unknown[][] = []
+    authOk(withPeriod(buildSupabase(ACCOUNT, { data: [], error: null }), null, entryFilters))
+
+    const req = createMockRequest('/api/reports/trial-balance/account/1931/sources', {
+      searchParams: { fiscal_period_id: 'other-period', to_date: '2026-06-30' },
+    })
+    const res = await GET(req, createMockRouteParams({ accountNumber: '1931' }))
+    expect(res.status).toBe(404)
+  })
+})

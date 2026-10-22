@@ -2,6 +2,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { parseDimensionFilterParams } from '@/lib/reports/dimension-filter'
+import { parseReportDateRange, type DateRange } from '@/lib/reports/date-range'
 import type { ReportSourceLine } from '@/lib/reports/source-lines'
 
 /**
@@ -9,7 +10,9 @@ import type { ReportSourceLine } from '@/lib/reports/source-lines'
  *
  * Returns the journal entry lines for one account in a fiscal period,
  * ordered by entry date then voucher number ASC. Used by the trial balance
- * drilldown UI to show the verifikat behind an aggregated row.
+ * drilldown UI to show the verifikat behind an aggregated row. Optional
+ * from_date/to_date narrow it to the report's date range, validated against
+ * the period exactly as the report validates them.
  *
  * Pagination uses an opaque cursor of `<entry_date>|<voucher_number>` for
  * the last seen row; pass it back as `cursor` to continue.
@@ -38,6 +41,26 @@ export const GET = withRouteContext<{ params: Promise<{ accountNumber: string }>
   const dimFilter = parseDimensionFilterParams(searchParams)
   if (!dimFilter.ok) {
     return NextResponse.json({ error: dimFilter.error }, { status: 400 })
+  }
+
+  // The report's date range, so an expanded row lists the lines behind its
+  // own Förändring. Read the period only when a range was asked for.
+  let range: DateRange = {}
+  if (searchParams.has('from_date') || searchParams.has('to_date')) {
+    const { data: period } = await supabase
+      .from('fiscal_periods')
+      .select('period_start, period_end')
+      .eq('id', fiscalPeriodId)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (!period) {
+      return NextResponse.json({ error: 'Räkenskapsåret saknas' }, { status: 404 })
+    }
+    const parsed = parseReportDateRange(searchParams, period)
+    if (!parsed.ok) {
+      return NextResponse.json({ error: parsed.error }, { status: 400 })
+    }
+    range = parsed.range
   }
 
   // Look up account name (and verify account belongs to the company)
@@ -98,11 +121,15 @@ export const GET = withRouteContext<{ params: Promise<{ accountNumber: string }>
     supabase,
     entryColumns: 'id, voucher_number, voucher_series, entry_date, description, status, company_id, fiscal_period_id',
     lineColumns: 'id, debit_amount, credit_amount, dimensions, journal_entry_id',
-    filterEntries: (q: EntryLinesQuery) =>
-      q
+    filterEntries: (q: EntryLinesQuery) => {
+      let scoped = q
         .eq('company_id', companyId)
         .eq('fiscal_period_id', fiscalPeriodId)
-        .in('status', ['posted', 'reversed']),
+        .in('status', ['posted', 'reversed'])
+      if (range.fromDate) scoped = scoped.gte('entry_date', range.fromDate)
+      if (range.toDate) scoped = scoped.lte('entry_date', range.toDate)
+      return scoped
+    },
     filterLines: (q: EntryLinesQuery) => {
       const scoped = q.eq('account_number', accountNumber)
       // jsonb containment (@>): served by idx_jel_dimensions_gin.
