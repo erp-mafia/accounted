@@ -246,9 +246,9 @@ describe('GET /api/billing/status first charge date', () => {
 
     const { body } = await parseJsonResponse<FirstChargeBody>(await GET())
 
+    // Stripe is still read for the subscription's price; the date is not claimed.
     expect(body.isPaying).toBe(true)
     expect('firstChargeAt' in (body as object)).toBe(false)
-    expect(subscriptionsRetrieve).not.toHaveBeenCalled()
   })
 })
 
@@ -463,5 +463,67 @@ describe('GET /api/billing/status subscription interval', () => {
 
     const { body } = await parseJsonResponse<StatusBody & { subscriptionPlan?: string }>(await GET())
     expect('subscriptionPlan' in (body as object)).toBe(false)
+  })
+})
+
+// The list price went up on 2026-10-22 and every earlier subscription kept its
+// Stripe price, so the paying card shows the subscription's own amount.
+describe('GET /api/billing/status subscription amount', () => {
+  type AmountBody = StatusBody & { subscriptionAmountExVat?: number }
+  const ACTIVE_ROW = {
+    status: 'active',
+    plan: 'yearly',
+    current_period_end: '2099-01-01T09:00:00+00:00',
+    stripe_subscription_id: 'sub_old_1',
+  }
+  const priced = (currency: string, unitAmount: number | null) => ({
+    status: 'active',
+    cancel_at_period_end: false,
+    cancel_at: null,
+    items: { data: [{ price: { currency, unit_amount: unitAmount } }] },
+  })
+
+  it('returns the price the subscription itself carries, not the list price', async () => {
+    subscriptionsRetrieve.mockResolvedValue(priced('sek', 199900))
+    authAs({ company_subscriptions: { data: ACTIVE_ROW }, capability_grants: { data: null } })
+
+    const { body } = await parseJsonResponse<AmountBody>(await GET())
+
+    expect(body.isPaying).toBe(true)
+    expect(body.subscriptionAmountExVat).toBe(1999)
+    expect(subscriptionsRetrieve).toHaveBeenCalledWith('sub_old_1')
+  })
+
+  it('omits it when Stripe cannot be asked', async () => {
+    subscriptionsRetrieve.mockRejectedValue(new Error('stripe unavailable'))
+    authAs({ company_subscriptions: { data: ACTIVE_ROW }, capability_grants: { data: null } })
+
+    const { status, body } = await parseJsonResponse<AmountBody>(await GET())
+
+    expect(status).toBe(200)
+    expect(body.isPaying).toBe(true)
+    expect('subscriptionAmountExVat' in (body as object)).toBe(false)
+  })
+
+  it.each([
+    ['another currency', priced('eur', 2000)],
+    ['no unit amount', priced('sek', null)],
+  ])('omits it for a price with %s', async (_case, live) => {
+    subscriptionsRetrieve.mockResolvedValue(live)
+    authAs({ company_subscriptions: { data: ACTIVE_ROW }, capability_grants: { data: null } })
+
+    const { body } = await parseJsonResponse<AmountBody>(await GET())
+
+    expect('subscriptionAmountExVat' in (body as object)).toBe(false)
+  })
+
+  it('never asks Stripe for a company that is not paying', async () => {
+    authAs({ company_subscriptions: { data: null }, capability_grants: { data: TRIAL_LIVE } })
+    serviceByTable = { companies: { data: { team_id: null } } }
+
+    const { body } = await parseJsonResponse<AmountBody>(await GET())
+
+    expect('subscriptionAmountExVat' in (body as object)).toBe(false)
+    expect(subscriptionsRetrieve).not.toHaveBeenCalled()
   })
 })

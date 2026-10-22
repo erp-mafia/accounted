@@ -15,21 +15,41 @@ import { createLogger } from '@/lib/logger'
 const log = createLogger('api/billing/status')
 
 /**
- * Whether a trialing subscription will still be charged when its trial ends.
- * company_subscriptions does not record a pending cancellation, and a portal
- * cancellation takes effect at period end by default, so a trial cancelled in
- * the portal stays 'trialing' in the row until it lapses without a charge.
- * Stripe is asked live, and only for a trialing row. Any doubt (a Stripe
- * error, a pending cancellation, a status other than trialing) counts as no:
- * the card then makes no date claim.
+ * What Stripe says about a paying company's subscription, asked live once per
+ * read.
+ *
+ * firstChargeDue: whether a trialing subscription will still be charged when
+ * its trial ends. company_subscriptions does not record a pending
+ * cancellation, and a portal cancellation takes effect at period end by
+ * default, so a trial cancelled in the portal stays 'trialing' in the row
+ * until it lapses without a charge.
+ *
+ * amountExVat: what the subscription itself costs per interval, in SEK exkl.
+ * moms. The list price went up on 2026-10-22 while every earlier
+ * subscription kept its Stripe price, so the plan row shows this amount and
+ * never the list price.
+ *
+ * Any doubt (a Stripe error, a pending cancellation, a price in another
+ * currency) counts as no / unknown: the card then makes no claim.
  */
-async function firstChargeStillDue(subscriptionId: string, companyId: string): Promise<boolean> {
+async function readSubscription(
+  subscriptionId: string,
+  companyId: string,
+): Promise<{ firstChargeDue: boolean; amountExVat: number | null }> {
   try {
     const sub = await getStripe().subscriptions.retrieve(subscriptionId)
-    return sub.status === 'trialing' && !sub.cancel_at_period_end && !sub.cancel_at
+    const price = sub.items?.data?.[0]?.price
+    const amountExVat =
+      price && price.currency === 'sek' && typeof price.unit_amount === 'number'
+        ? price.unit_amount / 100
+        : null
+    return {
+      firstChargeDue: sub.status === 'trialing' && !sub.cancel_at_period_end && !sub.cancel_at,
+      amountExVat,
+    }
   } catch (err) {
-    log.warn('first charge check failed', err as Error, { companyId })
-    return false
+    log.warn('subscription read failed', err as Error, { companyId })
+    return { firstChargeDue: false, amountExVat: null }
   }
 }
 
@@ -84,6 +104,10 @@ export async function GET() {
   // Stripe dashboard to a subscription that was already charged would also
   // read as a first charge here; the date is still the next charge.
   let firstChargeAt: string | null = null
+  // What the paying company's own subscription costs per interval (SEK exkl.
+  // moms), read from Stripe. Absent when unknown: the card then shows no
+  // amount rather than a list price the company does not pay.
+  let subscriptionAmountExVat: number | null = null
   if (companyId) {
     const entitlements = await getCompanyEntitlements(supabase, companyId)
     entitlementState = entitlements.entitlementState
@@ -114,15 +138,17 @@ export async function GET() {
       subscriptionPlan = plan === 'monthly' || plan === 'yearly' ? plan : null
       const periodEnd = subscription?.current_period_end
       const subscriptionId = subscription?.stripe_subscription_id
-      if (
-        !isDemo &&
-        subscription?.status === 'trialing' &&
-        typeof periodEnd === 'string' &&
-        new Date(periodEnd).getTime() > Date.now() &&
-        typeof subscriptionId === 'string' &&
-        (await firstChargeStillDue(subscriptionId, companyId))
-      ) {
-        firstChargeAt = periodEnd
+      if (!isDemo && typeof subscriptionId === 'string') {
+        const live = await readSubscription(subscriptionId, companyId)
+        subscriptionAmountExVat = live.amountExVat
+        if (
+          subscription?.status === 'trialing' &&
+          typeof periodEnd === 'string' &&
+          new Date(periodEnd).getTime() > Date.now() &&
+          live.firstChargeDue
+        ) {
+          firstChargeAt = periodEnd
+        }
       }
     }
   }
@@ -137,5 +163,6 @@ export async function GET() {
     ...(teamAgreement ? { teamAgreement } : {}),
     ...(subscriptionPlan ? { subscriptionPlan } : {}),
     ...(firstChargeAt ? { firstChargeAt } : {}),
+    ...(subscriptionAmountExVat !== null ? { subscriptionAmountExVat } : {}),
   })
 }

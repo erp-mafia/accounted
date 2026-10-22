@@ -22,18 +22,22 @@ import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { useFormat } from '@/lib/hooks/use-format'
 import { BillingActions } from '@/components/settings/BillingActions'
 import { ConnectorSettingsSection } from '@/components/settings/ConnectorSettingsSection'
-import { PLAN_PRICES } from '@/components/settings/billing-plans'
+import { PLAN_PRICES, planPrice } from '@/components/settings/billing-plans'
 import type { BillingPlan } from '@/lib/stripe/client'
 import { useBranding } from '@/lib/branding/brand-context'
 
 // What the paid tier unlocks: the external connections. One item per PAID
-// capability in lib/entitlements/keys.ts (ai, bank_sync, skatteverket,
+// capability in lib/entitlements/keys.ts (bank_sync, skatteverket,
 // email_send, and stripe_payments + woocommerce_sync + shopify_sync +
 // zettle_sync as one "payments and webshop" item). Keep in step with
 // PAID_CAPABILITIES when a key is added. collections has its own item
 // (UNLOCK_COLLECTIONS_KEY), listed only where the feature is switched on for
 // the viewing company, so merging it shows nothing to anyone.
-const UNLOCK_KEYS = ['unlock_ai', 'unlock_bank', 'unlock_skv', 'unlock_email', 'unlock_payments_webshop'] as const
+//
+// ai is deliberately not listed (owner, 2026-10-22): the assistant is meant
+// to be sold as an add-on later, so the page does not promise it as part of
+// the subscription. The capability itself is still granted with it.
+const UNLOCK_KEYS = ['unlock_bank', 'unlock_skv', 'unlock_email', 'unlock_payments_webshop'] as const
 const UNLOCK_COLLECTIONS_KEY = 'unlock_collections'
 
 // What stays without a subscription (the free plan card). Retention is the
@@ -74,6 +78,13 @@ interface BillingView {
    * this state has paid, so the sell view is never rendered for them.
    */
   agreement: { until: string | null } | null
+  /**
+   * Paying card: what the company's own subscription costs per interval, SEK
+   * exkl. moms. A subscription started before the 2026-10-22 price change
+   * keeps its old Stripe price, so the card shows this and never the list
+   * price. null when unknown: the card then shows no amount at all.
+   */
+  subscriptionAmountExVat: number | null
 }
 
 /** Mirrors GET /api/billing/invoices. */
@@ -134,9 +145,10 @@ function PlanCard({
 }: {
   title: string
   headerEnd?: React.ReactNode
-  price: number
-  period: string
-  note: string
+  /** Left out when the amount is not known: no price line at all. */
+  price?: number
+  period?: string
+  note?: string
   items: React.ReactNode
   footer?: React.ReactNode
   current?: boolean
@@ -152,11 +164,15 @@ function PlanCard({
         <h3 className="text-[13px] font-medium">{title}</h3>
         {headerEnd}
       </div>
-      <p className="mt-4 font-display text-3xl tabular-nums">
-        {formatCurrency(price)}
-        <span className="text-[15px] text-muted-foreground"> / {period}</span>
-      </p>
-      <p className="mt-1 text-xs tabular-nums text-muted-foreground">{note}</p>
+      {price !== undefined && (
+        <>
+          <p className="mt-4 font-display text-3xl tabular-nums">
+            {formatCurrency(price)}
+            <span className="text-[15px] text-muted-foreground"> / {period}</span>
+          </p>
+          <p className="mt-1 text-xs tabular-nums text-muted-foreground">{note}</p>
+        </>
+      )}
       <div className="my-6 border-t border-border" />
       <ul className="space-y-3">{items}</ul>
       {footer && <div className="mt-auto pt-8">{footer}</div>}
@@ -238,6 +254,7 @@ function BillingCoreContent() {
           teamAgreement?: unknown
           coverage?: unknown
           subscriptionPlan?: unknown
+          subscriptionAmountExVat?: unknown
         }
         if (!active) return
         if (typeof d?.isPaying !== 'boolean' || typeof d?.configured !== 'boolean') {
@@ -281,6 +298,12 @@ function BillingCoreContent() {
           isDemo: d.isDemo === true,
           teamAgreement,
           agreement,
+          subscriptionAmountExVat:
+            typeof d.subscriptionAmountExVat === 'number' &&
+            Number.isFinite(d.subscriptionAmountExVat) &&
+            d.subscriptionAmountExVat > 0
+              ? d.subscriptionAmountExVat
+              : null,
         })
       } catch {
         if (active) {
@@ -336,11 +359,23 @@ function BillingCoreContent() {
     (view.isPaying || view.paidJustNow || view.teamAgreement !== null || view.agreement !== null)
   const selling = !view.isDemo && !covered
   const { trialEndsAt, daysLeft, chargeDeferred } = view
-  const price = PLAN_PRICES[plan]
-  const priceNote =
+  // Two prices, never mixed. A company that is not paying sees the list
+  // price, written like the website's price page: the monthly figure large
+  // and how it is billed underneath. A paying company sees what its own
+  // subscription costs, which for anyone who subscribed before 2026-10-22 is
+  // the old price. When that amount is unknown no amount is shown.
+  const listPrice = PLAN_PRICES[plan]
+  const listNote =
     plan === 'yearly'
-      ? t('price_note_yearly', { inc: formatCurrency(price.incVat), perMonth: formatCurrency(price.perMonthEquivalent) })
-      : t('price_note_monthly', { inc: formatCurrency(price.incVat) })
+      ? t('price_note_yearly_billed', { ex: formatCurrency(listPrice.exVat), inc: formatCurrency(listPrice.incVat) })
+      : t('price_note_monthly_billed', { inc: formatCurrency(listPrice.incVat) })
+  const paidPrice =
+    view.subscriptionAmountExVat !== null ? planPrice(plan, view.subscriptionAmountExVat) : null
+  const paidNote = paidPrice
+    ? plan === 'yearly'
+      ? t('price_note_yearly', { inc: formatCurrency(paidPrice.incVat), perMonth: formatCurrency(paidPrice.perMonthEquivalent) })
+      : t('price_note_monthly', { inc: formatCurrency(paidPrice.incVat) })
+    : null
 
   // An active paid plan: one row with the plan, its price, the next charge
   // when one is known, and the manage action. The cards are a comparison.
@@ -439,9 +474,11 @@ function BillingCoreContent() {
               <Badge variant="outline">{t('your_plan')}</Badge>
             ) : undefined
           }
-          price={price.exVat}
-          period={t(`period_${plan}`)}
-          note={priceNote}
+          {...(covered
+            ? paidPrice && paidNote
+              ? { price: paidPrice.exVat, period: t(`period_${plan}`), note: paidNote }
+              : {}
+            : { price: listPrice.perMonthEquivalent, period: t('period_monthly'), note: listNote })}
           items={
             <>
               <CheckItem label={t('includes_free')} />
@@ -471,12 +508,12 @@ function BillingCoreContent() {
     <div>
       <SettingsRow label={t('paid_title')} help={t('manage_line')}>
         <span className="tabular-nums">
-          {formatCurrency(price.exVat)} / {t(`period_${plan}`)}
+          {paidPrice ? `${formatCurrency(paidPrice.exVat)} / ${t(`period_${plan}`)}` : t(`interval_${plan}`)}
         </span>
         <SettingsRowEnd>
           <BillingActions isPaying configured={view.configured} />
         </SettingsRowEnd>
-        <SettingsRowNote className="basis-full tabular-nums">{priceNote}</SettingsRowNote>
+        {paidNote && <SettingsRowNote className="basis-full tabular-nums">{paidNote}</SettingsRowNote>}
         {/* Subscribed during the trial: the card is committed but not yet
             charged, so say when, in the words the sell view used. */}
         {view.firstChargeAt && (
