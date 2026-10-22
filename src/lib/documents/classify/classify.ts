@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { z } from 'zod'
-import { getAiService, getAiStatus } from '@/lib/ai'
+import { getAiService, getAiStatus, isAiSwitchedOffError } from '@/lib/ai'
 import { eventBus } from '@/lib/events/bus'
 import { createLogger } from '@/lib/logger'
 import { DOC_TYPES, DOC_TYPE_DESCRIPTIONS, type DocType } from './taxonomy'
@@ -83,7 +83,7 @@ export function buildClassifyPrompt(input: { fileName: string; pageCount: number
 
 export type ClassifyOutcome =
   | { status: 'classified'; classification: Classification; admission: 'admitted' | 'held' }
-  | { status: 'skipped'; reason: 'no_pages' | 'human_decided' | 'ai_unconfigured' | 'not_found' }
+  | { status: 'skipped'; reason: 'no_pages' | 'human_decided' | 'ai_unconfigured' | 'ai_switched_off' | 'not_found' }
   | { status: 'error'; reason: string }
 
 interface DocumentRow {
@@ -214,6 +214,8 @@ export async function classifyDocument(supabase: SupabaseClient, documentId: str
     if (!parsed.success) return { status: 'error', reason: `classification did not match schema: ${parsed.error.issues.map((i) => i.path.join('.') + ' ' + i.message).join('; ')}` }
     classification = parsed.data
   } catch (err) {
+    // The company switched AI off: nothing to retry until it switches back.
+    if (isAiSwitchedOffError(err)) return { status: 'skipped', reason: 'ai_switched_off' }
     const reason = err instanceof Error ? err.message : String(err)
     log.warn('classify failed', { doc: documentId, reason })
     return { status: 'error', reason: reason.slice(0, 300) }

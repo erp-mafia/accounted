@@ -1,7 +1,7 @@
 'use client'
 
 import posthog from 'posthog-js'
-import { isAnalyticsEnabled } from '@/lib/analytics/enabled'
+import { isAnalyticsActive } from '@/lib/analytics/client'
 
 /**
  * The migration connect funnel. The server already records that a connect
@@ -13,7 +13,7 @@ import { isAnalyticsEnabled } from '@/lib/analytics/enabled'
 export type MigrationConnectOutcome = 'success' | 'provider_error' | 'cancelled' | 'window_closed'
 
 function capture(event: string, properties: Record<string, string>): void {
-  if (!isAnalyticsEnabled()) return
+  if (!isAnalyticsActive()) return
   try {
     posthog.capture(event, properties)
   } catch {

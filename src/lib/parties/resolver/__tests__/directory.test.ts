@@ -72,4 +72,42 @@ describe('promoteIfShared', () => {
     limit.mockResolvedValueOnce({ data: [{ company_id: 'a' }], error: null })
     expect(await promoteIfShared(service, { aliasKey: 'x', displayName: 'X', kind: 'merchant', rail: null, country: null, what: null })).toBe(false)
   })
+
+  describe('counts only companies that pool (Datadelning och AI)', () => {
+    const A = '11111111-1111-4111-8111-111111111111'
+    const B = '22222222-2222-4222-8222-222222222222'
+    function serviceWith(optOuts: { data: unknown; error: unknown }) {
+      const upsert = vi.fn(async () => ({ error: null }))
+      const limit = vi.fn(async () => ({ data: [{ company_id: A }, { company_id: B }], error: null }))
+      const optOutQuery = { select: () => ({ eq: () => ({ eq: () => ({ in: async () => optOuts }) }) }) }
+      const service = {
+        from: (table: string) =>
+          table === 'counterparty_directory'
+            ? { upsert }
+            : table === 'company_capability_config'
+              ? optOutQuery
+              : { select: () => ({ eq: () => ({ eq: () => ({ eq: () => ({ is: () => ({ limit }) }) }) }) }) },
+      } as unknown as SupabaseClient
+      return { service, upsert }
+    }
+    const candidate = { aliasKey: 'railway', displayName: 'Railway', kind: 'merchant' as const, rail: null, country: 'US', what: null }
+
+    it('does not promote when one of the two companies opted out', async () => {
+      const { service, upsert } = serviceWith({ data: [{ company_id: B }], error: null })
+      expect(await promoteIfShared(service, candidate)).toBe(false)
+      expect(upsert).not.toHaveBeenCalled()
+    })
+
+    it('promotes nothing when the opt-outs cannot be read', async () => {
+      const { service, upsert } = serviceWith({ data: null, error: { message: 'down' } })
+      expect(await promoteIfShared(service, candidate)).toBe(false)
+      expect(upsert).not.toHaveBeenCalled()
+    })
+
+    it('promotes when both pool', async () => {
+      const { service, upsert } = serviceWith({ data: [], error: null })
+      expect(await promoteIfShared(service, candidate)).toBe(true)
+      expect(upsert).toHaveBeenCalledWith(expect.objectContaining({ company_count: 2 }), { onConflict: 'directory_key' })
+    })
+  })
 })

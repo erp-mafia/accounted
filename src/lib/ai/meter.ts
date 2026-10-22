@@ -3,6 +3,7 @@ import { globalSingleton } from '@/lib/global-singleton'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { createLogger } from '@/lib/logger'
+import { isAiSwitchedOff } from '@/lib/legal/data-choices-store'
 import type { AiService, AiTier, AiUsage } from './types'
 
 const log = createLogger('ai-meter')
@@ -82,10 +83,54 @@ export async function recordAiUsage(row: AiUsageRow, supabase: SupabaseClient | 
 }
 
 /**
+ * Thrown instead of calling the model when the company switched AI off
+ * (Inställningar → Datadelning och AI). Callers that already survive a failed
+ * model call survive this one; a caller that wants to say "skipped" rather
+ * than "failed" checks for it.
+ */
+export class AiSwitchedOffError extends Error {
+  readonly code = 'AI_SWITCHED_OFF'
+  constructor(readonly companyId: string) {
+    super('AI is switched off for this company')
+    this.name = 'AiSwitchedOffError'
+  }
+}
+
+export function isAiSwitchedOffError(err: unknown): err is AiSwitchedOffError {
+  return err instanceof AiSwitchedOffError || (err as { code?: unknown } | null)?.code === 'AI_SWITCHED_OFF'
+}
+
+/** The company a call is made for: the request's own label first, then the surrounding withAiMeter scope. */
+function companyOf(requestMeter: AiMeter | undefined): string | null {
+  return requestMeter?.companyId ?? currentAiMeter()?.companyId ?? null
+}
+
+async function readAiSwitch(companyId: string): Promise<boolean> {
+  const supabase = meterClient()
+  if (!supabase) return false
+  return isAiSwitchedOff(supabase, companyId)
+}
+
+/**
  * The service every caller gets, recording each call's tokens after it
  * returns. One place, so a new feature is metered the day it ships.
+ *
+ * The same place keeps the company's AI switch: a call labelled with a
+ * company that switched AI off never reaches the model, whichever feature
+ * made it, so a new feature cannot forget the switch any more than the meter.
+ * The feature gates (hasCapability) still decide first; this is the backstop,
+ * and the only gate where the paywall is bypassed (local development,
+ * self-hosted). An unlabelled call has no company to check.
  */
-export function withMetering(service: AiService, record: (row: AiUsageRow) => Promise<void> = (row) => recordAiUsage(row)): AiService {
+export function withMetering(
+  service: AiService,
+  record: (row: AiUsageRow) => Promise<void> = (row) => recordAiUsage(row),
+  switchedOff: (companyId: string) => Promise<boolean> = readAiSwitch,
+): AiService {
+  async function refuseIfSwitchedOff(meter: AiMeter | undefined): Promise<void> {
+    const companyId = companyOf(meter)
+    if (companyId && (await switchedOff(companyId))) throw new AiSwitchedOffError(companyId)
+  }
   return {
     get provider() {
       return service.provider
@@ -95,16 +140,20 @@ export function withMetering(service: AiService, record: (row: AiUsageRow) => Pr
     },
     modelFor: (tier) => service.modelFor(tier),
     async generateText(req) {
+      await refuseIfSwitchedOff(req.meter)
       const out = await service.generateText(req)
       await record(usageRow(req.meter, req.tier, out.model, out.usage))
       return out
     },
     async generateStructured(req) {
+      await refuseIfSwitchedOff(req.meter)
       const out = await service.generateStructured(req)
       await record(usageRow(req.meter, req.tier, out.model, out.usage))
       return out
     },
     async extractFromDocument(req) {
+      const companyId = companyOf(req.meter)
+      if (companyId && (await switchedOff(companyId))) return { ok: false, skipped: 'ai_switched_off' }
       const out = await service.extractFromDocument(req)
       if (out.ok) await record(usageRow(req.meter, req.tier ?? 'extraction', out.model, out.usage))
       return out

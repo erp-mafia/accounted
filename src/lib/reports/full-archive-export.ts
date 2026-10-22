@@ -1447,6 +1447,8 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   chat_messages: 'AI assistant state, not räkenskapsinformation',
   chat_sessions: 'AI assistant state, not räkenskapsinformation',
   company_capability_config: 'entitlement state',
+  legal_acceptances:
+    "which person accepted which version of Accounted's terms and DPA, the provider relationship rather than räkenskapsinformation; company_id is context only",
   company_suggestions:
     'which suggestions are open, snoozed or declined; the proposals and decisions are pending_operations rows and every package switch an audit_log row',
   company_inbound_domains: 'inbound-mail infrastructure',

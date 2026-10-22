@@ -16,6 +16,15 @@ vi.mock('posthog-js', () => ({
   },
 }))
 
+// Whether the person consented, so PostHog was started (lib/analytics/
+// client.ts). With consent the gate is the deployment's own switch, as
+// before consent existed; without it PostHog never runs.
+let consented = true
+vi.mock('@/lib/analytics/client', async () => {
+  const { isAnalyticsEnabled } = await import('@/lib/analytics/enabled')
+  return { isAnalyticsActive: () => consented && isAnalyticsEnabled() }
+})
+
 describe('submitFeedback', () => {
   beforeEach(() => {
     vi.unstubAllGlobals()
@@ -25,6 +34,7 @@ describe('submitFeedback', () => {
     sendMessageMock.mockReset()
     sendMessageMock.mockResolvedValue({ ticket_id: 't1' })
     isAvailableMock.mockReturnValue(true)
+    consented = true
     // Analytics on by default so the breadcrumb path is exercised.
     vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
     vi.stubEnv('NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN', 'phc_test')
@@ -48,6 +58,18 @@ describe('submitFeedback', () => {
 
     expect(result).toEqual({ ok: true, channels: ['ticket'] })
     expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('delivers over email, and sends nothing to PostHog, for a person who did not consent to analytics', async () => {
+    consented = false
+    const fetchSpy = stubFetchOk()
+
+    const result = await submitFeedback({ subject: 'Hjälpsida', message: 'Hjälp tack' })
+
+    expect(result).toEqual({ ok: true, channels: ['email'] })
+    expect(fetchSpy).toHaveBeenCalledWith('/api/support/contact', expect.objectContaining({ method: 'POST' }))
+    expect(sendMessageMock).not.toHaveBeenCalled()
+    expect(captureMock).not.toHaveBeenCalled()
   })
 
   it('delivers over email when conversations are unavailable', async () => {

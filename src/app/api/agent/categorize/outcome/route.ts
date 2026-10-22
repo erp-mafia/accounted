@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { guardSandbox } from '@/lib/sandbox/guard'
+import { isPoolingOn } from '@/lib/legal/data-choices-store'
 
 /**
  * POST /api/agent/categorize/outcome: log one calibration sample.
@@ -64,6 +65,10 @@ export async function POST(request: Request): Promise<Response> {
   // Sandbox bookings are seed data: don't pollute the calibration corpus.
   const blocked = await guardSandbox(supabase, companyId)
   if (blocked) return noContent()
+
+  // The corpus is pooled across companies: a company that opted out of
+  // pooling (Inställningar → Datadelning och AI) adds nothing to it.
+  if (!(await isPoolingOn(supabase, companyId))) return noContent()
 
   const proposed = parsed.data.proposed_account ?? null
 

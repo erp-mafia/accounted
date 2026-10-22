@@ -10,6 +10,7 @@ import { useTheme } from 'next-themes'
 import { createClient } from '@/lib/supabase/client'
 import { InstallAppSection } from '@/components/settings/InstallAppSection'
 import { CalendarFeedSettings } from '@/components/settings/CalendarFeedSettings'
+import { AnalyticsConsentRow } from '@/components/settings/AnalyticsConsentRow'
 import {
   SettingsGroup,
   SettingsInput,
@@ -324,8 +325,19 @@ export function AccountSettingsContent() {
       {/* Calendar feed (extension-gated) */}
       {hasCalendarExtension && <CalendarFeedSettings />}
 
-      {/* Privacy & agreements: surface the otherwise-unlinked DPA + privacy policy */}
+      {/* Privacy & agreements: the documents, and the person's analytics choice */}
       <SettingsGroup label={tSettings('legal_title')}>
+        <AnalyticsConsentRow />
+        <SettingsRow label={tSettings('legal_terms')}>
+          <SettingsRowEnd>
+            <Button variant="outline" size="sm" asChild>
+              <Link href="/terms" target="_blank" rel="noopener noreferrer">
+                <ExternalLink className="mr-2 h-3.5 w-3.5" />
+                {tCommon('open')}
+              </Link>
+            </Button>
+          </SettingsRowEnd>
+        </SettingsRow>
         <SettingsRow label={tSettings('legal_privacy')}>
           <SettingsRowEnd>
             <Button variant="outline" size="sm" asChild>

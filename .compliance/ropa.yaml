@@ -117,7 +117,7 @@ processing_activities:
     lawful_basis: art_6_1_c   # legal obligation
     special_category_basis: null
     controller: gnubok-tenant
-    processor: anthropic-na   # software supplier; Skatteverket is recipient, not processor
+    processor: supabase   # storage; Skatteverket is recipient, not processor
     data_subjects:
       - employee
       - company_signatory           # firmatecknare/deklarationsombud (BankID-signerare av kvittensen)
@@ -163,7 +163,7 @@ processing_activities:
     lawful_basis: art_6_1_c   # legal obligation (ancillary to AGI filing)
     special_category_basis: null
     controller: gnubok-tenant
-    processor: anthropic-na
+    processor: supabase
     data_subjects:
       - employee
     data_categories:
@@ -202,7 +202,7 @@ processing_activities:
     lawful_basis: art_6_1_c
     special_category_basis: null
     controller: gnubok-tenant
-    processor: anthropic-na
+    processor: supabase
     data_subjects:
       - business_owner
     data_categories:
@@ -240,7 +240,7 @@ processing_activities:
     lawful_basis: art_6_1_b   # service provision: read-back requested by the customer
     special_category_basis: null
     controller: gnubok-tenant
-    processor: anthropic-na
+    processor: supabase
     data_subjects:
       - business_owner
     data_categories:
@@ -280,7 +280,7 @@ processing_activities:
     lawful_basis: art_6_1_b   # contract (PSD2 consent + bookkeeping service)
     special_category_basis: null
     controller: gnubok-tenant
-    processor: anthropic-na
+    processor: supabase
     data_subjects:
       - business_owner
     data_categories:
@@ -316,7 +316,7 @@ processing_activities:
     lawful_basis: art_6_1_b   # contract (bookkeeping service)
     special_category_basis: null
     controller: gnubok-tenant
-    processor: anthropic-na
+    processor: supabase
     data_subjects:
       - business_owner
       - counterparty
@@ -597,7 +597,7 @@ processing_activities:
     lawful_basis: art_6_1_c   # legal obligation (ÅRL filing duty)
     special_category_basis: null
     controller: gnubok-tenant
-    processor: anthropic-na   # software supplier; Bolagsverket is recipient, not processor
+    processor: supabase   # storage; Bolagsverket is recipient, not processor
     data_subjects:
       - business_owner        # avsändare/undertecknare (styrelseledamot, VD)
     data_categories:
@@ -1061,3 +1061,74 @@ processing_activities:
       - append_only_triggers_no_update_or_delete_while_company_exists
       - originals_in_private_company_scoped_bucket
       - short_lived_signed_urls_for_originals
+
+  - id: salary.payroll
+    name: Lönehantering (löneberäkning, frånvaro, lönebesked, utbetalning)
+    purpose: >-
+      Beräkna lön, skatteavdrag och arbetsgivaravgifter för kundens anställda,
+      registrera frånvaro som påverkar lönen, skicka lönebesked och skapa
+      betalfiler. Kunden är personuppgiftsansvarig som arbetsgivare; Accounted
+      behandlar uppgifterna som biträde enligt /dpa punkt 2 och 3. Frånvaro av
+      typen sick, pregnancy, care_relative, vab och parental är uppgifter om
+      hälsa eller familjeförhållanden; en återkommande löneart
+      net_deduction_union (Fackavgift) visar medlemskap i fackförening. Tjänsten
+      lagrar frånvarotyp och omfattning, aldrig diagnos. Lönebesked skickas som
+      personliga länkar, aldrig som e-postbilagor (lib/salary/payslips/send.ts),
+      i linje med IMY:s vägledning om lönespecifikationer i e-post.
+    # Kundens grund: art 6.1 b (anställningsavtalet) och 6.1 c (SFL, BFL,
+    # sjuklönelagen, semesterlagen). Art 9-uppgifterna: art 9.2 b med
+    # 3 kap. 2 § dataskyddslagen (arbetsrättsliga skyldigheter).
+    lawful_basis: art_6_1_b_and_c
+    special_category_basis: art_9_2_b_dataskyddslagen_3_kap_2_par
+    controller: gnubok-tenant
+    processor: supabase
+    data_subjects:
+      - employee
+    data_categories:
+      - user.government_id          # personnummer, krypterat i employees (lib/salary/personnummer.ts)
+      - user.name
+      - user.contact
+      - user.financial.bank_account # löneutbetalningskonto
+      - user.financial.employment   # lön, förmåner, skatteavdrag, semester
+      - user.health                 # frånvarotyp sick/pregnancy/care_relative (art 9)
+      - user.union_membership       # löneart Fackavgift (art 9)
+    recipients:
+      - name: Supabase
+        country: EU
+        role: processor
+      - name: Resend
+        country: US
+        role: processor             # e-post med länk till lönebeskedet, aldrig lönedata i meddelandet
+      - name: Skatteverket
+        country: SE
+        role: legal_recipient       # via agi.submit
+    international_transfers:
+      applicable: true
+      mechanism: dpf
+      note: >-
+        Endast e-postmeddelandet med länken till lönebeskedet går via Resend
+        (USA, DPF-certifierat). Lönedata och personnummer lämnar inte Sverige.
+    retention:
+      duration: 7_years_after_fiscal_year_end
+      basis: bfl_7_kap
+      note: >-
+        Lönekörningar, lönebesked och frånvaro som ligger till grund för
+        bokförd lön är räkenskapsinformation. Anställda och återkommande
+        lönearter som inte ingått i en bokförd lönekörning kan kunden ta bort.
+      stored_in:
+        - employees
+        - employee_recurring_lines
+        - employee_benefits
+        - employee_vacation_balances
+        - salary_runs
+        - salary_run_employees
+        - salary_line_items
+        - salary_absence_days
+        - salary_payslip_links
+        - salary_payslip_deliveries
+        - salary_payment_files
+    security_measures:
+      - rls_company_scoped
+      - personnummer_at_rest_encryption
+      - payslips_as_rotating_links_never_attachments
+      - no_diagnosis_field

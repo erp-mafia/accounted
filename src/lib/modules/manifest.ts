@@ -620,6 +620,10 @@ export const INFRA_LIB_FOLDERS: readonly string[] = Object.freeze([
   'handles',
   'hooks',
   'http',
+  // The published legal documents: versions, provider identity and the
+  // recipient list, read by the public pages, the middleware and the
+  // acceptance flow.
+  'legal',
   'lists',
   'modules',
   'navigation',

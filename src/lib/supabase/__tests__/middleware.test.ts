@@ -514,6 +514,23 @@ describe('updateSession redirect destinations', () => {
     })
   })
 
+  describe('anonymous access to the legal documents', () => {
+    it.each(['/terms', '/privacy', '/dpa', '/subprocessors'])(
+      'serves %s without a login bounce',
+      async (path) => {
+        const response = await run(path)
+        expect(response.status).not.toBe(307)
+        expect(locationOf(response)).toBeNull()
+      },
+    )
+
+    it('keeps an unlisted path under a legal prefix protected', async () => {
+      const response = await run('/privacy-settings')
+      expect(response.status).toBe(307)
+      expect(new URL(locationOf(response)!).pathname).toBe('/login')
+    })
+  })
+
   // ── Site 1: protected-route bounce ────────────────────────────────────
 
   describe('protected route bounce to /login', () => {

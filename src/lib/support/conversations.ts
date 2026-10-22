@@ -1,5 +1,5 @@
 import posthog from 'posthog-js'
-import { isAnalyticsEnabled } from '@/lib/analytics/enabled'
+import { isAnalyticsActive } from '@/lib/analytics/client'
 
 /**
  * PostHog Support (Conversations) as the in-app support channel.
@@ -166,7 +166,7 @@ export function otherTickets(
 }
 
 export function conversationsAvailable(): boolean {
-  if (!isAnalyticsEnabled()) return false
+  if (!isAnalyticsActive()) return false
   try {
     return Boolean(posthog.conversations?.isAvailable?.())
   } catch {

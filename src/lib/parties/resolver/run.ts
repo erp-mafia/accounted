@@ -21,6 +21,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { GENERIC_WORDS } from '@/lib/parties/classify'
 import { ledgerKey } from '@/lib/parties/ledger-key'
 import { preclean, type Precleaned } from './preclean'
+import { isAiSwitchedOff, isPoolingOn } from '@/lib/legal/data-choices-store'
 import { lookupDirectory, promoteIfShared } from './directory'
 import { readCounterparts, readerAvailable, verifyCounterparts, type ModelReading, type ReaderCandidate, type ReaderLine } from './model-reading'
 import { planAlias, type AliasDecision, type DocumentHit, type IdentityHit, type LedgerHit, type RegisterMatch } from './plan'
@@ -272,7 +273,8 @@ function partyByName(parties: PartyRow[]): Map<string, string> {
 export async function resolveCompanyCounterparts(supabase: SupabaseClient, companyId: string, options: RunOptions = {}): Promise<RunSummary> {
   const sinceDays = options.sinceDays ?? 400
   const maxModelLines = options.maxModelLines ?? 400
-  const useModel = options.useModel ?? true
+  // A company that switched AI off gets every rung but the model.
+  const useModel = (options.useModel ?? true) && !(await isAiSwitchedOff(supabase, companyId))
   const dryRun = options.dryRun ?? false
   const summary: RunSummary = {
     companyId,
@@ -419,10 +421,14 @@ export async function resolveCompanyCounterparts(supabase: SupabaseClient, compa
     summary.written += slice.length
   }
 
-  for (const d of decisions) {
-    if (d.source !== 'model' || d.band !== 'link' || !d.displayName) continue
-    const ok = await promoteIfShared(supabase, { aliasKey: d.aliasKey, displayName: d.displayName, kind: d.kind, rail: d.rail, country: d.country, what: d.what })
-    if (ok) summary.promoted += 1
+  // A company that opted out of pooling offers nothing to the shared
+  // directory; promoteIfShared also leaves it out of every count.
+  const offers = decisions.filter((d) => d.source === 'model' && d.band === 'link' && d.displayName)
+  if (offers.length > 0 && (await isPoolingOn(supabase, companyId))) {
+    for (const d of offers) {
+      const ok = await promoteIfShared(supabase, { aliasKey: d.aliasKey, displayName: d.displayName!, kind: d.kind, rail: d.rail, country: d.country, what: d.what })
+      if (ok) summary.promoted += 1
+    }
   }
 
   log.info('counterparts resolved', { ...summary, bySource: JSON.stringify(summary.bySource) })

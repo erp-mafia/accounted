@@ -50,6 +50,8 @@ import {
   resolveCockpitHref,
 } from '@/lib/company/home-domain'
 import HomeDomainSignpost from '@/components/dashboard/HomeDomainSignpost'
+import { LegalAcceptanceGate } from '@/components/legal/LegalAcceptanceGate'
+import { readAcceptanceState } from '@/lib/legal/acceptance'
 import type { AccountingFramework, EntityType, CompanyRole, Team } from '@/types'
 import { parseEntityType } from '@/lib/company/entity-type'
 import {
@@ -128,6 +130,7 @@ export default async function DashboardLayout({
     { data: userProfile },
     { data: userPrefs },
     { data: allMemberships },
+    acceptance,
   ] = await Promise.all([
     getDashboardCompanyId(),
     // Read the pathname forwarded by middleware so we can branch on it.
@@ -143,6 +146,10 @@ export default async function DashboardLayout({
     // hide-assistant-FAB preference (Inställningar → Assistenten).
     supabase.from('user_preferences').select('ui_state, hide_assistant_fab').eq('user_id', user.id).maybeSingle(),
     supabase.from('company_members').select('company_id, role, companies:company_id(id, name, org_number, entity_type, accounting_framework, jurisdiction, ledger_currency, created_by, team_id, archived_at, created_at, updated_at)').eq('user_id', user.id),
+    // Which legal documents the person still has to accept, and their
+    // analytics choice: the acceptance prompt and whether PostHog may start.
+    // Its own reads, so a failure never touches the ones above.
+    readAcceptanceState(supabase, user.id),
   ])
 
   const pathname = headerStore.get('x-pathname') ?? ''
@@ -271,6 +278,7 @@ export default async function DashboardLayout({
           <Suspense fallback={null}>
             <SupportDialogHost />
           </Suspense>
+          <LegalAcceptanceGate state={acceptance} pathname={pathname} company={null} role={null} isAnonymous={user.is_anonymous} />
           </div>
         </AgentSheetProvider>
       </CompanyProvider>
@@ -433,6 +441,7 @@ export default async function DashboardLayout({
               </MainContainer>
             </main>
             <SettingsHotkey />
+            <LegalAcceptanceGate state={acceptance} pathname={pathname} company={null} role={null} isAnonymous={user.is_anonymous} />
           </div>
         </AgentSheetProvider>
       </CompanyProvider>
@@ -685,6 +694,14 @@ export default async function DashboardLayout({
           {/* The palette's inbox entry goes where the menu puts the inbox (lib/inkorg/flag.ts). */}
           <LazyCommandPalette inkorgV2Enabled={navRollouts(companyId).inkorgV2Enabled} />
           <SettingsHotkey />
+          <LegalAcceptanceGate
+            state={acceptance}
+            pathname={pathname}
+            company={{ id: companyId, name: displayName }}
+            role={memberRow.role}
+            isSandbox={isSandbox}
+            isAnonymous={user.is_anonymous}
+          />
         </div>
         {/* Outside #dash-shell on purpose: non-modal dialogs (booking,
             invoice) set `inert` on the shell while open, and the assistant
@@ -699,6 +716,7 @@ export default async function DashboardLayout({
               role: memberRow.role as CompanyRole,
             }}
             identityHash={computeIdentityHash(user.id)}
+            analyticsConsent={acceptance.analyticsConsent === true}
             company={{
               id: companyId,
               name: displayName,

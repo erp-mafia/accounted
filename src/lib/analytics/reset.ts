@@ -1,5 +1,5 @@
 import posthog from 'posthog-js'
-import { isAnalyticsEnabled } from './enabled'
+import { isAnalyticsActive } from './client'
 
 /**
  * Detach the current person from PostHog on logout.
@@ -28,7 +28,7 @@ import { isAnalyticsEnabled } from './enabled'
  */
 export function resetAnalyticsIdentity(): void {
   if (typeof window === 'undefined') return
-  if (!isAnalyticsEnabled()) return
+  if (!isAnalyticsActive()) return
   try {
     posthog.reset()
   } catch {

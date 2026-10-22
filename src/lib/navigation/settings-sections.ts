@@ -98,6 +98,9 @@ export function visibleSettingsSections(scope: SettingsSectionScope): SettingsSe
     // open. A byrå user connects their clients from the cockpit, without
     // opening one of them first.
     section('api', '/settings/api', 'tools', hasCompany && hasMcpExtension, true),
+    // Datadelning och AI: the company's AI switch and what it lets us do with
+    // its data (lib/legal/data-choices.ts). Company-scoped like Kopplingar.
+    section('data-sharing', '/settings/data-sharing', 'tools', hasCompany),
   ]
 
   return (

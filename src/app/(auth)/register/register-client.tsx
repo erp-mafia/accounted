@@ -961,10 +961,10 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
 
         <p className="mt-3 text-center text-xs text-muted-foreground/80 leading-relaxed">
           {t('terms_prefix')}{' '}
-          {/* Same targets as the login page: platform terms on the marketing
-              site, in-app /privacy (host-relative for branded domains). */}
+          {/* The in-app legal pages (host-relative for branded domains). The
+              acceptance itself is recorded by the prompt after signup. */}
           <a
-            href="https://accounted.se/terms"
+            href="/terms"
             target="_blank"
             rel="noopener noreferrer"
             className="underline underline-offset-2 hover:text-foreground transition-colors"
@@ -972,6 +972,15 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
             {t('terms_link')}
           </a>{' '}
           {t('terms_and')}{' '}
+          <a
+            href="/dpa"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2 hover:text-foreground transition-colors"
+          >
+            {t('dpa_link')}
+          </a>
+          . {t('privacy_prefix')}{' '}
           <a
             href="/privacy"
             target="_blank"

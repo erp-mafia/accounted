@@ -22,6 +22,7 @@ describe('visibleSettingsSections', () => {
       'invoicing',
       'sending',
       'connections',
+      'data-sharing',
     ])
     expect(ids({ ...scope, hasMcpExtension: true })).toContain('api')
   })
@@ -44,6 +45,7 @@ describe('visibleSettingsSections', () => {
     expect(ids({ ...member, hasCompany: false })).not.toContain('api')
     // Every other tools section stays company-scoped.
     expect(ids(member)).not.toContain('connections')
+    expect(ids(member)).not.toContain('data-sharing')
   })
 
   it('maps a section id to its settings_nav key', () => {
