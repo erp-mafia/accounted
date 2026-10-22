@@ -197,6 +197,7 @@ export const collectionsSettlementsList = defineOperation({
     settlement: SettlementDetailSchema.nullable(),
   }),
   errorCodes: ['COLLECTION_SETTLEMENT_NOT_FOUND'],
+  http: { method: 'GET', path: '/api/v1/companies/:companyId/collections/settlements' },
   mcp: {
     name: 'gnubok_list_collection_settlements',
     title: 'List Collection Settlements',
@@ -268,6 +269,11 @@ export const collectionsPaymentsBook = defineOperation({
     reason: z.string().optional().describe('Why the books refused it (needs_review).'),
   }),
   errorCodes: ['COLLECTED_PAYMENT_NOT_FOUND', 'COLLECTED_PAYMENT_IGNORED', 'COLLECTED_PAYMENT_BUSY', 'COLLECTED_PAYMENT_CHANGED'],
+  http: {
+    method: 'POST',
+    path: '/api/v1/companies/:companyId/collections/payments/:paymentId/book',
+    pathParams: { paymentId: 'collected_payment_id' },
+  },
   mcp: {
     name: 'gnubok_book_collected_payment',
     title: 'Book Collected Payment',
@@ -441,6 +447,11 @@ export const collectionsSettlementsBook = defineOperation({
     'COLLECTION_SETTLEMENT_POSSIBLE_DUPLICATE',
     'COLLECTION_SETTLEMENT_NEEDS_PERSON',
   ],
+  http: {
+    method: 'POST',
+    path: '/api/v1/companies/:companyId/collections/settlements/:settlementId/book',
+    pathParams: { settlementId: 'settlement_id' },
+  },
   mcp: {
     name: 'gnubok_book_collection_settlement',
     title: 'Book Collection Settlement',

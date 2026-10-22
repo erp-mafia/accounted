@@ -21,6 +21,12 @@
  * the MCP approve tool or the app. withApiV1 refuses stage=true on every
  * endpoint registered without `stageSupported`.
  *
+ * Stage required: a write whose staged type only a person may approve in the
+ * app (risk-tiers.ts requiresWebApproval, for this input) is never committed
+ * from a key. Without `?stage=true` it answers 400 STAGE_REQUIRED before the
+ * operation runs; its dry run and its staging work as for any write. A
+ * direct commit would skip exactly the approval the staged one waits for.
+ *
  * Pinned previews (./preview-token.ts): every write's dry run answers a
  * `preview_token` beside its preview. A commit (or a staging) that sends it
  * back in the Preview-Token header first recomputes the dry run for the same
@@ -41,6 +47,7 @@ import { withApiV1, type ApiV1Context } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { addHandles, STAGED_PENDING_OPERATION_HANDLES } from '@/lib/api/v1/handles'
 import { moduleForOperationId } from '@/lib/modules/resolve'
+import { requiresWebApproval } from '@/lib/pending-operations/risk-tiers'
 import { toPendingOperationView } from '@/lib/pending-operations/view'
 import { operationPreviewToken, previewStaleFailure } from './preview-token'
 import { stageOperation } from './stage'
@@ -148,6 +155,13 @@ export function v1OperationHandler(op: AnyOperation) {
       }
       const input = parsed.data as Record<string, unknown>
       if (ctx.stage) return v1StageResponse(op, opCtx, input, ctx)
+      // A Preview-Token commit is a commit too: only the dry run passes.
+      if (!ctx.dryRun && needsPersonApproval(op, input)) {
+        return v1ErrorResponseFromCode('STAGE_REQUIRED', ctx.log, {
+          requestId: ctx.requestId,
+          details: { operation_type: op.mcp?.stage?.pendingType ?? null },
+        })
+      }
 
       // A write's dry run, and the dry run a pinned commit recomputes first:
       // the preview answers with its token, and a sent token that no longer
@@ -256,6 +270,16 @@ async function v1StageResponse(
     STAGED_PENDING_OPERATION_HANDLES,
   ).value
   return ok(staged202, { requestId: ctx.requestId, status: 202 })
+}
+
+/**
+ * True when the write stages as a type only a person approves in the app
+ * (risk-tiers.ts requiresWebApproval, which reads the input for case actions):
+ * such a write is staged over REST, never committed from a key.
+ */
+export function needsPersonApproval(op: AnyOperation, input: Record<string, unknown>): boolean {
+  const pendingType = op.kind === 'write' ? op.mcp?.stage?.pendingType : undefined
+  return pendingType !== undefined && requiresWebApproval(pendingType, input)
 }
 
 /** True when every input field is supplied by the path (a bare DELETE). */

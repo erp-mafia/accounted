@@ -455,7 +455,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     uses: ['vat'],
     libFolders: ['collections'],
     operationPrefixes: ['collections'],
-    v1Segments: [],
+    // An invoice's case lives under the invoice; the longer claim wins over invoicing's 'invoices'.
+    v1Segments: ['collections', 'invoices/:id/collection'],
     capability: 'collections',
     jurisdictions: SE,
   },

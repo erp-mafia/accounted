@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 356 endpoints.
+  pagination, scopes), and all 363 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -155,7 +155,10 @@ Poll `GET /pending-operations/{id}` until `task_state` is terminal:
 `completed` (committed, `result` holds the outcome), `failed` (the approved
 commit did not go through) or `cancelled` (rejected, expired or superseded).
 `stage=true` on any other endpoint is `400 STAGE_NOT_SUPPORTED`; values other
-than `true`/`false` are `400`. With `dry_run=true` (or a test key) the staging
+than `true`/`false` are `400`. A write only a person may approve in the app
+(handing an invoice to collection, an escalating collection case action) is
+never committed from a key: without `?stage=true` it answers
+`400 STAGE_REQUIRED` and does nothing. With `dry_run=true` (or a test key) the staging
 is previewed and nothing is stored. Approving twice never commits twice: the
 second approval answers `409 PENDING_OPERATION_NOT_PENDING` with the
 operation as it stands.
@@ -215,7 +218,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 356 operations. Paths are shown without
+API version `2026-05-12`, 363 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (22)
@@ -328,11 +331,15 @@ POST /companies/{companyId}/skatteverket/agi/validate-individuppgift : Pre-valid
 GET /companies/{companyId}/skatteverket/vat-declarations : Read a filed momsdeklaration (submitted and/or decided) from Skatteverket [scope:compliance:read risk:low idempotent]
 ```
 
-### Invoices (AR) (18)
+### Invoices (AR) (25)
 
 Full detail: [references/invoices.md](references/invoices.md)
 
 ```text
+GET /companies/{companyId}/collections/candidates : List the overdue customer invoices that could be handed over to the company's collections provider [scope:invoices:read risk:low idempotent]
+POST /companies/{companyId}/collections/payments/{paymentId}/book : Book a payment a debtor made to the collections provider as a payment of the invoice [scope:invoices:write risk:high idempotent dry-run]
+GET /companies/{companyId}/collections/settlements : List the payments debtors made to the collections provider and the provider's payouts, with how far each is booked [scope:invoices:read risk:low idempotent reversible]
+POST /companies/{companyId}/collections/settlements/{settlementId}/book : Book a payout from the collections provider as one voucher, with the settlement PDF as its underlag [scope:bookkeeping:write risk:high idempotent dry-run]
 GET /companies/{companyId}/invoices : List invoices for a company [scope:invoices:read risk:low idempotent]
 POST /companies/{companyId}/invoices : Create a draft invoice, proforma, or delivery note [scope:invoices:write risk:medium idempotent dry-run reversible]
 GET /companies/{companyId}/invoices/{id} : Retrieve a single invoice by id [scope:invoices:read risk:low idempotent]
@@ -340,6 +347,9 @@ PATCH /companies/{companyId}/invoices/{id} : Update a draft invoice (metadata fi
 DELETE /companies/{companyId}/invoices/{id} : Delete a draft invoice (hard delete if unnumbered, makulering if numbered) [scope:invoices:write risk:high idempotent dry-run]
 POST /companies/{companyId}/invoices/{id}/book : Book a sent customer invoice that was issued without a verifikat (the deferred Bokför step) [scope:invoices:write risk:high idempotent dry-run]
 POST /companies/{companyId}/invoices/{id}/cancel : Cancel (makulera) a quote or a proforma invoice [scope:invoices:write risk:low idempotent dry-run]
+GET /companies/{companyId}/invoices/{id}/collection : Read an invoice's collection case: stage, what the provider waits for, the actions it offers, amounts and timeline [scope:invoices:read risk:low idempotent]
+POST /companies/{companyId}/invoices/{id}/collection : Hand an overdue customer invoice over to the company's collections provider [scope:invoices:write risk:high idempotent dry-run]
+POST /companies/{companyId}/invoices/{id}/collection/actions : Act on an invoice's open collection case: pause, resume, withdraw, mark disputed, or answer what the provider waits for [scope:invoices:write risk:high idempotent dry-run]
 POST /companies/{companyId}/invoices/{id}/credit : Issue a credit note (kreditfaktura) against an invoice [scope:invoices:write risk:high idempotent dry-run]
 POST /companies/{companyId}/invoices/{id}/mark-paid : Record a payment against an invoice [scope:invoices:write risk:medium idempotent dry-run]
 POST /companies/{companyId}/invoices/{id}/mark-sent : Transition a draft invoice to sent (without emailing) [scope:invoices:write risk:medium idempotent dry-run]

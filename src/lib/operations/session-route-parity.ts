@@ -409,26 +409,29 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'DELETE /api/digital-mailboxes/:provider/send': gap('P3', 'stop sending through Kivra or Billo'),
   'POST /api/digital-mailboxes/:provider/sync': gap('P3', 'read a connected mailbox now; the cron reads it every 10 minutes'),
   'POST /api/invoices/:id/collection': covered(
-    ['gnubok_send_invoice_to_collection'],
-    'served while collections is switched on; attestations (no delivery record, an import, a customer answer, an unsynced bank) are a person\'s in the browser, and only a person approves the staged handover',
+    ['POST /api/v1/companies/:companyId/invoices/:id/collection', 'gnubok_send_invoice_to_collection'],
+    'served while collections is switched on; attestations (no delivery record, an import, a customer answer, an unsynced bank) are a person\'s in the browser, and only a person approves the staged handover (REST: stage=true only, STAGE_REQUIRED otherwise)',
   ),
   'POST /api/invoices/:id/collection/actions': covered(
-    ['gnubok_collection_case_action'],
-    'served while collections is switched on; escalations are approved by a person in the browser',
+    ['POST /api/v1/companies/:companyId/invoices/:id/collection/actions', 'gnubok_collection_case_action'],
+    'served while collections is switched on; escalations are approved by a person in the browser (REST: stage=true only for them, STAGE_REQUIRED otherwise)',
   ),
   'POST /api/invoices/:id/collection/forwards': gap(
     'P3',
     'retry a payment report the collections provider did not take, or mark a partly ignored one as handled',
   ),
   'POST /api/collections/settlements/:id/book': covered(
-    ['gnubok_book_collection_settlement'],
+    ['POST /api/v1/companies/:companyId/collections/settlements/:settlementId/book', 'gnubok_book_collection_settlement'],
     "served while collections is switched on; the staged booking pins the payout's lines and amount, and a possible duplicate stays a person's answer",
   ),
   'POST /api/collections/settlements/:id/duplicate': gap(
     'P2',
     'answer a payout held as a possible duplicate: book it, or mark it handled elsewhere with a reason',
   ),
-  'POST /api/collections/payments/:id/book': covered(['gnubok_book_collected_payment'], 'served while collections is switched on'),
+  'POST /api/collections/payments/:id/book': covered(
+    ['POST /api/v1/companies/:companyId/collections/payments/:paymentId/book', 'gnubok_book_collected_payment'],
+    'served while collections is switched on',
+  ),
   'POST /api/collections/payments/:id/rebook': gap(
     'P2',
     'storno and book again a payment the debtor made to the collections provider (the sanctioned correction)',

@@ -2,10 +2,315 @@
 
 # Invoices (AR) endpoints
 
-Accounts receivable invoices: draft -> send -> paid/credited; the F-series number is assigned at send, not create. Supplier bills you receive are a different resource: see suppliers.md. Customer and article registers: customers.md.
+Accounts receivable invoices: draft -> send -> paid/credited; the F-series number is assigned at send, not create. Supplier bills you receive are a different resource: see suppliers.md. Customer and article registers: customers.md. Collections: overdue invoices handed to the collections provider the company activated (the handover and escalations are staged for a person to approve in Accounted), the case on each invoice, and booking what the provider collected and paid out.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
+
+### `GET /api/v1/companies/{companyId}/collections/candidates`
+
+**List the overdue customer invoices that could be handed over to the company's collections provider.**
+`scope:invoices:read · risk:low · idempotent`
+
+Overdue customer invoices (due date passed, Europe/Stockholm) that are issued and still owed, checked against the handover rules: SEK and a Swedish customer, at least the company's minimum, no open case, a complete postal address, an org number for a business, not time-barred, no ROT/RUT share refused by Skatteverket. The bank check (an unbooked payment that may be this invoice) and a consumer's age are checked when the invoice is handed over, not here.
+
+**Use when:** Deciding which overdue invoices to stage for collection with gnubok_send_invoice_to_collection.
+**Do not use for:** Reading an invoice's case (gnubok_get_collection_case) or listing every unpaid invoice (GET /invoices).
+
+**Pitfalls:**
+- needs_attestation=true means only a person can hand the invoice over in the web UI (the invoice has no delivery record, was imported, or the customer answered a reminder).
+- COLLECTIONS_DISABLED or COLLECTIONS_NOT_ACTIVE: the company has not activated collections, or it is switched off on this installation.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `include_ineligible` | query | `boolean \| "true" \| "false"` | no | Also list overdue invoices that fail a check, with the checks they fail. |
+
+Response `200`:
+```ts
+{
+  data: {
+    candidates: { invoice_id: string, invoice_number: string | null, customer_id: string | null, customer_name: string | null, due_date: string, overdue_days: number, claim_amount: number, remaining_amount: number, eligible: boolean, blocks: string[], needs_attestation: boolean }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "candidates": [
+      {
+        "invoice_id": "7d1e…",
+        "invoice_number": "F-1042",
+        "customer_id": "1c2d…",
+        "customer_name": "Kund AB",
+        "due_date": "2026-09-01",
+        "overdue_days": 33,
+        "claim_amount": 12500,
+        "remaining_amount": 12500,
+        "eligible": true,
+        "blocks": [],
+        "needs_attestation": false
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/collections/payments/{paymentId}/book`
+
+**Book a payment a debtor made to the collections provider as a payment of the invoice.**
+`scope:invoices:write · risk:high · idempotent · dry-run`
+
+Books the capital the debtor paid on the day they paid, against the clearing account for money the provider holds (default 1689), with the provider's payment data rendered as the voucher's underlag. A payment the books refuse (a locked period, an invoice already paid) answers outcome needs_review with the reason and waits for a person. The dry run reads only and names the invoice and the clearing account; the staged booking pins the payment day.
+
+**Use when:** gnubok_list_collection_settlements lists a collected payment as pending or needs_review.
+**Do not use for:** Payments the customer made to the company itself (mark the invoice paid; it is reported to the provider).
+
+**Pitfalls:**
+- A booked payment is corrected only with "Bokför om" under Avräkningar; a generic storno of its voucher is refused.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `paymentId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
+
+Request body:
+```ts
+{ payment_date?: string }
+```
+
+Example request:
+```json
+{
+  "collected_payment_id": "8a2b…"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    outcome: "booked" | "needs_review",
+    journal_entry_id?: string | null,
+    invoice_payment_id?: string,
+    write_off_id?: string,
+    already_booked?: boolean,
+    reason?: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "outcome": "booked",
+    "journal_entry_id": "je…",
+    "already_booked": false
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/collections/settlements`
+
+**List the payments debtors made to the collections provider and the provider's payouts, with how far each is booked.**
+`scope:invoices:read · risk:low · idempotent · reversible`
+
+Newest first, up to 200 of each. With settlement_id it also returns that payout's lines: the account each books to and the choices a person (or an approved staged booking) must make before it books. Served whatever the collections start gates say.
+
+**Use when:** Before booking a collected payment or a payout, or to see what waits in Avräkningar.
+**Do not use for:** Open collection cases (gnubok_get_collection_case) or invoices not handed over.
+
+**Pitfalls:**
+- A payout in needs_mapping with reason possible_duplicate is answered by a person in the web UI, not by an agent.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `settlement_id` | query | `string` | no | A payout to read with its lines. |
+
+Response `200`:
+```ts
+{
+  data: {
+    provider: string | null,
+    settlements: { settlement_id: string, provider_settlement_ref: string, payment_date: string, amount: number, currency: string, status: string, needs_mapping_reason: string | null, journal_entry_id: string | null, voucher: string | null, bank_reference: string | null, acknowledged: boolean, duplicate_cleared: boolean, ignored_reason: string | null }[],
+    collected_payments: { collected_payment_id: string, case_id: string, invoice_id: string, invoice_number: string | null, customer_name: string | null, paid_at: string, capital_paid: number, to_agency: number, status: string, review_reason: string | null, journal_entry_id: string | null, voucher: string | null, settlement_id: string | null }[],
+    settlement: { settlement_id: string, provider_settlement_ref: string, payment_date: string, amount: number, currency: string, status: string, needs_mapping_reason: string | null, journal_entry_id: string | null, voucher: string | null, bank_reference: string | null, acknowledged: boolean, duplicate_cleared: boolean, ignored_reason: string | null, settlement_date: string | null, provider_status_ok: boolean, document_id: string | null, duplicate_of: { journal_entry_id: string, voucher: string | null } | null, lines: { position: number, kind: string, in_payout: boolean, amount: number, tax_amount: number, account_number: string | null, vat_account_number: string | null, chosen_by_person: boolean, needs_account: "vat" | "any" | null, needs_vat_account: boolean }[], voucher_preview: { account_number: string, debit: number, credit: number }[] | null } | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "provider": "Acme Inkasso",
+    "settlements": [
+      {
+        "settlement_id": "5c1e…",
+        "amount": 843.75,
+        "status": "needs_mapping",
+        "needs_mapping_reason": "vat_unconfirmed"
+      }
+    ],
+    "collected_payments": [
+      {
+        "collected_payment_id": "8a2b…",
+        "capital_paid": 1000,
+        "status": "pending"
+      }
+    ],
+    "settlement": {
+      "settlement_id": "5c1e…",
+      "lines": [
+        {
+          "position": 1,
+          "kind": "agency_fee_vat",
+          "needs_account": "vat"
+        }
+      ],
+      "voucher_preview": null
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/collections/settlements/{settlementId}/book`
+
+**Book a payout from the collections provider as one voucher, with the settlement PDF as its underlag.**
+`scope:bookkeeping:write · risk:high · idempotent · dry-run`
+
+Records the accounts chosen for the lines the ledger could not place (lines), books the payout's pending collected payments first, then posts one voucher dated the payout day: principal against the clearing account, the provider's fees and their VAT, the payout to the payout account. The dry run reads only and previews that voucher (voucher_lines); it refuses a payout the ledger cannot book with the choices given (409 COLLECTION_SETTLEMENT_NEEDS_PERSON with the reason). The staged booking pins the payout's day, amount, lines and voucher: a payout or voucher that changed before approval answers 409 COLLECTION_SETTLEMENT_CHANGED. A payout that still needs a person at commit answers outcome needs_mapping with the reason.
+
+**Use when:** gnubok_list_collection_settlements lists a payout as received or needs_mapping, and its lines show the choices to make.
+**Do not use for:** A payout held as a possible duplicate of one booked by hand: a person answers that in Avräkningar.
+
+**Pitfalls:**
+- Pass a choice for every line with needs_account or needs_vat_account; VAT takes 2641 (deductible) or 6062 (cost) only.
+- 409 COLLECTION_SETTLEMENT_POSSIBLE_DUPLICATE: a bank row of the payout already sits on a voucher.
+- 409 COLLECTION_SETTLEMENT_CHANGED: read the payout again and stage a new booking.
+- 409 COLLECTION_SETTLEMENT_NEEDS_PERSON at staging: details.reason and details.issues say what is missing (a line without an account, an unbooked collected payment, a payout that does not balance).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `settlementId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
+
+Request body:
+```ts
+{
+  lines?: { position: number, account_number?: string, vat_account_number?: string }[],
+  payment_date?: string,
+  expected_amount?: number,
+  expected_lines?: { position: number, kind: string, amount: number, tax_amount: number }[],
+  expected_voucher?: { account_number: string, debit: number, credit: number }[]
+}
+```
+
+Example request:
+```json
+{
+  "settlement_id": "5c1e…",
+  "lines": [
+    {
+      "position": 1,
+      "account_number": "2641"
+    }
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    outcome: "booked" | "needs_mapping",
+    journal_entry_id?: string,
+    already_booked?: boolean,
+    acknowledged?: boolean,
+    reason?: string,
+    issues?: { reason: string, position: number | null }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "outcome": "booked",
+    "journal_entry_id": "je…",
+    "acknowledged": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
 
 ### `GET /api/v1/companies/{companyId}/invoices`
 
@@ -598,6 +903,239 @@ Example response `200`:
     "status": "cancelled",
     "quote_status": "open",
     "already_cancelled": false
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/invoices/{id}/collection`
+
+**Read an invoice's collection case: stage, what the provider waits for, the actions it offers, amounts and timeline.**
+`scope:invoices:read · risk:low · idempotent`
+
+The invoice's open case, or its latest closed or refused one, re-read from the provider when it was last read more than a minute ago. Works whatever the company's plan or switches say: an open case is always readable.
+
+**Use when:** Following up an invoice handed over to collection, or before gnubok_collection_case_action to see which actions the case offers.
+**Do not use for:** Finding invoices to hand over (gnubok_list_collection_candidates).
+
+**Pitfalls:**
+- case=null means the invoice was never handed over.
+- submission_status=submitted means the handover is still being registered; it is retried automatically.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    case: { case_id: string, invoice_id: string, origin: string, start_step: string, submission_status: string, case_number: string | null, merged: boolean, stage: string, decision_kind: string | null, is_open: boolean, close_reason: string | null, provider_state_label: string | null, next_action_date: string | null, next_action_label: string | null, actions: string[], claim_amount: number, outstanding_principal: number | null, outstanding_total: number | null, paused_by_sweep: boolean, opened_at: string, closed_at: string | null, last_synced_at: string | null, sync_error: string | null, events: { event_id: string, occurred_at: string, kind: string, stage_from: string | null, stage_to: string | null, direction: string | null, label: string, amount: number | null }[] } | null,
+    withdraw_fee: { may_apply: boolean, free_days: number | null, free_until: string | null } | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "case": {
+      "case_id": "2b9c…",
+      "stage": "reminder",
+      "is_open": true,
+      "actions": [
+        "pause",
+        "withdraw",
+        "dispute"
+      ]
+    },
+    "withdraw_fee": {
+      "may_apply": false,
+      "free_days": 14,
+      "free_until": "2026-10-20T09:00:00.000Z"
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/invoices/{id}/collection`
+
+**Hand an overdue customer invoice over to the company's collections provider.**
+`scope:invoices:write · risk:high · idempotent · dry-run`
+
+Runs every handover check again (eligibility, the bank check for unbooked payments that may be this invoice, the amount still owed), then registers the claim with the provider, which starts with a reminder or a collection notice. The invoice PDF goes with it. The invoice's status does not change; payments recorded later are reported to the provider. The dry run checks everything as reads and contacts no provider.
+
+**Use when:** gnubok_list_collection_candidates lists the invoice as eligible and the customer has not paid.
+**Do not use for:** Invoices that need a person's attestation (imported, no delivery record, a customer answer to a reminder, a bank not synced in 24 hours): only a person can hand those over in the web UI.
+
+**Pitfalls:**
+- expected_remaining must equal what is still owed: a payment that arrived meanwhile answers 409 COLLECTION_REMAINING_CHANGED.
+- 409 COLLECTION_BANK_CANDIDATES: an unbooked incoming payment may be this invoice; book it or let a person dismiss it.
+- 409 COLLECTION_BANK_STALE: the account the customer pays to was not synced in 24 hours.
+- 409 COLLECTION_REMINDER_FEE_NOT_AGREED: a reminder needs a reminder fee agreed by the invoice date; omit start_step to start at the inkassokrav.
+- Approval is web-only: a person approves the staged operation in Accounted.
+- Over REST, send it with ?stage=true: a direct call answers 400 STAGE_REQUIRED and hands nothing over.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
+
+Request body:
+```ts
+{
+  expected_remaining: number,
+  start_step?: "reminder" | "collection" | null,
+  bank_attested?: boolean,
+  delivery_attested?: boolean,
+  imported_attested?: boolean,
+  response_attested?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "invoice_id": "7d1e…",
+  "expected_remaining": 12500,
+  "start_step": "collection"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    case: { case_id: string, invoice_id: string, origin: string, start_step: string, submission_status: string, case_number: string | null, merged: boolean, stage: string, decision_kind: string | null, is_open: boolean, close_reason: string | null, provider_state_label: string | null, next_action_date: string | null, next_action_label: string | null, actions: string[], claim_amount: number, outstanding_principal: number | null, outstanding_total: number | null, paused_by_sweep: boolean, opened_at: string, closed_at: string | null, last_synced_at: string | null, sync_error: string | null, events: { event_id: string, occurred_at: string, kind: string, stage_from: string | null, stage_to: string | null, direction: string | null, label: string, amount: number | null }[] },
+    registered: boolean
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "case": {
+      "case_id": "2b9c…",
+      "stage": "registered",
+      "submission_status": "registered"
+    },
+    "registered": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/invoices/{id}/collection/actions`
+
+**Act on an invoice's open collection case: pause, resume, withdraw, mark disputed, or answer what the provider waits for.**
+`scope:invoices:write · risk:high · idempotent · dry-run`
+
+Only the actions the case offers right now are accepted (gnubok_get_collection_case lists them). Pausing, resuming, withdrawing and disputing serve the open case and always run. Approving the next step, contesting a dispute, overriding the customer's "already paid" and approving legal action escalate against the customer: they re-run the bank check and only a person can approve them in Accounted.
+
+**Use when:** The case waits for a decision (stage awaiting_decision), the customer disputes the claim, or the company wants to pause or withdraw it.
+**Do not use for:** Recording a payment (mark the invoice paid; it is reported to the provider).
+
+**Pitfalls:**
+- dispute and confirm_not_paid need a message of at least ten characters.
+- withdraw can cost a fee at the provider once its free period has passed (gnubok_get_collection_case withdraw_fee.may_apply): show the user, then pass fee_acknowledged=true.
+- already_paid is never sent: record the payment on the invoice instead (409 COLLECTION_REGISTER_PAYMENT); it is reported to the provider.
+- start is not taken here: starting a delivered invoice is a handover, through gnubok_send_invoice_to_collection (409 COLLECTION_START_VIA_HANDOVER).
+- 409 CONNECTOR_COLLECTIONS_ACTION_UNAVAILABLE: the case does not offer that action in its current stage.
+- Over REST, an escalation (approve_step, contest_dispute, confirm_not_paid, approve_legal_action) is sent with ?stage=true: a direct call answers 400 STAGE_REQUIRED. pause, resume, withdraw and dispute also commit directly.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
+
+Request body:
+```ts
+{
+  action: "start" | "pause" | "resume" | "withdraw" | "dispute" | "contest_dispute" | "approve_step" | "already_paid" | "confirm_not_paid" | "approve_legal_action" | "decline_legal_action",
+  step?: "reminder" | "collection" | null,
+  message?: string | null,
+  until?: string | null,
+  fee_acknowledged?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "invoice_id": "7d1e…",
+  "action": "pause",
+  "until": "2026-11-01"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    case: { case_id: string, invoice_id: string, origin: string, start_step: string, submission_status: string, case_number: string | null, merged: boolean, stage: string, decision_kind: string | null, is_open: boolean, close_reason: string | null, provider_state_label: string | null, next_action_date: string | null, next_action_label: string | null, actions: string[], claim_amount: number, outstanding_principal: number | null, outstanding_total: number | null, paused_by_sweep: boolean, opened_at: string, closed_at: string | null, last_synced_at: string | null, sync_error: string | null, events: { event_id: string, occurred_at: string, kind: string, stage_from: string | null, stage_to: string | null, direction: string | null, label: string, amount: number | null }[] }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "case": {
+      "case_id": "2b9c…",
+      "stage": "paused"
+    }
   },
   "meta": {
     "request_id": "req_…",
