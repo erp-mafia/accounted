@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
-import { FileText, Loader2, Mail, Paperclip, Send, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, FileText, Mail, Paperclip, Plus, Send, X } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -14,6 +14,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
 import { submitFeedback } from '@/lib/support/submit-feedback'
@@ -36,10 +37,10 @@ import {
   listTickets,
   loadThread,
   markThreadRead,
-  otherTickets,
-  pickTicketToOpen,
   replyInThread,
   sortByActivity,
+  splitByStatus,
+  startView,
   totalUnread,
   type Thread,
   type TicketStatus,
@@ -60,16 +61,18 @@ type AttachmentError = 'unsupported' | 'too_many' | 'too_large'
 
 /**
  * loading  fetching tickets or a thread
+ * list     every ticket, open ones first: the start page once there is more
+ *          than one, or a single resolved one (startView)
  * thread   the conversation with support (reply box while the ticket is open;
  *          read-only for a resolved ticket, e.g. one opened for an unread answer)
- * compose  write a new ticket, attachments allowed: when there is nothing to
- *          reply to or read, or on "Nytt ärende" beside a ticket (the thread
- *          stays loaded, so the customer can go back to it). The other tickets
- *          are listed here too, so they are never out of reach.
+ * compose  write a new ticket, attachments allowed: with no tickets yet, or on
+ *          "Nytt ärende" from the list or a thread, with a way back to it
  * email    conversations unavailable (self-hosted, analytics off): same form, mail delivery
  * sent     delivered by mail (attachments, or the fallback)
  */
-type View = 'loading' | 'thread' | 'compose' | 'email' | 'sent'
+type View = 'loading' | 'list' | 'thread' | 'compose' | 'email' | 'sent'
+
+const SECTION_LABEL_CLASS = 'mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground'
 
 const POLL_MS = 20_000
 
@@ -96,7 +99,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
   const [tickets, setTickets] = useState<TicketSummary[]>([])
   const [thread, setThread] = useState<Thread | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
-  const [showResolved, setShowResolved] = useState(false)
+  const [composeBack, setComposeBack] = useState<'list' | 'thread' | null>(null)
   const [message, setMessage] = useState('')
   const [attachments, setAttachments] = useState<File[]>([])
   const [isPreparing, setIsPreparing] = useState(false)
@@ -118,6 +121,10 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
     if (!silent) setView('loading')
     const next = await loadThread(ticketId)
     if (!next) {
+      // A failed poll keeps what is on screen. A failed open must not leave
+      // the previous ticket's thread, and its reply box, under the error.
+      if (silent) return
+      setThread(null)
       setLoadFailed(true)
       setView('thread')
       return
@@ -132,10 +139,11 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
     }
   }, [])
 
-  const bootstrap = useCallback(async () => {
+  // `openId` is the ticket a send just landed in: it opens whether or not the
+  // ticket list has caught up with it yet.
+  const bootstrap = useCallback(async (openId?: string | null) => {
     setView('loading')
     setThread(null)
-    setShowResolved(false)
     if (!conversationsAvailable()) {
       setView('email')
       return
@@ -143,12 +151,17 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
     const list = sortByActivity(await listTickets())
     setTickets(list)
     setUnread(totalUnread(list))
-    const next = pickTicketToOpen(list, currentTicketId())
-    if (!next) {
-      setView('compose')
+    if (openId) {
+      await showTicket(openId)
       return
     }
-    await showTicket(next.ticket.id)
+    const start = startView(list)
+    if (start.view === 'thread') {
+      await showTicket(start.ticketId)
+      return
+    }
+    setComposeBack(null)
+    setView(start.view)
   }, [showTicket])
 
   // Unread dot on the trigger: one cheap call when the trigger mounts.
@@ -171,7 +184,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
     if (!open) return
     const id = setTimeout(() => {
       setMessage((current) => current || readSupportDraft())
-      void bootstrap()
+      void bootstrap(null)
     }, 0)
     return () => clearTimeout(id)
   }, [open, bootstrap])
@@ -314,7 +327,8 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
     clearMessage()
     resetAttachments()
     if (result.channels.includes('ticket')) {
-      await bootstrap()
+      // The SDK made the new ticket its current one: open it, not the list.
+      await bootstrap(currentTicketId())
       return
     }
     setView('sent')
@@ -333,20 +347,39 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
       return
     }
     clearMessage()
-    if (res.ticketId !== viewingId) await bootstrap()
+    if (res.ticketId !== viewingId) await bootstrap(res.ticketId)
     else await showTicket(viewingId, true)
+  }
+
+  // Back to the list from a thread or the composer. Statuses and unread counts
+  // may have moved meanwhile, so the list refreshes behind it; a failed fetch
+  // ([]) keeps the one on screen.
+  async function showList() {
+    setView('list')
+    const list = sortByActivity(await listTickets())
+    if (list.length === 0) return
+    setTickets(list)
+    setUnread(totalUnread(list))
   }
 
   const fmt = (iso: string) =>
     new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(iso))
+
+  // A ticket's name is the day it was opened: PostHog's ticket list carries no
+  // subject, and the last message alone does not tell two tickets apart.
+  const fmtDay = (iso: string) => {
+    const d = new Date(iso)
+    const sameYear = d.getFullYear() === new Date().getFullYear()
+    return new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }) }).format(d)
+  }
 
   const statusLabel = (s: TicketStatus) => t(`status_${s}`)
 
   // One draft for the dialog, not one per ticket: text typed as a reply moves
   // along to "Nytt ärende" (and back), which is what the customer who realises
   // mid-sentence that this is a separate matter wants.
-  function startNewTicket() {
-    setShowResolved(false)
+  function startNewTicket(from: 'list' | 'thread') {
+    setComposeBack(from)
     setView('compose')
   }
 
@@ -355,54 +388,55 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
   // replies to the ticket the dialog opened on left every other open ticket
   // read-only, so switching to one was a dead end (crm#1138).
   const canReply = Boolean(thread && !isResolved(thread.status))
-  const { open: otherOpen, resolved: otherResolved } = otherTickets(tickets, viewingId)
+  const { open: openTickets, resolved: resolvedTickets } = splitByStatus(tickets)
+  const hasList = tickets.length > 1
+  const openedAt = tickets.find((x) => x.id === viewingId)?.createdAt ?? thread?.messages[0]?.createdAt ?? null
 
-  const ticketList = (list: TicketSummary[]) => (
-    <ul className="mt-2 flex flex-col gap-1">
-      {list.map((x) => (
-        <li key={x.id}>
-          <button
-            type="button"
-            onClick={() => void showTicket(x.id)}
-            className="flex w-full items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-left text-sm hover:bg-secondary/35 transition-colors"
-          >
-            <span className="truncate text-foreground">{x.lastMessage || t('no_messages')}</span>
-            <span className="flex shrink-0 items-center gap-2 text-[11px] text-muted-foreground">
-              {x.unreadCount > 0 && (
-                <span
-                  aria-label={t('unread_aria', { count: x.unreadCount })}
-                  className="inline-block h-1.5 w-1.5 rounded-full bg-primary"
-                />
+  // No status on a row: the list does not say who wrote last, so a pending
+  // ticket could read "Väntar på dig" under the customer's own message. The
+  // section says open or resolved; the row says only what is new.
+  const ticketRow = (x: TicketSummary) => {
+    const fresh = x.unreadCount > 0
+    return (
+      <li key={x.id}>
+        <button
+          type="button"
+          onClick={() => void showTicket(x.id)}
+          className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-secondary/35 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        >
+          <span className="min-w-0 flex-1">
+            <span
+              className={cn(
+                'block truncate text-[13px]',
+                isResolved(x.status) ? 'text-muted-foreground' : 'text-foreground',
+                fresh && 'font-medium text-foreground'
               )}
-              {statusLabel(x.status)}
+            >
+              {x.lastMessage || t('no_messages')}
             </span>
-          </button>
-        </li>
-      ))}
-    </ul>
-  )
+            <span className="mt-1 flex items-center gap-2 text-[11px] tabular-nums text-muted-foreground">
+              {t('ticket_label', { date: fmtDay(x.createdAt) })}
+              {fresh && (
+                <span className="inline-flex items-center gap-1 text-foreground">
+                  <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-primary" />
+                  {t('new_reply')}
+                </span>
+              )}
+            </span>
+          </span>
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        </button>
+      </li>
+    )
+  }
 
-  // Shared by the thread and the compose view: with nothing to reply to or
-  // read, the dialog opens on the composer, and the other tickets must not
-  // vanish then.
-  const otherOpenList = otherOpen.length > 0 && (
-    <div className="mt-3">
-      <p className="text-[11px] text-muted-foreground">{t('other_open_tickets')}</p>
-      {ticketList(otherOpen)}
-    </div>
-  )
-
-  const resolvedToggle = otherResolved.length > 0 && (
-    <button
-      type="button"
-      onClick={() => setShowResolved((v) => !v)}
-      className="ml-auto text-xs text-muted-foreground hover:text-foreground transition-colors"
-    >
-      {showResolved ? t('hide_resolved') : t('resolved_tickets', { count: otherResolved.length })}
-    </button>
-  )
-
-  const resolvedList = showResolved && ticketList(otherResolved)
+  const ticketSection = (label: string, list: TicketSummary[]) =>
+    list.length > 0 && (
+      <section>
+        <p className={SECTION_LABEL_CLASS}>{label}</p>
+        <ul className="overflow-hidden rounded-lg border border-border divide-y divide-border">{list.map(ticketRow)}</ul>
+      </section>
+    )
 
   const triggerLabel = (
     <>
@@ -567,12 +601,28 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
       <DialogContent className="sm:max-w-md" onInteractOutside={guardDismiss} onEscapeKeyDown={guardDismiss}>
         <DialogHeader>
           <DialogTitle>{t('dialog_title')}</DialogTitle>
-          <DialogDescription>{view === 'thread' ? t('thread_description') : t('dialog_description')}</DialogDescription>
+          <DialogDescription>
+            {view === 'thread' || view === 'list' ? t('thread_description') : t('dialog_description')}
+          </DialogDescription>
         </DialogHeader>
 
         {view === 'loading' && (
-          <div className="flex items-center justify-center py-8 text-muted-foreground">
-            <Loader2 className="h-5 w-5 animate-spin" />
+          <div className="flex flex-col gap-2" aria-busy="true">
+            <Skeleton className="h-12 w-full rounded-lg" />
+            <Skeleton className="h-12 w-full rounded-lg" />
+          </div>
+        )}
+
+        {view === 'list' && (
+          <div className="flex flex-col gap-4">
+            {ticketSection(t('open_section'), openTickets)}
+            {ticketSection(t('resolved_section'), resolvedTickets)}
+            <DialogFooter>
+              <Button type="button" onClick={() => startNewTicket('list')}>
+                <Plus className="mr-2 h-4 w-4" />
+                {t('new_ticket')}
+              </Button>
+            </DialogFooter>
           </div>
         )}
 
@@ -585,22 +635,18 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
           </div>
         )}
 
-        {view === 'compose' && (thread || otherOpen.length > 0 || otherResolved.length > 0) && (
+        {view === 'compose' && composeBack && (
           <div>
-            <div className="flex items-center gap-3">
-              {thread && (
-                <button
-                  type="button"
-                  onClick={() => setView('thread')}
-                  className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  {t('back_to_ticket')}
-                </button>
-              )}
-              {resolvedToggle}
-            </div>
-            {otherOpenList}
-            {resolvedList}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="-ml-3"
+              onClick={() => (composeBack === 'list' ? void showList() : setView('thread'))}
+            >
+              <ChevronLeft className="mr-1 h-4 w-4" />
+              {composeBack === 'list' ? t('all_tickets') : t('back_to_ticket')}
+            </Button>
           </div>
         )}
 
@@ -608,31 +654,48 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
 
         {view === 'thread' && (
           <div>
-            <div className="flex items-center justify-between gap-2">
-              <span className="inline-flex h-5 items-center rounded-full border border-border px-2 text-[11px] text-muted-foreground">
-                {thread ? statusLabel(displayStatus(thread.status, thread.messages)) : ''}
-              </span>
-              <div className="flex items-center gap-3">
-                {resolvedToggle}
-                {canReply && (
-                  <button
-                    type="button"
-                    onClick={startNewTicket}
-                    className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    {t('new_ticket')}
-                  </button>
+            <div className="flex items-center gap-2">
+              {hasList && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="-ml-2 shrink-0"
+                  onClick={() => void showList()}
+                  aria-label={t('all_tickets')}
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+              )}
+              <div className="flex min-w-0 flex-1 items-center gap-2">
+                {openedAt && (
+                  <span className="truncate text-[13px] font-medium text-foreground">
+                    {t('ticket_label', { date: fmtDay(openedAt) })}
+                  </span>
+                )}
+                {thread && (
+                  <span className="inline-flex h-5 shrink-0 items-center rounded-full border border-border px-2 text-[11px] text-muted-foreground">
+                    {statusLabel(displayStatus(thread.status, thread.messages))}
+                  </span>
                 )}
               </div>
+              {canReply && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="-mr-3 shrink-0"
+                  onClick={() => startNewTicket('thread')}
+                >
+                  {t('new_ticket')}
+                </Button>
+              )}
             </div>
-
-            {otherOpenList}
-            {resolvedList}
 
             {loadFailed ? (
               <p className="mt-4 text-sm text-muted-foreground">{t('load_failed')}</p>
             ) : (
-              <div ref={listRef} className="mt-3 flex max-h-[45vh] flex-col gap-3 overflow-y-auto pr-1">
+              <div ref={listRef} className="mt-3 flex max-h-[45dvh] flex-col gap-3 overflow-y-auto pr-1">
                 {thread?.messages.map((m) => (
                   <div key={m.id} className={cn('flex flex-col gap-1', m.from === 'me' ? 'items-end' : 'items-start')}>
                     <span className="text-[11px] text-muted-foreground">
@@ -655,17 +718,20 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
             {canReply ? (
               replyForm
             ) : (
-              <div className="mt-4 flex items-center justify-between gap-3">
-                <p className="text-xs text-muted-foreground">{t('resolved_hint')}</p>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={startNewTicket}
-                >
-                  {t('new_ticket')}
-                </Button>
-              </div>
+              !loadFailed && (
+                <div className="mt-4 flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-xs text-muted-foreground">{t('resolved_hint')}</p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0"
+                    onClick={() => startNewTicket('thread')}
+                  >
+                    {t('new_ticket')}
+                  </Button>
+                </div>
+              )
             )}
           </div>
         )}

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { displayStatus, listTickets, loadThread, otherTickets, pickActiveTicket, pickTicketToOpen, replyInThread, startThread, toSummary, toThreadMessage, totalUnread } from '@/lib/support/conversations'
+import { displayStatus, listTickets, loadThread, replyInThread, splitByStatus, startThread, startView, toSummary, toThreadMessage, totalUnread } from '@/lib/support/conversations'
 
 const getTicketsMock = vi.fn()
 const getMessagesMock = vi.fn()
@@ -25,58 +25,29 @@ vi.mock('posthog-js', () => ({
 
 const t = (id: string, status: string, at: string, unread = 0) => toSummary({ id, status, created_at: at, last_message_at: at, unread_count: unread })
 
-describe('pickActiveTicket', () => {
-  it('prefers the SDK current ticket when it is still open', () => {
-    const tickets = [t('a', 'open', '2026-09-10'), t('cur', 'pending', '2026-09-01')]
-    expect(pickActiveTicket(tickets, 'cur')?.id).toBe('cur')
+describe('startView', () => {
+  it('opens the composer when there are no tickets', () => {
+    expect(startView([])).toEqual({ view: 'compose' })
   })
-  it('otherwise takes the most recently active unresolved ticket', () => {
-    const tickets = [t('old', 'open', '2026-09-01'), t('done', 'resolved', '2026-09-14'), t('new', 'new', '2026-09-12')]
-    expect(pickActiveTicket(tickets, 'missing')?.id).toBe('new')
+  it('opens a single open ticket straight away', () => {
+    expect(startView([t('a', 'pending', '2026-10-08')])).toEqual({ view: 'thread', ticketId: 'a' })
   })
-  it('is null when everything is resolved', () => {
-    expect(pickActiveTicket([t('done', 'resolved', '2026-09-14')])).toBeNull()
+  it('opens a single resolved ticket with an unread answer straight away', () => {
+    expect(startView([t('done', 'resolved', '2026-10-08', 1)])).toEqual({ view: 'thread', ticketId: 'done' })
   })
-})
-
-describe('pickTicketToOpen', () => {
-  it('opens an unresolved ticket for replying, even beside a newer unread resolved one', () => {
-    const tickets = [t('done', 'resolved', '2026-09-20', 1), t('open', 'open', '2026-09-10')]
-    expect(pickTicketToOpen(tickets, null)).toEqual({ ticket: tickets[1], mode: 'reply' })
+  it('lists a single resolved, read ticket instead of an empty composer', () => {
+    expect(startView([t('done', 'resolved', '2026-10-08')])).toEqual({ view: 'list' })
   })
-  it('keeps the SDK current ticket first while it is open', () => {
-    const tickets = [t('a', 'open', '2026-09-10'), t('cur', 'pending', '2026-09-01')]
-    expect(pickTicketToOpen(tickets, 'cur')).toEqual({ ticket: tickets[1], mode: 'reply' })
-  })
-  // Support answered and then resolved: the unread answer is what the
-  // customer came for, not an empty composer.
-  it('with nothing open, opens the most recently active resolved ticket with unread messages read-only', () => {
-    const tickets = [
-      t('seen', 'resolved', '2026-09-20'),
-      t('older', 'resolved', '2026-09-05', 2),
-      t('newer', 'resolved', '2026-09-15', 1),
-    ]
-    expect(pickTicketToOpen(tickets, 'seen')).toEqual({ ticket: tickets[2], mode: 'read' })
-  })
-  it('never makes the read-only ticket the one to reply in', () => {
-    const tickets = [t('done', 'resolved', '2026-09-14', 1)]
-    expect(pickTicketToOpen(tickets, 'done')?.mode).toBe('read')
-    expect(pickActiveTicket(tickets, 'done')).toBeNull()
-  })
-  it('is null when nothing is open and every answer has been read', () => {
-    expect(pickTicketToOpen([t('done', 'resolved', '2026-09-14')], 'done')).toBeNull()
-    expect(pickTicketToOpen([])).toBeNull()
+  it('lists two or more tickets, so every open one is in sight (crm#1138)', () => {
+    expect(startView([t('b', 'new', '2026-10-10'), t('a', 'open', '2026-10-08')])).toEqual({ view: 'list' })
+    expect(startView([t('b', 'open', '2026-10-10'), t('done', 'resolved', '2026-10-01', 1)])).toEqual({ view: 'list' })
   })
 })
 
-describe('otherTickets', () => {
-  it('lists every other open ticket and keeps resolved ones apart (crm#1138)', () => {
-    const tickets = [t('b', 'new', '2026-10-10'), t('a', 'pending', '2026-10-08'), t('old', 'resolved', '2026-09-01')]
-    expect(otherTickets(tickets, 'b')).toEqual({ open: [tickets[1]], resolved: [tickets[2]] })
-  })
-  it('lists all of them while composing with no thread on screen', () => {
-    const tickets = [t('b', 'open', '2026-10-10'), t('a', 'on_hold', '2026-10-08')]
-    expect(otherTickets(tickets, null).open.map((x) => x.id)).toEqual(['b', 'a'])
+describe('splitByStatus', () => {
+  it('puts open tickets first and resolved ones apart, keeping their order', () => {
+    const tickets = [t('b', 'new', '2026-10-10'), t('old', 'resolved', '2026-09-01'), t('a', 'on_hold', '2026-10-08')]
+    expect(splitByStatus(tickets)).toEqual({ open: [tickets[0], tickets[2]], resolved: [tickets[1]] })
   })
 })
 
